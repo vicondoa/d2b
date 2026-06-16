@@ -27,8 +27,6 @@
 #   - manifest contract (~1 min)
 #   - control-plane gates (~12 min cargo + broker test daemons)
 #   - per-example/template flake-check (~3 min wall but ~700 G disk)
-#   - cli-contract-coverage (~7 min cold; builds nixling CLI binary
-#     to validate parser/help against docs)
 #   - audio component (Layer 2; requires live host)
 #
 # Measured cold-cache run (baseline at HEAD f5a44b7): ~13 min
@@ -199,11 +197,6 @@ for gate in \
     run_gate "tests/$gate.sh" "bash '$ROOT/tests/$gate.sh'"
   fi
 done
-
-# Heavier drift gates intentionally skipped here; they fire in the
-# full tests/static.sh used by panel review:
-#   - cli-contract-coverage.sh (~7 min cold; builds nixling CLI binary
-#     to validate parser/help against docs)
 
 log "Static-fast checks OK"
 log "(skipped: smoke-eval, assertions-eval, mid-tier evals, manifest contract, broker daemon checks, per-example flake-check, audio.)"

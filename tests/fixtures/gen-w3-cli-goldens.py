@@ -11,7 +11,7 @@ Each envelope carries the 7 H4-mandated fields:
 
 This script is shipped in-tree so the goldens can be regenerated when
 the H4 table grows; the goldens themselves are checked in as the
-authoritative spec, and `tests/cli-contract-coverage.sh` enforces no
+authoritative spec, and `packages/nixling/tests/cli_contract_coverage.rs` enforces no
 orphan rows.
 """
 from __future__ import annotations

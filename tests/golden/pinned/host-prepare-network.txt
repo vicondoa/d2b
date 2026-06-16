@@ -8,8 +8,8 @@
 # tests/tools/assert-pinned-tests.sh (which lists the broker workspace under
 # --features layer1-bootstrap; all 3 broker tests are present there).
 # The retired gate's trailing `ch-net-handoff-not-supported` docs-anchor grep
-# is independently guarded by tests/cli-contract-coverage.sh and the committed
-# host-check goldens. One bare libtest path per line.
+# is independently guarded by packages/nixling/tests/cli_contract_coverage.rs
+# and the committed host-check goldens. One bare libtest path per line.
 #
 # nixling-host (cargo test --workspace):
 # netlink::tests::ipv6_off_sequence_runs_in_order is pinned in

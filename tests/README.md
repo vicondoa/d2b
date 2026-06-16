@@ -65,7 +65,7 @@ not test *cases* — they never become Rust/nix-unit:
 - **Tooling:** `tests/tools/{gen-migration-ledger,assert-pinned-tests,gen-nix-unit-pins,run-layer}.sh`.
 - **Meta-gates** that validate the test inventory / CI itself:
   `adr-index-coverage`, `ci-coverage`, `ci-uses-make`,
-  `cli-contract-coverage`, `deliverable-gate-inventory`,
+  `deliverable-gate-inventory`,
   `l3-pin-consistency`, `layer1-self-inventory`, `no-new-deferral`,
   `pr-checklist-gate`.
 - The consolidated `drift-check.sh`.
@@ -178,7 +178,6 @@ unless it also reproduces in CI.
 | --- | --- |
 | `tests/cli-rust-native-status.sh`, `tests/cli-rust-native-host-check.sh`, `tests/cli-json-drift.sh` | `systemctl_state` shells out to the real `systemctl is-active nixlingd.service` when the unit is absent from the test fixture, and the tests do not sandbox `NIXLING_DAEMON_STATE_DIR`, so VM status reflects the real host's running VMs / `pidfd-table.json` instead of the fixture. (`cli-rust-native-list` is **retired** — its successor `packages/nixling/tests/cli_contract.rs` fixes this by pinning `nixlingd.service` in the system-state fixture and sandboxing `NIXLING_DAEMON_STATE_DIR` to an empty dir, so status is hermetic.) |
 | `tests/daemon-socket-acl.sh`, `tests/daemon-version-negotiation.sh`, `tests/daemon-state-persistence.sh` | Spawn a transient test `nixlingd`; flaky/failing alongside a real running daemon on a live host. |
-| `tests/cli-contract-coverage.sh` | The `host check` flag-acceptance probe treats any `rc == 2` as "flag rejected", but `host check` returns a non-zero posture/`internal-io` exit when `nft` is absent or the real host posture is imperfect. (It also has a genuine, CI-visible dispatch-table doc-drift for the merge-added `usb`/`audio` verbs — see below.) |
 
 ### Layer-1 gate with pre-existing breakage inherited from `main`
 

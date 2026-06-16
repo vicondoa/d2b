@@ -111,7 +111,6 @@ reap_known_static_orphans() {
     '.assertions-eval.*'
     '.broad-caps-invariant.*'
     '.broker-*'
-    '.cli-contract-coverage.*'
     '.cli-legacy-bash-dispatch.*'
     '.cli-rust-native-cache'
     '.cli-rust-native.log'
@@ -1244,7 +1243,6 @@ nl_time_end "W2 CLI smoke prewarm"
 if [ -x "$HERE/broker-default-features-build.sh" ]; then nl_static_parallel_script "tests/broker-default-features-build.sh" "$HERE/broker-default-features-build.sh"; fi
 if [ -x "$HERE/cli-legacy-bash-dispatch.sh" ]; then nl_static_parallel_script "tests/cli-legacy-bash-dispatch.sh" "$HERE/cli-legacy-bash-dispatch.sh"; fi
 # Closure: wire the remaining gates.
-if [ -x "$HERE/cli-contract-coverage.sh" ]; then nl_static_parallel_script "tests/cli-contract-coverage.sh" "$HERE/cli-contract-coverage.sh"; fi
 nl_static_parallel_wait_all
 
 # Group 2: runtime/socket gates. Their repo-local AF_UNIX sockets make

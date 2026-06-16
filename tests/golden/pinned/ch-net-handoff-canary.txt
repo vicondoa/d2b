@@ -10,7 +10,8 @@
 # fails closed on duplicate bare paths.
 # Non-cargo residuals from the retired script are covered elsewhere:
 # - the ch-net-handoff-not-supported golden envelope/code field is guarded by
-#   tests/cli-contract-coverage.sh and the committed host-check goldens;
+#   packages/nixling/tests/cli_contract_coverage.rs and the committed
+#   host-check goldens;
 # - the CreateTapFd broker-wire/docs anchor is guarded by
 #   packages/nixling-contract-tests/tests/policy_contracts.rs::
 #   tap_dag_contract_doc_matches_implementation, already recorded by

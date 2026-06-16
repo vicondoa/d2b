@@ -1,0 +1,6 @@
+# cli-contract-coverage — Rust successor for tests/cli-contract-coverage.sh.
+# The tests live in packages/nixling/tests/cli_contract_coverage.rs and keep
+# the docs/reference/cli-contract.md parser/help drift contract plus the closed
+# host-* CLI error-golden table fail-closed under cargo nextest enumeration.
+cli_contract_sections_and_help_flags_match_documented_surface
+host_cli_error_golden_table_is_closed_and_complete
