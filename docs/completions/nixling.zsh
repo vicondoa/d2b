@@ -492,6 +492,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '*--env=[Set an environment variable in the guest command (\`KEY=VALUE\`). Repeatable]:KEY=VALUE:_default' \
 '--cwd=[Working directory for the guest command]:DIR:_default' \
+'-d[Start the command detached and print its exec id. Incompatible with \`-i\`/\`-t\`; detached execs are managed with \`nixling vm exec <vm> {list|logs|status|kill}\`]' \
+'--detach[Start the command detached and print its exec id. Incompatible with \`-i\`/\`-t\`; detached execs are managed with \`nixling vm exec <vm> {list|logs|status|kill}\`]' \
 '-i[Forward host stdin into the guest command (\`-i\`). Requires \`-t\`/\`--tty\`\: the guest-control transport forwards stdin only in PTY mode, so \`-i\` must be paired with \`-t\` (e.g. \`-it\`)]' \
 '--interactive[Forward host stdin into the guest command (\`-i\`). Requires \`-t\`/\`--tty\`\: the guest-control transport forwards stdin only in PTY mode, so \`-i\` must be paired with \`-t\` (e.g. \`-it\`)]' \
 '-t[Allocate a PTY in the guest and put the host terminal in raw mode (\`-t\`). Implies stdin forwarding. Human-only (incompatible with \`--json\`)]' \
@@ -501,7 +503,7 @@ _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
 '--help[Print help]' \
 ':vm -- VM name as declared in `nixling.vms.<name>`:_default' \
-'*::command -- The command and its arguments, after `--`. NOT a clap `required` argument\: a missing command is validated inside `cmd_vm_exec` so a `--json` run still emits the single terminal `source\: "cli"`, `reason\: "usage"` envelope on stdout instead of a clap stderr error (matching docs/reference/{error-codes,cli-contract}.md):_default' \
+'*::management -- Optional detached exec management form\: `list`, `logs <id>`, `status <id>`, or `kill <id>`. Command execs never use this position\: pass a command after `--` instead:_default' \
 && ret=0
 ;;
 (help)

@@ -11,7 +11,8 @@ use clap_complete::{
 use clap_mangen::Man;
 use nixling::{
     AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, ListOutputV2, StatusOutputV2,
-    StoreVerifyOutputV2,
+    StoreVerifyOutputV2, VmExecCreateOutputV1, VmExecKillOutputV1, VmExecListOutputV1,
+    VmExecLogsOutputV1, VmExecStatusOutputV1,
 };
 use nixling_core::{
     bundle::Bundle, closures::ClosureMetadata, error::Error, host::HostJson,
@@ -245,9 +246,29 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root.join("docs/reference/cli-output");
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 6] = [
+    let schemas: [(&str, RootSchema); 11] = [
         ("list.schema.json", schemars::schema_for!(ListOutputV2)),
         ("status.schema.json", schemars::schema_for!(StatusOutputV2)),
+        (
+            "vm-exec-create.schema.json",
+            schemars::schema_for!(VmExecCreateOutputV1),
+        ),
+        (
+            "vm-exec-list.schema.json",
+            schemars::schema_for!(VmExecListOutputV1),
+        ),
+        (
+            "vm-exec-status.schema.json",
+            schemars::schema_for!(VmExecStatusOutputV1),
+        ),
+        (
+            "vm-exec-logs.schema.json",
+            schemars::schema_for!(VmExecLogsOutputV1),
+        ),
+        (
+            "vm-exec-kill.schema.json",
+            schemars::schema_for!(VmExecKillOutputV1),
+        ),
         ("audit.schema.json", schemars::schema_for!(AuditOutputV2)),
         (
             "host-check.schema.json",

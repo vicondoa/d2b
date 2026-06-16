@@ -2242,33 +2242,53 @@ never perturb a `--json` stdout envelope.
 
 ### `vm exec`
 
-**Synopsis:** `nixling vm exec [-i] [-t] [--env KEY=VALUE]… [--cwd DIR] [--json] <vm> -- <cmd> [args…]`
+**Run synopsis:** `nixling vm exec [-i] [-t] [-d|--detach] [--env KEY=VALUE]… [--cwd DIR] [--json] <vm> -- <cmd> [args…]`
 
-Runs a command inside a running VM over the authenticated
-**guest-control transport**: the CLI opens one owner connection to the
-daemon public socket, the daemon establishes (and holds) a single
-authenticated guest-control vsock session to the VM's `guestd`, and the
-two endpoints multiplex the exec over a typed `exec` verb. There is **no
-SSH** and **no host PTY** — the guest owns the PTY. The command is
-admin-only (the same `SO_PEERCRED` admin gate as the other privileged
-verbs); a launcher-role caller is rejected with the typed
-`authz-not-admin` error (exit `77`, AUTH) before any session is
-established.
+**Detached management synopsis:**
 
-**Execution identity.** Every exec runs the requested command as the
-VM's configured workload user (`ssh.user`) — **never root** — inside a
-real PAM login session (`systemd-run --property=PAMName=login
---uid=<user>`). The command therefore sees the same environment an
-interactive SSH login would (`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, the
-login-shell profile), so graphical and login-shell workflows work
-unchanged. The wire `user` field is host-fixed by `guestd` and ignored;
-operators elevate with `sudo` inside the session.
+- `nixling vm exec [--json] <vm> list`
+- `nixling vm exec [--json] <vm> logs <exec-id>`
+- `nixling vm exec [--json] <vm> status <exec-id>`
+- `nixling vm exec [--json] <vm> kill <exec-id>`
+
+Runs or manages commands inside a running VM over the authenticated
+**guest-control transport**: the CLI opens an owner connection to the
+daemon public socket, the daemon reaches the VM's `guestd` over the
+authenticated guest-control vsock channel, and the endpoints exchange
+typed `exec` operations. There is **no SSH** and **no host PTY** — the
+guest owns the PTY. Exec is admin-only (the same `SO_PEERCRED` admin
+gate as other privileged verbs); a launcher-role caller is rejected with
+the typed `authz-not-admin` error (exit `77`, AUTH) before any guest
+session or detached create is attempted.
+
+Exec command forms **always require `--`** before `<cmd>`. Tokens after
+`<vm>` without `--` are management verbs; an unknown verb is a usage
+error that tells the operator to use `--` to run a command. This means
+`list`, `logs`, `status`, and `kill` remain valid VM names:
+`nixling vm exec list -- bash` runs `bash` in a VM named `list`, while
+`nixling vm exec list status <id>` asks that VM for a detached exec's
+status.
+
+**Execution identity and command resolution.** Every attached and
+detached exec runs the requested command as the VM's configured workload
+user (`ssh.user`) — **never root** — inside a real PAM login session
+(`systemd-run --property=PAMName=login --uid=<user>`). The command sees
+the same login environment an interactive SSH login would
+(`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, login-shell profile). `argv[0]`
+may be a bare program name or relative path; the workload user's login
+shell resolves it through that user's login `PATH` before `exec`. The
+wire `user` field is host-fixed by `guestd` and ignored; operators
+elevate with `sudo` inside the session. The console replacement is:
+
+```console
+$ nixling vm exec -it corp-vm -- bash
+```
 
 Modes:
 
-- **non-interactive** (default): stdin is closed up front; stdout and
-  stderr are streamed back as separate streams and written to the host's
-  stdout/stderr.
+- **Attached, non-interactive** (default): stdin is closed up front;
+  stdout and stderr are streamed back as separate streams and written to
+  the host's stdout/stderr.
 - **`-t`/`--tty`**: allocates a PTY **in the guest**, puts the host
   terminal in raw mode for the session, and forwards host stdin to the
   guest command (`-t` implies `-i`). stderr is merged into stdout by the
@@ -2280,59 +2300,106 @@ Modes:
   stdin. The guest-control transport forwards stdin **only** in PTY
   mode, so `-i` **must** be paired with `-t` (use `-it`); `-i` without
   `-t` is a usage error.
+- **`-d`/`--detach`**: creates a non-interactive detached exec, prints
+  the opaque `exec_id`, and returns without streaming stdio. The command
+  continues after the host client disconnects. `-d` is rejected with
+  `-i` or `-t`, and it still requires a command after `--`.
 
-FSM (one session, one exec, no per-op reconnect): the CLI drains
-enqueued host signals, forwards ready stdin, then bounded-long-polls
-stdout (and, in non-tty mode, polls stderr) so stdin and signals are
-never starved behind an output poll. When both streams reach EOF it
-polls `Wait` until the terminal disposition is known, having already
-flushed all output. Host terminal state (termios + `O_NONBLOCK`) is
-restored on **every** exit, error, disconnect, or panic via an RAII
-guard.
+Attached FSM (one session, one exec, no per-op reconnect): the CLI
+drains enqueued host signals, forwards ready stdin, then
+bounded-long-polls stdout (and, in non-tty mode, polls stderr) so stdin
+and signals are never starved behind an output poll. When both streams
+reach EOF it polls `Wait` until the terminal disposition is known,
+having already flushed all output. Host terminal state (termios +
+`O_NONBLOCK`) is restored on **every** exit, error, disconnect, or panic
+via an RAII guard.
 
-Signal forwarding (enqueue-only; handlers never touch termios or make
-syscalls): `SIGWINCH` → guest PTY `Resize` (tty mode only); `SIGINT` →
-guest signal `2`; `SIGQUIT` → `3`; `SIGHUP` → `1`; `SIGTERM` → `15`;
-`SIGTSTP` → `20`, all delivered to the exec's foreground process group.
+Attached signal forwarding (enqueue-only; handlers never touch termios
+or make syscalls): `SIGWINCH` → guest PTY `Resize` (tty mode only);
+`SIGINT` → guest signal `2`; `SIGQUIT` → `3`; `SIGHUP` → `1`;
+`SIGTERM` → `15`; `SIGTSTP` → `20`, all delivered to the exec's
+foreground process group.
+
+Detached management:
+
+- **create** — `nixling vm exec -d <vm> -- <cmd> [args…]`: human output
+  is one copy-pasteable `exec_id` line. JSON emits
+  `{ "command": "vm exec", "vm": "<vm>", "execId": "<id>", "state": "<state>" }`.
+- **list** — `nixling vm exec <vm> list`: human output is a table with
+  `execId`, state, start time, and terminal status when available. JSON
+  emits `{ "command": "vm exec list", "vm": "<vm>", "execs": [ { "execId",
+  "state", "startedAt", "exitCode"?, "signal"?, "startOffset",
+  "endOffset", "droppedBytes", "truncated" } ] }`; implementations also
+  expose per-stream stdout/stderr offsets and dropped/truncated flags for
+  resume-capable clients.
+- **status** — `nixling vm exec <vm> status <exec-id>`: human output is
+  the state plus terminal disposition. JSON emits
+  `{ "command": "vm exec status", "vm": "<vm>", "execId": "<id>",
+  "state", "reason"?, "exitCode"?, "signal"?, "startOffset",
+  "endOffset", "droppedBytes", "truncated" }`.
+- **logs** — `nixling vm exec <vm> logs <exec-id>`: human output writes
+  retained stdout/stderr bytes to the corresponding host streams and
+  prints only bounded metadata warnings to stderr when bytes were
+  dropped, truncated, or expired. JSON emits
+  `{ "command": "vm exec logs", "vm": "<vm>", "execId": "<id>",
+  "stdoutBase64", "stderrBase64", "startOffset", "endOffset",
+  "droppedBytes", "truncated" }`, plus per-stream
+  `stdoutStartOffset`/`stdoutEndOffset`/`stdoutNextOffset` and
+  `stderrStartOffset`/`stderrEndOffset`/`stderrNextOffset` fields for
+  offset resume. Logs are bounded ring buffers; dropped and truncated
+  accounting is metadata, not log content.
+- **kill** — `nixling vm exec <vm> kill <exec-id>`: public name for
+  `ExecCancel`. Guestd requests graceful termination, waits a bounded
+  grace window, then force-kills the workload if needed. The operation is
+  idempotent: human output confirms the result, and JSON emits
+  `{ "command": "vm exec kill", "vm": "<vm>", "execId": "<id>",
+  "result": "cancelling"|"already-terminal", "state": "<state>" }`.
+
+Detached exec is supervised inside `guestd` and its in-guest detached
+runner. It does not add a privileged broker operation. Guestd reconciles
+detached runner/workload units before advertising detached capability,
+re-adopts structurally valid work, cleans orphaned workload units, and
+runs a periodic reaper for terminal records and retained-log slots.
 
 **Exit codes:**
 
 | Exit | Source | Meaning |
 | --- | --- | --- |
-| `0`–`255` | guest | The guest command's `WIFEXITED` status passes through unchanged. |
-| `128+N` | guest | The guest command was killed by signal `N` (`WIFSIGNALED`). |
-| `2` | cli | Usage error: missing command after `--`, malformed `--env`, `-t` without a terminal, `-i` without `-t`, or `--json` combined with `-i`/`-t`. |
+| `0` | cli | Detached create/list/status/logs/kill succeeded. |
+| `0`–`255` | guest | Attached guest command `WIFEXITED` status passes through unchanged. |
+| `128+N` | guest | An attached guest command was killed by signal `N` (`WIFSIGNALED`). |
+| `2` | cli / guest-control | Usage error: missing command after `--`, unknown management verb without `--`, missing detached exec id, malformed `--env`, `-d` with `-i`/`-t`, `-t` without a terminal, `-i` without `-t`, `--json` combined with `-i`/`-t`, or guest-side `INVALID_PROGRAM` (`guest-control-invalid-program`) for an empty/leading-`-` program. |
 | `69` | transport | The guest-control transport was unreachable, or a per-op/establishment deadline elapsed (`guest-control-transport-unavailable`, `guest-control-timeout`). |
-| `70` | guest-control | The VM generation does not support guest-control exec, or it lacks a required exec capability (`guest-control-unavailable-old-generation`, `guest-control-capability-unavailable`). No SSH fallback. |
+| `70` | guest-control | The VM generation does not support guest-control exec, or it lacks a required exec capability (`guest-control-unavailable-old-generation`, `guest-control-capability-unavailable`, `guest-control-exec-detached-unavailable`). No SSH fallback. |
 | `75` | guest-control | The exec session table is at capacity or `Start` was rate limited (`exec-session-capacity`, `exec-session-rate-limited`). |
-| `76` | protocol | The guest returned a malformed/out-of-contract response, or rejected the op (`guest-control-protocol-error`, `guest-control-exec-error`). |
-| `77` | guest-control | The authenticated guest-control handshake was rejected (`guest-control-auth-failed`), or the daemon's admin gate refused a non-admin caller (`authz-not-admin`) — `vm exec` is admin-only. Both are authorization failures and map to the AUTH reserved code. |
-| `42` | internal | Daemon-internal or CLI-internal failure driving the session. |
+| `76` | protocol / guest-control | The guest returned a malformed/out-of-contract response, returned an op error, or no longer retains the requested detached record (`guest-control-protocol-error`, `guest-control-exec-error`, `guest-control-exec-not-found`, `guest-control-exec-expired`). |
+| `77` | guest-control | The authenticated guest-control handshake was rejected (`guest-control-auth-failed`), the daemon's admin gate refused a non-admin caller (`authz-not-admin`), or a stale exec session was detected (`guest-control-stale-session`). |
+| `42` | internal | Daemon-internal or CLI-internal failure driving exec. |
 
 A guest command that itself exits `70` (or any reserved transport
-number) is **not** ambiguous in machine-readable output: `--json` carries
-`source` plus `guestExitCode`/`transportExitCode` so a consumer
-distinguishes a guest exit code from a transport class that shares the
-shell status number.
+number) is **not** ambiguous in machine-readable output: attached
+`--json` carries `source` plus `guestExitCode`/`transportExitCode` so a
+consumer distinguishes a guest exit code from a transport class that
+shares the shell status number.
 
-**`--json` envelope** (non-interactive only): a single terminal stdout
-object.
+**Attached `--json` envelope** (non-interactive, non-detached only): a
+single terminal stdout object.
 
 - success → `{ "command": "vm exec", "vm", "source": "guest", "exitCode", "reason": "exited"|"signaled", "guestExitCode"?|"signal"?, "stdoutBase64", "stderrBase64", "stdoutTruncated", "stderrTruncated" }`. Only a true guest `WIFEXITED`/`WIFSIGNALED` terminal is a success.
 - failure → `{ "command": "vm exec", "vm", "source": "transport"|"guest-control"|"protocol"|"internal"|"cli", "reason": "<wire-kind>", "exitCode", "transportExitCode"?, "message", "remediation"? }`. Abnormal terminal kinds (`lost-guestd`, `cancelled`, `reaped`) and a malformed/missing terminal status are failures with a reserved code and a non-`guest` source — never a synthesized guest exit. A failure envelope never carries captured stdio bytes. Usage errors (`source: "cli"`, exit `2`) also emit one envelope.
 
-Captured output in the `--json` envelope is bounded; `stdoutTruncated` /
+Captured output in JSON envelopes is bounded; `stdoutTruncated` /
 `stderrTruncated` flag a clamp. argv, env, cwd, and stdio bytes never
-appear in any span, log, audit record, or metric label — only an
-aggregate outcome counter and a single kind=critical
-session-establishment event (carrying the VM name, peer uid, and
-negotiated tty only) are emitted. The opaque session handle is never
-written to a span, log, audit record, or metric label.
+appear in any span, log, audit record, or metric label. Attached exec
+emits only an aggregate outcome counter and a single kind=critical
+session-establishment event (VM name, peer uid, negotiated tty).
+Detached create/kill daemon audit is similarly redacted: VM, peer uid,
+closed action/result enums, and the opaque exec id only.
 
-**Disposition:** `rust-native` — owner connection over the daemon public
-socket → authenticated guest-control session → `guestd` exec RPCs; no
-SSH, no host PTY, no new privileged broker op (the session table lives
-in-process in `nixlingd`).
+**Disposition:** `rust-native` — daemon public socket → authenticated
+guest-control session → `guestd` exec RPCs; no SSH, no host PTY, no new
+privileged broker op (attached sessions live in-process in `nixlingd`;
+detached state lives in guestd's detached registry).
 
 ## Dispatch capability table
 
@@ -2374,4 +2441,4 @@ in-process in `nixlingd`).
 | `host install` | `rust-native` | Host install owns its dry-run preview in Rust and routes `--apply` through the daemon → broker `RunHostInstall` path without broker-error fallback to bash. |
 | `migrate` | `rust-native` | Dry-run analysis is native; `--apply` routes through `nixlingd` → broker `RunMigrate`. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `auth status` | `rust-native` | Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints. |
-| `vm exec` | `rust-native` | Owner connection over the daemon public socket → authenticated guest-control session → `guestd` exec RPCs. Admin-only; no SSH, no host PTY, no new privileged broker op (the exec session table is in-process in `nixlingd`). |
+| `vm exec` | `rust-native` | Daemon public socket → authenticated guest-control session → `guestd` exec RPCs. Admin-only; no SSH, no host PTY, no new privileged broker op. Attached exec uses the in-process `nixlingd` session table; detached exec uses guestd's detached registry and VM-first management verbs. |

@@ -81,7 +81,8 @@ id. Each `ExecListEntry` carries `exec_id`, `slot`, `state`,
 environment, or cwd), and the per-stream `stdout_truncated`/`stderr_truncated`
 booleans plus `dropped_bytes`. `ExecList` reconciles on access (a listed
 vanished job shows `cancelled`/lost, not stale `running`), authenticates
-before any side effect, and never lists attached execs.
+before any side effect, and never lists attached execs. The CLI and public
+daemon DTOs do not expose the argv hash.
 
 A detached exec lookup distinguishes three not-available conditions with
 distinct typed error kinds:
@@ -568,12 +569,13 @@ different leaves only if they preserve the same security properties:
    directories and log segments are `0700` directories and `0600` files,
    owned by the root `nixling-guestd` service account, not by the target
    workload user.
-2. Detached exec is served entirely by the root guestd; there is no
-   `nixling-userd` involvement and no per-user retained-log path to resolve.
-   Reachable attached exec runs as the host-fixed workload user (`ssh.user`)
-   inside a PAM login session, never root; the wire `user` field is ignored
-   and there is no separate user-session daemon (`nixling-userd` was removed;
-   see [ADR 0030](../adr/0030-guest-exec-as-workload-user.md)).
+2. Detached retained-log ownership is served by the root guestd and its
+   trusted runner; there is no `nixling-userd` involvement and no per-user
+   retained-log path to resolve. Attached exec and the detached workload
+   child both run as the host-fixed workload user (`ssh.user`) inside a PAM
+   login session, never root; the wire `user` field is ignored and there is
+   no separate user-session daemon (`nixling-userd` was removed; see
+   [ADR 0030](../adr/0030-guest-exec-as-workload-user.md)).
 3. Every open is rooted at the pre-opened runtime/state directory and uses
    symlink-safe, beneath-root traversal. Symlinks, `..`, hard-link count
    surprises, non-regular log segments, world/group-writable parents, and
@@ -882,13 +884,13 @@ payload bytes, or guest free-form error text.
 > `ExecSignal`/`ExecInspect`/`ExecWait`/`ExecCancel`) is the shipped
 > contract. The `nixling vm exec` **CLI** described below — including the
 > `--interactive` / `-i`, `--tty` / `-t`, and the interactive `exec -it`
-> flow — is shipped and drives that RPC surface (admin-only). The
-> `--detach` *CLI flag* is not exposed, and detached exec is **disabled in
-> this release**: production `guestd` forces `detached` off and the daemon
-> rejects a `detached = true` request, so a detached `ExecCreate` fails
-> closed (`GuestExecDisabled` / `UnsupportedMode`) — including through the
-> service surface — pending its workload-user migration. The behaviors
-> below specify the CLI mapping onto the RPC surface.
+> flow — is shipped and drives that RPC surface (admin-only). Detached
+> non-interactive exec is also shipped: `nixling vm exec -d <vm> --
+> <cmd>` creates a workload-user detached exec, and `nixling vm exec <vm>
+> list|logs|status|kill <id>` manages retained records. Detached exec uses
+> the same never-root workload-user model as attached exec, remains inside
+> guestd (no broker op), and is advertised only when guestd has reconciled
+> a usable detached registry.
 
 ### Attached exec
 
@@ -914,28 +916,38 @@ resizes as sequenced `TtyWinResize` calls with rows/cols in `1..65535`,
 merges output through stdout, and restores local terminal raw mode on every
 return path.
 
-### Detached exec (reserved; disabled in this release)
+### Detached exec
 
-Detached exec is **not exposed through the `nixling` CLI** today (there is
-no `--detach` flag and no `vm exec inspect/logs/attach/kill/run`
-subcommands; see the scope note above), and it is **disabled in this
-release**: the daemon rejects `detached = true` and production `guestd`
-forces `detached` off, so a detached create fails closed
-(`GuestExecDisabled` / `UnsupportedMode`) rather than returning an
-`exec_id`. The contract below is the **reserved** design that a future
-workload-user-migration release re-enables; when served, a detached create
-returns the `exec_id`, initial state, and effective retention limits and
-the process continues after host transport disconnect. The corresponding
-service operations are:
+`nixling vm exec -d <vm> -- <argv...>` creates a non-TTY detached exec and
+returns an opaque `exec_id` plus the initial state. The command runs as the
+VM's workload user inside a PAM login session, never as root, and
+continues after the host CLI disconnects. `-d` is mutually exclusive with
+`-i` and `-t`, and the command form still requires `--`; bare `argv[0]`
+names are resolved by the workload user's login `PATH` through the same
+`exec "$@"` wrapper used by attached exec.
 
-- `ExecInspect` for state and offset windows;
-- `ExecLogs` for retained logs;
-- a fresh attached `ReadOutput`/`ExecWait` poll to resume from a chosen
-  cursor;
-- `ExecSignal` (or later policy escalation) to terminate.
+Detached management is VM-first so management words remain valid VM names:
 
-A future release may surface these as CLI subcommands; until then the
-catalogue above is the authoritative detached-exec contract.
+- `nixling vm exec <vm> list` lists retained detached records;
+- `nixling vm exec <vm> logs <exec_id>` returns retained stdout/stderr;
+- `nixling vm exec <vm> status <exec_id>` returns state and terminal
+  disposition;
+- `nixling vm exec <vm> kill <exec_id>` maps to `ExecCancel`.
+
+`kill` is a two-phase cancel: guestd requests graceful termination, waits a
+bounded grace window, then force-kills the workload if needed. It is
+idempotent, returning `cancelling` for a live record or `already-terminal`
+for a terminal one.
+
+Detached logs are bounded ring buffers with dropped/truncated accounting.
+`ExecLogs` uses per-stream offsets (`stdout` and `stderr`) so clients can
+resume from retained cursors without replaying already-consumed bytes.
+
+Guestd reconciles detached state before advertising the detached
+capability: it re-adopts structurally valid runner/workload units, cleans
+orphaned workload units, and starts a periodic reaper that expires terminal
+records and releases retained-log slots. Detached exec remains entirely
+inside guestd's exec service; there is no privileged broker operation.
 
 ### Old-generation VMs
 
@@ -1197,6 +1209,8 @@ incorrect CLI retry behavior around `stdin-backpressure` or
 ## References
 
 - [ADR 0028: Guest control plane over virtio-vsock](../adr/0028-guest-control-plane-over-vsock.md)
+- [ADR 0030: Guest exec runs as the workload user in a PAM login session](../adr/0030-guest-exec-as-workload-user.md)
+- [ADR 0031: Bare commands and detached workload-user exec](../adr/0031-bare-command-and-detached-exec.md)
 - [Guest control feasibility dossier](../adr/guest-control-feasibility-dossier.md)
 - [Kata Agent protocol stdio RPCs](https://github.com/kata-containers/kata-containers/blob/6d2066b692ce69a908bb4daec2c6b71ccfad3829/src/libs/protocols/protos/agent.proto#L33-L49)
 - [Kata Agent stream message shapes](https://github.com/kata-containers/kata-containers/blob/6d2066b692ce69a908bb4daec2c6b71ccfad3829/src/libs/protocols/protos/agent.proto#L211-L227)
