@@ -25,9 +25,9 @@ is_known_non_layer1() {
       # Documented optional Layer-2 live-host tests in tests/README.md.
       return 0
       ;;
-    live-vm-smoke.sh|swtpm-persistence-smoke.sh|state-dir-acl-runtime.sh)
-      # Layer-2 live-host / runtime tests (real VM boot, state-dir ACLs,
-      # swtpm persistence). Not Layer-1 static gates; run on a live host.
+    live-vm-smoke.sh|swtpm-persistence-smoke.sh)
+      # Layer-2 live-host / runtime tests (real VM boot, swtpm persistence).
+      # Not Layer-1 static gates; run on a live host.
       return 0
       ;;
     hardware-smoke-gpu-yubikey.sh)

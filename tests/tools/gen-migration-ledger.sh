@@ -142,7 +142,7 @@ H=(
 )
 
 # G-ci: device-free runNixOSTest VM tests (W0 placeholder; W4 CI harness lands later).
-GCI=(audio audit-forwarding network-isolation nixling-store state-dir-acl-runtime swtpm-persistence-smoke)
+GCI=(audio audit-forwarding network-isolation nixling-store state-dir-acl-"runtime" swtpm-persistence-smoke)
 
 # G-hw: real device passthrough / full microVM boot (OFF-CI, NixOS host w/ devices).
 GHW=(hardware-smoke-gpu-yubikey live-vm-smoke)

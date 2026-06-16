@@ -224,15 +224,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/state-dir-acl-runtime.sh"
-group = "GCI"
-make_target = "test-integration"
-tier = "ci-kvm"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
 name = "tests/stub-no-socket.sh"
 group = "A"
 make_target = "test-rust"
@@ -267,6 +258,15 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
+
+[[script]]
+name = "tests/state-dir-acl-runtime.sh"
+group = "GCI"
+make_target = "test-integration"
+tier = "ci-kvm"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["vmChecks.<system>.state-dir-acl (tests/nixos/state-dir-acl.nix — hermetic runNixOSTest asserting the 5 g:nixling:--x traversal-ACL invariants against the real activated /var/lib/nixling)"]
+exercised_today = "manual"
 
 [[script]]
 name = "tests/bridge-isolation-runtime.sh"

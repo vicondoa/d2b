@@ -13,7 +13,6 @@ WORKFLOW_DIR="$ROOT/.github/workflows"
 # TODO(test-rearch): remove these entries as workflows converge on make targets.
 allowlisted_workflows=(
   .github/workflows/eval-with-entra-id.yml
-  .github/workflows/layer2-runtime-with-sudo.yml
   .github/workflows/pr-cargo-workspace.yml
   .github/workflows/pr-eval-shell-tests.yml
   .github/workflows/pr-l1c-privilege-oracle.yml

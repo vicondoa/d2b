@@ -412,54 +412,27 @@ sudo -A nixos-rebuild switch --flake "$FLAKE#$HOST" && \
 If both `--quick` runs are green and any failed VM was running before,
 the change is safe to commit.
 
-## Layer-2 with-sudo CI hook (v1.2fu58)
+## State-dir ACL VM check
 
-`tests/state-dir-acl-runtime.sh` is a Layer-2, root-only adversarial
-test that exercises the `/var/lib/nixling` traversal ACL added in
-v1.2fu58. It creates synthetic users + a throwaway state-dir, applies
-the activation script's setfacl pattern, and asserts:
+`vmChecks.<system>.state-dir-acl` boots the shared daemon
+runNixOSTest node and asserts the real activated `/var/lib/nixling`
+posture:
 
-- A launcher-group member CAN traverse + read the per-VM SSH key.
-- A non-launcher user CANNOT stat the key (no traversal).
-- The traversal grant is `--x` only (launcher member cannot list the
-  state-dir contents).
+- A launcher-group member CAN traverse to and read the per-VM SSH key.
+- A non-launcher user CANNOT stat the key or list the keys directory.
+- The launcher-group grant on the state-dir parent is `--x` only.
 
-### Local run
-
-Skipped silently if not root. Opt in via:
+Run it directly on an x86_64 host with KVM:
 
 ```bash
-NL_RUN_LAYER2_WITH_SUDO=1 sudo -n bash tests/state-dir-acl-runtime.sh
+nix build --impure --no-link .#vmChecks.x86_64-linux.state-dir-acl
 ```
-
-### CI run
-
-`.github/workflows/layer2-runtime-with-sudo.yml` is **manual
-dispatch only** (`workflow_dispatch`) — it is NOT triggered on
-`pull_request` because it uses passwordless `sudo -n` on a
-self-hosted runner and running PR-controlled code under root would
-be a privilege-escalation footgun (panel R9 security-1 +
-networking-1). Maintainers manually dispatch the workflow against a
-reviewed ref:
-
-```bash
-gh workflow run layer2-runtime-with-sudo.yml --ref <ref>
-```
-
-The `paths` list inside the workflow YAML doubles as a reviewer
-checklist: PRs that touch `nixos-modules/host-activation.nix`,
-`nixos-modules/host-activation.d/state-dir-acl.sh`,
-`nixos-modules/host-keys.nix`, or `tests/state-dir-acl-*.sh`
-should be Layer-2-dispatched after review. See
-[`CONTRIBUTING.md` § "Provisioning the `nixling-sudo` self-hosted
-runner"](../CONTRIBUTING.md) for runner setup.
 
 ## Runtime nixosTest follow-ups
 
 Layer-3 nixosTest coverage should add these invariants:
 
 - Cross-uid runner stop via broker fallback.
-- Launcher key-path traversal without read escalation.
 - Post-rename lifecycle authorization through only the `nixling` group.
 - Broker `DeregisterRunnerPidfd` lifecycle with no leak after normal
   stop and after daemon crash/restart.
