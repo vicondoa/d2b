@@ -114,15 +114,24 @@ test-fixtures:
 	system="$$(nix eval --raw --impure --expr builtins.currentSystem)"; \
 	nix build --no-link --print-out-paths ".#checks.$$system.fixture-smoke"
 test-mutation:    ; @echo "test-mutation: standing mutation gate lands W1+ (plan §3.7)"
-## test-integration — W0 placeholder: run legacy G-ci only on a local NixOS host
-## with KVM. The runNixOSTest CI job lands in W4; do not run live-host scripts
-## on generic CI runners.
+## test-integration — G-ci: podman container integration tests. Each
+## tests/containers/*.sh runner builds its Nix-built OCI image
+## (containerImages.<system>.<name>, NOT swept by `nix flake check`) and runs it
+## with rootless podman. Scope is foreign-userland portability only (e.g. a
+## static nixling binary on stock Ubuntu); daemon/socket activation is covered
+## natively (see tests/containers/README.md). Runs identically on a NixOS host
+## and a GitHub Actions ubuntu-latest runner (podman preinstalled).
 test-integration:
-	@if [ -e /dev/kvm ] && [ -f /etc/NIXOS ]; then \
-	bash tests/tools/run-layer.sh test-integration; \
-	else \
-	echo "G-ci legacy tests need a NixOS host; runNixOSTest harness lands W4"; \
-	fi
+	@set -eu; \
+	scripts="$$(find tests/containers -maxdepth 1 -name '*.sh' ! -name 'lib.sh' -type f 2>/dev/null | sort)"; \
+	if [ -z "$$scripts" ]; then \
+	echo "test-integration: no tests/containers/*.sh runners present"; \
+	exit 0; \
+	fi; \
+	for s in $$scripts; do \
+	echo "==> $$s"; \
+	bash "$$s"; \
+	done
 ## test-hardware — G-hw: real GPU/YubiKey/hardware-TPM passthrough + full
 ## microVM boot. NixOS host WITH the devices only; CI cannot run this.
 test-hardware:    ; bash tests/tools/run-layer.sh test-hardware

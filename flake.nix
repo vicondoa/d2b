@@ -169,6 +169,43 @@
 
       apps = forAllSystems (system: { });
 
+      # Container-based integration test images (the type-G layer), built by
+      # Nix and run with podman, rootless. Exposed under `containerImages`,
+      # NOT `checks`, so the Layer-1 `nix flake check --no-build --all-systems`
+      # never builds an image. The `make test-integration` target
+      # (tests/containers/*.sh, driven via podman) builds + runs them; the same
+      # target runs on a GitHub Actions ubuntu-latest job (podman is
+      # preinstalled there) and locally.
+      #
+      # Scope: this layer is ONLY for things that need a foreign (non-Nix)
+      # userland — e.g. proving a static nixling binary runs on stock Ubuntu.
+      # It deliberately does NOT boot systemd for daemon/socket activation;
+      # that is covered natively by
+      # packages/nixling-priv-broker/tests/socket_activation.rs plus nix-unit.
+      # See tests/containers/README.md.
+      #
+      # Auto-discovered from tests/containers/images/*.nix: each image module is
+      # `{ pkgs, self, system }: <dockerTools-built OCI image>`, so adding a new
+      # container test is one new image file + its tests/containers/<name>.sh
+      # runner — no edit here. x86_64-linux only (the project's CI runners +
+      # this host are x86_64; aarch64 images need an aarch64 builder).
+      containerImages = forAllSystems (system:
+        if system == "x86_64-linux" then
+          let
+            pkgs = nixpkgsFor.${system};
+            imageDir = ./tests/containers/images;
+            imageFiles = if builtins.pathExists imageDir
+              then builtins.attrNames (nixpkgs.lib.filterAttrs
+                (name: type: type == "regular" && nixpkgs.lib.hasSuffix ".nix" name)
+                (builtins.readDir imageDir))
+              else [ ];
+            mkImage = file: {
+              name = nixpkgs.lib.removeSuffix ".nix" file;
+              value = import (imageDir + "/${file}") { inherit pkgs self system; };
+            };
+          in builtins.listToAttrs (map mkImage imageFiles)
+        else { });
+
       templates.default = {
         path = ./templates/default;
         description = "Minimal nixling host scaffold — one env, one headless workload VM";
