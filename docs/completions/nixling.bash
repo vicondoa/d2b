@@ -2579,7 +2579,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__vm__subcmd__exec)
-            opts="-i -t -h --interactive --tty --env --cwd --json --human --help <VM> [COMMAND]..."
+            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

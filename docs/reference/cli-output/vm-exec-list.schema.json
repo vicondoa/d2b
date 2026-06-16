@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VmExecListOutputV1",
+  "type": "object",
+  "required": [
+    "command",
+    "execs",
+    "vm"
+  ],
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "execs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/VmExecListEntryOutputV1"
+      }
+    },
+    "vm": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ExecState": {
+      "type": "string",
+      "enum": [
+        "created",
+        "running",
+        "exited",
+        "signaled",
+        "cancelled",
+        "slow-consumer-cancelled",
+        "protocol-error",
+        "lost-guestd",
+        "reaped"
+      ]
+    },
+    "VmExecListEntryOutputV1": {
+      "type": "object",
+      "required": [
+        "droppedBytes",
+        "endOffset",
+        "execId",
+        "startOffset",
+        "startedAt",
+        "state",
+        "stderrDroppedBytes",
+        "stderrEndOffset",
+        "stderrStartOffset",
+        "stderrTruncated",
+        "stdoutDroppedBytes",
+        "stdoutEndOffset",
+        "stdoutStartOffset",
+        "stdoutTruncated",
+        "truncated"
+      ],
+      "properties": {
+        "droppedBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "endOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "execId": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "signal": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "startOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/definitions/ExecState"
+        },
+        "stderrDroppedBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrEndOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrStartOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrTruncated": {
+          "type": "boolean"
+        },
+        "stdoutDroppedBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutEndOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutStartOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutTruncated": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VmExecStatusOutputV1",
+  "type": "object",
+  "required": [
+    "command",
+    "droppedBytes",
+    "endOffset",
+    "execId",
+    "startOffset",
+    "state",
+    "truncated",
+    "vm"
+  ],
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "droppedBytes": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "endOffset": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "execId": {
+      "type": "string"
+    },
+    "exitCode": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32"
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "signal": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "startOffset": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "state": {
+      "$ref": "#/definitions/ExecState"
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "vm": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ExecState": {
+      "type": "string",
+      "enum": [
+        "created",
+        "running",
+        "exited",
+        "signaled",
+        "cancelled",
+        "slow-consumer-cancelled",
+        "protocol-error",
+        "lost-guestd",
+        "reaped"
+      ]
+    }
+  }
+}

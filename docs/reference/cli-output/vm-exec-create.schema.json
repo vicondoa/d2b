@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VmExecCreateOutputV1",
+  "type": "object",
+  "required": [
+    "command",
+    "execId",
+    "state",
+    "vm"
+  ],
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "execId": {
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/definitions/ExecState"
+    },
+    "vm": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ExecState": {
+      "type": "string",
+      "enum": [
+        "created",
+        "running",
+        "exited",
+        "signaled",
+        "cancelled",
+        "slow-consumer-cancelled",
+        "protocol-error",
+        "lost-guestd",
+        "reaped"
+      ]
+    }
+  }
+}
