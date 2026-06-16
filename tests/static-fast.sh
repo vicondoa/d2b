@@ -153,9 +153,9 @@ run_script_gate_if_present "tests/guest-control-auth-eval.sh" "$ROOT/tests/guest
 run_script_gate_if_present "tests/guest-control-token-materializer.sh" "$ROOT/tests/guest-control-token-materializer.sh"
 run_script_gate_if_present "tests/guest-control-vsock-eval.sh" "$ROOT/tests/guest-control-vsock-eval.sh"
 
-run_gate "nix flake check --no-build --all-systems" '
-  nix flake check "'$ROOT'" --no-build --all-systems
-'
+run_gate "nix flake check --no-build --all-systems" "
+  nix flake check '$ROOT' --no-build --all-systems
+"
 
 # ---------------------------------------------------------------------------
 # Rust workspace
@@ -185,7 +185,7 @@ log "==> Host-prepare gates"
 # cargo/rustc ahead of packages/rust-toolchain.toml. Rust gates that need
 # cargo bootstrap the pinned channel through rustup.
 if ! command -v cargo >/dev/null 2>&1; then
-  rust_path=$(nix shell --quiet --inputs-from "$ROOT" nixpkgs#rustup nixpkgs#stdenv.cc nixpkgs#sccache --command bash -lc 'printf %s "$PATH"')
+  rust_path=$(nix shell --quiet --inputs-from "$ROOT" nixpkgs#rustup nixpkgs#stdenv.cc nixpkgs#sccache --command bash -lc "printf %s \"\$PATH\"")
   PATH="$rust_path:$PATH"
   export PATH
 fi

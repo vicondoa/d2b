@@ -10,28 +10,10 @@
 //!   * tests/broker-validate-bundle.sh          -> broker_delegates_bundle_validation_to_core
 //!   * tests/privileges-matrix-completeness.sh   -> privileges_matrix_covers_declared_operations
 //!
-//! Reclassified (NOT migrated here): tests/broker-enum-disposition.sh.
-//!   That gate cross-references `docs/reference/broker-w2-dispositions.md`
-//!   against the v2 privileges schema enum and the broker dispatcher in
-//!   `packages/nixling-priv-broker/src/runtime.rs`. It is documented as
-//!   pre-existing breakage in `tests/README.md` and cannot be faithfully
-//!   ported to a *green* test without redesigning the gate's intent:
-//!     (1) its completeness assertion compares a deliberately v1-derived
-//!         snapshot doc against the v2 enum (so the doc is intentionally a
-//!         subset and the equality check is always red);
-//!     (2) its disposition->dispatcher-arm assertion was never green — the
-//!         current `runtime.rs` carries a `#[cfg(test)]` module (~line 7400+)
-//!         that constructs `BrokerRequest::X(..)` *values*, which the gate's
-//!         line-anchored arm parser captures and uses to overwrite the real
-//!         dispatcher-arm segments; `GuestControlSign` is dispatched via an
-//!         early `if let` rather than a match arm; and the doc uses a
-//!         `promoted-live` disposition the gate has no handler for.
-//!   Greening it requires scoping the arm parser to the snapshot dispatcher
-//!   block, dropping the completeness direction, and adding a `promoted-live`
-//!   handler — three intent decisions `tests/README.md` reserves to "the
-//!   original authors' intent" (the W2-snapshot->live migration). It is left
-//!   for the integrator; this unit does not retire `broker-enum-disposition.sh`
-//!   and creates no migration-state record for it.
+//! `tests/broker-enum-disposition.sh` is migrated separately in
+//! `policy_broker_dispositions.rs`, because it owns a larger cross-reference
+//! between the broker-disposition doc table, the privileges schema enum, and the
+//! production real-wire dispatcher.
 //!
 //! Spec corrections (existing code is canon):
 //!   * broker-validate-bundle.sh's 4th assertion forbids ALL

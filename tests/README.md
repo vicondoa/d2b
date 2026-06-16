@@ -182,17 +182,16 @@ unless it also reproduces in CI.
 | `tests/cli-contract-coverage.sh` | The `host check` flag-acceptance probe treats any `rc == 2` as "flag rejected", but `host check` returns a non-zero posture/`internal-io` exit when `nft` is absent or the real host posture is imperfect. (It also has a genuine, CI-visible dispatch-table doc-drift for the merge-added `usb`/`audio` verbs — see below.) |
 | `tests/examples-with-observability-eval.sh` | The example's `flake.lock` carries a mutable `path:../..` lock that `nix eval` rejects in this checkout layout. |
 
-### Layer-1 gates with pre-existing breakage inherited from `main`
+### Layer-1 gate with pre-existing breakage inherited from `main`
 
-These gates fail independently of host environment (i.e. on CI too)
+This gate fails independently of host environment (i.e. on CI too)
 because of drift that predates the guest-control work and lives in the
-store-view / broker-infra domain. They are **identical to `main`** and
-require the original authors' intent to fix correctly; they are not
-guest-control regressions:
+broker-infra domain. It is **identical to `main`** and requires the
+original authors' intent to fix correctly; it is not a guest-control
+regression:
 
 | Gate | Pre-existing issue |
 | --- | --- |
-| `tests/broker-enum-disposition.sh` | `docs/reference/broker-w2-dispositions.md` lacks rows for store-view ops (`StoreSync`, `StoreVerify`, `BindMountFromHardlinkFarm`, `DiskInit`, …) that are in the schema enum, and the gate has no handler for the doc's existing `promoted-live` disposition. Needs the W2-snapshot→live migration intent. (Only `GuestControlSign` is guest-control's; the other 9 are not.) |
 | `tests/broker-validate-bundle.sh` | Forbids **all** `serde_json::from_str`/`from_value` under the broker `src/` to prevent duplicate bundle parsing, but the broker legitimately parses subprocess JSON (nft / `ip route` / store-view runner output) in `ops/{store_view_farm,route,tap,store_sync_*}.rs`. The over-broad assertion needs narrowing. |
 
 ## Parallel W1 unit protocol

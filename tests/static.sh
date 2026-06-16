@@ -183,7 +183,7 @@ nl_static_path_prefix() {
   local shell_path="$1" base_path="$2"
   case "$shell_path" in
     "$base_path") printf '%s\n' "" ;;
-    *":$base_path") printf '%s\n' "${shell_path%:$base_path}" ;;
+    *":$base_path") printf '%s\n' "${shell_path%:"$base_path"}" ;;
     *) printf '%s\n' "$shell_path" ;;
   esac
 }
@@ -404,7 +404,7 @@ if [ -d "$ROOT/packages" ] && [ -f "$ROOT/packages/rust-toolchain.toml" ]; then
   _STATIC_RUST_SHELL_PATH=$(nix shell --quiet --inputs-from "$ROOT" \
     nixpkgs#rustup nixpkgs#cargo nixpkgs#rustc nixpkgs#rustfmt nixpkgs#clippy \
     nixpkgs#gcc nixpkgs#sccache nixpkgs#cargo-deny nixpkgs#cargo-audit \
-    --command bash -lc 'printf %s "$PATH"')
+    --command bash -lc "printf %s \"\$PATH\"")
   NL_RUST_TOOLCHAIN_PATH=$(nl_static_path_prefix "$_STATIC_RUST_SHELL_PATH" "$PATH")
   export NL_RUST_TOOLCHAIN_PATH
   _STATIC_PINNED_RUST_CHANNEL=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]\+\)".*/\1/p' "$ROOT/packages/rust-toolchain.toml" | head -1)
@@ -549,7 +549,7 @@ fi
 shellcheck_output_dir=$(nl_mktemp .shellcheck.XXXXXX)
 shellcheck_output="$shellcheck_output_dir/output"
 if ! command -v shellcheck >/dev/null 2>&1; then
-  _STATIC_SHELLCHECK_PATH=$(nix shell --quiet --inputs-from "$ROOT" nixpkgs#shellcheck --command bash -lc 'printf %s "$PATH"')
+  _STATIC_SHELLCHECK_PATH=$(nix shell --quiet --inputs-from "$ROOT" nixpkgs#shellcheck --command bash -lc "printf %s \"\$PATH\"")
   _STATIC_SHELLCHECK_PREFIX=$(nl_static_path_prefix "$_STATIC_SHELLCHECK_PATH" "$PATH")
   if [ -n "$_STATIC_SHELLCHECK_PREFIX" ]; then
     PATH="$_STATIC_SHELLCHECK_PREFIX:$PATH"
@@ -1255,7 +1255,6 @@ nl_time_end "W2 CLI smoke prewarm"
 # Group 1: pure/read-only gates that rely on getFlake or generated docs.
 # Keep them away from the runtime socket gates below because dirty-tree
 # snapshots fail closed on in-repo AF_UNIX socket paths.
-if [ -x "$HERE/broker-enum-disposition.sh" ]; then nl_static_parallel_script "tests/broker-enum-disposition.sh" "$HERE/broker-enum-disposition.sh"; fi
 # Pin layer1-bootstrap as the default broker feature
 # until lands the production-shaped runtime.
 if [ -x "$HERE/broker-default-features-build.sh" ]; then nl_static_parallel_script "tests/broker-default-features-build.sh" "$HERE/broker-default-features-build.sh"; fi
