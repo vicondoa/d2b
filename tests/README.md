@@ -37,6 +37,63 @@ User-facing VM names cannot start with `_` (eval-time assertion in
 `nixos-modules/assertions.nix`). The schema is documented in
 `docs/reference/manifest-schema.{md,json}`.
 
+## Test architecture — where test logic lives
+
+The suite was rearchitected to move per-gate logic out of ad-hoc bash
+into typed, fast, fail-closed homes. **When adding or changing a test,
+pick the home by what it asserts — do not add a new `tests/*.sh`
+gate.**
+
+| What you assert | Home | Mechanism |
+| --- | --- | --- |
+| Eval-time value / config shape / eval-failure | `tests/nix-unit/cases/<gate>.nix` | declarative `{ expr; expected; }` / `{ expr; expectedError; }`, auto-discovered by `tests/nix-unit/default.nix`, gated fail-closed by `nix flake check --no-build` (the `nix-unit` check throws at eval time on any failed case or missing pin). |
+| Source / doc / schema lint | `packages/nixling-contract-tests/tests/policy_*.rs` | reads the real checkout via `read_repo_file`; runs from `tests/rust-workspace-checks.sh`. |
+| Daemon / broker / CLI behaviour (KVM-free) | `packages/<crate>/tests/*.rs` | native integration test via `env!("CARGO_BIN_EXE_*")`; runs in the default `cargo test --workspace`. |
+| A gate that only **runs** existing `#[test]`s | `tests/golden/pinned/<gate>.txt` | cargo-pin; fail-closed presence via `tests/tools/assert-pinned-tests.sh`. |
+| Generated-artifact drift (`xtask gen → git diff`) | `tests/drift-check.sh` | one consolidated runner. |
+| Live-host / VM runtime (microVM boot, netns, root ACLs, devices) | `runNixOSTest` (the `test-integration` / `test-hardware` tiers) | **W4** — see "Planned runtime tests" below. |
+
+### `.sh` files that stay permanently (infrastructure, not test cases)
+
+The migration removes per-gate bash, but these are the test *runner*,
+not test *cases* — they never become Rust/nix-unit:
+
+- **Runners / harness:** `static.sh`, `static-fast.sh`,
+  `static-fast-tier0.sh`, `static-timing.sh`, `runner.sh`, `lib.sh`,
+  `preflight-disk-space.sh`, `cli-rust-native-common.sh`,
+  `rust-workspace-checks.sh`.
+- **Tooling:** `tests/tools/{gen-migration-ledger,assert-pinned-tests,gen-nix-unit-pins,run-layer}.sh`.
+- **Meta-gates** that validate the test inventory / CI itself:
+  `adr-index-coverage`, `ci-coverage`, `ci-uses-make`,
+  `cli-contract-coverage`, `deliverable-gate-inventory`,
+  `l3-pin-consistency`, `layer1-self-inventory`, `no-new-deferral`,
+  `pr-checklist-gate`.
+- The consolidated `drift-check.sh`.
+
+The only remaining migratable `.sh` are the live-host/VM **G-tier**
+gates, which leave in W4 (each flips its ledger row to
+`status = "ported"`, its `.sh` is retired, and a `runNixOSTest`
+successor takes over).
+
+### `.nix` files under `tests/` — the destination, not collateral
+
+The `.nix` files are the clean structure the migration moves *toward*;
+they stay and grow:
+
+- `tests/nix-unit/cases/*.nix` + `tests/nix-unit/default.nix` — the
+  migrated eval tests. A former bash eval gate (a `.sh` that shelled
+  out to `nix eval`) becomes a declarative case here.
+- `tests/eval-cases/*.nix`, `tests/smoke-eval*.nix`, and the top-level
+  `guest-control-*-eval.nix` — shared eval **fixtures** (consumer / VM
+  configs) imported by the nix-unit cases and by `flake.checks`
+  (e.g. `nix-unit/cases/guest-control-auth.nix` imports
+  `guest-control-auth-eval.nix`).
+
+The trade is deliberate: sloppy per-test `.sh` → a `.nix` corpus +
+Rust tests. Bash shrinks to the runner/harness; the test *logic* lives
+in nix-unit cases, `policy_*.rs`, `packages/<crate>/tests/*.rs`, or
+cargo-pins.
+
 ## Layer 1 — `static.sh`
 
 Pure eval / parse / dry-build. Runs in seconds. No host activation.
