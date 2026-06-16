@@ -61,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           for t in \
-            tests/bundle-drift.sh \
+            tests/drift-check.sh \
             tests/stub-no-socket.sh \
           ; do
             if [ -f "$t" ]; then

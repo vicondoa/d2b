@@ -62,15 +62,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/bundle-drift.sh"
-group = "B"
-make_target = "test-drift"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
 name = "tests/ci-coverage.sh"
 group = "H"
 make_target = "test-policy"
@@ -107,15 +98,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/daemon-api-drift.sh"
-group = "B"
-make_target = "test-drift"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
 name = "tests/deliverable-gate-inventory.sh"
 group = "H"
 make_target = "test-policy"
@@ -125,7 +107,7 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/error-codes-drift.sh"
+name = "tests/drift-check.sh"
 group = "B"
 make_target = "test-drift"
 tier = "ci-l1"
@@ -143,25 +125,7 @@ successor_ids = [
 exercised_today = "skip"
 
 [[script]]
-name = "tests/guest-control-proto.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
 name = "tests/guest-control-token-materializer.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/guest-proto-bindings.sh"
 group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
@@ -173,15 +137,6 @@ exercised_today = "yes"
 name = "tests/guest-static-consumption-eval.sh"
 group = "F"
 make_target = "test-flake"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/guest-ttrpc-bindings.sh"
-group = "A"
-make_target = "test-rust"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
@@ -267,15 +222,6 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
-
-[[script]]
-name = "tests/manpage-completion-drift.sh"
-group = "B"
-make_target = "test-drift"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
 
 [[script]]
 name = "tests/multi-env-daemon-backed.sh"
@@ -420,6 +366,69 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
+
+[[script]]
+name = "tests/bundle-drift.sh"
+group = "B"
+make_target = "test-drift"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["tests/drift-check.sh (runs xtask gen-schemas and checks git diff --exit-code -- docs/reference/schemas/)"]
+exercised_today = "skip"
+
+[[script]]
+name = "tests/daemon-api-drift.sh"
+group = "B"
+make_target = "test-drift"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["tests/drift-check.sh (runs xtask gen-daemon-api and checks git diff --exit-code -- docs/reference/daemon-api.md)"]
+exercised_today = "skip"
+
+[[script]]
+name = "tests/error-codes-drift.sh"
+group = "B"
+make_target = "test-drift"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["tests/drift-check.sh (runs xtask gen-error-codes and checks git diff --exit-code -- docs/reference/error-codes.md; preserves generated error-table marker and row assertions)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/guest-control-proto.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_guest_control_proto.rs::guest_control_proto_declares_service_methods_and_descriptor_sentinels (source-lints packages/nixling-ipc/proto/guest_control.proto for the GuestControl service, required RPC names, descriptor sentinel field names, optional scalar/string field count, TerminalStatus.outcome oneof, required enum values, and the retired capability/root-signal negatives)", "packages/nixling-contract-tests/tests/policy_guest_control_proto.rs::guest_control_proto_field_numbers_and_reserved_slots_are_stable (ports the bash field-number parser checks for HelloRequest.host_nonce=2, HelloResponse.guest_nonce=1, AuthenticateRequest.host_auth_tag=6, AuthenticateResponse guest_auth_tag=1 optional/capabilities_hash=2 optional/health=3/capabilities=4, plus HelloResponse retired pre-auth field negatives and reserved slots)", "packages/nixling-contract-tests/tests/policy_guest_control_proto.rs::guest_control_proto_schema_camelcase_fields_limits_and_shapes_match (asserts docs/reference/schemas/v2/guest-control.json exists and that generated schema message definitions, camelCase field mapping, scalar/bytes/repeated/ref shapes, optional nullability, required scalar fields, and GuestEffectiveLimits minima/maxima match the proto)", "packages/nixling-contract-tests/tests/policy_guest_control_proto.rs::guest_control_proto_schema_terminal_status_and_enums_match (asserts generated schema enum values and TerminalStatus oneOf payload variants match the proto)", "tests/guest-proto-bindings.sh / xtask gen-guest-proto generated-bindings drift gate (prost-build compiles packages/nixling-ipc/proto/guest_control.proto, so protoc well-formedness coverage remains outside this structural policy lint)"]
+exercised_today = "skip"
+
+[[script]]
+name = "tests/guest-proto-bindings.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["tests/drift-check.sh (runs xtask gen-guest-proto and checks git diff --exit-code -- packages/nixling-ipc/src/generated)", "packages/nixling-contract-tests/tests/policy_guest_bindings.rs::guest_proto_bindings_are_message_only_and_codegen_free (generated guest_control.rs has no unsafe/unsafe_code/broad lint bypasses; message-only no ttrpc/service/client/server symbols; nixling-ipc has no build.rs, no ttrpc, and no protobuf-codegen/prost-build/tonic-build/protoc build-dependency)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/guest-ttrpc-bindings.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["tests/drift-check.sh (runs xtask gen-guest-ttrpc and checks git diff --exit-code -- packages/nixling-guestd/src/generated)", "packages/nixling-contract-tests/tests/policy_guest_bindings.rs::guest_ttrpc_bindings_are_xtask_only_and_ipc_stays_ttrpc_free (generated guest_control_ttrpc.rs has no unsafe/unsafe_code/broad lint bypasses including clipto_camel_casepy; nixling-guestd has no build.rs and no ttrpc-codegen/ttrpc-compiler/prost-build/protoc build-dependency; nixling-ipc remains ttrpc-free)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/manpage-completion-drift.sh"
+group = "B"
+make_target = "test-drift"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["tests/drift-check.sh (runs xtask gen-cli-shell-artifacts and checks git diff --exit-code -- docs/manpages/ docs/completions/)"]
+exercised_today = "yes"
 
 [[script]]
 name = "tests/net-vm-network-eval.sh"

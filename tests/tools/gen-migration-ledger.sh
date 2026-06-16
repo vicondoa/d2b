@@ -82,7 +82,7 @@ A=(
 B=(
   bundle-drift cli-json-drift daemon-api-drift error-codes-drift
   host-json-drift-gate manpage-completion-drift vms-json-parity
-  wave-evidence-schema-eval
+  wave-evidence-schema-eval drift-check
 )
 
 # C: contract over rendered fixture artifact (DTO + snapshot).

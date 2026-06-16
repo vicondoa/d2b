@@ -16,8 +16,8 @@
 #   * bundle/schema static gates (12 tests, ~3 min)
 #   * host-prepare gates (17 tests, ~1 min— pure shell)
 #   * static-rust-dependency-direction (parse-only)
-#   * cross-cutting drift gates (error-codes, manpage-completion,
-#     daemon-api-drift)
+#   * consolidated drift gate (drift-check: schemas, error-codes,
+#     daemon-api, manpages/completions, guest proto + ttrpc bindings)
 #
 # Skipped vs tests/static.sh (run those in the full panel gate):
 #   - smoke-eval-*.nix (5 toplevel evals, ~4 min, ~50 G disk)
@@ -147,9 +147,6 @@ run_gate "shellcheck --severity=warning on all nixling shell scripts" "
   shellcheck --severity=warning -x \$files
 "
 
-run_script_gate_if_present "tests/guest-control-proto.sh" "$ROOT/tests/guest-control-proto.sh"
-run_script_gate_if_present "tests/guest-proto-bindings.sh" "$ROOT/tests/guest-proto-bindings.sh"
-run_script_gate_if_present "tests/guest-ttrpc-bindings.sh" "$ROOT/tests/guest-ttrpc-bindings.sh"
 run_script_gate_if_present "tests/guest-control-auth-eval.sh" "$ROOT/tests/guest-control-auth-eval.sh"
 run_script_gate_if_present "tests/guest-control-token-materializer.sh" "$ROOT/tests/guest-control-token-materializer.sh"
 run_script_gate_if_present "tests/guest-control-vsock-eval.sh" "$ROOT/tests/guest-control-vsock-eval.sh"
@@ -171,7 +168,7 @@ run_script_gate_if_present "tests/rust-workspace-checks.sh" "$ROOT/tests/rust-wo
 # ---------------------------------------------------------------------------
 log "==> Bundle/schema static gates"
 for gate in \
-  bundle-drift \
+  drift-check \
   vms-json-parity \
   static-invariant-uid0 \
   host-json-drift-gate \
@@ -205,18 +202,6 @@ for gate in \
   dag-topo \
   video-contract-eval \
   device-node-matrix; do
-  if [ -x "$ROOT/tests/$gate.sh" ]; then
-    run_gate "tests/$gate.sh" "bash '$ROOT/tests/$gate.sh'"
-  fi
-done
-
-# ---------------------------------------------------------------------------
-# Cross-cutting drift gates (cheap parse + small Rust builds)
-# ---------------------------------------------------------------------------
-for gate in \
-  error-codes-drift \
-  manpage-completion-drift \
-  daemon-api-drift; do
   if [ -x "$ROOT/tests/$gate.sh" ]; then
     run_gate "tests/$gate.sh" "bash '$ROOT/tests/$gate.sh'"
   fi

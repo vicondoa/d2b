@@ -111,7 +111,6 @@ reap_known_static_orphans() {
     '.assertions-eval.*'
     '.broad-caps-invariant.*'
     '.broker-*'
-    '.bundle-drift.*'
     '.cli-contract-coverage.*'
     '.cli-json-drift.*'
     '.cli-legacy-bash-dispatch.*'
@@ -1101,34 +1100,13 @@ nl_smoke_bundle_privileges_json >/dev/null
 # `path '//$ROOT/.vms-json-parity.XXXXXX' does not exist`.
 nl_smoke_bundle_host_json >/dev/null
 nl_time_end "W1 smoke cache prewarm"
-if [ -x "$HERE/guest-proto-bindings.sh" ]; then
-  nl_time_begin "tests/guest-proto-bindings.sh"
-  if bash "$HERE/guest-proto-bindings.sh" >/dev/null 2>&1; then
-    ok "guest-proto-bindings"
-  else
-    bash "$HERE/guest-proto-bindings.sh" 2>&1 | tail -80 >&2 || true
-    fail "guest-proto-bindings"
-  fi
-  nl_time_end "tests/guest-proto-bindings.sh"
-fi
-if [ -x "$HERE/guest-ttrpc-bindings.sh" ]; then
-  nl_time_begin "tests/guest-ttrpc-bindings.sh"
-  if bash "$HERE/guest-ttrpc-bindings.sh" >/dev/null 2>&1; then
-    ok "guest-ttrpc-bindings"
-  else
-    bash "$HERE/guest-ttrpc-bindings.sh" 2>&1 | tail -80 >&2 || true
-    fail "guest-ttrpc-bindings"
-  fi
-  nl_time_end "tests/guest-ttrpc-bindings.sh"
-fi
-if [ -x "$HERE/bundle-drift.sh" ]; then nl_static_parallel_script "tests/bundle-drift.sh" "$HERE/bundle-drift.sh"; fi
+if [ -x "$HERE/drift-check.sh" ]; then nl_static_parallel_script "tests/drift-check.sh" "$HERE/drift-check.sh"; fi
 # host.json per-field schema gold-file drift gate (integrator-wired).
 if [ -x "$HERE/host-json-drift-gate.sh" ]; then nl_static_parallel_script "tests/host-json-drift-gate.sh" "$HERE/host-json-drift-gate.sh"; fi
 # Assert Nix-emitted ifNameMappings
 # pass the Rust looks_nixling_owned format gate.
 if [ -x "$HERE/ifname-nix-rust-parity.sh" ]; then nl_static_parallel_script "tests/ifname-nix-rust-parity.sh" "$HERE/ifname-nix-rust-parity.sh"; fi
 if [ -x "$HERE/vms-json-parity.sh" ]; then nl_static_parallel_script "tests/vms-json-parity.sh" "$HERE/vms-json-parity.sh"; fi
-if [ -x "$HERE/guest-control-proto.sh" ]; then nl_static_parallel_script "tests/guest-control-proto.sh" "$HERE/guest-control-proto.sh"; fi
 if [ -x "$HERE/guest-control-vsock-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-eval.sh" "$HERE/guest-control-vsock-eval.sh"; fi
 if [ -x "$HERE/guest-exec-policy-eval.sh" ]; then nl_static_parallel_script "tests/guest-exec-policy-eval.sh" "$HERE/guest-exec-policy-eval.sh"; fi
 if [ -x "$HERE/guest-control-auth-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-auth-eval.sh" "$HERE/guest-control-auth-eval.sh"; fi
@@ -1172,12 +1150,9 @@ if [ -x "$HERE/broker-enum-disposition.sh" ]; then nl_static_parallel_script "te
 if [ -x "$HERE/broker-default-features-build.sh" ]; then nl_static_parallel_script "tests/broker-default-features-build.sh" "$HERE/broker-default-features-build.sh"; fi
 if [ -x "$HERE/cli-json-drift.sh" ]; then nl_static_parallel_script "tests/cli-json-drift.sh" "$HERE/cli-json-drift.sh"; fi
 if [ -x "$HERE/cli-legacy-bash-dispatch.sh" ]; then nl_static_parallel_script "tests/cli-legacy-bash-dispatch.sh" "$HERE/cli-legacy-bash-dispatch.sh"; fi
-if [ -x "$HERE/error-codes-drift.sh" ]; then nl_static_parallel_script "tests/error-codes-drift.sh" "$HERE/error-codes-drift.sh"; fi
-if [ -x "$HERE/manpage-completion-drift.sh" ]; then nl_static_parallel_script "tests/manpage-completion-drift.sh" "$HERE/manpage-completion-drift.sh"; fi
 # Closure: wire the remaining gates.
 if [ -x "$HERE/examples-with-observability-eval.sh" ]; then nl_static_parallel_script "tests/examples-with-observability-eval.sh" "$HERE/examples-with-observability-eval.sh"; fi
 if [ -x "$HERE/cli-contract-coverage.sh" ]; then nl_static_parallel_script "tests/cli-contract-coverage.sh" "$HERE/cli-contract-coverage.sh"; fi
-if [ -x "$HERE/daemon-api-drift.sh" ]; then nl_static_parallel_script "tests/daemon-api-drift.sh" "$HERE/daemon-api-drift.sh"; fi
 nl_static_parallel_wait_all
 
 # Group 2: runtime/socket gates. Their repo-local AF_UNIX sockets make
