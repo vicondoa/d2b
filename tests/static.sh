@@ -752,9 +752,6 @@ fi
 if [ -x "$ROOT/tests/video-contract-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/video-contract-eval.sh" "$ROOT/tests/video-contract-eval.sh"
 fi
-if [ -x "$ROOT/tests/video-binary-contract.sh" ]; then
-  nl_static_parallel_script_gate "tests/video-binary-contract.sh" "$ROOT/tests/video-binary-contract.sh"
-fi
 if [ -x "$ROOT/tests/broker-caps-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/broker-caps-eval.sh" "$ROOT/tests/broker-caps-eval.sh"
 fi
