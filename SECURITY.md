@@ -75,7 +75,7 @@ will introduce are:
   `0660` group `nixling`. Membership in the `nixling` group (populated
   from `nixling.site.launcherUsers`) is the only *connection* gate —
   there is no second `nixling-admin` socket or group. Destructive /
-  admin verbs (`vm exec`, `vm konsole`, `audit`, and `config sync`'s
+  admin verbs (`vm exec`, `audit`, and `config sync`'s
   guest read) are gated a second time *inside the daemon*: the
   `SO_PEERCRED` peer identity must also appear in
   `nixling.site.adminUsers`. Authorization is `SO_PEERCRED` plus the
@@ -174,7 +174,7 @@ The new trust-boundary statements are:
 
 ### Guest-control exec trust boundary
 
-`nixling vm exec` / `nixling vm konsole` run a command inside a VM over
+`nixling vm exec` runs a command inside a VM over
 the authenticated guest-control vsock channel — there is no SSH. The
 trust-boundary statements are:
 
@@ -182,18 +182,23 @@ trust-boundary statements are:
   `SO_PEERCRED` caller must be in `nixling.site.adminUsers` (the
   daemon-side role gate above), on top of the `nixling`-group
   connection gate. Per-VM exec must also be enabled in the bundle
-  (`guest.control.enable` + the guest exec policy); today guestd serves
-  **guest-root** exec (`guest.exec.allowRoot = true`), with the
-  non-root `guest.exec.users` allowlist validated but reserved for a
-  future wave.
-- **Leak-safe daemon-side audit.** The daemon records exec *lifecycle*
-  events (`GuestControlExecEstablished` / `GuestControlExecTerminated`)
-  to its own `daemon-events-<utc-date>.jsonl`, carrying ONLY the VM
-  name, the admin `peer_uid`, and the negotiated `tty` shape. The
-  session handle, argv, env, cwd, exit status, and any stdin/stdout/
-  stderr bytes are NEVER recorded. This daemon-side exec audit is
-  distinct from the broker `OpAuditRecord` stream (which covers
-  privileged host mutation, not guest exec).
+  (`guest.control.enable` + `guest.exec.enable`). Every exec runs the
+  requested command as the VM's workload user (`ssh.user`) — **never
+  root** — inside a real PAM login session (`systemd-run
+  --property=PAMName=login --uid=<user>`); the wire `user` field is
+  host-fixed by guestd and ignored, and operators elevate with `sudo`
+  inside the session.
+- **Leak-safe daemon-side audit.** The daemon records attached exec
+  lifecycle events (`GuestControlExecEstablished` /
+  `GuestControlExecTerminated`) to its own
+  `daemon-events-<utc-date>.jsonl`, carrying ONLY the VM name, the
+  admin `peer_uid`, and the negotiated `tty` shape. Detached create and
+  kill/cancel write separate redacted daemon audit events carrying ONLY
+  the VM name, admin `peer_uid`, closed action/result enums, and the
+  opaque `exec_id`. The session handle, argv, env, cwd, exit status, and
+  any stdin/stdout/stderr bytes are NEVER recorded. This daemon-side
+  exec audit is distinct from the broker `OpAuditRecord` stream (which
+  covers privileged host mutation, not guest exec).
 - **Containment / DoS limits.** Exec is bounded at multiple layers:
   per-VM concurrent session caps; detached-exec slot and retained-log
   quotas; bounded per-op deadlines (each long-poll op gets a fresh
@@ -202,9 +207,10 @@ trust-boundary statements are:
   down through the single existing teardown path with no reader-side
   socket write, preserving the single-writer invariant — so a stalled
   or abusive owner cannot pin unbounded work, and owner EOF/POLLHUP is
-  always observed promptly; and bounded teardown on disconnect. Known
-  limitation: these bounds are in-session only — a detached exec is not
-  reaped if its owning daemon session is lost (no orphan reaper yet).
+  always observed promptly; and bounded teardown on disconnect.
+  Detached exec adds startup reconciliation, valid runner/workload
+  re-adoption, orphan workload cleanup, terminal-record retention, and a
+  periodic reaper that releases retained-log slots.
 
 ## See also
 

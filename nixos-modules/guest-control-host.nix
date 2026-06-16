@@ -6,7 +6,6 @@ let
   enabledGuestControlVms =
     lib.filterAttrs (_: vm: vm.enable && vm.guest.control.enable) cfg.vms;
   usernamePattern = "^[a-z][a-z0-9_-]{0,31}$";
-  unique = xs: lib.length xs == lib.length (lib.unique xs);
   usernameValid = user: builtins.match usernamePattern user != null;
   tokenSpecs = lib.mapAttrsToList (name: vm: {
     inherit name;
@@ -52,45 +51,24 @@ in
   }) cfg.vms
   ++ lib.mapAttrsToList (name: vm: {
     assertion =
-      vm.guest.exec.enable
-      || (!vm.guest.exec.allowRoot && vm.guest.exec.users == [ ]);
+      !vm.guest.exec.enable
+      || vm.ssh.user != null;
     message = ''
-      nixling.vms.${name}.guest.exec.allowRoot/users are set, but
-      nixling.vms.${name}.guest.exec.enable is false. Enable guest exec policy
-      validation or remove the exec allowlist settings.
+      nixling.vms.${name}.guest.exec.enable is true, but no workload user is
+      configured. Guest exec always runs the command as the VM's workload user
+      (never root); set nixling.vms.${name}.ssh.user to the in-guest user exec
+      should run as.
     '';
   }) cfg.vms
   ++ lib.mapAttrsToList (name: vm: {
     assertion =
       !vm.guest.exec.enable
-      || vm.guest.exec.allowRoot
-      || vm.guest.exec.users != [ ];
+      || vm.ssh.user == null
+      || (usernameValid vm.ssh.user && vm.ssh.user != "root");
     message = ''
-      nixling.vms.${name}.guest.exec.enable is true, but no exec target is
-      allowed. Set guest.exec.users to at least one non-root guest user or set
-      guest.exec.allowRoot = true.
-    '';
-  }) cfg.vms
-  ++ lib.mapAttrsToList (name: vm: {
-    assertion = unique vm.guest.exec.users;
-    message = ''
-      nixling.vms.${name}.guest.exec.users must not contain duplicate users.
-    '';
-  }) cfg.vms
-  ++ lib.mapAttrsToList (name: vm: {
-    assertion = lib.all usernameValid vm.guest.exec.users;
-    message = ''
-      nixling.vms.${name}.guest.exec.users entries must match
-      ${usernamePattern}; wildcard, root-like, or path-like names are not
-      accepted.
-    '';
-  }) cfg.vms
-  ++ lib.mapAttrsToList (name: vm: {
-    assertion = !(builtins.elem "root" vm.guest.exec.users);
-    message = ''
-      nixling.vms.${name}.guest.exec.users must not include root. Use
-      nixling.vms.${name}.guest.exec.allowRoot for the separate root-exec
-      policy gate.
+      nixling.vms.${name}.ssh.user (the guest exec workload user) must match
+      ${usernamePattern} and must not be root. Guest exec never runs as root;
+      users elevate with sudo inside the session.
     '';
   }) cfg.vms;
 

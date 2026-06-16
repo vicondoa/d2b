@@ -282,10 +282,11 @@ ls -lZ /run/nixling/priv.sock
 
 v1.1.2 adds the broker-pre-established user namespace for
 virtiofsd per [ADR 0021](../adr/0021-broker-user-namespace-for-virtiofsd.md),
-plus several host-activation hardening fixes and a new
-`nixling vm konsole` CLI verb. The bump is **drop-in for
-consumer flakes**: no flake-input changes, no manifest
-edits, no `/etc/subuid` / `/etc/subgid` provisioning.
+plus several host-activation hardening fixes. It also briefly added
+`nixling vm konsole`, which has since been removed; use
+`nixling vm exec -it <vm> -- bash` instead. The bump is
+**drop-in for consumer flakes**: no flake-input changes, no
+manifest edits, no `/etc/subuid` / `/etc/subgid` provisioning.
 
 ### What `nixos-rebuild switch` does on the v1.1.1 → v1.1.2 bump
 
@@ -331,21 +332,22 @@ notes — `chown`/`chmod`/`setfacl` on
 needed**: the new activation script + daemon prune logic
 codify those workarounds.
 
-### New CLI verb: `nixling vm konsole <vm>`
+### Historical note: removed `nixling vm konsole <vm>`
 
-Spawns a terminal emulator (default `konsole`, override with
-`--terminal`) hosting an SSH session into the named VM.
-Resolves user/host/key from the manifest + bundle. Useful
-for quickly opening a guest shell after `vm start --apply`.
+v1.1 briefly added `nixling vm konsole <vm>` as an SSH-backed
+terminal-emulator helper. That verb has since been removed with the
+SSH console surface. Open an interactive workload-user shell with
+guest-control exec instead:
 
 ```
-nixling vm konsole personal-dev
-nixling vm konsole work-aad --terminal alacritty
-nixling vm konsole personal-dev --dry-run --json  # print resolved argv
+nixling vm exec -it personal-dev -- bash
 ```
 
-The `--dry-run --json` mode prints the resolved configuration
-without spawning anything; useful for tooling integration.
+Non-interactive commands use the same mandatory separator:
+
+```
+nixling vm exec personal-dev -- id
+```
 
 ### No prerequisite changes
 

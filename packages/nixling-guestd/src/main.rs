@@ -74,7 +74,15 @@ fn parse_serve_args(
                     .map(str::to_owned);
             }
             Some("--exec-enable") => policy.enabled = true,
-            Some("--exec-allow-root") => policy.allow_root = true,
+            Some("--exec-user") => {
+                let user = iter
+                    .next()
+                    .and_then(|value| value.to_str())
+                    .map(str::to_owned)
+                    .filter(|value| is_valid_workload_user(value))
+                    .ok_or(nixling_guestd::service::GuestdServiceError::Ttrpc)?;
+                policy.exec_user = Some(user);
+            }
             Some("--systemd-run-path") => {
                 systemd_run_path = Some(parse_abs_path(iter.next())?);
             }
@@ -141,4 +149,21 @@ fn parse_abs_path(
         return Err(nixling_guestd::service::GuestdServiceError::Ttrpc);
     }
     Ok(path)
+}
+
+/// A valid workload-user name for `--exec-user`: a non-empty POSIX-ish account
+/// name that is never `root`. The host (`guest-control.nix`) already asserts the
+/// user exists in the guest passwd at eval time; this is the fail-closed
+/// runtime guard against an empty/`root`/malformed value reaching the spawn.
+fn is_valid_workload_user(value: &str) -> bool {
+    !value.is_empty()
+        && value != "root"
+        && value.len() <= 32
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
+        })
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase() || byte == b'_')
 }

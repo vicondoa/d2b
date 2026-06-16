@@ -70,8 +70,8 @@ deprecations ship one minor release before removal.
   indefinitely by default; teardown drops the master (SIGHUP), waits a
   bounded grace, then SIGKILLs the whole TTY session (in-session
   no-orphan; a `setsid`/double-fork escapee is a documented trusted-root
-  limitation). `tty=true && detach=true` is rejected as an unsupported
-  mode. See
+  limitation). Interactive detached exec remains unsupported; use
+  non-TTY `nixling vm exec -d` for detached commands. See
   [`docs/reference/guest-control-exec-interactive-tty.md`](docs/reference/guest-control-exec-interactive-tty.md)
   and the interactive-exec section of
   [ADR 0028](docs/adr/0028-guest-control-plane-over-vsock.md). The
@@ -84,6 +84,24 @@ deprecations ship one minor release before removal.
   read-only into the guest config and forced from the host module, and
   emitted to `nixling-guestd` as `--interactive-max-runtime-sec`
   alongside the detached exec surface.
+
+- Guest exec now accepts bare command names and relative program paths in
+  both attached and detached modes. `guestd` passes `argv[0]` through the
+  workload user's login shell (`exec "$@"`), so the command is resolved
+  by that user's login `PATH`; invalid program names get the distinct
+  `INVALID_PROGRAM` / `guest-control-invalid-program` error. The
+  console replacement is `nixling vm exec -it <vm> -- bash`.
+
+- Detached workload-user exec is enabled with
+  `nixling vm exec -d <vm> -- <cmd>` and VM-first management verbs:
+  `nixling vm exec <vm> list`, `logs <exec_id>`, `status <exec_id>`,
+  and `kill <exec_id>`. Detached jobs are non-TTY, run as the workload
+  user (never root), stay inside guestd rather than adding a broker op,
+  and survive host client disconnect. Retained stdout/stderr use bounded
+  ring buffers with dropped/truncated accounting and per-stream offsets;
+  `kill` maps to idempotent two-phase `ExecCancel` (graceful terminate,
+  bounded grace, force kill). Guestd reconciles detached runner/workload
+  units at startup, cleans orphaned workloads, and reaps terminal records.
 
 ### Fixed
 
@@ -113,6 +131,25 @@ deprecations ship one minor release before removal.
   exhaustion from breaking TPM-bound credentials while preserving NVRAM
   and persistent handles.
 
+- Detached exec (`nixling vm exec -d`) now works end-to-end. Three faults in
+  its initial implementation are fixed: the per-VM exec runner verified the
+  workload's cgroup placement against a top-level `nixling-exec.slice` path
+  even though systemd nests it under `nixling.slice`, so every detached
+  command was killed at spawn; the daemon panicked (taking down `nixlingd`)
+  when a detached management verb (`list`/`logs`/`status`/`kill`) was
+  dispatched, because it built a nested async runtime on the request thread;
+  and the guest reconciler matched a running workload's command against
+  `systemctl show` output using exact, quote-aware argv tokens, but systemd
+  renders `ExecStart` argv as a literal, unescaped, space-joined string — so
+  live jobs (and any command containing a space, quote, backslash, or
+  semicolon) were misclassified as foreign and reaped as `lost-guestd`
+  shortly after starting. Workload identity is now matched against systemd's
+  raw rendering, and a failed runner-side spawn verification logs an
+  actionable guest-journal diagnostic. (Detached command arguments may not
+  contain a newline or carriage return, which `systemctl show` cannot render
+  on one line; such commands are now rejected at create as an invalid argument
+  rather than starting and then being reaped.)
+
 ### Added
 
 - `nixling vm exec <vm> -- <cmd…>` (and `-it` for an interactive TTY):
@@ -135,12 +172,13 @@ deprecations ship one minor release before removal.
   capacity, protocol, old-generation, and internal failures map to
   reserved CLI exit codes that `--json` disambiguates from a guest exit
   code via `source`/`reason`/`guestExitCode`/`transportExitCode`. `-it`
-  is human-only and is rejected together with `--json`. Detached
-  reconnect is deferred; the daemon owner handler rejects `detached=true`
-  for now. The exec session establishes one redacted kind=critical audit
-  event (vm / peer uid / tty only); the opaque session handle, argv
-  (hash-only), and stdio/env/cwd/paths never reach any log, span, audit
-  record, or metric label.
+  is human-only and is rejected together with `--json`; non-interactive
+  detached commands use `nixling vm exec -d <vm> -- <cmd>`. Attached exec
+  establishes one redacted kind=critical audit event (vm / peer uid / tty
+  only), and detached create/kill adds redacted daemon audit carrying only
+  vm / peer uid / result / exec id. Opaque session handles, argv, and
+  stdio/env/cwd/paths never reach any log, span, audit record, or metric
+  label.
 
 - Detached guest exec: `ExecCreate(detach=true)` runs a non-interactive
   command that outlives the originating connection, supervised by the root
@@ -156,13 +194,18 @@ deprecations ship one minor release before removal.
   ceiling. Cancellation is a two-phase, control-file mechanism with no
   in-process signal handler. Terminal records are retained for 30 minutes
   then garbage-collected; a running detached job is never reaped. guestd
-  re-adopts live detached execs across a guestd restart within one boot.
+  re-adopts live detached execs across a guestd restart within one boot,
+  reconciles valid runner/workload units before advertising detached
+  capability, and cleans orphaned workloads. The operator CLI exposes the
+  substrate as `nixling vm exec -d <vm> -- <cmd>` plus
+  `nixling vm exec <vm> list|logs|status|kill` management verbs.
 
 - `ExecList` RPC (guest-control protocol version 2): a minimal, read-only
   discovery call that enumerates the caller's detached execs for the same
   VM token + boot (bounded ≤32). Each entry carries the exec id, slot,
   state, create time, an argv SHA-256 hash (never raw argv), and per-stream
-  truncation/dropped-byte counters.
+  truncation/dropped-byte counters. The CLI and public daemon DTOs do not
+  expose the argv hash.
 
 - `ExecExpired` guest-control error kind, distinguishing a retention-evicted
   detached record from `StaleSession` (boot mismatch) and `ExecNotFound`
@@ -232,11 +275,9 @@ deprecations ship one minor release before removal.
   produces daemon-local health evidence only; it does not replace SSH readiness
   or enable exec.
 
-- Guest exec policy options `nixling.vms.<vm>.guest.exec.{enable,allowRoot,users}`
-  now validate exec allowlist defaults: generic exec is off by default, root
-  exec is separately denied by default, and non-root users must be explicitly
-  listed. This is dormant policy wiring only; no exec runtime/CLI behavior is
-  enabled by these options yet.
+- Guest exec policy option `nixling.vms.<vm>.guest.exec.enable` gates guest
+  exec (off by default). This is dormant policy wiring only; no exec
+  runtime/CLI behavior is enabled by this option yet.
 
 - Guest-control retained-log security requirements and canary-based
   redaction test coverage for stdout/stderr logs, telemetry, health, and
@@ -262,11 +303,16 @@ deprecations ship one minor release before removal.
   collector now tails the guest journal through the contrib `journald`
   receiver and forwards it to SigNoz as logs tagged with the VM's
   `vm.name` / `vm.env` resource attributes, with the journal `PRIORITY`
-  mapped to OTel severity and a `file_storage` cursor so a collector
-  restart resumes without dropping entries.
-  `nixling.vms.<vm>.observability.scrapeJournal` now defaults to `true`
-  (previously a reserved no-op) and the guest collector user is granted
-  `systemd-journal` read access plus `journalctl` on its unit PATH.
+  mapped to a readable OTel severity (`INFO`/`WARN`/`ERROR`/…) and a
+  `file_storage` cursor so a collector restart resumes without dropping
+  entries. `nixling.vms.<vm>.observability.scrapeJournal` now defaults
+  to `true` (previously a reserved no-op) and the guest collector user
+  is granted `systemd-journal` read access plus `journalctl` on its
+  unit PATH. Ingested telemetry's `deployment.environment` resource
+  attribute is the physical host machine name (from the host's
+  `networking.hostName`, settable via `nixling.observability.hostName`)
+  so SigNoz groups VMs by the host they run on; the per-VM env stays on
+  `vm.env` / `service.namespace`.
 
 - Native, container-free SigNoz observability backend packages and ADR.
   The bundled observability path now targets SigNoz, the SigNoz OTel
@@ -403,8 +449,30 @@ deprecations ship one minor release before removal.
   inside the VM. See
   [`docs/how-to/edit-vm-config-from-inside.md`](docs/how-to/edit-vm-config-from-inside.md).
 
+### Removed
+
+- `nixling vm konsole` is removed. The subcommand was a thin wrapper that
+  re-exec'd `nixling vm exec -it <vm> -- <login-shell> -l` inside a host
+  terminal emulator; operators now invoke `nixling vm exec -it` directly.
+  All references (CLI surface, shell completions, manpage, and reference
+  docs) are dropped accordingly.
+
 ### Changed
 
+- `nixling vm exec` now runs the requested command as the VM's
+  configured workload user (`ssh.user`) — **never root** — inside a real
+  PAM login session (`systemd-run --property=PAMName=login
+  --uid=<user>`). The command sees the same environment an interactive
+  SSH login would (`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, the login-shell
+  profile), so graphical and login-shell workflows (e.g. launching a
+  browser) work unchanged; operators elevate with `sudo` inside the
+  session. `guestd` host-fixes the exec identity and ignores the wire
+  `user` field. The per-VM `guest.exec.allowRoot` and `guest.exec.users`
+  options are removed — enabling `guest.exec.enable = true` on a VM with
+  a workload user is sufficient, and a VM whose `ssh.user` is unset,
+  `root`, or otherwise invalid disables exec at eval time with a typed
+  message. See
+  [ADR 0030](docs/adr/0030-guest-exec-as-workload-user.md).
 - Framework readiness for a guest-control-capable VM is now the
   authenticated guest-control Health probe rather than a raw TCP-22 SSH
   connect. The per-VM DAG node `guest-ssh-readiness` is replaced by
@@ -430,13 +498,6 @@ deprecations ship one minor release before removal.
 - The framework readiness label is now the canonical `guest-control-health`
   (no per-VM suffix) across `status`, `vm list`, and the start preview;
   the start-preview DAG no longer hard-codes an `ssh-ready` node.
-- `nixling vm konsole` is now a thin wrapper around `nixling vm exec -it`:
-  it opens the interactive guest session in a terminal emulator
-  (default `konsole`, overridable with `--terminal`) over the
-  authenticated guest-control transport. The historical operator-SSH
-  path and its allowlist site were removed; the SSH-only flags
-  (`--host` / `--key` / `--user`) are now rejected with a migration
-  message pointing at `vm exec -it`. No SSH process is spawned.
 - The default observability VM name is now `sys-obs`. The old
   `sys-obs-stack` state is not deleted automatically; keep it for
   rollback until the new stack is validated.

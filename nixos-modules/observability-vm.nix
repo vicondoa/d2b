@@ -74,6 +74,11 @@ in
           transport.relayPackage = lib.mkDefault cfg.transport.relayPackage;
           ingress.sources = lib.mkDefault obsIngressSources;
           alerts = lib.mkDefault cfg.alerts;
+          # Physical host the guests run on; stamped as
+          # deployment.environment on ingested telemetry. Resolved from
+          # the host's networking.hostName (this module evaluates in the
+          # host config context).
+          hostName = lib.mkDefault config.networking.hostName;
         };
 
         # SigNoz + ClickHouse is materially heavier than the retired

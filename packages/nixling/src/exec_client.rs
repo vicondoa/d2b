@@ -185,16 +185,21 @@ pub fn exit_for_kind(kind: &str) -> (i32, ExecFailureSource) {
         "guest-control-transport-unavailable" | "guest-control-timeout" => {
             (EXIT_EXEC_TRANSPORT, ExecFailureSource::Transport)
         }
-        "guest-control-unavailable-old-generation" | "guest-control-capability-unavailable" => {
+        "guest-control-unavailable-old-generation"
+        | "guest-control-capability-unavailable"
+        | "guest-control-exec-detached-unavailable" => {
             (EXIT_EXEC_OLD_GENERATION, ExecFailureSource::GuestControl)
         }
         "exec-session-capacity" | "exec-session-rate-limited" => {
             (EXIT_EXEC_CAPACITY, ExecFailureSource::GuestControl)
         }
-        "guest-control-protocol-error" | "guest-control-exec-error" => {
-            (EXIT_EXEC_PROTOCOL, ExecFailureSource::Protocol)
-        }
+        "guest-control-protocol-error"
+        | "guest-control-exec-error"
+        | "guest-control-exec-not-found"
+        | "guest-control-exec-expired" => (EXIT_EXEC_PROTOCOL, ExecFailureSource::Protocol),
+        "guest-control-invalid-program" => (2, ExecFailureSource::GuestControl),
         "guest-control-auth-failed" => (EXIT_EXEC_AUTH, ExecFailureSource::GuestControl),
+        "guest-control-stale-session" => (EXIT_EXEC_AUTH, ExecFailureSource::GuestControl),
         // The daemon's admin gate refused the caller before any guest contact
         // (caller not in `nixling.site.adminUsers`). It is an authorization
         // failure, NOT an internal bug — map it to the AUTH reserved code so
@@ -342,6 +347,76 @@ fn expect_write(resp: ExecOpResponse) -> Result<ExecWriteStdinResult, ExecClient
     }
 }
 
+pub fn expect_start(resp: ExecOpResponse) -> Result<ExecStartResult, ExecClientError> {
+    match resp {
+        ExecOpResponse::Start(result) => Ok(result),
+        other => Err(ExecClientError::protocol(format!(
+            "expected a Start response, got {}",
+            response_label(&other)
+        ))),
+    }
+}
+
+pub fn expect_detached_create(
+    resp: ExecOpResponse,
+) -> Result<nixling_ipc::public_wire::ExecDetachedCreateResult, ExecClientError> {
+    match resp {
+        ExecOpResponse::DetachedCreate(result) => Ok(result),
+        other => Err(ExecClientError::protocol(format!(
+            "expected a detached create response, got {}",
+            response_label(&other)
+        ))),
+    }
+}
+
+pub fn expect_detached_list(
+    resp: ExecOpResponse,
+) -> Result<nixling_ipc::public_wire::ExecDetachedListResult, ExecClientError> {
+    match resp {
+        ExecOpResponse::List(result) => Ok(result),
+        other => Err(ExecClientError::protocol(format!(
+            "expected a detached list response, got {}",
+            response_label(&other)
+        ))),
+    }
+}
+
+pub fn expect_detached_logs(
+    resp: ExecOpResponse,
+) -> Result<nixling_ipc::public_wire::ExecDetachedLogsResult, ExecClientError> {
+    match resp {
+        ExecOpResponse::Logs(result) => Ok(result),
+        other => Err(ExecClientError::protocol(format!(
+            "expected a detached logs response, got {}",
+            response_label(&other)
+        ))),
+    }
+}
+
+pub fn expect_detached_status(
+    resp: ExecOpResponse,
+) -> Result<nixling_ipc::public_wire::ExecDetachedStatusResult, ExecClientError> {
+    match resp {
+        ExecOpResponse::Status(result) => Ok(result),
+        other => Err(ExecClientError::protocol(format!(
+            "expected a detached status response, got {}",
+            response_label(&other)
+        ))),
+    }
+}
+
+pub fn expect_detached_kill(
+    resp: ExecOpResponse,
+) -> Result<nixling_ipc::public_wire::ExecDetachedKillResult, ExecClientError> {
+    match resp {
+        ExecOpResponse::Kill(result) => Ok(result),
+        other => Err(ExecClientError::protocol(format!(
+            "expected a detached kill response, got {}",
+            response_label(&other)
+        ))),
+    }
+}
+
 fn expect_read(resp: ExecOpResponse) -> Result<ExecReadOutputResult, ExecClientError> {
     match resp {
         ExecOpResponse::ReadOutput(result) => Ok(result),
@@ -365,12 +440,17 @@ fn expect_wait(resp: ExecOpResponse) -> Result<ExecWaitResult, ExecClientError> 
 fn response_label(resp: &ExecOpResponse) -> &'static str {
     match resp {
         ExecOpResponse::Start(_) => "start",
+        ExecOpResponse::DetachedCreate(_) => "detachedCreate",
         ExecOpResponse::WriteStdin(_) => "writeStdin",
         ExecOpResponse::ReadOutput(_) => "readOutput",
         ExecOpResponse::Signal(_) => "signal",
         ExecOpResponse::Resize(_) => "resize",
         ExecOpResponse::Wait(_) => "wait",
         ExecOpResponse::Close(_) => "close",
+        ExecOpResponse::List(_) => "list",
+        ExecOpResponse::Logs(_) => "logs",
+        ExecOpResponse::Status(_) => "status",
+        ExecOpResponse::Kill(_) => "kill",
     }
 }
 
@@ -1093,6 +1173,10 @@ mod tests {
             ExecOp::Resize(_) => "resize",
             ExecOp::Wait(_) => "wait",
             ExecOp::Close(_) => "close",
+            ExecOp::List(_) => "list",
+            ExecOp::Logs(_) => "logs",
+            ExecOp::Status(_) => "status",
+            ExecOp::Kill(_) => "kill",
         }
     }
 
@@ -1102,6 +1186,9 @@ mod tests {
             match op {
                 // A real exec session never re-sends Start through the FSM.
                 ExecOp::Start(_) => Err(ExecClientError::protocol("unexpected Start in FSM")),
+                ExecOp::List(_) | ExecOp::Logs(_) | ExecOp::Status(_) | ExecOp::Kill(_) => Err(
+                    ExecClientError::protocol("unexpected detached-management op in FSM"),
+                ),
                 ExecOp::Close(_) => {
                     self.close_seen = true;
                     Ok(ExecOpResponse::Close(
@@ -1271,6 +1358,9 @@ mod tests {
                 ExecOp::Wait(a) => &a.session,
                 ExecOp::Close(a) => &a.session,
                 ExecOp::Start(_) => panic!("FSM must never emit Start"),
+                ExecOp::List(_) | ExecOp::Logs(_) | ExecOp::Status(_) | ExecOp::Kill(_) => {
+                    panic!("FSM must never emit detached-management ops")
+                }
             };
             assert_eq!(
                 handle,

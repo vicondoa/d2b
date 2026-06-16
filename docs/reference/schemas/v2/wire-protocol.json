@@ -2272,6 +2272,425 @@
       },
       "additionalProperties": false
     },
+    "ExecDetachedCreateResult": {
+      "description": "Detached `Start` op result: an opaque exec id plus initial detached state.",
+      "type": "object",
+      "required": [
+        "execId",
+        "state"
+      ],
+      "properties": {
+        "execId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/definitions/ExecState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecDetachedKillArgs": {
+      "description": "`Kill` op args for one detached exec.",
+      "type": "object",
+      "required": [
+        "execId",
+        "vm"
+      ],
+      "properties": {
+        "execId": {
+          "type": "string"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecDetachedKillOutcome": {
+      "description": "Closed result for idempotent detached `Kill`.",
+      "type": "string",
+      "enum": [
+        "cancelling",
+        "already-terminal"
+      ]
+    },
+    "ExecDetachedKillResult": {
+      "description": "Detached `Kill` op result.",
+      "type": "object",
+      "required": [
+        "execId",
+        "result",
+        "state"
+      ],
+      "properties": {
+        "execId": {
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/definitions/ExecDetachedKillOutcome"
+        },
+        "state": {
+          "$ref": "#/definitions/ExecState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecDetachedListArgs": {
+      "description": "`List` op args for detached execs in one VM.",
+      "type": "object",
+      "required": [
+        "vm"
+      ],
+      "properties": {
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecDetachedListEntry": {
+      "description": "One detached exec summary for `List`.",
+      "type": "object",
+      "required": [
+        "droppedBytes",
+        "execId",
+        "startedAt",
+        "state"
+      ],
+      "properties": {
+        "droppedBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "endOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "execId": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "signal": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "startOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/definitions/ExecState"
+        },
+        "stderrDroppedBytes": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrEndOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrStartOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrTruncated": {
+          "default": false,
+          "type": "boolean"
+        },
+        "stdoutDroppedBytes": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutEndOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutStartOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutTruncated": {
+          "default": false,
+          "type": "boolean"
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecDetachedListResult": {
+      "description": "Detached `List` op result.",
+      "type": "object",
+      "required": [
+        "execs"
+      ],
+      "properties": {
+        "execs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExecDetachedListEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecDetachedLogsArgs": {
+      "description": "`Logs` op args for one detached exec. The daemon fetches retained stdout and stderr bytes, optionally resuming each stream from a caller-provided byte cursor, and returns them in one redacted-debug response.",
+      "type": "object",
+      "required": [
+        "execId",
+        "vm"
+      ],
+      "properties": {
+        "execId": {
+          "type": "string"
+        },
+        "maxLen": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrOffset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutOffset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecDetachedLogsResult": {
+      "description": "Detached `Logs` op result. The base64 payloads carry raw guest output and are redacted from `Debug`.",
+      "type": "object",
+      "required": [
+        "droppedBytes",
+        "endOffset",
+        "execId",
+        "startOffset",
+        "stderrBase64",
+        "stdoutBase64"
+      ],
+      "properties": {
+        "droppedBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "endOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "execId": {
+          "type": "string"
+        },
+        "startOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrBase64": {
+          "type": "string"
+        },
+        "stderrDroppedBytes": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrEndOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrEof": {
+          "default": false,
+          "type": "boolean"
+        },
+        "stderrNextOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrStartOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrTruncated": {
+          "default": false,
+          "type": "boolean"
+        },
+        "stdoutBase64": {
+          "type": "string"
+        },
+        "stdoutDroppedBytes": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutEndOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutEof": {
+          "default": false,
+          "type": "boolean"
+        },
+        "stdoutNextOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutStartOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutTruncated": {
+          "default": false,
+          "type": "boolean"
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecDetachedStatusArgs": {
+      "description": "`Status` op args for one detached exec.",
+      "type": "object",
+      "required": [
+        "execId",
+        "vm"
+      ],
+      "properties": {
+        "execId": {
+          "type": "string"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecDetachedStatusResult": {
+      "description": "Detached `Status` op result.",
+      "type": "object",
+      "required": [
+        "droppedBytes",
+        "endOffset",
+        "execId",
+        "startOffset",
+        "state"
+      ],
+      "properties": {
+        "droppedBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "endOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "execId": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "signal": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "startOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "state": {
+          "$ref": "#/definitions/ExecState"
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "ExecEnvVar": {
       "description": "A single environment variable for `ExecOp::Start`. Values are forwarded verbatim into the guest exec request and are NEVER logged, traced, or audited (only the count is observable). `Debug` is redacted so a stray `{:?}` can never leak a key or secret value.",
       "type": "object",
@@ -2417,6 +2836,78 @@
               ]
             }
           }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ExecDetachedListArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "list"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ExecDetachedLogsArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "logs"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ExecDetachedStatusArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "status"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ExecDetachedKillArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "kill"
+              ]
+            }
+          }
         }
       ]
     },
@@ -2438,6 +2929,24 @@
             },
             "result": {
               "$ref": "#/definitions/ExecStartResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "detachedCreate"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ExecDetachedCreateResult"
             }
           }
         },
@@ -2546,6 +3055,78 @@
             },
             "result": {
               "$ref": "#/definitions/ExecCloseResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "list"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ExecDetachedListResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "logs"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ExecDetachedLogsResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "status"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ExecDetachedStatusResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "kill"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ExecDetachedKillResult"
             }
           }
         }
@@ -2684,7 +3265,7 @@
       "additionalProperties": false
     },
     "ExecStartArgs": {
-      "description": "`Start` op args. The daemon resolves the per-VM vsock socket + peer credentials from the trusted bundle; the client supplies only the VM name, the command, and the session shape. `detached` is reserved: the daemon rejects a `detached = true` request in this release (a detached/reconnect lifecycle is not implemented), and the CLI never sets it — it ships non-detached interactive (`-it`) and non-interactive sessions only.",
+      "description": "`Start` op args. The daemon resolves the per-VM vsock socket + peer credentials from the trusted bundle; the client supplies only the VM name, the command, and the session shape. `detached = false` starts the attached interactive/non-interactive exec FSM; `detached = true` starts a detached exec and returns an opaque exec id for later management verbs.",
       "type": "object",
       "required": [
         "argv",
@@ -2764,6 +3345,20 @@
         }
       },
       "additionalProperties": false
+    },
+    "ExecState": {
+      "type": "string",
+      "enum": [
+        "created",
+        "running",
+        "exited",
+        "signaled",
+        "cancelled",
+        "slow-consumer-cancelled",
+        "protocol-error",
+        "lost-guestd",
+        "reaped"
+      ]
     },
     "ExecStream": {
       "description": "Output stream selector for `ReadOutput`. A closed enum — the daemon never forwards an unspecified stream to the guest.",
@@ -4598,7 +5193,7 @@
           }
         },
         {
-          "description": "Multiplexed, ADMIN-ONLY operation on a daemon-held authenticated guest-control exec session. A single owner connection issues a `Start` op then drives the session with the remaining ops (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`). The daemon enforces `PeerRole::Admin` BEFORE any session lookup, vsock connect, auth, or `ExecCreate`. `nixling vm exec` (and the `vm konsole` wrapper) drive this verb; it never crosses SSH.",
+          "description": "Multiplexed, ADMIN-ONLY operation on a daemon-held authenticated guest-control exec session. A single owner connection issues a `Start` op then drives the session with the remaining ops (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`). The daemon enforces `PeerRole::Admin` BEFORE any session lookup, vsock connect, auth, or `ExecCreate`. `nixling vm exec` drives this verb; it never crosses SSH.",
           "type": "object",
           "required": [
             "kind",

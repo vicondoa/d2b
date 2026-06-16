@@ -1103,7 +1103,8 @@
         "file-not-found",
         "file-too-large",
         "path-unsafe",
-        "read-denied"
+        "read-denied",
+        "invalid-program"
       ]
     },
     "GuestCwd": {

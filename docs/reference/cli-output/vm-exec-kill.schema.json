@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VmExecKillOutputV1",
+  "type": "object",
+  "required": [
+    "command",
+    "execId",
+    "result",
+    "state",
+    "vm"
+  ],
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "execId": {
+      "type": "string"
+    },
+    "result": {
+      "$ref": "#/definitions/ExecDetachedKillOutcome"
+    },
+    "state": {
+      "$ref": "#/definitions/ExecState"
+    },
+    "vm": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ExecDetachedKillOutcome": {
+      "description": "Closed result for idempotent detached `Kill`.",
+      "type": "string",
+      "enum": [
+        "cancelling",
+        "already-terminal"
+      ]
+    },
+    "ExecState": {
+      "type": "string",
+      "enum": [
+        "created",
+        "running",
+        "exited",
+        "signaled",
+        "cancelled",
+        "slow-consumer-cancelled",
+        "protocol-error",
+        "lost-guestd",
+        "reaped"
+      ]
+    }
+  }
+}

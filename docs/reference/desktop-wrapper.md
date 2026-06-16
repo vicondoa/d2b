@@ -73,8 +73,9 @@ of the store.
    `<sshUser>@<staticIp>` with the per-VM key; the daemon-native path no
    longer depends on SSH for terminal access.
 5. **Exec Konsole.** Replaces the wrapper with a chromed Konsole
-   running `nixling vm konsole <vm>`, which attaches an interactive
-   guest-control session (admin-only, guest-root, no SSH).
+   running `nixling vm exec -it <vm> -- <login-shell>`, which attaches an
+   interactive guest-control session (admin-only, runs as the VM's
+   workload user, no SSH).
    `StartupWMClass=org.kde.konsole` matches Konsole's fixed Wayland
    app_id.
 
@@ -102,7 +103,7 @@ and `journalctl -u nixlingd.service`.
   `Keywords`, `Categories`, `StartupWMClass`) is intentionally out
   of scope; that's UX styling, not a lifecycle contract. See
   `nixos-modules/cli.nix` `desktopItems`.
-- The in-VM session opened via `nixling vm konsole` is not pinned
+- The in-VM session opened via `nixling vm exec -it` is not pinned
   here. The wrapper hands off to Konsole + the guest-control
   interactive session; what the operator runs once they're in the VM
   is their concern.

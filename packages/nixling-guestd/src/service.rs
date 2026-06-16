@@ -40,15 +40,23 @@ use crate::{
     exec::{
         ExecCreateInput, ExecError, ExecPolicy, ExecRuntime, ExecSnapshot,
         ExecState as RtExecState, ExitOutcome, Stream as RtStream, TtyStdinSnapshot,
+        ValidatedCommand, HARD_MAX_CHUNK_BYTES, MAX_ARGV, MAX_ARG_BYTES, MAX_CWD_BYTES,
+        MAX_ENV_ENTRIES, MAX_ENV_KEY_BYTES, MAX_ENV_VALUE_BYTES,
     },
     exec_linux::LinuxProcessSpawner,
     exec_pty::linux::LinuxPtyProcessSpawner,
     generated::guest_control_ttrpc::{create_guest_control, GuestControl},
 };
 
+/// Absolute path to the guest login shell (NixOS system profile). Interactive
+/// and non-interactive execs run the requested command through this shell with
+/// `-l` so the profile (`/etc/set-environment`, `WAYLAND_DISPLAY`, …) is
+/// sourced inside the PAM login session, reproducing an interactive login
+/// environment (the surface `vm exec -it` drives) so graphical clients work.
+const GUEST_LOGIN_SHELL_PATH: &str = "/run/current-system/sw/bin/bash";
+
 /// Server-generated opaque exec id source backed by `/dev/urandom`.
 pub struct OsExecIds;
-
 impl crate::exec::ExecIdSource for OsExecIds {
     fn next_exec_id(&self) -> Result<String, ExecError> {
         let mut bytes = [0_u8; 16];
@@ -286,6 +294,30 @@ pub struct CapabilitiesConfig {
     pub read_guest_file: bool,
 }
 
+/// Derive the advertised capability set from runtime presence.
+///
+/// Extracted as a pure function so the **`exec_attached` ⟺ `exec_logs`**
+/// invariant is locked by a unit test: every attached exec session streams
+/// stdout/stderr back via `ReadOutput`, so the host must never negotiate an
+/// attached session it cannot stream. Both flags are therefore gated on the
+/// SAME `exec_paths_present` input here, by construction — they can never
+/// diverge. Detached exec is gated separately on a reconciled registry backed
+/// by a resolved non-root workload user.
+fn derive_capabilities_config(
+    exec_paths_present: bool,
+    exec_detached: bool,
+    exec_tty: bool,
+    read_guest_file: bool,
+) -> CapabilitiesConfig {
+    CapabilitiesConfig {
+        exec_attached: exec_paths_present,
+        exec_detached,
+        exec_logs: exec_paths_present,
+        exec_tty,
+        read_guest_file,
+    }
+}
+
 pub fn build_runtime_auth_core(
     token: Vec<u8>,
     capabilities: CapabilitiesConfig,
@@ -301,21 +333,108 @@ pub fn build_runtime_auth_core(
     ))
 }
 
-pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceError> {
-    let exec_enabled_root = config.exec_policy.enabled && config.exec_policy.allow_root;
+struct ServiceRuntime {
+    auth: SharedAuthCore,
+    exec: SharedExec,
+    detached: SharedDetached,
+    guest_config_path: Option<PathBuf>,
+}
 
-    // Build the cross-connection detached registry (shared by all connections)
-    // when the host wired detached runtime constants AND exec is usable.
-    let detached: SharedDetached = match (&config.detached, exec_enabled_root) {
-        (Some(detached_cfg), true) if detached_runtime_usable(detached_cfg) => {
-            let boot_id = ProcBootIdSource
-                .guest_boot_id()
-                .map_err(|_| GuestdServiceError::Io)?;
-            let registry = build_detached_registry(detached_cfg, boot_id);
-            // Re-adopt durable records before serving so a guestd restart never
-            // kills a still-running adopted unit and lost ids remain listable.
+trait StartupProbe {
+    fn classify_workload_user(&self, user: &str) -> crate::login_session::WorkloadUserUid;
+    fn guest_boot_id(&self) -> Result<String, GuestAuthError>;
+    fn path_is_file(&self, path: &Path) -> bool;
+    fn detached_runtime_usable(&self, detached: &DetachedRuntimeConfig) -> bool;
+    fn login_shell_path(&self) -> PathBuf {
+        PathBuf::from(GUEST_LOGIN_SHELL_PATH)
+    }
+}
+
+struct ProductionStartupProbe;
+
+impl StartupProbe for ProductionStartupProbe {
+    fn classify_workload_user(&self, user: &str) -> crate::login_session::WorkloadUserUid {
+        crate::login_session::classify_workload_user(user)
+    }
+
+    fn guest_boot_id(&self) -> Result<String, GuestAuthError> {
+        ProcBootIdSource.guest_boot_id()
+    }
+
+    fn path_is_file(&self, path: &Path) -> bool {
+        path.is_file()
+    }
+
+    fn detached_runtime_usable(&self, detached: &DetachedRuntimeConfig) -> bool {
+        detached_runtime_usable(detached)
+    }
+}
+
+async fn prepare_service_runtime_with_probe<P: StartupProbe>(
+    mut config: GuestdServeConfig,
+    probe: &P,
+) -> Result<ServiceRuntime, GuestdServiceError> {
+    // Enforce the never-root contract by EFFECTIVE UID before wiring any
+    // spawner. Arg parsing rejects only the literal name "root"; a non-root
+    // name aliased to UID 0 would otherwise reach `systemd-run --uid=<name>`
+    // and run the guest command as root. Resolve the workload user's UID from
+    // the guest passwd DB and refuse UID 0 (any alias) or an unresolvable user
+    // (fail closed). Refusal clears the workload user, disabling every exec
+    // path (non-TTY pipe and interactive PTY) — never root.
+    let mut exec_uid: Option<u32> = None;
+    if let Some(user) = config.exec_policy.exec_user.clone() {
+        match probe.classify_workload_user(&user) {
+            crate::login_session::WorkloadUserUid::NonRoot(uid) => {
+                exec_uid = Some(uid);
+            }
+            crate::login_session::WorkloadUserUid::Root => {
+                eprintln!(
+                    "nixling-guestd: refusing guest exec: workload user '{user}' resolves to \
+                     UID 0; guest exec never runs as root"
+                );
+                config.exec_policy.exec_user = None;
+            }
+            crate::login_session::WorkloadUserUid::Unresolved => {
+                eprintln!(
+                    "nixling-guestd: refusing guest exec: workload user '{user}' is not \
+                     resolvable in /etc/passwd; cannot prove non-root, failing closed"
+                );
+                config.exec_policy.exec_user = None;
+            }
+        }
+    }
+
+    // The host-fixed workload user every exec runs as (never root). When set,
+    // exec is usable; the wire `user` field is never consulted for authz.
+    let exec_user = config.exec_policy.exec_user.clone();
+    let exec_enabled_user = config.exec_policy.enabled && exec_user.is_some();
+
+    // Exec runtime paths (the `systemd-run` binary + the `nixling-exec-runner`
+    // PTY helper) are wired by the host whenever exec is enabled. Both reachable
+    // exec paths — the interactive PTY session and the non-interactive pipe —
+    // run the requested command as the host-fixed workload user (never root)
+    // inside a real PAM login session via `systemd-run --property=PAMName=login
+    // --uid=<user>`. Both require these paths present and valid.
+    let exec_paths: Option<&DetachedRuntimeConfig> = config.detached.as_ref().filter(|cfg| {
+        exec_enabled_user
+            && probe.path_is_file(&cfg.systemd_run_path)
+            && probe.path_is_file(&cfg.exec_runner_path)
+    });
+    let login_shell = probe.login_shell_path();
+
+    let detached: SharedDetached = match (config.detached.as_ref(), exec_user.clone(), exec_uid) {
+        (Some(detached_cfg), Some(user), Some(uid))
+            if detached_registry_allowed(
+                exec_enabled_user,
+                Some(uid),
+                probe.detached_runtime_usable(detached_cfg),
+                probe.path_is_file(&login_shell),
+            ) =>
+        {
+            let guest_boot_id = probe.guest_boot_id().map_err(|_| GuestdServiceError::Io)?;
+            let registry =
+                build_detached_registry(detached_cfg, guest_boot_id, user, uid, &login_shell);
             registry.reconcile_on_startup().await;
-            // Periodic reaper: live reconciliation of vanished units + TTL/GC.
             let reaper = Arc::clone(&registry);
             tokio::spawn(async move {
                 loop {
@@ -328,44 +447,67 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
         _ => None,
     };
 
-    // Interactive TTY exec usability: exec must be enabled+root and the
-    // first-party PTY helper (the `nixling-exec-runner` binary, shared with the
-    // detached path) must be present. The interactive path needs only the
-    // runner binary — not systemd-run or the detached slot dir — so it is gated
-    // on the runner path alone.
-    let interactive_helper: Option<PathBuf> = match (&config.detached, exec_enabled_root) {
-        (Some(detached_cfg), true) if detached_cfg.exec_runner_path.is_file() => {
-            Some(detached_cfg.exec_runner_path.clone())
+    // Non-interactive (attached, non-TTY) spawner: runs as the workload user via
+    // `systemd-run --pipe`, or disabled (fail closed, never root) when exec
+    // paths are unavailable.
+    let nontty_spawner = match (exec_paths, exec_user.clone()) {
+        (Some(paths), Some(user)) => {
+            crate::exec_linux::LinuxProcessSpawner::new(crate::exec_linux::WorkloadUserSpawn {
+                systemd_run_path: paths.systemd_run_path.clone(),
+                login_shell_path: login_shell.clone(),
+                exec_user: user,
+            })
         }
-        _ => None,
+        _ => crate::exec_linux::LinuxProcessSpawner::disabled(),
     };
 
-    let mut exec_runtime = ExecRuntime::new(LinuxProcessSpawner, OsExecIds, config.exec_policy);
-    if let Some(helper) = interactive_helper.clone() {
+    let mut exec_runtime = ExecRuntime::new(nontty_spawner, OsExecIds, config.exec_policy);
+    if let (Some(paths), Some(user)) = (exec_paths, exec_user.clone()) {
         // 0 means unlimited (the interactive default); a non-zero value caps the
         // per-session runtime. Non-TTY attached execs keep MAX_EXEC_RUNTIME_MS.
         let ceiling = (config.interactive_max_runtime_sec != 0)
             .then(|| Duration::from_secs(config.interactive_max_runtime_sec));
         exec_runtime = exec_runtime
-            .with_pty_spawner(Arc::new(LinuxPtyProcessSpawner::new(helper)))
+            .with_pty_spawner(Arc::new(LinuxPtyProcessSpawner::new(
+                paths.exec_runner_path.clone(),
+                paths.systemd_run_path.clone(),
+                login_shell.clone(),
+                user,
+            )))
             .with_interactive_ceiling(ceiling);
     }
     let exec: SharedExec = Arc::new(exec_runtime);
 
-    let capabilities = CapabilitiesConfig {
-        exec_attached: exec_enabled_root,
-        exec_detached: detached.is_some(),
-        // Retained logs share the detached store + quota.
-        exec_logs: detached.is_some(),
-        exec_tty: exec.tty_usable(),
-        read_guest_file: config.guest_config_path.is_some(),
-    };
+    let capabilities = derive_capabilities_config(
+        // Non-TTY attached exec (and its required ReadOutput streaming) is served
+        // iff the workload-user runtime paths are present.
+        exec_paths.is_some(),
+        detached.is_some(),
+        exec.tty_usable(),
+        config.guest_config_path.is_some(),
+    );
 
     let auth = Arc::new(Mutex::new(build_runtime_auth_core(
         config.token,
         capabilities,
     )?));
     let guest_config_path = config.guest_config_path.clone();
+    Ok(ServiceRuntime {
+        auth,
+        exec,
+        detached,
+        guest_config_path,
+    })
+}
+
+pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceError> {
+    let vm_id = config.vm_id.clone();
+    let ServiceRuntime {
+        auth,
+        exec,
+        detached,
+        guest_config_path,
+    } = prepare_service_runtime_with_probe(config, &ProductionStartupProbe).await?;
     let listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, GUEST_CONTROL_AUTH_PORT))
         .map_err(|_| GuestdServiceError::Ttrpc)?;
 
@@ -377,7 +519,7 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
         let auth = Arc::clone(&auth);
         let exec = Arc::clone(&exec);
         let detached = detached.clone();
-        let vm_id = config.vm_id.clone();
+        let vm_id = vm_id.clone();
         let guest_config_path = guest_config_path.clone();
         tokio::spawn(async move {
             if let Ok(context) = connection_context(vm_id, peer_addr.cid()) {
@@ -392,9 +534,13 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
 /// Build the production detached registry: `systemd-run`/`systemctl` unit
 /// manager, `/run/nixling-exec` slot store, system wall clock, tokio sleeper,
 /// and `/dev/urandom` exec ids.
+///
 fn build_detached_registry(
     detached: &DetachedRuntimeConfig,
     boot_id: String,
+    exec_user: String,
+    exec_uid: u32,
+    login_shell_path: &Path,
 ) -> Arc<DetachedRegistry> {
     let units = Arc::new(SystemdRunUnitManager::new(
         detached.systemd_run_path.clone(),
@@ -407,6 +553,10 @@ fn build_detached_registry(
         paths: RunnerUnitPaths::new(detached.exec_runner_path.clone()),
         boot_id,
         max_runtime_sec: detached.max_runtime_sec,
+        exec_user,
+        exec_uid,
+        systemd_run_path: detached.systemd_run_path.to_string_lossy().into_owned(),
+        login_shell_path: login_shell_path.to_string_lossy().into_owned(),
     };
     Arc::new(DetachedRegistry::new(
         units,
@@ -420,6 +570,7 @@ fn build_detached_registry(
 
 /// Runtime-usability probe for detached exec: the `systemd-run` + runner
 /// binaries must exist and `/run/nixling-exec` must be a root-owned directory.
+///
 fn detached_runtime_usable(detached: &DetachedRuntimeConfig) -> bool {
     if !detached.systemd_run_path.is_file() || !detached.exec_runner_path.is_file() {
         return false;
@@ -428,6 +579,18 @@ fn detached_runtime_usable(detached: &DetachedRuntimeConfig) -> bool {
         Ok(meta) => meta.is_dir() && owner_is_safe(meta.uid()),
         Err(_) => false,
     }
+}
+
+fn detached_registry_allowed(
+    exec_enabled_user: bool,
+    exec_uid: Option<u32>,
+    detached_runtime_usable: bool,
+    login_shell_usable: bool,
+) -> bool {
+    exec_enabled_user
+        && matches!(exec_uid, Some(uid) if uid != 0)
+        && detached_runtime_usable
+        && login_shell_usable
 }
 
 fn connection_context(
@@ -659,8 +822,7 @@ impl GuestControlService {
             return Ok(response);
         };
 
-        let command = match crate::exec::validate_and_authorize_detached(&input, self.exec.policy())
-        {
+        let command = match validate_detached_command(&input, self.exec.policy()) {
             Ok(command) => command,
             Err(error) => {
                 let mut response = pb::ExecCreateResponse::new();
@@ -813,6 +975,7 @@ fn wire_error_kind(error: ExecError) -> pb::GuestControlErrorKind {
         ExecError::UserDenied => Pb::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_USER_DENIED,
         ExecError::UnsupportedMode => Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
         ExecError::InvalidArgv => Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+        ExecError::InvalidProgram => Pb::GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM,
         ExecError::CwdInvalid => Pb::GUEST_CONTROL_ERROR_KIND_CWD_INVALID,
         ExecError::InvalidEnv => Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
         ExecError::MaxChunkExceeded => Pb::GUEST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED,
@@ -1629,6 +1792,102 @@ fn error_kind_for_auth(error: GuestAuthError) -> pb::GuestControlErrorKind {
     }
 }
 
+fn validate_detached_command(
+    input: &ExecCreateInput,
+    policy: &ExecPolicy,
+) -> Result<ValidatedCommand, ExecError> {
+    if !policy.enabled {
+        return Err(ExecError::ExecDisabled);
+    }
+    if input.tty || input.stdin_open || input.has_terminal_size {
+        return Err(ExecError::UnsupportedMode);
+    }
+    if policy.exec_user.is_none() {
+        return Err(ExecError::ExecDisabled);
+    }
+    if input.max_chunk_bytes == 0 || input.max_chunk_bytes > HARD_MAX_CHUNK_BYTES {
+        return Err(ExecError::MaxChunkExceeded);
+    }
+
+    if input.argv.is_empty() || input.argv.len() > MAX_ARGV {
+        return Err(ExecError::InvalidArgv);
+    }
+    for arg in &input.argv {
+        // NUL is rejected for every exec. Detached argv additionally must not
+        // contain a newline or carriage return: the workload-identity reconciler
+        // recovers the running command from `systemctl show -p ExecStart`, whose
+        // `argv[]` is a single line, so a `\n`/`\r` byte would split the property
+        // and make the live workload unmatchable (silently reaped). Reject at
+        // create — as an invalid argument — so a detached job is not started
+        // only to be reaped on the first reconcile. (The create error reuses the
+        // existing InvalidArgv kind; its operator message is generic.)
+        if arg.len() > MAX_ARG_BYTES
+            || arg
+                .as_bytes()
+                .iter()
+                .any(|&b| b == 0 || b == b'\n' || b == b'\r')
+        {
+            return Err(ExecError::InvalidArgv);
+        }
+    }
+    let program = &input.argv[0];
+    if program.is_empty() || program.starts_with('-') {
+        return Err(ExecError::InvalidProgram);
+    }
+    if input.argv.iter().skip(1).any(|arg| arg.is_empty()) {
+        return Err(ExecError::InvalidArgv);
+    }
+
+    let cwd = match input.cwd.as_deref() {
+        Some(cwd) => {
+            if cwd.is_empty()
+                || cwd.len() > MAX_CWD_BYTES
+                || !cwd.starts_with('/')
+                || cwd.as_bytes().contains(&0)
+            {
+                return Err(ExecError::CwdInvalid);
+            }
+            PathBuf::from(cwd)
+        }
+        None => PathBuf::from("/"),
+    };
+
+    if input.env.len() > MAX_ENV_ENTRIES {
+        return Err(ExecError::InvalidEnv);
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for (key, value) in &input.env {
+        if !valid_detached_env_key(key)
+            || value.len() > MAX_ENV_VALUE_BYTES
+            || value.as_bytes().contains(&0)
+        {
+            return Err(ExecError::InvalidEnv);
+        }
+        if !seen.insert(key.clone()) {
+            return Err(ExecError::InvalidEnv);
+        }
+    }
+
+    Ok(ValidatedCommand {
+        program: PathBuf::from(program),
+        args: input.argv[1..].to_vec(),
+        cwd,
+        env: input.env.clone(),
+    })
+}
+
+fn valid_detached_env_key(key: &str) -> bool {
+    if key.is_empty() || key.len() > MAX_ENV_KEY_BYTES {
+        return false;
+    }
+    let mut chars = key.chars();
+    let first = chars.next().unwrap_or('=');
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 fn exec_disabled_error() -> pb::GuestControlError {
     guest_error(pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_DISABLED)
 }
@@ -1896,9 +2155,222 @@ mod tests {
         ))
     }
 
+    fn detached_input(argv0: &str) -> ExecCreateInput {
+        ExecCreateInput {
+            argv: vec![argv0.to_owned(), "arg".to_owned()],
+            user: Some("ignored-wire-user".to_owned()),
+            cwd: Some("/work".to_owned()),
+            env: vec![("PATH".to_owned(), "/bin".to_owned())],
+            tty: false,
+            stdin_open: false,
+            detached: true,
+            has_terminal_size: false,
+            max_chunk_bytes: 64 * 1024,
+        }
+    }
+
+    fn exec_policy() -> ExecPolicy {
+        ExecPolicy {
+            enabled: true,
+            exec_user: Some("alice".to_owned()),
+        }
+    }
+
+    struct TestStartupProbe {
+        uid: crate::login_session::WorkloadUserUid,
+    }
+
+    impl StartupProbe for TestStartupProbe {
+        fn classify_workload_user(&self, _user: &str) -> crate::login_session::WorkloadUserUid {
+            self.uid
+        }
+
+        fn guest_boot_id(&self) -> Result<String, GuestAuthError> {
+            Ok("boot-1".to_owned())
+        }
+
+        fn path_is_file(&self, _path: &Path) -> bool {
+            true
+        }
+
+        fn detached_runtime_usable(&self, _detached: &DetachedRuntimeConfig) -> bool {
+            true
+        }
+
+        fn login_shell_path(&self) -> PathBuf {
+            PathBuf::from("/run/current-system/sw/bin/bash")
+        }
+    }
+
+    fn startup_config(user: &str) -> GuestdServeConfig {
+        GuestdServeConfig::with_exec_policy(
+            "corp-vm",
+            TEST_TOKEN.to_vec(),
+            ExecPolicy {
+                enabled: true,
+                exec_user: Some(user.to_owned()),
+            },
+        )
+        .unwrap()
+        .with_detached(DetachedRuntimeConfig {
+            systemd_run_path: PathBuf::from("/run/current-system/sw/bin/systemd-run"),
+            exec_runner_path: PathBuf::from("/run/current-system/sw/bin/nixling-exec-runner"),
+            max_runtime_sec: 0,
+        })
+    }
+
+    #[test]
+    fn detached_command_validation_allows_bare_absolute_and_relative_argv0() {
+        for argv0 in ["id", "/bin/true", "./script", "../script"] {
+            let command =
+                validate_detached_command(&detached_input(argv0), &exec_policy()).unwrap();
+            assert_eq!(command.program, PathBuf::from(argv0));
+            assert_eq!(command.args, vec!["arg".to_owned()]);
+            assert_eq!(command.cwd, PathBuf::from("/work"));
+        }
+    }
+
+    #[test]
+    fn detached_command_validation_rejects_leading_dash_argv0() {
+        let err = validate_detached_command(&detached_input("-sh"), &exec_policy()).unwrap_err();
+        assert_eq!(err, ExecError::InvalidProgram);
+    }
+
+    #[test]
+    fn detached_command_validation_rejects_empty_argv0_as_invalid_program() {
+        let err = validate_detached_command(&detached_input(""), &exec_policy()).unwrap_err();
+        assert_eq!(err, ExecError::InvalidProgram);
+    }
+
+    #[test]
+    fn detached_command_validation_rejects_newline_or_cr_in_argv() {
+        // A detached argv byte that would split the single-line `systemctl show
+        // -p ExecStart` property (newline / carriage return) is rejected at
+        // create — otherwise the running workload becomes unmatchable by the
+        // identity reconciler and is silently reaped. Reject up front instead.
+        for bad in ["a\nb", "a\rb", "trailing\n"] {
+            let mut input = detached_input("/bin/sh");
+            input.argv = vec!["/bin/sh".to_owned(), "-c".to_owned(), bad.to_owned()];
+            let err = validate_detached_command(&input, &exec_policy()).unwrap_err();
+            assert_eq!(err, ExecError::InvalidArgv, "argv {bad:?} must be rejected");
+        }
+        // A semicolon argument (now handled by raw identity matching) is still
+        // accepted — the newline guard must not over-restrict the common
+        // `sh -c 'a ; b'` pattern.
+        let mut ok = detached_input("/bin/sh");
+        ok.argv = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "echo a ; echo b".to_owned(),
+        ];
+        assert!(validate_detached_command(&ok, &exec_policy()).is_ok());
+    }
+
+    #[test]
+    fn derive_capabilities_locks_attached_implies_output() {
+        // The host requires `ReadOutput` (EXEC_LOGS) for every attached exec, so
+        // `exec_attached` and `exec_logs` MUST be gated on the same runtime
+        // presence. Lock that they never diverge however the inputs vary.
+        for exec_paths_present in [false, true] {
+            for exec_detached in [false, true] {
+                for exec_tty in [false, true] {
+                    for read_guest_file in [false, true] {
+                        let cfg = derive_capabilities_config(
+                            exec_paths_present,
+                            exec_detached,
+                            exec_tty,
+                            read_guest_file,
+                        );
+                        assert_eq!(
+                            cfg.exec_attached, cfg.exec_logs,
+                            "exec_attached must imply exec_logs (and vice-versa)"
+                        );
+                        assert_eq!(cfg.exec_attached, exec_paths_present);
+                        assert_eq!(cfg.exec_logs, exec_paths_present);
+                        assert_eq!(cfg.exec_detached, exec_detached);
+                        assert_eq!(cfg.exec_tty, exec_tty);
+                        assert_eq!(cfg.read_guest_file, read_guest_file);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn detached_registry_gate_requires_non_root_uid_and_runtime() {
+        assert!(detached_registry_allowed(true, Some(1000), true, true));
+        assert!(!detached_registry_allowed(true, Some(0), true, true));
+        assert!(!detached_registry_allowed(true, None, true, true));
+        assert!(!detached_registry_allowed(false, Some(1000), true, true));
+        assert!(!detached_registry_allowed(true, Some(1000), false, true));
+        assert!(!detached_registry_allowed(true, Some(1000), true, false));
+    }
+
+    #[tokio::test]
+    async fn service_startup_disables_detached_for_root_alias_and_unresolved_workload_user() {
+        for (uid, label, instance) in [
+            (
+                crate::login_session::WorkloadUserUid::Root,
+                "uid-0 alias",
+                31,
+            ),
+            (
+                crate::login_session::WorkloadUserUid::Unresolved,
+                "unresolved user",
+                32,
+            ),
+        ] {
+            let runtime = prepare_service_runtime_with_probe(
+                startup_config("alice"),
+                &TestStartupProbe { uid },
+            )
+            .await
+            .unwrap();
+            assert!(runtime.detached.is_none(), "{label}: no detached registry");
+            let service = GuestControlService::new(
+                runtime.auth,
+                runtime.exec,
+                runtime.detached,
+                test_context(instance),
+            );
+            authenticate(&service).await;
+
+            let ctx = ttrpc_context();
+            let caps = service
+                .capabilities(&ctx, capabilities_request())
+                .await
+                .unwrap();
+            let cap_values = caps
+                .capabilities
+                .iter()
+                .map(|cap| cap.enum_value().unwrap())
+                .collect::<Vec<_>>();
+            assert!(
+                !cap_values.contains(&pb::GuestCapability::GUEST_CAPABILITY_EXEC_DETACHED),
+                "{label}: EXEC_DETACHED must not be advertised"
+            );
+
+            let mut request = pb::ExecCreateRequest::new();
+            request.metadata = metadata();
+            request.argv = vec!["/bin/true".to_owned()];
+            request.detached = true;
+            let mut output_policy = pb::OutputPolicy::new();
+            output_policy.max_chunk_bytes = 64 * 1024;
+            request.output_policy = MessageField::some(output_policy);
+            let response = service.exec_create(&ctx, request).await.unwrap();
+            assert_disabled(
+                response
+                    .error
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("{label}: detached create disabled error")),
+            );
+            assert!(response.exec_id.is_none(), "{label}: no exec id allocated");
+        }
+    }
+
     fn test_exec() -> SharedExec {
         Arc::new(ExecRuntime::new(
-            LinuxProcessSpawner,
+            crate::exec_linux::LinuxProcessSpawner::disabled(),
             OsExecIds,
             ExecPolicy::disabled(),
         ))
@@ -1906,11 +2378,11 @@ mod tests {
 
     fn test_exec_root_enabled() -> SharedExec {
         Arc::new(ExecRuntime::new(
-            LinuxProcessSpawner,
+            crate::exec_linux::LinuxProcessSpawner::disabled(),
             OsExecIds,
             ExecPolicy {
                 enabled: true,
-                allow_root: true,
+                exec_user: Some("john".to_owned()),
             },
         ))
     }
@@ -2288,6 +2760,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn detached_create_is_disabled_without_registry() {
+        let ctx = ttrpc_context();
+        let service = GuestControlService::new(
+            test_auth(),
+            test_exec_root_enabled(),
+            None,
+            test_context(16),
+        );
+        authenticate(&service).await;
+        let mut request = pb::ExecCreateRequest::new();
+        request.metadata = metadata();
+        request.argv = vec!["/bin/true".to_owned()];
+        request.detached = true;
+        let mut output_policy = pb::OutputPolicy::new();
+        output_policy.max_chunk_bytes = 64 * 1024;
+        request.output_policy = MessageField::some(output_policy);
+        let response = service.exec_create(&ctx, request).await.unwrap();
+        assert_disabled(response.error.as_ref().expect("detached disabled"));
+    }
+
+    #[tokio::test]
     async fn exec_create_rejects_terminal_size_even_with_zero_rows() {
         let ctx = ttrpc_context();
         // Root exec enabled so the request passes policy and reaches the
@@ -2367,6 +2860,10 @@ mod tests {
             (
                 ExecError::InvalidArgv,
                 Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+            ),
+            (
+                ExecError::InvalidProgram,
+                Pb::GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM,
             ),
             (
                 ExecError::CwdInvalid,
@@ -2550,6 +3047,9 @@ mod tests {
         fn write_spec(&self, _slot: u32, _spec: &ExecSpec) -> Result<(), ExecError> {
             Ok(())
         }
+        fn read_spec(&self, _slot: u32) -> Result<ExecSpec, ExecError> {
+            Err(ExecError::Internal)
+        }
         fn write_cancel(&self, _slot: u32) -> Result<(), ExecError> {
             Ok(())
         }
@@ -2662,6 +3162,10 @@ mod tests {
                 paths: RunnerUnitPaths::new("/run/current-system/sw/bin/nixling-exec-runner"),
                 boot_id: boot_id.to_owned(),
                 max_runtime_sec: 0,
+                exec_user: "alice".to_owned(),
+                exec_uid: 1000,
+                systemd_run_path: "/run/current-system/sw/bin/systemd-run".to_owned(),
+                login_shell_path: "/run/current-system/sw/bin/bash".to_owned(),
             },
         );
         for index in 0..count {
@@ -3163,5 +3667,36 @@ mod tests {
             .unwrap();
         assert!(!advertised(&without.capabilities.capabilities));
         assert!(!advertised(&without.health.capabilities));
+    }
+
+    #[test]
+    fn attached_exec_advertises_output_capability_for_read_output() {
+        // The host requires the output capability (`EXEC_LOGS`) before it will
+        // issue `ReadOutput` for a non-TTY attached exec to stream stdout/
+        // stderr. A build that advertises attached exec but withholds the
+        // output cap establishes a session and then fails fetching output, so
+        // the two MUST be advertised together for the attached runtime.
+        let advertised = |caps: &[EnumOrUnknown<pb::GuestCapability>], cap: pb::GuestCapability| {
+            caps.iter().any(|c| c.enum_value().unwrap() == cap)
+        };
+        let snap = RuntimeCapabilitiesProvider::new(CapabilitiesConfig {
+            exec_attached: true,
+            exec_logs: true,
+            ..CapabilitiesConfig::default()
+        })
+        .snapshot()
+        .unwrap();
+        assert!(advertised(
+            &snap.capabilities.capabilities,
+            pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED
+        ));
+        assert!(advertised(
+            &snap.capabilities.capabilities,
+            pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS
+        ));
+        assert!(advertised(
+            &snap.health.capabilities,
+            pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS
+        ));
     }
 }

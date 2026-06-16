@@ -51,7 +51,7 @@ let
   };
   cargoLock = {
     lockFile = ../packages/Cargo.lock;
-    outputHashes."wl-proxy-0.1.2" = "sha256-5hnfZksxKQIWVEKYnqwyJGWKrBX1FOMGG+3k/FASoBg=";
+    outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
   };
   activationHelperPackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling-activation-helper";
@@ -182,7 +182,7 @@ in
     # SSH keys from `${cfg.site.keysDir}` (each key file is mode
     # 0640 root:nixling with a named-group ACL granting
     # read). Pre-v1.2fu58 the state-dir had no traversal grant
-    # for `nixling`, so `nixling vm konsole` failed
+    # for `nixling`, so `nixling vm exec` failed
     # `stat(2)` on the key path before reaching the file — even
     # though the key existed and the operator was in the group.
     #

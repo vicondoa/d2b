@@ -59,6 +59,10 @@ let
             {
               type = "severity_parser";
               parse_from = "body.PRIORITY";
+              # overwrite_text replaces the raw PRIORITY digit with the
+              # canonical OTel severity text (INFO/WARN/ERROR/…) so SigNoz
+              # shows a readable level instead of "3"/"4"/"6".
+              overwrite_text = true;
               mapping = {
                 fatal = [ "0" "1" "2" ];
                 error = "3";

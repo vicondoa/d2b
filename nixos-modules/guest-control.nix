@@ -4,7 +4,6 @@ let
   cfg = config.nixling.guestControl;
   guestPackages = nixlingInputs.self.packages.${pkgs.stdenv.hostPlatform.system};
   usernamePattern = "^[a-z][a-z0-9_-]{0,31}$";
-  unique = xs: lib.length xs == lib.length (lib.unique xs);
   usernameValid = user: builtins.match usernamePattern user != null;
   userExists = user:
     let
@@ -12,25 +11,11 @@ let
     in
     builtins.hasAttr user config.users.users
     && ((userCfg.isNormalUser or false) || (userCfg.isSystemUser or false));
-  # Detached exec is served only when root exec is allowed; the guest
-  # mirror gates it on exec.enable && exec.allowRoot, matching guestd's
-  # own usability check (both abs flags present => detached runtime).
-  detachedEnabled = cfg.exec.enable && cfg.exec.allowRoot;
-  userdServices =
-    if cfg.exec.enable then
-      lib.listToAttrs (map (user: lib.nameValuePair "nixling-userd-${user}" {
-        description = "nixling guest user daemon for ${user}";
-        wantedBy = [ ];
-        serviceConfig = {
-          Type = "exec";
-          User = user;
-          RuntimeDirectory = "nixling-userd-${user}";
-          RuntimeDirectoryMode = "0700";
-          ExecStart = "${guestPackages.nixling-userd-static}/bin/nixling-userd";
-        };
-      }) cfg.exec.users)
-    else
-      { };
+  # Exec runtime is wired whenever exec is enabled for a workload user.
+  # The detached runtime paths + substrate (parent dir + slice) are part
+  # of a both-or-neither bundle with the attached exec runtime; guestd
+  # decides at runtime whether to actually serve detached.
+  execRuntimeEnabled = cfg.exec.enable && cfg.exec.execUser != null;
 in
 {
   options.nixling.guestControl = {
@@ -65,18 +50,17 @@ in
         description = "Host-owned guest exec policy enable bit.";
       };
 
-      allowRoot = lib.mkOption {
-        type = lib.types.bool;
+      execUser = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
         internal = true;
         readOnly = true;
-        description = "Host-owned root exec policy gate.";
-      };
-
-      users = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
-        internal = true;
-        readOnly = true;
-        description = "Host-owned non-root guest exec user allowlist.";
+        description = ''
+          Host-fixed workload user every guest exec runs as (never root).
+          Derived from the per-VM workload user (`ssh.user`). When non-null,
+          guestd is launched with `--exec-user <name>` and every exec runs the
+          requested command as this user in a real PAM login session
+          (`systemd-run --property=PAMName=login --uid=<name>`).
+        '';
       };
 
       detachedMaxRuntimeSec = lib.mkOption {
@@ -102,15 +86,6 @@ in
   };
 
   config = {
-    warnings =
-      lib.optional (cfg.exec.enable && cfg.exec.users != [ ]) ''
-        nixling.guestControl.exec.users is set, but non-root guest exec is not
-        yet served by the guest exec runtime. Until non-root exec lands, the
-        guestd runtime only honours root exec (guest.exec.allowRoot = true) and
-        rejects every non-root request. The user allowlist is reserved for a
-        future wave and has no runtime effect today.
-      '';
-
     assertions = [
       {
         assertion =
@@ -123,56 +98,60 @@ in
         '';
       }
       {
-        assertion =
-          cfg.exec.enable
-          || (!cfg.exec.allowRoot && cfg.exec.users == [ ]);
+        # Exec runs as the workload user; a workload user MUST be configured.
+        assertion = !cfg.exec.enable || cfg.exec.execUser != null;
         message = ''
-          nixling.guestControl.exec.allowRoot/users were set while exec policy
-          is disabled. Use the host-side nixling.vms.<vm>.guest.exec options
-          instead of overriding internal guest-control policy.
+          nixling.vms.<vm>.guest.exec.enable is true, but no workload user is
+          configured. Guest exec always runs as the VM's workload user; set
+          nixling.vms.<vm>.ssh.user to the in-guest user exec should run as.
         '';
       }
       {
+        # The workload user must be a valid, non-root account.
         assertion =
           !cfg.exec.enable
-          || cfg.exec.allowRoot
-          || cfg.exec.users != [ ];
+          || cfg.exec.execUser == null
+          || (usernameValid cfg.exec.execUser && cfg.exec.execUser != "root");
         message = ''
-          nixling.guestControl.exec.enable is true, but no exec target is
-          allowed. Add at least one host-side guest.exec.users entry or set
-          guest.exec.allowRoot = true.
+          nixling.vms.<vm>.ssh.user (used as the guest exec workload user) must
+          match ${usernamePattern} and must not be root. Guest exec never runs
+          as root; users elevate with sudo inside the session.
         '';
       }
       {
-        assertion = unique cfg.exec.users;
-        message = "nixling.guestControl.exec.users must not contain duplicates.";
-      }
-      {
-        assertion = lib.all usernameValid cfg.exec.users;
+        # The workload user must exist in the guest so login/PAM can resolve it.
+        assertion =
+          !cfg.exec.enable
+          || cfg.exec.execUser == null
+          || userExists cfg.exec.execUser;
         message = ''
-          nixling.guestControl.exec.users entries must match ${usernamePattern}.
-          Wildcards, root-like names, path separators, and systemd specifiers
-          are not accepted.
+          nixling.vms.<vm>.ssh.user (the guest exec workload user) is not
+          declared as a normal or system user inside the guest. Declare it (or
+          enable the desktop/home-manager user) before enabling guest exec.
         '';
       }
       {
-        assertion = !(builtins.elem "root" cfg.exec.users);
+        # The workload user must not resolve to UID 0 (root) even under a
+        # non-root name. The name check above rejects only the literal "root",
+        # but the never-root contract is about the effective UID, so an explicit
+        # `uid = 0` alias must also be rejected. The guestd daemon additionally
+        # resolves the effective UID from the guest passwd DB at runtime and
+        # refuses 0; this is the eval-time half of that defense.
+        assertion =
+          !cfg.exec.enable
+          || cfg.exec.execUser == null
+          || !(builtins.hasAttr cfg.exec.execUser config.users.users)
+          || (config.users.users.${cfg.exec.execUser}.uid or null) != 0;
         message = ''
-          nixling.guestControl.exec.users must not include root. Use the
-          host-side guest.exec.allowRoot option for the separate root policy.
+          nixling.vms.<vm>.ssh.user (the guest exec workload user) is configured
+          with uid = 0. Guest exec never runs as root; assign the workload user
+          a non-zero uid.
         '';
       }
-    ] ++ map (user: {
-      assertion = userExists user;
-      message = ''
-        nixling.guestControl.exec.users contains ${user}, but that user is not
-        declared as a normal or system user inside the guest.
-      '';
-    }) cfg.exec.users;
+    ];
 
     environment.systemPackages = [
       guestPackages.nixling-guestd-static
-      guestPackages.nixling-userd-static
       guestPackages.nixling-exec-runner-static
     ];
 
@@ -185,13 +164,20 @@ in
           Type = "exec";
           ExecStart =
             let
+              execEnabledUser = cfg.exec.enable && cfg.exec.execUser != null;
               execFlags =
                 lib.optionalString cfg.exec.enable " --exec-enable"
-                + lib.optionalString (cfg.exec.enable && cfg.exec.allowRoot) " --exec-allow-root"
-                + lib.optionalString (cfg.exec.enable && cfg.exec.allowRoot)
+                + lib.optionalString execEnabledUser
+                    " --exec-user ${lib.escapeShellArg cfg.exec.execUser}"
+                + lib.optionalString execEnabledUser
                     " --interactive-max-runtime-sec ${toString cfg.exec.interactiveMaxRuntimeSec}";
-              detachedFlags =
-                lib.optionalString detachedEnabled (
+              # The reachable exec paths (interactive PTY + non-interactive pipe)
+              # run the command as the workload user in a PAM login session via
+              # systemd-run, using the exec-runner PTY helper, so both binary
+              # paths are wired whenever exec is enabled — not only for detached.
+              # guestd treats the two paths as a both-or-neither bundle.
+              execRuntimeFlags =
+                lib.optionalString execEnabledUser (
                   " --systemd-run-path ${pkgs.systemd}/bin/systemd-run"
                   + " --exec-runner-path ${guestPackages.nixling-exec-runner-static}/bin/nixling-exec-runner"
                   + " --detached-max-runtime-sec ${toString cfg.exec.detachedMaxRuntimeSec}"
@@ -204,26 +190,29 @@ in
                 lib.optionalString (cfg.guestConfigPath != null)
                   " --guest-config-path ${lib.escapeShellArg cfg.guestConfigPath}";
             in
-            "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${detachedFlags}${configFlags}";
+            "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}";
           LoadCredential = [
             "guest_control_token:/run/nixling-guest-control-host/token"
           ];
         };
       };
-    } // userdServices;
+    };
 
-    # Detached exec parent dir: root-owned, 0700, boot-scoped so it
-    # survives a guestd restart for re-adoption (D = clear at boot, NOT
-    # on every guestd restart). Do NOT make this guestd's RuntimeDirectory
-    # without RuntimeDirectoryPreserve, else a restart wipes adoptable state.
-    systemd.tmpfiles.rules = lib.mkIf detachedEnabled [
+    # Detached exec runtime substrate (parent dir + slice), declared as
+    # part of the both-or-neither exec runtime bundle whenever exec is
+    # enabled for a workload user. The parent dir is root-owned, 0700,
+    # boot-scoped (D = clear at boot, NOT on every guestd restart) so
+    # detached slot state survives a guestd restart for re-adoption. Do
+    # NOT make this guestd's RuntimeDirectory without
+    # RuntimeDirectoryPreserve, else a restart wipes adoptable state.
+    systemd.tmpfiles.rules = lib.mkIf execRuntimeEnabled [
       "D /run/nixling-exec 0700 root root -"
     ];
 
-    # Guest-internal slice that scopes every per-exec transient unit
+    # Guest-internal slice that scopes every per-exec transient slot unit
     # (nixling-exec-NN.service). Slot-keyed unit names bound metadata
     # cardinality to <=32 stable values that carry no exec id.
-    systemd.slices."nixling-exec" = lib.mkIf detachedEnabled {
+    systemd.slices."nixling-exec" = lib.mkIf execRuntimeEnabled {
       description = "nixling detached guest exec slice";
     };
   };

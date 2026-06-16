@@ -20,7 +20,7 @@
 #      type, evaluation fails immediately rather than silently shipping
 #      a broken JSON file.
 #   3. The CLI can consume `config.nixling.manifest` directly from
-#      sibling modules (e.g. `cli.nix`'s per-VM Konsole launcher) with
+#      sibling modules (e.g. `cli.nix`'s per-VM exec launcher) with
 #      type-checked attribute access, no second `lib.mapAttrs` of the
 #      same data.
 #
@@ -237,8 +237,7 @@ let
         type = lib.types.bool;
         description = ''
           True iff `nixling.vms.<name>.graphics.enable` is set. The CLI
-          uses this to pick the launch path (interactive Konsole wrapper
-          vs. `systemctl start microvm@<name>`).
+          uses this to pick the launch path.
         '';
       };
 

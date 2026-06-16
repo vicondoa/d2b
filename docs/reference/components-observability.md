@@ -38,9 +38,15 @@ forwards OTLP (metrics, traces, logs) over the guest→host vsock relay.
 The guest collector also tails the VM's systemd journal through the
 contrib `journald` receiver (`scrapeJournal`, default on) so guest
 service logs land in SigNoz tagged with the VM's `vm.name` / `vm.env`
-resource attributes. The journal `PRIORITY` field is mapped to OTel
-severity, and a `file_storage` cursor lets a collector restart resume
-where it left off rather than dropping entries written during downtime.
+resource attributes. The journal `PRIORITY` field is mapped to a
+readable OTel severity (`INFO`/`WARN`/`ERROR`/…), and a `file_storage`
+cursor lets a collector restart resume where it left off rather than
+dropping entries written during downtime.
+
+The central SigNoz collector stamps these resource attributes on every
+ingested source: `vm.name` (the VM), `vm.env` / `service.namespace`
+(the env), `vm.role`, and `deployment.environment` (the physical host
+machine the guests run on, from the host's `networking.hostName`).
 
 > The systemd journal can contain sensitive data (auth failures,
 > command lines, service-logged secrets). Guest journal logs are
@@ -80,6 +86,7 @@ LAN routing.
 | `nixling.observability.enable` | bool | `false` | Enable the bundled observability stack. |
 | `nixling.observability.env` | str | `"obs"` | Auto-declared observability env name. |
 | `nixling.observability.vmName` | str | `"sys-obs"` | Auto-declared observability VM name. |
+| `nixling.observability.hostName` | str | host `networking.hostName` | Physical host name stamped as the `deployment.environment` resource attribute on all ingested telemetry. |
 | `nixling.observability.index` | int | `10` | LAN index for `sys-obs`. |
 | `nixling.observability.lanSubnet` | str | `"10.40.0.0/24"` | Observability LAN CIDR. |
 | `nixling.observability.uplinkSubnet` | str | `"203.0.113.0/30"` | Host↔obs point-to-point CIDR. |

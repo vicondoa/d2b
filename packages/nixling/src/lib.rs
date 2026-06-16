@@ -41,6 +41,8 @@ mod doctor;
 mod exec_client;
 mod host_validate;
 
+use exec_client::ExecOwnerTransport as _;
+
 const DEFAULT_MANIFEST_PATH: &str = "/run/current-system/sw/share/nixling/vms.json";
 const DEFAULT_BUNDLE_PATH: &str = "/etc/nixling/bundle.json";
 const DEFAULT_PUBLIC_SOCKET: &str = "/run/nixling/public.sock";
@@ -82,6 +84,102 @@ pub struct ListItemOutputV2 {
     pub is_net_vm: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runner_parity_ok: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmExecCreateOutputV1 {
+    pub command: String,
+    pub vm: String,
+    pub exec_id: String,
+    pub state: nixling_ipc::guest_wire::ExecState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmExecListOutputV1 {
+    pub command: String,
+    pub vm: String,
+    pub execs: Vec<VmExecListEntryOutputV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmExecListEntryOutputV1 {
+    pub exec_id: String,
+    pub state: nixling_ipc::guest_wire::ExecState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal: Option<u32>,
+    pub started_at: String,
+    pub start_offset: u64,
+    pub end_offset: u64,
+    pub stdout_start_offset: u64,
+    pub stdout_end_offset: u64,
+    pub stderr_start_offset: u64,
+    pub stderr_end_offset: u64,
+    pub dropped_bytes: u64,
+    pub stdout_dropped_bytes: u64,
+    pub stderr_dropped_bytes: u64,
+    pub truncated: bool,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmExecStatusOutputV1 {
+    pub command: String,
+    pub vm: String,
+    pub exec_id: String,
+    pub state: nixling_ipc::guest_wire::ExecState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal: Option<u32>,
+    pub start_offset: u64,
+    pub end_offset: u64,
+    pub dropped_bytes: u64,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmExecLogsOutputV1 {
+    pub command: String,
+    pub vm: String,
+    pub exec_id: String,
+    pub stdout_base64: String,
+    pub stderr_base64: String,
+    pub start_offset: u64,
+    pub end_offset: u64,
+    pub dropped_bytes: u64,
+    pub truncated: bool,
+    pub stdout_start_offset: u64,
+    pub stdout_end_offset: u64,
+    pub stdout_next_offset: u64,
+    pub stdout_eof: bool,
+    pub stdout_dropped_bytes: u64,
+    pub stdout_truncated: bool,
+    pub stderr_start_offset: u64,
+    pub stderr_end_offset: u64,
+    pub stderr_next_offset: u64,
+    pub stderr_eof: bool,
+    pub stderr_dropped_bytes: u64,
+    pub stderr_truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmExecKillOutputV1 {
+    pub command: String,
+    pub vm: String,
+    pub exec_id: String,
+    pub result: nixling_ipc::public_wire::ExecDetachedKillOutcome,
+    pub state: nixling_ipc::guest_wire::ExecState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -417,8 +515,8 @@ enum NativeCommand {
     /// Authorisation introspection.
     Auth(AuthArgs),
     /// Per-VM lifecycle verbs (start / stop / restart / list / status) plus the
-    /// admin-only guest-control sub-verbs `exec` and `konsole`, which run
-    /// commands or an interactive session inside a VM over the authenticated
+    /// admin-only guest-control sub-verb `exec`, which runs commands or an
+    /// interactive session inside a VM over the authenticated
     /// guest-control transport (no SSH).
     Vm(VmArgs),
     /// Alias for `vm start <vm>`.
@@ -712,33 +810,28 @@ enum VmCommand {
     List(VmListArgs),
     /// Daemon-side readiness state for a VM (api-ready phase).
     Status(VmStatusArgs),
-    /// Open an interactive guest session in a host terminal. Thin wrapper
-    /// that hosts `nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l` in the chosen
-    /// terminal emulator (default `konsole`, overridable via `--terminal`)
-    /// over the authenticated guest-control transport. There is no SSH; the
-    /// retired SSH-only flags `--host`/`--key`/`--user` are rejected with a
-    /// migration message.
-    Konsole(VmKonsoleArgs),
-    /// Run a command inside the VM over the authenticated guest-control
-    /// transport (no SSH). `nixling vm exec <vm> -- <cmd...>` runs a
-    /// non-interactive command; `nixling vm exec -it <vm> -- <cmd...>`
-    /// allocates a guest PTY for an interactive session. Routed CLI →
-    /// daemon `public.sock` (admin-only) → authenticated guest-control vsock
-    /// → guestd exec RPCs.
+    /// Run or manage commands inside a running VM. Use
+    /// `nixling vm exec <vm> -- <cmd...>` for a non-interactive command,
+    /// `nixling vm exec -it <vm> -- bash` for an interactive shell, `-d` for
+    /// a detached command, and `nixling vm exec <vm> {list|logs|status|kill}`
+    /// to manage detached execs.
     Exec(VmExecArgs),
 }
 
-/// `nixling vm exec [-it] [-i] [-t] <vm> [--env K=V]... [--cwd DIR] -- <cmd...>`
-/// Run a command inside a guest-control VM. The guest owns the PTY; the CLI
-/// only manages host terminal state (raw mode + window resize forwarding) and
-/// multiplexes stdin/stdout/stderr/signals over one owner connection.
+/// `nixling vm exec [-d] [-it] [-i] [-t] <vm> [--env K=V]... [--cwd DIR] -- <cmd...>`
+/// Run a command inside a VM. Use `--` before the command, `-it` for an
+/// interactive guest PTY, and `-d` to create a detached exec. Detached execs
+/// are managed with `nixling vm exec <vm> list`, `logs <id>`, `status <id>`,
+/// and `kill <id>`.
 #[derive(Debug, Args)]
 struct VmExecArgs {
-    /// VM name as declared in `nixling.vms.<name>`.
-    vm: String,
-    /// Forward host stdin into the guest command (`-i`). Requires `-t`/`--tty`:
-    /// the guest-control transport forwards stdin only in PTY mode, so `-i`
-    /// must be paired with `-t` (e.g. `-it`).
+    /// Start the command detached and print its exec id. Incompatible with
+    /// `-i`/`-t`; detached execs are managed with
+    /// `nixling vm exec <vm> {list|logs|status|kill}`.
+    #[arg(short = 'd', long = "detach")]
+    detach: bool,
+    /// Forward host stdin into the guest command (`-i`). Requires
+    /// `-t`/`--tty`; use `-it` for an interactive shell.
     #[arg(short = 'i', long = "interactive")]
     interactive: bool,
     /// Allocate a PTY in the guest and put the host terminal in raw mode
@@ -753,19 +846,51 @@ struct VmExecArgs {
     /// Working directory for the guest command.
     #[arg(long = "cwd", value_name = "DIR")]
     cwd: Option<String>,
+    /// VM name as declared in `nixling.vms.<name>`.
+    vm: String,
     /// Emit a single terminal JSON envelope (exit code + source/reason +
     /// bounded captured output). Non-interactive only.
-    #[arg(long, conflicts_with = "human")]
+    #[arg(long, conflicts_with = "human", global = true)]
     json: bool,
-    #[arg(long, conflicts_with = "json")]
+    /// Force human output.
+    #[arg(long, conflicts_with = "json", global = true)]
     human: bool,
-    /// The command and its arguments, after `--`. NOT a clap `required`
-    /// argument: a missing command is validated inside `cmd_vm_exec` so a
-    /// `--json` run still emits the single terminal `source: "cli"`,
-    /// `reason: "usage"` envelope on stdout instead of a clap stderr error
-    /// (matching docs/reference/{error-codes,cli-contract}.md).
+    /// Optional detached exec management form: `list`,
+    /// `logs <id> [--stdout-offset N|--stdout-offset=N]
+    /// [--stderr-offset N|--stderr-offset=N] [--max-len N|--max-len=N]`,
+    /// `status <id>`, or `kill <id>`. Command execs never use this position:
+    /// pass a command after `--` instead.
+    #[arg(value_name = "MANAGEMENT", num_args = 0.., allow_hyphen_values = true)]
+    management: Vec<OsString>,
+    /// The guest command and its arguments, after `--`.
     #[arg(last = true)]
     command: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum VmExecManagementCommand {
+    List,
+    Logs(VmExecLogsArgs),
+    Status(VmExecIdArgs),
+    Kill(VmExecIdArgs),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VmExecIdArgs {
+    /// Detached exec id returned by `nixling vm exec -d`.
+    exec_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VmExecLogsArgs {
+    /// Detached exec id returned by `nixling vm exec -d`.
+    exec_id: String,
+    /// Resume stdout from this byte offset. The daemon clamps stale offsets.
+    stdout_offset: Option<u64>,
+    /// Resume stderr from this byte offset. The daemon clamps stale offsets.
+    stderr_offset: Option<u64>,
+    /// Maximum retained bytes to request per stream.
+    max_len: Option<u64>,
 }
 
 #[derive(Debug, Args)]
@@ -826,44 +951,6 @@ struct VmListArgs {
 struct VmStatusArgs {
     /// VM name.
     vm: String,
-    #[arg(long, conflicts_with = "human")]
-    json: bool,
-    #[arg(long, conflicts_with = "json")]
-    human: bool,
-}
-
-/// `nixling vm konsole <vm>` — open an interactive guest session in a
-/// host terminal. Spawns a terminal emulator (default `konsole`,
-/// overridable via `--terminal`) hosting `nixling vm exec -it <vm> --
-/// bash -l` over the authenticated guest-control transport. There is no
-/// SSH; the guest command runs as the guest-control principal. Detaches
-/// from the CLI process via setsid so closing the CLI doesn't take the
-/// terminal down. The retired SSH-only flags `--host`/`--key`/`--user`
-/// still parse but are rejected with a migration message.
-#[derive(Debug, Args)]
-struct VmKonsoleArgs {
-    /// VM name as declared in `nixling.vms.<name>`.
-    vm: String,
-    /// Terminal emulator binary to spawn. Must accept `-e` to
-    /// execute a command. Tested: konsole, alacritty, foot,
-    /// gnome-terminal, xterm. Default: konsole.
-    #[arg(long, default_value = "konsole")]
-    terminal: String,
-    /// Retired SSH-only flag. Rejected with a migration message;
-    /// guest-control exec runs as the guest-control principal.
-    #[arg(long, hide = true)]
-    user: Option<String>,
-    /// Retired SSH-only flag. Rejected with a migration message;
-    /// the transport is resolved from the trusted bundle.
-    #[arg(long, hide = true)]
-    host: Option<String>,
-    /// Retired SSH-only flag. Rejected with a migration message;
-    /// guest-control exec needs no SSH key.
-    #[arg(long, hide = true)]
-    key: Option<std::path::PathBuf>,
-    /// Print the would-be command without executing.
-    #[arg(long)]
-    dry_run: bool,
     #[arg(long, conflicts_with = "human")]
     json: bool,
     #[arg(long, conflicts_with = "json")]
@@ -1708,7 +1795,6 @@ fn dispatch(
             VmCommand::Restart(args) => cmd_vm_restart(context, args),
             VmCommand::List(args) => cmd_vm_list(context, args),
             VmCommand::Status(args) => cmd_vm_status(context, args),
-            VmCommand::Konsole(args) => cmd_vm_konsole(context, args),
             VmCommand::Exec(args) => cmd_vm_exec(context, args),
         },
         NativeCommand::Up(args) => cmd_vm_start(context, args),
@@ -3720,6 +3806,39 @@ fn exec_daemon_unavailable_error() -> exec_client::ExecClientError {
     )
 }
 
+fn exec_owner_transport(
+    context: &Context,
+) -> Result<OwnerSocketTransport, exec_client::ExecClientError> {
+    if !context.public_socket.exists() {
+        return Err(exec_daemon_unavailable_error());
+    }
+    let mut socket =
+        SeqpacketUnixSocket::connect(&context.public_socket).map_err(|err| match err {
+            err if is_daemon_unreachable(&err) => exec_daemon_unavailable_error(),
+            err => exec_client::ExecClientError::transport(format!(
+                "vm exec: failed to connect to the daemon: {err}"
+            )),
+        })?;
+    let hello = daemon_hello_frame("hello")
+        .map_err(|failure| exec_client::ExecClientError::internal(failure.message))?;
+    socket.send_frame(&hello).map_err(|err| {
+        exec_client::ExecClientError::transport(format!(
+            "vm exec: failed to send hello frame: {err}"
+        ))
+    })?;
+    let hello_reply = socket.recv_frame().map_err(|err| {
+        exec_client::ExecClientError::transport(format!(
+            "vm exec: failed to receive hello reply: {err}"
+        ))
+    })?;
+    parse_hello_reply(&hello_reply)
+        .map_err(|failure| exec_client::ExecClientError::protocol(failure.message))?;
+    Ok(OwnerSocketTransport {
+        socket,
+        next_op_id: 0,
+    })
+}
+
 /// Render a typed exec-client error as a CliFailure carrying the CLI exec
 /// exit-code contract. The wire `kind` slug + message + remediation are
 /// redaction-safe (no argv/env/output bytes).
@@ -3743,7 +3862,7 @@ fn exec_terminate(
     args: &VmExecArgs,
     error: exec_client::ExecClientError,
 ) -> Result<i32, CliFailure> {
-    if args.json {
+    if exec_effective_json(args) {
         let exit_code = error.exit_code;
         print_exec_json(&exec_json_failure_value(args, &error))?;
         Ok(exit_code)
@@ -3757,7 +3876,7 @@ fn exec_terminate(
 /// a plain stderr failure.
 fn exec_usage_terminate(args: &VmExecArgs, message: impl Into<String>) -> Result<i32, CliFailure> {
     let message = message.into();
-    if args.json {
+    if exec_effective_json(args) {
         let mut map = exec_json_base(args);
         map.insert("source".to_owned(), Value::String("cli".to_owned()));
         map.insert("reason".to_owned(), Value::String("usage".to_owned()));
@@ -3770,19 +3889,189 @@ fn exec_usage_terminate(args: &VmExecArgs, message: impl Into<String>) -> Result
     }
 }
 
+#[derive(Debug)]
+struct VmExecParsedAction {
+    json: bool,
+    management: Option<VmExecManagementCommand>,
+}
+
+fn exec_effective_json(args: &VmExecArgs) -> bool {
+    args.json
+        || args
+            .management
+            .iter()
+            .any(|value| value.to_str() == Some("--json"))
+}
+
+fn parse_vm_exec_action(args: &VmExecArgs) -> Result<VmExecParsedAction, String> {
+    let mut json = args.json;
+    let mut human = args.human;
+    let mut words = Vec::new();
+    for value in &args.management {
+        let Some(value) = value.to_str() else {
+            return Err("vm exec: management arguments must be valid UTF-8".to_owned());
+        };
+        match value {
+            "--json" => json = true,
+            "--human" => human = true,
+            other => words.push(other.to_owned()),
+        }
+    }
+    if json && human {
+        return Err("vm exec: --json cannot be combined with --human".to_owned());
+    }
+    if words.is_empty() {
+        return Ok(VmExecParsedAction {
+            json,
+            management: None,
+        });
+    }
+
+    let management = match words[0].as_str() {
+        "list" => {
+            if words.len() != 1 {
+                return Err(
+                    "vm exec list: expected no arguments after `list`; use `--` to run a command"
+                        .to_owned(),
+                );
+            }
+            VmExecManagementCommand::List
+        }
+        "status" => {
+            if words.len() != 2 {
+                return Err(
+                    "vm exec status: expected exactly one detached exec id after `status`"
+                        .to_owned(),
+                );
+            }
+            VmExecManagementCommand::Status(VmExecIdArgs {
+                exec_id: words[1].clone(),
+            })
+        }
+        "kill" => {
+            if words.len() != 2 {
+                return Err(
+                    "vm exec kill: expected exactly one detached exec id after `kill`".to_owned(),
+                );
+            }
+            VmExecManagementCommand::Kill(VmExecIdArgs {
+                exec_id: words[1].clone(),
+            })
+        }
+        "logs" => VmExecManagementCommand::Logs(parse_vm_exec_logs_args(&words)?),
+        _ => {
+            return Err(
+                "vm exec: use `--` to run a command, or choose management verb \
+                 {list|logs|status|kill} after the VM name"
+                    .to_owned(),
+            )
+        }
+    };
+    Ok(VmExecParsedAction {
+        json,
+        management: Some(management),
+    })
+}
+
+fn parse_vm_exec_logs_args(words: &[String]) -> Result<VmExecLogsArgs, String> {
+    if words.len() < 2 {
+        return Err("vm exec logs: expected a detached exec id after `logs`".to_owned());
+    }
+    let mut logs = VmExecLogsArgs {
+        exec_id: words[1].clone(),
+        stdout_offset: None,
+        stderr_offset: None,
+        max_len: None,
+    };
+    let mut index = 2;
+    while index < words.len() {
+        let word = words[index].as_str();
+        match word {
+            "--stdout-offset" => {
+                index += 1;
+                let value = words.get(index).ok_or_else(|| {
+                    "vm exec logs: --stdout-offset requires a byte offset".to_owned()
+                })?;
+                logs.stdout_offset = Some(parse_vm_exec_u64_flag("--stdout-offset", value)?);
+            }
+            "--stderr-offset" => {
+                index += 1;
+                let value = words.get(index).ok_or_else(|| {
+                    "vm exec logs: --stderr-offset requires a byte offset".to_owned()
+                })?;
+                logs.stderr_offset = Some(parse_vm_exec_u64_flag("--stderr-offset", value)?);
+            }
+            "--max-len" => {
+                index += 1;
+                let value = words
+                    .get(index)
+                    .ok_or_else(|| "vm exec logs: --max-len requires a byte length".to_owned())?;
+                logs.max_len = Some(parse_vm_exec_u64_flag("--max-len", value)?);
+            }
+            other if other.strip_prefix("--stdout-offset=").is_some() => {
+                let value = other
+                    .strip_prefix("--stdout-offset=")
+                    .expect("prefix checked");
+                logs.stdout_offset = Some(parse_vm_exec_u64_flag("--stdout-offset", value)?);
+            }
+            other if other.strip_prefix("--stderr-offset=").is_some() => {
+                let value = other
+                    .strip_prefix("--stderr-offset=")
+                    .expect("prefix checked");
+                logs.stderr_offset = Some(parse_vm_exec_u64_flag("--stderr-offset", value)?);
+            }
+            other if other.strip_prefix("--max-len=").is_some() => {
+                let value = other.strip_prefix("--max-len=").expect("prefix checked");
+                logs.max_len = Some(parse_vm_exec_u64_flag("--max-len", value)?);
+            }
+            other if other.starts_with('-') => {
+                return Err(
+                    "vm exec logs: unknown flag; expected --stdout-offset, --stderr-offset, or --max-len"
+                        .to_owned(),
+                );
+            }
+            _ => {
+                return Err(
+                    "vm exec logs: unexpected argument after log options; use `--` to run a command"
+                        .to_owned(),
+                );
+            }
+        }
+        index += 1;
+    }
+    Ok(logs)
+}
+
+fn parse_vm_exec_u64_flag(flag: &str, value: &str) -> Result<u64, String> {
+    value
+        .parse::<u64>()
+        .map_err(|_| format!("vm exec logs: {flag} must be a non-negative integer"))
+}
+
 /// Run a command inside a guest-control VM (FSM). Establishes the
 /// daemon-held authenticated session over `public.sock` (admin-only), then
 /// multiplexes stdin/stdout/stderr/signals over one owner connection. The
 /// guest owns the PTY; the CLI only manages host terminal state.
 fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> {
-    use nixling_ipc::public_wire::{
-        ExecEnvVar, ExecOp, ExecOpResponse, ExecStartArgs, ExecTermSize,
-    };
+    use nixling_ipc::public_wire::{ExecEnvVar, ExecOp, ExecStartArgs, ExecTermSize};
 
     // 1. Validate flags BEFORE touching host terminal state or the daemon.
+    let action = match parse_vm_exec_action(args) {
+        Ok(action) => action,
+        Err(message) => return exec_usage_terminate(args, message),
+    };
+    if let Some(management) = action.management.as_ref() {
+        return cmd_vm_exec_management(context, args, management);
+    }
+    if args.detach && (args.tty || args.interactive) {
+        return exec_usage_terminate(
+            args,
+            "vm exec: -d/--detach cannot be combined with -i/-t; detached exec has no attached terminal",
+        );
+    }
     //    `--json` is machine output: reject it together with ANY interactive /
     //    TTY mode (which streams raw bytes to stdout) before raw mode.
-    if args.json && (args.tty || args.interactive) {
+    if action.json && (args.tty || args.interactive) {
         return exec_usage_terminate(
             args,
             "vm exec: --json cannot be combined with -i/-t; an interactive \
@@ -3851,97 +4140,36 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
     //    establishment failure leaves the host terminal untouched. Every
     //    establishment failure is routed through `exec_terminate` so a `--json`
     //    run still emits exactly one terminal JSON document on stdout.
-    if !context.public_socket.exists() {
-        return exec_terminate(args, exec_daemon_unavailable_error());
-    }
-    let mut socket = match SeqpacketUnixSocket::connect(&context.public_socket) {
-        Ok(socket) => socket,
-        Err(err) if is_daemon_unreachable(&err) => {
-            return exec_terminate(args, exec_daemon_unavailable_error())
-        }
-        Err(err) => {
-            return exec_terminate(
-                args,
-                exec_client::ExecClientError::transport(format!(
-                    "vm exec: failed to connect to the daemon: {err}"
-                )),
-            )
-        }
-    };
-    let hello = daemon_hello_frame("hello")?;
-    if let Err(err) = socket.send_frame(&hello) {
-        return exec_terminate(
-            args,
-            exec_client::ExecClientError::transport(format!(
-                "vm exec: failed to send hello frame: {err}"
-            )),
-        );
-    }
-    let hello_reply = match socket.recv_frame() {
-        Ok(reply) => reply,
-        Err(err) => {
-            return exec_terminate(
-                args,
-                exec_client::ExecClientError::transport(format!(
-                    "vm exec: failed to receive hello reply: {err}"
-                )),
-            )
-        }
-    };
-    if let Err(failure) = parse_hello_reply(&hello_reply) {
-        // A rejected hello is a handshake/version skew — a protocol failure on
-        // the exec path. Preserve the redaction-safe message.
-        return exec_terminate(
-            args,
-            exec_client::ExecClientError::protocol(failure.message),
-        );
-    }
-
     let start_op = ExecOp::Start(ExecStartArgs {
         vm: args.vm.clone(),
         argv: args.command.clone(),
         tty,
-        detached: false,
+        detached: args.detach,
         env: (!env_vars.is_empty()).then_some(env_vars),
         cwd: args.cwd.clone(),
         term_size,
     });
-    let start_frame = match exec_client::encode_exec_op_frame(&start_op, 0) {
-        Ok(frame) => frame,
+    let mut transport = match exec_owner_transport(context) {
+        Ok(transport) => transport,
         Err(err) => return exec_terminate(args, err),
     };
-    if let Err(err) = socket.send_frame(&start_frame) {
-        return exec_terminate(
-            args,
-            exec_client::ExecClientError::transport(format!(
-                "vm exec: failed to send start request: {err}"
-            )),
-        );
-    }
-    let start_reply = match socket.recv_frame() {
-        Ok(reply) => reply,
+    let start_response = match transport.round_trip(&start_op) {
+        Ok(response) => response,
         Err(err) => {
-            return exec_terminate(
-                args,
-                exec_client::ExecClientError::transport(format!(
-                    "vm exec: failed to receive start reply: {err}"
-                )),
-            )
+            return exec_terminate(args, err);
         }
     };
-    let start_response = match exec_client::decode_exec_response_frame(&start_reply) {
-        Ok(response) => response,
-        Err(err) => return exec_terminate(args, err),
-    };
-    let start_result = match start_response {
-        ExecOpResponse::Start(result) => result,
-        _ => {
-            return exec_terminate(
-                args,
-                exec_client::ExecClientError::protocol(
-                    "the daemon did not return a Start response to the exec request",
-                ),
-            )
+    if args.detach {
+        let create = match exec_client::expect_detached_create(start_response) {
+            Ok(result) => result,
+            Err(err) => return exec_terminate(args, err),
+        };
+        return exec_render_detached_create(args, &create);
+    }
+    let start_result = match exec_client::expect_start(start_response) {
+        Ok(result) => result,
+        Err(err) => {
+            return exec_terminate(args, err);
         }
     };
 
@@ -3995,14 +4223,9 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
         poll_timeout_ms: if interactive { 40 } else { 200 },
         max_chunk: exec_client::EXEC_CLI_CHUNK_BYTES,
     };
-    let mut transport = OwnerSocketTransport {
-        socket,
-        next_op_id: 1,
-    };
-
     // 4. Drive the session to completion, then restore the terminal BEFORE any
     //    stdout emission (the --json envelope must not interleave raw output).
-    if args.json {
+    if action.json {
         let mut host = exec_client::CapturingHostIo::new(interactive, 1024 * 1024);
         let result = exec_client::run_exec_fsm(
             &mut transport,
@@ -4033,6 +4256,434 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
             Err(err) => Err(exec_error_to_failure(err)),
         }
     }
+}
+
+fn cmd_vm_exec_management(
+    context: &Context,
+    args: &VmExecArgs,
+    management: &VmExecManagementCommand,
+) -> Result<i32, CliFailure> {
+    use nixling_ipc::public_wire::{
+        ExecDetachedKillArgs, ExecDetachedListArgs, ExecDetachedLogsArgs, ExecDetachedStatusArgs,
+        ExecOp,
+    };
+
+    if args.detach
+        || args.interactive
+        || args.tty
+        || !args.env.is_empty()
+        || args.cwd.is_some()
+        || !args.command.is_empty()
+    {
+        return exec_usage_terminate(
+            args,
+            "vm exec: detached management verbs do not accept -d/-i/-t, --env, --cwd, or a command; use `--` to run a command",
+        );
+    }
+
+    match management {
+        VmExecManagementCommand::List => {
+            let response = match exec_send_one_op(
+                context,
+                ExecOp::List(ExecDetachedListArgs {
+                    vm: args.vm.clone(),
+                }),
+            ) {
+                Ok(response) => response,
+                Err(err) => return exec_terminate(args, err),
+            };
+            let result = match exec_client::expect_detached_list(response) {
+                Ok(result) => result,
+                Err(err) => return exec_terminate(args, err),
+            };
+            exec_render_detached_list(args, &result)
+        }
+        VmExecManagementCommand::Logs(logs_args) => {
+            let response = match exec_send_one_op(
+                context,
+                ExecOp::Logs(ExecDetachedLogsArgs {
+                    vm: args.vm.clone(),
+                    exec_id: logs_args.exec_id.clone(),
+                    stdout_offset: logs_args.stdout_offset,
+                    stderr_offset: logs_args.stderr_offset,
+                    max_len: logs_args.max_len,
+                }),
+            ) {
+                Ok(response) => response,
+                Err(err) => return exec_terminate(args, err),
+            };
+            let result = match exec_client::expect_detached_logs(response) {
+                Ok(result) => result,
+                Err(err) => return exec_terminate(args, err),
+            };
+            exec_render_detached_logs(args, &result)
+        }
+        VmExecManagementCommand::Status(status_args) => {
+            let response = match exec_send_one_op(
+                context,
+                ExecOp::Status(ExecDetachedStatusArgs {
+                    vm: args.vm.clone(),
+                    exec_id: status_args.exec_id.clone(),
+                }),
+            ) {
+                Ok(response) => response,
+                Err(err) => return exec_terminate(args, err),
+            };
+            let result = match exec_client::expect_detached_status(response) {
+                Ok(result) => result,
+                Err(err) => return exec_terminate(args, err),
+            };
+            exec_render_detached_status(args, &result)
+        }
+        VmExecManagementCommand::Kill(kill_args) => {
+            let response = match exec_send_one_op(
+                context,
+                ExecOp::Kill(ExecDetachedKillArgs {
+                    vm: args.vm.clone(),
+                    exec_id: kill_args.exec_id.clone(),
+                }),
+            ) {
+                Ok(response) => response,
+                Err(err) => return exec_terminate(args, err),
+            };
+            let result = match exec_client::expect_detached_kill(response) {
+                Ok(result) => result,
+                Err(err) => return exec_terminate(args, err),
+            };
+            exec_render_detached_kill(args, &result)
+        }
+    }
+}
+
+fn exec_send_one_op(
+    context: &Context,
+    op: nixling_ipc::public_wire::ExecOp,
+) -> Result<nixling_ipc::public_wire::ExecOpResponse, exec_client::ExecClientError> {
+    let mut transport = exec_owner_transport(context)?;
+    transport.round_trip(&op)
+}
+
+fn exec_render_detached_create(
+    args: &VmExecArgs,
+    result: &nixling_ipc::public_wire::ExecDetachedCreateResult,
+) -> Result<i32, CliFailure> {
+    if exec_effective_json(args) {
+        exec_print_json(&VmExecCreateOutputV1 {
+            command: "vm exec".to_owned(),
+            vm: args.vm.clone(),
+            exec_id: result.exec_id.clone(),
+            state: result.state,
+        })?;
+    } else {
+        print_stdout(&(result.exec_id.clone() + "\n"));
+    }
+    Ok(0)
+}
+
+fn exec_render_detached_list(
+    args: &VmExecArgs,
+    result: &nixling_ipc::public_wire::ExecDetachedListResult,
+) -> Result<i32, CliFailure> {
+    if exec_effective_json(args) {
+        let execs = result
+            .execs
+            .iter()
+            .map(|entry| VmExecListEntryOutputV1 {
+                exec_id: entry.exec_id.clone(),
+                state: entry.state,
+                exit_code: entry.exit_code,
+                signal: entry.signal,
+                started_at: entry.started_at.clone(),
+                start_offset: entry.start_offset,
+                end_offset: entry.end_offset,
+                stdout_start_offset: entry.stdout_start_offset,
+                stdout_end_offset: entry.stdout_end_offset,
+                stderr_start_offset: entry.stderr_start_offset,
+                stderr_end_offset: entry.stderr_end_offset,
+                dropped_bytes: entry.dropped_bytes,
+                stdout_dropped_bytes: entry.stdout_dropped_bytes,
+                stderr_dropped_bytes: entry.stderr_dropped_bytes,
+                truncated: entry.truncated,
+                stdout_truncated: entry.stdout_truncated,
+                stderr_truncated: entry.stderr_truncated,
+            })
+            .collect();
+        exec_print_json(&VmExecListOutputV1 {
+            command: "vm exec list".to_owned(),
+            vm: args.vm.clone(),
+            execs,
+        })?;
+    } else {
+        let mut rendered = String::new();
+        let _ = writeln!(
+            rendered,
+            "{:<24} {:<22} {:<25} {:<14} {:<42} DROPPED/TRUNCATED",
+            "EXEC ID", "STATE", "STARTED AT", "EXIT/SIGNAL", "OFFSETS"
+        );
+        for entry in &result.execs {
+            let _ = writeln!(
+                rendered,
+                "{:<24} {:<22} {:<25} {:<14} {:<42} {}",
+                entry.exec_id,
+                exec_state_label(entry.state),
+                entry.started_at,
+                exec_terminal_summary(entry.exit_code, entry.signal, None),
+                exec_list_offsets_summary(entry),
+                exec_list_loss_summary(entry)
+            );
+        }
+        print_stdout(&rendered);
+    }
+    Ok(0)
+}
+
+fn exec_render_detached_status(
+    args: &VmExecArgs,
+    result: &nixling_ipc::public_wire::ExecDetachedStatusResult,
+) -> Result<i32, CliFailure> {
+    if exec_effective_json(args) {
+        exec_print_json(&VmExecStatusOutputV1 {
+            command: "vm exec status".to_owned(),
+            vm: args.vm.clone(),
+            exec_id: result.exec_id.clone(),
+            state: result.state,
+            reason: result.reason.clone(),
+            exit_code: result.exit_code,
+            signal: result.signal,
+            start_offset: result.start_offset,
+            end_offset: result.end_offset,
+            dropped_bytes: result.dropped_bytes,
+            truncated: result.truncated,
+        })?;
+    } else {
+        let mut rendered = String::new();
+        let _ = writeln!(
+            rendered,
+            "{}: {}",
+            result.exec_id,
+            exec_state_label(result.state)
+        );
+        let _ = writeln!(
+            rendered,
+            "terminal: {}",
+            exec_terminal_summary(result.exit_code, result.signal, result.reason.as_deref())
+        );
+        let _ = writeln!(
+            rendered,
+            "logs: startOffset={} endOffset={} droppedBytes={} truncated={}",
+            result.start_offset, result.end_offset, result.dropped_bytes, result.truncated
+        );
+        print_stdout(&rendered);
+    }
+    Ok(0)
+}
+
+fn exec_render_detached_logs(
+    args: &VmExecArgs,
+    result: &nixling_ipc::public_wire::ExecDetachedLogsResult,
+) -> Result<i32, CliFailure> {
+    let (stdout, stderr) = match exec_decode_detached_logs(result) {
+        Ok(decoded) => decoded,
+        Err(err) => return exec_terminate(args, err),
+    };
+    if exec_effective_json(args) {
+        exec_print_json(&VmExecLogsOutputV1 {
+            command: "vm exec logs".to_owned(),
+            vm: args.vm.clone(),
+            exec_id: result.exec_id.clone(),
+            stdout_base64: result.stdout_base64.clone(),
+            stderr_base64: result.stderr_base64.clone(),
+            start_offset: result.start_offset,
+            end_offset: result.end_offset,
+            dropped_bytes: result.dropped_bytes,
+            truncated: result.truncated,
+            stdout_start_offset: result.stdout_start_offset,
+            stdout_end_offset: result.stdout_end_offset,
+            stdout_next_offset: result.stdout_next_offset,
+            stdout_eof: result.stdout_eof,
+            stdout_dropped_bytes: result.stdout_dropped_bytes,
+            stdout_truncated: result.stdout_truncated,
+            stderr_start_offset: result.stderr_start_offset,
+            stderr_end_offset: result.stderr_end_offset,
+            stderr_next_offset: result.stderr_next_offset,
+            stderr_eof: result.stderr_eof,
+            stderr_dropped_bytes: result.stderr_dropped_bytes,
+            stderr_truncated: result.stderr_truncated,
+        })?;
+        return Ok(0);
+    }
+
+    write_stdout_bytes(&stdout).map_err(|err| {
+        CliFailure::new(1, format!("vm exec logs: failed to write stdout: {err}"))
+    })?;
+    write_stderr_bytes(&stderr).map_err(|err| {
+        CliFailure::new(1, format!("vm exec logs: failed to write stderr: {err}"))
+    })?;
+    if exec_logs_incomplete(result) {
+        if !stderr.is_empty() && !stderr.ends_with(b"\n") {
+            write_stderr_bytes(b"\n").map_err(|err| {
+                CliFailure::new(1, format!("vm exec logs: failed to write warning: {err}"))
+            })?;
+        }
+        write_stderr_bytes(exec_logs_warning(result).as_bytes()).map_err(|err| {
+            CliFailure::new(1, format!("vm exec logs: failed to write warning: {err}"))
+        })?;
+    }
+    Ok(0)
+}
+
+fn exec_decode_detached_logs(
+    result: &nixling_ipc::public_wire::ExecDetachedLogsResult,
+) -> Result<(Vec<u8>, Vec<u8>), exec_client::ExecClientError> {
+    let stdout = match nixling_core::base64_codec::decode(&result.stdout_base64) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return Err(exec_client::ExecClientError::protocol(
+                "daemon returned malformed base64 for detached stdout",
+            ));
+        }
+    };
+    let stderr = match nixling_core::base64_codec::decode(&result.stderr_base64) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return Err(exec_client::ExecClientError::protocol(
+                "daemon returned malformed base64 for detached stderr",
+            ));
+        }
+    };
+    Ok((stdout, stderr))
+}
+
+fn exec_render_detached_kill(
+    args: &VmExecArgs,
+    result: &nixling_ipc::public_wire::ExecDetachedKillResult,
+) -> Result<i32, CliFailure> {
+    let outcome = exec_kill_outcome_label(result.result);
+    if exec_effective_json(args) {
+        exec_print_json(&VmExecKillOutputV1 {
+            command: "vm exec kill".to_owned(),
+            vm: args.vm.clone(),
+            exec_id: result.exec_id.clone(),
+            result: result.result,
+            state: result.state,
+        })?;
+    } else {
+        print_stdout(&format!(
+            "{}: {} (state={})\n",
+            result.exec_id,
+            outcome,
+            exec_state_label(result.state)
+        ));
+    }
+    Ok(0)
+}
+
+fn exec_print_json<T: Serialize>(value: &T) -> Result<(), CliFailure> {
+    let value = serde_json::to_value(value)
+        .map_err(|err| CliFailure::new(1, format!("vm exec: failed to serialize JSON: {err}")))?;
+    print_exec_json(&value)
+}
+
+fn exec_state_label(state: nixling_ipc::guest_wire::ExecState) -> &'static str {
+    use nixling_ipc::guest_wire::ExecState;
+
+    match state {
+        ExecState::Created => "created",
+        ExecState::Running => "running",
+        ExecState::Exited => "exited",
+        ExecState::Signaled => "signaled",
+        ExecState::Cancelled => "cancelled",
+        ExecState::SlowConsumerCancelled => "slow-consumer-cancelled",
+        ExecState::ProtocolError => "protocol-error",
+        ExecState::LostGuestd => "lost-guestd",
+        ExecState::Reaped => "reaped",
+    }
+}
+
+fn exec_kill_outcome_label(
+    outcome: nixling_ipc::public_wire::ExecDetachedKillOutcome,
+) -> &'static str {
+    use nixling_ipc::public_wire::ExecDetachedKillOutcome;
+
+    match outcome {
+        ExecDetachedKillOutcome::Cancelling => "cancelling",
+        ExecDetachedKillOutcome::AlreadyTerminal => "already-terminal",
+    }
+}
+
+fn exec_terminal_summary(
+    exit_code: Option<i32>,
+    signal: Option<u32>,
+    reason: Option<&str>,
+) -> String {
+    if let Some(code) = exit_code {
+        format!("exit={code}")
+    } else if let Some(signal) = signal {
+        format!("signal={signal}")
+    } else if let Some(reason) = reason {
+        reason.to_owned()
+    } else {
+        "-".to_owned()
+    }
+}
+
+fn exec_loss_summary(dropped_bytes: u64, truncated: bool) -> String {
+    format!(
+        "{dropped_bytes}/{}",
+        if truncated { "truncated" } else { "complete" }
+    )
+}
+
+fn exec_list_offsets_summary(entry: &nixling_ipc::public_wire::ExecDetachedListEntry) -> String {
+    format!(
+        "all={}..{} stdout={}..{} stderr={}..{}",
+        entry.start_offset,
+        entry.end_offset,
+        entry.stdout_start_offset,
+        entry.stdout_end_offset,
+        entry.stderr_start_offset,
+        entry.stderr_end_offset
+    )
+}
+
+fn exec_list_loss_summary(entry: &nixling_ipc::public_wire::ExecDetachedListEntry) -> String {
+    format!(
+        "all={} stdout={} stderr={}",
+        exec_loss_summary(entry.dropped_bytes, entry.truncated),
+        exec_loss_summary(entry.stdout_dropped_bytes, entry.stdout_truncated),
+        exec_loss_summary(entry.stderr_dropped_bytes, entry.stderr_truncated)
+    )
+}
+
+fn exec_logs_incomplete(result: &nixling_ipc::public_wire::ExecDetachedLogsResult) -> bool {
+    result.dropped_bytes > 0
+        || result.truncated
+        || result.stdout_dropped_bytes > 0
+        || result.stderr_dropped_bytes > 0
+        || result.stdout_truncated
+        || result.stderr_truncated
+}
+
+fn exec_logs_warning(result: &nixling_ipc::public_wire::ExecDetachedLogsResult) -> String {
+    format!(
+        "nixling: vm exec logs: retained output incomplete (startOffset={} endOffset={} droppedBytes={} truncated={} stdoutStartOffset={} stdoutEndOffset={} stdoutNextOffset={} stdoutEof={} stdoutDroppedBytes={} stdoutTruncated={} stderrStartOffset={} stderrEndOffset={} stderrNextOffset={} stderrEof={} stderrDroppedBytes={} stderrTruncated={})\n",
+        result.start_offset,
+        result.end_offset,
+        result.dropped_bytes,
+        result.truncated,
+        result.stdout_start_offset,
+        result.stdout_end_offset,
+        result.stdout_next_offset,
+        result.stdout_eof,
+        result.stdout_dropped_bytes,
+        result.stdout_truncated,
+        result.stderr_start_offset,
+        result.stderr_end_offset,
+        result.stderr_next_offset,
+        result.stderr_eof,
+        result.stderr_dropped_bytes,
+        result.stderr_truncated
+    )
 }
 
 /// Build the terminal `--json` envelope fields shared by success and failure.
@@ -4140,127 +4791,6 @@ fn print_exec_json(value: &Value) -> Result<(), CliFailure> {
     rendered.push('\n');
     print_stdout(&rendered);
     Ok(())
-}
-
-/// Absolute path to the guest login shell hosted by `vm konsole`. guestd
-/// performs no PATH lookup and rejects a relative argv[0]; on a nixling
-/// (NixOS) guest the system bash always resolves here.
-const GUEST_LOGIN_SHELL: &str = "/run/current-system/sw/bin/bash";
-
-/// `nixling vm konsole <vm>` — open an interactive guest session in a host
-/// terminal. This is now a thin wrapper that hosts
-/// `nixling vm exec -it <vm> -- <login-shell>` inside the chosen terminal
-/// emulator (default `konsole`, overridable via `--terminal`). It runs over
-/// the authenticated guest-control transport (admin-only); there is no SSH.
-/// The retired SSH-only flags (`--host`/`--key`/`--user`) are rejected with a
-/// migration message.
-fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFailure> {
-    eprintln!(
-        "note: `nixling vm konsole` now hosts `nixling vm exec -it` over the \
-         authenticated guest-control transport (no SSH). It is retained as a \
-         terminal-spawning convenience; use `nixling vm exec -it {} -- <cmd>` \
-         for ad-hoc commands.",
-        args.vm
-    );
-
-    // The SSH-only flags are retired: guest-control exec resolves the VM, its
-    // transport, and its principal from the trusted bundle. Reject them with a
-    // concrete migration path rather than silently ignoring them.
-    let mut retired = Vec::new();
-    if args.host.is_some() {
-        retired.push("--host");
-    }
-    if args.key.is_some() {
-        retired.push("--key");
-    }
-    if args.user.is_some() {
-        retired.push("--user");
-    }
-    if !retired.is_empty() {
-        return Err(CliFailure::new(
-            2,
-            format!(
-                "vm konsole: the SSH-only flag(s) {} are retired; `vm konsole` now runs over the \
-                 authenticated guest-control transport (no SSH host/key/user selection). Remove \
-                 them; the guest command runs as the guest-control principal.",
-                retired.join(", ")
-            ),
-        ));
-    }
-
-    require_known_vm(context, &args.vm, args.json)?;
-
-    let self_exe = std::env::current_exe().map_err(|err| {
-        CliFailure::new(
-            1,
-            format!("vm konsole: cannot resolve the nixling binary to re-exec: {err}"),
-        )
-    })?;
-
-    let terminal = &args.terminal;
-    // Host `nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l` in
-    // the terminal. The terminal owns the interactive session; the guest owns
-    // the PTY. guestd requires an absolute argv[0] (it performs no PATH
-    // lookup), so use the canonical NixOS system bash path inside the guest.
-    let argv: Vec<String> = vec![
-        terminal.clone(),
-        "-e".to_owned(),
-        self_exe.display().to_string(),
-        "vm".to_owned(),
-        "exec".to_owned(),
-        "-it".to_owned(),
-        args.vm.clone(),
-        "--".to_owned(),
-        GUEST_LOGIN_SHELL.to_owned(),
-        "-l".to_owned(),
-    ];
-
-    if args.dry_run || args.json {
-        let body = serde_json::json!({
-            "command": "vm konsole",
-            "mode": if args.dry_run { "dry-run" } else { "would-spawn" },
-            "vm": args.vm,
-            "terminal": terminal,
-            "transport": "guest-control",
-            "argv": argv,
-        });
-        let mut rendered = serde_json::to_string_pretty(&body)
-            .map_err(|err| CliFailure::new(1, format!("serialize: {err}")))?;
-        rendered.push('\n');
-        print_stdout(&rendered);
-        if args.dry_run {
-            return Ok(0);
-        }
-    } else if args.human {
-        print_stdout(&format!(
-            "vm konsole {}: spawning `{}` hosting `nixling vm exec -it`\n",
-            args.vm, terminal
-        ));
-    }
-
-    // Spawn detached so the CLI can exit while the terminal keeps running.
-    let mut child = spawn_detached_terminal(&argv, terminal)?;
-    let status = child.wait().map_err(|err| {
-        let operator_error =
-            CoreError::internal_io(format!("vm konsole: setsid wait failed: {err}"));
-        CliFailure {
-            exit_code: 1,
-            message: operator_error.message(),
-            rendered_stderr: render_operator_error(&operator_error, Some("vm konsole")),
-        }
-    })?;
-    if !status.success() {
-        let operator_error = CoreError::internal_io(format!(
-            "vm konsole: setsid --fork {} exited with status {:?} (terminal binary missing?)",
-            terminal, status
-        ));
-        return Err(CliFailure {
-            exit_code: 1,
-            message: operator_error.message(),
-            rendered_stderr: render_operator_error(&operator_error, Some("vm konsole")),
-        });
-    }
-    Ok(0)
 }
 
 // ---- store-lifecycle CLI verbs ----
@@ -6393,6 +6923,8 @@ where
 thread_local! {
     static TEST_STDOUT_CAPTURE: std::cell::RefCell<Option<Vec<u8>>> =
         const { std::cell::RefCell::new(None) };
+    static TEST_STDERR_CAPTURE: std::cell::RefCell<Option<Vec<u8>>> =
+        const { std::cell::RefCell::new(None) };
 }
 // Process-wide serialization for `with_test_stdout_capture`. The thread-local
 // buffer above isolates captured BYTES, but the capturing tests also mutate
@@ -6401,9 +6933,6 @@ thread_local! {
 // their env mutations cannot race each other under cargo's parallel harness.
 #[cfg(test)]
 static TEST_STDOUT_CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-#[cfg(test)]
-static TEST_KONSOLE_SPAWN_COUNT: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
 fn with_test_stdout_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>) {
@@ -6423,32 +6952,68 @@ fn with_test_stdout_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>) {
 }
 
 #[cfg(test)]
-fn reset_test_konsole_spawn_count() {
-    TEST_KONSOLE_SPAWN_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
-}
-
-#[cfg(test)]
-fn test_konsole_spawn_count() -> usize {
-    TEST_KONSOLE_SPAWN_COUNT.load(std::sync::atomic::Ordering::SeqCst)
+fn with_test_output_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>, Vec<u8>) {
+    let _guard = TEST_STDOUT_CAPTURE_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    TEST_STDOUT_CAPTURE.with(|capture| {
+        *capture.borrow_mut() = Some(Vec::new());
+    });
+    TEST_STDERR_CAPTURE.with(|capture| {
+        *capture.borrow_mut() = Some(Vec::new());
+    });
+    let result = f();
+    let stdout = TEST_STDOUT_CAPTURE
+        .with(|capture| capture.borrow_mut().take())
+        .expect("stdout capture active");
+    let stderr = TEST_STDERR_CAPTURE
+        .with(|capture| capture.borrow_mut().take())
+        .expect("stderr capture active");
+    (result, stdout, stderr)
 }
 
 fn print_stdout(text: &str) {
+    let _ = write_stdout_bytes(text.as_bytes());
+}
+
+fn write_stdout_bytes(bytes: &[u8]) -> io::Result<()> {
     #[cfg(test)]
     {
         let captured = TEST_STDOUT_CAPTURE.with(|capture| {
             if let Some(buffer) = capture.borrow_mut().as_mut() {
-                buffer.extend_from_slice(text.as_bytes());
+                buffer.extend_from_slice(bytes);
                 true
             } else {
                 false
             }
         });
         if captured {
-            return;
+            return Ok(());
         }
     }
     let mut stdout = io::stdout().lock();
-    let _ = stdout.write_all(text.as_bytes());
+    stdout.write_all(bytes)?;
+    stdout.flush()
+}
+
+fn write_stderr_bytes(bytes: &[u8]) -> io::Result<()> {
+    #[cfg(test)]
+    {
+        let captured = TEST_STDERR_CAPTURE.with(|capture| {
+            if let Some(buffer) = capture.borrow_mut().as_mut() {
+                buffer.extend_from_slice(bytes);
+                true
+            } else {
+                false
+            }
+        });
+        if captured {
+            return Ok(());
+        }
+    }
+    let mut stderr = io::stderr().lock();
+    stderr.write_all(bytes)?;
+    stderr.flush()
 }
 
 fn report_failure(err: CliFailure) -> i32 {
@@ -6472,33 +7037,6 @@ fn render_operator_error(error: &CoreError, owning_command: Option<&str>) -> Opt
     let mut rendered = serde_json::to_string_pretty(&value).ok()?;
     rendered.push('\n');
     Some(rendered)
-}
-
-fn spawn_detached_terminal(
-    argv: &[String],
-    terminal: &str,
-) -> Result<std::process::Child, CliFailure> {
-    #[cfg(test)]
-    TEST_KONSOLE_SPAWN_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-    std::process::Command::new("setsid")
-        .arg("--fork")
-        .args(argv)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|err| {
-            let operator_error = CoreError::internal_io(format!(
-                "vm konsole: failed to spawn `setsid --fork {}`: {err}",
-                terminal
-            ));
-            CliFailure {
-                exit_code: 1,
-                message: operator_error.message(),
-                rendered_stderr: render_operator_error(&operator_error, Some("vm konsole")),
-            }
-        })
 }
 
 fn stdout_is_tty() -> bool {
@@ -7272,10 +7810,10 @@ mod host_install_dispatch_tests {
 
     use super::{
         broker_error_envelope, cmd_host_install, cmd_vm_exec, cmd_vm_start,
-        daemon_supported_features, encode_type_tagged_message, nix_err_to_io, send, socket,
-        AddressFamily, ApiReadySimple, ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk,
-        MsgFlags, NativeCli, SockFlag, SockType, UnixAddr, UsbAttachArgs, VmExecArgs, VmStartArgs,
-        MAX_FRAME_BYTES,
+        daemon_supported_features, encode_type_tagged_message, nix_err_to_io, parse_vm_exec_action,
+        send, socket, AddressFamily, ApiReadySimple, ApiReadyStatusV1, Context, HostInstallArgs,
+        IpcHelloOk, MsgFlags, NativeCli, SockFlag, SockType, UnixAddr, UsbAttachArgs, VmExecArgs,
+        VmStartArgs, MAX_FRAME_BYTES,
     };
     use nixling_ipc::Version;
 
@@ -7622,10 +8160,19 @@ mod host_install_dispatch_tests {
     /// `error` frame whose `kind` is supplied. Returns the CLI result plus the
     /// list of post-hello frames the daemon received (the first MUST be the
     /// `Start`; any further frame would be an illegitimate proxied op).
-    fn run_vm_exec_with_mock_daemon(
+    fn run_vm_exec_with_mock_daemon_response(
         args: VmExecArgs,
-        error_kind: &'static str,
+        response_frame: Value,
     ) -> (Result<i32, super::CliFailure>, Vec<Value>, Vec<u8>) {
+        let (result, frames, stdout, _stderr) =
+            run_vm_exec_with_mock_daemon_response_and_stderr(args, response_frame);
+        (result, frames, stdout)
+    }
+
+    fn run_vm_exec_with_mock_daemon_response_and_stderr(
+        args: VmExecArgs,
+        response_frame: Value,
+    ) -> (Result<i32, super::CliFailure>, Vec<Value>, Vec<u8>, Vec<u8>) {
         let socket_path = test_socket_path("vm-exec", ".sock");
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent).expect("create test socket dir");
@@ -7668,18 +8215,9 @@ mod host_install_dispatch_tests {
                     .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
                 frames_tx.send(start).expect("send start frame");
 
-                // Fail closed: reply with the old-generation error frame. The
-                // CLI MUST NOT proxy any further op after this.
-                let error_frame = serde_json::to_vec(&json!({
-                    "type": "error",
-                    "error": {
-                        "kind": error_kind,
-                        "message": "this VM generation does not support guest-control exec",
-                        "remediation": "rebuild the VM with a current nixling generation",
-                    },
-                }))
-                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-                send_test_frame(accepted, &error_frame)?;
+                let response_frame = serde_json::to_vec(&response_frame)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                send_test_frame(accepted, &response_frame)?;
 
                 // Any further frame is an illegitimate proxied op; record it.
                 if let Ok(extra_bytes) = recv_test_frame(accepted) {
@@ -7707,11 +8245,54 @@ mod host_install_dispatch_tests {
             daemon_state_dir: PathBuf::from("/dev/null"),
             metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
         };
-        let (result, stdout) = super::with_test_stdout_capture(|| cmd_vm_exec(&context, &args));
+        let (result, stdout, stderr) =
+            super::with_test_output_capture(|| cmd_vm_exec(&context, &args));
         server.join().expect("join mock daemon thread");
         let frames: Vec<Value> = frames_rx.try_iter().collect();
         let _ = std::fs::remove_file(&socket_path);
-        (result, frames, stdout)
+        (result, frames, stdout, stderr)
+    }
+
+    fn run_vm_exec_with_mock_daemon(
+        args: VmExecArgs,
+        error_kind: &'static str,
+    ) -> (Result<i32, super::CliFailure>, Vec<Value>, Vec<u8>) {
+        run_vm_exec_with_mock_daemon_response(
+            args,
+            json!({
+                "type": "error",
+                "error": {
+                    "kind": error_kind,
+                    "message": "this VM generation does not support guest-control exec",
+                    "remediation": "rebuild the VM with a current nixling generation",
+                },
+            }),
+        )
+    }
+
+    fn missing_daemon_context() -> Context {
+        Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: PathBuf::from("/dev/null"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        }
+    }
+
+    fn parse_vm_exec(argv: &[&str]) -> VmExecArgs {
+        let cli = NativeCli::try_parse_from(argv).expect("vm exec argv parses");
+        match cli.command {
+            super::NativeCommand::Vm(super::VmArgs {
+                command: super::VmCommand::Exec(args),
+            }) => args,
+            other => panic!("expected vm exec parse, got {other:?}"),
+        }
     }
 
     #[test]
@@ -7728,12 +8309,14 @@ mod host_install_dispatch_tests {
 
         let args = VmExecArgs {
             vm: "oldgenvm".to_owned(),
+            detach: false,
             interactive: false,
             tty: false,
             env: Vec::new(),
             cwd: None,
             json: true,
             human: false,
+            management: Vec::new(),
             command: vec!["ls".to_owned()],
         };
         let (result, frames, stdout) =
@@ -7811,12 +8394,14 @@ mod host_install_dispatch_tests {
         // validation runs before any daemon connection, so /dev/null is fine.
         let human_args = VmExecArgs {
             vm: "work".to_owned(),
+            detach: false,
             interactive: false,
             tty: false,
             env: vec![format!("={SECRET}")],
             cwd: None,
             json: false,
             human: false,
+            management: Vec::new(),
             command: vec!["true".to_owned()],
         };
         let failure = cmd_vm_exec(&context, &human_args)
@@ -7836,12 +8421,14 @@ mod host_install_dispatch_tests {
         // JSON path: the single stdout envelope must not leak the value either.
         let json_args = VmExecArgs {
             vm: "work".to_owned(),
+            detach: false,
             interactive: false,
             tty: false,
             env: vec![format!("not-a-pair-{SECRET}")],
             cwd: None,
             json: true,
             human: false,
+            management: Vec::new(),
             command: vec!["true".to_owned()],
         };
         let (result, stdout) =
@@ -7883,12 +8470,14 @@ mod host_install_dispatch_tests {
 
         let json_args = VmExecArgs {
             vm: "work".to_owned(),
+            detach: false,
             interactive: false,
             tty: false,
             env: Vec::new(),
             cwd: None,
             json: true,
             human: false,
+            management: Vec::new(),
             command: Vec::new(),
         };
         let (result, stdout) =
@@ -7918,6 +8507,753 @@ mod host_install_dispatch_tests {
             failure.message.contains("missing command"),
             "human missing-command error is actionable: {}",
             failure.message
+        );
+    }
+
+    #[test]
+    fn vm_exec_detach_rejects_interactive_and_requires_command() {
+        let context = missing_daemon_context();
+
+        for argv in [
+            ["nixling", "vm", "exec", "-d", "-i", "work", "--", "id"].as_slice(),
+            ["nixling", "vm", "exec", "-d", "-t", "work", "--", "id"].as_slice(),
+        ] {
+            let args = parse_vm_exec(argv);
+            let failure = cmd_vm_exec(&context, &args).expect_err("-d with -i/-t is usage");
+            assert_eq!(failure.exit_code, 2);
+            assert!(
+                failure.message.contains("cannot be combined"),
+                "detach usage error is actionable: {}",
+                failure.message
+            );
+        }
+
+        let args = parse_vm_exec(&["nixling", "vm", "exec", "-d", "work", "--json"]);
+        let (result, stdout) = super::with_test_stdout_capture(|| cmd_vm_exec(&context, &args));
+        assert_eq!(result.expect("json usage returns exit code"), 2);
+        let envelope: Value = serde_json::from_slice(&stdout).expect("usage JSON");
+        assert_eq!(
+            envelope.get("reason").and_then(Value::as_str),
+            Some("usage")
+        );
+        assert!(
+            envelope
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("missing command"),
+            "detach missing command stays actionable: {envelope}"
+        );
+    }
+
+    #[test]
+    fn vm_exec_vm_first_management_grammar_parses_verbs_and_verb_named_vms() {
+        let list = parse_vm_exec(&["nixling", "vm", "exec", "work", "list"]);
+        assert_eq!(list.vm, "work");
+        let list_action = parse_vm_exec_action(&list).expect("list action parses");
+        assert!(matches!(
+            list_action.management,
+            Some(super::VmExecManagementCommand::List)
+        ));
+
+        let logs = parse_vm_exec(&[
+            "nixling",
+            "vm",
+            "exec",
+            "work",
+            "logs",
+            "exec-1",
+            "--stdout-offset",
+            "11",
+            "--stderr-offset",
+            "22",
+            "--max-len",
+            "33",
+        ]);
+        let logs_action = parse_vm_exec_action(&logs).expect("logs action parses");
+        assert!(matches!(
+            logs_action.management,
+            Some(super::VmExecManagementCommand::Logs(super::VmExecLogsArgs {
+                exec_id,
+                stdout_offset: Some(11),
+                stderr_offset: Some(22),
+                max_len: Some(33),
+            })) if exec_id == "exec-1"
+        ));
+
+        let logs_equals = parse_vm_exec(&[
+            "nixling",
+            "vm",
+            "exec",
+            "work",
+            "logs",
+            "exec-1",
+            "--stdout-offset=44",
+        ]);
+        let logs_equals_action =
+            parse_vm_exec_action(&logs_equals).expect("logs equals action parses");
+        assert!(matches!(
+            logs_equals_action.management,
+            Some(super::VmExecManagementCommand::Logs(
+                super::VmExecLogsArgs {
+                    stdout_offset: Some(44),
+                    ..
+                }
+            ))
+        ));
+
+        let status = parse_vm_exec(&["nixling", "vm", "exec", "list", "status", "exec-2"]);
+        assert_eq!(status.vm, "list");
+        let status_action = parse_vm_exec_action(&status).expect("status action parses");
+        assert!(matches!(
+            status_action.management,
+            Some(super::VmExecManagementCommand::Status(super::VmExecIdArgs { exec_id }))
+                if exec_id == "exec-2"
+        ));
+
+        let kill = parse_vm_exec(&["nixling", "vm", "exec", "kill", "kill", "exec-3"]);
+        assert_eq!(kill.vm, "kill");
+        let kill_action = parse_vm_exec_action(&kill).expect("kill action parses");
+        assert!(matches!(
+            kill_action.management,
+            Some(super::VmExecManagementCommand::Kill(super::VmExecIdArgs { exec_id }))
+                if exec_id == "exec-3"
+        ));
+
+        let command = parse_vm_exec(&["nixling", "vm", "exec", "logs", "--", "status", "exec-4"]);
+        assert_eq!(command.vm, "logs");
+        let command_action = parse_vm_exec_action(&command).expect("command action parses");
+        assert!(command_action.management.is_none());
+        assert_eq!(
+            command.command,
+            vec!["status".to_owned(), "exec-4".to_owned()]
+        );
+
+        let status_named_vm = parse_vm_exec(&[
+            "nixling",
+            "vm",
+            "exec",
+            "status",
+            "logs",
+            "exec-status-logs",
+        ]);
+        assert_eq!(status_named_vm.vm, "status");
+        let status_named_action =
+            parse_vm_exec_action(&status_named_vm).expect("status-named VM logs action parses");
+        assert!(matches!(
+            status_named_action.management,
+            Some(super::VmExecManagementCommand::Logs(super::VmExecLogsArgs {
+                exec_id,
+                ..
+            })) if exec_id == "exec-status-logs"
+        ));
+
+        let logs_named_vm = parse_vm_exec(&[
+            "nixling",
+            "vm",
+            "exec",
+            "logs",
+            "status",
+            "exec-logs-status",
+        ]);
+        assert_eq!(logs_named_vm.vm, "logs");
+        let logs_named_action =
+            parse_vm_exec_action(&logs_named_vm).expect("logs-named VM status action parses");
+        assert!(matches!(
+            logs_named_action.management,
+            Some(super::VmExecManagementCommand::Status(super::VmExecIdArgs { exec_id }))
+                if exec_id == "exec-logs-status"
+        ));
+    }
+
+    #[test]
+    fn vm_exec_unknown_management_word_is_usage_not_reserved_name() {
+        let context = missing_daemon_context();
+        const SECRET_TOKEN: &str = "secret-token-should-not-render";
+        let args = parse_vm_exec(&["nixling", "vm", "exec", "work", SECRET_TOKEN]);
+        let failure = cmd_vm_exec(&context, &args).expect_err("unknown no---word is usage failure");
+        assert_eq!(failure.exit_code, 2);
+        assert!(
+            failure.message.contains("use `--` to run a command"),
+            "unknown management error tells the operator how to run commands: {}",
+            failure.message
+        );
+        assert!(
+            !failure.message.contains(SECRET_TOKEN),
+            "unknown management error leaked the would-be argv token: {}",
+            failure.message
+        );
+
+        let json_args = parse_vm_exec(&["nixling", "vm", "exec", "work", SECRET_TOKEN, "--json"]);
+        let (result, stdout) =
+            super::with_test_stdout_capture(|| cmd_vm_exec(&context, &json_args));
+        assert_eq!(result.expect("json usage returns exit code"), 2);
+        let envelope: Value = serde_json::from_slice(&stdout).expect("usage JSON");
+        assert_eq!(
+            envelope.get("reason").and_then(Value::as_str),
+            Some("usage")
+        );
+        let rendered = envelope.to_string();
+        assert!(
+            !rendered.contains(SECRET_TOKEN),
+            "json usage envelope leaked the would-be argv token: {rendered}"
+        );
+    }
+
+    #[test]
+    fn vm_exec_invalid_program_daemon_error_exits_usage_without_stale_remediation() {
+        let args = parse_vm_exec(&["nixling", "vm", "exec", "work", "--json", "--", "-foo"]);
+        let (result, frames, stdout) = run_vm_exec_with_mock_daemon_response(
+            args,
+            json!({
+                "type": "error",
+                "error": {
+                    "kind": "guest-control-invalid-program",
+                    "message": "invalid program: pass a non-empty command after `--` that does not start with `-`",
+                    "remediation": "insert `--` before the guest command and use a program name such as `bash` or `id`",
+                },
+            }),
+        );
+        assert_eq!(result.expect("json error returns code"), 2);
+        assert_eq!(frames.len(), 1);
+        let envelope: Value = serde_json::from_slice(&stdout).expect("invalid-program JSON");
+        assert_eq!(
+            envelope.get("reason").and_then(Value::as_str),
+            Some("guest-control-invalid-program")
+        );
+        assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(2));
+        let rendered = envelope.to_string();
+        assert!(
+            !rendered.contains("already exited"),
+            "invalid-program must not use stale remediation: {rendered}"
+        );
+        assert!(
+            rendered.contains("pass a non-empty command after"),
+            "invalid-program JSON must carry the actionable daemon message: {rendered}"
+        );
+        assert!(
+            rendered.contains("insert `--` before the guest command"),
+            "invalid-program JSON must carry the actionable remediation: {rendered}"
+        );
+
+        let human_args = parse_vm_exec(&["nixling", "vm", "exec", "work", "--", "-foo"]);
+        let (human_result, _, _) = run_vm_exec_with_mock_daemon_response(
+            human_args,
+            json!({
+                "type": "error",
+                "error": {
+                    "kind": "guest-control-invalid-program",
+                    "message": "invalid program: pass a non-empty command after `--` that does not start with `-`",
+                    "remediation": "insert `--` before the guest command and use a program name such as `bash` or `id`",
+                },
+            }),
+        );
+        let failure = human_result.expect_err("human invalid-program is a usage failure");
+        assert_eq!(failure.exit_code, 2);
+        assert!(
+            failure.message.contains("pass a non-empty command after"),
+            "invalid-program human output must carry the actionable message: {}",
+            failure.message
+        );
+    }
+
+    #[test]
+    fn vm_exec_detached_create_renders_human_and_json() {
+        let human_args = parse_vm_exec(&["nixling", "vm", "exec", "-d", "work", "--", "id"]);
+        let (human_result, human_frames, human_stdout) = run_vm_exec_with_mock_daemon_response(
+            human_args,
+            json!({
+                "type": "execResponse",
+                "op": "detachedCreate",
+                "result": {"execId": "exec-abc", "state": "running"},
+            }),
+        );
+        assert_eq!(human_result.expect("detached create human"), 0);
+        assert_eq!(String::from_utf8(human_stdout).unwrap(), "exec-abc\n");
+        assert_eq!(
+            human_frames[0]
+                .pointer("/args/detached")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let json_args =
+            parse_vm_exec(&["nixling", "vm", "exec", "-d", "work", "--json", "--", "id"]);
+        let (json_result, _json_frames, json_stdout) = run_vm_exec_with_mock_daemon_response(
+            json_args,
+            json!({
+                "type": "execResponse",
+                "op": "detachedCreate",
+                "result": {"execId": "exec-json", "state": "created"},
+            }),
+        );
+        assert_eq!(json_result.expect("detached create json"), 0);
+        let envelope: Value = serde_json::from_slice(&json_stdout).expect("create JSON");
+        assert_eq!(
+            envelope.get("command").and_then(Value::as_str),
+            Some("vm exec")
+        );
+        assert_eq!(
+            envelope.get("execId").and_then(Value::as_str),
+            Some("exec-json")
+        );
+        assert_eq!(
+            envelope.get("state").and_then(Value::as_str),
+            Some("created")
+        );
+    }
+
+    #[test]
+    fn vm_exec_detached_management_renders_json_shapes() {
+        let list_args = parse_vm_exec(&["nixling", "vm", "exec", "work", "list", "--json"]);
+        let (list_result, list_frames, list_stdout) = run_vm_exec_with_mock_daemon_response(
+            list_args,
+            json!({
+                "type": "execResponse",
+                "op": "list",
+                "result": {
+                    "execs": [{
+                        "execId": "exec-1",
+                        "state": "exited",
+                        "exitCode": 0,
+                        "startedAt": "2026-06-15T00:00:00Z",
+                        "startOffset": 1,
+                        "endOffset": 9,
+                        "stdoutStartOffset": 1,
+                        "stdoutEndOffset": 5,
+                        "stderrStartOffset": 2,
+                        "stderrEndOffset": 9,
+                        "droppedBytes": 3,
+                        "stdoutDroppedBytes": 1,
+                        "stderrDroppedBytes": 2,
+                        "truncated": true,
+                        "stdoutTruncated": false,
+                        "stderrTruncated": true
+                    }]
+                },
+            }),
+        );
+        assert_eq!(list_result.expect("list json"), 0);
+        assert_eq!(
+            list_frames[0].get("op").and_then(Value::as_str),
+            Some("list")
+        );
+        let list_envelope: Value = serde_json::from_slice(&list_stdout).expect("list JSON");
+        assert_eq!(
+            list_envelope,
+            json!({
+                "command": "vm exec list",
+                "vm": "work",
+                "execs": [{
+                    "execId": "exec-1",
+                    "state": "exited",
+                    "exitCode": 0,
+                    "startedAt": "2026-06-15T00:00:00Z",
+                    "startOffset": 1,
+                    "endOffset": 9,
+                    "stdoutStartOffset": 1,
+                    "stdoutEndOffset": 5,
+                    "stderrStartOffset": 2,
+                    "stderrEndOffset": 9,
+                    "droppedBytes": 3,
+                    "stdoutDroppedBytes": 1,
+                    "stderrDroppedBytes": 2,
+                    "truncated": true,
+                    "stdoutTruncated": false,
+                    "stderrTruncated": true
+                }]
+            })
+        );
+
+        let status_args = parse_vm_exec(&[
+            "nixling", "vm", "exec", "work", "status", "exec-1", "--json",
+        ]);
+        let (status_result, _status_frames, status_stdout) = run_vm_exec_with_mock_daemon_response(
+            status_args,
+            json!({
+                "type": "execResponse",
+                "op": "status",
+                "result": {
+                    "execId": "exec-1",
+                    "state": "signaled",
+                    "reason": "operator-cancelled",
+                    "signal": 15,
+                    "startOffset": 4,
+                    "endOffset": 44,
+                    "droppedBytes": 0,
+                    "truncated": false
+                },
+            }),
+        );
+        assert_eq!(status_result.expect("status json"), 0);
+        let status_envelope: Value = serde_json::from_slice(&status_stdout).expect("status JSON");
+        assert_eq!(
+            status_envelope,
+            json!({
+                "command": "vm exec status",
+                "vm": "work",
+                "execId": "exec-1",
+                "state": "signaled",
+                "reason": "operator-cancelled",
+                "signal": 15,
+                "startOffset": 4,
+                "endOffset": 44,
+                "droppedBytes": 0,
+                "truncated": false
+            })
+        );
+
+        let logs_args = parse_vm_exec(&[
+            "nixling",
+            "vm",
+            "exec",
+            "work",
+            "logs",
+            "exec-1",
+            "--stdout-offset",
+            "4",
+            "--stderr-offset",
+            "8",
+            "--max-len",
+            "16",
+            "--json",
+        ]);
+        let (logs_result, logs_frames, logs_stdout) = run_vm_exec_with_mock_daemon_response(
+            logs_args,
+            json!({
+                "type": "execResponse",
+                "op": "logs",
+                "result": {
+                    "execId": "exec-1",
+                    "stdoutBase64": "T1VUCg==",
+                    "stderrBase64": "RVJSCg==",
+                    "startOffset": 4,
+                    "endOffset": 12,
+                    "droppedBytes": 0,
+                    "truncated": false,
+                    "stdoutStartOffset": 4,
+                    "stdoutEndOffset": 8,
+                    "stdoutNextOffset": 8,
+                    "stdoutEof": true,
+                    "stdoutDroppedBytes": 0,
+                    "stdoutTruncated": false,
+                    "stderrStartOffset": 8,
+                    "stderrEndOffset": 12,
+                    "stderrNextOffset": 12,
+                    "stderrEof": true,
+                    "stderrDroppedBytes": 0,
+                    "stderrTruncated": false
+                },
+            }),
+        );
+        assert_eq!(logs_result.expect("logs json"), 0);
+        assert_eq!(
+            logs_frames[0]
+                .pointer("/args/stdoutOffset")
+                .and_then(Value::as_i64),
+            Some(4)
+        );
+        assert_eq!(
+            logs_frames[0]
+                .pointer("/args/stderrOffset")
+                .and_then(Value::as_i64),
+            Some(8)
+        );
+        assert_eq!(
+            logs_frames[0]
+                .pointer("/args/maxLen")
+                .and_then(Value::as_i64),
+            Some(16)
+        );
+        let logs_envelope: Value = serde_json::from_slice(&logs_stdout).expect("logs JSON");
+        assert_eq!(
+            logs_envelope,
+            json!({
+                "command": "vm exec logs",
+                "vm": "work",
+                "execId": "exec-1",
+                "stdoutBase64": "T1VUCg==",
+                "stderrBase64": "RVJSCg==",
+                "startOffset": 4,
+                "endOffset": 12,
+                "droppedBytes": 0,
+                "truncated": false,
+                "stdoutStartOffset": 4,
+                "stdoutEndOffset": 8,
+                "stdoutNextOffset": 8,
+                "stdoutEof": true,
+                "stdoutDroppedBytes": 0,
+                "stdoutTruncated": false,
+                "stderrStartOffset": 8,
+                "stderrEndOffset": 12,
+                "stderrNextOffset": 12,
+                "stderrEof": true,
+                "stderrDroppedBytes": 0,
+                "stderrTruncated": false
+            })
+        );
+
+        let kill_args =
+            parse_vm_exec(&["nixling", "vm", "exec", "work", "kill", "exec-1", "--json"]);
+        let (kill_result, _kill_frames, kill_stdout) = run_vm_exec_with_mock_daemon_response(
+            kill_args,
+            json!({
+                "type": "execResponse",
+                "op": "kill",
+                "result": {
+                    "execId": "exec-1",
+                    "result": "cancelling",
+                    "state": "running"
+                },
+            }),
+        );
+        assert_eq!(kill_result.expect("kill json"), 0);
+        let kill_envelope: Value = serde_json::from_slice(&kill_stdout).expect("kill JSON");
+        assert_eq!(
+            kill_envelope.get("command").and_then(Value::as_str),
+            Some("vm exec kill")
+        );
+        assert_eq!(
+            kill_envelope.get("result").and_then(Value::as_str),
+            Some("cancelling")
+        );
+
+        let kill_terminal_args = parse_vm_exec(&[
+            "nixling",
+            "vm",
+            "exec",
+            "work",
+            "kill",
+            "exec-terminal",
+            "--json",
+        ]);
+        let (kill_terminal_result, _kill_terminal_frames, kill_terminal_stdout) =
+            run_vm_exec_with_mock_daemon_response(
+                kill_terminal_args,
+                json!({
+                    "type": "execResponse",
+                    "op": "kill",
+                    "result": {
+                        "execId": "exec-terminal",
+                        "result": "already-terminal",
+                        "state": "exited"
+                    },
+                }),
+            );
+        assert_eq!(kill_terminal_result.expect("kill already-terminal json"), 0);
+        let kill_terminal_envelope: Value =
+            serde_json::from_slice(&kill_terminal_stdout).expect("kill terminal JSON");
+        assert_eq!(
+            kill_terminal_envelope.get("result").and_then(Value::as_str),
+            Some("already-terminal")
+        );
+        assert_eq!(
+            kill_terminal_envelope.get("state").and_then(Value::as_str),
+            Some("exited")
+        );
+    }
+
+    #[test]
+    fn vm_exec_detached_management_renders_human_shapes_with_offsets() {
+        let list_args = parse_vm_exec(&["nixling", "vm", "exec", "work", "list"]);
+        let (list_result, _list_frames, list_stdout, _list_stderr) =
+            run_vm_exec_with_mock_daemon_response_and_stderr(
+                list_args,
+                json!({
+                    "type": "execResponse",
+                    "op": "list",
+                    "result": {
+                        "execs": [{
+                            "execId": "exec-1",
+                            "state": "exited",
+                            "exitCode": 0,
+                            "startedAt": "2026-06-15T00:00:00Z",
+                            "startOffset": 1,
+                            "endOffset": 9,
+                            "stdoutStartOffset": 1,
+                            "stdoutEndOffset": 5,
+                            "stderrStartOffset": 2,
+                            "stderrEndOffset": 9,
+                            "droppedBytes": 3,
+                            "stdoutDroppedBytes": 1,
+                            "stderrDroppedBytes": 2,
+                            "truncated": true,
+                            "stdoutTruncated": false,
+                            "stderrTruncated": true
+                        }]
+                    },
+                }),
+            );
+        assert_eq!(list_result.expect("list human"), 0);
+        let list_rendered = String::from_utf8(list_stdout).expect("list stdout utf8");
+        assert!(
+            list_rendered.contains("OFFSETS"),
+            "list human output labels retained offset windows: {list_rendered}"
+        );
+        assert!(
+            list_rendered.contains("all=1..9 stdout=1..5 stderr=2..9"),
+            "list human output includes aggregate and per-stream windows: {list_rendered}"
+        );
+        assert!(
+            list_rendered.contains("all=3/truncated stdout=1/complete stderr=2/truncated"),
+            "list human output includes aggregate and per-stream loss metadata: {list_rendered}"
+        );
+
+        let status_args = parse_vm_exec(&["nixling", "vm", "exec", "work", "status", "exec-1"]);
+        let (status_result, _status_frames, status_stdout, _status_stderr) =
+            run_vm_exec_with_mock_daemon_response_and_stderr(
+                status_args,
+                json!({
+                    "type": "execResponse",
+                    "op": "status",
+                    "result": {
+                        "execId": "exec-1",
+                        "state": "signaled",
+                        "reason": "operator-cancelled",
+                        "signal": 15,
+                        "startOffset": 4,
+                        "endOffset": 44,
+                        "droppedBytes": 2,
+                        "truncated": true
+                    },
+                }),
+            );
+        assert_eq!(status_result.expect("status human"), 0);
+        let status_rendered = String::from_utf8(status_stdout).expect("status stdout utf8");
+        assert!(
+            status_rendered.contains("terminal: signal=15"),
+            "status human output includes terminal disposition: {status_rendered}"
+        );
+        assert!(
+            status_rendered
+                .contains("logs: startOffset=4 endOffset=44 droppedBytes=2 truncated=true"),
+            "status human output includes retained window and loss metadata: {status_rendered}"
+        );
+
+        let logs_args = parse_vm_exec(&["nixling", "vm", "exec", "work", "logs", "exec-1"]);
+        let (logs_result, _logs_frames, logs_stdout, logs_stderr) =
+            run_vm_exec_with_mock_daemon_response_and_stderr(
+                logs_args,
+                json!({
+                    "type": "execResponse",
+                    "op": "logs",
+                    "result": {
+                        "execId": "exec-1",
+                        "stdoutBase64": "T1VUCg==",
+                        "stderrBase64": "RVJS",
+                        "startOffset": 4,
+                        "endOffset": 18,
+                        "droppedBytes": 5,
+                        "truncated": true,
+                        "stdoutStartOffset": 4,
+                        "stdoutEndOffset": 8,
+                        "stdoutNextOffset": 10,
+                        "stdoutEof": false,
+                        "stdoutDroppedBytes": 2,
+                        "stdoutTruncated": true,
+                        "stderrStartOffset": 9,
+                        "stderrEndOffset": 18,
+                        "stderrNextOffset": 21,
+                        "stderrEof": true,
+                        "stderrDroppedBytes": 3,
+                        "stderrTruncated": false
+                    },
+                }),
+            );
+        assert_eq!(logs_result.expect("logs human"), 0);
+        assert_eq!(
+            String::from_utf8(logs_stdout).expect("logs stdout utf8"),
+            "OUT\n"
+        );
+        let logs_stderr_rendered = String::from_utf8(logs_stderr).expect("logs stderr utf8");
+        assert_eq!(
+            logs_stderr_rendered,
+            "ERR\nnixling: vm exec logs: retained output incomplete (startOffset=4 endOffset=18 droppedBytes=5 truncated=true stdoutStartOffset=4 stdoutEndOffset=8 stdoutNextOffset=10 stdoutEof=false stdoutDroppedBytes=2 stdoutTruncated=true stderrStartOffset=9 stderrEndOffset=18 stderrNextOffset=21 stderrEof=true stderrDroppedBytes=3 stderrTruncated=false)\n"
+        );
+
+        for (wire_result, state) in [("cancelling", "running"), ("already-terminal", "exited")] {
+            let kill_args = parse_vm_exec(&["nixling", "vm", "exec", "work", "kill", wire_result]);
+            let (kill_result, _kill_frames, kill_stdout, _kill_stderr) =
+                run_vm_exec_with_mock_daemon_response_and_stderr(
+                    kill_args,
+                    json!({
+                        "type": "execResponse",
+                        "op": "kill",
+                        "result": {
+                            "execId": wire_result,
+                            "result": wire_result,
+                            "state": state
+                        },
+                    }),
+                );
+            assert_eq!(kill_result.expect("kill human"), 0);
+            let kill_rendered = String::from_utf8(kill_stdout).expect("kill stdout utf8");
+            assert!(
+                kill_rendered.contains(&format!("{wire_result}: {wire_result} (state={state})")),
+                "kill human output includes outcome {wire_result}: {kill_rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn vm_exec_logs_json_validates_base64_before_success_envelope() {
+        let logs_args = parse_vm_exec(&[
+            "nixling", "vm", "exec", "work", "logs", "exec-bad", "--json",
+        ]);
+        let (logs_result, _logs_frames, logs_stdout) = run_vm_exec_with_mock_daemon_response(
+            logs_args,
+            json!({
+                "type": "execResponse",
+                "op": "logs",
+                "result": {
+                    "execId": "exec-bad",
+                    "stdoutBase64": "not-valid-base64!",
+                    "stderrBase64": "RVJSCg==",
+                    "startOffset": 0,
+                    "endOffset": 0,
+                    "droppedBytes": 0,
+                    "truncated": false,
+                    "stdoutStartOffset": 0,
+                    "stdoutEndOffset": 0,
+                    "stdoutNextOffset": 0,
+                    "stdoutEof": false,
+                    "stdoutDroppedBytes": 0,
+                    "stdoutTruncated": false,
+                    "stderrStartOffset": 0,
+                    "stderrEndOffset": 0,
+                    "stderrNextOffset": 0,
+                    "stderrEof": false,
+                    "stderrDroppedBytes": 0,
+                    "stderrTruncated": false
+                },
+            }),
+        );
+        assert_eq!(
+            logs_result.expect("malformed logs JSON returns protocol exit code"),
+            76
+        );
+        let envelope: Value =
+            serde_json::from_slice(&logs_stdout).expect("protocol error JSON envelope");
+        assert_eq!(
+            envelope.get("reason").and_then(Value::as_str),
+            Some("guest-control-protocol-error")
+        );
+        assert_eq!(
+            envelope.get("source").and_then(Value::as_str),
+            Some("protocol")
+        );
+        assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(76));
+        assert!(
+            envelope.get("stdoutBase64").is_none(),
+            "protocol failure must not serialize malformed stdout payload: {envelope}"
+        );
+        assert!(
+            envelope
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("malformed base64 for detached stdout"),
+            "protocol failure names the malformed field: {envelope}"
         );
     }
 
@@ -8565,7 +9901,6 @@ mod host_install_dispatch_tests {
         assert_eq!(err.exit_code, 1);
         let rendered = err.rendered_stderr.as_deref().unwrap_or("");
         assert!(rendered.contains("nixling usb attach --apply"));
-        assert!(!rendered.contains("vm konsole"));
         assert!(!rendered.contains("--key"));
         assert!(!rendered.contains("daemon-down"));
 
@@ -9033,192 +10368,6 @@ mod host_install_dispatch_tests {
 }
 
 #[cfg(test)]
-mod konsole_wrapper_tests {
-    //! `vm konsole` is a thin wrapper that hosts `nixling vm exec -it`
-    //! over the authenticated guest-control transport. These tests pin
-    //! the wrapper argv shape (no SSH), the retired-flag rejection, and
-    //! the dry-run envelope.
-
-    use std::fs;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use super::GUEST_LOGIN_SHELL;
-
-    use serde_json::{json, Value};
-
-    use super::{
-        cmd_vm_konsole, reset_test_konsole_spawn_count, test_konsole_spawn_count, Context,
-        VmKonsoleArgs,
-    };
-
-    static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    fn test_dir(test_name: &str) -> PathBuf {
-        let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::current_dir()
-            .expect("current dir")
-            .join("target")
-            .join(format!(
-                "konsole-wrapper-{test_name}-{}-{counter}",
-                std::process::id()
-            ));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("create test dir");
-        dir
-    }
-
-    fn write_konsole_manifest(path: &std::path::Path, vm: &str) {
-        let manifest = json!({
-            (vm): {
-                "name": vm,
-                "env": "dev",
-                "graphics": false,
-                "tpm": false,
-                "audio": false,
-                "audioService": format!("nixling-{vm}-audio.service"),
-                "usbipYubikey": false,
-                "staticIp": "10.20.0.42",
-                "isNetVm": false,
-                "stateDir": format!("/var/lib/nixling/vms/{vm}"),
-                "bridge": "nl-dev",
-                "sshUser": "alice"
-            }
-        });
-        fs::write(
-            path,
-            serde_json::to_vec(&manifest).expect("serialize manifest"),
-        )
-        .expect("write manifest");
-    }
-
-    fn konsole_context(dir: &std::path::Path, vm: &str) -> Context {
-        let manifest_path = dir.join("vms.json");
-        write_konsole_manifest(&manifest_path, vm);
-        Context {
-            manifest_path,
-            bundle_path: dir.join("bundle.json"),
-            public_socket: PathBuf::from("/dev/null"),
-            broker_socket: PathBuf::from("/dev/null"),
-            state_root: None,
-            host_runtime_path: PathBuf::from("/dev/null"),
-            system_state_fixture: None,
-            auth_status_fixture: None,
-            daemon_state_dir: PathBuf::from("/dev/null"),
-            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
-        }
-    }
-
-    fn base_args(vm: &str) -> VmKonsoleArgs {
-        VmKonsoleArgs {
-            vm: vm.to_owned(),
-            terminal: "konsole".to_owned(),
-            user: None,
-            host: None,
-            key: None,
-            dry_run: true,
-            json: false,
-            human: false,
-        }
-    }
-
-    #[test]
-    fn dry_run_argv_hosts_vm_exec_it_with_no_ssh() {
-        let dir = test_dir("dry-run-argv");
-        let context = konsole_context(&dir, "work");
-        let args = base_args("work");
-
-        let code = cmd_vm_konsole(&context, &args).expect("dry-run ok");
-        assert_eq!(code, 0);
-
-        // The wrapper must re-exec this binary into `vm exec -it` and must
-        // not contain any SSH token. We can only assert the static suffix
-        // (the self-exe path is the test harness binary at runtime).
-        let argv_suffix = ["vm", "exec", "-it", "work", "--", GUEST_LOGIN_SHELL, "-l"];
-        // Reconstruct the argv the wrapper would build, mirroring the
-        // production logic, and assert no "ssh" token appears.
-        let self_exe = std::env::current_exe().expect("self exe");
-        let argv: Vec<String> = vec![
-            "konsole".to_owned(),
-            "-e".to_owned(),
-            self_exe.display().to_string(),
-            "vm".to_owned(),
-            "exec".to_owned(),
-            "-it".to_owned(),
-            "work".to_owned(),
-            "--".to_owned(),
-            GUEST_LOGIN_SHELL.to_owned(),
-            "-l".to_owned(),
-        ];
-        assert!(argv.iter().all(|a| !a.contains("ssh")));
-        assert_eq!(&argv[3..], &argv_suffix);
-    }
-
-    #[test]
-    fn dry_run_json_envelope_advertises_guest_control_transport() {
-        let dir = test_dir("dry-run-json");
-        let context = konsole_context(&dir, "work");
-        let mut args = base_args("work");
-        args.dry_run = true;
-
-        // Capture stdout by running the command; the JSON doc is printed.
-        // We re-derive the expected shape: transport == guest-control,
-        // argv contains `exec`/`-it`, and no `host`/`user`/`key` fields.
-        let body = json!({
-            "command": "vm konsole",
-            "mode": "dry-run",
-            "vm": "work",
-            "terminal": "konsole",
-            "transport": "guest-control",
-        });
-        assert_eq!(
-            body.get("transport").and_then(Value::as_str),
-            Some("guest-control")
-        );
-        assert!(body.get("host").is_none());
-        assert!(body.get("key").is_none());
-        assert!(body.get("user").is_none());
-
-        let code = cmd_vm_konsole(&context, &args).expect("dry-run ok");
-        assert_eq!(code, 0);
-    }
-
-    #[test]
-    fn retired_ssh_flags_are_rejected_with_migration_exit_2() {
-        let dir = test_dir("retired-flags");
-        let context = konsole_context(&dir, "work");
-
-        for mutate in [
-            |a: &mut VmKonsoleArgs| a.host = Some("10.0.0.1".to_owned()),
-            |a: &mut VmKonsoleArgs| a.user = Some("bob".to_owned()),
-            |a: &mut VmKonsoleArgs| a.key = Some(PathBuf::from("/tmp/k")),
-        ] {
-            reset_test_konsole_spawn_count();
-            let mut args = base_args("work");
-            mutate(&mut args);
-            let err = cmd_vm_konsole(&context, &args).expect_err("retired flag rejected");
-            assert_eq!(err.exit_code, 2);
-            assert!(err.message.contains("retired"));
-            assert!(!err.message.contains("ssh key"));
-            // A rejected migration error must never spawn a terminal.
-            assert_eq!(test_konsole_spawn_count(), 0);
-        }
-    }
-
-    #[test]
-    fn dry_run_does_not_spawn_a_terminal() {
-        let dir = test_dir("dry-run-no-spawn");
-        let context = konsole_context(&dir, "work");
-        let args = base_args("work");
-
-        reset_test_konsole_spawn_count();
-        let code = cmd_vm_konsole(&context, &args).expect("dry-run ok");
-        assert_eq!(code, 0);
-        assert_eq!(test_konsole_spawn_count(), 0);
-    }
-}
-
-#[cfg(test)]
 mod exec_json_envelope_tests {
     //! The `vm exec --json` envelope disambiguates a guest exit code from a
     //! transport/old-generation failure that happens to share the same shell
@@ -9232,12 +10381,14 @@ mod exec_json_envelope_tests {
     fn exec_args(vm: &str) -> VmExecArgs {
         VmExecArgs {
             vm: vm.to_owned(),
+            detach: false,
             interactive: false,
             tty: false,
             env: Vec::new(),
             cwd: None,
             json: true,
             human: false,
+            management: Vec::new(),
             command: vec!["true".to_owned()],
         }
     }
