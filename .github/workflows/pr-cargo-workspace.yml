@@ -6,6 +6,8 @@ on:
 permissions:
   contents: read
 
+# This workflow is superseded by pr-l1-static-fast/test-rust + test-proofs.
+# Kept temporarily for comparison; will be removed after validation.
 jobs:
   cargo-ubuntu:
     runs-on: ubuntu-latest
@@ -19,26 +21,9 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Cargo workspace gate
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Cargo workspace gate (via make)
         run: |
-          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]\+\)".*/\1/p' packages/rust-toolchain.toml | head -1)
-          nix shell \
-            nixpkgs#rustup \
-            nixpkgs#stdenv.cc \
-            --command bash -lc '
-              set -euo pipefail
-              channel="$1"
-              rustup toolchain install "$channel" --profile minimal --component rustfmt --component clippy
-              cd packages &&
-              CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo fmt --all -- --check &&
-              CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo clippy --workspace --all-targets -- -D warnings &&
-              CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test --workspace &&
-              (cd nixling-priv-broker &&
-                CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test &&
-                CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test --features layer1-bootstrap) &&
-              cd .. &&
-              CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo clippy --manifest-path proofs/chunked-stdio-conformance/Cargo.toml --all-targets -- -D warnings &&
-              CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test --manifest-path proofs/chunked-stdio-conformance/Cargo.toml &&
-              CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo clippy --manifest-path proofs/w0-ch-connect-proof/Cargo.toml --all-targets -- -D warnings &&
-              CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test --manifest-path proofs/w0-ch-connect-proof/Cargo.toml
-            ' -- "$channel"
+          make test-rust
+          make test-proofs
