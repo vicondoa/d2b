@@ -479,6 +479,10 @@ fn host_otlp_ingest_socket_isolation() {
             "deterministic ingest socket mode via UMask",
             r#"UMask[[:space:]]*=[[:space:]]*ingestUmask"#,
         ),
+        (
+            "the ingest dir is pre-created via tmpfiles before the unit namespace is built",
+            r#"d \$\{otelIngestDir\} \$\{ingestDirMode\} nixling-host-otel-collector \$\{ingestGroup\}"#,
+        ),
     ];
 
     let denies: &[(&str, &str)] = &[

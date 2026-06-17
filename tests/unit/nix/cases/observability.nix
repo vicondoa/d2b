@@ -697,6 +697,7 @@ let
           readWritePaths = svc.serviceConfig.ReadWritePaths or null;
           umask = svc.serviceConfig.UMask or null;
           suppGroups = svc.serviceConfig.SupplementaryGroups or null;
+          tmpfilesHasIngest = builtins.any (r: lib.hasInfix "/run/nixling/otel/ingest" r) nixos.config.systemd.tmpfiles.rules;
         };
       expectedExtract = {
         receiverNames = [ "filelog/store_sync_audit" "hostmetrics" "prometheus" ];
@@ -706,6 +707,7 @@ let
         readWritePaths = null;
         umask = null;
         suppGroups = null;
+        tmpfilesHasIngest = false;
       };
     };
 
@@ -764,6 +766,7 @@ let
           readWritePaths = svc.serviceConfig.ReadWritePaths or null;
           umask = svc.serviceConfig.UMask or null;
           endpointIsolatedFromEgress = endpoint != "/run/nixling/otel/host-egress.sock";
+          tmpfilesHasIngest = builtins.any (r: lib.hasInfix "/run/nixling/otel/ingest" r) nixos.config.systemd.tmpfiles.rules;
         };
       expectedExtract = {
         hasOtlp = true;
@@ -777,6 +780,7 @@ let
         readWritePaths = [ "/run/nixling/otel/ingest" ];
         umask = "0177";
         endpointIsolatedFromEgress = true;
+        tmpfilesHasIngest = true;
       };
     };
 

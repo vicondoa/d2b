@@ -274,7 +274,13 @@ lib.mkIf cfg.enable {
   systemd.tmpfiles.rules = [
     "d ${otelRuntimeDir} 0750 nixlingd nixling -"
     "L+ /run/nixling/host-egress.sock - - - - ${hostEgressSocket}"
-  ];
+  ] ++ lib.optional otlpIngest
+    # The OTLP ingest subdir MUST exist before the unit's mount namespace
+    # is constructed: systemd builds the ReadWritePaths bind mount for it
+    # at start, and a missing path fails the unit at the NAMESPACE step
+    # (226/NAMESPACE) before any ExecStartPre runs. tmpfiles creates it
+    # ahead of the unit; runtimePrep then refines perms/ACLs.
+    "d ${otelIngestDir} ${ingestDirMode} nixling-host-otel-collector ${ingestGroup} -";
 
   systemd.services.nixling-host-otel-collector = {
     description = "nixling host OpenTelemetry collector";
