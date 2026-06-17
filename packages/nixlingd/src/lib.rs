@@ -8204,10 +8204,11 @@ fn dispatch_list(
     request: public_wire::ListRequest,
 ) -> Result<Value, TypedError> {
     let manifest = load_manifest(&state.config.artifacts.public_manifest_path)?;
+    let processes = load_json::<ProcessesJson>(&state.config.artifacts.processes_path)?;
     let vms = manifest
-        .into_iter()
+        .iter()
         .filter(|(name, _)| !name.starts_with('_'))
-        .filter(|(name, _)| request.vm.as_ref().map(|vm| vm == name).unwrap_or(true))
+        .filter(|(name, _)| request.vm.as_ref().map(|vm| vm == *name).unwrap_or(true))
         .filter(|(_, value)| {
             request
                 .env
@@ -8216,11 +8217,25 @@ fn dispatch_list(
                 .unwrap_or(true)
         })
         .map(|(name, value)| {
+            let lifecycle = public_vm_lifecycle(state, name, value);
             json!({
                 "name": name,
+                "vm": name,
                 "env": value.get("env").cloned().unwrap_or(Value::Null),
                 "staticIp": value.get("staticIp").cloned().unwrap_or(Value::Null),
                 "isNetVm": value.get("isNetVm").cloned().unwrap_or(Value::Bool(false)),
+                "sshUser": value.get("sshUser").cloned().unwrap_or(Value::Null),
+                "graphics": value.get("graphics").cloned().unwrap_or(Value::Bool(false)),
+                "tpm": value.get("tpm").cloned().unwrap_or(Value::Bool(false)),
+                "usbip": value.get("usbipYubikey").cloned().unwrap_or(Value::Bool(false)),
+                "lifecycle": lifecycle,
+                "runtime": public_runtime_summary(&lifecycle),
+                "services": public_service_states(
+                    state,
+                    name,
+                    value,
+                    processes.vms.iter().find(|entry| entry.vm == *name),
+                ),
             })
         })
         .collect();
@@ -8232,7 +8247,6 @@ fn dispatch_status(
     request: public_wire::StatusRequest,
 ) -> Result<Value, TypedError> {
     let manifest = load_manifest(&state.config.artifacts.public_manifest_path)?;
-    let bundle = load_json::<Bundle>(&state.config.artifacts.bundle_path)?;
     let processes = load_json::<ProcessesJson>(&state.config.artifacts.processes_path)?;
     let requested_vm = request.vm.clone();
 
@@ -8241,27 +8255,562 @@ fn dispatch_status(
         .filter(|(name, _)| !name.starts_with('_'))
         .filter(|(name, _)| requested_vm.as_ref().map(|vm| vm == *name).unwrap_or(true))
         .map(|(name, manifest_entry)| {
-            let closure = load_closure(&state.config.artifacts.closures_dir, name).ok();
-            let process_nodes = processes
-                .vms
-                .iter()
-                .find(|vm| vm.vm == *name)
-                .map(|vm| vm.nodes.len())
-                .unwrap_or(0);
+            let lifecycle = public_vm_lifecycle(state, name, manifest_entry);
             json!({
                 "vm": name,
+                "name": name,
                 "env": manifest_entry.get("env").cloned().unwrap_or(Value::Null),
                 "staticIp": manifest_entry.get("staticIp").cloned().unwrap_or(Value::Null),
-                "bundleVersion": bundle.bundle_version,
-                "processNodes": process_nodes,
-                "runnerParityOk": closure.as_ref().map(|value| value.runner_parity_ok).unwrap_or(false),
-                "runtime": "unknown (daemon-experimental)",
-                "checkBridges": request.check_bridges,
+                "sshUser": manifest_entry.get("sshUser").cloned().unwrap_or(Value::Null),
+                "graphics": manifest_entry.get("graphics").cloned().unwrap_or(Value::Bool(false)),
+                "tpm": manifest_entry.get("tpm").cloned().unwrap_or(Value::Bool(false)),
+                "usbip": manifest_entry.get("usbipYubikey").cloned().unwrap_or(Value::Bool(false)),
+                "isNetVm": manifest_entry.get("isNetVm").cloned().unwrap_or(Value::Bool(false)),
+                "lifecycle": lifecycle,
+                "runtime": public_runtime_summary(&lifecycle),
+                "services": public_service_states(
+                    state,
+                    name,
+                    manifest_entry,
+                    processes.vms.iter().find(|entry| entry.vm == *name),
+                ),
+                "bridgeChecks": [],
             })
         })
         .collect::<Vec<_>>();
 
     Ok(wire::status_response(json!({ "entries": statuses })))
+}
+
+fn public_vm_lifecycle(state: &ServerState, vm: &str, manifest_entry: &Value) -> Value {
+    let live_roles = state
+        .pidfd_table
+        .list_for_vm(vm)
+        .into_iter()
+        .filter(|registration| {
+            state
+                .pidfd_table
+                .still_alive_same_start_time(vm, &registration.role)
+        })
+        .map(|registration| registration.role)
+        .collect::<Vec<_>>();
+
+    let lifecycle_state = if live_roles.iter().any(|role| role == VM_RUNNER_ROLE_ID) {
+        "Running"
+    } else if live_roles.is_empty() {
+        "Stopped"
+    } else {
+        "Starting"
+    };
+
+    let running = lifecycle_state == "Running";
+
+    json!({
+        "pendingRestart": running && public_pending_restart(manifest_entry),
+        "state": lifecycle_state,
+    })
+}
+
+fn public_pending_restart(manifest_entry: &Value) -> bool {
+    let Some(state_dir) = manifest_entry.get("stateDir").and_then(Value::as_str) else {
+        return false;
+    };
+    let state_dir = Path::new(state_dir);
+    let current = fs::read_link(state_dir.join("current")).ok();
+    let booted = fs::read_link(state_dir.join("booted")).ok();
+    matches!((current, booted), (Some(current), Some(booted)) if current != booted)
+}
+
+fn public_runtime_summary(lifecycle: &Value) -> Value {
+    let detail = lifecycle
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("Unknown")
+        .to_ascii_lowercase();
+    json!({ "detail": detail })
+}
+
+fn public_service_states(
+    state: &ServerState,
+    vm: &str,
+    manifest_entry: &Value,
+    process_vm: Option<&nixling_core::processes::VmProcessDag>,
+) -> Value {
+    let has_role = |role: ProcessRole| {
+        process_vm
+            .map(|entry| entry.nodes.iter().any(|node| node.role == role))
+            .unwrap_or(false)
+    };
+    let gpu_role_id = if has_role(ProcessRole::GpuRenderNode) {
+        Some("gpu-render-node")
+    } else if has_role(ProcessRole::Gpu)
+        || manifest_entry
+            .get("graphics")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
+        Some("gpu")
+    } else {
+        None
+    };
+
+    json!({
+        "nixling": "active",
+        "microvm": public_pidfd_role_state(state, vm, VM_RUNNER_ROLE_ID),
+        "virtiofsd": public_pidfd_role_prefix_state(state, vm, "virtiofsd"),
+        "gpu": gpu_role_id.map(|role| public_pidfd_role_state(state, vm, role)),
+        "video": has_role(ProcessRole::Video).then(|| public_pidfd_role_state(state, vm, "video")),
+        "snd": (has_role(ProcessRole::Audio)
+            || manifest_entry.get("audio").and_then(Value::as_bool).unwrap_or(false))
+            .then(|| public_pidfd_role_state(state, vm, "audio")),
+        "swtpm": (has_role(ProcessRole::Swtpm)
+            || manifest_entry.get("tpm").and_then(Value::as_bool).unwrap_or(false))
+            .then(|| public_pidfd_role_state(state, vm, "swtpm")),
+    })
+}
+
+fn public_pidfd_role_state(state: &ServerState, vm: &str, role: &str) -> String {
+    public_pidfd_role_state_matching(state, vm, |candidate| candidate == role)
+}
+
+fn public_pidfd_role_prefix_state(state: &ServerState, vm: &str, prefix: &str) -> String {
+    public_pidfd_role_state_matching(state, vm, |candidate| candidate.starts_with(prefix))
+}
+
+fn public_pidfd_role_state_matching<F>(state: &ServerState, vm: &str, role_matches: F) -> String
+where
+    F: Fn(&str) -> bool,
+{
+    let running = state
+        .pidfd_table
+        .list_for_vm(vm)
+        .into_iter()
+        .any(|registration| {
+            role_matches(&registration.role)
+                && state
+                    .pidfd_table
+                    .still_alive_same_start_time(vm, &registration.role)
+        });
+    if running { "running" } else { "stopped" }.to_owned()
+}
+
+#[cfg(test)]
+mod public_status_tests {
+    use super::supervisor::pidfd_table::{BrokerReapLog, PidfdEntry, PidfdTable};
+    use super::supervisor::state::parse_proc_stat_starttime;
+    use super::*;
+    use std::os::fd::OwnedFd;
+
+    fn test_state() -> (ServerState, tempfile::TempDir) {
+        test_state_with_config(DaemonConfig::default())
+    }
+
+    fn test_state_with_config(config: DaemonConfig) -> (ServerState, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("temp daemon state");
+        let broker_reap_log = BrokerReapLog::new();
+        let state = ServerState {
+            config,
+            daemon_uid: 0,
+            daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
+            daemon_state_dir: dir.path().to_path_buf(),
+            pidfd_table: Arc::new(
+                PidfdTable::new(dir.path().join("pidfd-table.json"))
+                    .with_broker_reap_log(Arc::clone(&broker_reap_log)),
+            ),
+            broker_reap_log,
+            metrics_registry: Arc::new(metrics::Registry::new()),
+            exec_sessions: Arc::new(exec_session::SessionTable::new(
+                exec_session::ExecSessionCaps::default(),
+            )),
+        };
+        (state, dir)
+    }
+
+    fn write_public_status_artifacts(root: &Path) -> ArtifactPaths {
+        write_public_status_artifacts_with_state_dir(root, None)
+    }
+
+    fn write_public_status_artifacts_with_state_dir(
+        root: &Path,
+        vm_a_state_dir: Option<&Path>,
+    ) -> ArtifactPaths {
+        let public_manifest_path = root.join("vms.json");
+        let bundle_path = root.join("bundle.json");
+        let processes_path = root.join("processes.json");
+        let closures_dir = root.join("closures");
+        fs::create_dir_all(&closures_dir).expect("closures dir");
+        let vm_a_state_dir = vm_a_state_dir
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| root.join("vm-a-state").display().to_string());
+
+        fs::write(
+            &public_manifest_path,
+            serde_json::to_vec_pretty(&json!({
+                "_manifest": { "version": 4 },
+                "vm-a": {
+                    "name": "vm-a",
+                    "env": "work",
+                    "staticIp": "10.20.0.10",
+                    "sshUser": "alice",
+                    "isNetVm": false,
+                    "stateDir": vm_a_state_dir,
+                    "graphics": true,
+                    "tpm": false,
+                    "usbipYubikey": true,
+                    "audio": false
+                },
+                "vm-b": {
+                    "name": "vm-b",
+                    "env": "personal",
+                    "staticIp": "10.30.0.10",
+                    "sshUser": "bob",
+                    "isNetVm": false,
+                    "graphics": false,
+                    "tpm": false,
+                    "usbipYubikey": false,
+                    "audio": false
+                }
+            }))
+            .expect("manifest json"),
+        )
+        .expect("write manifest");
+
+        fs::write(
+            &processes_path,
+            serde_json::to_vec_pretty(&json!({
+                "schemaVersion": "v2",
+                "vms": []
+            }))
+            .expect("processes json"),
+        )
+        .expect("write processes");
+
+        fs::write(
+            &bundle_path,
+            serde_json::to_vec_pretty(&json!({
+                "bundleVersion": 4,
+                "schemaVersion": "v2",
+                "publicManifestPath": public_manifest_path.display().to_string(),
+                "hostPath": root.join("host.json").display().to_string(),
+                "processesPath": processes_path.display().to_string(),
+                "privilegesPath": root.join("privileges.json").display().to_string(),
+                "closures": [],
+                "minijailProfiles": [],
+                "managedKeys": {},
+                "generation": {
+                    "generator": "public-status-test",
+                    "sourceRevision": null,
+                    "generatedAt": null
+                }
+            }))
+            .expect("bundle json"),
+        )
+        .expect("write bundle");
+
+        ArtifactPaths {
+            public_manifest_path,
+            bundle_path,
+            processes_path,
+            closures_dir,
+            ..ArtifactPaths::default()
+        }
+    }
+
+    fn make_generation_links(root: &Path, current: &str, booted: &str) -> PathBuf {
+        let state_dir = root.join("vm-a-state");
+        fs::create_dir_all(&state_dir).expect("state dir");
+        std::os::unix::fs::symlink(current, state_dir.join("current")).expect("current link");
+        std::os::unix::fs::symlink(booted, state_dir.join("booted")).expect("booted link");
+        state_dir
+    }
+
+    fn current_process_entry() -> PidfdEntry {
+        let pid = std::process::id() as i32;
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).expect("read current stat");
+        let start_time_ticks = parse_proc_stat_starttime(&stat).expect("parse current start time");
+        let pidfd: OwnedFd = File::open("/dev/null").expect("open dummy fd").into();
+        PidfdEntry {
+            pidfd,
+            pid,
+            start_time_ticks,
+        }
+    }
+
+    fn lifecycle_state(value: &Value) -> &str {
+        value
+            .get("state")
+            .and_then(Value::as_str)
+            .expect("lifecycle state")
+    }
+
+    fn manifest_entry() -> Value {
+        json!({ "stateDir": "/nonexistent/nixling-public-status-test" })
+    }
+
+    #[test]
+    fn public_lifecycle_reports_stopped_with_no_live_roles() {
+        let (state, _dir) = test_state();
+        let lifecycle = public_vm_lifecycle(&state, "vm-a", &manifest_entry());
+        assert_eq!(lifecycle_state(&lifecycle), "Stopped");
+        assert_eq!(
+            public_runtime_summary(&lifecycle)
+                .get("detail")
+                .and_then(Value::as_str),
+            Some("stopped")
+        );
+    }
+
+    #[test]
+    fn public_lifecycle_reports_running_when_ch_runner_is_live() {
+        let (state, _dir) = test_state();
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                VM_RUNNER_ROLE_ID.to_owned(),
+                current_process_entry(),
+            )
+            .expect("register ch runner");
+        let lifecycle = public_vm_lifecycle(&state, "vm-a", &manifest_entry());
+        assert_eq!(lifecycle_state(&lifecycle), "Running");
+        assert_eq!(
+            public_runtime_summary(&lifecycle)
+                .get("detail")
+                .and_then(Value::as_str),
+            Some("running")
+        );
+    }
+
+    #[test]
+    fn public_service_states_follow_pidfd_roles() {
+        let (state, _dir) = test_state();
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                VM_RUNNER_ROLE_ID.to_owned(),
+                current_process_entry(),
+            )
+            .expect("register ch runner");
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                "virtiofsd-ro-store".to_owned(),
+                current_process_entry(),
+            )
+            .expect("register virtiofsd");
+        let services = public_service_states(
+            &state,
+            "vm-a",
+            &json!({ "graphics": false, "audio": false, "tpm": false }),
+            None,
+        );
+        assert_eq!(
+            services.get("nixling").and_then(Value::as_str),
+            Some("active")
+        );
+        assert_eq!(
+            services.get("microvm").and_then(Value::as_str),
+            Some("running")
+        );
+        assert_eq!(
+            services.get("virtiofsd").and_then(Value::as_str),
+            Some("running")
+        );
+    }
+
+    #[test]
+    fn dispatch_list_emits_manifest_features_and_live_lifecycle() {
+        let root = tempfile::tempdir().expect("artifact root");
+        let artifacts = write_public_status_artifacts(root.path());
+        let (state, _dir) = test_state_with_config(DaemonConfig {
+            artifacts,
+            ..DaemonConfig::default()
+        });
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                VM_RUNNER_ROLE_ID.to_owned(),
+                current_process_entry(),
+            )
+            .expect("register ch runner");
+
+        let frame = dispatch_list(
+            &state,
+            public_wire::ListRequest {
+                env: Some("work".to_owned()),
+                vm: None,
+            },
+        )
+        .expect("list dispatch");
+
+        assert_eq!(
+            frame.get("type").and_then(Value::as_str),
+            Some("listResponse")
+        );
+        let vms = frame.get("vms").and_then(Value::as_array).expect("vms");
+        assert_eq!(vms.len(), 1);
+        let vm = &vms[0];
+        assert_eq!(vm.get("vm").and_then(Value::as_str), Some("vm-a"));
+        assert_eq!(vm.get("graphics").and_then(Value::as_bool), Some(true));
+        assert_eq!(vm.get("usbip").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            vm.pointer("/lifecycle/state").and_then(Value::as_str),
+            Some("Running")
+        );
+        assert_eq!(
+            vm.pointer("/runtime/detail").and_then(Value::as_str),
+            Some("running")
+        );
+        assert_eq!(
+            vm.pointer("/services/microvm").and_then(Value::as_str),
+            Some("running")
+        );
+    }
+
+    #[test]
+    fn dispatch_status_emits_entries_frame_and_service_states() {
+        let root = tempfile::tempdir().expect("artifact root");
+        let artifacts = write_public_status_artifacts(root.path());
+        let (state, _dir) = test_state_with_config(DaemonConfig {
+            artifacts,
+            ..DaemonConfig::default()
+        });
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                "virtiofsd-ro-store".to_owned(),
+                current_process_entry(),
+            )
+            .expect("register virtiofsd");
+
+        let frame = dispatch_status(
+            &state,
+            public_wire::StatusRequest {
+                check_bridges: false,
+                vm: Some("vm-a".to_owned()),
+            },
+        )
+        .expect("status dispatch");
+
+        assert_eq!(
+            frame.get("type").and_then(Value::as_str),
+            Some("statusResponse")
+        );
+        let entries = frame
+            .pointer("/status/entries")
+            .and_then(Value::as_array)
+            .expect("status entries");
+        assert_eq!(entries.len(), 1);
+        let vm = &entries[0];
+        assert_eq!(vm.get("vm").and_then(Value::as_str), Some("vm-a"));
+        assert_eq!(
+            vm.get("staticIp").and_then(Value::as_str),
+            Some("10.20.0.10")
+        );
+        assert_eq!(
+            vm.pointer("/lifecycle/state").and_then(Value::as_str),
+            Some("Starting")
+        );
+        assert_eq!(
+            vm.pointer("/runtime/detail").and_then(Value::as_str),
+            Some("starting")
+        );
+        assert_eq!(
+            vm.pointer("/services/microvm").and_then(Value::as_str),
+            Some("stopped")
+        );
+        assert_eq!(
+            vm.pointer("/services/virtiofsd").and_then(Value::as_str),
+            Some("running")
+        );
+        assert!(
+            vm.get("readiness").is_none(),
+            "public status should not expose raw readiness path strings"
+        );
+    }
+
+    #[test]
+    fn dispatch_status_pending_restart_requires_running_vm() {
+        let root = tempfile::tempdir().expect("artifact root");
+        let state_dir =
+            make_generation_links(root.path(), "/nix/store/current", "/nix/store/booted");
+        let artifacts = write_public_status_artifacts_with_state_dir(root.path(), Some(&state_dir));
+        let (state, _dir) = test_state_with_config(DaemonConfig {
+            artifacts,
+            ..DaemonConfig::default()
+        });
+
+        let stopped = dispatch_status(
+            &state,
+            public_wire::StatusRequest {
+                check_bridges: false,
+                vm: Some("vm-a".to_owned()),
+            },
+        )
+        .expect("stopped status");
+        assert_eq!(
+            stopped
+                .pointer("/status/entries/0/lifecycle/state")
+                .and_then(Value::as_str),
+            Some("Stopped")
+        );
+        assert_eq!(
+            stopped
+                .pointer("/status/entries/0/lifecycle/pendingRestart")
+                .and_then(Value::as_bool),
+            Some(false),
+            "stopped VMs do not have a pending restart even if current/booted differ"
+        );
+
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                VM_RUNNER_ROLE_ID.to_owned(),
+                current_process_entry(),
+            )
+            .expect("register running ch");
+        let running = dispatch_status(
+            &state,
+            public_wire::StatusRequest {
+                check_bridges: false,
+                vm: Some("vm-a".to_owned()),
+            },
+        )
+        .expect("running status");
+        assert_eq!(
+            running
+                .pointer("/status/entries/0/lifecycle/state")
+                .and_then(Value::as_str),
+            Some("Running")
+        );
+        assert_eq!(
+            running
+                .pointer("/status/entries/0/lifecycle/pendingRestart")
+                .and_then(Value::as_bool),
+            Some(true),
+            "running VMs report pending restart when current/booted differ"
+        );
+    }
+
+    #[test]
+    fn public_lifecycle_reports_starting_for_sidecars_without_ch_runner() {
+        let (state, _dir) = test_state();
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                "virtiofsd-ro-store".to_owned(),
+                current_process_entry(),
+            )
+            .expect("register sidecar");
+        let lifecycle = public_vm_lifecycle(&state, "vm-a", &manifest_entry());
+        assert_eq!(lifecycle_state(&lifecycle), "Starting");
+    }
 }
 
 fn dispatch_audit(
@@ -8439,10 +8988,6 @@ fn load_manifest(path: &Path) -> Result<serde_json::Map<String, Value>, TypedErr
             context: format!("decode manifest {}", path.display()),
             detail: "manifest must be a JSON object".to_owned(),
         })
-}
-
-fn load_closure(closures_dir: &Path, vm: &str) -> Result<ClosureMetadata, TypedError> {
-    load_json(&closures_dir.join(format!("{vm}.json")))
 }
 
 fn resolve_bundle_artifact_path(base_dir: &Path, raw_path: &str) -> PathBuf {

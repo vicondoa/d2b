@@ -4252,8 +4252,14 @@
     "ListEntry": {
       "type": "object",
       "required": [
+        "graphics",
+        "isNetVm",
         "lifecycle",
+        "name",
         "runtime",
+        "services",
+        "tpm",
+        "usbip",
         "vm"
       ],
       "properties": {
@@ -4263,17 +4269,41 @@
             "null"
           ]
         },
+        "graphics": {
+          "type": "boolean"
+        },
+        "isNetVm": {
+          "type": "boolean"
+        },
         "lifecycle": {
           "$ref": "#/definitions/VmLifecycle"
         },
+        "name": {
+          "type": "string"
+        },
         "runtime": {
           "$ref": "#/definitions/RuntimeSummary"
+        },
+        "services": {
+          "$ref": "#/definitions/PublicVmServices"
         },
         "sshUser": {
           "type": [
             "string",
             "null"
           ]
+        },
+        "staticIp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tpm": {
+          "type": "boolean"
+        },
+        "usbip": {
+          "type": "boolean"
         },
         "vm": {
           "type": "string"
@@ -5469,6 +5499,50 @@
         }
       ]
     },
+    "PublicVmServices": {
+      "type": "object",
+      "required": [
+        "microvm",
+        "nixling",
+        "virtiofsd"
+      ],
+      "properties": {
+        "gpu": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "microvm": {
+          "type": "string"
+        },
+        "nixling": {
+          "type": "string"
+        },
+        "snd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "swtpm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "video": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "virtiofsd": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "ReadGuestConfigRequest": {
       "description": "`read guest config` request payload. The daemon resolves the per-VM vsock socket + peer credentials from the trusted bundle; the client supplies only the VM name.",
       "type": "object",
@@ -6368,11 +6442,14 @@
     "StatusResponse": {
       "type": "object",
       "required": [
-        "vm"
+        "entries"
       ],
       "properties": {
-        "vm": {
-          "$ref": "#/definitions/VmStatus"
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/VmStatus"
+          }
         }
       },
       "additionalProperties": false
@@ -6904,8 +6981,14 @@
       "type": "object",
       "required": [
         "bridgeChecks",
+        "graphics",
+        "isNetVm",
         "lifecycle",
+        "name",
         "runtime",
+        "services",
+        "tpm",
+        "usbip",
         "vm"
       ],
       "properties": {
@@ -6921,11 +7004,23 @@
             "null"
           ]
         },
+        "graphics": {
+          "type": "boolean"
+        },
+        "isNetVm": {
+          "type": "boolean"
+        },
         "lifecycle": {
           "$ref": "#/definitions/VmLifecycle"
         },
+        "name": {
+          "type": "string"
+        },
         "runtime": {
           "$ref": "#/definitions/RuntimeSummary"
+        },
+        "services": {
+          "$ref": "#/definitions/PublicVmServices"
         },
         "sshUser": {
           "type": [
@@ -6938,6 +7033,12 @@
             "string",
             "null"
           ]
+        },
+        "tpm": {
+          "type": "boolean"
+        },
+        "usbip": {
+          "type": "boolean"
         },
         "vm": {
           "type": "string"

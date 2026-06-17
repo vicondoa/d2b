@@ -27,8 +27,10 @@ use nixling_ipc::{
     public_wire::{
         AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest, KeyEntry as IpcKeyEntry,
         KeysShowRequest as IpcKeysShowRequest, KeysShowResponse as IpcKeysShowResponse,
-        ReadGuestConfigRequest, UsbipProbeEntry as IpcUsbipProbeEntry,
-        UsbipProbeStatus as IpcUsbipProbeStatus,
+        ListEntry as IpcListEntry, ListRequest as IpcListRequest, PublicVmServices,
+        ReadGuestConfigRequest, StatusRequest as IpcStatusRequest,
+        UsbipProbeEntry as IpcUsbipProbeEntry, UsbipProbeStatus as IpcUsbipProbeStatus,
+        VmLifecycleState as IpcVmLifecycleState, VmStatus as IpcVmStatus,
     },
     Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
     SemverRange,
@@ -488,8 +490,9 @@ pub struct AuthDeniedSubcommandV2 {
     version,
     about = "nixling — opinionated NixOS desktop microVM CLI.",
     long_about = "nixling — daemon-native CLI for nixling microVMs.\n\nAll mutating verbs dispatch through nixlingd and nixling-priv-broker. \
-        Read-only verbs (list, status, audit, host check) query the daemon or \
-        the static manifest. See `nixling <COMMAND> --help` for per-verb usage."
+        Read-only verbs (list, status, audit, host check) prefer nixlingd's \
+        public socket and fall back to static/local sources where documented. \
+        See `nixling <COMMAND> --help` for per-verb usage."
 )]
 struct NativeCli {
     #[command(subcommand)]
@@ -498,7 +501,7 @@ struct NativeCli {
 
 #[derive(Debug, Subcommand)]
 enum NativeCommand {
-    /// List declared VMs from the static manifest.
+    /// List declared VMs with daemon runtime state when nixlingd is reachable.
     List(ListArgs),
     /// Show per-VM runtime status plus bridge health.
     Status(StatusArgs),
@@ -805,8 +808,7 @@ enum VmCommand {
     Stop(VmStopArgs),
     /// Stop then start; same envelope contract as start.
     Restart(VmRestartArgs),
-    /// Daemon-side runtime view (different from `nixling list`, which
-    /// is the static manifest view).
+    /// Daemon-side runtime inventory from nixlingd's public socket.
     List(VmListArgs),
     /// Daemon-side readiness state for a VM (api-ready phase).
     Status(VmStatusArgs),
@@ -1491,6 +1493,28 @@ struct KeysShowResponseFrame {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ListResponseFrame {
+    #[serde(rename = "type")]
+    _type_name: String,
+    vms: Vec<IpcListEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StatusResponseFrame {
+    #[serde(rename = "type")]
+    _type_name: String,
+    status: StatusResponsePayload,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StatusResponsePayload {
+    entries: Vec<IpcVmStatus>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct UsbipProbeResponseFrame {
     #[serde(rename = "type")]
     _type_name: String,
@@ -1538,6 +1562,18 @@ enum KeysSocketOutcome {
     Unavailable,
     List(Vec<IpcKeyEntry>),
     Show(IpcKeysShowResponse),
+}
+
+#[derive(Debug, Clone)]
+enum ListSocketOutcome {
+    Unavailable,
+    Entries(Vec<IpcListEntry>),
+}
+
+#[derive(Debug, Clone)]
+enum StatusSocketOutcome {
+    Unavailable,
+    Entries(Vec<IpcVmStatus>),
 }
 
 #[derive(Debug, Clone)]
@@ -2880,9 +2916,32 @@ fn cmd_config_status(args: &ConfigStatusArgs) -> Result<i32, CliFailure> {
 }
 
 fn cmd_list(context: &Context, args: &ListArgs) -> Result<i32, CliFailure> {
-    let manifest = context.load_manifest()?;
-    let bundle = context.load_bundle_context()?;
-    let output = ListOutputV2(
+    let output = match try_list_via_socket(context)? {
+        ListSocketOutcome::Entries(entries) => {
+            let bundle = context.load_bundle_context().ok().flatten();
+            list_output_from_public_entries(&entries, bundle.as_ref())
+        }
+        ListSocketOutcome::Unavailable => {
+            let manifest = context.load_manifest()?;
+            let bundle = context.load_bundle_context()?;
+            list_output_from_manifest(context, &manifest, bundle.as_ref())
+        }
+    };
+
+    if args.json {
+        print_json(&output)?;
+    } else {
+        print_stdout(&render_list_human(&output));
+    }
+    Ok(0)
+}
+
+fn list_output_from_manifest(
+    context: &Context,
+    manifest: &ManifestDocument,
+    bundle: Option<&BundleContext>,
+) -> ListOutputV2 {
+    ListOutputV2(
         manifest
             .vms()
             .into_iter()
@@ -2890,7 +2949,6 @@ fn cmd_list(context: &Context, args: &ListArgs) -> Result<i32, CliFailure> {
                 let current = current_symlink(context, vm);
                 let booted = booted_symlink(context, vm);
                 let process_vm = bundle
-                    .as_ref()
                     .and_then(|bundle| bundle.processes.as_ref())
                     .and_then(|processes| processes.vms.iter().find(|entry| entry.vm == vm.name));
                 let services = vm_service_states(context, vm, process_vm);
@@ -2906,25 +2964,40 @@ fn cmd_list(context: &Context, args: &ListArgs) -> Result<i32, CliFailure> {
                     status: list_status_label(vm, &services, pending_restart),
                     is_net_vm: vm.is_net_vm,
                     runner_parity_ok: bundle
-                        .as_ref()
                         .and_then(|bundle| bundle.closures.get(&vm.name))
                         .map(|closure| closure.runner_parity_ok),
                 }
             })
             .collect(),
-    );
+    )
+}
 
-    if args.json {
-        print_json(&output)?;
-    } else {
-        print_stdout(&render_list_human(&output));
-    }
-    Ok(0)
+fn list_output_from_public_entries(
+    entries: &[IpcListEntry],
+    bundle: Option<&BundleContext>,
+) -> ListOutputV2 {
+    ListOutputV2(
+        entries
+            .iter()
+            .map(|entry| ListItemOutputV2 {
+                name: entry.name.clone(),
+                env: entry.env.clone(),
+                graphics: entry.graphics,
+                tpm: entry.tpm,
+                usbip: entry.usbip,
+                static_ip: entry.static_ip.clone(),
+                status: public_lifecycle_list_status_label(&entry.lifecycle),
+                is_net_vm: entry.is_net_vm,
+                runner_parity_ok: bundle
+                    .and_then(|bundle| bundle.closures.get(&entry.vm))
+                    .map(|closure| closure.runner_parity_ok),
+            })
+            .collect(),
+    )
 }
 
 fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
     let manifest = context.load_manifest()?;
-    let bundle = context.load_bundle_context()?;
 
     if args.check_bridges {
         if args.vm.is_some() || args.vm_flag.is_some() {
@@ -2956,11 +3029,30 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
             None => warn_all_pending_staged_configs(),
         }
     }
+    if let Some(vm_name) = &selected_vm {
+        let _ = manifest
+            .get_vm(vm_name)
+            .ok_or_else(|| CliFailure::new(1, format!("unknown VM '{vm_name}'")))?;
+    }
+    let socket_status = match try_status_via_socket(context, selected_vm.as_deref())? {
+        StatusSocketOutcome::Entries(entries) => Some(entries),
+        StatusSocketOutcome::Unavailable => None,
+    };
+    let bundle = if socket_status.is_some() {
+        context.load_bundle_context().ok().flatten()
+    } else {
+        context.load_bundle_context()?
+    };
+
     if let Some(vm_name) = selected_vm {
         let vm = manifest
             .get_vm(&vm_name)
             .ok_or_else(|| CliFailure::new(1, format!("unknown VM '{vm_name}'")))?;
-        let output = build_vm_status_output(context, vm, bundle.as_ref());
+        let output = socket_status
+            .as_ref()
+            .and_then(|entries| entries.iter().find(|entry| entry.vm == vm.name))
+            .map(|entry| build_vm_status_output_from_public(context, vm, bundle.as_ref(), entry))
+            .unwrap_or_else(|| build_vm_status_output(context, vm, bundle.as_ref()));
         if args.json {
             print_json(&StatusOutputV2::Vm(Box::new(output)))?;
         } else {
@@ -2971,12 +3063,24 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
             ));
         }
     } else {
+        let socket_status = socket_status.as_ref();
         let output = StatusInventoryOutputV2 {
-            runtime: RUNTIME_UNKNOWN.to_owned(),
+            runtime: if socket_status.is_some() {
+                "daemon-public".to_owned()
+            } else {
+                RUNTIME_UNKNOWN.to_owned()
+            },
             vms: manifest
                 .vms()
                 .into_iter()
-                .map(|vm| build_vm_status_output(context, vm, bundle.as_ref()))
+                .map(|vm| {
+                    socket_status
+                        .and_then(|entries| entries.iter().find(|entry| entry.vm == vm.name))
+                        .map(|entry| {
+                            build_vm_status_output_from_public(context, vm, bundle.as_ref(), entry)
+                        })
+                        .unwrap_or_else(|| build_vm_status_output(context, vm, bundle.as_ref()))
+                })
                 .collect(),
         };
         if args.json {
@@ -3735,25 +3839,58 @@ fn cmd_vm_restart(context: &Context, args: &VmRestartArgs) -> Result<i32, CliFai
     )
 }
 
-fn cmd_vm_list(_context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> {
-    // `vm list` already has its stable JSON shape, but this shim still
-    // returns a placeholder empty inventory rather than a live daemon
-    // runner table. Keep the empty list explicit so callers do not
-    // misread it as proof that no VMs exist.
-    let body = serde_json::json!({
-        "command": "vm list",
-        "entries": [],
-        "notes": "vm list placeholder: live daemon runner inventory is not wired through this surface yet; use `nixling status <vm>` for per-VM truth.",
-    });
-    if args.json {
-        let mut rendered = serde_json::to_string_pretty(&body)
-            .map_err(|err| CliFailure::new(1, format!("failed to serialize vm list: {err}")))?;
-        rendered.push('\n');
-        print_stdout(&rendered);
-    } else {
-        print_stdout(
-            "vm list: daemon runner inventory not yet exposed here; use `nixling status <vm>`\n",
-        );
+fn cmd_vm_list(context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> {
+    match try_list_via_socket(context)? {
+        ListSocketOutcome::Entries(entries) => {
+            if args.json {
+                let body = serde_json::json!({
+                    "command": "vm list",
+                    "entries": entries,
+                });
+                let mut rendered = serde_json::to_string_pretty(&body).map_err(|err| {
+                    CliFailure::new(1, format!("failed to serialize vm list: {err}"))
+                })?;
+                rendered.push('\n');
+                print_stdout(&rendered);
+                return Ok(0);
+            }
+            if entries.is_empty() {
+                print_stdout("vm list: no daemon runtime entries reported\n");
+            } else {
+                let mut rendered = String::from("VM\tSTATE\tRUNTIME\n");
+                for entry in entries {
+                    let _ = writeln!(
+                        rendered,
+                        "{}\t{}\t{}",
+                        entry.vm,
+                        public_lifecycle_status_label(&entry.lifecycle),
+                        entry.runtime.detail
+                    );
+                }
+                print_stdout(&rendered);
+            }
+        }
+        ListSocketOutcome::Unavailable => {
+            let note =
+                "vm list requires nixlingd's public socket; start or restart nixlingd and retry.";
+            if args.json {
+                let body = serde_json::json!({
+                    "command": "vm list",
+                    "entries": [],
+                    "notes": note,
+                });
+                let mut rendered = serde_json::to_string_pretty(&body).map_err(|err| {
+                    CliFailure::new(1, format!("failed to serialize vm list: {err}"))
+                })?;
+                rendered.push('\n');
+                print_stdout(&rendered);
+            } else {
+                let mut rendered = String::from("vm list: ");
+                rendered.push_str(note);
+                rendered.push('\n');
+                print_stdout(&rendered);
+            }
+        }
     }
     Ok(0)
 }
@@ -5791,7 +5928,7 @@ fn cmd_migrate(
             "v1.1 daemon-only: every enabled VM is daemon-supervised by default; no consumer-flake action is required for supervisor classification.",
             "Per migrating VM: verify per-VM state under `/var/lib/nixling/vms/<vm>/` is owned root:nixlingd 0750.",
             "Run `nixos-rebuild switch` so the daemon module materializes the per-VM broker SpawnRunner state.",
-            "Verify each migrated VM via `nixling status <vm>`; `vm list` is still a placeholder inventory surface.",
+            "Verify each migrated VM via `nixling status <vm>` and `nixling vm list` after nixlingd is running.",
             "After all VMs migrate cleanly, keep the default-switch readiness gates aligned with the rollout evidence."
         ],
         "notes": "migrate reports the deployment-shape tier today; v1.1 retired the per-VM supervisor option, so per-VM classification is uniformly daemon-supervised. `--apply` routes through nixlingd → broker RunMigrate.",
@@ -6247,6 +6384,69 @@ fn build_vm_status_output(
     }
 }
 
+fn build_vm_status_output_from_public(
+    context: &Context,
+    vm: &ManifestVm,
+    bundle: Option<&BundleContext>,
+    public: &IpcVmStatus,
+) -> StatusVmOutputV2 {
+    let process_vm = bundle
+        .and_then(|bundle| bundle.processes.as_ref())
+        .and_then(|processes| processes.vms.iter().find(|entry| entry.vm == vm.name));
+    let declared_roles = process_vm
+        .map(|entry| {
+            entry
+                .nodes
+                .iter()
+                .map(|node| process_role_name(&node.role))
+                .collect()
+        })
+        .unwrap_or_default();
+    let readiness: Vec<String> = process_vm
+        .map(|entry| {
+            entry
+                .nodes
+                .iter()
+                .flat_map(|node| node.readiness.iter().map(readiness_name))
+                .collect()
+        })
+        .unwrap_or_default();
+    let runner_parity = bundle
+        .and_then(|bundle| bundle.closures.get(&vm.name))
+        .map(|closure| RunnerParityOutputV2 {
+            declared_runner: closure.declared_runner.clone(),
+            runner_parity_path: closure.runner_parity_path.clone(),
+            runner_parity_ok: closure.runner_parity_ok,
+        });
+
+    StatusVmOutputV2 {
+        name: vm.name.clone(),
+        env: public.env.clone().or_else(|| vm.env.clone()),
+        services: status_services_from_public(&public.services),
+        current: current_symlink(context, vm),
+        booted: booted_symlink(context, vm),
+        pending_restart: public.lifecycle.pending_restart,
+        runtime: public.runtime.detail.clone(),
+        declared_roles,
+        readiness,
+        api_ready: read_vm_api_ready(&context.daemon_state_dir, &vm.name),
+        runner_parity,
+        live_pool_integrity: read_live_pool_integrity(context, vm),
+    }
+}
+
+fn status_services_from_public(services: &PublicVmServices) -> StatusServicesOutputV2 {
+    StatusServicesOutputV2 {
+        nixling: services.nixling.clone(),
+        microvm: services.microvm.clone(),
+        virtiofsd: services.virtiofsd.clone(),
+        gpu: services.gpu.clone(),
+        video: services.video.clone(),
+        snd: services.snd.clone(),
+        swtpm: services.swtpm.clone(),
+    }
+}
+
 fn vm_service_states(
     context: &Context,
     vm: &ManifestVm,
@@ -6381,6 +6581,38 @@ fn list_status_label(
     }
 }
 
+fn public_lifecycle_status_label(lifecycle: &nixling_ipc::public_wire::VmLifecycle) -> String {
+    if lifecycle.pending_restart {
+        return "pending-restart".to_owned();
+    }
+    match lifecycle.state {
+        IpcVmLifecycleState::Stopped => "stopped",
+        IpcVmLifecycleState::Starting => "starting",
+        IpcVmLifecycleState::Booted | IpcVmLifecycleState::Running => "running",
+        IpcVmLifecycleState::Stopping => "stopping",
+        IpcVmLifecycleState::Restarting => "restarting",
+        IpcVmLifecycleState::Failed => "failed",
+        IpcVmLifecycleState::Unknown => "unknown",
+    }
+    .to_owned()
+}
+
+fn public_lifecycle_list_status_label(lifecycle: &nixling_ipc::public_wire::VmLifecycle) -> String {
+    if lifecycle.pending_restart {
+        return "pending-restart".to_owned();
+    }
+    match lifecycle.state {
+        IpcVmLifecycleState::Stopped => "stopped",
+        IpcVmLifecycleState::Booted
+        | IpcVmLifecycleState::Running
+        | IpcVmLifecycleState::Starting
+        | IpcVmLifecycleState::Stopping
+        | IpcVmLifecycleState::Restarting => "running",
+        IpcVmLifecycleState::Failed | IpcVmLifecycleState::Unknown => "unknown",
+    }
+    .to_owned()
+}
+
 fn process_role_name(role: &nixling_core::processes::ProcessRole) -> String {
     match role {
         nixling_core::processes::ProcessRole::HostReconcile => "host-reconcile",
@@ -6438,7 +6670,7 @@ fn render_list_human(output: &ListOutputV2) -> String {
     );
     for item in &output.0 {
         let status = if item.is_net_vm {
-            "systemd (net-vm)".to_owned()
+            format!("{} (net-vm)", item.status)
         } else {
             item.status.clone()
         };
@@ -7548,6 +7780,47 @@ fn try_keys_show_via_socket(context: &Context, vm: &str) -> Result<KeysSocketOut
     }
 }
 
+fn try_list_via_socket(context: &Context) -> Result<ListSocketOutcome, CliFailure> {
+    let request = encode_type_tagged_message(
+        "list",
+        &IpcListRequest {
+            env: None,
+            vm: None,
+        },
+        "list request",
+    )?;
+    match try_public_socket_request(context, &request, "list")? {
+        PublicSocketOutcome::Reply(response) => {
+            parse_list_reply(&response).map(ListSocketOutcome::Entries)
+        }
+        PublicSocketOutcome::Unavailable | PublicSocketOutcome::Unsupported => {
+            Ok(ListSocketOutcome::Unavailable)
+        }
+    }
+}
+
+fn try_status_via_socket(
+    context: &Context,
+    vm: Option<&str>,
+) -> Result<StatusSocketOutcome, CliFailure> {
+    let request = encode_type_tagged_message(
+        "status",
+        &IpcStatusRequest {
+            check_bridges: false,
+            vm: vm.map(str::to_owned),
+        },
+        "status request",
+    )?;
+    match try_public_socket_request(context, &request, "status")? {
+        PublicSocketOutcome::Reply(response) => {
+            parse_status_reply(&response).map(StatusSocketOutcome::Entries)
+        }
+        PublicSocketOutcome::Unavailable | PublicSocketOutcome::Unsupported => {
+            Ok(StatusSocketOutcome::Unavailable)
+        }
+    }
+}
+
 fn try_usb_probe_via_socket(context: &Context) -> Result<UsbProbeSocketOutcome, CliFailure> {
     let request =
         encode_type_tagged_message("usbipProbe", &serde_json::json!({}), "usbipProbe request")?;
@@ -7666,6 +7939,34 @@ fn parse_keys_show_reply(bytes: &[u8]) -> Result<IpcKeysShowResponse, CliFailure
     serde_json::from_value::<KeysShowResponseFrame>(value)
         .map(|frame| frame.payload)
         .map_err(|err| CliFailure::new(1, format!("failed to decode keysShow reply: {err}")))
+}
+
+fn parse_list_reply(bytes: &[u8]) -> Result<Vec<IpcListEntry>, CliFailure> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|err| CliFailure::new(1, format!("failed to parse list reply: {err}")))?;
+    if value.get("type").and_then(Value::as_str) != Some("listResponse") {
+        return Err(CliFailure::new(
+            1,
+            "daemon returned an unexpected reply to list".to_owned(),
+        ));
+    }
+    serde_json::from_value::<ListResponseFrame>(value)
+        .map(|frame| frame.vms)
+        .map_err(|err| CliFailure::new(1, format!("failed to decode list reply: {err}")))
+}
+
+fn parse_status_reply(bytes: &[u8]) -> Result<Vec<IpcVmStatus>, CliFailure> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|err| CliFailure::new(1, format!("failed to parse status reply: {err}")))?;
+    if value.get("type").and_then(Value::as_str) != Some("statusResponse") {
+        return Err(CliFailure::new(
+            1,
+            "daemon returned an unexpected reply to status".to_owned(),
+        ));
+    }
+    serde_json::from_value::<StatusResponseFrame>(value)
+        .map(|frame| frame.status.entries)
+        .map_err(|err| CliFailure::new(1, format!("failed to decode status reply: {err}")))
 }
 
 fn parse_usb_probe_reply(bytes: &[u8]) -> Result<Vec<IpcUsbipProbeEntry>, CliFailure> {
@@ -8087,6 +8388,93 @@ mod host_install_dispatch_tests {
         let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_file(&manifest_path);
         (result, request)
+    }
+
+    fn run_public_command_with_mock_daemon<F>(
+        test_name: &str,
+        vm: &str,
+        response: Value,
+        command: F,
+    ) -> (Result<i32, super::CliFailure>, Value, Vec<u8>)
+    where
+        F: FnOnce(&Context) -> Result<i32, super::CliFailure>,
+    {
+        let socket_path = test_socket_path(test_name, ".sock");
+        let manifest_path = test_socket_path(test_name, ".manifest.json");
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test socket dir");
+        }
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&manifest_path);
+        write_test_manifest(&manifest_path, vm);
+
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("listener socket");
+        let addr = UnixAddr::new(&socket_path).expect("unix addr");
+        bind(listener.as_raw_fd(), &addr).expect("bind listener");
+        listen(&listener, Backlog::new(1).expect("backlog")).expect("listen");
+
+        let (request_tx, request_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let accepted = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).expect("accept");
+            let exchange_result = (|| -> io::Result<()> {
+                let hello_bytes = recv_test_frame(accepted)?;
+                let hello: Value = serde_json::from_slice(&hello_bytes)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+
+                let hello_reply = encode_type_tagged_message(
+                    "helloOk",
+                    &IpcHelloOk {
+                        server_version: Version::new("0.4.0").expect("server version"),
+                        selected_version: Version::new("0.4.0").expect("selected version"),
+                        capabilities: daemon_supported_features(),
+                    },
+                    "test hello reply",
+                )
+                .expect("encode hello reply");
+                send_test_frame(accepted, &hello_reply)?;
+
+                let request_bytes = recv_test_frame(accepted)?;
+                let request: Value = serde_json::from_slice(&request_bytes)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                request_tx
+                    .send(request)
+                    .expect("send request to test thread");
+
+                let response_bytes = serde_json::to_vec(&response)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                send_test_frame(accepted, &response_bytes)
+            })();
+            close(accepted).expect("close accepted socket");
+            exchange_result.expect("mock daemon exchange");
+        });
+
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("bundle.json"),
+            public_socket: socket_path.clone(),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let (result, stdout) = super::with_test_stdout_capture(|| command(&context));
+        let request = request_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("receive daemon request");
+        server.join().expect("join mock daemon thread");
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&manifest_path);
+        (result, request, stdout)
     }
 
     fn gc_sync_args(vm: &str) -> super::ConfigSyncArgs {
@@ -10241,6 +10629,297 @@ mod host_install_dispatch_tests {
         assert_eq!(services.snd.as_deref(), Some("running"));
         assert_eq!(super::list_status_label(&vm, &services, false), "running");
         let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    #[test]
+    fn public_list_entries_drive_legacy_list_status_without_pidfd_read() {
+        let services = nixling_ipc::public_wire::PublicVmServices {
+            nixling: "active".to_owned(),
+            microvm: "running".to_owned(),
+            virtiofsd: "running".to_owned(),
+            gpu: Some("running".to_owned()),
+            video: Some("running".to_owned()),
+            snd: None,
+            swtpm: None,
+        };
+        let entry = nixling_ipc::public_wire::ListEntry {
+            env: Some("dev".to_owned()),
+            graphics: true,
+            is_net_vm: false,
+            lifecycle: nixling_ipc::public_wire::VmLifecycle {
+                pending_restart: false,
+                state: nixling_ipc::public_wire::VmLifecycleState::Running,
+            },
+            name: "vm-a".to_owned(),
+            runtime: nixling_ipc::public_wire::RuntimeSummary {
+                detail: "running".to_owned(),
+            },
+            services,
+            ssh_user: Some("alice".to_owned()),
+            static_ip: Some("10.20.0.10".to_owned()),
+            tpm: false,
+            usbip: true,
+            vm: "vm-a".to_owned(),
+        };
+
+        let output = super::list_output_from_public_entries(&[entry], None);
+
+        assert_eq!(output.0.len(), 1);
+        assert_eq!(output.0[0].name, "vm-a");
+        assert_eq!(output.0[0].status, "running");
+        assert!(output.0[0].graphics);
+        assert!(output.0[0].usbip);
+    }
+
+    #[test]
+    fn public_list_status_collapses_transient_lifecycle_to_stable_label() {
+        let lifecycle = nixling_ipc::public_wire::VmLifecycle {
+            pending_restart: false,
+            state: nixling_ipc::public_wire::VmLifecycleState::Starting,
+        };
+
+        assert_eq!(
+            super::public_lifecycle_list_status_label(&lifecycle),
+            "running"
+        );
+    }
+
+    #[test]
+    fn list_human_preserves_net_vm_status_label() {
+        let output = super::ListOutputV2(vec![super::ListItemOutputV2 {
+            name: "sys-work-net".to_owned(),
+            env: Some("work".to_owned()),
+            graphics: false,
+            tpm: false,
+            usbip: false,
+            static_ip: Some("192.168.100.2".to_owned()),
+            status: "stopped".to_owned(),
+            is_net_vm: true,
+            runner_parity_ok: None,
+        }]);
+
+        let rendered = super::render_list_human(&output);
+
+        assert!(rendered.contains("stopped (net-vm)"));
+        assert!(!rendered.contains("systemd (net-vm)"));
+    }
+
+    #[test]
+    fn public_status_entry_drives_legacy_status_services_without_pidfd_read() {
+        let root = test_socket_path("public-status-output", "");
+        std::fs::create_dir_all(&root).expect("create status root");
+        let context = Context {
+            manifest_path: root.join("vms.json"),
+            bundle_path: root.join("bundle.json"),
+            public_socket: PathBuf::from("/dev/null"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: Some(root.clone()),
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: root.join("daemon-state"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let vm = super::ManifestVm {
+            name: "vm-a".to_owned(),
+            env: Some("dev".to_owned()),
+            graphics: true,
+            tpm: false,
+            audio: false,
+            usbip_yubikey: true,
+            static_ip: Some("10.20.0.10".to_owned()),
+            usbipd_host_ip: Some("192.0.2.1".to_owned()),
+            is_net_vm: false,
+            state_dir: root.join("vm-a").display().to_string(),
+            bridge: "nl-dev".to_owned(),
+            ssh_user: Some("alice".to_owned()),
+        };
+        let public = nixling_ipc::public_wire::VmStatus {
+            bridge_checks: Vec::new(),
+            env: Some("dev".to_owned()),
+            graphics: true,
+            is_net_vm: false,
+            lifecycle: nixling_ipc::public_wire::VmLifecycle {
+                pending_restart: false,
+                state: nixling_ipc::public_wire::VmLifecycleState::Running,
+            },
+            name: "vm-a".to_owned(),
+            runtime: nixling_ipc::public_wire::RuntimeSummary {
+                detail: "running".to_owned(),
+            },
+            services: nixling_ipc::public_wire::PublicVmServices {
+                nixling: "active".to_owned(),
+                microvm: "running".to_owned(),
+                virtiofsd: "running".to_owned(),
+                gpu: Some("running".to_owned()),
+                video: Some("running".to_owned()),
+                snd: None,
+                swtpm: None,
+            },
+            ssh_user: Some("alice".to_owned()),
+            static_ip: Some("10.20.0.10".to_owned()),
+            tpm: false,
+            usbip: true,
+            vm: "vm-a".to_owned(),
+        };
+
+        let output = super::build_vm_status_output_from_public(&context, &vm, None, &public);
+
+        assert_eq!(output.runtime, "running");
+        assert_eq!(output.services.microvm, "running");
+        assert_eq!(output.services.virtiofsd, "running");
+        assert_eq!(output.services.gpu.as_deref(), Some("running"));
+        assert!(!output.pending_restart);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cmd_status_json_uses_daemon_status_entries_envelope() {
+        let response = json!({
+            "type": "statusResponse",
+            "status": {
+                "entries": [{
+                    "vm": "vm-a",
+                    "name": "vm-a",
+                    "env": "dev",
+                    "graphics": true,
+                    "tpm": false,
+                    "usbip": true,
+                    "isNetVm": false,
+                    "sshUser": "alice",
+                    "staticIp": "10.20.0.10",
+                    "lifecycle": { "state": "Running", "pendingRestart": false },
+                    "runtime": { "detail": "running" },
+                    "services": {
+                        "nixling": "active",
+                        "microvm": "running",
+                        "virtiofsd": "running",
+                        "gpu": "running",
+                        "video": "running",
+                        "snd": null,
+                        "swtpm": null
+                    },
+                    "bridgeChecks": []
+                }]
+            }
+        });
+        let args = super::StatusArgs {
+            json: true,
+            human: false,
+            check_bridges: false,
+            vm_flag: None,
+            vm: Some("vm-a".to_owned()),
+        };
+
+        let (result, request, stdout) =
+            run_public_command_with_mock_daemon("cmd-status-public", "vm-a", response, |context| {
+                super::cmd_status(context, &args)
+            });
+
+        assert_eq!(result.expect("cmd status result"), 0);
+        assert_eq!(request.get("type").and_then(Value::as_str), Some("status"));
+        assert_eq!(request.get("vm").and_then(Value::as_str), Some("vm-a"));
+        let output: Value = serde_json::from_slice(&stdout).expect("status json output");
+        assert_eq!(
+            output.get("runtime").and_then(Value::as_str),
+            Some("running")
+        );
+        assert_eq!(
+            output.pointer("/services/microvm").and_then(Value::as_str),
+            Some("running")
+        );
+        assert_eq!(
+            output
+                .pointer("/services/virtiofsd")
+                .and_then(Value::as_str),
+            Some("running")
+        );
+    }
+
+    #[test]
+    fn cmd_list_json_uses_daemon_public_list_entries() {
+        let response = json!({
+            "type": "listResponse",
+            "vms": [{
+                "vm": "vm-a",
+                "name": "vm-a",
+                "env": "dev",
+                "graphics": true,
+                "tpm": false,
+                "usbip": true,
+                "isNetVm": false,
+                "sshUser": "alice",
+                "staticIp": "10.20.0.10",
+                "lifecycle": { "state": "Running", "pendingRestart": false },
+                "runtime": { "detail": "running" },
+                "services": {
+                    "nixling": "active",
+                    "microvm": "running",
+                    "virtiofsd": "running",
+                    "gpu": "running",
+                    "video": "running",
+                    "snd": null,
+                    "swtpm": null
+                }
+            }]
+        });
+        let args = super::ListArgs {
+            json: true,
+            human: false,
+        };
+
+        let (result, request, stdout) =
+            run_public_command_with_mock_daemon("cmd-list-public", "vm-a", response, |context| {
+                super::cmd_list(context, &args)
+            });
+
+        assert_eq!(result.expect("cmd list result"), 0);
+        assert_eq!(request.get("type").and_then(Value::as_str), Some("list"));
+        let output: Value = serde_json::from_slice(&stdout).expect("list json output");
+        assert_eq!(
+            output.pointer("/0/name").and_then(Value::as_str),
+            Some("vm-a")
+        );
+        assert_eq!(
+            output.pointer("/0/status").and_then(Value::as_str),
+            Some("running")
+        );
+        assert_eq!(
+            output.pointer("/0/graphics").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            output.pointer("/0/usbip").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn vm_list_human_unavailable_reports_socket_requirement() {
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: test_socket_path("vm-list-unavailable", ".sock"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let args = super::VmListArgs {
+            json: false,
+            human: false,
+        };
+
+        let (result, stdout) =
+            super::with_test_stdout_capture(|| super::cmd_vm_list(&context, &args));
+
+        assert_eq!(result.expect("vm list result"), 0);
+        let rendered = String::from_utf8(stdout).expect("utf8 stdout");
+        assert!(rendered.contains("requires nixlingd's public socket"));
+        assert!(!rendered.contains("no daemon runtime entries"));
     }
 
     #[test]

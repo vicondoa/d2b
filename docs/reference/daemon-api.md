@@ -210,7 +210,7 @@ names are rejected during deserialization.
 | `CapabilitiesResponse` | struct | [`CapabilitiesResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1043) | struct { `broker_socket`: `String`; `capabilities`: `Vec<FeatureFlag>`; `public_socket`: `String`; `server_version`: `Version`; `selected_version`: `Version` } |
 | `AuthStatusResponse` | struct | [`AuthStatusResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1053) | struct { `allowed_subcommands`: `Vec<String>`; `denied_subcommands`: `Vec<DeniedCommandHint>`; `role`: `AuthRole`; `sockets`: `Vec<SocketReachability>` } |
 | `ListResponse` | struct | [`ListResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1062) | struct { `vms`: `Vec<ListEntry>` } |
-| `StatusResponse` | struct | [`StatusResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1068) | struct { `vm`: `VmStatus` } |
+| `StatusResponse` | struct | [`StatusResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1068) | struct { `entries`: `Vec<VmStatus>` } |
 | `AuditResponse` | struct | [`AuditResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1074) | struct { `entries`: `Vec<AuditEntry>` } |
 | `HostCheckResponse` | struct | [`HostCheckResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1080) | struct { `exit_code`: `u8`; `findings`: `Vec<HostFinding>` } |
 | `KeysListResponse` | struct | [`KeysListResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1098) | struct { `entries`: `Vec<KeyEntry>` } |
@@ -270,7 +270,7 @@ state-machine node.
 
 | Type | Kind | Rust definition | Shape |
 | --- | --- | --- | --- |
-| `VmLifecycleState` | enum | [`VmLifecycleState`](../../packages/nixling-ipc/src/public_wire.rs#L1215) | `Stopped`; `Starting`; `Booted`; `Running`; `Stopping`; `Restarting`; `Failed`; `Unknown` |
+| `VmLifecycleState` | enum | [`VmLifecycleState`](../../packages/nixling-ipc/src/public_wire.rs#L1240) | `Stopped`; `Starting`; `Booted`; `Running`; `Stopping`; `Restarting`; `Failed`; `Unknown` |
 
 ### Other documented enums
 
@@ -318,7 +318,7 @@ state-machine node.
 | `UsbipProbeStatus` | enum | [`UsbipProbeStatus`](../../packages/nixling-ipc/src/public_wire.rs#L1116) | `Bound`; `Unbound` |
 | `AuditFormat` | enum | [`AuditFormat`](../../packages/nixling-ipc/src/public_wire.rs#L1149) | `Human`; `Json` |
 | `AuthRole` | enum | [`AuthRole`](../../packages/nixling-ipc/src/public_wire.rs#L1157) | `None`; `Launcher`; `Admin` |
-| `HostFindingSeverity` | enum | [`HostFindingSeverity`](../../packages/nixling-ipc/src/public_wire.rs#L1251) | `Pass`; `Warn`; `Fail` |
+| `HostFindingSeverity` | enum | [`HostFindingSeverity`](../../packages/nixling-ipc/src/public_wire.rs#L1276) | `Pass`; `Warn`; `Fail` |
 | `PathClass` | enum | [`PathClass`](../../packages/nixling-ipc/src/types.rs#L115) | `Vm`; `Runtime` |
 <!-- END AUTO-GENERATED: enum-variants -->
 
