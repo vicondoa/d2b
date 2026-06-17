@@ -976,6 +976,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nixling-constellation-core"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nixling-contract-tests"
 version = "0.0.0-bootstrap"
 dependencies = [

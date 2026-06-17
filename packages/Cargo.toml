@@ -4,6 +4,7 @@ exclude = ["nixling-priv-broker"]
 members = [
     "nixling-host-activation-helper",
     "nixling-core",
+    "nixling-constellation-core",
     "nixling-host",
     "nixling-guestd",
     "nixling-userd",
