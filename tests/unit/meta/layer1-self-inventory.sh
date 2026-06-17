@@ -44,10 +44,11 @@ is_known_non_layer1() {
       # Aggregating wrappers that invoke static.sh; not Layer-1 gate bodies.
       return 0
       ;;
-    static-fast.sh)
-      # PR-loop sibling tier (Tier 2 fast). Runs the
-      # Layer-1 fast subset on its own; not invoked from static.sh.
-      # See AGENTS.md "Build & validate" / docs/CHANGELOG entry.
+    test-lint.sh|test-rust.sh|test-proofs.sh|test-flake.sh|test-nix-unit.sh|test-drift.sh|test-policy.sh|test-integration.sh)
+      # Make-target driver scripts. Each is invoked via `make test-<name>`
+      # (the new umbrella-target interface). CI runs them as parallel jobs;
+      # locally `make test-unit` runs them serially. They are not invoked
+      # from static.sh; they ARE the successors to static-fast.sh.
       return 0
       ;;
   esac
