@@ -40,13 +40,24 @@ if [ -z "${NIXLING_PROOFS_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>
     --command bash -lc "
       set -euo pipefail
       rustup toolchain install '$pinned_channel' --profile minimal
-      rustup component add --toolchain '$pinned_channel' clippy
       exec bash '$ROOT/tests/test-proofs.sh'
     "
 fi
 
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
 export CARGO_BUILD_RUSTC_WRAPPER="" RUSTC_WRAPPER=""
+
+# Ensure the clippy component exists for the pinned toolchain. On CI runners
+# that ship rustup pre-installed, cargo is already on PATH so the nix-shell
+# bootstrap above is skipped; but the pinned toolchain then auto-installs as
+# `minimal` (no clippy) on the first `cargo clippy`, which fails. Add clippy
+# explicitly and idempotently whenever rustup drives the toolchain. (Locally,
+# rustup is typically not on PATH — only the activated toolchain bin — and the
+# toolchain already carries clippy, so this is a no-op.)
+if command -v rustup >/dev/null 2>&1; then
+  rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal >/dev/null 2>&1 || true
+  rustup component add --toolchain "$RUSTUP_TOOLCHAIN" clippy
+fi
 
 rc=0
 for proof in chunked-stdio-conformance w0-ch-connect-proof; do
