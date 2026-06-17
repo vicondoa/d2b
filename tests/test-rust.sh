@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Rust workspace checks. Called by tests/static.sh only when packages/ exists.
+# tests/test-rust.sh — `make test-rust`: the comprehensive Rust gate.
+#   fmt + clippy + `cargo test --workspace` (excluding the fixture-dependent
+#   nixling-contract-tests), the contract crate against NL_FIXTURES, the
+#   CLI-contract layer, no-bash-ast-walker, the privileged broker workspace
+#   (3 feature passes, concurrent), schema-gen reproducibility, and cargo-deny.
 # If cargo is absent, re-enter through the repo-pinned nixpkgs toolchain.
 
 set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
-ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
+ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
 
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
@@ -418,3 +422,10 @@ cargo_audit_check "broker workspace" "$broker_lock_file"
 log "--> tests/tools/stub-no-socket.sh"
 bash "$ROOT/tests/tools/stub-no-socket.sh"
 ok "stub-no-socket"
+
+# Fail-closed Rust test inventory: every pinned workspace + broker test must
+# still exist (catches a silently-deleted test that would otherwise vanish from
+# coverage). The pinned set is committed under tests/golden/pinned/.
+log "--> tests/tools/assert-pinned-tests.sh"
+bash "$ROOT/tests/tools/assert-pinned-tests.sh"
+ok "assert-pinned-tests"

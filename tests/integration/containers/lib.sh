@@ -23,7 +23,7 @@
 # (podman is preinstalled there). If podman is not on PATH (e.g. before the
 # host `virtualisation.podman.enable` rebuild lands), it is bootstrapped via
 # `nix shell nixpkgs#podman`, mirroring the rust-toolchain bootstrap in
-# tests/tools/rust-workspace-checks.sh.
+# tests/test-rust.sh.
 
 set -euo pipefail
 

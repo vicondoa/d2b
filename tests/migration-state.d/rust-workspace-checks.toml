@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["tests/test-rust.sh (renamed: the comprehensive Rust gate is now the `make test-rust` driver at tests/test-rust.sh — identical fmt/clippy/cargo-test/contract/cli/no-bash-ast/broker/schema-gen/cargo-deny coverage; moved from tests/tools/ to tests/ root so the driver name matches the make target)"]

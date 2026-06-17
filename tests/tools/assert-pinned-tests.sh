@@ -67,7 +67,7 @@ collect_present < <(
   cargo nextest list --workspace --exclude nixling-contract-tests --message-format oneline
 )
 # Fixture contract tests are excluded from the default workspace test pass, but
-# rust-workspace-checks.sh runs them with NL_FIXTURES. Include their nextest
+# test-rust.sh runs them with NL_FIXTURES. Include their nextest
 # listing so retired shell gates can pin rendered-artifact contract successors.
 collect_present < <(
   cd "$ROOT/packages"
@@ -106,7 +106,7 @@ collect_present < <(
   # test surface: the default real-wire tests, the layer1-bootstrap legacy
   # probe-* + scm_rights_fd_lifecycle fd-passing tests, AND the
   # `#![cfg(feature = "fake-backends")]`-gated hermetic integration tests
-  # (e.g. tests/pidfd_handoff_scm_rights.rs). rust-workspace-checks.sh runs the
+  # (e.g. tests/pidfd_handoff_scm_rights.rs). test-rust.sh runs the
   # default, layer1-bootstrap, AND fake-backends broker test passes, so every
   # listed test is actually executed and can be guarded by the pinned gate.
   cargo nextest list --workspace --features layer1-bootstrap,fake-backends --message-format oneline

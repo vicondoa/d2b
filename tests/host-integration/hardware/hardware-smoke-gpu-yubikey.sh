@@ -150,7 +150,7 @@ phase_cargo_build() {
     if ! (cd "$ROOT/packages" && \
         env -u RUSTC_WRAPPER nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc nixpkgs#rustfmt nixpkgs#clippy \
         -c cargo build --workspace 2>&1 | tail -3); then
-        soft_fail_or_skip "cargo build --workspace failed; rerun via tests/tools/rust-workspace-checks.sh for full diagnostic"
+        soft_fail_or_skip "cargo build --workspace failed; rerun via tests/test-rust.sh for full diagnostic"
         return 0
     fi
     if ! (cd "$ROOT/packages/nixling-priv-broker" && \

@@ -458,10 +458,10 @@ export NL_STATIC_CACHE
 # cargo target dir; the gate's entire $ROOT footprint is gitignored, so
 # concurrent git-fetcher flake evals never stat it.
 _STATIC_RUST_GATE_OVERLAP=0
-if [ -n "${NL_STATIC_PARALLEL_RUST:-}" ] && [ -d "$ROOT/packages" ] && [ -x "$ROOT/tests/tools/rust-workspace-checks.sh" ]; then
+if [ -n "${NL_STATIC_PARALLEL_RUST:-}" ] && [ -d "$ROOT/packages" ] && [ -x "$ROOT/tests/test-rust.sh" ]; then
   _STATIC_RUST_GATE_OVERLAP=1
-  log "==> launching rust-workspace-checks.sh as background long pole (NL_STATIC_PARALLEL_RUST=1; overlaps flake check + smoke evals)"
-  nl_static_longpole_spawn "tests/tools/rust-workspace-checks.sh" bash "$ROOT/tests/tools/rust-workspace-checks.sh"
+  log "==> launching test-rust.sh as background long pole (NL_STATIC_PARALLEL_RUST=1; overlaps flake check + smoke evals)"
+  nl_static_longpole_spawn "tests/test-rust.sh" bash "$ROOT/tests/test-rust.sh"
 fi
 
 log "==> Layer 1: parse + eval"
@@ -722,7 +722,7 @@ nl_static_parallel_wait_all
 # Rust tests finish against light Nix load, and the heavy Nix builds then run
 # without Rust contention.
 if [ "${_STATIC_RUST_GATE_OVERLAP:-0}" -eq 1 ]; then
-  log "==> joining background rust-workspace-checks.sh long pole (before heavy mid-tier evals)"
+  log "==> joining background test-rust.sh long pole (before heavy mid-tier evals)"
   nl_static_longpole_join
   _STATIC_RUST_GATE_OVERLAP=2
 fi
@@ -1159,30 +1159,30 @@ nl_static_gate_end "tests/unit/meta/layer1-self-inventory.sh"
 # optional NL_STATIC_PARALLEL_RUST overlap launched the background long pole, it
 # was already joined above (after the smoke-eval region, before the heavy
 # evals), so this is a no-op in that case. tests/tools/stub-no-socket.sh is invoked by
-# rust-workspace-checks.sh after the cargo gates.
+# test-rust.sh after the cargo gates.
 # -----------------------------------------------------------------------------
 if [ "$_STATIC_RUST_GATE_OVERLAP" -eq 2 ]; then
   : # Overlap mode: already joined above (after smoke evals, before heavy evals).
 elif [ "$_STATIC_RUST_GATE_OVERLAP" -eq 1 ]; then
   # Defensive: overlap spawned but not yet joined (e.g. smoke-eval region
   # skipped). Join now.
-  log "==> joining background rust-workspace-checks.sh long pole"
+  log "==> joining background test-rust.sh long pole"
   nl_static_longpole_join
 else
-  nl_static_gate_begin "tests/tools/rust-workspace-checks.sh" "tests/tools/rust-workspace-checks.sh"
-  if [ -d "$ROOT/packages" ] && [ -x "$ROOT/tests/tools/rust-workspace-checks.sh" ]; then
-    if bash "$ROOT/tests/tools/rust-workspace-checks.sh" >/dev/null 2>&1; then
+  nl_static_gate_begin "tests/test-rust.sh" "tests/test-rust.sh"
+  if [ -d "$ROOT/packages" ] && [ -x "$ROOT/tests/test-rust.sh" ]; then
+    if bash "$ROOT/tests/test-rust.sh" >/dev/null 2>&1; then
       ok "rust-workspace-checks"
     else
-      bash "$ROOT/tests/tools/rust-workspace-checks.sh" 2>&1 | tail -80 >&2 || true
+      bash "$ROOT/tests/test-rust.sh" 2>&1 | tail -80 >&2 || true
       fail "rust-workspace-checks"
     fi
   elif [ -d "$ROOT/packages" ]; then
-    log "  SKIP: rust-workspace-checks.sh (not present)"
+    log "  SKIP: test-rust.sh (not present)"
   else
     log "  no packages/ — skipping rust workspace checks (W0a unstaged)"
   fi
-  nl_static_gate_end "tests/tools/rust-workspace-checks.sh"
+  nl_static_gate_end "tests/test-rust.sh"
 fi
 
 # -----------------------------------------------------------------------------

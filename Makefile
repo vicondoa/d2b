@@ -4,10 +4,11 @@
 # interface incrementally during the test rearchitecture.
 
 .PHONY: pre-tag smoke-lite i3-check \
-	        check check-ci check-all check-fast check-tier0 \
-	        test-rust test-drift test-fixtures test-contract test-nix-unit \
-	        test-flake test-policy test-mutation test-integration test-hardware perf \
-	        ledger ledger-regen check-inventory pr-checklist-gate ci-uses-make nix-unit-pin
+        check check-ci check-all check-fast check-tier0 \
+        test test-unit \
+        test-lint test-rust test-proofs test-flake test-nix-unit \
+        test-drift test-policy test-integration test-host-integration test-hardware perf \
+        ledger ledger-regen check-inventory pr-checklist-gate ci-uses-make nix-unit-pin
 
 # Current Nix system double, used to address per-system flake.checks attrs.
 # Falls back to x86_64-linux if `nix` is unavailable (e.g. a docs-only host).
@@ -45,10 +46,76 @@ check-all:
 	$(MAKE) perf
 
 ## check-fast / check-tier0 — fast PR-loop subsets.
-check-fast:
-	bash tests/static-fast.sh
+## check-fast is superseded by `make test-unit` (the new umbrella); left for
+## back-compat but now aliases to test-unit.
+check-fast: test-unit
 check-tier0:
 	bash tests/static-fast-tier0.sh
+
+# ===========================================================================
+# Umbrella test targets (local / agent development).
+#
+#   make test-unit        L1 gate sub-targets (lint, rust, proofs, flake, drift,
+#                         policy). The full local-dev fast gate. Use in place of
+#                         the old check-fast.
+#   make test             test-unit + test-integration (full local gate).
+#   make test-integration L2 podman container integration tests.
+#
+# CI runs the individual sub-targets in parallel; locally, `make test-unit`
+# runs them serially (or `make -j test-unit` for parallelism, but beware
+# /nix/store contention).
+# ===========================================================================
+
+test: test-unit test-integration
+
+test-unit: test-lint test-rust test-proofs test-flake test-drift test-policy
+
+# ===========================================================================
+# Sub-targets. Each has a corresponding tests/test-<name>.sh driver.
+# ===========================================================================
+
+## test-lint — preflight + nix-instantiate --parse + shellcheck (no eval, no cargo).
+test-lint:
+	bash tests/test-lint.sh
+
+## test-rust — the comprehensive Rust gate (fmt, clippy, cargo test, contract
+## tests with NL_FIXTURES, CLI-contract layer, no-bash-ast-walker, broker
+## workspace ×3 feature passes, schema-gen reproducibility, cargo-deny/audit,
+## stub-no-socket, assert-pinned-tests).
+test-rust:
+	bash tests/test-rust.sh
+
+## test-proofs — standalone proof crates under proofs/ (not members of packages/).
+test-proofs:
+	bash tests/test-proofs.sh
+
+## test-flake — `nix flake check --no-build` for the native system (bounded
+## memory). CI runs this as a 2-arch matrix (x86_64 + aarch64).
+## Set NL_FLAKE_ALL_SYSTEMS=1 to cross-evaluate both (like `make check`/static.sh).
+test-flake:
+	bash tests/test-flake.sh
+
+## test-nix-unit — build the nix-unit corpus check (focused convenience target;
+## already covered by test-flake, so NOT in test-unit to avoid double work).
+test-nix-unit:
+	bash tests/test-nix-unit.sh
+
+## test-drift — generated-artifact drift gates (xtask gen-*, vms-json parity).
+test-drift:
+	bash tests/test-drift.sh
+
+## test-policy — meta gates that guard the test architecture + cross-cutting
+## invariants (ci-coverage, ci-uses-make, adr-index, deliverable-gate, etc.).
+test-policy:
+	bash tests/test-policy.sh
+
+## test-integration — L2 podman container integration tests.
+test-integration:
+	bash tests/test-integration.sh
+
+# ===========================================================================
+# Additional targets (helper utilities, legacy aliases, meta gates).
+# ===========================================================================
 
 ## check-inventory — fail-closed ledger drift check for CI.
 check-inventory:
@@ -61,77 +128,17 @@ ledger: check-inventory
 ledger-regen:
 	bash tests/tools/gen-migration-ledger.sh
 
-## W0 policy gates. Warn-only in aggregate CI today; CI wiring lands later.
+## nix-unit-pin — regenerate the fail-closed nix-unit case-presence pins
+## (tests/unit/nix/pinned/*.txt) after adding or removing cases.
+nix-unit-pin:
+	bash tests/tools/gen-nix-unit-pins.sh
+
+## W0 policy gates (also run by test-policy).
 pr-checklist-gate:
 	bash tests/unit/meta/pr-checklist-gate.sh .github/PULL_REQUEST_TEMPLATE.md
 ci-uses-make:
 	bash tests/unit/meta/ci-uses-make.sh
 
-## Per-layer targets — W0: run the group's not-yet-ported legacy scripts via
-## the ledger. W1+ repoints each to its successor (nextest/nix-unit/VM).
-test-rust:
-	bash tests/tools/run-layer.sh test-rust
-	bash tests/tools/assert-pinned-tests.sh
-	set -eu; \
-	if ! command -v cargo >/dev/null 2>&1; then \
-	  for candidate in "$$HOME"/.rustup/toolchains/1.94.1-*/bin; do \
-	    if [ -x "$$candidate/cargo" ]; then PATH="$$candidate:$$PATH"; export PATH; break; fi; \
-	  done; \
-	fi; \
-	CARGO_BUILD_RUSTC_WRAPPER='' RUSTC_WRAPPER='' nix shell --quiet --inputs-from . nixpkgs#cargo-nextest nixpkgs#gcc --command bash -c 'cd packages && cargo nextest run --workspace --exclude nixling-contract-tests'; \
-	cd packages; \
-	CARGO_BUILD_RUSTC_WRAPPER='' RUSTC_WRAPPER='' cargo test --doc --workspace --exclude nixling-contract-tests
-	bash tests/tools/assert-pinned-tests.sh
-test-drift:       ; bash tests/tools/run-layer.sh test-drift
-test-contract:
-	bash tests/tools/run-layer.sh test-contract
-	@set -eu; \
-	system="$$(nix eval --raw --impure --expr builtins.currentSystem)"; \
-	fixtures="$$(nix build --no-link --print-out-paths ".#checks.$$system.fixture-smoke")"; \
-	printf 'NL_FIXTURES=%s\n' "$$fixtures"; \
-	cd packages; \
-	if command -v cargo-nextest >/dev/null 2>&1; then \
-	  NL_FIXTURES="$$fixtures" cargo nextest run -p nixling-contract-tests; \
-	elif command -v nix >/dev/null 2>&1; then \
-	  NL_FIXTURES="$$fixtures" nix shell --inputs-from .. nixpkgs#cargo-nextest -c cargo nextest run -p nixling-contract-tests; \
-	else \
-	  NL_FIXTURES="$$fixtures" cargo test -p nixling-contract-tests; \
-	fi
-## test-nix-unit — W2: legacy D/E eval-gates still on bash, then the
-## migrated nix-unit value/throw corpus (flake.checks.<sys>.nix-unit).
-test-nix-unit:
-	bash tests/tools/run-layer.sh test-nix-unit
-	$(NIX_FLAKE) build --no-link --print-out-paths '.#checks.$(SYSTEM).nix-unit'
-
-## nix-unit-pin — regenerate the fail-closed nix-unit case-presence pins
-## (tests/unit/nix/pinned/*.txt) after adding or removing cases.
-nix-unit-pin:
-	bash tests/tools/gen-nix-unit-pins.sh
-test-flake:       ; bash tests/tools/run-layer.sh test-flake
-test-policy:      ; bash tests/tools/run-layer.sh test-policy
-test-fixtures:
-	@set -eu; \
-	system="$$(nix eval --raw --impure --expr builtins.currentSystem)"; \
-	nix build --no-link --print-out-paths ".#checks.$$system.fixture-smoke"
-test-mutation:    ; @echo "test-mutation: standing mutation gate lands W1+ (plan §3.7)"
-## test-integration — G-ci: podman container integration tests. Each
-## tests/integration/containers/*.sh runner builds its Nix-built OCI image
-## (containerImages.<system>.<name>, NOT swept by `nix flake check`) and runs it
-## with rootless podman. Scope is foreign-userland portability only (e.g. a
-## static nixling binary on stock Ubuntu); daemon/socket activation is covered
-## natively (see tests/integration/containers/README.md). Runs identically on a NixOS host
-## and a GitHub Actions ubuntu-latest runner (podman preinstalled).
-test-integration:
-	@set -eu; \
-	scripts="$$(find tests/integration/containers -maxdepth 1 -name '*.sh' ! -name 'lib.sh' -type f 2>/dev/null | sort)"; \
-	if [ -z "$$scripts" ]; then \
-	echo "test-integration: no tests/integration/containers/*.sh runners present"; \
-	exit 0; \
-	fi; \
-	for s in $$scripts; do \
-	echo "==> $$s"; \
-	bash "$$s"; \
-	done
 ## test-host-integration — G-host: runNixOSTest VM integration tests (the
 ## `vmChecks` flake output, NOT swept by `nix flake check`). Each test boots a
 ## real NixOS VM with the nixling daemon surface and asserts live broker /

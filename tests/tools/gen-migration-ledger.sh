@@ -151,7 +151,10 @@ GHW=(hardware-smoke-gpu-yubikey live-vm-smoke)
 PERF=(performance-budgets)
 
 # ORCH / helpers: NOT test cases (become `make`-target plumbing); excluded.
-ORCH=(static static-fast static-fast-tier0 static-timing runner preflight-disk-space cli-rust-native-common lib)
+# The test-<target> entries are the `make` sub-target driver scripts (one per
+# Layer-1 sub-target); they orchestrate the gates, they are not gates themselves.
+ORCH=(static static-fast-tier0 static-timing runner preflight-disk-space cli-rust-native-common lib
+  test-lint test-rust test-proofs test-flake test-nix-unit test-drift test-policy test-integration)
 
 GROUP_NAMES=(A B C D E F H GCI GHW PERF ORCH)
 

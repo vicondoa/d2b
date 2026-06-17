@@ -8,15 +8,6 @@ schema_version = 0
 generated_for = "test-rearchitecture W0"
 
 [[script]]
-name = "tests/tools/rust-workspace-checks.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/tools/stub-no-socket.sh"
 group = "A"
 make_target = "test-rust"
@@ -177,6 +168,15 @@ tier = "scheduled"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "manual"
+
+[[script]]
+name = "tests/tools/rust-workspace-checks.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["tests/test-rust.sh (renamed: the comprehensive Rust gate is now the `make test-rust` driver at tests/test-rust.sh — identical fmt/clippy/cargo-test/contract/cli/no-bash-ast/broker/schema-gen/cargo-deny coverage; moved from tests/tools/ to tests/ root so the driver name matches the make target)"]
+exercised_today = "yes"
 
 [[script]]
 name = "tests/video-binary-contract.sh"
