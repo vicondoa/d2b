@@ -27,6 +27,14 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- `deployment.environment` is now machine-and-env aware: the central
+  collector stamps it `<hostName>` for host telemetry and
+  `<hostName>-<env>` for workload VMs (e.g. `ddbus`, `ddbus-work`,
+  `ddbus-personal`), instead of the bare host name for everything.
+  `host.name` remains the per-source name (the host's name for host
+  telemetry, the VM's name for workloads). See
+  [ADR 0033](docs/adr/0033-host-collector-parity.md).
+
 - Host-origin telemetry now carries the **hostname** as `vm.name` /
   `host.name` (via `nixling.observability.host.identityName`, default
   `networking.hostName`), assigned at the trusted ingress boundary, rather
