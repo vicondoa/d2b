@@ -1,0 +1,21 @@
+[package]
+name = "nixling-constellation-router"
+version = "0.0.0-bootstrap"
+edition = "2021"
+publish = false
+license.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+# Codec-neutral operation router (ADR 0032). Routes typed semantic commands
+# derived from a decoded ConstellationFrame; owns idempotency-key + dedup
+# enforcement and per-operation capability derivation. Depends ONLY on the
+# codec-neutral contract crates (core + provider); MUST NOT depend on
+# prost/codec, a transport impl, or host-only internals (dep-direction gate).
+[dependencies]
+nixling-constellation-core = { path = "../nixling-constellation-core" }
+nixling-constellation-provider = { path = "../nixling-constellation-provider" }

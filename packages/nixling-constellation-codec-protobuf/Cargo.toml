@@ -1,0 +1,25 @@
+[package]
+name = "nixling-constellation-codec-protobuf"
+version = "0.0.0-bootstrap"
+edition = "2021"
+publish = false
+license.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+# The first ProtocolCodec implementation (ADR 0032): protobuf via `prost`.
+# The authoritative schema is the `prost::Message`-derived wire types in
+# this crate (Spec correction: the plan named a proto/constellation.proto +
+# prost-build, but prost-build requires a `protoc` binary that is not on the
+# NixOS build PATH and would break the hermetic flake/CI build; prost's
+# derive macro produces the identical protobuf wire format without protoc).
+# This crate is the ONLY contract crate permitted to link `prost`; the
+# routing/operation layer never depends on it (dependency-direction gate).
+[dependencies]
+nixling-constellation-core = { path = "../nixling-constellation-core" }
+nixling-constellation-provider = { path = "../nixling-constellation-provider" }
+prost = "0.13"

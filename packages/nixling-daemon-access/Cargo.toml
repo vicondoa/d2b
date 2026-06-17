@@ -1,0 +1,25 @@
+[package]
+name = "nixling-daemon-access"
+version = "0.0.0-bootstrap"
+edition = "2021"
+publish = false
+license.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+# Transport-neutral CLI<->nixlingd semantic API + the local Unix binding
+# (ADR 0032). Reproduces current CLI->daemon behavior over the existing
+# public.sock wire (delegates to nixling-ipc public-wire types; no new
+# wire). relay/direct_tls are declared-but-unimplemented slots.
+[dependencies]
+nixling-constellation-core = { path = "../nixling-constellation-core" }
+nixling-constellation-provider = { path = "../nixling-constellation-provider" }
+nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
