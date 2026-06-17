@@ -81,6 +81,19 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # `nix flake check --no-build` evaluates several full nixosSystem
+      # toplevels (eval-minimal/multi-env/graphics/observability/daemon +
+      # fixture-smoke + nix-unit) in ONE evaluator process. On a 16 GB hosted
+      # runner the live eval heap OOMs ~8-9 min in (the OOM-killer takes down
+      # the runner agent -> "runner received a shutdown signal"). Back the
+      # evaluator with a large swapfile so it spills to disk instead.
+      - name: Add swap (bound flake-eval peak memory)
+        run: |
+          sudo fallocate -l 14G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
       - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
         with:
           nix_path: nixpkgs=channel:nixos-unstable
@@ -95,6 +108,13 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Add swap (bound flake-eval peak memory)
+        run: |
+          sudo fallocate -l 14G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
       - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
         with:
           nix_path: nixpkgs=channel:nixos-unstable
