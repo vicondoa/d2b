@@ -876,6 +876,15 @@ Touch these only with a clear plan and a corresponding test run.
   sections. See [Versioning & changelog](#versioning--changelog).
   The functional `nixling.defaultSwitchReadiness.<wave>` option
   surface is the one deliberate exception.
+- **Don't let a host process hold realm credentials, or treat relay
+  identity as local auth (ADR 0032).** Realm relay/session/provider
+  credentials, remote node registries, and realm audit belong inside
+  a per-realm gateway guest VM — never in `nixlingd`, the broker, the
+  host bundle, host-readable storage, or any host-side activation
+  artifact. A relay-authenticated peer is never mapped to local
+  `Admin`; `SO_PEERCRED` + `nixling` group membership stays the only
+  local lifecycle authz surface. Work and personal realms never share
+  a gateway guest or an L2 bridge.
 
 ## cgroup slice naming + ownership-marker conventions
 
@@ -994,6 +1003,15 @@ contract:
 - [docs/adr/0031-bare-command-and-detached-exec.md](./docs/adr/0031-bare-command-and-detached-exec.md)
   — bare command-name exec resolution and enabled detached
   workload-user exec with VM-first management verbs.
+- [docs/adr/0032-nixling-v2-constellation-control-plane.md](./docs/adr/0032-nixling-v2-constellation-control-plane.md)
+  — evolves `nixlingd` into a transport-neutral constellation
+  daemon. **Load-bearing invariant:** the host daemon/broker hold
+  **no** realm relay/provider credentials, remote node registries,
+  or realm audit (those live inside a per-realm gateway guest); and
+  **relay identity is not local auth** — relay credentials
+  authenticate relay/transport access only, are never mapped to
+  `nixling-launcher`/`nixling-admin`, and `SO_PEERCRED` + `nixling`
+  group membership remains the sole local lifecycle authz surface.
 - [README.md](./README.md) — consumer-facing intro, install,
   manual integration walkthrough.
 - [CHANGELOG.md](./CHANGELOG.md) — Keep-a-Changelog, entries

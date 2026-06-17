@@ -120,6 +120,20 @@ Telemetry posture is preserved: `nixlingd` makes no outbound network
 connections by default; any future opt-in lands behind an explicit
 `--enable-diagnostics` flag and an update to this file.
 
+The v2 constellation layer ([ADR 0032](docs/adr/0032-nixling-v2-constellation-control-plane.md))
+preserves the host's no-realm-egress posture: the **host** daemon and
+broker still open no realm relay/provider connections. Realm egress
+(relay rendezvous, provider APIs) is opt-in and confined to a per-realm
+**gateway guest VM**; the host holds none of that realm's relay,
+session, or provider credentials. A realm relay is treated as an
+untrusted, ciphertext-only rendezvous: it sees connection metadata and
+traffic shape but never plaintext operations, and relay credentials
+authenticate relay access only — never a constellation principal or
+local `Admin`. Gateway and provider-workload egress are expected to be
+endpoint-allowlisted (relay/provider/registry endpoints only) and pinned
+to an operator-approved tenant/subscription/region; this is realm
+configuration held inside the gateway guest, not host state.
+
 This section documents the daemon trust-boundary delta for consumers.
 
 ### Host-prepare trust-boundary delta

@@ -70,6 +70,22 @@ are denied (`defaultForUnknown: deny`).
 > `nixling-launcher` shares a similar spelling for historical reasons,
 > but it is an authz classification identifier, NOT a Linux group.
 
+> **Relay and realm identity are not local authz principals.** The
+> two-socket classification chain described above is the entirety of
+> local lifecycle authorization: `SO_PEERCRED` + `nixling` group
+> membership for daemon public-socket access, and `nixlingd`-uid-only
+> access for the broker private socket. Relay credentials used for
+> remote daemon-access sessions are **node-management credentials**
+> that authenticate the transport connection; they are never mapped
+> to `nixling-launcher` or `nixling-admin` and never enter the
+> `launcherUsers`/`adminUsers` uid lookup or the broker's authz
+> chain. Realm or provider workload credentials are distinct from
+> both: they are held inside a gateway guest VM and are never placed
+> on the host daemon or its config. A gateway guest has no direct
+> channel to the broker — the host daemon manages it as a local
+> workload VM — and its realm credentials, policy, and audit log
+> live entirely inside the guest.
+
 ## Operation catalog (PROTOCOL_VERSION = 2)
 
 The currently implemented broker operation catalog. Every row carries

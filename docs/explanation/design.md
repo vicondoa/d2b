@@ -355,6 +355,104 @@ unchanged once the host boots again. If the host cannot boot at
 all, that is a Lanzaboote / `sbctl` recovery procedure rather
 than a nixling one.
 
+### Constellation realm gateway (v2, ADR 0032)
+
+[ADR 0032](../adr/0032-nixling-v2-constellation-control-plane.md)
+adds a v2 constellation layer on top of the existing v1 substrate.
+The local fast path — the host daemon, the broker, and local VM
+lifecycle — is unchanged when constellation is disabled or when a
+relay or provider is unreachable. The following threat-model
+properties govern the constellation extension.
+
+**Entrypoint modes.** Each realm has one of two entrypoint modes:
+
+- *Host-resident*: the host `nixlingd` is the realm entrypoint,
+  for local-only or trusted-host realms whose workloads all live
+  on this host and require no relay or provider credentials.
+- *Gateway-backed*: a dedicated local nixling guest VM (the
+  *realm gateway*) is the realm entrypoint. This is the default
+  for cross-host, work, and provider realms. The gateway guest
+  holds relay transport code, node registry, provider
+  configuration, credentials, policy, and the realm audit log.
+  The host daemon manages the gateway like any other local
+  workload; it does not hold the realm's credentials or policy.
+
+**Host holds no realm credentials.** The host daemon and broker
+hold no realm relay credentials, realm session keys, provider
+credentials, remote node registries, or realm audit log. All of
+those belong inside the per-realm gateway guest VM. They must not
+be loaded into any host process, host-readable storage, or
+host-side activation artifact. This invariant must hold
+regardless of which realm or provider is in use.
+
+**Relay is untrusted.** A relay (such as Azure Relay) is a
+ciphertext-only rendezvous transport. Relay credentials
+authenticate access to the relay endpoint; they do not
+authenticate a constellation principal, authorise a workload
+operation, or substitute for end-to-end session security. A
+compromised relay can deny, delay, or observe traffic shape, but
+cannot read, forge, or replay constellation operations. A
+relay-authenticated peer is never mapped to the local `Admin` role.
+
+**Local auth model is unchanged.** `SO_PEERCRED` at
+`/run/nixling/public.sock` combined with membership in the
+`nixling` group remains the only local lifecycle authorisation
+surface, exactly as in v1. The broker remains the only
+privileged host-mutation path, with every op audited to
+`/var/lib/nixling/audit/broker-<date>.jsonl`. The gateway guest
+receives no broker channel and no generic host-control channel.
+
+**Per-realm L2 isolation.** A work gateway and a personal
+gateway must not share a host L2 bridge or broadcast domain.
+The existing per-env bridge model is the natural boundary: each
+realm's gateway and its local workloads occupy a distinct env,
+with no cross-realm bridge membership, L3 forwarding, or
+transitive route unless an explicit named operation or named
+stream is authorised.
+
+### Constellation design constraints
+
+The following constraints follow from the reasoning in
+[ADR 0032](../adr/0032-nixling-v2-constellation-control-plane.md).
+They are stated here because violating any one of them would
+undermine the threat-model properties above.
+
+- **Do not turn nixling into an arbitrary network bridge.** The
+  port-forward stream carries one connection per operation, not
+  a generic L2 or L3 tunnel.
+- **Do not collapse work and personal networks or identities.**
+  Work and personal realms must remain in distinct environments
+  with separate gateway guests and separate L2 bridges.
+- **Do not map a relay-authenticated principal to local Admin.**
+  Relay identity is a transport credential, not a constellation
+  or host authorisation credential.
+- **Do not let a host process hold realm relay credentials.**
+  Relay credentials, realm session keys, and provider credentials
+  belong inside the gateway guest, not in the host daemon, any
+  host-side activation artifact, or host-readable storage.
+- **Do not open relay sessions directly from the host daemon.**
+  Realm relay transport code runs inside the gateway guest or
+  inside remote nodes. Daemon-access relay (an opt-in path for
+  remote node management) is a separate transport with its own
+  audit path and must not carry realm or provider workload
+  authority.
+- **Do not give the gateway a broker or generic host-control
+  channel.** The gateway guest manages its own realm; it does
+  not reach back through the broker to mutate the physical host.
+- **Do not add a generic raw stream or port-forward escape
+  hatch.** A raw bidirectional stream that carries arbitrary
+  traffic becomes the real API and dissolves every other
+  constraint listed here.
+- **Do not make provider sandboxes pretend to be full hypervisor
+  hosts.** A provider-managed container session and a local KVM
+  guest are explicitly distinct node types with explicit
+  capability differences; presenting them as equivalent conceals
+  those limits.
+- **Do not route local microVM lifecycle through remote
+  control-plane infrastructure.** Local VM start, stop, and
+  switch stay on the host-local Unix-socket fast path regardless
+  of whether constellation is configured.
+
 ## 3. Architecture
 
 Nixling is a set of NixOS modules under `nixos-modules/`, aggregated

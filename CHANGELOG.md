@@ -12,6 +12,20 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Documentation for the v2 constellation control plane
+  ([ADR 0032](docs/adr/0032-nixling-v2-constellation-control-plane.md)):
+  the threat model in `docs/explanation/design.md` now describes the
+  realm-gateway trust boundary — the host daemon and broker hold no
+  realm relay/provider credentials, remote node registries, or realm
+  audit (those live inside a per-realm gateway guest VM); a realm relay
+  is an untrusted, ciphertext-only rendezvous transport; relay identity
+  is never local authorization (`SO_PEERCRED` + the `nixling` group
+  remain the only local lifecycle authz surface); and work and personal
+  realms never share a gateway guest or an L2 bridge. `SECURITY.md`,
+  `docs/reference/privileges.md`, `docs/reference/daemon-api.md`, and
+  `docs/reference/daemon-audit-check.md` are updated to state the same
+  relay-is-not-local-auth and no-host-held-realm-credentials boundary.
+
 - `ReadGuestFile` guest-control RPC: a single-shot, bounded, enum-keyed
   (initially `GuestConfig`-only) RPC for the host to read a small,
   trusted in-guest file over the authenticated vsock channel.
