@@ -100,7 +100,13 @@ impl FixtureEnv {
         let mut cmd = base_command(args, &self.home, &self.runtime);
         cmd.env("NIXLING_MANIFEST_PATH", self.tree.join("manifest.json"))
             .env("NIXLING_BUNDLE_PATH", self.tree.join("bundle.json"))
-            .env("NIXLING_DAEMON_STATE_DIR", &self.daemon_state);
+            .env("NIXLING_DAEMON_STATE_DIR", &self.daemon_state)
+            // Read-only verbs (list/status/...) prefer nixlingd's public socket
+            // for live VM status (d098dfca); point it + the broker socket at
+            // non-existent paths so spawns fall back to the static fixture
+            // inventory instead of the operator's live daemon.
+            .env("NIXLING_PUBLIC_SOCKET", self.tree.join("public.sock"))
+            .env("NIXLING_BROKER_SOCKET", self.tree.join("priv.sock"));
         for (key, value) in envs {
             cmd.env(key, value);
         }

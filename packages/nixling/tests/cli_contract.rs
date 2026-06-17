@@ -64,6 +64,12 @@ fn list_json_matches_smoke_inventory_and_schema() {
     // /var/lib/nixling/daemon-state — the hermeticity fix over the bash gate.
     let daemon_state = tmp.path().join("daemon-state");
     std::fs::create_dir_all(&daemon_state).expect("mk daemon-state dir");
+    // nixlingd's public socket is preferred for live VM status (d098dfca: "report
+    // live public VM status from pidfd table"). Point it (and the broker socket)
+    // at non-existent paths so `list` cannot reach the real host daemon and falls
+    // back to the static fixture inventory — the hermeticity fix for that change.
+    let missing_public = tmp.path().join("public.sock");
+    let missing_broker = tmp.path().join("priv.sock");
 
     let out = Command::new(env!("CARGO_BIN_EXE_nixling"))
         .args(["list", "--json"])
@@ -71,6 +77,8 @@ fn list_json_matches_smoke_inventory_and_schema() {
         .env("NIXLING_BUNDLE_PATH", format!("{fixtures}/bundle.json"))
         .env("NIXLING_TEST_SYSTEM_STATE_JSON", &sys)
         .env("NIXLING_DAEMON_STATE_DIR", &daemon_state)
+        .env("NIXLING_PUBLIC_SOCKET", &missing_public)
+        .env("NIXLING_BROKER_SOCKET", &missing_broker)
         .output()
         .expect("spawn nixling list --json");
 
