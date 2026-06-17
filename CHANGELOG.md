@@ -12,6 +12,29 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Host OTel collector parity (ADR 0033). New
+  `nixling.observability.host.*` options bring the host edge collector to
+  parity with the per-VM guest collector: `host.scrapeJournal` adds a host
+  `journald` receiver (severity-mapped, restart-resuming `file_storage`
+  cursor) and `host.otlpIngest.enable` adds a host-local OTLP ingest
+  endpoint (a Unix socket in a dedicated `/run/nixling/otel/ingest/`
+  subdirectory, isolated from `host-egress.sock`) plus a `traces` pipeline
+  and `otlp` on the `metrics`/`logs` pipelines. Both default off and ship
+  over the existing host → `sys-obs` vsock bridge (never a LAN).
+  `host.otlpIngest.clientGroup` optionally widens the ingest socket from
+  `0600` to a `0660` group. See
+  [ADR 0033](docs/adr/0033-host-collector-parity.md).
+
+### Changed
+
+- Host-origin telemetry now carries the **hostname** as `vm.name` /
+  `host.name` (via `nixling.observability.host.identityName`, default
+  `networking.hostName`), assigned at the trusted ingress boundary, rather
+  than the literal `"host"`. `vm.role` stays `"host"`. This is a default
+  label change for observability-enabled hosts even with the new receivers
+  off; set `nixling.observability.host.identityName = "host"` to keep the
+  old labels. See [ADR 0033](docs/adr/0033-host-collector-parity.md).
+
 - `ReadGuestFile` guest-control RPC: a single-shot, bounded, enum-keyed
   (initially `GuestConfig`-only) RPC for the host to read a small,
   trusted in-guest file over the authenticated vsock channel.

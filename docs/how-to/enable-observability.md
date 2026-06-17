@@ -48,6 +48,49 @@ Each opted-in VM runs a guest OTel collector and a relay that forwards
 OTLP over vsock. The host runs a nixling-owned OTel collector for host
 metrics and a broker-spawned host bridge into `sys-obs`.
 
+## Optional: host journal and host OTLP ingest
+
+The host edge collector always ships hostmetrics and the StoreSync audit
+log. To bring it to parity with the guest collectors — host journal logs
+and a host-local OTLP ingest endpoint — opt in (both default off):
+
+```nix
+{
+  nixling.observability.host.scrapeJournal = true;       # host journal -> SigNoz
+  nixling.observability.host.otlpIngest.enable = true;   # host apps push OTLP
+  # nixling.observability.host.otlpIngest.clientGroup = "telemetry";
+}
+```
+
+Host instrumentation then pushes OTLP to the Unix socket
+`/run/nixling/otel/ingest/host-otlp.sock` (e.g.
+`OTEL_EXPORTER_OTLP_ENDPOINT=unix:///run/nixling/otel/ingest/host-otlp.sock`).
+There is no TCP listener; by default only root and the collector can write
+the socket. To let a group emit, point `clientGroup` at an **existing**
+group (declare it if needed):
+
+```nix
+{
+  users.groups.telemetry = { };
+  users.users.my-host-app.extraGroups = [ "telemetry" ];
+  nixling.observability.host.otlpIngest.clientGroup = "telemetry";
+}
+```
+
+> The host journal **and** host OTLP payloads can carry secrets (auth
+> failures, sudo command lines, span attributes, log bodies). They are
+> forwarded non-redacted over the host → `sys-obs` vsock bridge only, never
+> a LAN. Enable them only when `sys-obs` is a trusted operator sink.
+> Retention is governed by SigNoz/ClickHouse TTL inside `sys-obs`.
+
+**Identity migration.** Enabling the framework stack already changes
+host-origin telemetry identity: `vm.name` / `host.name` become the
+hostname (`nixling.observability.host.identityName`, default
+`networking.hostName`) instead of the literal `"host"`, even with the
+receivers above left off. `vm.role` stays `"host"`. Set
+`nixling.observability.host.identityName = "host"` if you depend on the
+old labels in saved SigNoz queries.
+
 ## Step 3: Rebuild and restart affected VMs
 
 On hosts where `nixling switch <vm>` is unreliable, restart VMs with:

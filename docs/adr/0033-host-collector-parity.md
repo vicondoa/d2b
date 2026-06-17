@@ -191,12 +191,14 @@ The existing `hostmetrics`, self-`prometheus`, and StoreSync-audit
   private `pkgs.writeText` binding, so eval tests cannot inspect it. The
   pre-serialization attrset is exposed via an internal, `visible = false`
   option (e.g. `nixling.observability._internal.hostCollectorConfig`) so
-  `tests/unit/nix/eval-cases/observability.nix` can assert receivers /
-  pipelines / extensions.
+  `tests/unit/nix/cases/observability.nix` (the live nix-unit corpus) can
+  assert receivers / pipelines / extensions. (The dead
+  `tests/unit/nix/eval-cases/observability.nix`, used only by a retired
+  bash gate, is not touched.)
 - **Eval cases** cover: defaults-off (no `journald`/`otlp` receiver, no
   `traces`/general `logs` pipeline, no journal group/cursor), each flag
-  on, both flags on (no conditional-merge clobber), identity resolution +
-  override, and socket-path non-collision
+  on, both flags on (processor routing + no `service.name` clobber),
+  identity resolution + override, and socket-path non-collision
   (`host-otlp.sock` != `host-egress.sock` / guest sockets; no SigNoz
   4317/4318 or vsock 14317 reuse).
 - **Contract tests (Rust):**
@@ -217,10 +219,10 @@ The existing `hostmetrics`, self-`prometheus`, and StoreSync-audit
   `host-otlp.sock`, and a Secrets/sensitivity note for host journal/OTLP;
   `docs/how-to/enable-observability.md` documents opting in and the
   identity migration; `CHANGELOG.md` records the label change and new
-  options; `AGENTS.md` notes the load-bearing behavior (ingress-boundary
-  identity stamping, host source key/port invariants, default-off host
-  journal/OTLP). This ADR is added to `docs/adr/README.md` (the index
-  coverage guard).
+  options. This ADR is added to `docs/adr/README.md` (the index coverage
+  guard). The framework `AGENTS.md` has no observability-behavior section,
+  so the load-bearing behavior lives in the Diataxis reference + this ADR
+  rather than a forced `AGENTS.md` entry.
 - **Status convention:** this ADR is `Proposed` during panel review and
   flipped to `Accepted` in the commit that lands the implementation.
 

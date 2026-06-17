@@ -249,6 +249,13 @@ observability/obs-default-off-no-units
 observability/obs-disabled-default
 observability/obs-enabled-defaults
 observability/obs-graphics-runner-wiring
+observability/obs-host-collector-both-processor-split
+observability/obs-host-collector-default-off
+observability/obs-host-collector-journal
+observability/obs-host-collector-otlp
+observability/obs-host-flags-require-enable
+observability/obs-host-identity-override
+observability/obs-host-otlp-client-group-umask
 observability/obs-journal-default-on
 observability/obs-manifest-fields
 observability/obs-metric-references
