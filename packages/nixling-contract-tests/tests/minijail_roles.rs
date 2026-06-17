@@ -4,7 +4,7 @@
 //!
 //! These gates validate the RENDERED minijail role profiles, so they belong in
 //! the fixture-contract layer (this crate, gated by the NL_FIXTURES step in
-//! `tests/rust-workspace-checks.sh`), not the doc/source-grep policy layer.
+//! `tests/tools/rust-workspace-checks.sh`), not the doc/source-grep policy layer.
 //!
 //! Each VM emits a `cloud-hypervisor` runner and a set of `virtiofsd` shares,
 //! so both roles' profiles are present in the fixture-smoke bundle (corp-vm +

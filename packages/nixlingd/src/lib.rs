@@ -13185,7 +13185,7 @@ mod broker_dispatch_tests {
     ///   - plan_ops contains DiskInit → DO dispatch DiskInit
     ///
     /// The integration of the predicate + actual broker dispatch is
-    /// covered by `tests/live-vm-smoke.sh` against a live deploy.
+    /// covered by `tests/integration/live/live-vm-smoke.sh` against a live deploy.
     /// This hermetic test catches the "predicate accidentally
     /// short-circuited to `false`" regression that would otherwise
     /// silently re-introduce the v1.2 D9 hole.

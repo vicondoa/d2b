@@ -3,7 +3,7 @@
 //! files (via the `nixling_contract_tests` repo-file helpers) and asserts a
 //! structural / documentation / completeness invariant. This crate is excluded
 //! from the hermetic Nix sandbox workspace build and runs only from
-//! `tests/rust-workspace-checks.sh` against the real checkout, so reading repo
+//! `tests/tools/rust-workspace-checks.sh` against the real checkout, so reading repo
 //! files relative to the repo root is sound here.
 //!
 //! Migrated gates:

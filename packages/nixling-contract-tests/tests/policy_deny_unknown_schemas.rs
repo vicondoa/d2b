@@ -20,7 +20,7 @@
 //!   * the guest-control string / chunk / terminal definition bounds have not
 //!     drifted (`assert_guest_control_{string,chunk,terminal}_bounds`).
 //!
-//! This crate runs only from `tests/rust-workspace-checks.sh` against the real
+//! This crate runs only from `tests/tools/rust-workspace-checks.sh` against the real
 //! checkout (excluded from the hermetic Nix sandbox build), so repo-file access
 //! via the `nixling_contract_tests` helpers is sound.
 

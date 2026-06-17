@@ -3,7 +3,7 @@
 //!
 //! The legacy bash gate mixed three layers. The realized `nix flake check`
 //! remains in the shell gate, resolved-config value assertions live in
-//! `tests/nix-unit/cases/examples-with-observability.nix`, and these tests
+//! `tests/unit/nix/cases/examples-with-observability.nix`, and these tests
 //! keep the file-presence / source-grep assertions in the Rust policy layer.
 
 use std::path::Path;

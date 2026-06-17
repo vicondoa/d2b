@@ -1,7 +1,7 @@
 //! Guest-control generated binding source policy lints migrated from the
 //! retired guest binding bash gates. These are source greps over committed
 //! generated bindings and crate manifests; generation determinism stays in
-//! `tests/drift-check.sh`.
+//! `tests/unit/gates/drift-check.sh`.
 
 use nixling_contract_tests::{read_repo_file, repo_path_exists};
 use regex::Regex;

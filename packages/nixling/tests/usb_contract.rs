@@ -13,7 +13,7 @@
 //! sandbox is required here — only that corp-vm exists in the manifest.
 //!
 //! Requires NL_FIXTURES (the fixture-smoke output dir), delivered by the
-//! dedicated CLI-contract step in tests/rust-workspace-checks.sh. When unset
+//! dedicated CLI-contract step in tests/tools/rust-workspace-checks.sh. When unset
 //! (plain `cargo test --workspace`) the test skips; the gate step always sets
 //! NL_FIXTURES, so the contract cannot be silently disabled there.
 

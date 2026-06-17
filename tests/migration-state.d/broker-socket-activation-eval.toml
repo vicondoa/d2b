@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/broker-socket-activation.nix — 5 cases: host-broker ExecStart no --socket-path source-grep via readFile + socket-unit FileDescriptorName/ListenSequentialPacket via mkEval introspection)"]
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/broker-socket-activation.nix — 5 cases: host-broker ExecStart no --socket-path source-grep via readFile + socket-unit FileDescriptorName/ListenSequentialPacket via mkEval introspection)"]

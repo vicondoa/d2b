@@ -7,7 +7,7 @@
 //!
 //! Each test reads the real repo files (via the `nixling_contract_tests`
 //! helpers) and asserts a structural source/doc invariant. This crate runs
-//! only from `tests/rust-workspace-checks.sh` against the real checkout (it is
+//! only from `tests/tools/rust-workspace-checks.sh` against the real checkout (it is
 //! excluded from the hermetic Nix sandbox workspace build), so repo-file
 //! access is sound.
 //!
@@ -17,8 +17,8 @@
 //! readiness now rides the authenticated guest-control Health probe) and the
 //! `nixling exec` CLI non-goal was retired in W16 (the admin-only `vm exec` /
 //! `vm konsole` surface landed). The gate degenerated to a `nix eval` smoke of
-//! `tests/eval-cases/guest-control-auth-eval.nix`, whose evaluation is already covered by
-//! the nix-unit case `tests/nix-unit/cases/guest-control-auth.nix` (see
+//! `tests/unit/nix/eval-cases/guest-control-auth-eval.nix`, whose evaluation is already covered by
+//! the nix-unit case `tests/unit/nix/cases/guest-control-auth.nix` (see
 //! `tests/migration-state.d/guest-control-auth-eval.toml`). Because this
 //! pure-Rust contract crate does not run `nix`, the port asserts the
 //! still-source-greppable current reality: the two former non-goals are now
@@ -151,7 +151,7 @@ fn retired_guest_control_nongoals_are_now_shipped_goals() {
 
 // Migrated from tests/guest-control-auth-nongoals.sh. The auth-core
 // token-share / LoadCredential contract the smoke eval
-// (tests/eval-cases/guest-control-auth-eval.nix) exercises is present in the module
+// (tests/unit/nix/eval-cases/guest-control-auth-eval.nix) exercises is present in the module
 // source.
 #[test]
 fn guest_control_auth_core_token_share_contract_present() {

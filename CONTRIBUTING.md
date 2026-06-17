@@ -76,7 +76,7 @@ refreshed in the shared cache.
   per gate;
 - independent Rust, schema, and example gates run behind a small semaphore
   controlled by `NL_STATIC_JOBS` (default `4`);
-- `bash tests/static-timing.sh` writes a per-gate wall-clock report to
+- `bash tests/tools/static-timing.sh` writes a per-gate wall-clock report to
   `$ROOT/.static-timing.log`;
 - to profile one gate in isolation, run `time bash tests/<gate>.sh`.
 
@@ -165,7 +165,7 @@ pool in `static.sh` adds ≈ 4-10 minutes of wall-clock per gate.
 
 ### When to run the L2 KVM tests
 
-The Layer-2 (`tests/nixling-store.sh`, `tests/audio.sh`) tests
+The Layer-2 (`tests/integration/live/nixling-store.sh`, `tests/integration/live/audio.sh`) tests
 require a live host with nixling activated and are NOT part of the
 PR gate. Run them locally when:
 

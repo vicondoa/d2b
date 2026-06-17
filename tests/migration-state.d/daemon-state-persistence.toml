@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["packages/nixlingd/tests/daemon_state_persistence.rs::daemon_state_persistence::restores_pidfd_table_and_clears_after_vm_stop — default cargo test --workspace via tests/rust-workspace-checks.sh", "tests/golden/pinned/daemon-state-persistence.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["packages/nixlingd/tests/daemon_state_persistence.rs::daemon_state_persistence::restores_pidfd_table_and_clears_after_vm_stop — default cargo test --workspace via tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/daemon-state-persistence.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]

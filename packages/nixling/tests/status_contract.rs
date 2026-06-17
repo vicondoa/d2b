@@ -18,7 +18,7 @@
 //!   * `--human` renders the runner-parity and bridge-health sections.
 //!
 //! Requires NL_FIXTURES (the fixture-smoke output dir), delivered by the
-//! dedicated CLI-contract step in tests/rust-workspace-checks.sh. When unset
+//! dedicated CLI-contract step in tests/tools/rust-workspace-checks.sh. When unset
 //! (e.g. the plain `cargo test --workspace` pass that has no Nix sandbox) the
 //! test skips; the gate step always sets NL_FIXTURES, so the contract cannot be
 //! silently disabled there.

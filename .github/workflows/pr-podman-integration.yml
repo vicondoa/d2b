@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 # Container integration tier (type-G): builds the Nix-built OCI images under
-# tests/containers/images/*.nix and runs them with rootless podman via
+# tests/integration/containers/images/*.nix and runs them with rootless podman via
 # `make test-integration`. This is the Ubuntu-CI-parity tier — it proves the
 # statically-linked nixling guest binary runs on a stock non-Nix userland
 # (ubuntu:24.04). podman is preinstalled on the ubuntu-latest runner; Nix is
-# installed to build the images. See tests/containers/README.md for why this
+# installed to build the images. See tests/integration/containers/README.md for why this
 # tier is deliberately narrow (foreign-userland portability only; daemon/socket
 # activation is covered natively + by the runNixOSTest tier).
 jobs:

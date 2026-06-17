@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/video-contract.nix — 28 video-sidecar DAG/socket/principal/device-bind/virgl-opt-in/guard-assertion cases plus the graphics.nix use_video source-wiring checks, via mkEval; x86_64-only guarded)"]
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/video-contract.nix — 28 video-sidecar DAG/socket/principal/device-bind/virgl-opt-in/guard-assertion cases plus the graphics.nix use_video source-wiring checks, via mkEval; x86_64-only guarded)"]

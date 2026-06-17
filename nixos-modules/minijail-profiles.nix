@@ -354,7 +354,7 @@ let
       # /var/lib/nixling/vms/<vm>/swtpm into the jail (NOT tmpfs),
       # preserving TPM 2.0 NVRAM + EK seed across daemon restarts.
       # Regression guards: tests/minijail-validator-swtpm.sh and
-      # tests/swtpm-persistence-smoke.sh. Breaking this contract
+      # tests/integration/live/swtpm-persistence-smoke.sh. Breaking this contract
       # forces Entra/Intune re-enrollment for work-aad and similar
       # TPM-bound IdP joins.
       "${profileIdFor name "swtpm-flush"}" = mkProfile {

@@ -30,7 +30,7 @@
 //! probe can only ever read the fixture artifacts.
 //!
 //! Requires NL_FIXTURES (the fixture-smoke output dir), delivered by the
-//! CLI-contract step in tests/rust-workspace-checks.sh. When unset (e.g. the
+//! CLI-contract step in tests/tools/rust-workspace-checks.sh. When unset (e.g. the
 //! plain `cargo test --workspace` pass) every test skips.
 
 mod common;

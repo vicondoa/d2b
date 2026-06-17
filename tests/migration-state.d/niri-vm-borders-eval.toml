@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/niri-vm-borders.nix — 10 niri KDL window-rule cases via mkEval introspection)"]
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/niri-vm-borders.nix — 10 niri KDL window-rule cases via mkEval introspection)"]

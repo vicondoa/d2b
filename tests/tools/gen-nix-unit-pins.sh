@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/tools/gen-nix-unit-pins.sh — regenerate the fail-closed nix-unit
-# case-presence pins (tests/nix-unit/pinned/{common,<system>}.txt).
+# case-presence pins (tests/unit/nix/pinned/{common,<system>}.txt).
 #
 # `common.txt`        = case names present on EVERY system.
 # `<system>.txt`      = extra case names present only on that system
@@ -32,7 +32,7 @@ if [ "${#SYSTEMS[@]}" -eq 0 ]; then
   echo "gen-nix-unit-pins: could not derive systems from .#checks; falling back to defaults" >&2
   SYSTEMS=(aarch64-linux x86_64-linux)
 fi
-PIN_DIR="$ROOT/tests/nix-unit/pinned"
+PIN_DIR="$ROOT/tests/unit/nix/pinned"
 mkdir -p "$PIN_DIR"
 
 case_names() {
@@ -46,7 +46,7 @@ case_names() {
       mkEval = modules: f.inputs.nixpkgs.lib.nixosSystem {
         system = "'"$sys"'"; modules = [ nixlingModule ] ++ modules;
       };
-      cases = import '"$ROOT"'/tests/nix-unit {
+      cases = import '"$ROOT"'/tests/unit/nix {
         lib = pkgs.lib; inherit pkgs; system = "'"$sys"'";
         flakeRoot = '"$ROOT"';
         nl = import '"$ROOT"'/nixos-modules/lib.nix { lib = pkgs.lib; };

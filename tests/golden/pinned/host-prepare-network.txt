@@ -4,7 +4,7 @@
 # `cargo test -p nixling-priv-broker --all-features -- <filter>` invocations.
 # Every test matched by those substring filters is present in the default
 # `cargo test --workspace` host list and the broker default + layer1-bootstrap
-# lists, all gated by tests/rust-workspace-checks.sh. Pinned fail-closed via
+# lists, all gated by tests/tools/rust-workspace-checks.sh. Pinned fail-closed via
 # tests/tools/assert-pinned-tests.sh (which lists the broker workspace under
 # --features layer1-bootstrap; all 3 broker tests are present there).
 # The retired gate's trailing `ch-net-handoff-not-supported` docs-anchor grep

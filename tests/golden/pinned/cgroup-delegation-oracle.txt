@@ -5,7 +5,7 @@
 # `cargo test --all-features --lib ops::cgroup` (broker) and asserted the
 # named canaries below. They already run in the gated `cargo test --workspace`
 # (nixling-host) and the broker layer1-bootstrap pass in
-# tests/rust-workspace-checks.sh. Pinned fail-closed via
+# tests/tools/rust-workspace-checks.sh. Pinned fail-closed via
 # tests/tools/assert-pinned-tests.sh.
 cgroup::tests::refuses_uid_zero
 cgroup::tests::refuses_when_unified_hierarchy_missing

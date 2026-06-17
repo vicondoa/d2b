@@ -118,7 +118,7 @@ nixling status work-vm
 ### `host install --apply` wrote files but the service is not usable
 
 That is the current scaffold state. Compare what landed with the fixture notes
-in `tests/distro-matrix/fixtures/ubuntu-2404/` and replace placeholder content
+in `tests/integration/distro-matrix/fixtures/ubuntu-2404/` and replace placeholder content
 with the real generated unit/config artifacts for your deployment.
 
 ### `vm start --apply` says the bundle is missing

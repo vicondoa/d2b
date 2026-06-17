@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["cargo test --workspace --features layer1-bootstrap (nixling-priv-broker fd_passing::tests::scm_rights_fd_lifecycle_* — runs in tests/rust-workspace-checks.sh broker layer1-bootstrap test pass)", "tests/tools/assert-pinned-tests.sh (fail-closed pin via the broker --features layer1-bootstrap nextest list)"]
+successor_ids = ["cargo test --workspace --features layer1-bootstrap (nixling-priv-broker fd_passing::tests::scm_rights_fd_lifecycle_* — runs in tests/tools/rust-workspace-checks.sh broker layer1-bootstrap test pass)", "tests/tools/assert-pinned-tests.sh (fail-closed pin via the broker --features layer1-bootstrap nextest list)"]

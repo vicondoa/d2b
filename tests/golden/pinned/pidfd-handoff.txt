@@ -1,7 +1,7 @@
 # pidfd-handoff successor native tests (retired tests/pidfd-handoff.sh).
 #
 # The pidfd handoff contract is exercised by native Rust tests that run in the
-# gated `cargo test --workspace` passes (tests/rust-workspace-checks.sh). This
+# gated `cargo test --workspace` passes (tests/tools/rust-workspace-checks.sh). This
 # fail-closed pin guards their continued presence so they can't be silently
 # deleted. The two broker integration tests live in
 # tests/pidfd_handoff_scm_rights.rs (#![cfg(feature = "fake-backends")]) and run

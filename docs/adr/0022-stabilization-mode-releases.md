@@ -89,7 +89,7 @@ amendment, explicitly surfacing the policy relaxation for panel review.
 ### Required pre-tag live-smoke gate (D1)
 
 No v1.2.x tag is cut without a passing run of
-`tests/live-vm-smoke.sh --full`. This gate:
+`tests/integration/live/live-vm-smoke.sh --full`. This gate:
 
 - Exercises end-to-end VM bring-up for both `personal-dev` and
   `work-aad` on the maintainer's desktop (requires KVM + systemd +
@@ -99,13 +99,13 @@ No v1.2.x tag is cut without a passing run of
   API liveness, CAP_NET_ADMIN bit-clear, pidfd-table snapshot, zero
   zombies, `nixling host doctor --read-only` exit 0, and teardown
   cleanliness.
-- Records the result in `tests/smoke-run-log.txt` as a single line:
+- Records the result in `${TMPDIR:-/tmp}/nixling-smoke-run-log.txt` as a single line:
   `<HEAD-SHA> <ISO-timestamp> {PASS|FAIL} {lite|full}`.
 
 Panel sub-agents verify the smoke gate at each panel round (I5) by
-reading `tests/smoke-run-log.txt` and asserting the most-recent line
-matches the HEAD SHA under review. R1 and R3 require `--full` mode;
-R2 allows `--lite`.
+reading the operator-supplied smoke log and asserting the most-recent
+line matches the HEAD SHA under review. R1 and R3 require `--full`
+mode; R2 allows `--lite`.
 
 The gate is **maintainer-side only** and never runs in CI (no KVM
 access in the standard GitHub Actions runner pool). CI covers the
@@ -131,9 +131,9 @@ If R3 surfaces new must-fix items, R2 and R3 are repeated. A fourth
 round is an escalation signal (scope creep); the integrator surfaces
 it to the maintainer rather than silently repeating the cycle.
 
-Each panel round requires the maintainer to commit the updated
-`tests/smoke-run-log.txt` before dispatching panel sub-agents, so
-the I5 check is machine-verifiable without out-of-band coordination.
+Each panel round requires the maintainer to preserve the updated smoke
+log before dispatching panel sub-agents, so the I5 check is
+machine-verifiable without adding repo-local test artifacts.
 
 ### Tag-signing policy
 

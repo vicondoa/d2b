@@ -2,7 +2,7 @@
 # tests/daemon-version-negotiation.sh, which exercised hello version ranges,
 # deny_unknown_fields, unknown feature tolerance, and IfName validation through
 # serve --once plus test-client frames. These integration tests run in the
-# default cargo test --workspace pass gated by tests/rust-workspace-checks.sh.
+# default cargo test --workspace pass gated by tests/tools/rust-workspace-checks.sh.
 # Pinned fail-closed via tests/tools/assert-pinned-tests.sh. One bare libtest
 # path per line.
 #

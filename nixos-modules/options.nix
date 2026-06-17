@@ -46,7 +46,7 @@
   #                                service is on the  denylist).
   #   nixling.audioStateHelperPath — set by cli.nix to point at
   #                                nixling-read-audio-state.sh; the
-  #                                only consumer (tests/audio.sh)
+  #                                only consumer (tests/integration/live/audio.sh)
   #                                now discovers the helper at the
   #                                daemon-managed path.
   #   nixling._desktopWrappers   — set by cli.nix to pin the per-VM

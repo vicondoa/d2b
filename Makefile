@@ -63,9 +63,9 @@ ledger-regen:
 
 ## W0 policy gates. Warn-only in aggregate CI today; CI wiring lands later.
 pr-checklist-gate:
-	bash tests/pr-checklist-gate.sh .github/PULL_REQUEST_TEMPLATE.md
+	bash tests/unit/meta/pr-checklist-gate.sh .github/PULL_REQUEST_TEMPLATE.md
 ci-uses-make:
-	bash tests/ci-uses-make.sh
+	bash tests/unit/meta/ci-uses-make.sh
 
 ## Per-layer targets — W0: run the group's not-yet-ported legacy scripts via
 ## the ledger. W1+ repoints each to its successor (nextest/nix-unit/VM).
@@ -104,7 +104,7 @@ test-nix-unit:
 	$(NIX_FLAKE) build --no-link --print-out-paths '.#checks.$(SYSTEM).nix-unit'
 
 ## nix-unit-pin — regenerate the fail-closed nix-unit case-presence pins
-## (tests/nix-unit/pinned/*.txt) after adding or removing cases.
+## (tests/unit/nix/pinned/*.txt) after adding or removing cases.
 nix-unit-pin:
 	bash tests/tools/gen-nix-unit-pins.sh
 test-flake:       ; bash tests/tools/run-layer.sh test-flake
@@ -115,17 +115,17 @@ test-fixtures:
 	nix build --no-link --print-out-paths ".#checks.$$system.fixture-smoke"
 test-mutation:    ; @echo "test-mutation: standing mutation gate lands W1+ (plan §3.7)"
 ## test-integration — G-ci: podman container integration tests. Each
-## tests/containers/*.sh runner builds its Nix-built OCI image
+## tests/integration/containers/*.sh runner builds its Nix-built OCI image
 ## (containerImages.<system>.<name>, NOT swept by `nix flake check`) and runs it
 ## with rootless podman. Scope is foreign-userland portability only (e.g. a
 ## static nixling binary on stock Ubuntu); daemon/socket activation is covered
-## natively (see tests/containers/README.md). Runs identically on a NixOS host
+## natively (see tests/integration/containers/README.md). Runs identically on a NixOS host
 ## and a GitHub Actions ubuntu-latest runner (podman preinstalled).
 test-integration:
 	@set -eu; \
-	scripts="$$(find tests/containers -maxdepth 1 -name '*.sh' ! -name 'lib.sh' -type f 2>/dev/null | sort)"; \
+	scripts="$$(find tests/integration/containers -maxdepth 1 -name '*.sh' ! -name 'lib.sh' -type f 2>/dev/null | sort)"; \
 	if [ -z "$$scripts" ]; then \
-	echo "test-integration: no tests/containers/*.sh runners present"; \
+	echo "test-integration: no tests/integration/containers/*.sh runners present"; \
 	exit 0; \
 	fi; \
 	for s in $$scripts; do \
@@ -171,16 +171,16 @@ perf:             ; bash tests/tools/run-layer.sh perf
 ## i3-check — verify no v1.3 deferrals authored (ADR 0022 I3 invariant).
 ##            Wired into pre-tag and tests/static.sh per panel-docs R1 MF-1.
 i3-check:
-	bash tests/no-new-deferral.sh
+	bash tests/unit/meta/no-new-deferral.sh
 
 ## pre-tag — run the full live-VM smoke gate before tagging a release.
 ##           Requires: KVM, nixling active, both personal-dev and work-aad VMs declared.
-##           Exits non-zero on any probe failure.  Updates tests/smoke-run-log.txt.
+##           Exits non-zero on any probe failure.  Updates $${TMPDIR:-/tmp}/nixling-smoke-run-log.txt.
 ##           ALSO runs the I3 invariant grep gate (ADR 0022 + panel-docs R1).
 pre-tag: i3-check
-	bash tests/live-vm-smoke.sh --full
+	bash tests/integration/live/live-vm-smoke.sh --full
 
 ## smoke-lite — run the single-VM lite smoke gate (≤5 min).
 ##              Used at every panel-round HEAD per I5.
 smoke-lite:
-	bash tests/live-vm-smoke.sh --lite
+	bash tests/integration/live/live-vm-smoke.sh --lite

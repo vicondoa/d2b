@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["tests/rust-workspace-checks.sh (gated `cargo check --workspace --manifest-path nixling-priv-broker default features = real wire dispatch` — the broker default-features build is already a gate step)"]
+successor_ids = ["tests/tools/rust-workspace-checks.sh (gated `cargo check --workspace --manifest-path nixling-priv-broker default features = real wire dispatch` — the broker default-features build is already a gate step)"]

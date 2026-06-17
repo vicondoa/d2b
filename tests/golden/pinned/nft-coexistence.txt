@@ -3,7 +3,7 @@
 # only ran these #[test]s (nixling-host with --all-features; broker
 # ops::nft::tests with --all-features). They already run in the gated
 # `cargo test --workspace` (nixling-host) and the broker layer1-bootstrap
-# pass in tests/rust-workspace-checks.sh. Pinned fail-closed via
+# pass in tests/tools/rust-workspace-checks.sh. Pinned fail-closed via
 # tests/tools/assert-pinned-tests.sh.
 nftables::tests::coexistence_matrix_all_7_rows
 nftables::tests::detector_clean_host

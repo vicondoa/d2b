@@ -5,7 +5,7 @@
 //! `#[serde(deny_unknown_fields)]`, so a regression that silently drops the
 //! attribute from a DTO fails the static gate.
 //!
-//! This crate runs only from `tests/rust-workspace-checks.sh` against the real
+//! This crate runs only from `tests/tools/rust-workspace-checks.sh` against the real
 //! checkout (it is excluded from the hermetic Nix sandbox workspace build), so
 //! repo-file access via the `nixling_contract_tests` helpers is sound here.
 //!

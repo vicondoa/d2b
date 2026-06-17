@@ -2,7 +2,7 @@
 # tests/daemon-socket-acl.sh, which exercised the SO_PEERCRED launcher
 # authorization matrix through serve --once plus test-client frames. These
 # integration tests run in the default cargo test --workspace pass gated by
-# tests/rust-workspace-checks.sh. Pinned fail-closed via
+# tests/tools/rust-workspace-checks.sh. Pinned fail-closed via
 # tests/tools/assert-pinned-tests.sh. One bare libtest path per line.
 #
 daemon_socket_acl::non_launcher_uid_is_rejected

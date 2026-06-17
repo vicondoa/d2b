@@ -10,7 +10,7 @@
 #   carveout_ordering_invariant_via_op,
 #   w6_ops_refused_with_unknown_operation_audit}
 # These #[cfg(test)] names are present under the default host workspace and
-# broker workspace test lists, so tests/rust-workspace-checks.sh already runs
+# broker workspace test lists, so tests/tools/rust-workspace-checks.sh already runs
 # them; pinned fail-closed via tests/tools/assert-pinned-tests.sh.
 # Non-cargo residual: the retired script grepped usbip_firewall.rs for
 # UsbipBind/UsbipUnbind/UsbipProxyReconcile. That boundary is covered by

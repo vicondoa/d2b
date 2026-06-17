@@ -28,7 +28,7 @@ fail() {
 log "==> tests/static-fast-tier0.sh"
 cd "$ROOT"
 
-mapfile -t shell_files < <(find tests scripts harness/ubuntu -maxdepth 1 -type f -name '*.sh' 2>/dev/null | sort)
+mapfile -t shell_files < <(find tests scripts harness/ubuntu -type f -name '*.sh' 2>/dev/null | sort)
 [ "${#shell_files[@]}" -gt 0 ] || fail "no shell scripts found for tier0 gate"
 
 bash -n "${shell_files[@]}"

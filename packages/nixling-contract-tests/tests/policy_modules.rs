@@ -2,7 +2,7 @@
 //! workspace dependency graph (the "H-group"), migrated from the
 //! `tests/*.sh` bash gates. Each test reads the real repo files and asserts a
 //! structural/source invariant. This crate runs only from
-//! `tests/rust-workspace-checks.sh` against the real checkout (it is excluded
+//! `tests/tools/rust-workspace-checks.sh` against the real checkout (it is excluded
 //! from the hermetic Nix sandbox workspace build), so repo-file access — and
 //! shelling out to `git` for the gitignore-respecting file enumeration that the
 //! bash gates got from `rg` — is sound here.

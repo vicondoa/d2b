@@ -6,7 +6,7 @@
 //! lowercase-hex digest), an `https://` `image_url`, and
 //! `panel_approval_required_for_change = true` (drift requires an ADR).
 //!
-//! This crate runs only from `tests/rust-workspace-checks.sh` against the real
+//! This crate runs only from `tests/tools/rust-workspace-checks.sh` against the real
 //! checkout (it is excluded from the hermetic Nix sandbox workspace build), so
 //! reading repo files is sound.
 

@@ -111,7 +111,7 @@ bash tests/assertions-eval.sh        # consolidated batch eval +
                                      # fallback for the 3 throw cases
                                      # (~13 min cold)
 nix-instantiate --eval --strict \
-  -E 'let f = import ./tests/smoke-eval-tpm.nix; r = f {}; in r.drvPath' \
+  -E 'let f = import ./tests/unit/smoke/smoke-eval-tpm.nix; r = f {}; in r.drvPath' \
   >/dev/null
 bash tests/net-vm-network-eval.sh    # net VM networkd config invariants
 bash tests/usbip-gating-eval.sh      # host-side USBIP gating + env scoping
@@ -120,7 +120,7 @@ bash tests/legacy-unit-denylist-eval.sh  # fail-closed gate (ADR 0015)
 bash tests/agents-md-rewrite-eval.sh # AGENTS.md docs invariant
 ```
 
-Layer-2 integration tests (`tests/nixling-store.sh`) require a live
+Layer-2 integration tests (`tests/integration/live/nixling-store.sh`) require a live
 host with `nixlingd` + `nixling-priv-broker` active; they're
 documented in [`tests/README.md`](./tests/README.md). Most
 contributors do **not** need to run them — Layer 1 is the PR gate.
@@ -510,10 +510,10 @@ In that implementation, the roster is selected per plan via
 | `tests/static-fast-tier0.sh`          | **Tier-0 sub-60s fast gate.** Bash syntax + `shellcheck` on repo entrypoints and helpers; no Nix eval/build work. |
 | `tests/static-fast.sh`                | **Fast PR-loop gate.** Parse / `shellcheck` / `flake check` / rust workspace / bundle invariants / host-prepare canaries / cross-cutting drift without the full panel-exit set. |
 | `tests/static.sh`                     | **Top-level Layer-1 gate.** Parse, `flake check`, smoke evals, assertion/observability/USBIP/autostart/restart-policy eval gates, manifest contract, per-example flake checks. Runs from repo root; override with `ROOT=<path>`. |
-| `tests/smoke-eval.nix`                | Workload smoke: minimal consumer-style nixosSystem, builder's native system.                 |
-| `tests/smoke-eval-graphics.nix`       | Same shape, with `graphics.enable = true`. x86_64-only.                                      |
-| `tests/smoke-eval-tpm.nix`            | TPM host-surface regression gate: swtpm parent-dir ACLs, swtpm flush helper, runner socket ACLs, and ownership-migration invariants. |
-| `tests/smoke-eval-aarch64.nix`        | Headless smoke cross-evaluated on aarch64-linux (multi-arch eval-graph regression gate).     |
+| `tests/unit/smoke/smoke-eval.nix`                | Workload smoke: minimal consumer-style nixosSystem, builder's native system.                 |
+| `tests/unit/smoke/smoke-eval-graphics.nix`       | Same shape, with `graphics.enable = true`. x86_64-only.                                      |
+| `tests/unit/smoke/smoke-eval-tpm.nix`            | TPM host-surface regression gate: swtpm parent-dir ACLs, swtpm flush helper, runner socket ACLs, and ownership-migration invariants. |
+| `tests/unit/smoke/smoke-eval-aarch64.nix`        | Headless smoke cross-evaluated on aarch64-linux (multi-arch eval-graph regression gate).     |
 | `tests/assertions-eval.sh`            | Negative assertion cases (CIDR overlap, naming invariants, platform gate, missing `waylandUser`, reserved-path invariants, boot-cleaned `tmpDir`, etc.). Each bad case must fail eval with the expected message. |
 | `tests/usbip-gating-eval.sh`          | Host-side USBIP gating: absent until both host + enabled-VM opt-ins are set, and scoped to opted-in envs only. |
 | `tests/niri-vm-borders-eval.sh`       | Opt-in niri KDL border generation: disabled by default, correct window-rule per graphics VM when enabled, per-VM color override, default color stability, and custom `outputPath`. |
@@ -521,14 +521,14 @@ In that implementation, the roster is selected per plan via
 | `tests/volume-mounts-eval.sh`         | Declared `microvm.volumes` invariant: Cloud Hypervisor disk serials and guest `fileSystems` mounts stay aligned, and duplicate/reserved/overlong serials fail eval. |
 | `tests/video-sidecar-hardening-eval.sh` | Eval-time hardening gate for the broker `SpawnRunner` video runner descriptor (`AF_UNIX` only, syscall filter, empty capability sets). |
 | `tests/minijail-validator-wayland-proxy.sh` | Wayland filter proxy minijail profile gate: mandatory seccomp, empty capabilities, empty device binds, dedicated runtime dir (`/run/nixling-wlproxy/<vm>`), no PipeWire/Pulse socket access; compositor access is granted to the `wlproxy` role by ACL, not by a profile bind mount. |
-| `tests/nixos/daemon-smoke.nix`        | **runNixOSTest (`make test-host-integration`).** Hermetic VM check of the daemon-only end-state (ADR 0015): broker socket-activated, `nixlingd` binds `/run/nixling/public.sock`, the three required service/socket units present (the `nixling.slice` cgroup slice is allowed), no retired per-VM template / host-singleton / `microvms.target`. |
-| `tests/nixos/state-dir-acl.nix`       | **runNixOSTest (`make test-host-integration`).** Hermetic VM check of the `g:nixling:--x` traversal ACL on `/var/lib/nixling`: launcher-group member can stat/read a per-VM key, an outsider is denied stat/list, the launcher cannot list (traverse-only). Replaces the retired Layer-2 `state-dir-acl-runtime.sh` + its self-hosted `nixling-sudo` workflow. |
-| `tests/nixos/bridge-isolation.nix`    | **runNixOSTest (`make test-host-integration`).** Hermetic VM check of Linux bridge isolation: the net-VM port stays reachable while workload ports stay isolated even after peer-style MAC spoofing. Replaces the retired `bridge-isolation-runtime.sh`. |
-| `tests/nixos/privilege-oracle.nix`    | **runNixOSTest (`make test-host-integration`).** Hermetic VM check of the live `nixling-priv-broker` posture: bounded `CapBnd`, empty `CapAmb`, seccomp filter active, `nixling.slice` cgroup placement — derived from the rendered systemd unit. Replaces the retired self-hosted `l1c-privilege-oracle.sh`. |
+| `tests/host-integration/daemon-smoke.nix`        | **runNixOSTest (`make test-host-integration`).** Hermetic VM check of the daemon-only end-state (ADR 0015): broker socket-activated, `nixlingd` binds `/run/nixling/public.sock`, the three required service/socket units present (the `nixling.slice` cgroup slice is allowed), no retired per-VM template / host-singleton / `microvms.target`. |
+| `tests/host-integration/state-dir-acl.nix`       | **runNixOSTest (`make test-host-integration`).** Hermetic VM check of the `g:nixling:--x` traversal ACL on `/var/lib/nixling`: launcher-group member can stat/read a per-VM key, an outsider is denied stat/list, the launcher cannot list (traverse-only). Replaces the retired Layer-2 `state-dir-acl-runtime.sh` + its self-hosted `nixling-sudo` workflow. |
+| `tests/host-integration/bridge-isolation.nix`    | **runNixOSTest (`make test-host-integration`).** Hermetic VM check of Linux bridge isolation: the net-VM port stays reachable while workload ports stay isolated even after peer-style MAC spoofing. Replaces the retired `bridge-isolation-runtime.sh`. |
+| `tests/host-integration/privilege-oracle.nix`    | **runNixOSTest (`make test-host-integration`).** Hermetic VM check of the live `nixling-priv-broker` posture: bounded `CapBnd`, empty `CapAmb`, seccomp filter active, `nixling.slice` cgroup placement — derived from the rendered systemd unit. Replaces the retired self-hosted `l1c-privilege-oracle.sh`. |
 | `tests/legacy-unit-denylist-eval.sh`  | Fail-closed gate: no example's `nixos-rebuild dry-build` output emits a retired per-VM systemd template or host-singleton framework service (ADR 0015). |
 | `tests/adr-0015-presence-eval.sh`     | Asserts the daemon-only ADR exists, carries the canonical header, and is cross-referenced from `AGENTS.md`. |
 | `tests/agents-md-rewrite-eval.sh`     | Asserts `AGENTS.md` does not describe the legacy bash CLI or retired per-VM systemd templates as live framework surfaces. |
-| `tests/nixling-store.sh`              | Layer 2, optional. Per-VM `/nix/store` hardlink farm + `nixling vm switch` lifecycle. Requires a live host. |
+| `tests/integration/live/nixling-store.sh`              | Layer 2, optional. Per-VM `/nix/store` hardlink farm + `nixling vm switch` lifecycle. Requires a live host. |
 | `tests/lib.sh`                        | Shared shell helpers (logging, skip-detection, root-path derivation).                        |
 
 The full layered overview, including Layer-2 integration tests, is in
@@ -793,7 +793,7 @@ by-release history.
 - Before `git worktree remove`, confirm the worktree's
   `packages/target/` is the shared-cache symlink (or absent), not a
   real per-worktree directory.
-- `tests/preflight-disk-space.sh` fails the wave when free disk under
+- `tests/tools/preflight-disk-space.sh` fails the wave when free disk under
   `$ROOT` drops below 10 GiB. Runs after the orphan reapers but BEFORE
   the rust toolchain bootstrap so the fail-closed guard cannot be
   bypassed by disk-consuming setup (W2fu4 H2).
@@ -815,7 +815,7 @@ Touch these only with a clear plan and a corresponding test run.
 | ----------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | Net VM networking / firewall        | `nixos-modules/net.nix` (the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp`, plus the per-env MTU/MSS and east-west wiring) | Net VM dual-stacks DHCP on its uplink, breaks NAT, or weakens same-env isolation unexpectedly. Validate with `tests/net-vm-network-eval.sh`. |
 | Per-VM `/nix/store` hardlink farm   | `nixos-modules/store.nix`, `/var/lib/nixling/vms/<vm>/store{,-meta}/`, `nixos-modules/processes-json.nix` (`virtiofsdRunner` ro-store `--shared-dir`), daemon `StoreSync` op + broker `store_view_farm` | The guest's `/nix/store` MUST be the per-VM closure-only farm `/var/lib/nixling/vms/<vm>/store`, never the host's full `/nix/store`: virtiofsd-ro-store's `--shared-dir` points at that farm (the `share.source == "/nix/store"` string stays as the eval-time sentinel — do not "simplify" it back to serving `/nix/store`, that re-leaks the whole host store to every guest). Requires `/var/lib/nixling` and `/nix/store` on the **same filesystem** — hardlinks can't cross FS boundaries; if split, `nixling vm switch` refuses with a fatal error. The broker builds the farm inside a private mount namespace where `/nix/store` is lazily detached (NixOS bind-mounts `/nix/store` on itself, so a same-`st_dev` cross-vfsmount `link(2)` returns `EXDEV` — recoverable, distinct from a fatal different-filesystem `EXDEV`); a `link(2)` `EMLINK` on a `--optimise`d store's saturated empty-file inode falls back to a byte copy. The daemon owns the sync; there is no per-VM `store-sync` unit. |
-| TPM persistence (per-VM swtpm)      | `/var/lib/nixling/vms/<vm>/swtpm/`; spawned via broker `SpawnRunner` from `packages/nixling-host/src/swtpm_argv.rs` and supervised by `nixlingd` as a child of the VM's DAG | Holds the per-VM TPM 2.0 NVRAM + EK seed. **Wiping it looks like device tampering to any IdP** (Entra ID, Intune, Bitlocker-style policies) and forces re-enrollment. Never zero it casually. The state directory's ACLs are asserted by `tests/smoke-eval-tpm.nix`. |
+| TPM persistence (per-VM swtpm)      | `/var/lib/nixling/vms/<vm>/swtpm/`; spawned via broker `SpawnRunner` from `packages/nixling-host/src/swtpm_argv.rs` and supervised by `nixlingd` as a child of the VM's DAG | Holds the per-VM TPM 2.0 NVRAM + EK seed. **Wiping it looks like device tampering to any IdP** (Entra ID, Intune, Bitlocker-style policies) and forces re-enrollment. Never zero it casually. The state directory's ACLs are asserted by `tests/unit/smoke/smoke-eval-tpm.nix`. |
 | USBIP passthrough                   | `nixos-modules/components/usbip.nix` (eval-time gating) + broker `UsbipBindFirewallRule` + `SpawnRunner` (per-busid attach process supervised by `nixlingd`) | Eval-time gating still scopes attach to opted-in envs (validated by `tests/usbip-gating-eval.sh`). At runtime, attach/detach runs through the broker — there is no per-env `nixling-sys-<env>-usbipd-*` socket. Misrouted attaches expose a YubiKey to the wrong env. |
 | GPU sidecar (graphics VMs)          | `nixos-modules/components/graphics.nix` + broker `SpawnRunner` for cloud-hypervisor on graphics VMs; pidfd handed back via `OpenPidfd` and supervised by `nixlingd` | Graphics VMs run cloud-hypervisor with the GPU device attached. Restarting `nixlingd` no longer terminates CH — pidfd handoff means the child outlives a daemon reconnect — but the broker spawn path is the only audited place CH is launched. Bypassing it breaks the audit trail. Validate with `tests/video-sidecar-hardening-eval.sh`. |
 | Video sidecar (graphics VMs)        | `nixos-modules/components/video/guest.nix`, `nixos-modules/processes-json.nix`, `pkgs/vhost-user-video/`, `packages/nixling-host/src/video_argv.rs`, broker `SpawnRunner{role: Video}` | `graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor `--vhost-user-media` + patched crosvm `device video-decoder --backend vaapi`. There is no per-VM video systemd unit, no stock crosvm/CH fallback, and no free-form video extra args. The video runner MUST use the dedicated `nixling-<vm>-video` principal, not `nixling-<vm>-gpu`, so broker/activation ACLs can deny host Wayland/PipeWire/Pulse sockets to video without breaking GPU cross-domain. The broker masks `/dev` for the video runner and exposes only the declared device allowlist: default `/dev/dri/renderD128`, plus `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` only when `graphics.videoNvidiaDecode = true`. `virtio_media` is a guest module, not a host `/proc/modules` preflight requirement. Firefox/VA-API uses the separate experimental `graphics.virglVideo` GPU path; it is default-off and must not be treated as stable video-sidecar coverage. Validate with `tests/video-contract-eval.sh`, `tests/video-argv-shape.sh`, and `tests/minijail-validator-video.sh`. |

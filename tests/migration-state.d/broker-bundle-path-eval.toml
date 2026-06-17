@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/broker-bundle-path.nix — 12 cases: host-broker/host-daemon bundle-path source-grep via readFile + bundle.json artifact ACL contract via mkEval introspection)"]
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/broker-bundle-path.nix — 12 cases: host-broker/host-daemon bundle-path source-grep via readFile + bundle.json artifact ACL contract via mkEval introspection)"]

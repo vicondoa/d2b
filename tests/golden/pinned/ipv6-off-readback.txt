@@ -3,7 +3,7 @@
 # #[test]s via substring filters (`cargo test -p nixling-host --all-features
 # -- <name>`); each name resolves to exactly one netlink::tests test, and
 # they already run in the gated `cargo test --workspace` pass in
-# tests/rust-workspace-checks.sh. Pinned fail-closed via
+# tests/tools/rust-workspace-checks.sh. Pinned fail-closed via
 # tests/tools/assert-pinned-tests.sh.
 netlink::tests::ipv6_off_sequence_runs_in_order
 netlink::tests::drift_after_write_fails_closed

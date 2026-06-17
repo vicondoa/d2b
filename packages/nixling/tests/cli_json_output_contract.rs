@@ -1,7 +1,7 @@
 //! CLI-output golden contract migrated from `tests/cli-json-drift.sh`.
 //!
 //! The schema-generation half of that shell gate now lives in
-//! `tests/drift-check.sh`; this test owns the committed
+//! `tests/unit/gates/drift-check.sh`; this test owns the committed
 //! `tests/golden/cli-output/*.golden` output contract that remained.  Existing
 //! CLI-contract tests already cover the daemon-only runtime semantics for the
 //! list/status/audit/host-check/auth/usb surfaces; this module adds golden

@@ -6,7 +6,7 @@
 //! Both gates validate the RENDERED minijail role profiles plus a handful of
 //! `nixos-modules/minijail-profiles.nix` source-shape pins, so they belong in
 //! the fixture-contract layer (this crate, gated by the NL_FIXTURES /
-//! NL_FIXTURES_FULL contract steps in `tests/rust-workspace-checks.sh`), not the
+//! NL_FIXTURES_FULL contract steps in `tests/tools/rust-workspace-checks.sh`), not the
 //! doc/source-grep policy layer.
 //!
 //! The audio + usbip profiles are FEATURE-RICH: they only render on a VM with

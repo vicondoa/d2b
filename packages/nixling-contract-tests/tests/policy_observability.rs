@@ -4,7 +4,7 @@
 //! a structural / documentation invariant over the native SigNoz/OpenTelemetry
 //! observability modules, the host-activation/secrets wiring, and the
 //! readiness-wave evidence schema. This crate runs only from
-//! `tests/rust-workspace-checks.sh` against the real checkout (it is excluded
+//! `tests/tools/rust-workspace-checks.sh` against the real checkout (it is excluded
 //! from the hermetic Nix sandbox workspace build), so repo-file access is
 //! sound here.
 //!

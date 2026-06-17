@@ -3,7 +3,7 @@
 # assertions ran these broker #[test]s via substring filters
 # (`cargo test --all-features -- <name>` in packages/nixling-priv-broker);
 # each name resolves to exactly one test below, and they already run in the
-# broker layer1-bootstrap pass in tests/rust-workspace-checks.sh. Pinned
+# broker layer1-bootstrap pass in tests/tools/rust-workspace-checks.sh. Pinned
 # fail-closed via tests/tools/assert-pinned-tests.sh.
 #
 # (The gate's trailing `--features fake-backends -- path_safety_violation`

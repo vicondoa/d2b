@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["cargo test --workspace (nixling-host cgroup::tests::* delegation canaries) + broker test pass (nixling-priv-broker ops::cgroup::tests::* delegation/audit canaries) — already gated in tests/rust-workspace-checks.sh", "tests/golden/pinned/cgroup-delegation-oracle.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["cargo test --workspace (nixling-host cgroup::tests::* delegation canaries) + broker test pass (nixling-priv-broker ops::cgroup::tests::* delegation/audit canaries) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/cgroup-delegation-oracle.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]

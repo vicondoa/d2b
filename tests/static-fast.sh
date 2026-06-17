@@ -41,7 +41,7 @@ export ROOT
 export FLAKE=${FLAKE:-$ROOT}
 export NL_STATIC_CACHE="$ROOT/.static-fast-cache.bootstrap"
 
-# shellcheck source=lib.sh
+# shellcheck source=tests/lib.sh
 . "$HERE/lib.sh"
 
 # Honor the same inter-process serializer as tests/static.sh so two
@@ -106,7 +106,7 @@ run_script_gate_if_present() {
 # ---------------------------------------------------------------------------
 # Preflight
 # ---------------------------------------------------------------------------
-run_script_gate_if_present "tests/preflight-disk-space.sh" "$ROOT/tests/preflight-disk-space.sh"
+run_script_gate_if_present "tests/tools/preflight-disk-space.sh" "$ROOT/tests/tools/preflight-disk-space.sh"
 
 # ---------------------------------------------------------------------------
 # Parse + lint
@@ -157,20 +157,15 @@ run_gate "nix flake check --no-build --all-systems" "
 # ---------------------------------------------------------------------------
 # Rust workspace
 # ---------------------------------------------------------------------------
-run_script_gate_if_present "tests/rust-workspace-checks.sh" "$ROOT/tests/rust-workspace-checks.sh"
+run_script_gate_if_present "tests/tools/rust-workspace-checks.sh" "$ROOT/tests/tools/rust-workspace-checks.sh"
 
 # ---------------------------------------------------------------------------
 #  bundle/schema static gates (pure shell + small Nix evals)
 # ---------------------------------------------------------------------------
 log "==> Bundle/schema static gates"
-for gate in \
-  drift-check \
-  vms-json-parity \
-  static-invariant-uid0; do
-  if [ -x "$ROOT/tests/$gate.sh" ]; then
-    run_gate "tests/$gate.sh" "bash '$ROOT/tests/$gate.sh'"
-  fi
-done
+run_script_gate_if_present "tests/unit/gates/drift-check.sh" "$ROOT/tests/unit/gates/drift-check.sh"
+run_script_gate_if_present "tests/unit/gates/vms-json-parity.sh" "$ROOT/tests/unit/gates/vms-json-parity.sh"
+run_script_gate_if_present "tests/static-invariant-uid0.sh" "$ROOT/tests/static-invariant-uid0.sh"
 
 # ---------------------------------------------------------------------------
 #  Host-prepare gates (mostly pure shell; some need cargo)

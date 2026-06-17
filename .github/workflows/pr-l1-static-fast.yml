@@ -15,13 +15,13 @@ jobs:
       - name: Tier 0 first-pass gate
         run: make check-tier0
       - name: ADR index coverage guard
-        run: bash tests/adr-index-coverage.sh
+        run: bash tests/unit/meta/adr-index-coverage.sh
       - name: CI coverage structural guard
-        run: bash tests/ci-coverage.sh
+        run: bash tests/unit/meta/ci-coverage.sh
       - name: Test rearchitecture fail-closed gates
         run: |
           bash tests/tools/gen-migration-ledger.sh --check
-          bash tests/ci-uses-make.sh
+          bash tests/unit/meta/ci-uses-make.sh
 
   static-fast:
     needs: tier0

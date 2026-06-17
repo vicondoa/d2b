@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["packages/nixlingd/tests/daemon_state_lock.rs::daemon_state_lock::{lock_file_created_with_current_user_0640,second_lock_holder_exits_already_running,symlink_lock_parent_is_rejected} — default cargo test --workspace via tests/rust-workspace-checks.sh", "tests/golden/pinned/daemon-state-lock.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["packages/nixlingd/tests/daemon_state_lock.rs::daemon_state_lock::{lock_file_created_with_current_user_0640,second_lock_holder_exits_already_running,symlink_lock_parent_is_rejected} — default cargo test --workspace via tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/daemon-state-lock.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]

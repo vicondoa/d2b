@@ -7,7 +7,7 @@
 //! feature-enabled sidecars (per-VM swtpm 2.0 + the daemon-spawned
 //! vhost-user-media video decoder), so they belong in the fixture-contract
 //! layer (this crate, gated by the NL_FIXTURES / NL_FIXTURES_FULL contract
-//! step in `tests/rust-workspace-checks.sh`), not the doc/source-grep policy
+//! step in `tests/tools/rust-workspace-checks.sh`), not the doc/source-grep policy
 //! layer.
 //!
 //! Fixture split (KEY): swtpm + video profiles only render on a VM that

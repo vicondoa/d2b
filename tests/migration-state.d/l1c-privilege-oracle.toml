@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["vmChecks.<system>.privilege-oracle (tests/nixos/privilege-oracle.nix — hermetic runNixOSTest asserting the live nixling-priv-broker /proc posture: bounded CapBnd, empty CapAmb, seccomp filter active, nixling.slice cgroup placement, derived from the rendered systemd unit)"]
+successor_ids = ["vmChecks.<system>.privilege-oracle (tests/host-integration/privilege-oracle.nix — hermetic runNixOSTest asserting the live nixling-priv-broker /proc posture: bounded CapBnd, empty CapAmb, seccomp filter active, nixling.slice cgroup placement, derived from the rendered systemd unit)"]

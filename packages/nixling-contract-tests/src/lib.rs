@@ -102,7 +102,7 @@ pub fn load_bundle_resolver_from_env() -> BundleResolver {
 // Repo-file access for the policy/source/doc-lint layer (the H-group gates).
 //
 // This crate is excluded from the hermetic Nix sandbox workspace build and
-// runs only from tests/rust-workspace-checks.sh against the real checkout, so
+// runs only from tests/tools/rust-workspace-checks.sh against the real checkout, so
 // reading repo files relative to CARGO_MANIFEST_DIR is sound here (it is NOT
 // sound for crates built in the sandbox).
 // ---------------------------------------------------------------------------

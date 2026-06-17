@@ -6,7 +6,7 @@
 //! WaylandProxy sidecar roles plus the source-of-truth wiring that grounds
 //! them, so they belong in the fixture-contract layer (this crate, gated by the
 //! NL_FIXTURES / NL_FIXTURES_FULL contract step in
-//! `tests/rust-workspace-checks.sh`), not the doc/source-grep policy layer.
+//! `tests/tools/rust-workspace-checks.sh`), not the doc/source-grep policy layer.
 //!
 //! The Gpu and WaylandProxy role profiles only render on a graphics-enabled VM,
 //! which the MINIMAL fixture-smoke bundle (corp-vm + net VMs) does not contain.

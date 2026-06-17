@@ -1,17 +1,17 @@
 # tests/static.sh timing
 wall           cumulative     label
 00:00.974      00:00.974      shared rust toolchain bootstrap
-00:00.048      00:01.040      tests/preflight-disk-space.sh
+00:00.048      00:01.040      tests/tools/preflight-disk-space.sh
 00:01.589      00:02.712      nix-instantiate --parse
 00:06.298      00:09.025      shellcheck --severity=warning on all nixling shell scripts
 00:00.793      00:09.835      readOnly + default + config trio lint
 01:01.164      01:11.019      nix flake check --no-build --all-systems
-00:18.083      01:29.117      tests/smoke-eval.nix
-00:19.739      01:30.878      tests/smoke-eval-extraspecialargs.nix
-00:20.827      01:31.934      tests/smoke-eval-home-manager.nix
-00:21.195      01:32.265      tests/smoke-eval-graphics.nix
-00:21.856      01:51.023      tests/smoke-eval-aarch64.nix
-00:45.539      01:56.709      tests/smoke-eval-tpm.nix
+00:18.083      01:29.117      tests/unit/smoke/smoke-eval.nix
+00:19.739      01:30.878      tests/unit/smoke/smoke-eval-extraspecialargs.nix
+00:20.827      01:31.934      tests/unit/smoke/smoke-eval-home-manager.nix
+00:21.195      01:32.265      tests/unit/smoke/smoke-eval-graphics.nix
+00:21.856      01:51.023      tests/unit/smoke/smoke-eval-aarch64.nix
+00:45.539      01:56.709      tests/unit/smoke/smoke-eval-tpm.nix
 00:15.359      02:12.095      tests/net-vm-network-eval.sh
 00:17.821      02:14.699      tests/autostart-wiring-eval.sh
 00:28.319      02:27.313      tests/restart-policy-eval.sh
@@ -22,8 +22,8 @@ wall           cumulative     label
 04:42.005      15:02.698      tests/observability-eval.sh
 00:15.721      15:18.425      manifest JSON contract (docs/reference/manifest-schema.json)
 00:00.013      15:18.608      audio component
-00:04.066      15:22.697      tests/layer1-self-inventory.sh
-00:56.578      16:19.287      tests/rust-workspace-checks.sh
+00:04.066      15:22.697      tests/unit/meta/layer1-self-inventory.sh
+00:56.578      16:19.287      tests/tools/rust-workspace-checks.sh
 00:19.126      16:38.446      W1 smoke cache prewarm
 00:00.146      16:38.611      tests/bundle-drift.sh
 00:00.427      16:38.978      tests/static-invariant-broad-caps.sh
@@ -32,7 +32,7 @@ wall           cumulative     label
 00:00.079      16:39.186      tests/static-invariant-world-readable-leak.sh
 00:00.119      16:39.262      tests/static-invariant-opaque-key-ids.sh
 00:02.803      16:42.042      tests/privileges-matrix-completeness.sh
-00:10.370      16:48.860      tests/vms-json-parity.sh
+00:10.370      16:48.860      tests/unit/gates/vms-json-parity.sh
 00:14.937      16:54.057      tests/static-invariant-deny-unknown-fields.sh
 00:34.792      16:54.096      W1 bundle/schema static gates
 00:10.519      17:04.756      W2 cargo prebuild

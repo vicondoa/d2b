@@ -3,7 +3,7 @@
 # `cargo test -p nixling-host --all-features --lib runner_shape::tests::<t>`
 # over these names (nixling-host's fake-backends is #[cfg(any(test, feature))]
 # so they run under the default `cargo test --workspace` pass in
-# tests/rust-workspace-checks.sh). Pinned fail-closed via
+# tests/tools/rust-workspace-checks.sh). Pinned fail-closed via
 # tests/tools/assert-pinned-tests.sh.
 runner_shape::tests::happy_path_yields_only_ok_finding
 runner_shape::tests::missing_declared_runner_fails_closed

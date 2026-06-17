@@ -25,7 +25,7 @@ export FLAKE=${FLAKE:-$ROOT}
 # a fallback smoke cache that would then be mistaken for an orphan.
 export NL_STATIC_CACHE="$ROOT/.static-cache.bootstrap"
 
-# shellcheck source=lib.sh
+# shellcheck source=tests/lib.sh
 . "$HERE/lib.sh"
 
 # Coarse-grained inter-process serializer. Concurrent invocations of
@@ -387,14 +387,14 @@ reap_known_static_orphans
 # bootstrap below pulls multi-GiB into /nix/store via nix shell). Runs
 # AFTER the orphan reapers above so a recoverable-by-reap situation
 # isn't flagged spuriously, but BEFORE any nix-store realisation work.
-nl_static_gate_begin "tests/preflight-disk-space.sh" "tests/preflight-disk-space.sh"
-if [ -x "$ROOT/tests/preflight-disk-space.sh" ]; then
-  bash "$ROOT/tests/preflight-disk-space.sh"
+nl_static_gate_begin "tests/tools/preflight-disk-space.sh" "tests/tools/preflight-disk-space.sh"
+if [ -x "$ROOT/tests/tools/preflight-disk-space.sh" ]; then
+  bash "$ROOT/tests/tools/preflight-disk-space.sh"
   ok "preflight-disk-space"
 else
-  log "  SKIP: tests/preflight-disk-space.sh (not present)"
+  log "  SKIP: tests/tools/preflight-disk-space.sh (not present)"
 fi
-nl_static_gate_end "tests/preflight-disk-space.sh"
+nl_static_gate_end "tests/tools/preflight-disk-space.sh"
 
 if [ -d "$ROOT/packages" ] && [ -f "$ROOT/packages/rust-toolchain.toml" ]; then
   nl_time_begin "shared rust toolchain bootstrap"
@@ -435,7 +435,7 @@ export GIT_CONFIG_VALUE_0="$ROOT"
 NL_STATIC_CACHE=$(nl_mktemp .static-cache.XXXXXX)
 export NL_STATIC_CACHE
 
-# shellcheck source=cli-rust-native-common.sh
+# shellcheck source=tests/cli-rust-native-common.sh
 . "$HERE/cli-rust-native-common.sh"
 
 # -----------------------------------------------------------------------------
@@ -458,10 +458,10 @@ export NL_STATIC_CACHE
 # cargo target dir; the gate's entire $ROOT footprint is gitignored, so
 # concurrent git-fetcher flake evals never stat it.
 _STATIC_RUST_GATE_OVERLAP=0
-if [ -n "${NL_STATIC_PARALLEL_RUST:-}" ] && [ -d "$ROOT/packages" ] && [ -x "$HERE/rust-workspace-checks.sh" ]; then
+if [ -n "${NL_STATIC_PARALLEL_RUST:-}" ] && [ -d "$ROOT/packages" ] && [ -x "$ROOT/tests/tools/rust-workspace-checks.sh" ]; then
   _STATIC_RUST_GATE_OVERLAP=1
   log "==> launching rust-workspace-checks.sh as background long pole (NL_STATIC_PARALLEL_RUST=1; overlaps flake check + smoke evals)"
-  nl_static_longpole_spawn "tests/rust-workspace-checks.sh" bash "$HERE/rust-workspace-checks.sh"
+  nl_static_longpole_spawn "tests/tools/rust-workspace-checks.sh" bash "$ROOT/tests/tools/rust-workspace-checks.sh"
 fi
 
 log "==> Layer 1: parse + eval"
@@ -514,11 +514,11 @@ NL_FILES=(
   nixos-modules/components/observability/guest.nix
   nixos-modules/components/observability/host.nix
   nixos-modules/components/observability/stack.nix
-  tests/smoke-eval-aarch64.nix
-  tests/smoke-eval-graphics.nix
-  tests/smoke-eval-home-manager.nix
-  tests/smoke-eval-extraspecialargs.nix
-  tests/smoke-eval-tpm.nix
+  tests/unit/smoke/smoke-eval-aarch64.nix
+  tests/unit/smoke/smoke-eval-graphics.nix
+  tests/unit/smoke/smoke-eval-home-manager.nix
+  tests/unit/smoke/smoke-eval-extraspecialargs.nix
+  tests/unit/smoke/smoke-eval-tpm.nix
   flake.nix
 )
 nl_static_gate_begin "nix-instantiate --parse" "nix-instantiate --parse"
@@ -675,39 +675,39 @@ nl_static_gate_end "nix flake check --no-build --all-systems"
 # These eval-only smoke checks are independent, so run them behind the
 # shared NL_STATIC_JOBS semaphore.
 nl_static_parallel_smoke_eval_gate \
-  "tests/smoke-eval.nix" \
-  "$ROOT/tests/smoke-eval.nix" \
-  "let f = import $ROOT/tests/smoke-eval.nix; r = f {}; in r.drvPath" \
+  "tests/unit/smoke/smoke-eval.nix" \
+  "$ROOT/tests/unit/smoke/smoke-eval.nix" \
+  "let f = import $ROOT/tests/unit/smoke/smoke-eval.nix; r = f {}; in r.drvPath" \
   "smoke-eval" \
   20
 nl_static_parallel_smoke_eval_gate \
-  "tests/smoke-eval-graphics.nix" \
-  "$ROOT/tests/smoke-eval-graphics.nix" \
-  "let f = import $ROOT/tests/smoke-eval-graphics.nix; r = f {}; in r.drvPath" \
+  "tests/unit/smoke/smoke-eval-graphics.nix" \
+  "$ROOT/tests/unit/smoke/smoke-eval-graphics.nix" \
+  "let f = import $ROOT/tests/unit/smoke/smoke-eval-graphics.nix; r = f {}; in r.drvPath" \
   "smoke-eval-graphics" \
   20
 nl_static_parallel_smoke_eval_gate \
-  "tests/smoke-eval-home-manager.nix" \
-  "$ROOT/tests/smoke-eval-home-manager.nix" \
-  "let f = import $ROOT/tests/smoke-eval-home-manager.nix; r = f {}; in r.drvPath" \
+  "tests/unit/smoke/smoke-eval-home-manager.nix" \
+  "$ROOT/tests/unit/smoke/smoke-eval-home-manager.nix" \
+  "let f = import $ROOT/tests/unit/smoke/smoke-eval-home-manager.nix; r = f {}; in r.drvPath" \
   "smoke-eval-home-manager" \
   20
 nl_static_parallel_smoke_eval_gate \
-  "tests/smoke-eval-extraspecialargs.nix" \
-  "$ROOT/tests/smoke-eval-extraspecialargs.nix" \
-  "let f = import $ROOT/tests/smoke-eval-extraspecialargs.nix; r = f {}; in r.drvPath" \
+  "tests/unit/smoke/smoke-eval-extraspecialargs.nix" \
+  "$ROOT/tests/unit/smoke/smoke-eval-extraspecialargs.nix" \
+  "let f = import $ROOT/tests/unit/smoke/smoke-eval-extraspecialargs.nix; r = f {}; in r.drvPath" \
   "smoke-eval-extraspecialargs" \
   20
 nl_static_parallel_smoke_eval_gate \
-  "tests/smoke-eval-tpm.nix" \
-  "$ROOT/tests/smoke-eval-tpm.nix" \
-  "let f = import $ROOT/tests/smoke-eval-tpm.nix; r = f {}; in r.drvPath" \
+  "tests/unit/smoke/smoke-eval-tpm.nix" \
+  "$ROOT/tests/unit/smoke/smoke-eval-tpm.nix" \
+  "let f = import $ROOT/tests/unit/smoke/smoke-eval-tpm.nix; r = f {}; in r.drvPath" \
   "smoke-eval-tpm" \
   20
 nl_static_parallel_smoke_eval_gate \
-  "tests/smoke-eval-aarch64.nix" \
-  "$ROOT/tests/smoke-eval-aarch64.nix" \
-  "let f = import $ROOT/tests/smoke-eval-aarch64.nix; r = f {}; in r.drvPath" \
+  "tests/unit/smoke/smoke-eval-aarch64.nix" \
+  "$ROOT/tests/unit/smoke/smoke-eval-aarch64.nix" \
+  "let f = import $ROOT/tests/unit/smoke/smoke-eval-aarch64.nix; r = f {}; in r.drvPath" \
   "smoke-eval-aarch64" \
   20
 nl_static_parallel_wait_all
@@ -787,14 +787,14 @@ if [ -x "$ROOT/tests/daemon-default-compat-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/daemon-default-compat-eval.sh" "$ROOT/tests/daemon-default-compat-eval.sh"
 fi
 # ADR index coverage guard (/ -class doc-drift).
-if [ -x "$ROOT/tests/adr-index-coverage.sh" ]; then
-  nl_static_parallel_script_gate "tests/adr-index-coverage.sh" "$ROOT/tests/adr-index-coverage.sh"
+if [ -x "$ROOT/tests/unit/meta/adr-index-coverage.sh" ]; then
+  nl_static_parallel_script_gate "tests/unit/meta/adr-index-coverage.sh" "$ROOT/tests/unit/meta/adr-index-coverage.sh"
 fi
 # I3 invariant enforcement (ADR 0022): no new v1.3 deferrals authored
 # during v1.2 stabilization. ADR 0022 documents this gate, so it must
 # stay wired.
-if [ -x "$ROOT/tests/no-new-deferral.sh" ]; then
-  nl_static_parallel_script_gate "tests/no-new-deferral.sh" "$ROOT/tests/no-new-deferral.sh"
+if [ -x "$ROOT/tests/unit/meta/no-new-deferral.sh" ]; then
+  nl_static_parallel_script_gate "tests/unit/meta/no-new-deferral.sh" "$ROOT/tests/unit/meta/no-new-deferral.sh"
 fi
 if [ -x "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/privileges-json-rust-vs-nix-eval.sh" "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh"
@@ -814,18 +814,18 @@ for _gate in \
 done
 unset _gate
 # deliverable-gate-inventory + pr-checklist-gate are invoked literally (not via
-# the loop above) so tests/layer1-self-inventory.sh's invocation grep resolves
+# the loop above) so tests/unit/meta/layer1-self-inventory.sh's invocation grep resolves
 # them.
-if [ -x "$ROOT/tests/deliverable-gate-inventory.sh" ]; then
-  nl_static_parallel_script_gate "tests/deliverable-gate-inventory.sh" "$ROOT/tests/deliverable-gate-inventory.sh"
+if [ -x "$ROOT/tests/unit/meta/deliverable-gate-inventory.sh" ]; then
+  nl_static_parallel_script_gate "tests/unit/meta/deliverable-gate-inventory.sh" "$ROOT/tests/unit/meta/deliverable-gate-inventory.sh"
 fi
-if [ -x "$ROOT/tests/pr-checklist-gate.sh" ]; then
-  nl_static_parallel_script_gate "tests/pr-checklist-gate.sh" "$ROOT/tests/pr-checklist-gate.sh"
+if [ -x "$ROOT/tests/unit/meta/pr-checklist-gate.sh" ]; then
+  nl_static_parallel_script_gate "tests/unit/meta/pr-checklist-gate.sh" "$ROOT/tests/unit/meta/pr-checklist-gate.sh"
 fi
 # ci-coverage.sh structural guard (must run after all other tests
 # are registered above so it can attest the full set is wired).
-if [ -x "$ROOT/tests/ci-coverage.sh" ]; then
-  nl_static_parallel_script_gate "tests/ci-coverage.sh" "$ROOT/tests/ci-coverage.sh"
+if [ -x "$ROOT/tests/unit/meta/ci-coverage.sh" ]; then
+  nl_static_parallel_script_gate "tests/unit/meta/ci-coverage.sh" "$ROOT/tests/unit/meta/ci-coverage.sh"
 fi
 nl_static_parallel_wait_all
 
@@ -871,7 +871,7 @@ nl_check_disk_budget "post-eval-gates" || fail "disk budget exhausted after eval
 # else in the test harness depends on Python today, but the jsonschema
 # package is small (~50KB) and pulled lazily on first run.
 nl_static_gate_begin "manifest JSON contract (docs/reference/manifest-schema.json)" "manifest JSON contract (docs/reference/manifest-schema.json)"
-if [ -f "$ROOT/docs/reference/manifest-schema.json" ] && [ -f "$ROOT/tests/smoke-eval.nix" ]; then
+if [ -f "$ROOT/docs/reference/manifest-schema.json" ] && [ -f "$ROOT/tests/unit/smoke/smoke-eval.nix" ]; then
   _MANIFEST_DIR=$(nl_mktemp .manifest-gate.XXXXXX)
   _MANIFEST_JSON="$_MANIFEST_DIR/manifest.json"
 
@@ -1143,22 +1143,22 @@ log "Layer 1 core gates OK"
 # flake checks so adding a new executable Layer-1 tests/*.sh script without
 # wiring it into static.sh fails closed.
 # -----------------------------------------------------------------------------
-nl_static_gate_begin "tests/layer1-self-inventory.sh" "tests/layer1-self-inventory.sh"
-if [ -x "$HERE/layer1-self-inventory.sh" ]; then
-  if bash "$HERE/layer1-self-inventory.sh" >/dev/null 2>&1; then
+nl_static_gate_begin "tests/unit/meta/layer1-self-inventory.sh" "tests/unit/meta/layer1-self-inventory.sh"
+if [ -x "$ROOT/tests/unit/meta/layer1-self-inventory.sh" ]; then
+  if bash "$ROOT/tests/unit/meta/layer1-self-inventory.sh" >/dev/null 2>&1; then
     ok "layer1-self-inventory"
   else
-    bash "$HERE/layer1-self-inventory.sh" 2>&1 | tail -40 >&2 || true
+    bash "$ROOT/tests/unit/meta/layer1-self-inventory.sh" 2>&1 | tail -40 >&2 || true
     fail "layer1-self-inventory"
   fi
 fi
-nl_static_gate_end "tests/layer1-self-inventory.sh"
+nl_static_gate_end "tests/unit/meta/layer1-self-inventory.sh"
 
 # -----------------------------------------------------------------------------
 # Rust workspace gate. By default (serial) this runs inline here. When the
 # optional NL_STATIC_PARALLEL_RUST overlap launched the background long pole, it
 # was already joined above (after the smoke-eval region, before the heavy
-# evals), so this is a no-op in that case. tests/stub-no-socket.sh is invoked by
+# evals), so this is a no-op in that case. tests/tools/stub-no-socket.sh is invoked by
 # rust-workspace-checks.sh after the cargo gates.
 # -----------------------------------------------------------------------------
 if [ "$_STATIC_RUST_GATE_OVERLAP" -eq 2 ]; then
@@ -1169,12 +1169,12 @@ elif [ "$_STATIC_RUST_GATE_OVERLAP" -eq 1 ]; then
   log "==> joining background rust-workspace-checks.sh long pole"
   nl_static_longpole_join
 else
-  nl_static_gate_begin "tests/rust-workspace-checks.sh" "tests/rust-workspace-checks.sh"
-  if [ -d "$ROOT/packages" ] && [ -x "$HERE/rust-workspace-checks.sh" ]; then
-    if bash "$HERE/rust-workspace-checks.sh" >/dev/null 2>&1; then
+  nl_static_gate_begin "tests/tools/rust-workspace-checks.sh" "tests/tools/rust-workspace-checks.sh"
+  if [ -d "$ROOT/packages" ] && [ -x "$ROOT/tests/tools/rust-workspace-checks.sh" ]; then
+    if bash "$ROOT/tests/tools/rust-workspace-checks.sh" >/dev/null 2>&1; then
       ok "rust-workspace-checks"
     else
-      bash "$HERE/rust-workspace-checks.sh" 2>&1 | tail -80 >&2 || true
+      bash "$ROOT/tests/tools/rust-workspace-checks.sh" 2>&1 | tail -80 >&2 || true
       fail "rust-workspace-checks"
     fi
   elif [ -d "$ROOT/packages" ]; then
@@ -1182,7 +1182,7 @@ else
   else
     log "  no packages/ — skipping rust workspace checks (W0a unstaged)"
   fi
-  nl_static_gate_end "tests/rust-workspace-checks.sh"
+  nl_static_gate_end "tests/tools/rust-workspace-checks.sh"
 fi
 
 # -----------------------------------------------------------------------------
@@ -1200,9 +1200,9 @@ nl_smoke_bundle_privileges_json >/dev/null
 # gates still hold per-test scratch files inside the checkout.
 nl_smoke_bundle_host_json >/dev/null
 nl_time_end "W1 smoke cache prewarm"
-if [ -x "$HERE/drift-check.sh" ]; then nl_static_parallel_script "tests/drift-check.sh" "$HERE/drift-check.sh"; fi
+if [ -x "$ROOT/tests/unit/gates/drift-check.sh" ]; then nl_static_parallel_script "tests/unit/gates/drift-check.sh" "$ROOT/tests/unit/gates/drift-check.sh"; fi
 # host.json per-field schema gold-file drift gate (integrator-wired).
-if [ -x "$HERE/vms-json-parity.sh" ]; then nl_static_parallel_script "tests/vms-json-parity.sh" "$HERE/vms-json-parity.sh"; fi
+if [ -x "$ROOT/tests/unit/gates/vms-json-parity.sh" ]; then nl_static_parallel_script "tests/unit/gates/vms-json-parity.sh" "$ROOT/tests/unit/gates/vms-json-parity.sh"; fi
 if [ -x "$HERE/guest-control-vsock-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-eval.sh" "$HERE/guest-control-vsock-eval.sh"; fi
 if [ -x "$HERE/guest-control-auth-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-auth-eval.sh" "$HERE/guest-control-auth-eval.sh"; fi
 if [ -x "$HERE/static-invariant-uid0.sh" ]; then nl_static_parallel_script "tests/static-invariant-uid0.sh" "$HERE/static-invariant-uid0.sh"; fi
@@ -1284,7 +1284,7 @@ nl_static_parallel_wait_all
 nl_static_gate_end "W3 host-prepare gates"
 
 nl_static_gate_begin "L1c and performance canaries" "L1c and performance canaries"
-if [ -x "$HERE/performance-budgets.sh" ]; then bash "$HERE/performance-budgets.sh" || fail "performance-budgets"; fi
+if [ -x "$ROOT/tests/unit/gates/performance-budgets.sh" ]; then bash "$ROOT/tests/unit/gates/performance-budgets.sh" || fail "performance-budgets"; fi
 nl_static_gate_end "L1c and performance canaries"
 
 # Gc before per-example flake-check, which is the heaviest

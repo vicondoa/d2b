@@ -173,7 +173,7 @@
       # Nix and run with podman, rootless. Exposed under `containerImages`,
       # NOT `checks`, so the Layer-1 `nix flake check --no-build --all-systems`
       # never builds an image. The `make test-integration` target
-      # (tests/containers/*.sh, driven via podman) builds + runs them; the same
+      # (tests/integration/containers/*.sh, driven via podman) builds + runs them; the same
       # target runs on a GitHub Actions ubuntu-latest job (podman is
       # preinstalled there) and locally.
       #
@@ -182,18 +182,18 @@
       # It deliberately does NOT boot systemd for daemon/socket activation;
       # that is covered natively by
       # packages/nixling-priv-broker/tests/socket_activation.rs plus nix-unit.
-      # See tests/containers/README.md.
+      # See tests/integration/containers/README.md.
       #
-      # Auto-discovered from tests/containers/images/*.nix: each image module is
+      # Auto-discovered from tests/integration/containers/images/*.nix: each image module is
       # `{ pkgs, self, system }: <dockerTools-built OCI image>`, so adding a new
-      # container test is one new image file + its tests/containers/<name>.sh
+      # container test is one new image file + its tests/integration/containers/<name>.sh
       # runner — no edit here. x86_64-linux only (the project's CI runners +
       # this host are x86_64; aarch64 images need an aarch64 builder).
       containerImages = forAllSystems (system:
         if system == "x86_64-linux" then
           let
             pkgs = nixpkgsFor.${system};
-            imageDir = ./tests/containers/images;
+            imageDir = ./tests/integration/containers/images;
             imageFiles = if builtins.pathExists imageDir
               then builtins.attrNames (nixpkgs.lib.filterAttrs
                 (name: type: type == "regular" && nixpkgs.lib.hasSuffix ".nix" name)
@@ -219,7 +219,7 @@
       # `make test-host-integration` (`nix build .#vmChecks.<system>.<name>`),
       # which needs KVM (a local NixOS host; TCG fallback otherwise).
       #
-      # Auto-discovered from tests/nixos/*.nix (excluding lib.nix): each test is
+      # Auto-discovered from tests/host-integration/*.nix (excluding lib.nix): each test is
       # `{ pkgs, self }: pkgs.testers.runNixOSTest { ... }`, so adding a VM test
       # is one new file — no edit here. x86_64-linux only: a runNixOSTest VM is
       # built + booted for the builder's own system, and the hosted CI runners
@@ -228,7 +228,7 @@
         if system == "x86_64-linux" then
           let
             pkgs = nixpkgsFor.${system};
-            testDir = ./tests/nixos;
+            testDir = ./tests/host-integration;
             testFiles = if builtins.pathExists testDir
               then builtins.attrNames (nixpkgs.lib.filterAttrs
                 (name: type:
@@ -554,18 +554,18 @@
         '';
 
         # --- W2 nix-unit layer -------------------------------------------
-        # Hermetic pure-eval comparison runner over the tests/nix-unit
+        # Hermetic pure-eval comparison runner over the tests/unit/nix
         # corpus ({ expr; expected; } / { expr; expectedError; } cases).
         # NO recursive-nix / IFD: each case is compared at flake-eval time
         # and the verdict baked into a tiny runCommand. The same corpus is
         # CLI-compatible with upstream `nix-unit` for local iteration.
-        nixUnitCases = import ./tests/nix-unit {
+        nixUnitCases = import ./tests/unit/nix {
           lib = pkgs.lib;
           inherit pkgs system;
           flakeRoot = ./.;
           nl = import ./nixos-modules/lib.nix { lib = pkgs.lib; };
           inherit mkEval;
-          # Direct-injection handles for tests/eval-cases/shared.nix (the
+          # Direct-injection handles for tests/unit/nix/eval-cases/shared.nix (the
           # minimal lib.evalModules fast evaluator) — passing the nixpkgs
           # flake input + the nixling module set avoids a `getFlake ./.`
           # (which would resolve to a non-git store path inside the flake).
@@ -648,8 +648,8 @@
             throw "nix-unit: required per-system pin file ${toString path} is missing — every supported system commits one (header-only is fine); run `make nix-unit-pin`"
           else pinNames path;
         nixUnitPinned =
-          (readPinsRequiredNonEmpty ./tests/nix-unit/pinned/common.txt)
-          ++ (readPinsRequiredExist (./tests/nix-unit/pinned + "/${system}.txt"));
+          (readPinsRequiredNonEmpty ./tests/unit/nix/pinned/common.txt)
+          ++ (readPinsRequiredExist (./tests/unit/nix/pinned + "/${system}.txt"));
         nixUnitMissingPins =
           pkgs.lib.filter (n: !(builtins.elem n nixUnitCaseNames)) nixUnitPinned;
         nixUnitMissingReport = pkgs.lib.concatMapStringsSep "\n"
@@ -810,7 +810,7 @@
         '';
 
         guest-static-consumption = let
-          evidence = import ./tests/guest-static-consumption-eval.nix {
+          evidence = import ./tests/unit/smoke/guest-static-consumption-eval.nix {
             inherit system pkgs;
             flake = self;
           };
@@ -820,7 +820,7 @@
         '';
 
         guest-exec-policy = let
-          evidence = import ./tests/eval-cases/guest-exec-policy-eval.nix {
+          evidence = import ./tests/unit/nix/eval-cases/guest-exec-policy-eval.nix {
             inherit system pkgs;
             flake = self;
             scenario = "enabled";
@@ -831,7 +831,7 @@
         '';
 
         guest-control-vsock = let
-          evidence = import ./tests/eval-cases/guest-control-vsock-eval.nix {
+          evidence = import ./tests/unit/nix/eval-cases/guest-control-vsock-eval.nix {
             inherit system pkgs;
             flake = self;
             scenario = "base";

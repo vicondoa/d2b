@@ -2,7 +2,7 @@
 //! `tests/*-eval.sh` bash gates. Each test reads the real repo (via the
 //! `nixling_contract_tests::read_repo_file` / `repo_root` helpers) and asserts a
 //! release-hygiene, version-tag, or retired-surface invariant. This crate runs
-//! only from `tests/rust-workspace-checks.sh` against the real checkout (it is
+//! only from `tests/tools/rust-workspace-checks.sh` against the real checkout (it is
 //! excluded from the hermetic Nix sandbox workspace build), so repo-file and
 //! repo-`git` access are sound.
 //!

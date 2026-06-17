@@ -3,7 +3,7 @@
 //! repo files (via the `nixling_contract_tests::read_repo_file` helper) and
 //! asserts a structural/source invariant — all are grep-only gates over
 //! `nixos-modules/**` (no Nix eval/build). This crate runs only from
-//! `tests/rust-workspace-checks.sh` against the real checkout (it is excluded
+//! `tests/tools/rust-workspace-checks.sh` against the real checkout (it is excluded
 //! from the hermetic Nix sandbox workspace build), so repo-file access — and
 //! shelling out to `git` for the gitignore-respecting file enumeration the
 //! bash gates got from `grep -R` — is sound here.

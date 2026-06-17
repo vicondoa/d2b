@@ -2,7 +2,7 @@
 //! the `tests/*.sh` bash gates. Each test reads the real repo files (via the
 //! `nixling_contract_tests` repo-file helpers) and asserts a structural /
 //! source invariant, or reproduces a deterministic logic canary. This crate
-//! runs only from `tests/rust-workspace-checks.sh` against the real checkout
+//! runs only from `tests/tools/rust-workspace-checks.sh` against the real checkout
 //! (it is excluded from the hermetic Nix sandbox workspace build), so repo-file
 //! access is sound here.
 //!

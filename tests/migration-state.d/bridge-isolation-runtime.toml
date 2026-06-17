@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["vmChecks.<system>.bridge-isolation (tests/nixos/bridge-isolation.nix — hermetic runNixOSTest exercising the same bridge isolation + MAC-spoof invariants as root in a VM)"]
+successor_ids = ["vmChecks.<system>.bridge-isolation (tests/host-integration/bridge-isolation.nix — hermetic runNixOSTest exercising the same bridge isolation + MAC-spoof invariants as root in a VM)"]

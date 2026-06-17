@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["cargo test --workspace (nixlingd ssh_host_key_preflight::tests::* + typed_error::tests::{sshd_host_key_drift_envelope_shape,envelope_kind_matches_expected_discriminant}) — already gated in tests/rust-workspace-checks.sh", "tests/golden/pinned/ssh-host-key-preflight.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["cargo test --workspace (nixlingd ssh_host_key_preflight::tests::* + typed_error::tests::{sshd_host_key_drift_envelope_shape,envelope_kind_matches_expected_discriminant}) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/ssh-host-key-preflight.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]

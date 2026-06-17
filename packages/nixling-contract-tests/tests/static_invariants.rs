@@ -9,7 +9,7 @@
 //!     `nixling-core` sets `[lib] test = false` (its libtest surface is the
 //!     custom smoke harness), so in-crate unit tests would not run in the gate.
 //!     The contract crate IS gated (the NL_FIXTURES step in
-//!     `tests/rust-workspace-checks.sh`), and these synthetic cases need no
+//!     `tests/tools/rust-workspace-checks.sh`), and these synthetic cases need no
 //!     fixture, so they run there unconditionally.
 //!   * **rendered** — the validators run against the REAL rendered fixture-smoke
 //!     artifacts (`manifest.json` / bundle profiles), a strictly stronger

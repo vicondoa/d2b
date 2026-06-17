@@ -2,14 +2,14 @@
 //! tail of `tests/per-vm-state-ownership-eval.sh`.
 //!
 //! The eval-time assertions over `nixling.daemon.perVmStateOwnershipMatrix`
-//! live in the nix-unit corpus (`tests/nix-unit/cases/per-vm-state-ownership.nix`).
+//! live in the nix-unit corpus (`tests/unit/nix/cases/per-vm-state-ownership.nix`).
 //! The bash gate ALSO carried source-level regression guards — that
 //! `nixos-modules/store.nix` and the daemon's
 //! `packages/nixlingd/src/ownership_preflight.rs` never re-introduce the legacy
 //! `root:kvm` ownership / `2775` group-writable store mode. Those are
 //! source-greps, not eval-time values, so they belong in the Rust policy layer
 //! with the other `policy_*.rs` lints (this crate reads the real checkout via
-//! `tests/rust-workspace-checks.sh`, which is excluded from the hermetic Nix
+//! `tests/tools/rust-workspace-checks.sh`, which is excluded from the hermetic Nix
 //! sandbox).
 //!
 //! Faithful port of the bash gate's `grep`s:

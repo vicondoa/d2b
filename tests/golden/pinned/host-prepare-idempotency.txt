@@ -3,7 +3,7 @@
 # `cargo test -p nixling-host --features fake-backends -- idempotency`
 # (the drift-digest portion of the no-op invariant; the broker build was
 # best-effort and ran no test). These idempotency_* tests already run in
-# the gated `cargo test --workspace` (tests/rust-workspace-checks.sh) — the
+# the gated `cargo test --workspace` (tests/tools/rust-workspace-checks.sh) — the
 # fake-backends cfg is active under plain `cargo test`, and both tests are
 # present in the default workspace nextest list. The shell gate's
 # zero-test grep guard is superseded by this fail-closed pin

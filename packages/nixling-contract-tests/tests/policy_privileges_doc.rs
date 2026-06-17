@@ -8,7 +8,7 @@
 //! parsing.
 //!
 //! This crate is excluded from the hermetic Nix sandbox workspace build and
-//! runs only from `tests/rust-workspace-checks.sh` against the real checkout,
+//! runs only from `tests/tools/rust-workspace-checks.sh` against the real checkout,
 //! so reading repo files via the `nixling_contract_tests` repo-file helpers is
 //! sound here.
 //!

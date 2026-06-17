@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/store-overlay-emit.nix — 9 cases)"]
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/store-overlay-emit.nix — 9 cases)"]
