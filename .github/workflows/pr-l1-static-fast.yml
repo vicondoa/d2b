@@ -23,10 +23,21 @@ jobs:
           bash tests/tools/gen-migration-ledger.sh --check
           bash tests/unit/meta/ci-uses-make.sh
 
-  static-fast:
+  # Run L1 sub-targets in parallel for faster CI. Locally, `make test-unit`
+  # runs them serially as an umbrella.
+  test-lint:
     needs: tier0
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Lint gate (preflight + parse + shellcheck)
+        run: make test-lint
+
+  test-rust:
+    needs: tier0
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
@@ -36,5 +47,75 @@ jobs:
             experimental-features = nix-command flakes
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
-      - name: Static fast regression gate
-        run: make check-fast
+      - name: Rust workspace gate
+        run: make test-rust
+
+  test-proofs:
+    needs: tier0
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Proof crates gate
+        run: make test-proofs
+
+  test-flake-x86:
+    needs: tier0
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Flake check (x86_64-linux)
+        run: make test-flake
+
+  test-flake-aarch64:
+    needs: tier0
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Flake check (aarch64-linux)
+        run: make test-flake
+
+  test-drift:
+    needs: tier0
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Drift gate
+        run: make test-drift
+
+  test-policy:
+    needs: tier0
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Policy meta-gates
+        run: make test-policy

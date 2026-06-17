@@ -27,7 +27,7 @@ is_allowlisted() {
 
 calls_make_target() {
   local workflow="$1"
-  grep -Eq '(^|[[:space:]])make[[:space:]]+(check|check-ci|check-all|check-fast|check-tier0|test-rust|test-drift|test-fixtures|test-contract|test-nix-unit|test-flake|test-policy|test-mutation|test-integration|test-hardware|perf|check-inventory|ledger-regen)([[:space:]]|$)' "$workflow"
+  grep -Eq '(^|[[:space:]])make[[:space:]]+(check|check-ci|check-all|check-fast|check-tier0|test|test-unit|test-lint|test-rust|test-proofs|test-drift|test-flake|test-nix-unit|test-policy|test-integration|test-host-integration|test-hardware|perf|check-inventory|ledger-regen)([[:space:]]|$)' "$workflow"
 }
 
 [ -d "$WORKFLOW_DIR" ] || { echo "ci-uses-make: missing workflow dir: $WORKFLOW_DIR" >&2; exit 1; }
