@@ -972,6 +972,18 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "nixling-contract-tests"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "nixling-core",
+ "nixling-host",
+ "regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1048,6 +1060,13 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "nixling-userd"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "nixling-ipc",
 ]
 
 [[package]]

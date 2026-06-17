@@ -739,10 +739,7 @@ nl_smoke_bundle_privileges_json() {
 }
 
 # Render the smoke `nixling._bundle.hostJson.jsonText` once per run and
-# emit its cached path. Used by `tests/ifname-nix-rust-parity.sh` to assert
-# the Nix-emitted
-# `ifNameMappings[].derivedIfname` values pass the Rust
-# `looks_nixling_owned` predicate's format gate.
+# emit its cached path for host-json contract and parity gates.
 nl_smoke_bundle_host_json() {
   local cache; cache=$(_nl_smoke_cache_dir) || return 1
   local out="$cache/bundle-host.json"

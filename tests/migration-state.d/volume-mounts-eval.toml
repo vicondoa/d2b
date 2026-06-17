@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/volume-mounts.nix — 19 volume-helper value cases)", "flake.checks.<system>.module-helper-wiring (processes-json/vm-guest-base shared-helper callsite invariant)"]

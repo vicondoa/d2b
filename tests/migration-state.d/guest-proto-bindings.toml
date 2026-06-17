@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["tests/unit/gates/drift-check.sh (runs xtask gen-guest-proto and checks git diff --exit-code -- packages/nixling-ipc/src/generated)", "packages/nixling-contract-tests/tests/policy_guest_bindings.rs::guest_proto_bindings_are_message_only_and_codegen_free (generated guest_control.rs has no unsafe/unsafe_code/broad lint bypasses; message-only no ttrpc/service/client/server symbols; nixling-ipc has no build.rs, no ttrpc, and no protobuf-codegen/prost-build/tonic-build/protoc build-dependency)"]

@@ -1,0 +1,5 @@
+# broker-scm-rights-fd-lifecycle (nixling-priv-broker, --features layer1-bootstrap)
+fd_passing::tests::scm_rights_fd_lifecycle_accepts_and_returns_pipe_fd
+fd_passing::tests::scm_rights_fd_lifecycle_cleans_up_on_broker_restart
+fd_passing::tests::scm_rights_fd_lifecycle_closes_own_copy_on_error
+fd_passing::tests::scm_rights_fd_lifecycle_refuses_duplicate_fd_send

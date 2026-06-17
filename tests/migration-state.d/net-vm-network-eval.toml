@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/net-vm-network.nix — 61 net-VM/network value cases covering catch-all DHCP neutralization, work/safe/obs static addressing, MTU propagation, MSS clamp, peer/host CIDR drops, nftables ordering, east-west controls, host bridge/tap wiring, and observability env safe defaults)"]

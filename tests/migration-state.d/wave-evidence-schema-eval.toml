@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["packages/nixling-contract-tests/tests/policy_observability.rs::wave_evidence_schema_cross_check (readiness-wave doc/schema drift gate: every wave key parsed from nixos-modules/options-daemon.nix:readinessWaveSpecs has a matching per-wave inventory row in docs/reference/wave-evidence-schema.md, and docs/reference/wave-evidence-schema.json .required declares exactly [operatorSignature, timestamp, wave]); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/tools/rust-workspace-checks.sh"]

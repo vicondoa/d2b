@@ -49,6 +49,7 @@
           cp -r ${./packages/nixling-core} $out/packages/nixling-core
           cp -r ${./packages/nixling-ipc} $out/packages/nixling-ipc
           cp -r ${./packages/nixling-guestd} $out/packages/nixling-guestd
+          cp -r ${./packages/nixling-userd} $out/packages/nixling-userd
           cp -r ${./packages/nixling-exec-runner} $out/packages/nixling-exec-runner
           cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
           chmod -R u+w $out/packages/nixling-core
@@ -85,6 +86,7 @@
             "nixling-core",
             "nixling-ipc",
             "nixling-guestd",
+            "nixling-userd",
             "nixling-exec-runner",
           ]
 
@@ -156,6 +158,7 @@
           install -Dm644 ${./docs/completions/nixling.fish} "$out/share/fish/vendor_completions.d/nixling.fish"
         '';
         nixling-guestd-static = guestStaticPackage "nixling-guestd" "nixling-guestd";
+        nixling-userd-static = guestStaticPackage "nixling-userd" "nixling-userd";
         nixling-exec-runner-static =
           guestStaticPackage "nixling-exec-runner" "nixling-exec-runner";
 
@@ -165,6 +168,81 @@
       });
 
       apps = forAllSystems (system: { });
+
+      # Container-based integration test images (the type-G layer), built by
+      # Nix and run with podman, rootless. Exposed under `containerImages`,
+      # NOT `checks`, so the Layer-1 `nix flake check --no-build --all-systems`
+      # never builds an image. The `make test-integration` target
+      # (tests/integration/containers/*.sh, driven via podman) builds + runs them; the same
+      # target runs on a GitHub Actions ubuntu-latest job (podman is
+      # preinstalled there) and locally.
+      #
+      # Scope: this layer is ONLY for things that need a foreign (non-Nix)
+      # userland — e.g. proving a static nixling binary runs on stock Ubuntu.
+      # It deliberately does NOT boot systemd for daemon/socket activation;
+      # that is covered natively by
+      # packages/nixling-priv-broker/tests/socket_activation.rs plus nix-unit.
+      # See tests/integration/containers/README.md.
+      #
+      # Auto-discovered from tests/integration/containers/images/*.nix: each image module is
+      # `{ pkgs, self, system }: <dockerTools-built OCI image>`, so adding a new
+      # container test is one new image file + its tests/integration/containers/<name>.sh
+      # runner — no edit here. x86_64-linux only (the project's CI runners +
+      # this host are x86_64; aarch64 images need an aarch64 builder).
+      containerImages = forAllSystems (system:
+        if system == "x86_64-linux" then
+          let
+            pkgs = nixpkgsFor.${system};
+            imageDir = ./tests/integration/containers/images;
+            imageFiles = if builtins.pathExists imageDir
+              then builtins.attrNames (nixpkgs.lib.filterAttrs
+                (name: type: type == "regular" && nixpkgs.lib.hasSuffix ".nix" name)
+                (builtins.readDir imageDir))
+              else [ ];
+            mkImage = file: {
+              name = nixpkgs.lib.removeSuffix ".nix" file;
+              value = import (imageDir + "/${file}") { inherit pkgs self system; };
+            };
+          in builtins.listToAttrs (map mkImage imageFiles)
+        else { });
+
+      # Type-G runNixOSTest integration tests (the additive real-kernel
+      # coverage layer). Each test boots a real NixOS VM with the nixling
+      # daemon surface and asserts live broker/daemon/host-posture behaviour
+      # (socket activation, SO_PEERCRED, bridge isolation, state-dir ACLs,
+      # broker privilege posture) that the fake-backed native Rust canaries and
+      # pure-eval gates cannot exercise. This is the hermetic, non-destructive
+      # successor to the `NL_LIVE`-against-the-real-host bash scripts.
+      #
+      # Exposed under `vmChecks`, NOT `checks`, so the Layer-1 `nix flake check
+      # --no-build --all-systems` never realizes a VM. Selected explicitly by
+      # `make test-host-integration` (`nix build .#vmChecks.<system>.<name>`),
+      # which needs KVM (a local NixOS host; TCG fallback otherwise).
+      #
+      # Auto-discovered from tests/host-integration/*.nix (excluding lib.nix): each test is
+      # `{ pkgs, self }: pkgs.testers.runNixOSTest { ... }`, so adding a VM test
+      # is one new file — no edit here. x86_64-linux only: a runNixOSTest VM is
+      # built + booted for the builder's own system, and the hosted CI runners
+      # are x86_64 — aarch64 VM coverage needs an aarch64 builder.
+      vmChecks = forAllSystems (system:
+        if system == "x86_64-linux" then
+          let
+            pkgs = nixpkgsFor.${system};
+            testDir = ./tests/host-integration;
+            testFiles = if builtins.pathExists testDir
+              then builtins.attrNames (nixpkgs.lib.filterAttrs
+                (name: type:
+                  type == "regular"
+                  && nixpkgs.lib.hasSuffix ".nix" name
+                  && name != "lib.nix")
+                (builtins.readDir testDir))
+              else [ ];
+            mkTest = file: {
+              name = nixpkgs.lib.removeSuffix ".nix" file;
+              value = import (testDir + "/${file}") { inherit pkgs self; };
+            };
+          in builtins.listToAttrs (map mkTest testFiles)
+        else { });
 
       templates.default = {
         path = ./templates/default;
@@ -202,6 +280,137 @@
         mkCheck = name: cfg: pkgs.runCommand "nixling-check-${name}" { } ''
           echo ${builtins.unsafeDiscardStringContext cfg.config.system.build.toplevel.drvPath} > $out
         '';
+        smokeConfigModule = { lib, ... }: {
+          boot.loader.grub.enable = false;
+          boot.loader.systemd-boot.enable = false;
+          boot.initrd.includeDefaultModules = false;
+          fileSystems."/" = {
+            device = "tmpfs";
+            fsType = "tmpfs";
+          };
+          environment.etc."machine-id".text =
+            "00000000000000000000000000000000";
+          system.stateVersion = "25.11";
+
+          users.users.alice = {
+            isNormalUser = true;
+            uid = 1000;
+          };
+
+          nixling.site = {
+            waylandUser = "alice";
+            launcherUsers = [ "alice" ];
+            yubikey.enable = false;
+          };
+
+          nixling.envs.work = {
+            lanSubnet = "10.20.0.0/24";
+            uplinkSubnet = "192.0.2.0/30";
+          };
+
+          nixling.vms.corp-vm = {
+            enable = true;
+            env = "work";
+            index = 10;
+            ssh.user = "alice";
+            config = {
+              networking.hostName = lib.mkDefault "corp-vm";
+              users.users.alice = {
+                isNormalUser = true;
+                uid = 1000;
+              };
+            };
+          };
+        };
+        smokeEval = mkEval [ smokeConfigModule ];
+        smokeFixture = let
+          bundle = smokeEval.config.nixling._bundle;
+          manifestPkg = smokeEval.config.nixling._manifestPkg;
+        in pkgs.runCommand "nixling-fixture-smoke" { } ''
+          mkdir -p $out $out/closures
+          cp ${bundle.privilegesJson.path} $out/privileges.json
+          cp ${bundle.hostJson.path} $out/host.json
+          cp ${bundle.processesJson.path} $out/processes.json
+          cp ${bundle.bundle.path} $out/bundle.json
+          cp ${manifestPkg}/share/nixling/vms.json $out/manifest.json
+          ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
+            (vm: c: "cp ${c.path} $out/closures/${vm}.json")
+            bundle.closures)}
+        '';
+        # Feature-RICH fixture: a single workload VM with graphics + video +
+        # audio + tpm + usbip + observability enabled, so every per-role
+        # minijail profile (gpu, wayland-proxy, video, audio, swtpm, usbip,
+        # vsock-relay, otel-host-bridge) renders into the bundle. Consumed by
+        # the per-role minijail-validator contract tests. x86_64-linux only:
+        # the framework's checkVmPlatform gate throws on graphics for aarch64,
+        # so this is referenced only under that guard below (lazily — never
+        # forced on aarch64).
+        fullConfigModule = { lib, ... }: {
+          boot.loader.grub.enable = false;
+          boot.loader.systemd-boot.enable = false;
+          boot.initrd.includeDefaultModules = false;
+          fileSystems."/" = {
+            device = "tmpfs";
+            fsType = "tmpfs";
+          };
+          environment.etc."machine-id".text =
+            "00000000000000000000000000000000";
+          system.stateVersion = "25.11";
+
+          users.users.alice = {
+            isNormalUser = true;
+            uid = 1000;
+          };
+
+          nixling.site = {
+            waylandUser = "alice";
+            launcherUsers = [ "alice" ];
+            yubikey.enable = true;
+          };
+
+          nixling.observability.enable = true;
+
+          nixling.envs.work = {
+            lanSubnet = "10.20.0.0/24";
+            uplinkSubnet = "192.0.2.0/30";
+          };
+
+          nixling.vms.corp-full = {
+            enable = true;
+            env = "work";
+            index = 10;
+            ssh.user = "alice";
+            graphics.enable = true;
+            graphics.crossDomainTrusted = true;
+            graphics.videoSidecar = true;
+            audio.enable = true;
+            usbip.yubikey = true;
+            tpm.enable = true;
+            observability.enable = true;
+            config = {
+              networking.hostName = lib.mkDefault "corp-full";
+              users.users.alice = {
+                isNormalUser = true;
+                uid = 1000;
+              };
+            };
+          };
+        };
+        fullEval = mkEval [ fullConfigModule ];
+        fullFixture = let
+          bundle = fullEval.config.nixling._bundle;
+          manifestPkg = fullEval.config.nixling._manifestPkg;
+        in pkgs.runCommand "nixling-fixture-smoke-full" { } ''
+          mkdir -p $out $out/closures
+          cp ${bundle.privilegesJson.path} $out/privileges.json
+          cp ${bundle.hostJson.path} $out/host.json
+          cp ${bundle.processesJson.path} $out/processes.json
+          cp ${bundle.bundle.path} $out/bundle.json
+          cp ${manifestPkg}/share/nixling/vms.json $out/manifest.json
+          ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
+            (vm: c: "cp ${c.path} $out/closures/${vm}.json")
+            fullEval.config.nixling._bundle.closures)}
+        '';
         # Rust tests reach repo-level fixtures under tests/golden/
         # (compile-time
         # include_str! goldens) and tests/fixtures/ (compile-time +
@@ -223,6 +432,7 @@
           cp -r ${./packages/nixling-core} $out/packages/nixling-core
           cp -r ${./packages/nixling-ipc} $out/packages/nixling-ipc
           cp -r ${./packages/nixling-guestd} $out/packages/nixling-guestd
+          cp -r ${./packages/nixling-userd} $out/packages/nixling-userd
           cp -r ${./packages/nixling-exec-runner} $out/packages/nixling-exec-runner
           cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
           chmod -R u+w $out/packages/nixling-core
@@ -259,6 +469,7 @@
             "nixling-core",
             "nixling-ipc",
             "nixling-guestd",
+            "nixling-userd",
             "nixling-exec-runner",
           ]
 
@@ -341,12 +552,183 @@
           git -c user.email=nixbld@localhost -c user.name=nixbld \
             commit -q -m 'advisory-db snapshot'
         '';
+
+        # --- W2 nix-unit layer -------------------------------------------
+        # Hermetic pure-eval comparison runner over the tests/unit/nix
+        # corpus ({ expr; expected; } / { expr; expectedError; } cases).
+        # NO recursive-nix / IFD: each case is compared at flake-eval time
+        # and the verdict baked into a tiny runCommand. The same corpus is
+        # CLI-compatible with upstream `nix-unit` for local iteration.
+        nixUnitCases = import ./tests/unit/nix {
+          lib = pkgs.lib;
+          inherit pkgs system;
+          flakeRoot = ./.;
+          nl = import ./nixos-modules/lib.nix { lib = pkgs.lib; };
+          inherit mkEval;
+          # Direct-injection handles for tests/unit/nix/eval-cases/shared.nix (the
+          # minimal lib.evalModules fast evaluator) — passing the nixpkgs
+          # flake input + the nixling module set avoids a `getFlake ./.`
+          # (which would resolve to a non-git store path inside the flake).
+          nixpkgsFlake = nixpkgs;
+          inherit nixlingModule;
+        };
+        nixUnitEval = name: case:
+          let
+            r = builtins.tryEval (let v = case.expr; in builtins.deepSeq v v);
+          in
+          if case ? expectedError then
+            # Bucket-B: the case must throw. `tryEval` cannot capture the
+            # message, so message-substring matching is NOT supported here:
+            # if an author sets `expectedError.msg` (expecting it enforced),
+            # fail loudly rather than give false confidence. Message-sensitive
+            # negative gates should assert over `config.assertions` data (see
+            # guest-config-containment.nix) instead.
+            if (builtins.isAttrs case.expectedError) && (case.expectedError != { }) then
+              {
+                inherit name;
+                ok = false;
+                detail = "expectedError must be `{ }` — this runner asserts only THAT the expr throws; tryEval cannot match a throw message. Move message-substring checks to config.assertions data.";
+              }
+            else
+              {
+                inherit name;
+                ok = !r.success;
+                detail =
+                  if r.success
+                  then "expected an error, but eval succeeded"
+                  else "threw as expected";
+              }
+          else
+            {
+              inherit name;
+              ok = r.success && r.value == case.expected;
+              detail =
+                if !r.success then "eval threw; expected a value"
+                else "got=${builtins.toJSON r.value} expected=${builtins.toJSON case.expected}";
+            };
+        nixUnitResults = pkgs.lib.mapAttrsToList nixUnitEval nixUnitCases;
+        nixUnitFailures = pkgs.lib.filter (x: !x.ok) nixUnitResults;
+        nixUnitReport = pkgs.lib.concatMapStringsSep "\n"
+          (x: "FAIL ${x.name}: ${x.detail}") nixUnitFailures;
+        nixUnitTotal = pkgs.lib.length nixUnitResults;
+
+        # Fail-closed case-PRESENCE gate (mirrors tests/tools/assert-pinned-tests.sh
+        # for the Rust layer): every pinned case name MUST still exist in the
+        # corpus, so a retired bash gate's nix-unit successor can't silently
+        # vanish. Pins are system-aware — `common.txt` holds the all-systems
+        # cases; `<system>.txt` holds extra (e.g. x86-only graphics) cases.
+        # Regenerate with `make nix-unit-pin` after adding/removing cases.
+        #
+        # common.txt is REQUIRED and must be non-empty: deleting the pin file
+        # itself (along with case files) must fail closed, not silently make
+        # the pin set empty (panel W2 finding). The PER-SYSTEM file is also
+        # REQUIRED TO EXIST for the current system, but may be empty — a
+        # system with no extra (e.g. graphics) cases still commits a
+        # header-only file, so deleting a non-empty per-system pin file
+        # (e.g. x86_64-linux.txt with its 42 graphics pins) also fails closed
+        # (panel W2 re-review finding). The set of supported systems is the
+        # flake's own `systems`, not the currently-evaluated case set (which
+        # could be deleted in the same diff).
+        nixUnitCaseNames = pkgs.lib.attrNames nixUnitCases;
+        pinNames = path: pkgs.lib.filter (n: n != "" && !(pkgs.lib.hasPrefix "#" n))
+          (pkgs.lib.splitString "\n" (builtins.readFile path));
+        readPinsRequiredNonEmpty = path:
+          if !(builtins.pathExists path) then
+            throw "nix-unit: required pin file ${toString path} is missing — run `make nix-unit-pin`"
+          else
+            let names = pinNames path;
+            in if names == [ ]
+            then throw "nix-unit: required pin file ${toString path} has no pinned cases — the corpus would be unguarded; run `make nix-unit-pin`"
+            else names;
+        readPinsRequiredExist = path:
+          # The file MUST exist (so deleting it fails closed) but MAY be empty
+          # for a system with no system-specific cases (e.g. aarch64 has no
+          # x86-only graphics cases).
+          if !(builtins.pathExists path) then
+            throw "nix-unit: required per-system pin file ${toString path} is missing — every supported system commits one (header-only is fine); run `make nix-unit-pin`"
+          else pinNames path;
+        nixUnitPinned =
+          (readPinsRequiredNonEmpty ./tests/unit/nix/pinned/common.txt)
+          ++ (readPinsRequiredExist (./tests/unit/nix/pinned + "/${system}.txt"));
+        nixUnitMissingPins =
+          pkgs.lib.filter (n: !(builtins.elem n nixUnitCaseNames)) nixUnitPinned;
+        nixUnitMissingReport = pkgs.lib.concatMapStringsSep "\n"
+          (n: "MISSING PINNED CASE: ${n} (a pinned nix-unit case was deleted — restore it or run `make nix-unit-pin`)")
+          nixUnitMissingPins;
       in {
+        fixture-smoke = smokeFixture;
+
+        # Feature-rich fixture for the per-role minijail-validator contract
+        # tests. x86_64-linux only (graphics platform gate); on other systems
+        # the key resolves to a trivial derivation so `nix flake check
+        # --all-systems` never forces the graphics eval.
+        fixture-smoke-full =
+          if system == "x86_64-linux" then
+            fullFixture
+          else
+            pkgs.runCommand "nixling-fixture-smoke-full-unsupported" { } ''
+              echo "fixture-smoke-full is x86_64-linux only (graphics gate)" > $out
+            '';
+
+        # W2: nix-unit value/throw assertions migrated from the group-D/E
+        # eval-gate bash scripts.
+        #
+        # CRITICAL: failures THROW at EVALUATION time, not just at build time.
+        # tests/static.sh + static-fast.sh run `nix flake check --no-build
+        # --all-systems`, which evaluates every check's derivation but does
+        # NOT build it. A failing runCommand would evaluate to a valid
+        # (unbuilt) derivation and slip through fail-OPEN (panel W2 finding).
+        # Throwing here forces the gate to fail during `--no-build`
+        # evaluation, on BOTH systems (aarch64 included on an x86 runner).
+        nix-unit =
+          if nixUnitFailures != [ ] || nixUnitMissingPins != [ ] then
+            throw ''
+              nix-unit gate FAILED (${toString (pkgs.lib.length nixUnitFailures)}/${toString nixUnitTotal} cases failed, ${toString (pkgs.lib.length nixUnitMissingPins)} pinned cases missing) for ${system}:
+              ${nixUnitReport}${pkgs.lib.optionalString (nixUnitMissingPins != [ ]) "\n${nixUnitMissingReport}"}
+            ''
+          else
+            pkgs.runCommand "nixling-nix-unit" { } ''
+              echo "nix-unit: ${toString nixUnitTotal} cases passed (${toString (pkgs.lib.length nixUnitPinned)} pinned present)"
+              mkdir -p "$out"
+              echo ok > "$out/nix-unit"
+            '';
+
+        # W2: the "module callsites use the shared volume helpers" grep
+        # checks from volume-mounts-eval.sh — a hermetic source-wiring
+        # invariant (the nix-unit value cases assert the helpers; this
+        # asserts the production modules actually call them).
+        module-helper-wiring = pkgs.runCommand "nixling-module-helper-wiring" { } ''
+          set -e
+          grep -Fq 'serial = nl.volumeSerial volume;' ${./nixos-modules/processes-json.nix} \
+            || { echo "processes-json.nix must use shared volumeSerial helper" >&2; exit 1; }
+          grep -Fq 'nl.volumeFileSystem volume' ${./nixos-modules/vm-guest-base.nix} \
+            || { echo "vm-guest-base.nix must use shared volumeFileSystem helper" >&2; exit 1; }
+          grep -Fq 'builtins.filter nl.volumeDiskInitEligible microvm.volumes' ${./nixos-modules/processes-json.nix} \
+            || { echo "processes-json.nix must gate DiskInit with shared eligibility helper" >&2; exit 1; }
+          mkdir -p "$out"
+          echo ok > "$out/module-helper-wiring"
+        '';
+
         eval-minimal = mkCheck "eval-minimal"
           (mkEval [ (import ./examples/minimal/configuration.nix) ]);
 
         eval-multi-env = mkCheck "eval-multi-env"
           (mkEval [ (import ./examples/multi-env/configuration.nix) ]);
+
+        eval-multi-env-daemon = mkCheck "eval-multi-env-daemon"
+          (mkEval [
+            (import ./examples/multi-env/configuration.nix)
+            ({ lib, ... }: {
+              nixling.site.allowUnsafeEastWest = true;
+              nixling.daemonExperimental.enable = true;
+              nixling.envs.work.mtu = lib.mkForce 1400;
+              nixling.envs.work.mssClamp = lib.mkForce true;
+              nixling.envs.work.lan.allowEastWest = lib.mkForce true;
+            })
+          ]);
+
+        eval-with-observability = mkCheck "eval-with-observability"
+          (mkEval [ (import ./examples/with-observability/configuration.nix) ]);
 
         rust-build = rustWorkspace {
           pname = "nixling-rust-build";
@@ -359,7 +741,14 @@
           pname = "nixling-rust-tests";
           preBuild = assertRustToolchain;
           cargoBuildFlags = [ "--workspace" ];
-          cargoTestFlags = [ "--workspace" ];
+          # Keep fixture-dependent contract crates out of generic
+          # sandbox workspace tests. Full NL_FIXTURES delivery to the
+          # sandbox/CI is a tracked W1 deliverable.
+          cargoTestFlags = [
+            "--workspace"
+            "--exclude"
+            "nixling-contract-tests"
+          ];
           installPhase = ''
             runHook preInstall
             mkdir -p $out
@@ -392,6 +781,7 @@
         } ''
           for bin in \
             ${self.packages.${system}.nixling-guestd-static}/bin/nixling-guestd \
+            ${self.packages.${system}.nixling-userd-static}/bin/nixling-userd \
             ${self.packages.${system}.nixling-exec-runner-static}/bin/nixling-exec-runner
           do
             test -x "$bin"
@@ -420,7 +810,7 @@
         '';
 
         guest-static-consumption = let
-          evidence = import ./tests/guest-static-consumption-eval.nix {
+          evidence = import ./tests/unit/smoke/guest-static-consumption-eval.nix {
             inherit system pkgs;
             flake = self;
           };
@@ -430,7 +820,7 @@
         '';
 
         guest-exec-policy = let
-          evidence = import ./tests/guest-exec-policy-eval.nix {
+          evidence = import ./tests/unit/nix/eval-cases/guest-exec-policy-eval.nix {
             inherit system pkgs;
             flake = self;
             scenario = "enabled";
@@ -441,7 +831,7 @@
         '';
 
         guest-control-vsock = let
-          evidence = import ./tests/guest-control-vsock-eval.nix {
+          evidence = import ./tests/unit/nix/eval-cases/guest-control-vsock-eval.nix {
             inherit system pkgs;
             flake = self;
             scenario = "base";

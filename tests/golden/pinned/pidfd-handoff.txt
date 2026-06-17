@@ -1,0 +1,24 @@
+# pidfd-handoff successor native tests (retired tests/pidfd-handoff.sh).
+#
+# The pidfd handoff contract is exercised by native Rust tests that run in the
+# gated `cargo test --workspace` passes (tests/tools/rust-workspace-checks.sh). This
+# fail-closed pin guards their continued presence so they can't be silently
+# deleted. The two broker integration tests live in
+# tests/pidfd_handoff_scm_rights.rs (#![cfg(feature = "fake-backends")]) and run
+# under the broker's fake-backends test pass.
+#
+# Broker SCM_RIGHTS pidfd transport (integration; fake-backends pass):
+scm_rights_transports_pidfd_with_cloexec_preserved
+reconciliation_refuses_start_time_drift
+# Broker ops::pidfd unit canaries (default pass):
+ops::pidfd::tests::cloexec_assertion_rejects_non_cloexec
+ops::pidfd::tests::fake_spawner_yields_cloexec_pidfd
+ops::pidfd::tests::reconcile_succeeds_on_matching_start_time
+ops::pidfd::tests::reconcile_refuses_on_start_time_drift
+ops::pidfd::tests::parses_proc_stat_field_22
+# Daemon supervisor pidfd-table canaries (main workspace pass):
+supervisor::pidfd_table::tests::registers_and_deregisters
+supervisor::pidfd_table::tests::refuses_duplicate_registration
+supervisor::pidfd_table::tests::child_subreaper_self_test_takes_effect
+supervisor::pidfd_table::tests::register_signal_snapshot_roundtrip
+supervisor::pidfd_table::tests::wait_terminated_times_out_for_running_child

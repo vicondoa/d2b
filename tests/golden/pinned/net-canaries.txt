@@ -1,0 +1,8 @@
+ifname::tests::ifname_too_long_rejected
+ifname::tests::ifname_invalid_character_rejected
+ifname::tests::derivation_is_deterministic
+ifname::tests::role_distinguishes_bridge_vs_tap
+ifname::tests::vm_changes_derivation
+ifname::tests::detect_collisions_flags_duplicate_bridge
+ifname::tests::detect_collisions_flags_bridge_vs_tap
+ifname::tests::detect_collisions_passes_unique_set

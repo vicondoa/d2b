@@ -10,7 +10,7 @@
     "v1.1 daemon-only: every enabled VM is daemon-supervised by default; no consumer-flake action is required for supervisor classification.",
     "Per migrating VM: verify per-VM state under `/var/lib/nixling/vms/<vm>/` is owned root:nixlingd 0750.",
     "Run `nixos-rebuild switch` so the daemon module materializes the per-VM broker SpawnRunner state.",
-    "Verify each migrated VM via `nixling status <vm>`; `vm list` is still a placeholder inventory surface.",
+    "Verify each migrated VM via `nixling status <vm>` and `nixling vm list` after nixlingd is running.",
     "After all VMs migrate cleanly, keep the default-switch readiness gates aligned with the rollout evidence."
   ],
   "totalVms": 2,

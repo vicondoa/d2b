@@ -385,11 +385,9 @@ mod tests {
             "/nix/store/5dp5ya1q03ab3indxnd7x3pwixifw5rn-cloud-hypervisor-52.0/bin/cloud-hypervisor"
         );
 
-        // Spot-check ordered emission. The full per-test substring
-        // gate lives in tests/ch-argv-shape.sh; this unit-test
-        // smoke pins the W0b audit contract field-by-field. NOTE:
-        // tests/ch-argv-shape.sh runs the named unit-test surface
-        // rather than doing a byte-compare against
+        // Spot-check ordered emission. The pinned unit-test surface
+        // covers the W0b audit contract field-by-field rather than
+        // doing a byte-compare against
         // tests/golden/runner-shape/cloud-hypervisor-argv-minimal.txt;
         // the W0b audit fixture is a snapshot of microvm.nix's
         // runner shape that includes `${runtime_args:-}` template

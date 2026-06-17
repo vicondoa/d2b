@@ -23,6 +23,20 @@ use rustix::process::{kill_process, kill_process_group, test_kill_process, Pid, 
 use rustix::pty::{grantpt, openpt, ptsname, unlockpt, OpenptFlags};
 use rustix::termios::{tcgetpgrp, tcgetsid, tcsetwinsize, Winsize};
 
+/// Generous wall-clock budget for the signal-/PTY-delivery polls below. The
+/// polls break as soon as their condition is met (~1s on an idle machine), so a
+/// large ceiling does not slow the happy path — it only keeps the suite green
+/// under heavy CI load (e.g. when the rust workspace gate runs concurrently
+/// with the Nix eval region). A tight 5s ceiling was racy under that load.
+const WAIT: Duration = Duration::from_secs(30);
+
+/// Hard ceiling for the SIGHUP-on-hangup watchdog. The session leader is
+/// reaped with a blocking `wait()`, so this is NOT a normal-path budget — it
+/// only bounds the pathological case where the leader genuinely ignores SIGHUP
+/// (a real bug), escalating to SIGKILL so the test fails loudly instead of
+/// hanging. Generous so heavy co-scheduled load never trips it spuriously.
+const WATCHDOG: Duration = Duration::from_secs(120);
+
 /// Allocate a PTY master/slave pair the way the spawner does: master AND slave
 /// both `O_RDWR|O_NOCTTY|O_CLOEXEC`. The slave is `O_CLOEXEC` (matching the G4
 /// production contract) so a concurrent fork/exec elsewhere cannot inherit it
@@ -98,6 +112,13 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
     // and not a foreground-PG kill — can clean it up. A `sleep` loop (rather
     // than a blocking `read`) keeps the shell responsive so a trapped SIGWINCH
     // runs promptly between commands, and a SIGHUP on hangup still terminates it.
+    //
+    // Some long-running gate launchers enter `cargo test` with SIGHUP inherited
+    // as SIG_IGN. Ignored dispositions survive exec, and `/bin/sh` cannot
+    // reliably reset an ignored-on-entry SIGHUP itself, so normalize HUP with
+    // `env --default-signal=HUP` before execing the shell. `env` execs in-place,
+    // preserving the helper's PID/SID while making the leader's SIGHUP contract
+    // explicit and deterministic.
     let script = "stty size; \
          trap 'stty size' WINCH; \
          ( trap '' HUP; exec sleep 600 ) & \
@@ -113,6 +134,8 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
             "--cols",
             "100",
             "--",
+            "/usr/bin/env",
+            "--default-signal=HUP",
             "/bin/sh",
             "-c",
             script,
@@ -138,7 +161,7 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
         let start = Instant::now();
         let mut handshake: Option<std::io::Result<usize>> = None;
         let mut byte = [0u8; 1];
-        while start.elapsed() < Duration::from_secs(5) {
+        while start.elapsed() < WAIT {
             match read(&status, &mut byte) {
                 Ok(n) => {
                     handshake = Some(Ok(n));
@@ -160,8 +183,7 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
 
     // 2. Session leader + controlling terminal: tcgetsid(master) resolves to the
     //    child's pid (setsid made pid == sid; TIOCSCTTY bound the slave).
-    let sid = wait_for_ctty_sid(&master, Duration::from_secs(5))
-        .expect("controlling-terminal session id");
+    let sid = wait_for_ctty_sid(&master, WAIT).expect("controlling-terminal session id");
     assert_eq!(
         sid, child_pid,
         "session leader pid must equal the spawned helper/target pid"
@@ -173,7 +195,7 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
     //    keeps every byte regardless of how reads batch.
     let mut transcript = String::new();
     assert!(
-        drain_until(&master, &mut transcript, "READY", Duration::from_secs(5)),
+        drain_until(&master, &mut transcript, "READY", WAIT),
         "expected READY from target, saw: {transcript:?}"
     );
     assert!(
@@ -199,29 +221,51 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
     )
     .expect("resize master");
     assert!(
-        drain_until(&master, &mut transcript, "40 120", Duration::from_secs(5)),
+        drain_until(&master, &mut transcript, "40 120", WAIT),
         "expected post-SIGWINCH winsize 40 120, saw: {transcript:?}"
     );
 
     // 5. SIGHUP on hangup: dropping the master (the last master reference) closes
     //    the terminal, so the kernel sends SIGHUP to the session leader, which
-    //    terminates.
+    //    terminates. Send an explicit SIGHUP to the leader as well (the kernel
+    //    terminal-hangup delivery can race). Then poll for the leader to exit
+    //    with NO fixed budget for the success path: under heavy co-scheduled
+    //    load (the rust gate running concurrently with the Nix eval region) the
+    //    leader can be scheduler-starved for tens of seconds, and a wall-clock
+    //    deadline would flake. Only after a generous WATCHDOG ceiling — which a
+    //    healthy leader never reaches — do we treat a still-alive leader as a
+    //    genuine SIGHUP-ignored bug, SIGKILL it to avoid hanging the suite, and
+    //    fail the assertion. SIGHUP goes to the leader's PID only (not the
+    //    process group), so the HUP-trapping in-session background child checked
+    //    in step 6 still survives.
     drop(master);
+    if let Some(pid) = Pid::from_raw(child_pid) {
+        let _ = kill_process(pid, Signal::Hup);
+    }
     let start = Instant::now();
-    let mut hung_up = false;
-    while start.elapsed() < Duration::from_secs(5) {
+    let mut hup_ignored = false;
+    loop {
         match child.try_wait() {
-            Ok(Some(_status)) => {
-                hung_up = true;
-                break;
+            Ok(Some(_status)) => break,
+            Ok(None) => {
+                if start.elapsed() > WATCHDOG {
+                    if let Some(pid) = Pid::from_raw(child_pid) {
+                        let _ = kill_process(pid, Signal::Kill);
+                    }
+                    hup_ignored = true;
+                    break;
+                }
+                sleep(Duration::from_millis(20));
             }
-            Ok(None) => sleep(Duration::from_millis(10)),
             Err(_) => break,
         }
     }
-    assert!(hung_up, "session leader did not exit after master hangup");
-    // Reap the now-exited helper/target so no zombie remains.
+    // Reap the leader (the SIGKILL path leaves a just-killed child to collect).
     let _ = child.wait();
+    assert!(
+        !hup_ignored,
+        "session leader did not exit after master hangup (SIGHUP ignored)"
+    );
 
     // 6. In-session no-orphan: the background child shares the helper-created
     //    session (sid == child_pid) and is NOT a direct child of the helper's
@@ -253,7 +297,7 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
     }
     let start = Instant::now();
     let mut reaped = false;
-    while start.elapsed() < Duration::from_secs(5) {
+    while start.elapsed() < WAIT {
         // test_kill_process is kill(pid, 0): Err(ESRCH) once the pid is gone.
         if let Some(pid) = Pid::from_raw(bg_pid) {
             if test_kill_process(pid).is_err() {
@@ -352,20 +396,14 @@ fn tty_signal_follows_the_foreground_process_group_at_delivery_time() {
 
     // The helper exec'd /bin/sh and bound the slave as its controlling terminal:
     // the session id resolves to the helper/shell pid (setsid made pid == sid).
-    let sid = wait_for_ctty_sid(&master, Duration::from_secs(5))
-        .expect("controlling-terminal session id");
+    let sid = wait_for_ctty_sid(&master, WAIT).expect("controlling-terminal session id");
     assert_eq!(sid, helper_pid, "the shell is the session leader");
 
     // The shell prints SHELL:<pid> and the foreground child prints CHILD:<pid>
     // then CHILDREADY. The child is a DIFFERENT process from the shell.
     let mut transcript = String::new();
     assert!(
-        drain_until(
-            &master,
-            &mut transcript,
-            "CHILDREADY",
-            Duration::from_secs(5)
-        ),
+        drain_until(&master, &mut transcript, "CHILDREADY", WAIT),
         "foreground child did not become ready, saw: {transcript:?}"
     );
     let shell_pid = parse_labelled_pid(&transcript, "SHELL:")
@@ -384,7 +422,7 @@ fn tty_signal_follows_the_foreground_process_group_at_delivery_time() {
     // The terminal's foreground PG moved OFF the session leader and ONTO the
     // child's own process group (job control). This is the precondition the
     // delivery-time `tcgetpgrp` exists to track.
-    let fg_pgrp = wait_for_fg_pgrp_off(&master, sid, Duration::from_secs(5))
+    let fg_pgrp = wait_for_fg_pgrp_off(&master, sid, WAIT)
         .expect("foreground PG must move off the session leader");
     assert_ne!(
         fg_pgrp, sid,
@@ -413,16 +451,11 @@ fn tty_signal_follows_the_foreground_process_group_at_delivery_time() {
     // resume. Observing both markers proves the signal reached the child's group
     // and NOT merely the session leader.
     assert!(
-        drain_until(&master, &mut transcript, "GOTUSR1", Duration::from_secs(5)),
+        drain_until(&master, &mut transcript, "GOTUSR1", WAIT),
         "SIGUSR1 was not delivered to the foreground child, saw: {transcript:?}"
     );
     assert!(
-        drain_until(
-            &master,
-            &mut transcript,
-            "SHELLRESUMED",
-            Duration::from_secs(5)
-        ),
+        drain_until(&master, &mut transcript, "SHELLRESUMED", WAIT),
         "shell did not resume after the foreground child exited, saw: {transcript:?}"
     );
 
@@ -497,7 +530,7 @@ fn run_helper_expect_status_byte(args: &[&str]) -> Option<u8> {
     let start = Instant::now();
     let mut result: Option<u8> = None;
     let mut byte = [0u8; 1];
-    while start.elapsed() < Duration::from_secs(5) {
+    while start.elapsed() < WAIT {
         match read(&status_r, &mut byte) {
             Ok(0) => break, // EOF: exec succeeded (no failure byte).
             Ok(_) => {

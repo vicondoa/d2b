@@ -128,7 +128,7 @@ If you disabled `brokerPreNs` for any role, please re-enable it
 once the broker-side fix lands and validate the smoke gate:
 
 ```bash
-make pre-tag   # runs tests/live-vm-smoke.sh --full
+make pre-tag   # runs tests/integration/live/live-vm-smoke.sh --full
 ```
 
 The full smoke gate's `swtpm`, `gpu`, and `audio` probes will

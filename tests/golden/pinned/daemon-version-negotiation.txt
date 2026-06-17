@@ -1,0 +1,12 @@
+# daemon-version-negotiation — nixlingd daemon-spawn #[test]s. Successor of
+# tests/daemon-version-negotiation.sh, which exercised hello version ranges,
+# deny_unknown_fields, unknown feature tolerance, and IfName validation through
+# serve --once plus test-client frames. These integration tests run in the
+# default cargo test --workspace pass gated by tests/tools/rust-workspace-checks.sh.
+# Pinned fail-closed via tests/tools/assert-pinned-tests.sh. One bare libtest
+# path per line.
+#
+daemon_version_negotiation::version_mismatch_is_rejected
+daemon_version_negotiation::unknown_feature_flags_are_accepted
+daemon_version_negotiation::unknown_hello_field_is_rejected
+daemon_version_negotiation::invalid_ifname_is_rejected

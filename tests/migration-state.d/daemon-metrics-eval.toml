@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["packages/nixling-contract-tests/tests/policy_metrics.rs::daemon_metrics_inventory_descriptors_match_policy + daemon_metrics_histogram_buckets_match_policy + daemon_metrics_reference_doc_rows_match_retired_gate_policy (descriptor inventory names/kinds/label-keys/buckets + retired doc-row parity; gated via the NL_FIXTURES contract step in tests/tools/rust-workspace-checks.sh)"]

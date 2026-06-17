@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/assertions.nix — 26 eval-rejection cases via the minimal lib.evalModules fast evaluator; 23 Bucket-A preserve the message-substring check, 3 Bucket-B platform/throw cases assert rejection)"]

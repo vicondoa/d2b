@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/umask-roundtrip.nix — 4 cases)"]

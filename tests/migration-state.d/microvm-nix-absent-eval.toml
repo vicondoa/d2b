@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["packages/nixling-contract-tests/tests/policy_release.rs::microvm_nix_input_absent_from_flake (flake.nix declares no microvm input / inputs.microvm reference per ADR 0018); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/tools/rust-workspace-checks.sh"]

@@ -1404,8 +1404,9 @@ impl BundleResolver {
     /// bundle ships (via `processes.json` role profiles) and asserts
     /// the invariants:
     ///
-    /// 1. uid and gid are non-zero unless an `adr_carve_out` ref
-    ///    explicitly documents a root carve-out;
+    /// 1. uid and gid are non-zero unless a NON-EMPTY `adr_carve_out`
+    ///    ref explicitly documents a root carve-out (an empty or
+    ///    whitespace-only carve-out is treated as no carve-out);
     /// 2. mount_policy.nix_store_read_only is `true` for every
     ///    non-root role;
     /// 3. cgroup_placement.subtree starts with `nixling/` or `nixling.slice/`;
@@ -1415,6 +1416,19 @@ impl BundleResolver {
     /// when every profile passes. The integrator must add a
     /// corresponding fix to the Nix profile emitter for any reported
     /// violation.
+    ///
+    /// Migration note (supersedes tests/static-invariant-uid0.sh): the
+    /// retired bash gate additionally coupled a uid-0 long-lived profile to
+    /// `requiresStartRoot = true`. `requires_start_root` lives on the
+    /// minijail-profile metadata, not on the `processes::RoleProfile` this
+    /// validator walks, and per ADR 0021 virtiofsd now runs fake-root inside
+    /// a broker-established user namespace with `requiresStartRoot = false` —
+    /// so the carve-out reference, not `requiresStartRoot`, is the live
+    /// security gate. The schema-shape part of the bash gate (root-capable
+    /// shapes must declare an ADR carve-out field) is structurally
+    /// guaranteed: `RoleProfile` carries `adr_carve_out` alongside `uid`/`gid`
+    /// (so the negative unit tests would fail to compile if it were removed)
+    /// and `bundle-drift` keeps the committed v2 schema in sync with the DTO.
     pub fn validate_minijail_profiles(&self) -> Result<usize, MinijailProfileViolation> {
         let mut count = 0usize;
         for dag in &self.processes.vms {
@@ -1426,7 +1440,16 @@ impl BundleResolver {
                         node: node.id.0.clone(),
                     });
                 }
-                let root_carve_out = p.adr_carve_out.is_some();
+                // An ADR carve-out justifies a uid/gid 0 or writable-store
+                // profile, but only if it is a real reference — an empty or
+                // whitespace-only `adr_carve_out` is treated as NO carve-out
+                // (the bash static-invariant-uid0 gate required an ADR-like
+                // reference; matching that here closes a fail-open where
+                // `Some("")` would satisfy the gate).
+                let root_carve_out = p
+                    .adr_carve_out
+                    .as_deref()
+                    .is_some_and(|s| !s.trim().is_empty());
                 if !root_carve_out && (p.uid == 0 || p.gid == 0) {
                     return Err(MinijailProfileViolation::RootWithoutCarveOut {
                         profile_id: p.profile_id.clone(),
@@ -2875,7 +2898,7 @@ mod tests {
 
         let manifest = ManifestV04 {
             manifest: ManifestMeta {
-                manifest_version: 4,
+                manifest_version: crate::manifest_v04::MANIFEST_VERSION_CURRENT,
             },
             observability: ObservabilityMeta {
                 enabled: false,
@@ -3081,6 +3104,156 @@ mod tests {
             vec!["host-reconcile", "store-virtiofs-preflight"]
         );
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // W3: negative-case coverage for BundleResolver::validate_minijail_profiles.
+    // The static-invariant-uid0 / minijail-validator bash gates were the ONLY
+    // coverage of these rejection paths; these unit tests bring the invariant
+    // logic into Rust so those gates can retire to a Rust successor (plus the
+    // positive contract test over the rendered fixture bundle in
+    // packages/nixling-contract-tests/tests/minijail_profiles.rs). Each
+    // mutates ONE invariant on the first node of the otherwise-valid
+    // personal-dev bundle and asserts the matching violation (validate returns
+    // on the first violation, and vms[0].nodes[0] is iterated first).
+    #[test]
+    fn validate_minijail_profiles_accepts_the_rendered_personal_dev_bundle() {
+        let root = test_root("minijail-valid-baseline");
+        let resolver = build_personal_dev_bundle(&root);
+        assert!(
+            resolver.validate_minijail_profiles().is_ok(),
+            "the rendered personal-dev bundle must pass every minijail invariant"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn validate_minijail_profiles_rejects_empty_profile_id() {
+        let root = test_root("minijail-empty-id");
+        let mut resolver = build_personal_dev_bundle(&root);
+        resolver.processes.vms[0].nodes[0].profile.profile_id = String::new();
+        assert!(
+            matches!(
+                resolver.validate_minijail_profiles(),
+                Err(MinijailProfileViolation::EmptyProfileId { .. })
+            ),
+            "an empty profile_id must be rejected"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn validate_minijail_profiles_rejects_root_uid_without_carve_out() {
+        let root = test_root("minijail-root-no-carveout");
+        let mut resolver = build_personal_dev_bundle(&root);
+        {
+            let p = &mut resolver.processes.vms[0].nodes[0].profile;
+            p.uid = 0;
+            p.adr_carve_out = None;
+        }
+        assert!(
+            matches!(
+                resolver.validate_minijail_profiles(),
+                Err(MinijailProfileViolation::RootWithoutCarveOut { uid: 0, .. })
+            ),
+            "uid 0 without an ADR carve-out must be rejected"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn validate_minijail_profiles_rejects_writable_nix_store_without_carve_out() {
+        let root = test_root("minijail-store-rw");
+        let mut resolver = build_personal_dev_bundle(&root);
+        {
+            let p = &mut resolver.processes.vms[0].nodes[0].profile;
+            p.adr_carve_out = None;
+            p.mount_policy.nix_store_read_only = false;
+        }
+        assert!(
+            matches!(
+                resolver.validate_minijail_profiles(),
+                Err(MinijailProfileViolation::NixStoreNotReadOnly { .. })
+            ),
+            "a writable /nix/store without an ADR carve-out must be rejected"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn validate_minijail_profiles_rejects_cgroup_subtree_outside_nixling() {
+        let root = test_root("minijail-cgroup-foreign");
+        let mut resolver = build_personal_dev_bundle(&root);
+        resolver.processes.vms[0].nodes[0]
+            .profile
+            .cgroup_placement
+            .subtree = "system.slice/evil".to_owned();
+        assert!(
+            matches!(
+                resolver.validate_minijail_profiles(),
+                Err(MinijailProfileViolation::CgroupSubtreeOutsideNixling { .. })
+            ),
+            "a cgroup subtree outside nixling/ must be rejected"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn validate_minijail_profiles_accepts_root_uid_with_carve_out() {
+        let root = test_root("minijail-root-with-carveout");
+        let mut resolver = build_personal_dev_bundle(&root);
+        {
+            let p = &mut resolver.processes.vms[0].nodes[0].profile;
+            p.uid = 0;
+            p.adr_carve_out =
+                Some("ADR 0004 swtpm-flush requires uid 0 for /dev/tpm access".to_owned());
+        }
+        assert!(
+            resolver.validate_minijail_profiles().is_ok(),
+            "uid 0 WITH an ADR carve-out must be accepted (the swtpm-flush pattern)"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn validate_minijail_profiles_rejects_root_uid_with_empty_carve_out() {
+        let root = test_root("minijail-root-empty-carveout");
+        let mut resolver = build_personal_dev_bundle(&root);
+        {
+            let p = &mut resolver.processes.vms[0].nodes[0].profile;
+            p.uid = 0;
+            // An empty (or whitespace-only) carve-out is NOT a real ADR
+            // reference and must not satisfy the uid0 gate.
+            p.adr_carve_out = Some("   ".to_owned());
+        }
+        assert!(
+            matches!(
+                resolver.validate_minijail_profiles(),
+                Err(MinijailProfileViolation::RootWithoutCarveOut { uid: 0, .. })
+            ),
+            "uid 0 with an empty/whitespace adr_carve_out must be rejected"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn validate_minijail_profiles_rejects_root_gid_without_carve_out() {
+        let root = test_root("minijail-root-gid-no-carveout");
+        let mut resolver = build_personal_dev_bundle(&root);
+        {
+            let p = &mut resolver.processes.vms[0].nodes[0].profile;
+            // uid stays non-root (1100); gid 0 alone must also be rejected
+            // (the validator gates on uid == 0 || gid == 0).
+            p.gid = 0;
+            p.adr_carve_out = None;
+        }
+        assert!(
+            matches!(
+                resolver.validate_minijail_profiles(),
+                Err(MinijailProfileViolation::RootWithoutCarveOut { gid: 0, .. })
+            ),
+            "gid 0 without an ADR carve-out must be rejected"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -673,9 +673,9 @@ configs that referenced the legacy group names (see
   overlay disk via the new `SpawnRunnerPlanOp::DiskInit` op
   (`mkfs.ext4` on first spawn). Size override via
   `nixling.vms.<vm>.writableStoreOverlaySize` (default 1 GiB).
-- `tests/live-vm-smoke.sh` (`--lite` / `--full`) is the maintainer
+- `tests/integration/live/live-vm-smoke.sh` (`--lite` / `--full`) is the maintainer
   pre-tag gate (`make pre-tag` / `make smoke-lite`); results land in
-  `tests/smoke-run-log.txt`.
+  `${TMPDIR:-/tmp}/nixling-smoke-run-log.txt`.
 - New ADRs:
   [ADR 0022](docs/adr/0022-stabilization-mode-releases.md)
   (stabilization-mode releases) and
@@ -1509,16 +1509,16 @@ and adds regression tests for every v0.1.x patch.
 
 ### Added (tests)
 
-- `tests/smoke-eval-extraspecialargs.nix` — regression for v0.1.1
+- `tests/unit/smoke/smoke-eval-extraspecialargs.nix` — regression for v0.1.1
   `extraSpecialArgs` propagation through `nixos-modules/host.nix:165`.
 - `tests/net-vm-network-eval.sh` extended — regression for v0.1.2
   `ConfigureWithoutCarrier` + route entry on the host's uplink bridge.
 - `tests/autostart-wiring-eval.sh` — covers `nixling@<vm>` as
   template-only, multi-user.target.wants wiring, and
   `microvms.target.wants == []`.
-- `tests/smoke-eval-graphics.nix` extended — regression for v0.1.4
+- `tests/unit/smoke/smoke-eval-graphics.nix` extended — regression for v0.1.4
   `/dev/net/tun rw` in the GPU sidecar's DeviceAllow.
-- `tests/smoke-eval-tpm.nix` — regression for v0.1.4 swtpm parent-dir
+- `tests/unit/smoke/smoke-eval-tpm.nix` — regression for v0.1.4 swtpm parent-dir
   ACL traversal grant.
 - `tests/restart-policy-eval.sh` — regression for v0.1.5
   `restartIfChanged = false` across all six services.
@@ -1942,7 +1942,7 @@ seam.
   `docs/reference/components-*.md` (graphics, tpm, usbip, audio,
   home-manager).
 - `docs/reference/manifest-schema.{md,json}` polished with a rendered
-  example payload generated from `tests/smoke-eval.nix`.
+  example payload generated from `tests/unit/smoke/smoke-eval.nix`.
 - **`examples/minimal/`** — headless starter example: one env, one
   workload VM, ~25-line flake. Provides a quick sanity test.
 - **`examples/graphics-workstation/`** — desktop VM with
@@ -1981,7 +1981,7 @@ seam.
 - **`docs/README.md`** — Diataxis IA index (tutorials, how-to,
   reference, explanation). The reference quadrant landed first;
   the others landed before v0.1.0.
-- **Multi-arch eval coverage.** `tests/smoke-eval-aarch64.nix` —
+- **Multi-arch eval coverage.** `tests/unit/smoke/smoke-eval-aarch64.nix` —
   cross-evaluates a headless workload VM on `aarch64-linux`,
   verifying the eval graph stays multi-arch clean. Runtime is still
   `x86_64-linux`-only (cloud-hypervisor + crosvm); aarch64 is
@@ -2044,7 +2044,7 @@ seam.
   script for consumers upgrading from a pre-public in-tree nixling
   layout. Preserves TPM state byte-for-byte. Has `--dry-run` and
   `--rollback`. Committed under `scripts/` so CI can shellcheck it.
-- **`tests/smoke-eval.nix`** — minimal consumer-style nixosSystem
+- **`tests/unit/smoke/smoke-eval.nix`** — minimal consumer-style nixosSystem
   that imports `nixling.nixosModules.default` and exercises the
   eval graph end-to-end. Wired into `tests/static.sh` Layer-1.
 - **`tests/assertions-eval.sh`** — 8 regression tests exercising every
@@ -2269,11 +2269,11 @@ seam.
 - `tests/{static,nixling-store,audio,lib}.sh` no longer assume
   `ROOT=/etc/nixos`; the value is derived from the script's own path
   so the suite runs from any clone.
-- `tests/nixling-store.sh:33` SC2157 (preexisting).
+- `tests/integration/live/nixling-store.sh:33` SC2157 (preexisting).
 - Host-specific `NL_FILES` entries (`vms/personal-dev.nix`,
   `vms/work-aad.nix`) dropped or guarded so the static gate stays
   useful for the public flake.
-- `tests/audio.sh` `NL_WAYLAND_USER` resolution chain genericized
+- `tests/integration/live/audio.sh` `NL_WAYLAND_USER` resolution chain genericized
   (no longer hardcoded to the maintainer's host user).
 - README polish: `microVM` is defined inline on first use; a
   maintainer-anecdote phrasing was replaced with neutral wording;
@@ -2293,7 +2293,7 @@ seam.
   combined with `readOnly = true` and the matching
   `config.nixling.manifest = …` assignment, it produced
   `set multiple times` only when a graphics VM was synthesized. See
-  `tests/smoke-eval-graphics.nix` for the regression test.
+  `tests/unit/smoke/smoke-eval-graphics.nix` for the regression test.
 - Inter-env CIDR overlap check now performs real IPv4 prefix
   arithmetic (`lib.cidrOverlaps` in `nixos-modules/lib.nix`) instead
   of exact-string equality. Containment (e.g. `10.0.0.0/16` ⊃

@@ -1,0 +1,19 @@
+# path-safety-violation-fs — broker filesystem-mutating op path-safety
+# #[test]s. Successor of tests/path-safety-violation-fs.sh, whose hard
+# assertions ran these broker #[test]s via substring filters
+# (`cargo test --all-features -- <name>` in packages/nixling-priv-broker);
+# each name resolves to exactly one test below, and they already run in the
+# broker layer1-bootstrap pass in tests/tools/rust-workspace-checks.sh. Pinned
+# fail-closed via tests/tools/assert-pinned-tests.sh.
+#
+# (The gate's trailing `--features fake-backends -- path_safety_violation`
+# step was best-effort `2>/dev/null` non-failing scaffolding with no matching
+# test in the gated default/layer1-bootstrap broker passes — not pinned.)
+ops::hosts::tests::refuses_symlink_target
+ops::hosts::tests::writes_managed_block_into_fresh_file
+ops::hosts::tests::idempotent_when_block_matches
+ops::nm::tests::reload_failure_rolls_back
+ops::state_dir::tests::refuses_absolute_relative_path
+ops::state_dir::tests::refuses_parent_dir_escape
+ops::state_dir::tests::idempotent_reuses_existing_dirs
+ops::state_dir::tests::creates_base_and_relative_paths

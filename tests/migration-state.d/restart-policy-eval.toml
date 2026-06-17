@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/restart-policy.nix — 14 restartIfChanged value cases via mkEval introspection)"]

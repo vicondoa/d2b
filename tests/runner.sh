@@ -2,7 +2,7 @@
 # Aggregating wrapper for the nixling test layers.
 #
 # Runs in a deterministic order:
-#   static.sh -> nixling-store.sh -> audio.sh -> every security-*.sh (sorted)
+#   static.sh -> integration/live/nixling-store.sh -> integration/live/audio.sh -> every security-*.sh (sorted)
 #
 # This is the single gate that the `security/hardening` branch's daily
 # smoke is checked against. Sub-scripts have varying dispatcher
@@ -51,17 +51,17 @@
 # Failed runs are always retained for diagnostics.
 #
 # Honors NL_VMS and NL_RUN_ROOT — NL_VMS is passed through to children
-# via the environment so `nixling-store.sh` and the security-* scripts
-# target the same VM set; NL_RUN_ROOT pins the log root (useful for CI).
+# via the environment so the live integration scripts target the same VM set;
+# NL_RUN_ROOT pins the log root (useful for CI).
 
 set -uo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 
 # Fixed-order layers. static.sh has no --quick flag and is cheap, so it
-# always runs as-is. nixling-store.sh and audio.sh both speak the
+# always runs as-is. The live store and audio gates both speak the
 # --quick / --only / --list dispatcher contract.
-SCRIPTS=( static.sh nixling-store.sh audio.sh )
+SCRIPTS=( static.sh integration/live/nixling-store.sh integration/live/audio.sh )
 
 # Append every security-*.sh in lexical order. We use shell glob
 # expansion sorted by LC_ALL=C so phases can drop new files in without
@@ -336,7 +336,7 @@ MATCHED_ANY=0
 run_one() {
   local script="$1"
   local path="$HERE/$script"
-  local base="${script%.sh}"
+  local base; base=$(basename "${script%.sh}")
   local log="$RUN_DIR/${base}.log"
 
   if [ ! -f "$path" ]; then

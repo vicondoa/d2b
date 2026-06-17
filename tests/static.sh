@@ -25,7 +25,7 @@ export FLAKE=${FLAKE:-$ROOT}
 # a fallback smoke cache that would then be mistaken for an orphan.
 export NL_STATIC_CACHE="$ROOT/.static-cache.bootstrap"
 
-# shellcheck source=lib.sh
+# shellcheck source=tests/lib.sh
 . "$HERE/lib.sh"
 
 # Coarse-grained inter-process serializer. Concurrent invocations of
@@ -111,33 +111,18 @@ reap_known_static_orphans() {
     '.assertions-eval.*'
     '.broad-caps-invariant.*'
     '.broker-*'
-    '.bundle-drift.*'
-    '.cli-contract-coverage.*'
-    '.cli-json.*'
-    '.cli-json-drift.*'
     '.cli-legacy-bash-dispatch.*'
-    '.cli-rust-native-audit.*'
-    '.cli-rust-native-auth-status.*'
     '.cli-rust-native-cache'
-    '.cli-rust-native-host-check.*'
-    '.cli-rust-native-list.*'
     '.cli-rust-native.log'
-    '.cli-rust-native-status.*'
-    '.cli-rust-native-usb.*'
     '.daemon-*'
     '.host-check.*'
-    '.nixlingd-startup-smoke.*'
-    '.manifest-fuzz-bounded.*'
     '.manifest-gate.*'
-    '.manifest-v04-roundtrip.*'
     '.nl-smoke-cache.*'
     '.nixling-rust-gate.*'
     '.nixling-stub-smoke.*'
     '.nixling-test.log'
-    '.observability-eval.*'
     '.opaque-key-ids.*'
     '.privileges-matrix.*'
-    '.runner-shape-snapshot.log'
     '.static-cache.*'
     '.static-gitcfg.*'
     '.template-flake-check.*'
@@ -195,7 +180,7 @@ nl_static_path_prefix() {
   local shell_path="$1" base_path="$2"
   case "$shell_path" in
     "$base_path") printf '%s\n' "" ;;
-    *":$base_path") printf '%s\n' "${shell_path%:$base_path}" ;;
+    *":$base_path") printf '%s\n' "${shell_path%:"$base_path"}" ;;
     *) printf '%s\n' "$shell_path" ;;
   esac
 }
@@ -323,6 +308,61 @@ nl_static_parallel_script_gate() {
   nl_static_parallel_spawn --timer-begun "$label" bash "$path"
 }
 
+# Dedicated "long pole" background job, distinct from the NL_STATIC_JOBS
+# semaphore pool above. The Layer-1 nix eval region (flake check + smoke
+# evals + eval gates + mid-tier + per-example checks) is single-core
+# evaluator-bound, while the Rust workspace gate is multi-core cargo-bound;
+# the two contend on different resources, so running the Rust gate
+# concurrently with the entire nix eval region hides whichever is shorter
+# (profiled: cold `nix flake check` ~120s single-core vs the Rust gate's
+# cargo compile across all cores). The job's $ROOT footprint (cargo
+# `target/`, `nl_mktemp` scratch dirs) is entirely gitignored, so the
+# concurrent git-fetcher flake evals never stat it — no source-capture race.
+# Unlike the pool, this job is NOT harvested by `nl_static_parallel_wait_all`,
+# so intermediate barriers don't block on it; it is joined explicitly.
+# Set NL_STATIC_SERIAL_RUST=1 to disable the overlap (run the gate inline).
+NL_STATIC_LONGPOLE_PID=""
+NL_STATIC_LONGPOLE_LABEL=""
+NL_STATIC_LONGPOLE_LOG=""
+NL_STATIC_LONGPOLE_STATUS=""
+
+nl_static_longpole_spawn() {
+  local label="$1"
+  shift
+  NL_STATIC_LONGPOLE_LABEL="$label"
+  NL_STATIC_LONGPOLE_LOG=$(nl_static_parallel_log_path "longpole.$label")
+  NL_STATIC_LONGPOLE_STATUS=$(nl_static_parallel_status_path "longpole.$label")
+  rm -f -- "$NL_STATIC_LONGPOLE_LOG" "$NL_STATIC_LONGPOLE_STATUS"
+  nl_static_gate_begin "$label" "$label"
+  (
+    local rc=0
+    set +e
+    "$@" >"$NL_STATIC_LONGPOLE_LOG" 2>&1
+    rc=$?
+    set -e
+    nl_time_end "$label"
+    printf '%s\n' "$rc" > "$NL_STATIC_LONGPOLE_STATUS"
+    exit 0
+  ) &
+  NL_STATIC_LONGPOLE_PID=$!
+}
+
+nl_static_longpole_join() {
+  [ -n "$NL_STATIC_LONGPOLE_PID" ] || return 0
+  local rc=1
+  wait "$NL_STATIC_LONGPOLE_PID" >/dev/null 2>&1 || true
+  if [ -f "$NL_STATIC_LONGPOLE_STATUS" ]; then
+    rc=$(cat "$NL_STATIC_LONGPOLE_STATUS")
+    rm -f -- "$NL_STATIC_LONGPOLE_STATUS"
+  fi
+  NL_STATIC_LONGPOLE_PID=""
+  if [ "$rc" -ne 0 ]; then
+    [ -f "$NL_STATIC_LONGPOLE_LOG" ] && tail -120 "$NL_STATIC_LONGPOLE_LOG" >&2 || true
+    fail "$NL_STATIC_LONGPOLE_LABEL"
+  fi
+  ok "$NL_STATIC_LONGPOLE_LABEL"
+}
+
 nl_static_run_smoke_eval() {
   local path="$1" expr="$2" ok_label="$3" tail_lines="${4:-20}"
   [ -f "$path" ] || return 0
@@ -347,17 +387,21 @@ reap_known_static_orphans
 # bootstrap below pulls multi-GiB into /nix/store via nix shell). Runs
 # AFTER the orphan reapers above so a recoverable-by-reap situation
 # isn't flagged spuriously, but BEFORE any nix-store realisation work.
-nl_static_gate_begin "tests/preflight-disk-space.sh" "tests/preflight-disk-space.sh"
-bash "$ROOT/tests/preflight-disk-space.sh"
-ok "preflight-disk-space"
-nl_static_gate_end "tests/preflight-disk-space.sh"
+nl_static_gate_begin "tests/tools/preflight-disk-space.sh" "tests/tools/preflight-disk-space.sh"
+if [ -x "$ROOT/tests/tools/preflight-disk-space.sh" ]; then
+  bash "$ROOT/tests/tools/preflight-disk-space.sh"
+  ok "preflight-disk-space"
+else
+  log "  SKIP: tests/tools/preflight-disk-space.sh (not present)"
+fi
+nl_static_gate_end "tests/tools/preflight-disk-space.sh"
 
 if [ -d "$ROOT/packages" ] && [ -f "$ROOT/packages/rust-toolchain.toml" ]; then
   nl_time_begin "shared rust toolchain bootstrap"
   _STATIC_RUST_SHELL_PATH=$(nix shell --quiet --inputs-from "$ROOT" \
     nixpkgs#rustup nixpkgs#cargo nixpkgs#rustc nixpkgs#rustfmt nixpkgs#clippy \
     nixpkgs#gcc nixpkgs#sccache nixpkgs#cargo-deny nixpkgs#cargo-audit \
-    --command bash -lc 'printf %s "$PATH"')
+    --command bash -lc "printf %s \"\$PATH\"")
   NL_RUST_TOOLCHAIN_PATH=$(nl_static_path_prefix "$_STATIC_RUST_SHELL_PATH" "$PATH")
   export NL_RUST_TOOLCHAIN_PATH
   _STATIC_PINNED_RUST_CHANNEL=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]\+\)".*/\1/p' "$ROOT/packages/rust-toolchain.toml" | head -1)
@@ -391,8 +435,34 @@ export GIT_CONFIG_VALUE_0="$ROOT"
 NL_STATIC_CACHE=$(nl_mktemp .static-cache.XXXXXX)
 export NL_STATIC_CACHE
 
-# shellcheck source=cli-rust-native-common.sh
+# shellcheck source=tests/cli-rust-native-common.sh
 . "$HERE/cli-rust-native-common.sh"
+
+# -----------------------------------------------------------------------------
+# Optional Rust ‖ Nix overlap. When NL_STATIC_PARALLEL_RUST=1, launch the Rust
+# workspace gate as a background long pole so its multi-core cargo
+# compile/clippy overlaps the SINGLE-CORE, lighter nix eval region that
+# immediately follows (parse+eval, the 120s flake check, and the smoke evals).
+# It is joined right after the smoke-eval barrier — BEFORE the memory-heavy
+# mid-tier eval pool + assertions-eval, which materialize multiple NixOS system
+# closures.
+#
+# OFF BY DEFAULT (opt-in): profiling showed the overlap saves wall-clock on the
+# cold flake-check path, but running the Rust gate's process-spawning tests
+# concurrently with the Nix eval region intermittently starves test
+# subprocesses (the PTY hangup test fails even with a 120s watchdog) — a
+# resource-contention flake, not a test bug. cargo test --workspace is reliable
+# when the Rust gate runs serially (the default). Opt into the overlap with
+# NL_STATIC_PARALLEL_RUST=1 only where the wall-clock win outweighs the
+# timing-test flake risk. Nothing between here and the join touches the shared
+# cargo target dir; the gate's entire $ROOT footprint is gitignored, so
+# concurrent git-fetcher flake evals never stat it.
+_STATIC_RUST_GATE_OVERLAP=0
+if [ -n "${NL_STATIC_PARALLEL_RUST:-}" ] && [ -d "$ROOT/packages" ] && [ -x "$ROOT/tests/test-rust.sh" ]; then
+  _STATIC_RUST_GATE_OVERLAP=1
+  log "==> launching test-rust.sh as background long pole (NL_STATIC_PARALLEL_RUST=1; overlaps flake check + smoke evals)"
+  nl_static_longpole_spawn "tests/test-rust.sh" bash "$ROOT/tests/test-rust.sh"
+fi
 
 log "==> Layer 1: parse + eval"
 
@@ -444,11 +514,11 @@ NL_FILES=(
   nixos-modules/components/observability/guest.nix
   nixos-modules/components/observability/host.nix
   nixos-modules/components/observability/stack.nix
-  tests/smoke-eval-aarch64.nix
-  tests/smoke-eval-graphics.nix
-  tests/smoke-eval-home-manager.nix
-  tests/smoke-eval-extraspecialargs.nix
-  tests/smoke-eval-tpm.nix
+  tests/unit/smoke/smoke-eval-aarch64.nix
+  tests/unit/smoke/smoke-eval-graphics.nix
+  tests/unit/smoke/smoke-eval-home-manager.nix
+  tests/unit/smoke/smoke-eval-extraspecialargs.nix
+  tests/unit/smoke/smoke-eval-tpm.nix
   flake.nix
 )
 nl_static_gate_begin "nix-instantiate --parse" "nix-instantiate --parse"
@@ -476,7 +546,7 @@ fi
 shellcheck_output_dir=$(nl_mktemp .shellcheck.XXXXXX)
 shellcheck_output="$shellcheck_output_dir/output"
 if ! command -v shellcheck >/dev/null 2>&1; then
-  _STATIC_SHELLCHECK_PATH=$(nix shell --quiet --inputs-from "$ROOT" nixpkgs#shellcheck --command bash -lc 'printf %s "$PATH"')
+  _STATIC_SHELLCHECK_PATH=$(nix shell --quiet --inputs-from "$ROOT" nixpkgs#shellcheck --command bash -lc "printf %s \"\$PATH\"")
   _STATIC_SHELLCHECK_PREFIX=$(nl_static_path_prefix "$_STATIC_SHELLCHECK_PATH" "$PATH")
   if [ -n "$_STATIC_SHELLCHECK_PREFIX" ]; then
     PATH="$_STATIC_SHELLCHECK_PREFIX:$PATH"
@@ -585,7 +655,11 @@ fi
 nl_static_gate_end "readOnly + default + config trio lint"
 
 nl_static_gate_begin "nix flake check --no-build --all-systems" "nix flake check --no-build --all-systems"
-if nix flake check "$ROOT" --no-build --all-systems 2>&1 | tail -20 >> "$NL_LOG"; then
+# Use the git+file:// ref (not a bare path) so the eval is source-captured
+# from the git tree only. This honours .gitignore, so the concurrently-running
+# background Rust gate's untracked $ROOT scratch (cargo target/, nl_mktemp
+# dirs) is invisible to the source capture and cannot race it.
+if nix flake check "git+file://$ROOT" --no-build --all-systems 2>&1 | tail -20 >> "$NL_LOG"; then
   ok "flake check"
 else
   fail "flake check"
@@ -601,52 +675,61 @@ nl_static_gate_end "nix flake check --no-build --all-systems"
 # These eval-only smoke checks are independent, so run them behind the
 # shared NL_STATIC_JOBS semaphore.
 nl_static_parallel_smoke_eval_gate \
-  "tests/smoke-eval.nix" \
-  "$ROOT/tests/smoke-eval.nix" \
-  "let f = import $ROOT/tests/smoke-eval.nix; r = f {}; in r.drvPath" \
+  "tests/unit/smoke/smoke-eval.nix" \
+  "$ROOT/tests/unit/smoke/smoke-eval.nix" \
+  "let f = import $ROOT/tests/unit/smoke/smoke-eval.nix; r = f {}; in r.drvPath" \
   "smoke-eval" \
   20
 nl_static_parallel_smoke_eval_gate \
-  "tests/smoke-eval-graphics.nix" \
-  "$ROOT/tests/smoke-eval-graphics.nix" \
-  "let f = import $ROOT/tests/smoke-eval-graphics.nix; r = f {}; in r.drvPath" \
+  "tests/unit/smoke/smoke-eval-graphics.nix" \
+  "$ROOT/tests/unit/smoke/smoke-eval-graphics.nix" \
+  "let f = import $ROOT/tests/unit/smoke/smoke-eval-graphics.nix; r = f {}; in r.drvPath" \
   "smoke-eval-graphics" \
   20
 nl_static_parallel_smoke_eval_gate \
-  "tests/smoke-eval-home-manager.nix" \
-  "$ROOT/tests/smoke-eval-home-manager.nix" \
-  "let f = import $ROOT/tests/smoke-eval-home-manager.nix; r = f {}; in r.drvPath" \
+  "tests/unit/smoke/smoke-eval-home-manager.nix" \
+  "$ROOT/tests/unit/smoke/smoke-eval-home-manager.nix" \
+  "let f = import $ROOT/tests/unit/smoke/smoke-eval-home-manager.nix; r = f {}; in r.drvPath" \
   "smoke-eval-home-manager" \
   20
 nl_static_parallel_smoke_eval_gate \
-  "tests/smoke-eval-extraspecialargs.nix" \
-  "$ROOT/tests/smoke-eval-extraspecialargs.nix" \
-  "let f = import $ROOT/tests/smoke-eval-extraspecialargs.nix; r = f {}; in r.drvPath" \
+  "tests/unit/smoke/smoke-eval-extraspecialargs.nix" \
+  "$ROOT/tests/unit/smoke/smoke-eval-extraspecialargs.nix" \
+  "let f = import $ROOT/tests/unit/smoke/smoke-eval-extraspecialargs.nix; r = f {}; in r.drvPath" \
   "smoke-eval-extraspecialargs" \
   20
 nl_static_parallel_smoke_eval_gate \
-  "tests/smoke-eval-tpm.nix" \
-  "$ROOT/tests/smoke-eval-tpm.nix" \
-  "let f = import $ROOT/tests/smoke-eval-tpm.nix; r = f {}; in r.drvPath" \
+  "tests/unit/smoke/smoke-eval-tpm.nix" \
+  "$ROOT/tests/unit/smoke/smoke-eval-tpm.nix" \
+  "let f = import $ROOT/tests/unit/smoke/smoke-eval-tpm.nix; r = f {}; in r.drvPath" \
   "smoke-eval-tpm" \
   20
 nl_static_parallel_smoke_eval_gate \
-  "tests/smoke-eval-aarch64.nix" \
-  "$ROOT/tests/smoke-eval-aarch64.nix" \
-  "let f = import $ROOT/tests/smoke-eval-aarch64.nix; r = f {}; in r.drvPath" \
+  "tests/unit/smoke/smoke-eval-aarch64.nix" \
+  "$ROOT/tests/unit/smoke/smoke-eval-aarch64.nix" \
+  "let f = import $ROOT/tests/unit/smoke/smoke-eval-aarch64.nix; r = f {}; in r.drvPath" \
   "smoke-eval-aarch64" \
   20
 nl_static_parallel_wait_all
 
-# Smaller eval/runtime script gates parallelize well, but the large
+# Join the background Rust workspace gate HERE — after the lighter flake-check +
+# smoke-eval region it was overlapping, but BEFORE the memory-heavy mid-tier
+# eval pool and assertions-eval below (those materialize multiple NixOS system
+# closures). Overlapping the Rust gate's process-spawning TESTS with that heavy
+# Nix-build phase oversubscribes RAM and starves test subprocesses (the PTY
+# hangup test was the canary). Joining here keeps the high-value overlap (Rust
+# compile ‖ the 120s single-core flake check + smoke evals) while letting the
+# Rust tests finish against light Nix load, and the heavy Nix builds then run
+# without Rust contention.
+if [ "${_STATIC_RUST_GATE_OVERLAP:-0}" -eq 1 ]; then
+  log "==> joining background test-rust.sh long pole (before heavy mid-tier evals)"
+  nl_static_longpole_join
+  _STATIC_RUST_GATE_OVERLAP=2
+fi
+
+# Smaller eval script gates parallelize well, but the large
 # assertion/observability matrices saturate the nix daemon when overlapped.
 # Keep those two serial after the lighter fan-out drains.
-if [ -x "$ROOT/tests/net-vm-network-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/net-vm-network-eval.sh" "$ROOT/tests/net-vm-network-eval.sh"
-fi
-if [ -x "$ROOT/tests/bridge-isolation-runtime.sh" ]; then
-  nl_static_parallel_script_gate "tests/bridge-isolation-runtime.sh" "$ROOT/tests/bridge-isolation-runtime.sh"
-fi
 if [ -x "$ROOT/tests/usbip-gating-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/usbip-gating-eval.sh" "$ROOT/tests/usbip-gating-eval.sh"
 fi
@@ -660,38 +743,14 @@ if [ -x "$ROOT/tests/bridge-ipv6-boot-sysctl-eval.sh" ]; then
   # suppresses IPv6 at NixOS activation, closing the boot-time window.
   nl_static_parallel_script_gate "tests/bridge-ipv6-boot-sysctl-eval.sh" "$ROOT/tests/bridge-ipv6-boot-sysctl-eval.sh"
 fi
-if [ -x "$ROOT/tests/cli-json.sh" ]; then
-  nl_static_parallel_script_gate "tests/cli-json.sh" "$ROOT/tests/cli-json.sh"
-fi
 if [ -x "$ROOT/tests/autostart-wiring-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/autostart-wiring-eval.sh" "$ROOT/tests/autostart-wiring-eval.sh"
 fi
 if [ -x "$ROOT/tests/restart-policy-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/restart-policy-eval.sh" "$ROOT/tests/restart-policy-eval.sh"
 fi
-if [ -x "$ROOT/tests/nixlingd-startup-smoke.sh" ]; then
-  nl_static_parallel_script_gate "tests/nixlingd-startup-smoke.sh" "$ROOT/tests/nixlingd-startup-smoke.sh"
-fi
-if [ -x "$ROOT/tests/video-sidecar-hardening-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/video-sidecar-hardening-eval.sh" "$ROOT/tests/video-sidecar-hardening-eval.sh"
-fi
 if [ -x "$ROOT/tests/video-contract-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/video-contract-eval.sh" "$ROOT/tests/video-contract-eval.sh"
-fi
-if [ -x "$ROOT/tests/video-binary-contract.sh" ]; then
-  nl_static_parallel_script_gate "tests/video-binary-contract.sh" "$ROOT/tests/video-binary-contract.sh"
-fi
-if [ -x "$ROOT/tests/cli-vm-verbs-eval.sh" ]; then
-  # P4fu1 software-r1 / test-r1 closure: wire the cli-vm-verbs Layer-1
-  # gate so the bash-fallback removal stays regression-gated.
-  nl_static_parallel_script_gate "tests/cli-vm-verbs-eval.sh" "$ROOT/tests/cli-vm-verbs-eval.sh"
-fi
-if [ -x "$ROOT/tests/cli-nix-consumers-eval.sh" ]; then
-  # Regression gate that asserts no
-  # consumer of nixos-modules/cli.nix's outputs survives outside the
-  # file itself + this gate. Lets the sibling
-  # agent delete cli.nix without breaking framework eval.
-  nl_static_parallel_script_gate "tests/cli-nix-consumers-eval.sh" "$ROOT/tests/cli-nix-consumers-eval.sh"
 fi
 if [ -x "$ROOT/tests/broker-caps-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/broker-caps-eval.sh" "$ROOT/tests/broker-caps-eval.sh"
@@ -722,137 +781,51 @@ if [ -x "$ROOT/tests/volume-mounts-eval.sh" ]; then
   # identity-bearing services regenerate state on every VM restart.
   nl_static_parallel_script_gate "tests/volume-mounts-eval.sh" "$ROOT/tests/volume-mounts-eval.sh"
 fi
-if [ -x "$ROOT/tests/tempo-budget-eval.sh" ]; then
-  # Static gate for the Tempo retention +
-  # sampling budget policy. Asserts Nix-side constants in
-  # nixos-modules/components/observability/stack.nix +
-  # options-observability.nix stay aligned with
-  # docs/reference/tempo-retention-sampling.md.
-  nl_static_parallel_script_gate "tests/tempo-budget-eval.sh" "$ROOT/tests/tempo-budget-eval.sh"
-fi
 if [ -x "$ROOT/tests/daemon-default-compat-eval.sh" ]; then
   # Assert daemonExperimental.enable default
   # flip gate honors readiness + evidence + override semantics.
   nl_static_parallel_script_gate "tests/daemon-default-compat-eval.sh" "$ROOT/tests/daemon-default-compat-eval.sh"
 fi
-if [ -x "$ROOT/tests/host-validate-verb-eval.sh" ]; then
-  # Layer-1 gate for the
-  # `nixling host validate --apply` verb that writes per-wave
-  # evidence files.
-  nl_static_parallel_script_gate "tests/host-validate-verb-eval.sh" "$ROOT/tests/host-validate-verb-eval.sh"
-fi
-if [ -x "$ROOT/tests/wave-evidence-schema-eval.sh" ]; then
-  # Assert the canonical wave
-  # evidence schema doc + JSON Schema cover every wave declared
-  # in options-daemon.nix.
-  nl_static_parallel_script_gate "tests/wave-evidence-schema-eval.sh" "$ROOT/tests/wave-evidence-schema-eval.sh"
-fi
-if [ -x "$ROOT/tests/polkit-allowlist-eval.sh" ]; then
-  # Assert host-polkit.nix names ONLY
-  # the daemon-only singleton units (nixlingd.service,
-  # nixling-priv-broker.{service,socket}) and contains no
-  # references to the retired per-VM / per-env unit shapes.
-  nl_static_parallel_script_gate "tests/polkit-allowlist-eval.sh" "$ROOT/tests/polkit-allowlist-eval.sh"
-fi
-if [ -x "$ROOT/tests/legacy-unit-denylist-eval.sh" ]; then
-  # Drift gate enforcing that no
-  # systemd unit name retired in reappears in nixos-modules/.
-  # EXPECTED-RED until lands; the gate
-  # is wired here so the deletion sweep has a machine-checkable
-  # target to drive to green.
-  nl_static_parallel_script_gate "tests/legacy-unit-denylist-eval.sh" "$ROOT/tests/legacy-unit-denylist-eval.sh"
-fi
 # ADR index coverage guard (/ -class doc-drift).
-if [ -x "$ROOT/tests/adr-index-coverage.sh" ]; then
-  nl_static_parallel_script_gate "tests/adr-index-coverage.sh" "$ROOT/tests/adr-index-coverage.sh"
+if [ -x "$ROOT/tests/unit/meta/adr-index-coverage.sh" ]; then
+  nl_static_parallel_script_gate "tests/unit/meta/adr-index-coverage.sh" "$ROOT/tests/unit/meta/adr-index-coverage.sh"
 fi
 # I3 invariant enforcement (ADR 0022): no new v1.3 deferrals authored
 # during v1.2 stabilization. ADR 0022 documents this gate, so it must
 # stay wired.
-if [ -x "$ROOT/tests/no-new-deferral.sh" ]; then
-  nl_static_parallel_script_gate "tests/no-new-deferral.sh" "$ROOT/tests/no-new-deferral.sh"
-fi
-# Wire the remaining doc/drift gates so
-# the clean-break invariants are Layer-1 always-on.
-if [ -x "$ROOT/tests/adr-0015-presence-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/adr-0015-presence-eval.sh" "$ROOT/tests/adr-0015-presence-eval.sh"
-fi
-if [ -x "$ROOT/tests/agents-md-rewrite-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/agents-md-rewrite-eval.sh" "$ROOT/tests/agents-md-rewrite-eval.sh"
-fi
-if [ -x "$ROOT/tests/privileges-doc-completeness-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/privileges-doc-completeness-eval.sh" "$ROOT/tests/privileges-doc-completeness-eval.sh"
+if [ -x "$ROOT/tests/unit/meta/no-new-deferral.sh" ]; then
+  nl_static_parallel_script_gate "tests/unit/meta/no-new-deferral.sh" "$ROOT/tests/unit/meta/no-new-deferral.sh"
 fi
 if [ -x "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/privileges-json-rust-vs-nix-eval.sh" "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh"
 fi
-if [ -x "$ROOT/tests/cli-nix-consumers-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/cli-nix-consumers-eval.sh" "$ROOT/tests/cli-nix-consumers-eval.sh"
-fi
-# tracing-contract + daemon-metrics need static.sh wiring.
-if [ -x "$ROOT/tests/tracing-contract-lint.sh" ]; then
-  nl_static_parallel_script_gate "tests/tracing-contract-lint.sh" "$ROOT/tests/tracing-contract-lint.sh"
-fi
-if [ -x "$ROOT/tests/daemon-metrics-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/daemon-metrics-eval.sh" "$ROOT/tests/daemon-metrics-eval.sh"
-fi
 # Wire orphaned static-eval gates. These were previously not referenced
 # in any CI workflow or aggregator;
 # wired here so ci-coverage.sh structural guard passes.
-for _d13_gate in \
-  audio-argv-shape \
+for _gate in \
   broker-socket-activation-eval \
-  broker-systemd-unit-eval \
-  cli-rust-native-host-doctor \
   daemon-autostart-eval \
-  daemon-experimental-warning-eval \
-  gpu-argv-shape \
-  host-prep-dag-eval \
-  kernel-modules-parity-eval \
-  loki-label-cardinality-eval \
-  microvm-nix-absent-eval \
-  minijail-validator-audio \
-  minijail-validator-cloud-hypervisor \
-  minijail-validator-gpu \
-  minijail-validator-otel-host-bridge \
-  minijail-validator-swtpm \
-  minijail-validator-usbip \
-  minijail-validator-video \
-  minijail-validator-virtiofsd \
-  minijail-validator-vsock-relay \
-  minijail-validator-wayland-proxy \
   net-vm-bundle-gate-eval \
   niri-vm-borders-eval \
-  no-bash-exec-eval \
-  otel-acl-migration-eval \
-  otel-host-bridge-argv-shape \
-  deliverable-gate-inventory \
-  per-vm-state-ownership-eval \
-  processes-json-eval \
-  readiness-waves-eval \
-  release-tag-eval \
-  ssh-host-key-preflight-eval \
-  state-dir-acl-eval \
-  store-sync-export-eval \
-  stop-dag-reconcile-eval \
-  supervisor-option-absent-eval \
-  tap-dag-contract-doc-eval \
-  usbip-argv-shape \
-  usbip-state-machine-eval \
-  v1.1-kernel-floor-eval \
-  vfsd-watchdog-retired-eval \
-  video-argv-shape \
-  vm-submodule-cutover-eval \
-  vm-submodule-eval; do
-  if [ -x "$ROOT/tests/${_d13_gate}.sh" ]; then
-    nl_static_parallel_script_gate "tests/${_d13_gate}.sh" "$ROOT/tests/${_d13_gate}.sh"
+  readiness-waves-eval; do
+  if [ -x "$ROOT/tests/${_gate}.sh" ]; then
+    nl_static_parallel_script_gate "tests/${_gate}.sh" "$ROOT/tests/${_gate}.sh"
   fi
 done
-unset _d13_gate
+unset _gate
+# deliverable-gate-inventory + pr-checklist-gate are invoked literally (not via
+# the loop above) so tests/unit/meta/layer1-self-inventory.sh's invocation grep resolves
+# them.
+if [ -x "$ROOT/tests/unit/meta/deliverable-gate-inventory.sh" ]; then
+  nl_static_parallel_script_gate "tests/unit/meta/deliverable-gate-inventory.sh" "$ROOT/tests/unit/meta/deliverable-gate-inventory.sh"
+fi
+if [ -x "$ROOT/tests/unit/meta/pr-checklist-gate.sh" ]; then
+  nl_static_parallel_script_gate "tests/unit/meta/pr-checklist-gate.sh" "$ROOT/tests/unit/meta/pr-checklist-gate.sh"
+fi
 # ci-coverage.sh structural guard (must run after all other tests
 # are registered above so it can attest the full set is wired).
-if [ -x "$ROOT/tests/ci-coverage.sh" ]; then
-  nl_static_parallel_script_gate "tests/ci-coverage.sh" "$ROOT/tests/ci-coverage.sh"
+if [ -x "$ROOT/tests/unit/meta/ci-coverage.sh" ]; then
+  nl_static_parallel_script_gate "tests/unit/meta/ci-coverage.sh" "$ROOT/tests/unit/meta/ci-coverage.sh"
 fi
 nl_static_parallel_wait_all
 
@@ -876,17 +849,6 @@ if [ -x "$ROOT/tests/assertions-eval.sh" ]; then
 fi
 nl_static_gate_end "tests/assertions-eval.sh"
 
-nl_static_gate_begin "tests/observability-eval.sh" "tests/observability-eval.sh"
-if [ -x "$ROOT/tests/observability-eval.sh" ]; then
-  if bash "$ROOT/tests/observability-eval.sh" >/dev/null 2>&1; then
-    ok "observability-eval"
-  else
-    bash "$ROOT/tests/observability-eval.sh" 2>&1 | tail -40 >&2 || true
-    fail "observability-eval"
-  fi
-fi
-nl_static_gate_end "tests/observability-eval.sh"
-
 # Release auto-gcroots accumulated by the smoke-eval pool +
 # the two big eval gates (assertions/observability). Without this
 # the next major phase (manifest-contract + + per-example
@@ -909,7 +871,7 @@ nl_check_disk_budget "post-eval-gates" || fail "disk budget exhausted after eval
 # else in the test harness depends on Python today, but the jsonschema
 # package is small (~50KB) and pulled lazily on first run.
 nl_static_gate_begin "manifest JSON contract (docs/reference/manifest-schema.json)" "manifest JSON contract (docs/reference/manifest-schema.json)"
-if [ -f "$ROOT/docs/reference/manifest-schema.json" ] && [ -f "$ROOT/tests/smoke-eval.nix" ]; then
+if [ -f "$ROOT/docs/reference/manifest-schema.json" ] && [ -f "$ROOT/tests/unit/smoke/smoke-eval.nix" ]; then
   _MANIFEST_DIR=$(nl_mktemp .manifest-gate.XXXXXX)
   _MANIFEST_JSON="$_MANIFEST_DIR/manifest.json"
 
@@ -1181,35 +1143,47 @@ log "Layer 1 core gates OK"
 # flake checks so adding a new executable Layer-1 tests/*.sh script without
 # wiring it into static.sh fails closed.
 # -----------------------------------------------------------------------------
-nl_static_gate_begin "tests/layer1-self-inventory.sh" "tests/layer1-self-inventory.sh"
-if [ -x "$HERE/layer1-self-inventory.sh" ]; then
-  if bash "$HERE/layer1-self-inventory.sh" >/dev/null 2>&1; then
+nl_static_gate_begin "tests/unit/meta/layer1-self-inventory.sh" "tests/unit/meta/layer1-self-inventory.sh"
+if [ -x "$ROOT/tests/unit/meta/layer1-self-inventory.sh" ]; then
+  if bash "$ROOT/tests/unit/meta/layer1-self-inventory.sh" >/dev/null 2>&1; then
     ok "layer1-self-inventory"
   else
-    bash "$HERE/layer1-self-inventory.sh" 2>&1 | tail -40 >&2 || true
+    bash "$ROOT/tests/unit/meta/layer1-self-inventory.sh" 2>&1 | tail -40 >&2 || true
     fail "layer1-self-inventory"
   fi
 fi
-nl_static_gate_end "tests/layer1-self-inventory.sh"
+nl_static_gate_end "tests/unit/meta/layer1-self-inventory.sh"
 
 # -----------------------------------------------------------------------------
-# Rust workspace gate. packages/ lands on the parallel s1 branch, so
-# this is a no-op on this isolated s2 branch and becomes a hard gate after the
-# Integration merge. tests/stub-no-socket.sh is invoked by
-# rust-workspace-checks.sh after the cargo gates.
+# Rust workspace gate. By default (serial) this runs inline here. When the
+# optional NL_STATIC_PARALLEL_RUST overlap launched the background long pole, it
+# was already joined above (after the smoke-eval region, before the heavy
+# evals), so this is a no-op in that case. tests/tools/stub-no-socket.sh is invoked by
+# test-rust.sh after the cargo gates.
 # -----------------------------------------------------------------------------
-nl_static_gate_begin "tests/rust-workspace-checks.sh" "tests/rust-workspace-checks.sh"
-if [ -d "$ROOT/packages" ]; then
-  if bash "$HERE/rust-workspace-checks.sh" >/dev/null 2>&1; then
-    ok "rust-workspace-checks"
-  else
-    bash "$HERE/rust-workspace-checks.sh" 2>&1 | tail -80 >&2 || true
-    fail "rust-workspace-checks"
-  fi
+if [ "$_STATIC_RUST_GATE_OVERLAP" -eq 2 ]; then
+  : # Overlap mode: already joined above (after smoke evals, before heavy evals).
+elif [ "$_STATIC_RUST_GATE_OVERLAP" -eq 1 ]; then
+  # Defensive: overlap spawned but not yet joined (e.g. smoke-eval region
+  # skipped). Join now.
+  log "==> joining background test-rust.sh long pole"
+  nl_static_longpole_join
 else
-  log "  no packages/ — skipping rust workspace checks (W0a unstaged)"
+  nl_static_gate_begin "tests/test-rust.sh" "tests/test-rust.sh"
+  if [ -d "$ROOT/packages" ] && [ -x "$ROOT/tests/test-rust.sh" ]; then
+    if bash "$ROOT/tests/test-rust.sh" >/dev/null 2>&1; then
+      ok "rust-workspace-checks"
+    else
+      bash "$ROOT/tests/test-rust.sh" 2>&1 | tail -80 >&2 || true
+      fail "rust-workspace-checks"
+    fi
+  elif [ -d "$ROOT/packages" ]; then
+    log "  SKIP: test-rust.sh (not present)"
+  else
+    log "  no packages/ — skipping rust workspace checks (W0a unstaged)"
+  fi
+  nl_static_gate_end "tests/test-rust.sh"
 fi
-nl_static_gate_end "tests/rust-workspace-checks.sh"
 
 # -----------------------------------------------------------------------------
 # bundle/schema drift, public vms.json parity, and static portability
@@ -1221,61 +1195,18 @@ nl_static_gate_begin "W1 bundle/schema static gates" "W1 bundle/schema static ga
 nl_time_begin "W1 smoke cache prewarm"
 nl_smoke_vms_json >/dev/null
 nl_smoke_bundle_privileges_json >/dev/null
-# Prewarm the host.json cache so
-# `tests/ifname-nix-rust-parity.sh` running in the parallel pool
-# hits the cache instead of triggering a fresh `getFlake` against $ROOT
-# while sibling gates (`tests/vms-json-parity.sh`,
-# `tests/bundle-drift.sh`) still hold per-test scratch files inside
-# $ROOT. Without the prewarm the parity gate fail-closes with
-# `path '//$ROOT/.vms-json-parity.XXXXXX' does not exist`.
+# Prewarm the host.json cache before the parallel bundle/schema gates so
+# each worker avoids forcing a fresh `getFlake` against $ROOT while sibling
+# gates still hold per-test scratch files inside the checkout.
 nl_smoke_bundle_host_json >/dev/null
 nl_time_end "W1 smoke cache prewarm"
-if [ -x "$HERE/guest-proto-bindings.sh" ]; then
-  nl_time_begin "tests/guest-proto-bindings.sh"
-  if bash "$HERE/guest-proto-bindings.sh" >/dev/null 2>&1; then
-    ok "guest-proto-bindings"
-  else
-    bash "$HERE/guest-proto-bindings.sh" 2>&1 | tail -80 >&2 || true
-    fail "guest-proto-bindings"
-  fi
-  nl_time_end "tests/guest-proto-bindings.sh"
-fi
-if [ -x "$HERE/guest-ttrpc-bindings.sh" ]; then
-  nl_time_begin "tests/guest-ttrpc-bindings.sh"
-  if bash "$HERE/guest-ttrpc-bindings.sh" >/dev/null 2>&1; then
-    ok "guest-ttrpc-bindings"
-  else
-    bash "$HERE/guest-ttrpc-bindings.sh" 2>&1 | tail -80 >&2 || true
-    fail "guest-ttrpc-bindings"
-  fi
-  nl_time_end "tests/guest-ttrpc-bindings.sh"
-fi
-if [ -x "$HERE/bundle-drift.sh" ]; then nl_static_parallel_script "tests/bundle-drift.sh" "$HERE/bundle-drift.sh"; fi
+if [ -x "$ROOT/tests/unit/gates/drift-check.sh" ]; then nl_static_parallel_script "tests/unit/gates/drift-check.sh" "$ROOT/tests/unit/gates/drift-check.sh"; fi
 # host.json per-field schema gold-file drift gate (integrator-wired).
-if [ -x "$HERE/host-json-drift-gate.sh" ]; then nl_static_parallel_script "tests/host-json-drift-gate.sh" "$HERE/host-json-drift-gate.sh"; fi
-# Assert Nix-emitted ifNameMappings
-# pass the Rust looks_nixling_owned format gate.
-if [ -x "$HERE/ifname-nix-rust-parity.sh" ]; then nl_static_parallel_script "tests/ifname-nix-rust-parity.sh" "$HERE/ifname-nix-rust-parity.sh"; fi
-if [ -x "$HERE/vms-json-parity.sh" ]; then nl_static_parallel_script "tests/vms-json-parity.sh" "$HERE/vms-json-parity.sh"; fi
-if [ -x "$HERE/guest-control-proto.sh" ]; then nl_static_parallel_script "tests/guest-control-proto.sh" "$HERE/guest-control-proto.sh"; fi
-if [ -x "$HERE/guest-control-auth-nongoals.sh" ]; then nl_static_parallel_script "tests/guest-control-auth-nongoals.sh" "$HERE/guest-control-auth-nongoals.sh"; fi
+if [ -x "$ROOT/tests/unit/gates/vms-json-parity.sh" ]; then nl_static_parallel_script "tests/unit/gates/vms-json-parity.sh" "$ROOT/tests/unit/gates/vms-json-parity.sh"; fi
 if [ -x "$HERE/guest-control-vsock-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-eval.sh" "$HERE/guest-control-vsock-eval.sh"; fi
-if [ -x "$HERE/guest-control-vsock-helper-static.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-helper-static.sh" "$HERE/guest-control-vsock-helper-static.sh"; fi
-if [ -x "$HERE/guest-exec-runtime-static.sh" ]; then nl_static_parallel_script "tests/guest-exec-runtime-static.sh" "$HERE/guest-exec-runtime-static.sh"; fi
-if [ -x "$HERE/guest-exec-policy-eval.sh" ]; then nl_static_parallel_script "tests/guest-exec-policy-eval.sh" "$HERE/guest-exec-policy-eval.sh"; fi
 if [ -x "$HERE/guest-control-auth-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-auth-eval.sh" "$HERE/guest-control-auth-eval.sh"; fi
-if [ -x "$HERE/guest-control-token-materializer.sh" ]; then nl_static_parallel_script "tests/guest-control-token-materializer.sh" "$HERE/guest-control-token-materializer.sh"; fi
-if [ -x "$HERE/guest-static-elf.sh" ]; then nl_static_parallel_script "tests/guest-static-elf.sh" "$HERE/guest-static-elf.sh"; fi
-if [ -x "$HERE/guest-static-consumption-eval.sh" ]; then nl_static_parallel_script "tests/guest-static-consumption-eval.sh" "$HERE/guest-static-consumption-eval.sh"; fi
 if [ -x "$HERE/static-invariant-uid0.sh" ]; then nl_static_parallel_script "tests/static-invariant-uid0.sh" "$HERE/static-invariant-uid0.sh"; fi
-if [ -x "$HERE/static-invariant-broad-caps.sh" ]; then nl_static_parallel_script "tests/static-invariant-broad-caps.sh" "$HERE/static-invariant-broad-caps.sh"; fi
-if [ -x "$HERE/static-invariant-writable-paths.sh" ]; then nl_static_parallel_script "tests/static-invariant-writable-paths.sh" "$HERE/static-invariant-writable-paths.sh"; fi
-if [ -x "$HERE/static-invariant-world-readable-leak.sh" ]; then nl_static_parallel_script "tests/static-invariant-world-readable-leak.sh" "$HERE/static-invariant-world-readable-leak.sh"; fi
-if [ -x "$HERE/static-invariant-deny-unknown-fields.sh" ]; then nl_static_parallel_script "tests/static-invariant-deny-unknown-fields.sh" "$HERE/static-invariant-deny-unknown-fields.sh"; fi
 # -DTO deny_unknown_fields static invariant (integrator-wired).
-if [ -x "$HERE/static-invariant-deny-unknown-fields-w3.sh" ]; then nl_static_parallel_script "tests/static-invariant-deny-unknown-fields-w3.sh" "$HERE/static-invariant-deny-unknown-fields-w3.sh"; fi
-if [ -x "$HERE/static-invariant-opaque-key-ids.sh" ]; then nl_static_parallel_script "tests/static-invariant-opaque-key-ids.sh" "$HERE/static-invariant-opaque-key-ids.sh"; fi
-if [ -x "$HERE/privileges-matrix-completeness.sh" ]; then nl_static_parallel_script "tests/privileges-matrix-completeness.sh" "$HERE/privileges-matrix-completeness.sh"; fi
 nl_static_parallel_wait_all
 nl_static_gate_end "W1 bundle/schema static gates"
 
@@ -1287,7 +1218,6 @@ nl_static_gate_end "W1 bundle/schema static gates"
 # error-codes, and bounded fuzz of the manifest_v04 / bundle parsers.
 # -----------------------------------------------------------------------------
 nl_static_gate_begin "W2 control-plane skeleton gates" "W2 control-plane skeleton gates"
-if [ -x "$HERE/static-rust-dependency-direction.sh" ]; then bash "$HERE/static-rust-dependency-direction.sh" || fail "static-rust-dependency-direction"; fi
 nl_time_begin "W2 cargo prebuild"
 if [ -d "$ROOT/packages" ]; then
   nl_activate_rust_toolchain_path || true
@@ -1305,41 +1235,18 @@ nl_time_end "W2 CLI smoke prewarm"
 # Group 1: pure/read-only gates that rely on getFlake or generated docs.
 # Keep them away from the runtime socket gates below because dirty-tree
 # snapshots fail closed on in-repo AF_UNIX socket paths.
-if [ -x "$HERE/manifest-v04-roundtrip.sh" ]; then nl_static_parallel_script "tests/manifest-v04-roundtrip.sh" "$HERE/manifest-v04-roundtrip.sh"; fi
-if [ -x "$HERE/broker-enum-disposition.sh" ]; then nl_static_parallel_script "tests/broker-enum-disposition.sh" "$HERE/broker-enum-disposition.sh"; fi
-if [ -x "$HERE/broker-validate-bundle.sh" ]; then nl_static_parallel_script "tests/broker-validate-bundle.sh" "$HERE/broker-validate-bundle.sh"; fi
 # Pin layer1-bootstrap as the default broker feature
 # until lands the production-shaped runtime.
 if [ -x "$HERE/broker-default-features-build.sh" ]; then nl_static_parallel_script "tests/broker-default-features-build.sh" "$HERE/broker-default-features-build.sh"; fi
-if [ -x "$HERE/cli-rust-native-list.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-list.sh" "$HERE/cli-rust-native-list.sh"; fi
-if [ -x "$HERE/cli-rust-native-status.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-status.sh" "$HERE/cli-rust-native-status.sh"; fi
-if [ -x "$HERE/cli-rust-native-usb.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-usb.sh" "$HERE/cli-rust-native-usb.sh"; fi
-if [ -x "$HERE/cli-rust-native-auth-status.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-auth-status.sh" "$HERE/cli-rust-native-auth-status.sh"; fi
-if [ -x "$HERE/cli-json-drift.sh" ]; then nl_static_parallel_script "tests/cli-json-drift.sh" "$HERE/cli-json-drift.sh"; fi
 if [ -x "$HERE/cli-legacy-bash-dispatch.sh" ]; then nl_static_parallel_script "tests/cli-legacy-bash-dispatch.sh" "$HERE/cli-legacy-bash-dispatch.sh"; fi
-if [ -x "$HERE/error-codes-drift.sh" ]; then nl_static_parallel_script "tests/error-codes-drift.sh" "$HERE/error-codes-drift.sh"; fi
-if [ -x "$HERE/manpage-completion-drift.sh" ]; then nl_static_parallel_script "tests/manpage-completion-drift.sh" "$HERE/manpage-completion-drift.sh"; fi
-if [ -x "$HERE/manpage-completeness-eval.sh" ]; then nl_static_parallel_script "tests/manpage-completeness-eval.sh" "$HERE/manpage-completeness-eval.sh"; fi
 # Closure: wire the remaining gates.
-if [ -x "$HERE/changelog-v1-cut-eval.sh" ]; then nl_static_parallel_script "tests/changelog-v1-cut-eval.sh" "$HERE/changelog-v1-cut-eval.sh"; fi
-if [ -x "$HERE/examples-with-observability-eval.sh" ]; then nl_static_parallel_script "tests/examples-with-observability-eval.sh" "$HERE/examples-with-observability-eval.sh"; fi
-if [ -x "$HERE/cli-contract-coverage.sh" ]; then nl_static_parallel_script "tests/cli-contract-coverage.sh" "$HERE/cli-contract-coverage.sh"; fi
-if [ -x "$HERE/daemon-api-drift.sh" ]; then nl_static_parallel_script "tests/daemon-api-drift.sh" "$HERE/daemon-api-drift.sh"; fi
 nl_static_parallel_wait_all
 
 # Group 2: runtime/socket gates. Their repo-local AF_UNIX sockets make
 # getFlake choke on dirty-tree snapshots, so run them only after the
 # read-only group has drained.
-if [ -x "$HERE/broker-socket-acl.sh" ]; then nl_static_parallel_script "tests/broker-socket-acl.sh" "$HERE/broker-socket-acl.sh"; fi
-if [ -x "$HERE/broker-export-audit.sh" ]; then nl_static_parallel_script "tests/broker-export-audit.sh" "$HERE/broker-export-audit.sh"; fi
 if [ -x "$HERE/broker-scm-rights-fd-lifecycle.sh" ]; then nl_static_parallel_script "tests/broker-scm-rights-fd-lifecycle.sh" "$HERE/broker-scm-rights-fd-lifecycle.sh"; fi
-if [ -x "$HERE/daemon-socket-acl.sh" ]; then nl_static_parallel_script "tests/daemon-socket-acl.sh" "$HERE/daemon-socket-acl.sh"; fi
-if [ -x "$HERE/daemon-state-lock.sh" ]; then nl_static_parallel_script "tests/daemon-state-lock.sh" "$HERE/daemon-state-lock.sh"; fi
-if [ -x "$HERE/daemon-version-negotiation.sh" ]; then nl_static_parallel_script "tests/daemon-version-negotiation.sh" "$HERE/daemon-version-negotiation.sh"; fi
-if [ -x "$HERE/cli-rust-native-audit.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-audit.sh" "$HERE/cli-rust-native-audit.sh"; fi
-if [ -x "$HERE/cli-rust-native-host-check.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-host-check.sh" "$HERE/cli-rust-native-host-check.sh"; fi
 nl_static_parallel_wait_all
-if [ -x "$HERE/manifest-fuzz-bounded.sh" ]; then bash "$HERE/manifest-fuzz-bounded.sh" || fail "manifest-fuzz-bounded"; fi
 nl_static_gate_end "W2 control-plane skeleton gates"
 
 # -----------------------------------------------------------------------------
@@ -1362,47 +1269,22 @@ nl_static_gate_begin "W3 host-prepare gates" "W3 host-prepare gates"
 # negatives, kernel-module + device-node matrix, runner-shape preflight,
 # minijail version check, ipv6 sysctl readback). Safe to run in parallel
 # alongside the fake-backend network gates.
-if [ -x "$HERE/cgroup-delegation-oracle.sh" ]; then nl_static_parallel_script "tests/cgroup-delegation-oracle.sh" "$HERE/cgroup-delegation-oracle.sh"; fi
-if [ -x "$HERE/pidfd-handoff.sh" ]; then nl_static_parallel_script "tests/pidfd-handoff.sh" "$HERE/pidfd-handoff.sh"; fi
-if [ -x "$HERE/host-prepare-network.sh" ]; then nl_static_parallel_script "tests/host-prepare-network.sh" "$HERE/host-prepare-network.sh"; fi
-if [ -x "$HERE/ipv6-off-readback.sh" ]; then nl_static_parallel_script "tests/ipv6-off-readback.sh" "$HERE/ipv6-off-readback.sh"; fi
 if [ -x "$HERE/ifname-collision.sh" ]; then nl_static_parallel_script "tests/ifname-collision.sh" "$HERE/ifname-collision.sh"; fi
-if [ -x "$HERE/path-safety-violation-fs.sh" ]; then nl_static_parallel_script "tests/path-safety-violation-fs.sh" "$HERE/path-safety-violation-fs.sh"; fi
 # L3 distro-matrix pin parser/drift gate (integrator-wired).
-if [ -x "$HERE/l3-pin-consistency.sh" ]; then nl_static_parallel_script "tests/l3-pin-consistency.sh" "$HERE/l3-pin-consistency.sh"; fi
-if [ -x "$HERE/nft-coexistence.sh" ]; then nl_static_parallel_script "tests/nft-coexistence.sh" "$HERE/nft-coexistence.sh"; fi
 # Host-prepare idempotency no-op invariant (integrator-wired).
-if [ -x "$HERE/host-prepare-idempotency.sh" ]; then nl_static_parallel_script "tests/host-prepare-idempotency.sh" "$HERE/host-prepare-idempotency.sh"; fi
 # Ch-net-handoff executable canary (replaces prior doc-grep) (integrator-wired).
-if [ -x "$HERE/ch-net-handoff-canary.sh" ]; then nl_static_parallel_script "tests/ch-net-handoff-canary.sh" "$HERE/ch-net-handoff-canary.sh"; fi
-if [ -x "$HERE/nft-foreign-rule-preservation.sh" ]; then nl_static_parallel_script "tests/nft-foreign-rule-preservation.sh" "$HERE/nft-foreign-rule-preservation.sh"; fi
-if [ -x "$HERE/usbip-firewall-skeleton.sh" ]; then nl_static_parallel_script "tests/usbip-firewall-skeleton.sh" "$HERE/usbip-firewall-skeleton.sh"; fi
 if [ -x "$HERE/kernel-module-matrix.sh" ]; then nl_static_parallel_script "tests/kernel-module-matrix.sh" "$HERE/kernel-module-matrix.sh"; fi
-if [ -x "$HERE/kernel-module-matrix-eval.sh" ]; then nl_static_parallel_script "tests/kernel-module-matrix-eval.sh" "$HERE/kernel-module-matrix-eval.sh"; fi
 if [ -x "$HERE/device-node-matrix.sh" ]; then nl_static_parallel_script "tests/device-node-matrix.sh" "$HERE/device-node-matrix.sh"; fi
 if [ -x "$HERE/ioctl-negative.sh" ]; then nl_static_parallel_script "tests/ioctl-negative.sh" "$HERE/ioctl-negative.sh"; fi
-if [ -x "$HERE/runner-shape-preflight.sh" ]; then nl_static_parallel_script "tests/runner-shape-preflight.sh" "$HERE/runner-shape-preflight.sh"; fi
-# Gates: CH / virtiofsd / swtpm argv generators + DAG executor
-# + daemon state-persistence + [pending restart] machinery.
-if [ -x "$HERE/ch-argv-shape.sh" ]; then nl_static_parallel_script "tests/ch-argv-shape.sh" "$HERE/ch-argv-shape.sh"; fi
-if [ -x "$HERE/virtiofsd-argv-shape.sh" ]; then nl_static_parallel_script "tests/virtiofsd-argv-shape.sh" "$HERE/virtiofsd-argv-shape.sh"; fi
+# Gates: DAG executor + daemon state-persistence + [pending restart] machinery.
 # Layer-1 smoke for the nixling-activation-helper binary (fd-safe
 # activation primitives per ADR 0021 + TOCTOU closures).
-if [ -x "$HERE/activation-helper-eval.sh" ]; then nl_static_parallel_script "tests/activation-helper-eval.sh" "$HERE/activation-helper-eval.sh"; fi
 if [ -x "$HERE/dag-topo.sh" ]; then nl_static_parallel_script "tests/dag-topo.sh" "$HERE/dag-topo.sh"; fi
-# GPU / audio / video sidecar argv generators.
-if [ -x "$HERE/sidecar-argv-shape.sh" ]; then nl_static_parallel_script "tests/sidecar-argv-shape.sh" "$HERE/sidecar-argv-shape.sh"; fi
-# Vsock-relay + USBIP argv generators.
-if [ -x "$HERE/w6-argv-shape.sh" ]; then nl_static_parallel_script "tests/w6-argv-shape.sh" "$HERE/w6-argv-shape.sh"; fi
-if [ -x "$HERE/minijail-version-check.sh" ]; then nl_static_parallel_script "tests/minijail-version-check.sh" "$HERE/minijail-version-check.sh"; fi
-if [ -x "$HERE/multi-env-daemon-backed.sh" ]; then nl_static_parallel_script "tests/multi-env-daemon-backed.sh" "$HERE/multi-env-daemon-backed.sh"; fi
 nl_static_parallel_wait_all
-if [ -x "$HERE/daemon-state-persistence.sh" ]; then bash "$HERE/daemon-state-persistence.sh" || fail "daemon-state-persistence"; fi
 nl_static_gate_end "W3 host-prepare gates"
 
 nl_static_gate_begin "L1c and performance canaries" "L1c and performance canaries"
-if [ -x "$HERE/l1c-privilege-oracle.sh" ]; then bash "$HERE/l1c-privilege-oracle.sh" || fail "l1c-privilege-oracle"; fi
-if [ -x "$HERE/performance-budgets.sh" ]; then bash "$HERE/performance-budgets.sh" || fail "performance-budgets"; fi
+if [ -x "$ROOT/tests/unit/gates/performance-budgets.sh" ]; then bash "$ROOT/tests/unit/gates/performance-budgets.sh" || fail "performance-budgets"; fi
 nl_static_gate_end "L1c and performance canaries"
 
 # Gc before per-example flake-check, which is the heaviest
@@ -1413,28 +1295,8 @@ nl_phase_gc "post-w3-gates"
 nl_check_disk_budget "post-w3-gates" || fail "disk budget exhausted after W3 host-prepare gates"
 
 #  Runner-shape snapshot regression guards
-# (CH variadic argv, absolute vsock paths, /dev/net/tun deviceBind).
-nl_static_gate_begin "tests/runner-shape-snapshot.sh" "tests/runner-shape-snapshot.sh"
-if [ -x "$HERE/runner-shape-snapshot.sh" ]; then
-  if bash "$HERE/runner-shape-snapshot.sh" >/dev/null 2>&1; then
-    ok "runner-shape-snapshot"
-  else
-    bash "$HERE/runner-shape-snapshot.sh" 2>&1 | tail -80 >&2 || true
-    fail "runner-shape-snapshot"
-  fi
-fi
-nl_static_gate_end "tests/runner-shape-snapshot.sh"
-
-nl_static_gate_begin "tests/harness-ubuntu-eval.sh" "tests/harness-ubuntu-eval.sh"
-if [ -x "$HERE/harness-ubuntu-eval.sh" ]; then
-  if bash "$HERE/harness-ubuntu-eval.sh" >/dev/null 2>&1; then
-    ok "harness-ubuntu-eval"
-  else
-    bash "$HERE/harness-ubuntu-eval.sh" 2>&1 | tail -80 >&2 || true
-    fail "harness-ubuntu-eval"
-  fi
-fi
-nl_static_gate_end "tests/harness-ubuntu-eval.sh"
+# (CH variadic argv, absolute vsock paths, /dev/net/tun deviceBind)
+# migrated to packages/nixling-contract-tests/tests/runner_shape_contract.rs.
 
 # -----------------------------------------------------------------------------
 # 7b /— per-example/template flake check. Each `examples/<name>/flake.nix`

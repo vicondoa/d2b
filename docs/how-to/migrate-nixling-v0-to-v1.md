@@ -235,7 +235,7 @@ done
 sudo nixling host validate --apply --wave p4
 ```
 
-Cross-reference: `tests/cli-vm-verbs-eval.sh`,
+Cross-reference: `packages/nixling/tests/vm_verbs_contract.rs`,
 `tests/desktop-wrapper-contract-eval.sh`,
 `tests/legacy-unit-denylist-eval.sh` (asserts no example's
 `nixos-rebuild dry-build` output emits a retired unit name).
@@ -304,7 +304,7 @@ NIXLING_LEGACY_BASH_OPT_IN=1 NIXLING_LEGACY_CLI_PATH=/bin/false \
 sudo systemctl start nixlingd.service
 ```
 
-Layer-1 gate: `tests/cli-vm-verbs-eval.sh` (poison-pill case —
+Layer-1 gate: `packages/nixling/tests/vm_verbs_contract.rs` (poison-pill case —
 asserts no bash exec even with `NIXLING_LEGACY_CLI_PATH` and
 `NIXLING_LEGACY_BASH_OPT_IN=1` set).
 

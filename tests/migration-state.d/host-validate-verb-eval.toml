@@ -1,0 +1,11 @@
+status = "retired"
+successor_ids = [
+  "packages/nixling/tests/host_validate_verb.rs::catalog_waves_match_options_daemon_readiness_specs (parses packages/nixling/src/host_validate.rs::WAVE_CATALOG and nixos-modules/options-daemon.nix readinessWaveSpecs with the retired gate's order-preserving extraction rules; asserts non-empty exact order/name parity)",
+  "packages/nixling/tests/host_validate_verb.rs::host_validate_without_apply_or_dry_run_exits_78_usage_envelope (`nixling host validate --json` with redirected validator/evidence dirs exits 78 and emits the --apply-or-dry-run-required JSON envelope)",
+  "packages/nixling/tests/host_validate_verb.rs::host_validate_dry_run_reports_catalog_waves_and_writes_no_evidence (`nixling host validate --dry-run --json` against staged WAVE_CATALOG validator stubs exits 0, reports every catalog wave with status plus per-validator presence, and writes no evidence JSON)",
+  "packages/nixling/tests/host_validate_verb.rs::host_validate_apply_wave_p1_writes_canonical_evidence_only_for_p1 (`nixling host validate --apply --wave p1 --json` against staged validators exits 0, reports p1 attested, writes p1.json with wave/timestamp/operatorSignature, and writes no other wave evidence)",
+  "packages/nixling/tests/host_validate_verb.rs::host_validate_apply_missing_validators_exits_78_and_writes_no_evidence (`nixling host validate --apply --wave p1 --json` against an empty scripts dir exits 78, reports Missing with detail containing evidence NOT written, and leaves p1.json absent)",
+  "packages/nixling/tests/host_validate_verb.rs::host_validate_apply_unknown_wave_exits_78_envelope (`nixling host validate --apply --wave bogus-wave --json` exits 78 with the typed unknown-wave envelope)",
+  "tests/tools/rust-workspace-checks.sh (CLI-contract cargo test step: cargo test -p nixling --tests — gated in static.sh/static-fast.sh)",
+  "tests/golden/pinned/host-validate-verb-eval.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)",
+]

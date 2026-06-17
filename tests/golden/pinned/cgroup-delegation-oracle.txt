@@ -1,0 +1,25 @@
+# cgroup-delegation-oracle — nixling-host cgroup v2 delegation canaries +
+# broker ops::cgroup delegation/audit canaries. Successor of
+# tests/cgroup-delegation-oracle.sh, which ran
+# `cargo test -p nixling-host --all-features --lib cgroup::` and
+# `cargo test --all-features --lib ops::cgroup` (broker) and asserted the
+# named canaries below. They already run in the gated `cargo test --workspace`
+# (nixling-host) and the broker layer1-bootstrap pass in
+# tests/tools/rust-workspace-checks.sh. Pinned fail-closed via
+# tests/tools/assert-pinned-tests.sh.
+cgroup::tests::refuses_uid_zero
+cgroup::tests::refuses_when_unified_hierarchy_missing
+cgroup::tests::refuses_when_controllers_missing
+cgroup::tests::refuses_kill_on_ancestor
+cgroup::tests::happy_path_delegation
+cgroup::tests::detects_internal_processes
+cgroup::tests::refuses_threaded_cgroups
+cgroup::tests::rejects_partition_root_writes
+cgroup::tests::vm_subtree_creates_chowned_per_vm_interior
+cgroup::tests::vm_role_leaf_creates_chowned_per_role_leaf_under_vm_interior
+cgroup::tests::cpuset_inheritance_fills_empty_files
+ops::cgroup::tests::delegate_happy_path
+ops::cgroup::tests::delegate_refused_uid_zero
+ops::cgroup::tests::open_unknown_subject_audited
+ops::cgroup::tests::open_known_vm_leaf_after_delegation
+ops::cgroup::tests::cgroup_kill_ancestor_refused

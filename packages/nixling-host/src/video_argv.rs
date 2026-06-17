@@ -266,15 +266,26 @@ mod tests {
         assert!(serde_json::from_str::<VideoArgvInput>(json).is_err());
     }
 
-    /// Byte-parity snapshot: the line printed here is byte-compared
-    /// against `tests/golden/runner-shape/video-argv-minimal.txt` by
-    /// `tests/video-argv-shape.sh`. The snapshot includes both the argv
-    /// the daemon will exec AND the wire-contract pins from the CH
-    /// `0003-vhost-user-media-device.patch`, so any drift in either
-    /// surface is caught by a single byte diff.
+    const VIDEO_ARGV_GOLDEN: &str =
+        include_str!("../../../tests/golden/runner-shape/video-argv-minimal.txt");
+
+    fn golden_payload() -> String {
+        VIDEO_ARGV_GOLDEN
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn audit_parity_snapshot_line() {
         let argv = generate_video_argv(&audit_input()).unwrap();
+        let observed = format!("{}\n{}", argv.join(" "), wire_contract_snapshot());
+        let expected = golden_payload();
+        assert_eq!(
+            observed, expected,
+            "video argv/wire-contract drifted from tests/golden/runner-shape/video-argv-minimal.txt"
+        );
         println!("SNAPSHOT: {}", argv.join(" "));
         println!("WIRE: {}", wire_contract_snapshot());
     }

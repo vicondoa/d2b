@@ -1,0 +1,28 @@
+# host-prepare-network — nixling-host + nixling-priv-broker network-reconcile
+# #[test]s. Successor of tests/host-prepare-network.sh, which ran a set of
+# focused `cargo test -p nixling-host --all-features -- <filter>` and
+# `cargo test -p nixling-priv-broker --all-features -- <filter>` invocations.
+# Every test matched by those substring filters is present in the default
+# `cargo test --workspace` host list and the broker default + layer1-bootstrap
+# lists, all gated by tests/tools/rust-workspace-checks.sh. Pinned fail-closed via
+# tests/tools/assert-pinned-tests.sh (which lists the broker workspace under
+# --features layer1-bootstrap; all 3 broker tests are present there).
+# The retired gate's trailing `ch-net-handoff-not-supported` docs-anchor grep
+# is independently guarded by packages/nixling/tests/cli_contract_coverage.rs
+# and the committed host-check goldens. One bare libtest path per line.
+#
+# nixling-host (cargo test --workspace):
+# netlink::tests::ipv6_off_sequence_runs_in_order is pinned in
+# tests/golden/pinned/ipv6-off-readback.txt (its primary owner); this gate
+# also exercised it but the pin lives there to keep the name unique.
+bridge_port::tests::readback_matches_defaults
+netlink::tests::bridge_port_readback_matches_defaults
+routes::tests::no_default_route_fails_closed
+routes::tests::foreign_default_route_fails_closed
+routes::tests::dnsmasq_not_bound_fails_closed
+routes::tests::host_lan_cidr_ambiguous_for_vpn
+#
+# nixling-priv-broker (broker-workspace cargo test --workspace [+ layer1-bootstrap]):
+ops::nm::tests::managed_foreign_conflict_detected
+ops::nm::tests::reload_command_select_by_version
+ops::tap::tests::set_bridge_port_flags_readback_drift_fails_closed

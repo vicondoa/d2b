@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["packages/nixling-contract-tests/tests/policy_supervisor.rs::supervisor_option_absent (asserts the productive `supervisor = lib.mkOption` declaration is absent from nixos-modules/options-vms.nix, and the top-level defense-in-depth assertion in nixos-modules/assertions.nix fires on any per-VM `vm ? supervisor` / `nixling.vms.${name}.supervisor` definition with the friendly ADR-0015 daemon-only-clean-break message); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/tools/rust-workspace-checks.sh"]

@@ -98,7 +98,7 @@ or whose `timestamp` / `operatorSignature` are absent or empty.
 | `p1` | `minijail-validator-{cloud-hypervisor,virtiofsd,swtpm,gpu,audio,video,vsock-relay,usbip,otel-host-bridge}.sh` |
 | `p2` | `per-vm-state-ownership-eval.sh`, `daemon-autostart-eval.sh`, `host-prep-dag-eval.sh` |
 | `p3` | `observability-eval.sh`, `daemon-metrics-eval.sh`, `usbip-state-machine-eval.sh` |
-| `p4` | `cli-vm-verbs-eval.sh`, `desktop-wrapper-contract-eval.sh` |
+| `p4` | `packages/nixling/tests/vm_verbs_contract.rs`, `desktop-wrapper-contract-eval.sh` |
 | `p5` | `host-validate-verb-eval.sh` |
 | `p6` | _(no per-host validator; readiness is gate-output only)_ |
 | `p7` | _(no per-host validator; readiness is gate-output only)_ |

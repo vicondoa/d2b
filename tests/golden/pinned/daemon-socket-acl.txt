@@ -1,0 +1,11 @@
+# daemon-socket-acl — nixlingd daemon-spawn #[test]s. Successor of
+# tests/daemon-socket-acl.sh, which exercised the SO_PEERCRED launcher
+# authorization matrix through serve --once plus test-client frames. These
+# integration tests run in the default cargo test --workspace pass gated by
+# tests/tools/rust-workspace-checks.sh. Pinned fail-closed via
+# tests/tools/assert-pinned-tests.sh. One bare libtest path per line.
+#
+daemon_socket_acl::non_launcher_uid_is_rejected
+daemon_socket_acl::wheel_non_launcher_is_rejected
+daemon_socket_acl::configured_launcher_is_accepted
+daemon_socket_acl::daemon_self_client_is_rejected

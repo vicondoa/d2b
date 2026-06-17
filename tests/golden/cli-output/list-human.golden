@@ -1,3 +1,3 @@
 NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 corp-vm            work      false     false false   10.20.0.10      stopped
-sys-work-net       work      false     false false   192.0.2.2       systemd (net-vm)
+sys-work-net       work      false     false false   192.0.2.2       running (net-vm)

@@ -336,8 +336,9 @@ v2 → v3 auto-rewriter.
 
 ## Verification
 
-- [`tests/adr-0015-presence-eval.sh`](../../tests/adr-0015-presence-eval.sh)
-  asserts this file exists and is cross-referenced from `AGENTS.md`.
+- [`packages/nixling-contract-tests/tests/policy_lints.rs`](../../packages/nixling-contract-tests/tests/policy_lints.rs)
+  (`adr_0015_present_with_header_and_cross_references`) asserts this file
+  exists and is cross-referenced from `AGENTS.md`.
 - [`tests/legacy-unit-denylist-eval.sh`](../../tests/legacy-unit-denylist-eval.sh)
   (P6 `ph6-p6-unit-denylist-gate`) asserts none of the deleted unit
   names appear in `nixos-rebuild dry-build` output on any example.

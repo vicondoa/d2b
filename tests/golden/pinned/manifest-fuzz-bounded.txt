@@ -1,0 +1,7 @@
+# manifest-fuzz-bounded — native bounded parser checks replacing the retired
+# bounded bolero shell wrapper. One bare libtest path per line; checked by
+# tests/tools/assert-pinned-tests.sh.
+bundle_bounded_byte_inputs_do_not_panic
+host_json_bounded_byte_inputs_do_not_panic
+manifest_v04_bounded_byte_inputs_do_not_panic
+privileges_json_bounded_byte_inputs_do_not_panic

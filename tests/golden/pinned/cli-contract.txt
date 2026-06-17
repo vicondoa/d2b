@@ -1,0 +1,7 @@
+# cli-contract — CLI-contract integration tests (nixling crate, tests/*.rs).
+# Successors for the retired cli-rust-native-* bash gates: spawn the real
+# `nixling` binary against the NL_FIXTURES rendered bundle + a hermetic
+# system-state/daemon-state fixture and validate the JSON envelopes strictly
+# against the committed DTOs (deny_unknown_fields). One libtest path per line;
+# checked by tests/tools/assert-pinned-tests.sh.
+list_json_matches_smoke_inventory_and_schema

@@ -6,11 +6,13 @@ members = [
     "nixling-core",
     "nixling-host",
     "nixling-guestd",
+    "nixling-userd",
     "nixling-exec-runner",
     "nixling-ipc",
     "nixling",
     "nixlingd",
     "nixling-wayland-filter",
+    "nixling-contract-tests",
     "xtask",
 ]
 

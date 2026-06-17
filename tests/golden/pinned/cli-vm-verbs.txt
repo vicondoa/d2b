@@ -1,0 +1,15 @@
+# cli-vm-verbs — CLI-contract integration tests for the daemon-native mutating
+# verbs (up/down/restart + vm start/stop/restart), list/vm list, and the
+# guest-control surface (vm exec). Successor for the retired
+# tests/cli-vm-verbs-eval.sh bash gate: spawns the real `nixling` binary against
+# a synthetic inline manifest + a missing public socket + an exit-99 poison-pill
+# legacy CLI, and asserts the typed daemon-down/native JSON envelopes with NO
+# bash fallback. One libtest path per line; checked by
+# tests/tools/assert-pinned-tests.sh.
+mutating_verbs_emit_daemon_down_without_bash_fallback
+legacy_bash_opt_in_is_a_no_op
+vm_list_is_daemon_native_json
+top_level_list_is_daemon_native_json
+vm_exec_missing_command_emits_cli_usage_envelope
+vm_exec_no_daemon_emits_transport_unavailable_envelope
+vm_exec_rejects_interactive_without_tty

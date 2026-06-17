@@ -1,0 +1,29 @@
+# usbip-firewall-skeleton — nixling-host nftables + broker usbip_firewall
+# #[test]s. Successor of tests/usbip-firewall-skeleton.sh, which ran:
+# - cargo test --manifest-path packages/Cargo.toml -p nixling-host
+#   --all-features -- nftables::tests::{usbip_carveout_inserted_before_generic,
+#   comment_marker_prefix_on_every_managed_rule,
+#   fake_backend_refuses_carveout_after_generic}
+# - cargo test --manifest-path packages/nixling-priv-broker/Cargo.toml
+#   --all-features -- ops::usbip_firewall::tests::{
+#   bind_firewall_rule_produces_audit_with_busid_and_hash,
+#   carveout_ordering_invariant_via_op,
+#   w6_ops_refused_with_unknown_operation_audit}
+# These #[cfg(test)] names are present under the default host workspace and
+# broker workspace test lists, so tests/tools/rust-workspace-checks.sh already runs
+# them; pinned fail-closed via tests/tools/assert-pinned-tests.sh.
+# Non-cargo residual: the retired script grepped usbip_firewall.rs for
+# UsbipBind/UsbipUnbind/UsbipProxyReconcile. That boundary is covered by
+# ops::usbip_firewall::tests::w6_ops_refused_with_unknown_operation_audit,
+# which enumerates the same W6UsbipOperation variants and asserts
+# unknown-operation refusal audit payloads. One bare libtest path per line.
+#
+# nixling-host (cargo test --workspace):
+nftables::tests::usbip_carveout_inserted_before_generic
+nftables::tests::comment_marker_prefix_on_every_managed_rule
+nftables::tests::fake_backend_refuses_carveout_after_generic
+#
+# nixling-priv-broker (broker-workspace cargo test --workspace [+ layer1-bootstrap]):
+ops::usbip_firewall::tests::bind_firewall_rule_produces_audit_with_busid_and_hash
+ops::usbip_firewall::tests::carveout_ordering_invariant_via_op
+ops::usbip_firewall::tests::w6_ops_refused_with_unknown_operation_audit

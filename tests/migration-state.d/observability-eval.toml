@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/observability.nix — 24 observability batch cases: 23 success extracted-JSON parity cases plus the obs-vm-without-framework failure-substring assertion; reconstructs tests/unit/nix/eval-cases/observability.nix with direct nixpkgs/nixlingModule injection for hermetic flake evaluation)"]

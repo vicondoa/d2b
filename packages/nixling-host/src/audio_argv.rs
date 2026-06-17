@@ -166,13 +166,27 @@ mod tests {
         assert!(joined.contains("--backend pipewire"));
     }
 
-    /// Byte-parity snapshot printed for the `tests/audio-argv-shape.sh`
-    /// golden gate against
-    /// `tests/golden/runner-shape/audio-argv-minimal.txt`.
+    const AUDIO_ARGV_GOLDEN: &str =
+        include_str!("../../../tests/golden/runner-shape/audio-argv-minimal.txt");
+
+    fn golden_payload() -> String {
+        AUDIO_ARGV_GOLDEN
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn audit_minimal_snapshot_line() {
         let argv = generate_audio_argv(&audit_input()).unwrap();
-        println!("SNAPSHOT: {}", argv.join(" "));
+        let observed = argv.join(" ");
+        let expected = golden_payload();
+        assert_eq!(
+            observed, expected,
+            "audio argv drifted from tests/golden/runner-shape/audio-argv-minimal.txt"
+        );
+        println!("SNAPSHOT: {observed}");
     }
 
     #[test]

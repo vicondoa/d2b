@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["flake.checks.<system>.harness-ubuntu-skeleton (flake.nix:945; declared under checks = forAllSystems for x86_64-linux and aarch64-linux, so nix flake check --no-build --all-systems evaluates both systems; full nix flake check/nix build realizes the same derivation, including the stub JSON smoke)"]

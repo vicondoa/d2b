@@ -23,7 +23,7 @@ Minimum expectations:
 ### Run the automated phases
 
 ```bash
-bash tests/hardware-smoke-gpu-yubikey.sh
+bash tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh
 ```
 
 Use `NIXLING_HARDWARE_SMOKE_STRICT=1` to fail closed on cargo/minijail/
@@ -64,7 +64,7 @@ Once the live phase is green, write the readiness evidence files:
 NIXLING_HARDWARE_SMOKE_RECORD_EVIDENCE_ONLY=1 \
 NIXLING_HARDWARE_SMOKE_LIVE_GREEN=1 \
 NIXLING_HARDWARE_SMOKE_OPERATOR_SIGNATURE='alice@example' \
-bash tests/hardware-smoke-gpu-yubikey.sh
+bash tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh
 ```
 
 That writes:
@@ -87,7 +87,7 @@ Run this on an Ubuntu 24.04 x86_64 host with KVM and root access:
 
 ```bash
 sudo NIXLING_REPO=/path/to/nixling \
-  tests/distro-matrix/ubuntu-2404-tier1.sh
+  tests/integration/distro-matrix/ubuntu-2404-tier1.sh
 ```
 
 On non-Ubuntu hosts the harness automatically flips into
@@ -114,9 +114,9 @@ artifacts should fail closed.
 
 The canonical fixtures are:
 
-- `tests/distro-matrix/fixtures/ubuntu-2404/expected-audit-ops.txt`
-- `tests/distro-matrix/fixtures/ubuntu-2404/expected-installer-artifacts.txt`
-- `tests/distro-matrix/fixtures/ubuntu-2404/README.md`
+- `tests/integration/distro-matrix/fixtures/ubuntu-2404/expected-audit-ops.txt`
+- `tests/integration/distro-matrix/fixtures/ubuntu-2404/expected-installer-artifacts.txt`
+- `tests/integration/distro-matrix/fixtures/ubuntu-2404/README.md`
 
 After a live run, compare the observed audit log and written artifacts against
 those fixtures before signing off the wave.

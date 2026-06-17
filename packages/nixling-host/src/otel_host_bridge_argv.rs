@@ -171,13 +171,27 @@ mod tests {
         );
     }
 
+    const OTEL_HOST_BRIDGE_ARGV_GOLDEN: &str =
+        include_str!("../../../tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt");
+
+    fn golden_payload() -> String {
+        OTEL_HOST_BRIDGE_ARGV_GOLDEN
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn snapshot_line_for_golden_parity() {
-        // Consumed by tests/otel-host-bridge-argv-shape.sh to
-        // compare against
-        // tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt.
         let argv = generate_otel_host_bridge_argv(&happy_inputs()).expect("happy path");
-        println!("SNAPSHOT: {}", argv.join(" "));
+        let observed = argv.join(" ");
+        let expected = golden_payload();
+        assert_eq!(
+            observed, expected,
+            "otel-host-bridge argv drifted from tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt"
+        );
+        println!("SNAPSHOT: {observed}");
     }
 
     #[test]

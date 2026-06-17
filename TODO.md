@@ -121,7 +121,7 @@ the privileged broker disk path, so route through panel review.
 
 `tests/assertions-eval.sh` now evaluates its 26-case batch via a
 minimal `lib.evalModules` (nixling modules + `nixos/modules/misc/assertions.nix`
-+ namespace sinks in `tests/eval-cases/shared.nix`) instead of a full
++ namespace sinks in `tests/unit/nix/eval-cases/shared.nix`) instead of a full
 `nixpkgs.lib.nixosSystem` per case — the batch dropped from ~2 min to
 ~68 s. The remaining wall time (~9 min) is dominated by the ~9 tail
 "probe" cases at the bottom of the gate, each of which spawns a
@@ -136,7 +136,7 @@ whole gate runs in one eval. The 3 throw-message-capture fallbacks
 on a per-case `--show-trace` eval unless their stderr-message
 assertion is relaxed (or moved to `nix-unit`'s `expectedError.msg`).
 The same minimal-evalModules technique also applies to
-`tests/eval-cases/observability.nix` and `processes-dag-order.nix`,
+`tests/unit/nix/eval-cases/observability.nix` and `processes-dag-order.nix`,
 which still call full `nixosSystem`. This touches a critical contract
 gate, so route it through panel review. Target: whole gate under
 ~2 min.

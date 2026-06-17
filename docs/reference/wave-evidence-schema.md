@@ -96,7 +96,7 @@ eval.
 | `p0`     | P0 daemon-only foundation: broker socket-activation, bundle digest verify, canonical `/run/nixling`, `nixlingd.service restartIfChanged=false`.                       | `tests/nixlingd-startup-smoke.sh` green on this host, recorded into the evidence file.                         |
 | `p0Fu`   | P0fu: cgroup delegation sequence, bundle-tampered envelope, per-artifact hash verification, `ListenSequentialPacket` socket fix.                                      | `tests/broker-cgroup-delegation-smoke.sh` green on this host.                                                  |
 | `p1`     | Per-role minijail profiles + byte-parity argv generators (CH, virtiofsd, swtpm, gpu, audio, video, vsockRelay, usbip, otelHostBridge).                                | Per-role `tests/minijail-validator-<role>.sh` green + hardware smoke on the target SKUs.                       |
-| `p2`     | Daemon-side host-prep + ownership matrix + `manifestVersion=4` + daemon autostart.                                                                                    | `tests/daemon-autostart-smoke.sh` + `tests/vms-json-parity.sh` + ownership-eval green.                         |
+| `p2`     | Daemon-side host-prep + ownership matrix + `manifestVersion=4` + daemon autostart.                                                                                    | `tests/daemon-autostart-smoke.sh` + `tests/unit/gates/vms-json-parity.sh` + ownership-eval green.                         |
 | `p3`     | Host singletons retired (net-route-preflight, audit-check, ch-exporter, otel-host-bridge, per-env usbipd) + daemon health endpoint.                                   | `tests/observability-eval.sh` + USBIP smoke + degraded-mode escape-hatch smoke green.                          |
 | `p4`     | `vm start/stop/restart/list` daemon-native end-to-end; `.desktop` wrapper updated.                                                                                    | Per-VM `vm start` smoke + Wayland desktop launcher smoke green.                                                |
 | `p5`     | First-run validation UX shipped (`nixling host validate --apply` + daemon auto-write on first op).                                                                    | Fresh-host bootstrap smoke green on this host.                                                                 |
@@ -130,7 +130,7 @@ The intended path from a fresh host to a wave's
 
 2. **Exercise the wave on this host.** Run the per-wave smoke
    listed in the inventory above. For `w5Fu` / `w6Fu` this is
-   `tests/hardware-smoke-gpu-yubikey.sh`; for `p0` it is
+   `tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh`; for `p0` it is
    `tests/nixlingd-startup-smoke.sh`; etc.
 
 3. **Write the evidence file.** Run:

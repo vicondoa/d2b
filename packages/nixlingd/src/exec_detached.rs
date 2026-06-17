@@ -120,20 +120,38 @@ fn hook_slot() -> &'static Mutex<Option<DetachedTestHook>> {
     HOOK.get_or_init(|| Mutex::new(None))
 }
 
+// Process-wide serialization for the global test hook: `cargo test` runs the
+// lib unit tests multithreaded in one process, and the hook above is a single
+// shared slot. Without serialization, two `detached_exec_routing_tests` running
+// concurrently clobber each other's hook (one test observes the other's hook
+// and the routed response mismatches). `set_test_hook` takes this lock and the
+// returned guard holds it for the whole test body, so hook-using tests run
+// one-at-a-time without forcing `--test-threads=1` on the rest of the suite.
 #[cfg(test)]
-pub(crate) struct DetachedTestHookGuard;
+fn hook_serial() -> &'static Mutex<()> {
+    static SERIAL: OnceLock<Mutex<()>> = OnceLock::new();
+    SERIAL.get_or_init(|| Mutex::new(()))
+}
+
+#[cfg(test)]
+pub(crate) struct DetachedTestHookGuard(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
 
 #[cfg(test)]
 impl Drop for DetachedTestHookGuard {
     fn drop(&mut self) {
+        // Clear the hook before the serial guard (field) is released, so the
+        // next waiting test always starts from an empty slot.
         *hook_slot().lock().expect("detached exec test hook lock") = None;
     }
 }
 
 #[cfg(test)]
 pub(crate) fn set_test_hook(hook: DetachedTestHook) -> DetachedTestHookGuard {
+    let serial = hook_serial()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     *hook_slot().lock().expect("detached exec test hook lock") = Some(hook);
-    DetachedTestHookGuard
+    DetachedTestHookGuard(serial)
 }
 
 #[cfg(test)]

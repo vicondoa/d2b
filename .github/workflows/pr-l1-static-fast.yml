@@ -13,16 +13,22 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Tier 0 first-pass gate
-        run: bash tests/static-fast-tier0.sh
+        run: make check-tier0
       - name: ADR index coverage guard
-        run: bash tests/adr-index-coverage.sh
+        run: bash tests/unit/meta/adr-index-coverage.sh
       - name: CI coverage structural guard
-        run: bash tests/ci-coverage.sh
+        run: bash tests/unit/meta/ci-coverage.sh
+      - name: Test rearchitecture fail-closed gates
+        run: |
+          bash tests/tools/gen-migration-ledger.sh --check
+          bash tests/unit/meta/ci-uses-make.sh
 
-  static-fast:
+  # Run L1 sub-targets in parallel for faster CI. Locally, `make test-unit`
+  # runs them serially as an umbrella.
+  test-lint:
     needs: tier0
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
@@ -30,7 +36,134 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Lint gate (preflight + parse + shellcheck)
+        run: make test-lint
+
+  test-rust:
+    needs: tier0
+    runs-on: ubuntu-latest
+    # ~43 min cold on a hosted x86 runner (no compilation cache in CI). 60 min
+    # gives headroom so a slightly slower runner doesn't flake on timeout.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          # Full history + tags: the nixling-contract-tests release-policy
+          # tests assert the annotated `v1.1` tag exists and resolves to a
+          # commit (migrated from tests/release-tag-eval.sh). A shallow
+          # checkout has no tags, so they fail-closed without this.
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
-      - name: Static fast regression gate
-        run: bash tests/static-fast.sh
+      - name: Rust workspace gate
+        run: make test-rust
+
+  test-proofs:
+    needs: tier0
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Proof crates gate
+        run: make test-proofs
+
+  test-flake-x86:
+    needs: tier0
+    runs-on: ubuntu-latest
+    # ~41 min with swap spill (the eval exceeds RAM and pages to /mnt swap).
+    # 60 min gives headroom over the slow swap-backed eval.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # `nix flake check --no-build` evaluates several full nixosSystem
+      # toplevels (eval-minimal/multi-env/graphics/observability/daemon +
+      # fixture-smoke + nix-unit) in ONE evaluator process. On a 16 GB hosted
+      # runner the live eval heap OOMs ~8-9 min in (the OOM-killer takes down
+      # the runner agent -> "runner received a shutdown signal"). Back the
+      # evaluator with a large swapfile so it spills to disk instead.
+      - name: Add swap (bound flake-eval peak memory)
+        run: |
+          # Hosted runner images sometimes already ship an active
+          # /mnt/swapfile (fallocate would fail "Text file busy"), so use a
+          # dedicated file and add it on top of whatever swap exists.
+          SWAP=/mnt/nixling-ci-swap
+          sudo swapoff "$SWAP" 2>/dev/null || true
+          sudo rm -f "$SWAP"
+          sudo fallocate -l 14G "$SWAP" || sudo dd if=/dev/zero of="$SWAP" bs=1M count=14336
+          sudo chmod 600 "$SWAP"
+          sudo mkswap "$SWAP"
+          sudo swapon "$SWAP"
+          free -h
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Flake check (x86_64-linux)
+        run: make test-flake
+
+  test-flake-aarch64:
+    needs: tier0
+    runs-on: ubuntu-24.04-arm
+    # ARM runner evaluates in ~8 min, but keep parity headroom with x86.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Add swap (bound flake-eval peak memory)
+        run: |
+          # Hosted runner images sometimes already ship an active
+          # /mnt/swapfile (fallocate would fail "Text file busy"), so use a
+          # dedicated file and add it on top of whatever swap exists.
+          SWAP=/mnt/nixling-ci-swap
+          sudo swapoff "$SWAP" 2>/dev/null || true
+          sudo rm -f "$SWAP"
+          sudo fallocate -l 14G "$SWAP" || sudo dd if=/dev/zero of="$SWAP" bs=1M count=14336
+          sudo chmod 600 "$SWAP"
+          sudo mkswap "$SWAP"
+          sudo swapon "$SWAP"
+          free -h
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Flake check (aarch64-linux)
+        run: make test-flake
+
+  test-drift:
+    needs: tier0
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Drift gate
+        run: make test-drift
+
+  test-policy:
+    needs: tier0
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Policy meta-gates
+        run: make test-policy

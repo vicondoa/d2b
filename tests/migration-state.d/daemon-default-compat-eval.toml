@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/daemon-default-compat.nix — 5 daemonExperimental.enable default-flip + operator-override (mkForce true/false) cases via mkEval; the historical evidence-dir writes are inert because the default is no longer evidence-gated)"]
