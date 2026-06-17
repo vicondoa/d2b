@@ -27,14 +27,19 @@ pub mod stream;
 pub mod trace_context;
 pub mod workload;
 
-pub use audit::AuditEnvelope;
+pub use audit::{AuditEnvelope, AuthzDecision};
 pub use capability::{Capability, CapabilitySet};
 pub use error::{ConstellationError, ErrorKind};
-pub use frame::ConstellationFrame;
+pub use execution::{ExecState, ExecutionSummary};
+pub use frame::{
+    ConstellationFrame, Handshake, OperationKind, OperationRequest, OperationResponse,
+};
 pub use ids::{
     ExecutionId, GatewayId, IdempotencyKey, NodeId, OperationId, PrincipalId, ProviderId, RealmId,
     StreamId, WorkloadId,
 };
+pub use node::{NodeKind, NodeSummary};
 pub use realm::{EntrypointMode, RealmPath};
 pub use stream::{StreamAuthz, StreamDescriptor, StreamKind};
 pub use trace_context::TraceContext;
+pub use workload::{WorkloadSelector, WorkloadState, WorkloadSummary};

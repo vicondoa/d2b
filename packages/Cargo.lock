@@ -985,6 +985,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nixling-constellation-provider"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "nixling-constellation-core",
+ "schemars",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "nixling-contract-tests"
 version = "0.0.0-bootstrap"
 dependencies = [

@@ -1,0 +1,25 @@
+[package]
+name = "nixling-constellation-provider"
+version = "0.0.0-bootstrap"
+edition = "2021"
+publish = false
+license.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+# Provider traits + typed capability descriptors (ADR 0032). Depends only
+# on the codec-neutral `nixling-constellation-core` and `async-trait`.
+# MUST NOT depend on `prost`/codec crates, transport crates, or host-only
+# broker/daemon internals (dependency-direction gate).
+[dependencies]
+nixling-constellation-core = { path = "../nixling-constellation-core" }
+async-trait = "0.1"
+serde.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

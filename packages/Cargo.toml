@@ -5,6 +5,7 @@ members = [
     "nixling-host-activation-helper",
     "nixling-core",
     "nixling-constellation-core",
+    "nixling-constellation-provider",
     "nixling-host",
     "nixling-guestd",
     "nixling-userd",
