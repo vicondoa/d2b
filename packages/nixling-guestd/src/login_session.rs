@@ -230,17 +230,43 @@ const SYSTEMCTL_KILL_RETRY_DELAY: Duration = Duration::from_millis(50);
 /// that successfully asks another manager to spawn work into a different cgroup
 /// (e.g. a lingering `systemd --user` service) is out of scope for this kill.
 pub fn systemctl_kill_unit(systemctl_path: &Path, unit_name: &str) {
+    systemctl_kill_unit_with(systemctl_path, unit_name, run_systemctl_kill_once, || {
+        std::thread::sleep(SYSTEMCTL_KILL_RETRY_DELAY)
+    });
+}
+
+fn systemctl_kill_unit_with<K, D>(
+    systemctl_path: &Path,
+    unit_name: &str,
+    mut kill_once: K,
+    mut retry_delay: D,
+) where
+    K: FnMut(&Path, &str) -> Option<bool>,
+    D: FnMut(),
+{
     for attempt in 0..2 {
         // `Some(true)` => unit existed and was signalled; done.
-        if let Some(true) = run_systemctl_kill_once(systemctl_path, unit_name) {
+        if let Some(true) = kill_once(systemctl_path, unit_name) {
             return;
         }
         // Non-zero (unit not loaded) or timed out => maybe the unit is not
         // registered yet (spawn/teardown race). Pause briefly, then retry once.
         if attempt == 0 {
-            std::thread::sleep(SYSTEMCTL_KILL_RETRY_DELAY);
+            retry_delay();
         }
     }
+}
+
+fn systemctl_kill_args(unit_name: &str) -> Vec<OsString> {
+    vec![
+        OsString::from("--system"),
+        OsString::from("--no-ask-password"),
+        OsString::from("--quiet"),
+        OsString::from("--kill-whom=all"),
+        OsString::from("--signal=SIGKILL"),
+        OsString::from("kill"),
+        OsString::from(unit_name),
+    ]
 }
 
 /// Run one bounded `systemctl kill`. `Some(true)` = exit 0; `Some(false)` = ran
@@ -249,13 +275,7 @@ pub fn systemctl_kill_unit(systemctl_path: &Path, unit_name: &str) {
 /// out because this teardown is security-sensitive (no reliance on defaults).
 fn run_systemctl_kill_once(systemctl_path: &Path, unit_name: &str) -> Option<bool> {
     let mut child = Command::new(systemctl_path)
-        .arg("--system")
-        .arg("--no-ask-password")
-        .arg("--quiet")
-        .arg("--kill-whom=all")
-        .arg("--signal=SIGKILL")
-        .arg("kill")
-        .arg(unit_name)
+        .args(systemctl_kill_args(unit_name))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -281,7 +301,6 @@ fn run_systemctl_kill_once(systemctl_path: &Path, unit_name: &str) -> Option<boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
     fn cmd(program: &str, args: &[&str], cwd: &str, env: &[(&str, &str)]) -> ValidatedCommand {
@@ -529,79 +548,18 @@ john:x:1000:100:John:/home/john:/run/current-system/sw/bin/bash
         );
     }
 
-    // --- kill-model teardown (hermetic, via a fake `systemctl`) -------------
-
-    /// Scratch dir under the system temp dir (respects TMPDIR), never repo-relative.
-    fn scratch_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "guestd-kill-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    /// Write an executable fake `systemctl` that appends one record per
-    /// invocation to `<dir>/calls.log` and exits with `exit_code`. Argv
-    /// boundaries are preserved: each argument is written followed by a NUL
-    /// byte, and each invocation record is terminated by a newline. This
-    /// lets `read_calls` reconstruct the EXACT argv vector (order + count),
-    /// so a regression that adds/reorders/duplicates flags is caught — a
-    /// space-joined `$*` could not distinguish those shapes.
-    fn write_fake_systemctl(dir: &Path, exit_code: i32) -> PathBuf {
-        let log = dir.join("calls.log");
-        let script = dir.join("systemctl");
-        let body = format!(
-            "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\0' \"$a\"; done >> '{0}'\nprintf '\\n' >> '{0}'\nexit {1}\n",
-            log.display(),
-            exit_code
-        );
-        std::fs::write(&script, body).unwrap();
-        let mut perms = std::fs::metadata(&script).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script, perms).unwrap();
-        script
-    }
-
-    /// One inner `Vec<String>` per fake-`systemctl` invocation, each holding
-    /// that invocation's exact argv (excluding the program name), with
-    /// boundaries preserved via the NUL-separated record format written by
-    /// `write_fake_systemctl`.
-    fn read_calls(dir: &Path) -> Vec<Vec<String>> {
-        match std::fs::read_to_string(dir.join("calls.log")) {
-            Ok(s) => s
-                .lines()
-                .map(|line| {
-                    line.split('\0')
-                        .filter(|tok| !tok.is_empty())
-                        .map(|tok| tok.to_owned())
-                        .collect()
-                })
-                .collect(),
-            Err(_) => Vec::new(),
-        }
-    }
+    // --- kill-model teardown ------------------------------------------------
 
     #[test]
-    fn run_systemctl_kill_once_spells_out_the_full_kill_argv() {
-        let dir = scratch_dir("argv");
-        let systemctl = write_fake_systemctl(&dir, 0);
-
+    fn systemctl_kill_args_spells_out_the_full_kill_argv() {
         let unit = "nixling-exec-1-0-abcdef.service";
-        assert_eq!(run_systemctl_kill_once(&systemctl, unit), Some(true));
 
-        let calls = read_calls(&dir);
-        assert_eq!(calls.len(), 1, "exit-0 means exactly one invocation");
         // Exact argv equality (order + count), not mere token presence: a
         // regression that adds an extra flag, duplicates a conflicting one,
         // or reorders `kill`/<unit> would change teardown semantics yet slip
         // past a subset check.
         assert_eq!(
-            calls[0],
+            as_strs(&systemctl_kill_args(unit)),
             vec![
                 "--system".to_owned(),
                 "--no-ask-password".to_owned(),
@@ -613,34 +571,62 @@ john:x:1000:100:John:/home/john:/run/current-system/sw/bin/bash
             ],
             "kill argv must be exactly the spelled-out vector"
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn systemctl_kill_unit_retries_once_after_a_failure() {
-        // A unit not-yet-registered makes the first kill exit non-zero; the
-        // teardown MUST retry exactly once (total two invocations).
-        let dir = scratch_dir("retry");
-        let systemctl = write_fake_systemctl(&dir, 1);
+    fn systemctl_kill_unit_retries_once_after_non_success() {
+        // A unit not-yet-registered (exit non-zero) or a wedged/spawn-failed
+        // systemctl (None) MUST retry exactly once (total two attempts).
+        for result in [Some(false), None] {
+            let systemctl = Path::new("/fake/systemctl");
+            let unit = "nixling-exec-2-0-abcdef.service";
+            let mut calls = Vec::new();
+            let mut retry_delays = 0;
 
-        systemctl_kill_unit(&systemctl, "nixling-exec-2-0-abcdef.service");
+            systemctl_kill_unit_with(
+                systemctl,
+                unit,
+                |path, unit_name| {
+                    calls.push((path.to_path_buf(), unit_name.to_owned()));
+                    result
+                },
+                || {
+                    retry_delays += 1;
+                },
+            );
 
-        let calls = read_calls(&dir);
-        assert_eq!(calls.len(), 2, "non-success must retry exactly once");
-        std::fs::remove_dir_all(&dir).ok();
+            assert_eq!(calls.len(), 2, "non-success must retry exactly once");
+            assert_eq!(retry_delays, 1, "one retry delay before the retry");
+            assert!(
+                calls
+                    .iter()
+                    .all(|(path, unit_name)| path == systemctl && unit_name == unit),
+                "retry attempts must preserve the target path and unit"
+            );
+        }
     }
 
     #[test]
     fn systemctl_kill_unit_does_not_retry_after_success() {
         // A first successful kill ends teardown immediately (no second call).
-        let dir = scratch_dir("nostretch");
-        let systemctl = write_fake_systemctl(&dir, 0);
+        let systemctl = Path::new("/fake/systemctl");
+        let mut calls = 0;
+        let mut retry_delays = 0;
 
-        systemctl_kill_unit(&systemctl, "nixling-exec-3-0-abcdef.service");
+        systemctl_kill_unit_with(
+            systemctl,
+            "nixling-exec-3-0-abcdef.service",
+            |_, _| {
+                calls += 1;
+                Some(true)
+            },
+            || {
+                retry_delays += 1;
+            },
+        );
 
-        let calls = read_calls(&dir);
-        assert_eq!(calls.len(), 1, "success must not retry");
-        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(calls, 1, "success must not retry");
+        assert_eq!(retry_delays, 0, "success must not sleep for a retry");
     }
 
     #[test]
