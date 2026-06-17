@@ -33,6 +33,7 @@ result-*
 .vscode/
 
 # Test artifacts
+tests/smoke-run-log.txt
 /tmp/nixling-*.log
 
 # W2 transient test caches + logs (smoke/cache scratch, daemon test agent-tmp,
