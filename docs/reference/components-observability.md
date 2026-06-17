@@ -44,9 +44,13 @@ cursor lets a collector restart resume where it left off rather than
 dropping entries written during downtime.
 
 The central SigNoz collector stamps these resource attributes on every
-ingested source: `vm.name` (the VM), `vm.env` / `service.namespace`
-(the env), `vm.role`, and `deployment.environment` (the physical host
-machine the guests run on, from the host's `networking.hostName`).
+ingested source: `vm.name` (the source's nixling name — the host or the
+VM), `host.name` (the same per-source name, i.e. the hostname telemetry
+is collected from: `ddbus` for the host, `work-aad` for a VM), `vm.env` /
+`service.namespace` (the env), `vm.role` (`host` or `workload`), and
+`deployment.environment` — the physical host for host telemetry
+(`<hostName>`, e.g. `ddbus`) and `<hostName>-<env>` for workload VMs
+(e.g. `ddbus-work`, `ddbus-personal`).
 
 > The systemd journal can contain sensitive data (auth failures,
 > command lines, service-logged secrets). Guest journal logs are
