@@ -430,8 +430,8 @@ undermine the threat-model properties above.
   Relay credentials, realm session keys, and provider credentials
   belong inside the gateway guest, not in the host daemon, any
   host-side activation artifact, or host-readable storage.
-- **Do not open relay sessions directly from the host daemon.**
-  Realm relay transport code runs inside the gateway guest or
+- **Do not open realm relay sessions directly from the host
+  daemon.** Realm relay transport code runs inside the gateway guest or
   inside remote nodes. Daemon-access relay (an opt-in path for
   remote node management) is a separate transport with its own
   audit path and must not carry realm or provider workload

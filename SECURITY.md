@@ -129,10 +129,10 @@ session, or provider credentials. A realm relay is treated as an
 untrusted, ciphertext-only rendezvous: it sees connection metadata and
 traffic shape but never plaintext operations, and relay credentials
 authenticate relay access only — never a constellation principal or
-local `Admin`. Gateway and provider-workload egress are expected to be
-endpoint-allowlisted (relay/provider/registry endpoints only) and pinned
-to an operator-approved tenant/subscription/region; this is realm
-configuration held inside the gateway guest, not host state.
+local `Admin`. Later realm-policy work (a separate ADR/reference) is
+expected to add endpoint-allowlisted, region-pinned realm egress as
+gateway-held realm configuration; that enforcement is not a current host
+guarantee and is not provided by the host daemon.
 
 This section documents the daemon trust-boundary delta for consumers.
 

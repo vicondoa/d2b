@@ -454,13 +454,16 @@ broker `serve` CLI takes `--audit-dir <path>` instead of the prior
 `--audit-log-path` flag.
 
 > **Audit boundary.** The broker audit log above is the local
-> root-owned record for host mutations only. Any future gateway or
-> realm audit (realm access events, provider operation records,
-> remote node log) is separate and lives inside the gateway guest
-> VM, not in `/var/lib/nixling/audit/`. Relay or realm identity
-> never enters the local broker audit or auth path: `peer_uid`,
-> `authz_result`, and `decision` in the records above reflect only
-> the local `SO_PEERCRED`-derived classification.
+> root-owned record for broker operations on this host. Any future
+> gateway or realm *aggregate* audit (realm access events, provider
+> operation records) is a separate record that lives inside the
+> per-realm gateway guest VM, not in `/var/lib/nixling/audit/`;
+> a remote full-host node keeps its own broker/audit records on that
+> node's local audit path (broker-mediated and node-owned), not in the
+> gateway guest. Relay or realm identity never enters this local broker
+> audit or auth path: the record's identity fields (e.g. `peer_uid`,
+> `authz_result`) carry only the local `SO_PEERCRED`-derived
+> classification, and `decision` is the local broker operation outcome.
 
 ## Forward-compatibility policy
 
