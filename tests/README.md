@@ -20,9 +20,9 @@ that you must *not* add new ad-hoc `tests/*.sh`), read [`AGENTS.md`](./AGENTS.md
 
 ```
 tests/
-├── static.sh, static-fast.sh, static-fast-tier0.sh, runner.sh   orchestrators (entry points)
-├── lib.sh, cli-rust-native-common.sh                            shared shell harness
-├── README.md, AGENTS.md                                         this guide + the test-model contract
+├── static.sh, static-fast-tier0.sh, runner.sh, test-*.sh          orchestrators (entry points)
+├── lib.sh, cli-rust-native-common.sh                              shared shell harness
+├── README.md, AGENTS.md                                           this guide + the test-model contract
 ├── migration-ledger.toml, migration-state.d/                    retirement ledger + per-test records
 ├── golden/, fixtures/                                           shared golden data + fixtures
 ├── tools/                                                       runners + codegen/asserter tools
@@ -48,12 +48,24 @@ Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
 
 | Command | Runs | Where |
 |---------|------|-------|
-| `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
-| `make check-fast` | fast PR-loop gate (`tests/static-fast.sh`): parse/shellcheck, `flake check`, rust workspace, nix-unit, pins | local + CI |
-| `make check` | full Layer-1 gate (`tests/static.sh`): everything above + smoke/assertion/contract evals, drift gates, per-example flake checks | local + CI |
+| `make test-unit` | **L1 umbrella**: lint + rust + proofs + flake + drift + policy | local + CI (parallel jobs) |
+| `make test` | `test-unit` + `test-integration` | local |
+| `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
+| `make test-rust` | comprehensive Rust gate (fmt, clippy, cargo test, contract, broker ×3, deny/audit) | local + CI |
+| `make test-proofs` | standalone proofs/ crates | local + CI |
+| `make test-flake` | `nix flake check --no-build` (native system) | local + CI (2-arch matrix) |
+| `make test-nix-unit` | nix-unit corpus (already covered by test-flake; focused convenience target) | local |
+| `make test-drift` | drift-check + vms-json-parity | local + CI |
+| `make test-policy` | meta gates (ci-coverage, ci-uses-make, adr-index, etc.) | local + CI |
 | `make test-integration` | type-9 podman container tests | **ubuntu CI + local** (podman) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks | **local NixOS host w/ KVM** (manual; TCG fallback) |
+| `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
+| `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
+| `make check` | full Layer-1 gate (`tests/static.sh`) | local + CI |
 | `NL_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests | **manual, against a deployed nixling host** |
+
+CI runs the individual sub-targets (`test-lint`, `test-rust`, etc.) in parallel.
+Locally, `make test-unit` runs them serially.
 
 Useful knobs:
 - `NL_NO_SCCACHE=1` — disable sccache in the rust gate (it is auto-disabled in CI).
