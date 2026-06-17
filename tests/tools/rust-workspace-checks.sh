@@ -35,6 +35,10 @@ fi
 export pinned_channel
 
 workspace_target_dir=$(nl_cargo_target_dir workspace)
+# Separate target dirs for the broker's three concurrent feature passes so they
+# don't lock-contend. Per the sccache-dedup design (broker .cargo/config sets no
+# target-dir), these are fresh per-run dirs; sccache caches the COMPILATION
+# across runs so a fresh dir is not a full recompile.
 broker_target_dir=$(nl_cargo_target_dir broker)
 broker_layer1_target_dir=$(nl_mktemp .nixling-broker-layer1-target.XXXXXX)
 add_cleanup "rm -rf -- \"$broker_layer1_target_dir\""
@@ -169,8 +173,59 @@ cleanup_package_test_scratch() {
   fi
 }
 
+# sccache: a per-crate compilation cache (keyed on source + flags), shared
+# across the main + broker workspaces and all feature passes — so the broker's
+# rebuilds of crates the main workspace already compiled (nixling-core/host/ipc)
+# and its three separate-target-dir feature passes become cache hits. Use it
+# locally; DISABLE in CI (no persistent backend there → only overhead/failure)
+# and when sccache is unavailable. The per-command `RUSTC_WRAPPER=""` overrides
+# below (xtask gen-schemas) intentionally opt out regardless of this mode.
+if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ] || [ "${NL_NO_SCCACHE:-0}" = 1 ] \
+  || ! command -v sccache >/dev/null 2>&1; then
+  export RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER=""
+  log "sccache: disabled (CI or unavailable)"
+else
+  _sccache_bin=$(command -v sccache)
+  export RUSTC_WRAPPER="$_sccache_bin" CARGO_BUILD_RUSTC_WRAPPER="$_sccache_bin"
+  log "sccache: enabled ($_sccache_bin)"
+fi
+
 log "--> rust toolchain version"
 assert_pinned_rust_toolchain
+
+# The privileged broker is a SEPARATE workspace with three independent feature
+# passes (default, layer1-bootstrap, fake-backends), each on its OWN target dir.
+# They share nothing with the main workspace and nothing with each other, so run
+# all three CONCURRENTLY in the background here — they overlap with the longer
+# main-workspace section below and are reaped after it. With sccache the shared
+# crates are cache hits across all four streams. Set NL_NO_PARALLEL_BROKER=1 to
+# force serial. Each stream logs to its own file; failures surface at reap.
+broker_stream_default() {
+  cargo metadata --format-version 1 --manifest-path "$broker_manifest" >/dev/null
+  CARGO_TARGET_DIR="$broker_target_dir" cargo check --workspace --manifest-path "$broker_manifest"
+  rm -f -- "$broker_target_dir"/debug/deps/socket_activation-* 2>/dev/null || true
+  CARGO_TARGET_DIR="$broker_target_dir" cargo test --workspace --manifest-path "$broker_manifest"
+}
+broker_stream_layer1() {
+  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo check --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
+  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
+}
+broker_stream_fakebackends() {
+  CARGO_TARGET_DIR="$broker_fakebackends_target_dir" cargo test --workspace --manifest-path "$broker_manifest" --features fake-backends
+}
+broker_streams=(default layer1 fakebackends)
+declare -A broker_pid broker_log
+broker_parallel=1
+[ "${NL_NO_PARALLEL_BROKER:-0}" = 1 ] && broker_parallel=0
+if [ "$broker_parallel" = 1 ]; then
+  log "--> broker workspace: launching default|layer1|fake-backends concurrently (separate target dirs)"
+  broker_logdir=$(nl_mktemp ".nixling-broker-logs.XXXXXX")
+  for _stream in "${broker_streams[@]}"; do
+    broker_log[$_stream]="$broker_logdir/$_stream.log"
+    ( "broker_stream_$_stream" ) >"${broker_log[$_stream]}" 2>&1 &
+    broker_pid[$_stream]=$!
+  done
+fi
 
 log "--> cargo fmt --check"
 cargo fmt --manifest-path "$manifest" --all --check
@@ -250,41 +305,32 @@ CARGO_TARGET_DIR="$workspace_target_dir" \
     -- "$ROOT/packages"
 ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
 
-# The privileged broker lives in its own sibling workspace, so the main
-# workspace checks above do not see it. Validate its manifest/lock graph
-# explicitly, then run its tests in both feature modes.
-log "--> cargo metadata --format-version 1 (broker workspace)"
-cargo metadata --format-version 1 --manifest-path "$broker_manifest" >/dev/null
-ok "broker cargo metadata"
-
-log "--> cargo check --workspace (broker workspace, default features = real wire dispatch)"
-CARGO_TARGET_DIR="$broker_target_dir" cargo check --workspace --manifest-path "$broker_manifest"
-ok "broker cargo check (default features = real wire dispatch)"
-
-log "--> cargo check --workspace --features layer1-bootstrap (broker workspace, legacy probe-* harness)"
-CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo check --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
-ok "broker cargo check --features layer1-bootstrap"
-
-log "--> cargo test --workspace (broker workspace, default features = real wire dispatch)"
-rm -f -- "$broker_target_dir"/debug/deps/socket_activation-* 2>/dev/null || true
-CARGO_TARGET_DIR="$broker_target_dir" cargo test --workspace --manifest-path "$broker_manifest"
-ok "broker cargo test (default features = real wire dispatch)"
-
-log "--> cargo test --workspace --features layer1-bootstrap (broker workspace, legacy probe-* harness)"
-CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
-ok "broker cargo test --features layer1-bootstrap"
-
-# The `fake-backends` feature gates the broker's hermetic integration tests
-# (e.g. tests/pidfd_handoff_scm_rights.rs, #![cfg(feature = "fake-backends")])
-# behind test doubles for the privileged spawn/host backends. Neither the
-# default nor the layer1-bootstrap pass enables it, so without this pass those
-# fd-passing integration tests would not run in the gate at all — the retired
-# tests/pidfd-handoff.sh used to run them via `--all-features`. Run the full
-# broker workspace under fake-backends so every such test runs uniformly
-# (fail-closed presence is pinned in tests/golden/pinned/pidfd-handoff.txt).
-log "--> cargo test --workspace --features fake-backends (broker workspace, hermetic integration test doubles)"
-CARGO_TARGET_DIR="$broker_fakebackends_target_dir" cargo test --workspace --manifest-path "$broker_manifest" --features fake-backends
-ok "broker cargo test --features fake-backends"
+# Reap the broker streams launched concurrently before the main section (or run
+# them serially if NL_NO_PARALLEL_BROKER=1). The fail-closed `fake-backends`
+# stream runs the broker's hermetic integration tests (e.g.
+# tests/pidfd_handoff_scm_rights.rs, #![cfg(feature = "fake-backends")], pinned
+# in tests/golden/pinned/pidfd-handoff.txt) that neither the default nor the
+# layer1-bootstrap pass enables — without it those fd-passing tests would not
+# run in the gate at all (the retired tests/pidfd-handoff.sh used --all-features).
+if [ "$broker_parallel" = 1 ]; then
+  broker_failed=0
+  for _stream in "${broker_streams[@]}"; do
+    if wait "${broker_pid[$_stream]}"; then
+      ok "broker cargo ($_stream feature pass)"
+    else
+      log "broker stream '$_stream' FAILED — captured output follows:"
+      cat "${broker_log[$_stream]}" >&2 || true
+      broker_failed=1
+    fi
+  done
+  [ "$broker_failed" -eq 0 ] || { fail "broker workspace checks failed"; exit 1; }
+else
+  for _stream in "${broker_streams[@]}"; do
+    log "--> broker cargo ($_stream feature pass, serial)"
+    "broker_stream_$_stream"
+    ok "broker cargo ($_stream feature pass)"
+  done
+fi
 
 cleanup_cargo_special_files "workspace cargo test" "$workspace_target_dir"
 cleanup_cargo_special_files "broker cargo test" "$broker_target_dir"
