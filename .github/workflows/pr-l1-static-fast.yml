@@ -93,10 +93,16 @@ jobs:
       # evaluator with a large swapfile so it spills to disk instead.
       - name: Add swap (bound flake-eval peak memory)
         run: |
-          sudo fallocate -l 14G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
+          # Hosted runner images sometimes already ship an active
+          # /mnt/swapfile (fallocate would fail "Text file busy"), so use a
+          # dedicated file and add it on top of whatever swap exists.
+          SWAP=/mnt/nixling-ci-swap
+          sudo swapoff "$SWAP" 2>/dev/null || true
+          sudo rm -f "$SWAP"
+          sudo fallocate -l 14G "$SWAP" || sudo dd if=/dev/zero of="$SWAP" bs=1M count=14336
+          sudo chmod 600 "$SWAP"
+          sudo mkswap "$SWAP"
+          sudo swapon "$SWAP"
           free -h
       - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
         with:
@@ -115,10 +121,16 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Add swap (bound flake-eval peak memory)
         run: |
-          sudo fallocate -l 14G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
+          # Hosted runner images sometimes already ship an active
+          # /mnt/swapfile (fallocate would fail "Text file busy"), so use a
+          # dedicated file and add it on top of whatever swap exists.
+          SWAP=/mnt/nixling-ci-swap
+          sudo swapoff "$SWAP" 2>/dev/null || true
+          sudo rm -f "$SWAP"
+          sudo fallocate -l 14G "$SWAP" || sudo dd if=/dev/zero of="$SWAP" bs=1M count=14336
+          sudo chmod 600 "$SWAP"
+          sudo mkswap "$SWAP"
+          sudo swapon "$SWAP"
           free -h
       - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
         with:
