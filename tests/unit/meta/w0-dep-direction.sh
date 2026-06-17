@@ -86,6 +86,10 @@ is_member() {
 }
 
 # External (non-member) crates a pure contract crate must never depend on.
+# nixling-priv-broker lives in a SEPARATE workspace (excluded from
+# packages/Cargo.toml), so it never appears in the member set — name it
+# explicitly, along with any other nixling-* host/daemon crate caught by the
+# glob in check_dep below.
 is_external_forbidden() {
   case "$1" in
     prost | prost-types) return 0 ;;
@@ -94,12 +98,20 @@ is_external_forbidden() {
 }
 
 # Classify one resolved dependency name against a pure crate's allowlist.
-# Forbidden iff it is a workspace member not in the allowlist (this catches
-# nixling, nixling-*, xtask, the other contract crates, etc.) OR an external
-# forbidden crate (prost).
+# Forbidden iff it is NOT whitelisted and is any of: a workspace member
+# (catches nixling, xtask, the sibling contract crates), any `nixling`/
+# `nixling-*` crate (catches the separate-workspace nixling-priv-broker and
+# every host/daemon crate, member or not), or an external forbidden crate
+# (prost).
 check_dep() {
   local crate="$1" allowed="$2" dep="$3"
   case "$allowed" in *" $dep "*) return 0 ;; esac
+  case "$dep" in
+    nixling | nixling-*)
+      violation "$crate declares forbidden workspace/host dependency '$dep' (dependency-direction violation)"
+      return 0
+      ;;
+  esac
   if is_member "$dep"; then
     violation "$crate declares forbidden workspace dependency '$dep' (dependency-direction violation)"
   elif is_external_forbidden "$dep"; then
