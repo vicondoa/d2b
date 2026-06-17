@@ -28,6 +28,12 @@ let
   clickhouseDsn = "tcp://127.0.0.1:${toString clickhousePort}";
   defaultIngressSources = {
     host = {
+      # Standalone-only fallback (used when cfg.ingress.sources == {}).
+      # The bundled path always sets ingress.sources via
+      # observability-vm.nix's obsIngressSources, which threads the host's
+      # nixling.observability.host.identityName here instead. Do NOT derive
+      # this from config.networking.hostName: in stack.nix that is the
+      # obs-VM's own hostname, not the physical host (ADR 0033).
       vmName = "host";
       envName = "host";
       role = "host";

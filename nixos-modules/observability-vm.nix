@@ -31,7 +31,11 @@ let
     observedVmNames);
   obsIngressSources = {
     host = {
-      vmName = "host";
+      # Host-origin telemetry identity is assigned here, at the trusted
+      # per-source ingress boundary (ADR 0026/0033), from the host option
+      # (this module evaluates in the host config context). vm.role stays
+      # "host" so host streams remain selectable as a class.
+      vmName = cfg.host.identityName;
       envName = "host";
       role = "host";
       vsockPort = hostVsockPort;
