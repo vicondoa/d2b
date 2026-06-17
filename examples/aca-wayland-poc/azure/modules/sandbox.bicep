@@ -1,0 +1,109 @@
+// Sandbox module for the nixling ACA + Wayland POC (ADR 0032, Wave P0).
+//
+// Azure Container Apps **Sandboxes** (Microsoft.App/sandboxGroups) are the
+// isolation boundary for the POC: ephemeral, strongly-isolated compute
+// instances with explicit lifecycle control, exec, file management, port
+// exposure, and egress policies. The container (running the Wayland app +
+// Waypipe + relay bridge) dials Azure Relay outbound.
+//
+// The sandbox GROUP is the only ARM resource: individual sandboxes, disk
+// images, snapshots, volumes, and egress policies are created through the
+// ADC data plane (management.azuredevcompute.io), not ARM/Bicep. This
+// module also keeps the Azure Relay namespace + hybrid connection that
+// carries the constellation control/display streams, and grants the shared
+// identity data-plane ownership of the sandbox group.
+//
+// Naming scheme (see ../README.md): <prefix>-<workload>-<suffix>, suffix =
+// uniqueString(subscription().id, resourceGroup().id).
+
+targetScope = 'resourceGroup'
+
+@description('Stable workload token used in every resource name.')
+param workload string
+
+@description('Resource-type name prefixes (CAF-aligned defaults set in main.bicep).')
+param prefixes object
+
+@description('Tags applied to every resource.')
+param tags object
+
+@description('Principal id of the identity that manages sandboxes via the data plane (from the registry module).')
+param managedIdentityPrincipalId string
+
+// Deterministic per-(subscription, resource group) suffix.
+var suffix = uniqueString(subscription().id, resourceGroup().id)
+
+var sandboxGroupName = toLower('${prefixes.sandboxGroup}-${workload}-${suffix}')
+var relayNamespaceName = toLower('${prefixes.relayNamespace}-${workload}-${suffix}')
+var hybridConnectionName = toLower('${prefixes.hybridConnection}-${workload}-display')
+
+// "Container Apps SandboxGroup Data Owner" built-in role: required to
+// create/manage sandboxes, disk images, and egress policies on the group
+// through the ADC data plane.
+var sandboxDataOwnerRoleId = 'c24cf47c-5077-412d-a19c-45202126392c'
+
+@description('Sandbox group: the top-level management boundary for ephemeral, isolated sandboxes. Sandboxes themselves are created via the data plane.')
+resource sandboxGroup 'Microsoft.App/sandboxGroups@2026-02-01-preview' = {
+  name: sandboxGroupName
+  location: resourceGroup().location
+  tags: tags
+}
+
+@description('Grant the shared identity data-plane ownership of the sandbox group so the realm gateway can create/suspend/exec/expose sandboxes.')
+resource sandboxDataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(sandboxGroup.id, managedIdentityPrincipalId, sandboxDataOwnerRoleId)
+  scope: sandboxGroup
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', sandboxDataOwnerRoleId)
+    principalId: managedIdentityPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+@description('Azure Relay namespace (Standard SKU required for hybrid connections).')
+resource relayNamespace 'Microsoft.Relay/namespaces@2024-01-01' = {
+  name: relayNamespaceName
+  location: resourceGroup().location
+  sku: {
+    name: 'Standard'
+  }
+  tags: tags
+}
+
+@description('Hybrid connection carrying the constellation control/display streams. Both gateway (listener) and sandbox (sender) connect outbound; client authorization is required.')
+resource hybridConnection 'Microsoft.Relay/namespaces/hybridConnections@2024-01-01' = {
+  parent: relayNamespace
+  name: hybridConnectionName
+  properties: {
+    requiresClientAuthorization: true
+  }
+}
+
+@description('SAS policy granting Listen on the hybrid connection (held by the realm gateway listener). Keys are fetched out-of-band during gateway enrollment; they are never emitted as deployment outputs.')
+resource listenRule 'Microsoft.Relay/namespaces/hybridConnections/authorizationRules@2024-01-01' = {
+  parent: hybridConnection
+  name: 'gateway-listen'
+  properties: {
+    rights: [
+      'Listen'
+    ]
+  }
+}
+
+@description('SAS policy granting Send on the hybrid connection. The gateway mints short-lived per-sandbox Send tokens from this policy; the policy key itself never enters a sandbox.')
+resource sendRule 'Microsoft.Relay/namespaces/hybridConnections/authorizationRules@2024-01-01' = {
+  parent: hybridConnection
+  name: 'gateway-send'
+  properties: {
+    rights: [
+      'Send'
+    ]
+  }
+}
+
+output sandboxGroupName string = sandboxGroup.name
+output sandboxGroupResourceId string = sandboxGroup.id
+output relayNamespaceName string = relayNamespace.name
+output hybridConnectionName string = hybridConnection.name
+output relayListenRuleName string = listenRule.name
+output relaySendRuleName string = sendRule.name
