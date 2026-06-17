@@ -28,11 +28,44 @@ rc=0
 note() { printf '  %s\n' "$*" >&2; }
 violation() { printf 'FAIL: %s\n' "$*" >&2; rc=1; }
 
+# Resolve a cargo binary (PATH, the rustup toolchain, or ~/.cargo). When
+# found, `cargo metadata --no-deps` is the AUTHORITATIVE dependency resolver:
+# it returns each workspace member's dependencies by their real, resolved
+# crate name (post-`package=` rename, post-`workspace=true` inheritance,
+# including target-specific and quoted-key forms) without compiling or
+# touching the network. The awk parser below is a defense-in-depth fallback
+# for environments without cargo.
+resolve_cargo() {
+  if command -v cargo >/dev/null 2>&1; then command -v cargo; return 0; fi
+  local c
+  for c in "$HOME"/.rustup/toolchains/*/bin/cargo "$HOME"/.cargo/bin/cargo; do
+    [ -x "$c" ] && { echo "$c"; return 0; }
+  done
+  return 1
+}
+CARGO="$(resolve_cargo || true)"
+CARGO_META=""
+if [ -n "$CARGO" ] && command -v jq >/dev/null 2>&1; then
+  CARGO_META="$("$CARGO" metadata --no-deps --format-version 1 \
+    --manifest-path "$PKGS/Cargo.toml" 2>/dev/null || true)"
+fi
+
+# Print a pure crate's resolved, non-dev dependency crate names via cargo
+# metadata (authoritative). Empty output if cargo metadata is unavailable.
+crate_deps_cargo() {
+  local crate="$1"
+  [ -n "$CARGO_META" ] || return 0
+  printf '%s' "$CARGO_META" | jq -r --arg c "$crate" '
+    .packages[] | select(.name == $c) | .dependencies[]
+    | select(.kind != "dev") | .name' 2>/dev/null
+}
+
 # Print the declared dependency names of a crate manifest. Handles
 # `name = ...`, `name.workspace = true`, `[dependencies.name]` tables,
 # target-specific `[target.'cfg(...)'.dependencies(.name)]` sections, inline
 # `package = "real"` / `package = 'real'` renames (both quote styles), and
 # trailing comments on section headers. Ignores dev-/build-dependencies.
+# Best-effort fallback used only when cargo metadata is unavailable.
 crate_deps() {
   local manifest="$1"
   awk '
@@ -109,6 +142,47 @@ is_forbidden_edge() {
   esac
 }
 
+# Resolve a workspace-dependency alias to its real crate name, for the awk
+# fallback only (cargo metadata already resolves these). Reads
+# `[workspace.dependencies]` in packages/Cargo.toml: `alias = { package =
+# "X" }` -> X, `alias = { path = ".../X" }` -> X (basename), else the alias.
+resolve_ws_alias() {
+  local alias="$1" ws="$PKGS/Cargo.toml"
+  [ -f "$ws" ] || { echo "$alias"; return; }
+  awk -v want="$alias" '
+    /^\[workspace\.dependencies\]/ { in_d = 1; next }
+    /^\[/ { in_d = 0 }
+    in_d {
+      line = $0; sub(/#.*/, "", line); gsub(/^[ \t]+/, "", line)
+      key = line; sub(/[ \t]*[=.].*$/, "", key); gsub(/["'"'"']/, "", key)
+      if (key != want) next
+      if (line ~ /package[ \t]*=/) {
+        v = line; sub(/.*package[ \t]*=[ \t]*["'"'"']/, "", v); sub(/["'"'"'].*$/, "", v)
+        print v; found = 1; exit
+      }
+      if (line ~ /path[ \t]*=/) {
+        v = line; sub(/.*path[ \t]*=[ \t]*["'"'"']/, "", v); sub(/["'"'"'].*$/, "", v)
+        sub(/.*\//, "", v); print v; found = 1; exit
+      }
+    }
+    END { if (!found) print want }
+  ' "$ws"
+}
+
+# Classify a single resolved dependency name against a pure crate's allowlist.
+check_dep() {
+  local crate="$1" allowed="$2" dep="$3"
+  case "$allowed" in *" $dep "*) return 0 ;; esac
+  if is_forbidden_edge "$dep"; then
+    violation "$crate declares forbidden dependency '$dep' (dependency-direction violation)"
+  fi
+  case "$dep" in
+    nixling-*)
+      violation "$crate declares un-whitelisted workspace dependency '$dep'"
+      ;;
+  esac
+}
+
 # Check a pure contract crate: every declared dependency that is a workspace
 # crate or prost must be in the allowed list; forbidden edges fail closed.
 check_pure_crate() {
@@ -119,23 +193,26 @@ check_pure_crate() {
     note "skip $crate (not present yet)"
     return 0
   fi
-  note "checking $crate"
   check_lints "$manifest" "$crate"
-  local dep
-  while IFS= read -r dep; do
-    [ -n "$dep" ] || continue
-    # Allowed contract deps are explicitly whitelisted.
-    case "$allowed" in *" $dep "*) continue ;; esac
-    if is_forbidden_edge "$dep"; then
-      violation "$crate declares forbidden dependency '$dep' (dependency-direction violation)"
-    fi
-    # A pure crate may not depend on ANY other nixling-* crate not whitelisted.
-    case "$dep" in
-      nixling-*)
-        violation "$crate declares un-whitelisted workspace dependency '$dep'"
-        ;;
-    esac
-  done < <(crate_deps "$manifest")
+
+  local dep cargo_deps
+  cargo_deps="$(crate_deps_cargo "$crate")"
+  if [ -n "$cargo_deps" ]; then
+    note "checking $crate (cargo metadata)"
+    while IFS= read -r dep; do
+      [ -n "$dep" ] && check_dep "$crate" "$allowed" "$dep"
+    done <<< "$cargo_deps"
+  else
+    note "checking $crate (manifest fallback; cargo metadata unavailable)"
+    while IFS= read -r dep; do
+      [ -n "$dep" ] || continue
+      check_dep "$crate" "$allowed" "$dep"
+      # Resolve workspace-inherited aliases to their real crate name.
+      local real
+      real="$(resolve_ws_alias "$dep")"
+      [ "$real" != "$dep" ] && check_dep "$crate" "$allowed" "$real"
+    done < <(crate_deps "$manifest")
+  fi
 }
 
 # nixling-constellation-core: depends on no workspace crate, no prost.
