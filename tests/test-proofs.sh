@@ -39,7 +39,8 @@ if [ -z "${NIXLING_PROOFS_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>
   exec nix shell --quiet --inputs-from "$ROOT" nixpkgs#rustup nixpkgs#stdenv.cc \
     --command bash -lc "
       set -euo pipefail
-      rustup toolchain install '$pinned_channel' --profile minimal --component clippy >/dev/null
+      rustup toolchain install '$pinned_channel' --profile minimal
+      rustup component add --toolchain '$pinned_channel' clippy
       exec bash '$ROOT/tests/test-proofs.sh'
     "
 fi
