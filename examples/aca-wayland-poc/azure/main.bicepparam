@@ -38,6 +38,12 @@ param workload = 'nixling'
 param imageRepository = 'nixling-wayland'
 param imageTag = 'latest'
 
+// Optionally grant a human operator the SandboxGroup Data Owner role so
+// they can drive sandboxes in the portal/CLI. Set to your user object id
+// (az ad signed-in-user show --query id -o tsv). Leave '' to skip.
+param operatorPrincipalId = ''
+param operatorPrincipalType = 'User'
+
 // Tags. Set values meaningful for your subscription.
 param tags = {
   workload: 'nixling'

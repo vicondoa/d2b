@@ -30,6 +30,16 @@ param tags object
 @description('Principal id of the identity that manages sandboxes via the data plane (from the registry module).')
 param managedIdentityPrincipalId string
 
+@description('Optional object id of an operator (user/group) to also grant the SandboxGroup Data Owner role, so a human can drive sandboxes in the portal/CLI. Leave empty to skip.')
+param operatorPrincipalId string = ''
+
+@description('Principal type for operatorPrincipalId (User or Group).')
+@allowed([
+  'User'
+  'Group'
+])
+param operatorPrincipalType string = 'User'
+
 // Deterministic per-(subscription, resource group) suffix.
 var suffix = uniqueString(subscription().id, resourceGroup().id)
 
@@ -57,6 +67,17 @@ resource sandboxDataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' =
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', sandboxDataOwnerRoleId)
     principalId: managedIdentityPrincipalId
     principalType: 'ServicePrincipal'
+  }
+}
+
+@description('Optionally grant a human operator the same data-plane ownership so they can drive sandboxes in the portal/CLI. Created only when operatorPrincipalId is set.')
+resource operatorDataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(operatorPrincipalId)) {
+  name: guid(sandboxGroup.id, operatorPrincipalId, sandboxDataOwnerRoleId)
+  scope: sandboxGroup
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', sandboxDataOwnerRoleId)
+    principalId: operatorPrincipalId
+    principalType: operatorPrincipalType
   }
 }
 

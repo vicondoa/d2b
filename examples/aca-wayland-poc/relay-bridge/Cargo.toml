@@ -1,0 +1,38 @@
+[package]
+name = "nixling-relay-bridge"
+version = "0.0.0-poc"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+# Standalone POC tool (ADR 0032, Wave P0): tunnels a raw byte stream over
+# an Azure Relay Hybrid Connection so the in-sandbox `waypipe server` can
+# reach the host `waypipe client` with no inbound ports. Deliberately kept
+# out of the main `packages/` workspace; the productionized form is the
+# planned `nixling-constellation-transport-azure-relay` crate.
+
+[[bin]]
+name = "nixling-relay-bridge"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", features = ["ring"] }
+webpki-roots = "0.26"
+rustls-pemfile = "2"
+futures-util = "0.3"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+urlencoding = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.8"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true

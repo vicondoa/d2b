@@ -49,6 +49,16 @@ param imageRepository string = 'nixling-wayland'
 @description('Container image tag.')
 param imageTag string = 'latest'
 
+@description('Optional object id of an operator (user/group) to grant the SandboxGroup Data Owner role, so a human can drive sandboxes in the portal/CLI. Leave empty to skip.')
+param operatorPrincipalId string = ''
+
+@description('Principal type for operatorPrincipalId (User or Group).')
+@allowed([
+  'User'
+  'Group'
+])
+param operatorPrincipalType string = 'User'
+
 @description('Tags applied to every resource.')
 param tags object = {
   workload: workload
@@ -80,6 +90,8 @@ module sandbox 'modules/sandbox.bicep' = {
     prefixes: prefixes
     tags: tags
     managedIdentityPrincipalId: registry.outputs.managedIdentityPrincipalId
+    operatorPrincipalId: operatorPrincipalId
+    operatorPrincipalType: operatorPrincipalType
   }
 }
 
