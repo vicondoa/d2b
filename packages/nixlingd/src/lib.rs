@@ -169,6 +169,11 @@ pub mod usbip_state_machine;
 // broker's OpAuditRecord stream (e.g. api-ready timeout).
 pub mod daemon_audit;
 
+// ADR 0032 Wave 0: compile-only peer-module skeletons wiring the v2
+// constellation provider/router trait surface. NOT called from the running
+// daemon (zero behavior change); see the module docs.
+pub mod constellation_stubs;
+
 use typed_error::TypedError;
 
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/nixling/daemon-config.json";

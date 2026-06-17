@@ -12,9 +12,7 @@ use crate::trace_context::TraceContext;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// The authorization decision recorded for an operation/stream.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AuthzDecision {
     /// The operation/stream was authorized.

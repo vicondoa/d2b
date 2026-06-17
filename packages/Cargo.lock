@@ -982,6 +982,7 @@ dependencies = [
  "nixling-constellation-core",
  "nixling-constellation-provider",
  "prost 0.13.5",
+ "serde_json",
 ]
 
 [[package]]
@@ -1053,9 +1054,12 @@ name = "nixling-daemon-access"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "nix 0.29.0",
  "nixling-constellation-core",
  "nixling-constellation-provider",
  "nixling-ipc",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -1161,6 +1165,9 @@ dependencies = [
  "getrandom 0.2.17",
  "libc",
  "nix 0.29.0",
+ "nixling-constellation-core",
+ "nixling-constellation-provider",
+ "nixling-constellation-router",
  "nixling-core",
  "nixling-host",
  "nixling-ipc",

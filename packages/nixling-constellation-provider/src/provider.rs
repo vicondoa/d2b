@@ -74,7 +74,10 @@ pub trait WorkloadProvider: Send + Sync {
     /// Stop a workload.
     async fn stop(&self, id: WorkloadId) -> ProviderResult<WorkloadStatus>;
     /// Start an execution.
-    async fn exec(&self, req: ExecStartRequest) -> ProviderResult<nixling_constellation_core::ExecutionId>;
+    async fn exec(
+        &self,
+        req: ExecStartRequest,
+    ) -> ProviderResult<nixling_constellation_core::ExecutionId>;
 }
 
 /// Window/display forwarding for workloads that can present UI. A provider

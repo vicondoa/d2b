@@ -6,9 +6,7 @@ use crate::ids::{NodeId, WorkloadId};
 use serde::{Deserialize, Serialize};
 
 /// Coarse workload lifecycle state.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkloadState {
     /// Declared/known but not running.
@@ -24,9 +22,7 @@ pub enum WorkloadState {
 }
 
 /// A selector for listing workloads.
-#[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkloadSelector {
     /// All workloads on the node.

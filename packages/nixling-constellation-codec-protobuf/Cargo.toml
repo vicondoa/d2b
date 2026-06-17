@@ -23,3 +23,6 @@ workspace = true
 nixling-constellation-core = { path = "../nixling-constellation-core" }
 nixling-constellation-provider = { path = "../nixling-constellation-provider" }
 prost = "0.13"
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -5,9 +5,7 @@ use crate::ids::{ExecutionId, WorkloadId};
 use serde::{Deserialize, Serialize};
 
 /// Coarse execution lifecycle state.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ExecState {
     /// Accepted, not yet started.

@@ -3,9 +3,7 @@
 //! deliberately NOT `serde`/`Clone`/`Eq` and redact their contents in
 //! `Debug`.
 
-use nixling_constellation_core::{
-    NodeId, ProviderId, StreamId, WorkloadId, WorkloadSelector,
-};
+use nixling_constellation_core::{NodeId, ProviderId, StreamId, WorkloadId, WorkloadSelector};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 

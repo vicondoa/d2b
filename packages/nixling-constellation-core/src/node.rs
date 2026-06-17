@@ -6,9 +6,7 @@ use crate::ids::NodeId;
 use serde::{Deserialize, Serialize};
 
 /// What kind of node this is, and therefore what nixling can own.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum NodeKind {
     /// A full nixling host (KVM, broker, vsock, device control).

@@ -8,7 +8,16 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// Stable, closed-enum classification of a constellation failure. Codecs
 /// map this to/from typed error frames; it never carries payload bytes.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
     schemars::JsonSchema,
 )]
 #[serde(rename_all = "kebab-case")]

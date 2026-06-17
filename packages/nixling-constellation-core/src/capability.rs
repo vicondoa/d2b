@@ -9,7 +9,16 @@ use std::collections::BTreeSet;
 /// audio, HID, and USB are deliberately distinct so display forwarding
 /// cannot smuggle clipboard or device access.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
     schemars::JsonSchema,
 )]
 #[serde(rename_all = "kebab-case")]
@@ -88,9 +97,7 @@ impl Capability {
 
 /// A set of advertised capabilities. Routing is by required capability;
 /// callers fail closed when a required capability is absent.
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct CapabilitySet(BTreeSet<Capability>);
 

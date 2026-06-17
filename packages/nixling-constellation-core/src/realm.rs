@@ -5,9 +5,7 @@ use crate::ids::RealmId;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Where a realm's entrypoint runs.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum EntrypointMode {
     /// Local-only / trusted-host realm dispatched on the host `nixlingd`.
@@ -21,10 +19,7 @@ pub enum EntrypointMode {
 /// Internally policy may store it parent-first as `work/payments`; the
 /// target-name form stays DNS-shaped. Bounded in label count and total
 /// rendered length so it cannot become an unbounded side channel.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize,
-    schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, schemars::JsonSchema)]
 #[serde(transparent)]
 #[schemars(
     length(min = 1, max = 16),
@@ -59,8 +54,8 @@ impl RealmPath {
             return None;
         }
         // total bytes of the dotted target form (labels + separators).
-        let total: usize = labels.iter().map(|l| l.as_str().len()).sum::<usize>()
-            + labels.len().saturating_sub(1);
+        let total: usize =
+            labels.iter().map(|l| l.as_str().len()).sum::<usize>() + labels.len().saturating_sub(1);
         if total > MAX_REALM_PATH_BYTES {
             return None;
         }
@@ -69,7 +64,9 @@ impl RealmPath {
 
     /// The reserved local realm (`local`).
     pub fn local() -> Self {
-        Self(vec![RealmId::parse("local").expect("`local` is a valid label")])
+        Self(vec![
+            RealmId::parse("local").expect("`local` is a valid label")
+        ])
     }
 
     /// Labels, most-specific first.

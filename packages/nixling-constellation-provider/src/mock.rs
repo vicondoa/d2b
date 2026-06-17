@@ -12,8 +12,8 @@ use crate::capabilities::{DisplayCapabilitySet, WorkloadCapabilitySet};
 use crate::error::{ProviderError, ProviderResult};
 use crate::provider::{DisplayProvider, StreamMux, WorkloadProvider};
 use crate::types::{
-    DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest, ExecStartRequest, IncomingStream,
-    ListSelector, StreamHandle, WorkloadStatus,
+    DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest, ExecStartRequest,
+    IncomingStream, ListSelector, StreamHandle, WorkloadStatus,
 };
 
 fn id(label: &str) -> ProviderId {
@@ -98,7 +98,9 @@ impl DisplayProvider for HeadlessDisplayProvider {
         &self,
         _req: DisplaySessionRequest,
     ) -> ProviderResult<DisplaySessionHandle> {
-        Err(ProviderError::capability_denied(Capability::WindowForwarding))
+        Err(ProviderError::capability_denied(
+            Capability::WindowForwarding,
+        ))
     }
     async fn close_display_session(&self, _id: DisplaySessionId) -> ProviderResult<()> {
         Ok(())
@@ -153,7 +155,9 @@ impl StreamMux for LoopbackStreamMux {
     }
 
     async fn accept_stream(&self) -> ProviderResult<IncomingStream> {
-        Err(ProviderError::unsupported("mock mux does not accept inbound streams"))
+        Err(ProviderError::unsupported(
+            "mock mux does not accept inbound streams",
+        ))
     }
 
     async fn close_stream(&self, _id: nixling_constellation_core::StreamId) -> ProviderResult<()> {

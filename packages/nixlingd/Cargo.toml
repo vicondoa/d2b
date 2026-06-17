@@ -19,6 +19,13 @@ rustix = { workspace = true }
 nixling-core = { path = "../nixling-core", version = "0.0.0-bootstrap" }
 nixling-host = { path = "../nixling-host", version = "0.0.0-bootstrap" }
 nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
+# v2 constellation contract crates (ADR 0032). Wave 0 wires the peer-module
+# skeletons in src/constellation_stubs.rs against this trait surface; they
+# are compile-only and NOT called from the running daemon (zero behavior
+# change).
+nixling-constellation-core = { path = "../nixling-constellation-core" }
+nixling-constellation-provider = { path = "../nixling-constellation-provider" }
+nixling-constellation-router = { path = "../nixling-constellation-router" }
 protobuf = "3.7.2"
 semver = "1"
 serde.workspace = true

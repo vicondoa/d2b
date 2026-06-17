@@ -11,12 +11,12 @@
 
 use async_trait::async_trait;
 use nixling_constellation_core::ErrorKind;
+use nixling_constellation_core::{NodeId, ProviderId};
 use nixling_constellation_provider::error::{ProviderError, ProviderResult};
 use nixling_constellation_provider::provider::{TransportListener, TransportProvider};
 use nixling_constellation_provider::types::{
     NodeRegistration, SafeLabel, TransportSession, TransportTarget,
 };
-use nixling_constellation_core::{NodeId, ProviderId};
 use tokio::sync::{mpsc, Mutex};
 
 /// Default in-memory duplex buffer size for a loopback session.
@@ -78,12 +78,9 @@ impl TransportProvider for LoopbackTransport {
         &self,
         registration: NodeRegistration,
     ) -> ProviderResult<Box<dyn TransportListener>> {
-        let rx = self
-            .rx
-            .lock()
-            .await
-            .take()
-            .ok_or_else(|| ProviderError::new(ErrorKind::RelayUnavailable, "listener already taken"))?;
+        let rx = self.rx.lock().await.take().ok_or_else(|| {
+            ProviderError::new(ErrorKind::RelayUnavailable, "listener already taken")
+        })?;
         Ok(Box::new(LoopbackListener {
             node: registration.node,
             rx: Mutex::new(rx),

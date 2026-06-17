@@ -63,9 +63,7 @@ pub fn is_label(s: &str) -> bool {
 /// True for a bounded, non-empty printable-ASCII opaque token (no spaces
 /// or control characters).
 fn is_opaque_token(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_graphic() && c != ' ')
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_graphic() && c != ' ')
 }
 
 macro_rules! id_newtype {

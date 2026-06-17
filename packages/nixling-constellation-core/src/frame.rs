@@ -4,11 +4,9 @@
 //! encoding (`prost`, protobuf-generated types, etc.).
 
 use crate::audit::AuditEnvelope;
-use crate::error::ConstellationError;
-use crate::ids::{
-    IdempotencyKey, NodeId, OperationId, PrincipalId, StreamId, WorkloadId,
-};
 use crate::capability::Capability;
+use crate::error::ConstellationError;
+use crate::ids::{IdempotencyKey, NodeId, OperationId, PrincipalId, StreamId, WorkloadId};
 use crate::payload::OpaquePayload;
 use crate::realm::RealmPath;
 use crate::stream::{StreamAuthz, StreamDescriptor};
@@ -51,9 +49,7 @@ pub struct Handshake {
 
 /// The kind of an operation (ADR 0032 examples). Closed enum; unknown
 /// kinds are rejected at decode (fail-closed).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum OperationKind {
@@ -247,7 +243,11 @@ impl OperationRequest {
         push("node", self.node.as_str().as_bytes());
         push(
             "workload",
-            self.workload.as_ref().map(|w| w.as_str()).unwrap_or("").as_bytes(),
+            self.workload
+                .as_ref()
+                .map(|w| w.as_str())
+                .unwrap_or("")
+                .as_bytes(),
         );
         push("principal", self.principal.as_str().as_bytes());
         push("body", self.body.as_bytes());
@@ -365,7 +365,6 @@ pub enum ConstellationFrame {
     AdmissionAudit(AuditEnvelope),
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,8 +465,7 @@ mod tests {
         let close = "{\"frame\":\"stream-close\",\"stream\":\"s1\"}";
         assert!(serde_json::from_str::<ConstellationFrame>(close).is_ok());
         // Extra peer-supplied fields are rejected (deny_unknown_fields).
-        let data_extra =
-            "{\"frame\":\"stream-data\",\"stream\":\"s1\",\"data\":[1],\"evil\":true}";
+        let data_extra = "{\"frame\":\"stream-data\",\"stream\":\"s1\",\"data\":[1],\"evil\":true}";
         assert!(serde_json::from_str::<ConstellationFrame>(data_extra).is_err());
         let close_extra = "{\"frame\":\"stream-close\",\"stream\":\"s1\",\"evil\":true}";
         assert!(serde_json::from_str::<ConstellationFrame>(close_extra).is_err());

@@ -102,7 +102,10 @@ impl JsonSchema for TraceContext {
             instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
             object: Some(Box::new(ObjectValidation {
                 properties,
-                required: ["trace_id", "span_id"].iter().map(|s| s.to_string()).collect(),
+                required: ["trace_id", "span_id"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
                 additional_properties: Some(Box::new(Schema::Bool(false))),
                 ..Default::default()
             })),
@@ -126,7 +129,8 @@ mod tests {
     #[test]
     fn deserialize_is_fail_closed() {
         assert!(
-            serde_json::from_str::<TraceContext>("{\"trace_id\":\"t1\",\"span_id\":\"s1\"}").is_ok()
+            serde_json::from_str::<TraceContext>("{\"trace_id\":\"t1\",\"span_id\":\"s1\"}")
+                .is_ok()
         );
         // empty / overlong / unsafe fields are rejected at decode.
         assert!(
@@ -138,7 +142,8 @@ mod tests {
         );
         assert!(serde_json::from_str::<TraceContext>(&overlong).is_err());
         assert!(
-            serde_json::from_str::<TraceContext>("{\"trace_id\":\"t 1\",\"span_id\":\"s1\"}").is_err()
+            serde_json::from_str::<TraceContext>("{\"trace_id\":\"t 1\",\"span_id\":\"s1\"}")
+                .is_err()
         );
     }
 }
