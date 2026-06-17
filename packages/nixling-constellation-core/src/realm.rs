@@ -26,7 +26,10 @@ pub enum EntrypointMode {
     schemars::JsonSchema,
 )]
 #[serde(transparent)]
-#[schemars(length(min = 1, max = 16))]
+#[schemars(
+    length(min = 1, max = 16),
+    description = "Most-specific-first realm labels. Bounded to 16 labels and a 255-byte total rendered (dotted) length, enforced at construction and decode."
+)]
 pub struct RealmPath(Vec<RealmId>);
 
 /// Maximum number of labels in a realm path.
@@ -128,5 +131,19 @@ mod tests {
             .map(|i| RealmId::parse(format!("r{i}")).unwrap())
             .collect();
         assert!(RealmPath::new(ok).is_some());
+    }
+
+    #[test]
+    fn realm_path_rejects_over_byte_cap() {
+        // Two 128-byte labels render to 257 bytes (> MAX_REALM_PATH_BYTES),
+        // rejected at construction AND at decode.
+        let long = "a".repeat(128);
+        let labels = vec![
+            RealmId::parse(long.clone()).unwrap(),
+            RealmId::parse(long.clone()).unwrap(),
+        ];
+        assert!(RealmPath::new(labels).is_none());
+        let json = format!("[\"{long}\",\"{long}\"]");
+        assert!(serde_json::from_str::<RealmPath>(&json).is_err());
     }
 }

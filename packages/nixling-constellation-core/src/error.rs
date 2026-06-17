@@ -95,14 +95,15 @@ pub const MAX_MESSAGE_LEN: usize = 256;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConstellationError {
-    /// Stable classification.
-    pub kind: ErrorKind,
+    /// Stable classification. Private so the `CapabilityDenied` =>
+    /// `Some(capability)` invariant cannot be broken by external mutation
+    /// or struct-literal construction.
+    kind: ErrorKind,
     /// The structured missing capability, present for `CapabilityDenied`
     /// so callers route on a stable field rather than parsing the message.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub capability: Option<Capability>,
-    /// Bounded operator-actionable message (no payload/secrets). Private so
-    /// it can only be set through the bounding constructor / deserializer.
+    capability: Option<Capability>,
+    /// Bounded operator-actionable message (no payload/secrets).
     #[schemars(length(max = 256))]
     message: String,
 }
@@ -110,13 +111,22 @@ pub struct ConstellationError {
 impl ConstellationError {
     /// Construct a typed error. The message is bounded to
     /// [`MAX_MESSAGE_LEN`] bytes (truncated on a char boundary). Use
-    /// [`ConstellationError::capability_denied`] for `CapabilityDenied` so
-    /// the structured missing capability is always present.
+    /// [`ConstellationError::capability_denied`] for `CapabilityDenied`.
+    ///
+    /// To keep the `CapabilityDenied => Some(capability)` invariant airtight
+    /// in every build, passing `CapabilityDenied` here (a misuse — there is
+    /// no capability to attach) is downgraded to `Unauthorized` rather than
+    /// producing a denial with no structured capability.
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
         debug_assert!(
             kind != ErrorKind::CapabilityDenied,
             "use ConstellationError::capability_denied for capability denials"
         );
+        let kind = if kind == ErrorKind::CapabilityDenied {
+            ErrorKind::Unauthorized
+        } else {
+            kind
+        };
         Self {
             kind,
             capability: None,
@@ -137,7 +147,13 @@ impl ConstellationError {
         }
     }
 
+    /// The stable error classification.
+    pub fn kind(&self) -> ErrorKind {
+        self.kind
+    }
+
     /// The structured missing capability, if this is a capability denial.
+    /// Guaranteed `Some` whenever [`kind`](Self::kind) is `CapabilityDenied`.
     pub fn missing_capability(&self) -> Option<Capability> {
         self.capability
     }
@@ -205,7 +221,7 @@ mod tests {
     #[test]
     fn capability_denied_carries_structured_capability() {
         let e = ConstellationError::capability_denied(Capability::WindowForwarding);
-        assert_eq!(e.kind, ErrorKind::CapabilityDenied);
+        assert_eq!(e.kind(), ErrorKind::CapabilityDenied);
         assert_eq!(e.missing_capability(), Some(Capability::WindowForwarding));
         assert!(e.message().contains("window-forwarding"));
     }

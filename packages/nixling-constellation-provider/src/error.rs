@@ -31,7 +31,7 @@ impl ProviderError {
 
     /// The underlying error kind.
     pub fn kind(&self) -> ErrorKind {
-        self.0.kind
+        self.0.kind()
     }
 
     /// The structured missing capability, if this is a capability denial.

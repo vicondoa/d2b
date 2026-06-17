@@ -30,47 +30,49 @@ violation() { printf 'FAIL: %s\n' "$*" >&2; rc=1; }
 
 # Print the declared dependency names of a crate manifest. Handles
 # `name = ...`, `name.workspace = true`, `[dependencies.name]` tables,
-# target-specific `[target.'cfg(...)'.dependencies(.name)]` sections, and
-# `package = "real-name"` renames (the real crate name is emitted too so an
-# aliased forbidden edge cannot hide). Ignores dev-/build-dependencies.
+# target-specific `[target.'cfg(...)'.dependencies(.name)]` sections, inline
+# `package = "real"` / `package = 'real'` renames (both quote styles), and
+# trailing comments on section headers. Ignores dev-/build-dependencies.
 crate_deps() {
   local manifest="$1"
   awk '
-    function strip(s) { sub(/#.*/, "", s); return s }
-    /^\[/ {
-      section = $0
-      # A dependencies section: flat [dependencies] or a target-specific
-      # [target.<cfg>.dependencies]. NOT [dev-dependencies]/[build-...].
-      in_deps = (section ~ /^\[dependencies\][ \t]*$/) || (section ~ /\.dependencies\][ \t]*$/)
-      in_table = 0
-      # A dependency table header: [dependencies.NAME] or
-      # [target.<cfg>.dependencies.NAME].
-      if (section ~ /^\[dependencies\./ || section ~ /\.dependencies\./) {
-        name = section
-        sub(/.*\.dependencies\./, "", name)
-        sub(/\].*$/, "", name)
-        gsub(/[" ]/, "", name)
-        if (name != "") { print name; in_table = 1 }
-        in_deps = 0
-      }
-      next
-    }
     {
-      line = strip($0)
-      gsub(/^[ \t]+/, "", line)
+      line = $0
+      sub(/#.*/, "", line)              # strip trailing comment
+      sub(/[ \t]+$/, "", line)          # strip trailing whitespace
+      gsub(/^[ \t]+/, "", line)         # strip leading whitespace
       if (line == "") next
-      # `package = "real"` rename target (in a flat dep inline table or a
-      # dependency table body).
+
+      if (line ~ /^\[/) {               # a section header
+        in_deps = (line == "[dependencies]") \
+                  || (line ~ /^\[target\./ && line ~ /\.dependencies\]$/)
+        in_table = 0
+        # dependency TABLE header: [dependencies.NAME] or
+        # [target.<cfg>.dependencies.NAME]
+        if (line ~ /^\[dependencies\.[^]]+\]$/ \
+            || (line ~ /^\[target\./ && line ~ /\.dependencies\.[^]]+\]$/)) {
+          name = line
+          sub(/\]$/, "", name)
+          if (name ~ /^\[dependencies\./) sub(/^\[dependencies\./, "", name)
+          else sub(/^.*\.dependencies\./, "", name)
+          gsub(/["'"'"' ]/, "", name)
+          if (name != "") { print name; in_table = 1 }
+        }
+        next
+      }
+
+      # `package = "real"` / `package = '"'"'real'"'"'` rename target.
       if (line ~ /(^|[,{ \t])package[ \t]*=/) {
         pkg = line
-        sub(/.*package[ \t]*=[ \t]*"/, "", pkg)
-        sub(/".*$/, "", pkg)
+        sub(/.*package[ \t]*=[ \t]*["'"'"']/, "", pkg)
+        sub(/["'"'"'].*$/, "", pkg)
         if (pkg != "") print pkg
       }
-      if (in_deps) {
+
+      if (in_deps) {                    # a key in a flat dependency section
         key = line
         sub(/[ \t]*[=.].*$/, "", key)
-        gsub(/["]/, "", key)
+        gsub(/["'"'"']/, "", key)
         if (key != "") print key
       }
     }

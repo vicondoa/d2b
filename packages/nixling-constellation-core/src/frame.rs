@@ -321,9 +321,28 @@ impl<'de> Deserialize<'de> for StreamOpen {
     }
 }
 
+/// A bounded chunk of stream data (opaque payload).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StreamData {
+    /// Stream the chunk belongs to.
+    pub stream: StreamId,
+    /// Opaque, bounded chunk bytes. Never logged/audited as content.
+    pub data: OpaquePayload,
+}
+
+/// Close a named stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StreamClose {
+    /// Stream being closed.
+    pub stream: StreamId,
+}
+
 /// The semantic frame exchanged over a constellation peer session. The
 /// codec layer maps bytes to/from this enum; the operation layer never
-/// depends on the encoding.
+/// depends on the encoding. Every variant wraps a `deny_unknown_fields`
+/// struct so a peer cannot smuggle extra fields past the decoder.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "frame", rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -337,17 +356,9 @@ pub enum ConstellationFrame {
     /// Open a named stream (descriptor + authorization context).
     StreamOpen(StreamOpen),
     /// A bounded chunk of stream data (opaque payload).
-    StreamData {
-        /// Stream the chunk belongs to.
-        stream: StreamId,
-        /// Opaque, bounded chunk bytes. Never logged/audited as content.
-        data: OpaquePayload,
-    },
+    StreamData(StreamData),
     /// Close a named stream.
-    StreamClose {
-        /// Stream being closed.
-        stream: StreamId,
-    },
+    StreamClose(StreamClose),
     /// A typed error frame.
     TypedError(ConstellationError),
     /// A redacted admission/audit frame.
@@ -445,5 +456,20 @@ mod tests {
             "x".repeat(200)
         );
         assert!(serde_json::from_str::<Handshake>(&overlong).is_err());
+    }
+
+    #[test]
+    fn stream_frames_reject_unknown_fields() {
+        // Valid stream-data / stream-close frames decode.
+        let data = "{\"frame\":\"stream-data\",\"stream\":\"s1\",\"data\":[1,2,3]}";
+        assert!(serde_json::from_str::<ConstellationFrame>(data).is_ok());
+        let close = "{\"frame\":\"stream-close\",\"stream\":\"s1\"}";
+        assert!(serde_json::from_str::<ConstellationFrame>(close).is_ok());
+        // Extra peer-supplied fields are rejected (deny_unknown_fields).
+        let data_extra =
+            "{\"frame\":\"stream-data\",\"stream\":\"s1\",\"data\":[1],\"evil\":true}";
+        assert!(serde_json::from_str::<ConstellationFrame>(data_extra).is_err());
+        let close_extra = "{\"frame\":\"stream-close\",\"stream\":\"s1\",\"evil\":true}";
+        assert!(serde_json::from_str::<ConstellationFrame>(close_extra).is_err());
     }
 }
