@@ -19,34 +19,49 @@ pub enum EntrypointMode {
 /// A realm path: an ordered list of labels written most-specific realm
 /// first (e.g. `payments.work` for child `payments` of parent `work`).
 /// Internally policy may store it parent-first as `work/payments`; the
-/// target-name form stays DNS-shaped.
+/// target-name form stays DNS-shaped. Bounded in label count and total
+/// rendered length so it cannot become an unbounded side channel.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize,
     schemars::JsonSchema,
 )]
 #[serde(transparent)]
+#[schemars(length(min = 1, max = 16))]
 pub struct RealmPath(Vec<RealmId>);
 
-// Fail-closed decode: the empty-path invariant is enforced on the wire,
-// not just in the constructor.
+/// Maximum number of labels in a realm path.
+pub const MAX_REALM_LABELS: usize = 16;
+/// Maximum total bytes of a realm path's rendered target form.
+pub const MAX_REALM_PATH_BYTES: usize = 255;
+
+// Fail-closed decode: the non-empty + bound invariants are enforced on the
+// wire, not just in the constructor.
 impl<'de> Deserialize<'de> for RealmPath {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         let labels = Vec::<RealmId>::deserialize(deserializer)?;
-        Self::new(labels).ok_or_else(|| serde::de::Error::custom("realm path must be non-empty"))
+        Self::new(labels)
+            .ok_or_else(|| serde::de::Error::custom("realm path is empty or exceeds bounds"))
     }
 }
 
 impl RealmPath {
-    /// Build from most-specific-first labels. Empty paths are rejected.
+    /// Build from most-specific-first labels. Empty paths, paths with more
+    /// than [`MAX_REALM_LABELS`] labels, and paths whose target form exceeds
+    /// [`MAX_REALM_PATH_BYTES`] are rejected (fail-closed).
     pub fn new(labels: Vec<RealmId>) -> Option<Self> {
-        if labels.is_empty() {
-            None
-        } else {
-            Some(Self(labels))
+        if labels.is_empty() || labels.len() > MAX_REALM_LABELS {
+            return None;
         }
+        // total bytes of the dotted target form (labels + separators).
+        let total: usize = labels.iter().map(|l| l.as_str().len()).sum::<usize>()
+            + labels.len().saturating_sub(1);
+        if total > MAX_REALM_PATH_BYTES {
+            return None;
+        }
+        Some(Self(labels))
     }
 
     /// The reserved local realm (`local`).
@@ -101,5 +116,17 @@ mod tests {
         assert!(serde_json::from_str::<RealmPath>("[]").is_err());
         // a malformed inner label is rejected too (RealmId is fail-closed).
         assert!(serde_json::from_str::<RealmPath>("[\"Work\"]").is_err());
+    }
+
+    #[test]
+    fn realm_path_rejects_too_many_labels() {
+        let many: Vec<RealmId> = (0..MAX_REALM_LABELS + 1)
+            .map(|i| RealmId::parse(format!("r{i}")).unwrap())
+            .collect();
+        assert!(RealmPath::new(many).is_none());
+        let ok: Vec<RealmId> = (0..MAX_REALM_LABELS)
+            .map(|i| RealmId::parse(format!("r{i}")).unwrap())
+            .collect();
+        assert!(RealmPath::new(ok).is_some());
     }
 }

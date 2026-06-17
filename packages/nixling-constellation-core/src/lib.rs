@@ -25,6 +25,7 @@ pub mod node;
 pub mod payload;
 pub mod realm;
 pub mod stream;
+pub mod token;
 pub mod trace_context;
 pub mod workload;
 
@@ -44,5 +45,6 @@ pub use node::{NodeKind, NodeSummary};
 pub use payload::OpaquePayload;
 pub use realm::{EntrypointMode, RealmPath};
 pub use stream::{StreamAuthz, StreamDescriptor, StreamKind};
+pub use token::ProtocolToken;
 pub use trace_context::TraceContext;
 pub use workload::{WorkloadSelector, WorkloadState, WorkloadSummary};

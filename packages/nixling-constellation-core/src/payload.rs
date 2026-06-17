@@ -125,4 +125,11 @@ mod tests {
         // a small array round-trips
         assert!(serde_json::from_str::<OpaquePayload>("[1,2,3]").is_ok());
     }
+
+    #[test]
+    fn deserialize_rejects_oversized_payload() {
+        // An over-cap byte array is rejected at decode, before retention.
+        let oversized = serde_json::to_value(vec![0u8; MAX_PAYLOAD_LEN + 1]).unwrap();
+        assert!(serde_json::from_value::<OpaquePayload>(oversized).is_err());
+    }
 }

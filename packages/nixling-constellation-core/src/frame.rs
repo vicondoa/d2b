@@ -12,6 +12,7 @@ use crate::capability::Capability;
 use crate::payload::OpaquePayload;
 use crate::realm::RealmPath;
 use crate::stream::{StreamAuthz, StreamDescriptor};
+use crate::token::ProtocolToken;
 use crate::trace_context::TraceContext;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -24,8 +25,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct PeerContext {
     /// Stable, non-secret auth-mechanism id negotiated for the session
-    /// (e.g. `none` initially; `mtls`/`relay-sas-bound` later).
-    pub auth_mechanism: String,
+    /// (e.g. `none` initially; `mtls`/`relay-sas-bound` later). Bounded.
+    pub auth_mechanism: ProtocolToken,
     /// The peer's authenticated principal, once a mechanism binds one.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub peer_principal: Option<PrincipalId>,
@@ -41,8 +42,8 @@ pub struct PeerContext {
 pub struct Handshake {
     /// Protocol version proposed/accepted (fail-closed on skew).
     pub protocol_version: u32,
-    /// Codec id negotiated for this session.
-    pub codec_id: String,
+    /// Codec id negotiated for this session (bounded token).
+    pub codec_id: ProtocolToken,
     /// Reserved peer-binding seam. Absent in the bootstrap protocol.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub peer: Option<PeerContext>,
@@ -141,7 +142,7 @@ impl OperationKind {
 /// [`OperationKind::required_capability`] in trusted code so a peer cannot
 /// downgrade it. The authenticated session principal MUST match
 /// [`OperationRequest::principal`]; the router rejects a mismatch.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OperationRequest {
     /// Audit/correlation id (per attempt).
@@ -165,6 +166,50 @@ pub struct OperationRequest {
     pub trace: Option<TraceContext>,
     /// Opaque, bounded operation-specific body (codec-defined).
     pub body: OpaquePayload,
+}
+
+// Fail-closed decode: a mutating operation MUST carry an idempotency key,
+// so an at-least-once retry can be deduped before any side effect. A
+// mutating request that omits the key is rejected at the boundary.
+impl<'de> Deserialize<'de> for OperationRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            operation_id: OperationId,
+            #[serde(default)]
+            idempotency_key: Option<IdempotencyKey>,
+            realm: RealmPath,
+            node: NodeId,
+            #[serde(default)]
+            workload: Option<WorkloadId>,
+            principal: PrincipalId,
+            kind: OperationKind,
+            #[serde(default)]
+            trace: Option<TraceContext>,
+            body: OpaquePayload,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        if raw.kind.is_mutating() && raw.idempotency_key.is_none() {
+            return Err(serde::de::Error::custom(
+                "mutating operation requires an idempotency_key",
+            ));
+        }
+        Ok(OperationRequest {
+            operation_id: raw.operation_id,
+            idempotency_key: raw.idempotency_key,
+            realm: raw.realm,
+            node: raw.node,
+            workload: raw.workload,
+            principal: raw.principal,
+            kind: raw.kind,
+            trace: raw.trace,
+            body: raw.body,
+        })
+    }
 }
 
 impl OperationRequest {
@@ -330,5 +375,75 @@ mod tests {
         assert!(OperationKind::ExecStart.is_mutating());
         assert!(!OperationKind::WorkloadList.is_mutating());
         assert!(!OperationKind::GuestHealth.is_mutating());
+    }
+
+    #[test]
+    fn authorization_scope_maps_node_and_health_ops() {
+        use crate::audit::AuthorizationScope;
+        assert_eq!(
+            OperationKind::NodeRegister.authorization_scope(),
+            AuthorizationScope::Enrollment
+        );
+        assert_eq!(
+            OperationKind::NodeHeartbeat.authorization_scope(),
+            AuthorizationScope::NodeControl
+        );
+        assert_eq!(
+            OperationKind::NodeCapabilities.authorization_scope(),
+            AuthorizationScope::NodeControl
+        );
+        assert_eq!(
+            OperationKind::GuestHealth.authorization_scope(),
+            AuthorizationScope::Health
+        );
+        assert_eq!(
+            OperationKind::ExecStart.authorization_scope(),
+            AuthorizationScope::capability(Capability::Exec)
+        );
+    }
+
+    #[test]
+    fn stream_open_decode_rejects_inconsistent_authz() {
+        // A Display descriptor paired with a downgraded Clipboard authz must
+        // fail to decode, both as a StreamOpen and inside a frame.
+        let forged = "{\"descriptor\":{\"id\":\"s1\",\"kind\":\"display\"},\
+                      \"operation_id\":\"op1\",\
+                      \"authz\":{\"principal\":\"p1\",\"realm\":[\"local\"],\"capability\":\"clipboard\"}}";
+        assert!(serde_json::from_str::<StreamOpen>(forged).is_err());
+        let framed = format!("{{\"frame\":\"stream-open\",{}}}", &forged[1..]);
+        assert!(serde_json::from_str::<ConstellationFrame>(&framed).is_err());
+        // The consistent pairing decodes.
+        let ok = "{\"descriptor\":{\"id\":\"s1\",\"kind\":\"display\"},\
+                   \"operation_id\":\"op1\",\
+                   \"authz\":{\"principal\":\"p1\",\"realm\":[\"local\"],\"capability\":\"window-forwarding\"}}";
+        assert!(serde_json::from_str::<StreamOpen>(ok).is_ok());
+    }
+
+    #[test]
+    fn operation_request_decode_requires_idempotency_key_for_mutating() {
+        // WorkloadStart is mutating: omitting the key fails closed.
+        let no_key = "{\"operation_id\":\"op1\",\"realm\":[\"work\"],\"node\":\"n1\",\
+                      \"principal\":\"p1\",\"kind\":\"workload-start\",\"body\":[]}";
+        assert!(serde_json::from_str::<OperationRequest>(no_key).is_err());
+        // With a key it decodes.
+        let with_key = "{\"operation_id\":\"op1\",\"idempotency_key\":\"k1\",\
+                        \"realm\":[\"work\"],\"node\":\"n1\",\"principal\":\"p1\",\
+                        \"kind\":\"workload-start\",\"body\":[]}";
+        assert!(serde_json::from_str::<OperationRequest>(with_key).is_ok());
+        // A non-mutating op needs no key.
+        let read = "{\"operation_id\":\"op1\",\"realm\":[\"work\"],\"node\":\"n1\",\
+                    \"principal\":\"p1\",\"kind\":\"workload-list\",\"body\":[]}";
+        assert!(serde_json::from_str::<OperationRequest>(read).is_ok());
+    }
+
+    #[test]
+    fn handshake_codec_id_is_bounded_at_decode() {
+        let ok = "{\"protocol_version\":1,\"codec_id\":\"protobuf.v1\"}";
+        assert!(serde_json::from_str::<Handshake>(ok).is_ok());
+        let overlong = format!(
+            "{{\"protocol_version\":1,\"codec_id\":\"{}\"}}",
+            "x".repeat(200)
+        );
+        assert!(serde_json::from_str::<Handshake>(&overlong).is_err());
     }
 }

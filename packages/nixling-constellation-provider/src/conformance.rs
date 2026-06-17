@@ -128,10 +128,16 @@ mod tests {
 
     #[tokio::test]
     async fn mux_rejects_forged_inconsistent_open() {
-        // A Display descriptor paired with a downgraded Clipboard authz —
-        // an inconsistent open that bypassed the wire decoder — must fail
-        // closed even though Display (WindowForwarding) IS advertised.
-        let mux = LoopbackStreamMux::default();
+        // A mux that advertises BOTH WindowForwarding (the Display-required
+        // capability) AND Clipboard (the forged authz capability). A naive
+        // mux that only checked the authz capability against its advertised
+        // set would wrongly ALLOW this; the correct mux rejects it because
+        // the Display descriptor is paired with a downgraded Clipboard authz.
+        let mux = LoopbackStreamMux::new(
+            nixling_constellation_core::CapabilitySet::empty()
+                .with(Capability::WindowForwarding)
+                .with(Capability::Clipboard),
+        );
         assert!(
             mux_rejects_inconsistent_open(&mux, StreamKind::Display, Capability::Clipboard).await
         );

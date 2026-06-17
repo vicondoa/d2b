@@ -109,8 +109,14 @@ pub struct ConstellationError {
 
 impl ConstellationError {
     /// Construct a typed error. The message is bounded to
-    /// [`MAX_MESSAGE_LEN`] bytes (truncated on a char boundary).
+    /// [`MAX_MESSAGE_LEN`] bytes (truncated on a char boundary). Use
+    /// [`ConstellationError::capability_denied`] for `CapabilityDenied` so
+    /// the structured missing capability is always present.
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+        debug_assert!(
+            kind != ErrorKind::CapabilityDenied,
+            "use ConstellationError::capability_denied for capability denials"
+        );
         Self {
             kind,
             capability: None,
@@ -159,6 +165,11 @@ impl<'de> Deserialize<'de> for ConstellationError {
             message: String,
         }
         let raw = Raw::deserialize(deserializer)?;
+        if raw.kind == ErrorKind::CapabilityDenied && raw.capability.is_none() {
+            return Err(serde::de::Error::custom(
+                "capability-denied error must carry the missing capability",
+            ));
+        }
         Ok(Self {
             kind: raw.kind,
             capability: raw.capability,
@@ -211,5 +222,16 @@ mod tests {
     fn deserialize_rejects_unknown_fields() {
         let json = "{\"kind\":\"timeout\",\"message\":\"x\",\"extra\":1}";
         assert!(serde_json::from_str::<ConstellationError>(json).is_err());
+    }
+
+    #[test]
+    fn deserialize_rejects_capability_denied_without_capability() {
+        // CapabilityDenied must carry the structured missing capability.
+        let bad = "{\"kind\":\"capability-denied\",\"message\":\"x\"}";
+        assert!(serde_json::from_str::<ConstellationError>(bad).is_err());
+        let ok =
+            "{\"kind\":\"capability-denied\",\"capability\":\"window-forwarding\",\"message\":\"x\"}";
+        let e: ConstellationError = serde_json::from_str(ok).unwrap();
+        assert_eq!(e.missing_capability(), Some(Capability::WindowForwarding));
     }
 }

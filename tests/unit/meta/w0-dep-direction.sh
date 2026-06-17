@@ -28,47 +28,63 @@ rc=0
 note() { printf '  %s\n' "$*" >&2; }
 violation() { printf 'FAIL: %s\n' "$*" >&2; rc=1; }
 
-# Print the declared dependency names of a crate manifest (handles
-# `name = ...`, `name.workspace = true`, and `[dependencies.name]` tables;
-# ignores [dev-dependencies] / [build-dependencies]).
+# Print the declared dependency names of a crate manifest. Handles
+# `name = ...`, `name.workspace = true`, `[dependencies.name]` tables,
+# target-specific `[target.'cfg(...)'.dependencies(.name)]` sections, and
+# `package = "real-name"` renames (the real crate name is emitted too so an
+# aliased forbidden edge cannot hide). Ignores dev-/build-dependencies.
 crate_deps() {
   local manifest="$1"
   awk '
+    function strip(s) { sub(/#.*/, "", s); return s }
     /^\[/ {
       section = $0
-      in_deps = (section ~ /^\[dependencies\]/)
-      # [dependencies.NAME] table header
-      if (section ~ /^\[dependencies\./) {
+      # A dependencies section: flat [dependencies] or a target-specific
+      # [target.<cfg>.dependencies]. NOT [dev-dependencies]/[build-...].
+      in_deps = (section ~ /^\[dependencies\][ \t]*$/) || (section ~ /\.dependencies\][ \t]*$/)
+      in_table = 0
+      # A dependency table header: [dependencies.NAME] or
+      # [target.<cfg>.dependencies.NAME].
+      if (section ~ /^\[dependencies\./ || section ~ /\.dependencies\./) {
         name = section
-        sub(/^\[dependencies\./, "", name)
+        sub(/.*\.dependencies\./, "", name)
         sub(/\].*$/, "", name)
         gsub(/[" ]/, "", name)
-        if (name != "") print name
+        if (name != "") { print name; in_table = 1 }
         in_deps = 0
       }
       next
     }
-    in_deps {
-      line = $0
-      sub(/#.*/, "", line)
+    {
+      line = strip($0)
       gsub(/^[ \t]+/, "", line)
       if (line == "") next
-      # dep key is the token before the first = or .
-      key = line
-      sub(/[ \t]*[=.].*$/, "", key)
-      gsub(/["]/, "", key)
-      if (key != "") print key
+      # `package = "real"` rename target (in a flat dep inline table or a
+      # dependency table body).
+      if (line ~ /(^|[,{ \t])package[ \t]*=/) {
+        pkg = line
+        sub(/.*package[ \t]*=[ \t]*"/, "", pkg)
+        sub(/".*$/, "", pkg)
+        if (pkg != "") print pkg
+      }
+      if (in_deps) {
+        key = line
+        sub(/[ \t]*[=.].*$/, "", key)
+        gsub(/["]/, "", key)
+        if (key != "") print key
+      }
     }
   ' "$manifest"
 }
 
-# Assert a manifest declares workspace lint inheritance.
+# Assert a manifest declares workspace lint inheritance (comments stripped
+# so a commented-out `workspace = true` cannot satisfy the gate).
 check_lints() {
   local manifest="$1" crate="$2"
   if ! awk '
-      /^\[lints\]/ { in_l = 1; next }
-      /^\[/ { in_l = 0 }
-      in_l && /workspace[ \t]*=[ \t]*true/ { found = 1 }
+      function strip(s) { sub(/#.*/, "", s); return s }
+      /^\[/ { in_l = ($0 ~ /^\[lints\]/); next }
+      in_l { line = strip($0); if (line ~ /workspace[ \t]*=[ \t]*true/) found = 1 }
       END { exit(found ? 0 : 1) }
     ' "$manifest"; then
     violation "$crate: missing [lints] workspace = true"
