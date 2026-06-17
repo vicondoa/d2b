@@ -16,6 +16,9 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+          # Full history + tags for the release-policy contract tests
+          # (annotated v1.1 tag assertions) run by `make test-rust`.
+          fetch-depth: 0
       - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
         with:
           nix_path: nixpkgs=channel:nixos-unstable

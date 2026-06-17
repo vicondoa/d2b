@@ -45,6 +45,12 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          # Full history + tags: the nixling-contract-tests release-policy
+          # tests assert the annotated `v1.1` tag exists and resolves to a
+          # commit (migrated from tests/release-tag-eval.sh). A shallow
+          # checkout has no tags, so they fail-closed without this.
+          fetch-depth: 0
       - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
         with:
           nix_path: nixpkgs=channel:nixos-unstable
