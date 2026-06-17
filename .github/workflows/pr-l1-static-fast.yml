@@ -42,7 +42,9 @@ jobs:
   test-rust:
     needs: tier0
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # ~43 min cold on a hosted x86 runner (no compilation cache in CI). 60 min
+    # gives headroom so a slightly slower runner doesn't flake on timeout.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -78,7 +80,9 @@ jobs:
   test-flake-x86:
     needs: tier0
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # ~41 min with swap spill (the eval exceeds RAM and pages to /mnt swap).
+    # 60 min gives headroom over the slow swap-backed eval.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       # `nix flake check --no-build` evaluates several full nixosSystem
@@ -105,7 +109,8 @@ jobs:
   test-flake-aarch64:
     needs: tier0
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 45
+    # ARM runner evaluates in ~8 min, but keep parity headroom with x86.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Add swap (bound flake-eval peak memory)
