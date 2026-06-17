@@ -195,11 +195,12 @@ assert_pinned_rust_toolchain
 
 # The privileged broker is a SEPARATE workspace with three independent feature
 # passes (default, layer1-bootstrap, fake-backends), each on its OWN target dir.
-# They share nothing with the main workspace and nothing with each other, so run
-# all three CONCURRENTLY in the background here — they overlap with the longer
-# main-workspace section below and are reaped after it. With sccache the shared
-# crates are cache hits across all four streams. Set NL_NO_PARALLEL_BROKER=1 to
-# force serial. Each stream logs to its own file; failures surface at reap.
+# They share nothing with the main workspace and nothing with each other, so the
+# three are run CONCURRENTLY among themselves in the broker section below — but
+# AFTER the main-workspace section, not overlapping it, so they don't contend
+# with the main workspace's timing-sensitive tests. With sccache the shared
+# crates are cache hits across all streams. Set NL_NO_PARALLEL_BROKER=1 to force
+# serial. Each stream logs to its own file; failures surface at reap.
 broker_stream_default() {
   cargo metadata --format-version 1 --manifest-path "$broker_manifest" >/dev/null
   CARGO_TARGET_DIR="$broker_target_dir" cargo check --workspace --manifest-path "$broker_manifest"
@@ -217,15 +218,6 @@ broker_streams=(default layer1 fakebackends)
 declare -A broker_pid broker_log
 broker_parallel=1
 [ "${NL_NO_PARALLEL_BROKER:-0}" = 1 ] && broker_parallel=0
-if [ "$broker_parallel" = 1 ]; then
-  log "--> broker workspace: launching default|layer1|fake-backends concurrently (separate target dirs)"
-  broker_logdir=$(nl_mktemp ".nixling-broker-logs.XXXXXX")
-  for _stream in "${broker_streams[@]}"; do
-    broker_log[$_stream]="$broker_logdir/$_stream.log"
-    ( "broker_stream_$_stream" ) >"${broker_log[$_stream]}" 2>&1 &
-    broker_pid[$_stream]=$!
-  done
-fi
 
 log "--> cargo fmt --check"
 cargo fmt --manifest-path "$manifest" --all --check
@@ -305,14 +297,23 @@ CARGO_TARGET_DIR="$workspace_target_dir" \
     -- "$ROOT/packages"
 ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
 
-# Reap the broker streams launched concurrently before the main section (or run
-# them serially if NL_NO_PARALLEL_BROKER=1). The fail-closed `fake-backends`
-# stream runs the broker's hermetic integration tests (e.g.
-# tests/pidfd_handoff_scm_rights.rs, #![cfg(feature = "fake-backends")], pinned
-# in tests/golden/pinned/pidfd-handoff.txt) that neither the default nor the
+# Broker workspace: run the three feature passes (default, layer1-bootstrap,
+# fake-backends) — each on its own target dir — CONCURRENTLY among themselves,
+# here AFTER the main-workspace section so they don't contend with the main
+# tests. The fail-closed `fake-backends` stream runs the broker's hermetic
+# integration tests (e.g. tests/pidfd_handoff_scm_rights.rs,
+# #![cfg(feature = "fake-backends")], pinned in
+# tests/golden/pinned/pidfd-handoff.txt) that neither the default nor the
 # layer1-bootstrap pass enables — without it those fd-passing tests would not
 # run in the gate at all (the retired tests/pidfd-handoff.sh used --all-features).
 if [ "$broker_parallel" = 1 ]; then
+  log "--> broker workspace: running default|layer1|fake-backends concurrently (separate target dirs)"
+  broker_logdir=$(nl_mktemp ".nixling-broker-logs.XXXXXX")
+  for _stream in "${broker_streams[@]}"; do
+    broker_log[$_stream]="$broker_logdir/$_stream.log"
+    ( "broker_stream_$_stream" ) >"${broker_log[$_stream]}" 2>&1 &
+    broker_pid[$_stream]=$!
+  done
   broker_failed=0
   for _stream in "${broker_streams[@]}"; do
     if wait "${broker_pid[$_stream]}"; then
