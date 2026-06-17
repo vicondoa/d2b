@@ -12,10 +12,20 @@
 //! All constructors validate; malformed input is rejected with
 //! [`IdError`] rather than silently accepted (fail-closed).
 
-use serde::{Deserialize, Serialize};
+use schemars::{
+    gen::SchemaGenerator,
+    schema::{InstanceType, Schema, SchemaObject, SingleOrVec, StringValidation},
+    JsonSchema,
+};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Maximum length for any identifier token.
 pub const MAX_ID_LEN: usize = 128;
+
+/// ECMA-regex for the nixling lowercase label shape `^[a-z][a-z0-9-]*$`.
+const LABEL_PATTERN: &str = "^[a-z][a-z0-9-]*$";
+/// ECMA-regex for a non-empty printable-ASCII opaque token (no spaces).
+const OPAQUE_PATTERN: &str = "^[\\x21-\\x7e]+$";
 
 /// Reason an identifier failed validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,11 +69,10 @@ fn is_opaque_token(s: &str) -> bool {
 }
 
 macro_rules! id_newtype {
-    ($(#[$meta:meta])* $name:ident, $validate:expr) => {
+    ($(#[$meta:meta])* $name:ident, $validate:expr, $pattern:expr) => {
         $(#[$meta])*
         #[derive(
-            Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-            schemars::JsonSchema,
+            Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize,
         )]
         #[serde(transparent)]
         pub struct $name(String);
@@ -97,6 +106,38 @@ macro_rules! id_newtype {
                 f.write_str(&self.0)
             }
         }
+
+        // Fail-closed decode: deserialization routes through `parse` so a
+        // codec/serde path can never instantiate a malformed identifier.
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                Self::parse(String::deserialize(deserializer)?)
+                    .map_err(serde::de::Error::custom)
+            }
+        }
+
+        // Schema carries the bound + shape so generated schemas advertise
+        // the same fail-closed constraints the validator enforces.
+        impl JsonSchema for $name {
+            fn schema_name() -> String {
+                stringify!($name).to_owned()
+            }
+
+            fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+                Schema::Object(SchemaObject {
+                    instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::String))),
+                    string: Some(Box::new(StringValidation {
+                        max_length: Some(MAX_ID_LEN as u32),
+                        min_length: Some(1),
+                        pattern: Some($pattern.to_owned()),
+                    })),
+                    ..Default::default()
+                })
+            }
+        }
     };
 }
 
@@ -104,52 +145,62 @@ id_newtype!(
     /// A single realm label. A full realm path is a `.`-joined sequence
     /// of these; see [`crate::realm::RealmPath`].
     RealmId,
-    is_label
+    is_label,
+    LABEL_PATTERN
 );
 id_newtype!(
     /// A node within a realm (a host, gateway, or provider-managed node).
     NodeId,
-    is_label
+    is_label,
+    LABEL_PATTERN
 );
 id_newtype!(
     /// A workload (VM, session, or sandbox) on a node.
     WorkloadId,
-    is_label
+    is_label,
+    LABEL_PATTERN
 );
 id_newtype!(
     /// A provider implementation id.
     ProviderId,
-    is_label
+    is_label,
+    LABEL_PATTERN
 );
 id_newtype!(
     /// A realm gateway guest identity. Opaque (not operator-typed).
     GatewayId,
-    is_opaque_token
+    is_opaque_token,
+    OPAQUE_PATTERN
 );
 id_newtype!(
     /// A durable execution id.
     ExecutionId,
-    is_opaque_token
+    is_opaque_token,
+    OPAQUE_PATTERN
 );
 id_newtype!(
     /// A multiplexed stream id within a peer session.
     StreamId,
-    is_opaque_token
+    is_opaque_token,
+    OPAQUE_PATTERN
 );
 id_newtype!(
     /// An authenticated principal (never a relay credential).
     PrincipalId,
-    is_opaque_token
+    is_opaque_token,
+    OPAQUE_PATTERN
 );
 id_newtype!(
     /// Audit/correlation id for a single operation.
     OperationId,
-    is_opaque_token
+    is_opaque_token,
+    OPAQUE_PATTERN
 );
 id_newtype!(
     /// Caller-generated key for at-least-once mutating operations.
     IdempotencyKey,
-    is_opaque_token
+    is_opaque_token,
+    OPAQUE_PATTERN
 );
 
 #[cfg(test)]
@@ -175,5 +226,25 @@ mod tests {
             PrincipalId::parse("x".repeat(MAX_ID_LEN + 1)),
             Err(IdError::TooLong)
         );
+    }
+
+    #[test]
+    fn deserialize_is_fail_closed() {
+        // Valid tokens round-trip.
+        assert!(serde_json::from_str::<RealmId>("\"work\"").is_ok());
+        assert!(serde_json::from_str::<ExecutionId>("\"exec-1\"").is_ok());
+        // Malformed tokens are rejected at decode, not silently accepted.
+        assert!(serde_json::from_str::<RealmId>("\"Work\"").is_err());
+        assert!(serde_json::from_str::<RealmId>("\"\"").is_err());
+        assert!(serde_json::from_str::<NodeId>("\"a_b\"").is_err());
+        assert!(serde_json::from_str::<ExecutionId>("\"a b\"").is_err());
+        let overlong = format!("\"{}\"", "x".repeat(MAX_ID_LEN + 1));
+        assert!(serde_json::from_str::<PrincipalId>(&overlong).is_err());
+    }
+
+    #[test]
+    fn serialize_is_transparent_string() {
+        let id = WorkloadId::parse("build-vm").unwrap();
+        assert_eq!(serde_json::to_string(&id).unwrap(), "\"build-vm\"");
     }
 }

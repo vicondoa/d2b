@@ -57,6 +57,35 @@ pub enum Capability {
     ProviderManagedIsolation,
 }
 
+impl Capability {
+    /// A short, stable, low-cardinality kebab-case code (for messages and
+    /// audit; never a secret).
+    pub fn code(self) -> &'static str {
+        match self {
+            Capability::Lifecycle => "lifecycle",
+            Capability::Exec => "exec",
+            Capability::Pty => "pty",
+            Capability::Logs => "logs",
+            Capability::FileCopy => "file-copy",
+            Capability::PortForward => "port-forward",
+            Capability::Vsock => "vsock",
+            Capability::Virtiofs => "virtiofs",
+            Capability::WindowForwarding => "window-forwarding",
+            Capability::DisplayStreaming => "display-streaming",
+            Capability::Clipboard => "clipboard",
+            Capability::AudioPlayback => "audio-playback",
+            Capability::AudioCapture => "audio-capture",
+            Capability::Hid => "hid",
+            Capability::Usb => "usb",
+            Capability::GpuAccel => "gpu-accel",
+            Capability::Snapshots => "snapshots",
+            Capability::Hotplug => "hotplug",
+            Capability::EphemeralSessions => "ephemeral-sessions",
+            Capability::ProviderManagedIsolation => "provider-managed-isolation",
+        }
+    }
+}
+
 /// A set of advertised capabilities. Routing is by required capability;
 /// callers fail closed when a required capability is absent.
 #[derive(

@@ -20,6 +20,10 @@ nixling-constellation-core = { path = "../nixling-constellation-core" }
 async-trait = "0.1"
 serde.workspace = true
 schemars.workspace = true
+# Transport sessions/streams carry real bidirectional bytes (the mock
+# loopback and later relay sessions implement AsyncRead/AsyncWrite). Only
+# the io traits are needed here; no runtime/network features.
+tokio = { version = "1", default-features = false, features = ["io-util"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "io-util"] }

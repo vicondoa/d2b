@@ -1,5 +1,5 @@
 {
-  # Build the nixling Wayland sandbox image (ADR 0032, Wave P0).
+  # Build the nixling Wayland sandbox image (ADR 0032).
   #
   #   nix-build image.nix            # -> ./result (an OCI image tar.gz)
   #   ./build-and-push.sh            # build + push to the deployed ACR

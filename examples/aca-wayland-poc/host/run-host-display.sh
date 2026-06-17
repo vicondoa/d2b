@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Host side of the ADR 0032 Wave P0 ACA + Wayland forwarding POC.
+# Host side of the ADR 0032 ACA + Wayland forwarding POC.
 #
 # Brings up the two host processes that receive the sandbox's display:
 #   1. `waypipe client` bound to a unix socket next to the operator's

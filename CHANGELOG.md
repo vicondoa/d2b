@@ -12,6 +12,21 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Internal v2 constellation provider-abstraction crates
+  ([ADR 0032](docs/adr/0032-nixling-v2-constellation-control-plane.md)),
+  with **no user-facing behavior change**: `nixling-constellation-core`
+  (the pure, codec-neutral model — strongly-typed identifiers with
+  fail-closed deserialization, the capability model, the semantic
+  `ConstellationFrame` with a trusted per-operation required-capability
+  mapping, the redacted audit envelope, and a bounded trace context) and
+  `nixling-constellation-provider` (the async provider trait surface —
+  runtime/workload/display/transport/stream-mux/codec/credential/
+  daemon-access providers — with typed capability descriptors, structured
+  capability-denial errors, byte-carrying transport sessions, and
+  fail-closed mock/conformance fixtures). These crates are the foundation
+  for later ADR 0032 work; they do not change any CLI, daemon, or
+  on-host behavior.
+
 - Documentation for the v2 constellation control plane
   ([ADR 0032](docs/adr/0032-nixling-v2-constellation-control-plane.md)):
   the threat model in `docs/explanation/design.md` now describes the

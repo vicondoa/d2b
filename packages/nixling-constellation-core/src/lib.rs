@@ -22,23 +22,26 @@ pub mod execution;
 pub mod frame;
 pub mod ids;
 pub mod node;
+pub mod payload;
 pub mod realm;
 pub mod stream;
 pub mod trace_context;
 pub mod workload;
 
-pub use audit::{AuditEnvelope, AuthzDecision};
+pub use audit::{AuditEnvelope, AuthorizationScope, AuthzDecision};
 pub use capability::{Capability, CapabilitySet};
 pub use error::{ConstellationError, ErrorKind};
 pub use execution::{ExecState, ExecutionSummary};
 pub use frame::{
-    ConstellationFrame, Handshake, OperationKind, OperationRequest, OperationResponse,
+    ConstellationFrame, Handshake, OperationKind, OperationRequest, OperationResponse, PeerContext,
+    StreamOpen,
 };
 pub use ids::{
     ExecutionId, GatewayId, IdempotencyKey, NodeId, OperationId, PrincipalId, ProviderId, RealmId,
     StreamId, WorkloadId,
 };
 pub use node::{NodeKind, NodeSummary};
+pub use payload::OpaquePayload;
 pub use realm::{EntrypointMode, RealmPath};
 pub use stream::{StreamAuthz, StreamDescriptor, StreamKind};
 pub use trace_context::TraceContext;

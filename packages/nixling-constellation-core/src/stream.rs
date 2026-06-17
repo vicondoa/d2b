@@ -4,7 +4,8 @@
 //! the codec-neutral descriptor surface.
 
 use crate::capability::Capability;
-use crate::ids::{PrincipalId, RealmId, StreamId};
+use crate::ids::{PrincipalId, StreamId};
+use crate::realm::RealmPath;
 use serde::{Deserialize, Serialize};
 
 /// The kind of a named stream. Each kind maps to a required capability.
@@ -31,16 +32,22 @@ pub enum StreamKind {
     Display,
     /// Explicit opt-in, realm-gated clipboard.
     Clipboard,
-    /// Audio playback/capture.
-    Audio,
-    /// USB/HID-like operations through named policy only.
-    Device,
+    /// Audio playback (host → workload).
+    AudioPlayback,
+    /// Audio capture (workload → host); a distinct capability from playback.
+    AudioCapture,
+    /// Named HID device operations.
+    DeviceHid,
+    /// Named USB device operations; a distinct capability from HID.
+    DeviceUsb,
 }
 
 impl StreamKind {
     /// The capability a peer must advertise to open this stream kind.
     /// `Display` requires `WindowForwarding`; clipboard/audio/device are
-    /// independent so display cannot smuggle them.
+    /// independent so display cannot smuggle them, and audio
+    /// playback/capture and HID/USB are split so the required capability
+    /// is exact.
     pub fn required_capability(self) -> Capability {
         match self {
             StreamKind::Control => Capability::Lifecycle,
@@ -51,8 +58,10 @@ impl StreamKind {
             StreamKind::PortForward => Capability::PortForward,
             StreamKind::Display => Capability::WindowForwarding,
             StreamKind::Clipboard => Capability::Clipboard,
-            StreamKind::Audio => Capability::AudioPlayback,
-            StreamKind::Device => Capability::Hid,
+            StreamKind::AudioPlayback => Capability::AudioPlayback,
+            StreamKind::AudioCapture => Capability::AudioCapture,
+            StreamKind::DeviceHid => Capability::Hid,
+            StreamKind::DeviceUsb => Capability::Usb,
         }
     }
 }
@@ -67,16 +76,37 @@ pub struct StreamDescriptor {
     pub kind: StreamKind,
 }
 
-/// The authorization context evaluated before a stream is opened.
+/// The authorization context evaluated before a stream is opened. The
+/// `capability` is always derived from the stream kind via
+/// [`StreamAuthz::for_kind`] so a caller cannot pair a stream kind with a
+/// weaker capability.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StreamAuthz {
     /// Authenticated principal (never a relay credential).
     pub principal: PrincipalId,
-    /// Realm the stream belongs to.
-    pub realm: RealmId,
-    /// Capability required for the stream kind.
+    /// Realm the stream belongs to (full path; supports nested realms).
+    pub realm: RealmPath,
+    /// Capability required for the stream kind (derived from the kind).
     pub capability: Capability,
+}
+
+impl StreamAuthz {
+    /// Build an authorization context whose capability is derived from
+    /// the stream kind (so the capability can never be downgraded).
+    pub fn for_kind(principal: PrincipalId, realm: RealmPath, kind: StreamKind) -> Self {
+        Self {
+            principal,
+            realm,
+            capability: kind.required_capability(),
+        }
+    }
+
+    /// True iff `capability` matches the capability `kind` requires. The
+    /// mux/router MUST reject a stream open where this is false.
+    pub fn matches_kind(&self, kind: StreamKind) -> bool {
+        self.capability == kind.required_capability()
+    }
 }
 
 #[cfg(test)]
@@ -93,5 +123,28 @@ mod tests {
             StreamKind::Clipboard.required_capability(),
             Capability::Clipboard
         );
+    }
+
+    #[test]
+    fn audio_and_device_capabilities_are_exact() {
+        assert_eq!(
+            StreamKind::AudioPlayback.required_capability(),
+            Capability::AudioPlayback
+        );
+        assert_eq!(
+            StreamKind::AudioCapture.required_capability(),
+            Capability::AudioCapture
+        );
+        assert_eq!(StreamKind::DeviceHid.required_capability(), Capability::Hid);
+        assert_eq!(StreamKind::DeviceUsb.required_capability(), Capability::Usb);
+    }
+
+    #[test]
+    fn stream_authz_capability_is_derived_from_kind() {
+        let p = PrincipalId::parse("principal-1").unwrap();
+        let realm = RealmPath::local();
+        let authz = StreamAuthz::for_kind(p, realm, StreamKind::Display);
+        assert!(authz.matches_kind(StreamKind::Display));
+        assert!(!authz.matches_kind(StreamKind::Clipboard));
     }
 }

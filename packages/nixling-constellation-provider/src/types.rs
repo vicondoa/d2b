@@ -1,12 +1,15 @@
-//! Minimal provider DTOs (ADR 0032). These are deliberately thin for the
-//! Wave 0 skeleton: enough to give the trait signatures meaning without
-//! prejudging later-wave detail. Operation/stream payloads stay opaque.
+//! Provider DTOs (ADR 0032). Pure-data DTOs are `serde`; runtime handles
+//! that carry live byte channels (transport sessions, mux substreams) are
+//! deliberately NOT `serde`/`Clone`/`Eq` and redact their contents in
+//! `Debug`.
 
 use nixling_constellation_core::{
-    CapabilitySet, ExecutionId, NodeId, ProviderId, StreamId, StreamKind, WorkloadId,
-    WorkloadSelector, WorkloadSummary,
+    NodeId, ProviderId, StreamId, WorkloadId, WorkloadSelector,
 };
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncWrite};
+
+pub use nixling_constellation_core::{StreamKind, StreamOpen};
 
 /// A request to plan/run a workload, addressed by a stable alias.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,31 +63,6 @@ pub struct ExecStartRequest {
     pub tty: bool,
 }
 
-/// A request to open a named stream.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StreamOpenRequest {
-    /// Stream id.
-    pub id: StreamId,
-    /// Stream kind (maps to a required capability).
-    pub kind: StreamKind,
-}
-
-/// An opaque handle to an opened stream.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StreamHandle {
-    /// Stream id.
-    pub id: StreamId,
-}
-
-/// An accepted incoming stream.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct IncomingStream {
-    /// Stream id.
-    pub id: StreamId,
-    /// Stream kind.
-    pub kind: StreamKind,
-}
-
 /// A display-session id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DisplaySessionId(pub String);
@@ -103,11 +81,8 @@ pub struct DisplaySessionHandle {
     pub id: DisplaySessionId,
 }
 
-/// Re-export the selector + summary used by the workload trait.
-pub use nixling_constellation_core::{WorkloadSelector as Selector, WorkloadSummary as Summary};
-
-/// Convenience alias so trait signatures read cleanly.
-pub type WorkloadList = Vec<WorkloadSummary>;
+/// A selector used by [`crate::WorkloadProvider::list`].
+pub type ListSelector = WorkloadSelector;
 
 /// A node registration handle (transport listener side).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,25 +98,168 @@ pub struct TransportTarget {
     pub endpoint: String,
 }
 
-/// An opaque transport session (byte channel below the mux).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Maximum length of a [`SafeLabel`].
+pub const MAX_LABEL_LEN: usize = 64;
+
+/// A bounded, low-cardinality, non-secret diagnostic label. It MUST carry
+/// a stable classification (e.g. `relay-session`, `loopback`), never an
+/// endpoint, store path, argv, or secret. The length is bounded so it can
+/// never become an unbounded/high-cardinality side channel.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SafeLabel(String);
+
+impl SafeLabel {
+    /// Build a bounded label (truncated to [`MAX_LABEL_LEN`]).
+    pub fn new(label: impl Into<String>) -> Self {
+        let mut s = label.into();
+        if s.len() > MAX_LABEL_LEN {
+            let mut end = MAX_LABEL_LEN;
+            while end > 0 && !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            s.truncate(end);
+        }
+        Self(s)
+    }
+
+    /// The label text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl core::fmt::Debug for SafeLabel {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "SafeLabel({:?})", self.0)
+    }
+}
+
+/// A bidirectional byte channel: a connected transport session or an
+/// accepted mux substream. Implemented by any `AsyncRead + AsyncWrite`
+/// (e.g. a `tokio::io::DuplexStream` for the loopback mock, or a relay
+/// WebSocket adapter later).
+pub trait ByteStream: AsyncRead + AsyncWrite + Send + Unpin {}
+impl<T: AsyncRead + AsyncWrite + Send + Unpin + ?Sized> ByteStream for T {}
+
+/// A connected transport session: a bidirectional byte channel below the
+/// mux, plus a bounded non-secret label. Not `Clone`/`Eq`/`serde` (it owns
+/// a live stream); `Debug` reveals only the label.
 pub struct TransportSession {
-    /// Opaque session label for diagnostics (no secrets).
-    pub label: String,
+    label: SafeLabel,
+    stream: Box<dyn ByteStream>,
 }
 
-/// An opaque transport listener.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TransportListener {
-    /// Node the listener is registered for.
-    pub node: NodeId,
+impl TransportSession {
+    /// Wrap a connected byte stream with a bounded diagnostic label.
+    pub fn new(label: SafeLabel, stream: Box<dyn ByteStream>) -> Self {
+        Self { label, stream }
+    }
+
+    /// The non-secret diagnostic label.
+    pub fn label(&self) -> &str {
+        self.label.as_str()
+    }
+
+    /// Borrow the underlying byte channel.
+    pub fn stream_mut(&mut self) -> &mut dyn ByteStream {
+        &mut *self.stream
+    }
+
+    /// Take ownership of the underlying byte channel.
+    pub fn into_stream(self) -> Box<dyn ByteStream> {
+        self.stream
+    }
 }
 
-/// A selector used by [`crate::WorkloadProvider::list`].
-pub type ListSelector = WorkloadSelector;
+impl core::fmt::Debug for TransportSession {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TransportSession")
+            .field("label", &self.label)
+            .finish_non_exhaustive()
+    }
+}
 
-/// An execution reference returned by exec.
-pub type ExecRef = ExecutionId;
+/// An opened mux substream: the authorized open plus its byte channel.
+pub struct StreamHandle {
+    /// The stream id.
+    pub id: StreamId,
+    stream: Box<dyn ByteStream>,
+}
 
-/// A capability descriptor bundle attached to provider summaries.
-pub type Caps = CapabilitySet;
+impl StreamHandle {
+    /// Wrap an opened substream.
+    pub fn new(id: StreamId, stream: Box<dyn ByteStream>) -> Self {
+        Self { id, stream }
+    }
+
+    /// Borrow the underlying byte channel.
+    pub fn stream_mut(&mut self) -> &mut dyn ByteStream {
+        &mut *self.stream
+    }
+
+    /// Take ownership of the underlying byte channel.
+    pub fn into_stream(self) -> Box<dyn ByteStream> {
+        self.stream
+    }
+}
+
+impl core::fmt::Debug for StreamHandle {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("StreamHandle")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+/// An accepted inbound mux substream: the (already-authorized) open and
+/// its byte channel.
+pub struct IncomingStream {
+    /// The authorized stream open (descriptor + authz).
+    pub open: StreamOpen,
+    stream: Box<dyn ByteStream>,
+}
+
+impl IncomingStream {
+    /// Wrap an accepted substream.
+    pub fn new(open: StreamOpen, stream: Box<dyn ByteStream>) -> Self {
+        Self { open, stream }
+    }
+
+    /// Take ownership of the underlying byte channel.
+    pub fn into_stream(self) -> Box<dyn ByteStream> {
+        self.stream
+    }
+}
+
+impl core::fmt::Debug for IncomingStream {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("IncomingStream")
+            .field("open", &self.open)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A daemon-access transport mode (which `nixlingd` transport the CLI uses).
+/// Only [`DaemonAccessMode::LocalUnix`] is implemented today; the others are
+/// declared slots that fail closed with `UnsupportedFeature` until a later
+/// wave implements them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum DaemonAccessMode {
+    /// Local `public.sock` Unix-domain socket (current behavior).
+    LocalUnix,
+    /// Relay-backed (Azure Relay hybrid connection); later wave.
+    Relay,
+    /// Direct mTLS/QUIC/WebSocket; later wave.
+    DirectTls,
+    /// Explicit SSH bootstrap; later wave.
+    SshBootstrap,
+}
+
+impl DaemonAccessMode {
+    /// Whether this mode is implemented today.
+    pub fn is_implemented(self) -> bool {
+        matches!(self, DaemonAccessMode::LocalUnix)
+    }
+}

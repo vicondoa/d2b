@@ -1,8 +1,8 @@
-# Live demo checklist — ACA sandbox + Wayland forwarding (ADR 0032, Wave P0)
+# Live demo checklist — ACA sandbox + Wayland forwarding (ADR 0032)
 
 This is a **Layer 2, manual** procedure (it provisions real Azure resources
 and needs a live Wayland compositor). It is the reproducible record behind
-the P0 acceptance bar: a Wayland-native app running inside an **Azure
+the acceptance bar: a Wayland-native app running inside an **Azure
 Container Apps sandbox** is rendered on the operator's compositor with every
 display byte carried over an **Azure Relay** hybrid connection.
 

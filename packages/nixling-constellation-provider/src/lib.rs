@@ -21,7 +21,8 @@ pub mod types;
 
 pub use error::ProviderError;
 pub use provider::{
-    CredentialProvider, DaemonAccessApi, DaemonAccessTransport, DisplayProvider,
+    CredentialProvider, CredentialStatus, DaemonAccessApi, DaemonAccessTransport, DisplayProvider,
     HostSubstrateProvider, InfrastructureProvider, NodeProvider, ObservabilitySinkProvider,
-    ProtocolCodec, RelayProvider, RuntimeProvider, StreamMux, TransportProvider, WorkloadProvider,
+    ProtocolCodec, RelayProvider, RuntimeProvider, StreamMux, TransportListener, TransportProvider,
+    WorkloadProvider,
 };

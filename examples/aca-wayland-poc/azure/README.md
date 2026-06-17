@@ -1,6 +1,6 @@
 # nixling ACA + Wayland POC — Azure deployment (Bicep)
 
-Infrastructure-as-code for the Wave P0 vertical of
+Infrastructure-as-code for the ADR 0032 vertical of
 [ADR 0032](../../../docs/adr/0032-nixling-v2-constellation-control-plane.md):
 a real Azure Container Apps **sandbox** that runs a Wayland-native app, plus
 an **Azure Relay** hybrid connection that carries the constellation
@@ -115,7 +115,7 @@ az deployment sub create \
 
 The deployment outputs (registry login server, image reference, sandbox
 group resource id, relay namespace + hybrid connection + the `Listen`/`Send`
-SAS policy names) feed the next P0 steps: building and pushing the Wayland
+SAS policy names) feed the next steps: building and pushing the Wayland
 container image, registering it as a sandbox disk image, and enrolling the
 realm gateway.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the nixling Wayland sandbox image with Nix and push it to the ACR
-# created by the Bicep deployment (ADR 0032, Wave P0).
+# created by the Bicep deployment (ADR 0032).
 #
 # Usage:
 #   ./build-and-push.sh [<registry-name>] [<repository:tag>]

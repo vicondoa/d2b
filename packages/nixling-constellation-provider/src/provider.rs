@@ -2,23 +2,23 @@
 //! traits are `async` via `async_trait` — Azure Relay, QUIC, SSH,
 //! provider APIs, remote daemon sessions, and stream muxing must never
 //! block the daemon reactor. Sync wrappers over blocking host code must
-//! use `spawn_blocking`/dedicated threads (Wave 0 no-blocking gate).
+//! use `spawn_blocking`/dedicated threads (the no-blocking gate).
 
 use async_trait::async_trait;
 use nixling_constellation_core::{
-    ConstellationError, ConstellationFrame, ExecutionId, NodeId, ProviderId, WorkloadId,
+    ConstellationError, ConstellationFrame, NodeId, ProviderId, StreamOpen, WorkloadId,
     WorkloadSummary,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::capabilities::{
     DisplayCapabilitySet, NodeCapabilitySet, RuntimeCapabilitySet, WorkloadCapabilitySet,
 };
 use crate::error::ProviderResult;
 use crate::types::{
-    DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest, ExecStartRequest,
-    IncomingStream, ListSelector, NodeRegistration, RuntimeHandle, RuntimePlan, RuntimeStatus,
-    StreamHandle, StreamOpenRequest, TransportListener, TransportSession, TransportTarget,
-    WorkloadSpec, WorkloadStatus,
+    DaemonAccessMode, DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest,
+    ExecStartRequest, IncomingStream, ListSelector, NodeRegistration, RuntimeHandle, RuntimePlan,
+    RuntimeStatus, StreamHandle, TransportSession, TransportTarget, WorkloadSpec, WorkloadStatus,
 };
 
 /// Installs/checks/prepares nixling on a host OS (NixOS, Ubuntu, generic
@@ -52,6 +52,11 @@ pub trait RuntimeProvider: Send + Sync {
 /// Workload lifecycle when the isolation boundary is not the local host
 /// runtime (e.g. Azure Container Apps sessions) or a local runtime-backed
 /// microVM, behind one operation API.
+///
+/// Workloads do NOT own mux stream lifecycle: streams are opened/accepted
+/// by the [`StreamMux`] against an already-authorized [`StreamOpen`]. A
+/// workload that presents streams binds to those authorized substreams;
+/// it never authorizes a stream itself.
 #[async_trait]
 pub trait WorkloadProvider: Send + Sync {
     /// Provider id.
@@ -69,9 +74,7 @@ pub trait WorkloadProvider: Send + Sync {
     /// Stop a workload.
     async fn stop(&self, id: WorkloadId) -> ProviderResult<WorkloadStatus>;
     /// Start an execution.
-    async fn exec(&self, req: ExecStartRequest) -> ProviderResult<ExecutionId>;
-    /// Open a named stream against the workload.
-    async fn open_stream(&self, req: StreamOpenRequest) -> ProviderResult<StreamHandle>;
+    async fn exec(&self, req: ExecStartRequest) -> ProviderResult<nixling_constellation_core::ExecutionId>;
 }
 
 /// Window/display forwarding for workloads that can present UI. A provider
@@ -91,7 +94,19 @@ pub trait DisplayProvider: Send + Sync {
     async fn close_display_session(&self, id: DisplaySessionId) -> ProviderResult<()>;
 }
 
-/// Byte transport below the constellation peer session/mux.
+/// An accepted inbound transport session and the node that registered the
+/// listener it arrived on.
+#[async_trait]
+pub trait TransportListener: Send + Sync {
+    /// The node this listener is registered for.
+    fn node(&self) -> NodeId;
+    /// Accept the next inbound session (outbound-only relays still expose
+    /// an accept path here after the rendezvous completes).
+    async fn accept(&self) -> ProviderResult<TransportSession>;
+}
+
+/// Byte transport below the constellation peer session/mux. Sessions carry
+/// real bidirectional bytes.
 #[async_trait]
 pub trait TransportProvider: Send + Sync {
     /// Transport id.
@@ -99,17 +114,32 @@ pub trait TransportProvider: Send + Sync {
     /// Connect to a transport target (sender side).
     async fn connect(&self, target: TransportTarget) -> ProviderResult<TransportSession>;
     /// Listen for inbound rendezvous (listener side).
-    async fn listen(&self, registration: NodeRegistration)
-        -> ProviderResult<TransportListener>;
+    async fn listen(
+        &self,
+        registration: NodeRegistration,
+    ) -> ProviderResult<Box<dyn TransportListener>>;
 }
 
-/// Named-stream multiplexing over a transport session.
+/// Named-stream multiplexing over a transport session. The mux is the
+/// single owner of stream open/accept/close lifecycle and capability
+/// gating: it opens a stream only against an already-validated
+/// [`StreamOpen`] whose authz capability matches the descriptor kind and
+/// whose required capability is advertised.
+///
+/// The **router** owns issuing the `StreamOpen.operation_id` binding (it
+/// ties the open to the single authorizing operation and its principal);
+/// the mux does not re-authorize the principal — it enforces capability
+/// consistency + advertisement and rejects everything else fail-closed.
 #[async_trait]
 pub trait StreamMux: Send + Sync {
-    /// Open a named stream with the given authorization context.
-    async fn open_stream(&self, req: StreamOpenRequest) -> ProviderResult<StreamHandle>;
-    /// Accept the next inbound stream.
+    /// Open a named stream. Implementations MUST reject the open
+    /// (`CapabilityDenied`) when `open.is_consistent()` is false or the
+    /// peer does not advertise `open.authz.capability` (fail-closed).
+    async fn open_stream(&self, open: StreamOpen) -> ProviderResult<StreamHandle>;
+    /// Accept the next inbound stream (already authorized by the peer).
     async fn accept_stream(&self) -> ProviderResult<IncomingStream>;
+    /// Close a stream by id.
+    async fn close_stream(&self, id: nixling_constellation_core::StreamId) -> ProviderResult<()>;
 }
 
 /// Encodes/decodes the semantic [`ConstellationFrame`]. The first codec is
@@ -126,12 +156,16 @@ pub trait ProtocolCodec: Send + Sync {
 }
 
 /// How the `nixling` CLI reaches a specific `nixlingd` (local Unix, direct
-/// mTLS/QUIC/WebSocket, relay-backed, or explicit SSH bootstrap).
+/// mTLS/QUIC/WebSocket, relay-backed, or explicit SSH bootstrap). Only
+/// [`DaemonAccessMode::LocalUnix`] is implemented today; other modes fail
+/// closed with `UnsupportedFeature`.
 #[async_trait]
 pub trait DaemonAccessTransport: Send + Sync {
     /// Transport id.
     fn transport_id(&self) -> ProviderId;
-    /// Open a daemon connection label (opaque) to the endpoint.
+    /// The access mode this transport implements.
+    fn mode(&self) -> DaemonAccessMode;
+    /// Open a daemon byte session to the endpoint.
     async fn connect(&self, endpoint: TransportTarget) -> ProviderResult<TransportSession>;
 }
 
@@ -152,14 +186,41 @@ pub trait InfrastructureProvider: Send + Sync {
     async fn plan_infrastructure(&self, node: NodeId) -> ProviderResult<()>;
 }
 
+/// Non-secret lifecycle status of a realm/node enrollment credential. It
+/// never carries key material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CredentialStatus {
+    /// A valid, unexpired, unrevoked enrollment.
+    Valid,
+    /// No enrollment is present.
+    Absent,
+    /// The enrollment has expired.
+    Expired,
+    /// The enrollment was revoked.
+    Revoked,
+}
+
+impl CredentialStatus {
+    /// Whether the enrollment is currently usable.
+    pub fn is_valid(self) -> bool {
+        matches!(self, CredentialStatus::Valid)
+    }
+}
+
 /// Realm/node enrollment and relay/provider credential handling. Never
-/// exposes plaintext credentials to the host.
+/// exposes plaintext credentials to the host; lifecycle/proof hooks return
+/// only opaque, non-secret values.
 #[async_trait]
 pub trait CredentialProvider: Send + Sync {
     /// Provider id.
     fn provider_id(&self) -> ProviderId;
-    /// Whether an enrollment is currently valid (not expired/revoked).
-    async fn enrollment_valid(&self) -> ProviderResult<bool>;
+    /// The non-secret enrollment status.
+    async fn status(&self) -> ProviderResult<CredentialStatus>;
+    /// Convenience: whether an enrollment is currently valid.
+    async fn enrollment_valid(&self) -> ProviderResult<bool> {
+        Ok(self.status().await?.is_valid())
+    }
 }
 
 /// Observability export target (local, gateway, observer, or external).
@@ -178,7 +239,7 @@ pub trait RelayProvider: Send + Sync {
     /// Provider id.
     fn provider_id(&self) -> ProviderId;
     /// Open the listener side (outbound-only).
-    async fn open_listener(&self, node: NodeId) -> ProviderResult<TransportListener>;
+    async fn open_listener(&self, node: NodeId) -> ProviderResult<Box<dyn TransportListener>>;
 }
 
 /// A registered node that dispatches operations.

@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 license = "Apache-2.0"
 
-# Standalone POC tool (ADR 0032, Wave P0): tunnels a raw byte stream over
+# Standalone POC tool (ADR 0032): tunnels a raw byte stream over
 # an Azure Relay Hybrid Connection so the in-sandbox `waypipe server` can
 # reach the host `waypipe client` with no inbound ports. Deliberately kept
 # out of the main `packages/` workspace; the productionized form is the

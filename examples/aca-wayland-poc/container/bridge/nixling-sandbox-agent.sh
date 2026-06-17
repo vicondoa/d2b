@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# nixling sandbox agent — Wave P0 (ADR 0032).
+# nixling sandbox agent (ADR 0032).
 #
 # Runs inside an Azure Container Apps sandbox. Exposes a Wayland-native app
 # over `waypipe server` (SHM-only, no GPU/DMABUF — ACA sandboxes have no

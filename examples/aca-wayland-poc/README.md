@@ -1,7 +1,7 @@
-# ACA + Wayland forwarding POC (ADR 0032, Wave P0)
+# ACA + Wayland forwarding POC (ADR 0032)
 
 > **Status: proof-of-concept.** This directory is the hard vertical slice
-> behind ADR 0032 Wave P0 — it proves a Wayland-native app can run inside an
+> behind ADR 0032 — it proves a Wayland-native app can run inside an
 > **Azure Container Apps sandbox** and be rendered on the operator's
 > compositor with the display carried over an **Azure Relay** hybrid
 > connection. The production realm-gateway design (jailed broker
@@ -64,7 +64,7 @@ sandbox via `aca sandbox exec`. **Delete the sandbox when done.**
   delivers gateway-minted, expiring, per-session tokens via a sealed
   enrollment path.
 - No authenticated constellation handshake / per-operation authz / stream
-  mux / gateway audit yet — those are the Wave P0 → Wave 1+ code, not this
+  mux / gateway audit yet — those are later ADR 0032 work, not this
   feasibility bridge.
 - The relay bridge is a raw byte tunnel; it does not implement the
   constellation `display` stream framing.

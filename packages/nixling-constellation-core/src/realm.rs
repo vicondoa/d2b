@@ -2,7 +2,7 @@
 //! DNS-style path written most-specific-first.
 
 use crate::ids::RealmId;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Where a realm's entrypoint runs.
 #[derive(
@@ -21,11 +21,23 @@ pub enum EntrypointMode {
 /// Internally policy may store it parent-first as `work/payments`; the
 /// target-name form stays DNS-shaped.
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize,
     schemars::JsonSchema,
 )]
 #[serde(transparent)]
 pub struct RealmPath(Vec<RealmId>);
+
+// Fail-closed decode: the empty-path invariant is enforced on the wire,
+// not just in the constructor.
+impl<'de> Deserialize<'de> for RealmPath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let labels = Vec::<RealmId>::deserialize(deserializer)?;
+        Self::new(labels).ok_or_else(|| serde::de::Error::custom("realm path must be non-empty"))
+    }
+}
 
 impl RealmPath {
     /// Build from most-specific-first labels. Empty paths are rejected.
@@ -81,5 +93,13 @@ mod tests {
         assert_eq!(p.target_form(), "payments.work");
         assert_eq!(p.storage_form(), "work/payments");
         assert!(RealmPath::new(vec![]).is_none());
+    }
+
+    #[test]
+    fn realm_path_deserialize_rejects_empty() {
+        assert!(serde_json::from_str::<RealmPath>("[\"work\"]").is_ok());
+        assert!(serde_json::from_str::<RealmPath>("[]").is_err());
+        // a malformed inner label is rejected too (RealmId is fail-closed).
+        assert!(serde_json::from_str::<RealmPath>("[\"Work\"]").is_err());
     }
 }
