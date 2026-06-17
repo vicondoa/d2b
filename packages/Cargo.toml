@@ -6,6 +6,7 @@ members = [
     "nixling-core",
     "nixling-constellation-core",
     "nixling-constellation-provider",
+    "nixling-constellation-transport",
     "nixling-host",
     "nixling-guestd",
     "nixling-userd",
