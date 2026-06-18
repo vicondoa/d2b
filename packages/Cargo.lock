@@ -1003,6 +1003,7 @@ dependencies = [
  "nixling-constellation-core",
  "schemars",
  "serde",
+ "serde_json",
  "tokio",
 ]
 
