@@ -42,9 +42,22 @@ jobs:
   test-rust:
     needs: tier0
     runs-on: ubuntu-latest
-    # ~43 min cold on a hosted x86 runner (no compilation cache in CI). 60 min
-    # gives headroom so a slightly slower runner doesn't flake on timeout.
+    # Cold ~43 min; a warm sccache (restored below) typically cuts this sharply.
+    # 60 min keeps headroom for a fully cold run or a slow runner.
     timeout-minutes: 60
+    env:
+      # Re-enable sccache in CI (test-rust.sh disables it by default there) and
+      # back it with a LOCAL-DISK cache restored/saved by actions/cache. We do
+      # NOT use sccache's native GHA backend: that exports ACTIONS_RUNTIME_TOKEN
+      # into this job's shell env, where the untrusted crate code this gate
+      # compiles + runs (build scripts, proc-macros, `cargo test`) could read
+      # and exfiltrate it. actions/cache performs its I/O in its own action
+      # process and never exposes that token to `run:` steps. CARGO_INCREMENTAL=0
+      # because sccache cannot cache incremental compilation artifacts.
+      NL_CI_SCCACHE: "1"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: "3G"
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -58,10 +71,33 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Restore/save sccache compilation cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ${{ github.workspace }}/.sccache
+          # Key on the lockfiles + pinned toolchain so a dependency or compiler
+          # bump rotates the cache; restore-keys lets the newest prior cache
+          # seed a new key (sccache then recompiles only the changed crates).
+          key: sccache-test-rust-${{ runner.os }}-${{ hashFiles('packages/Cargo.lock', 'packages/nixling-priv-broker/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-keys: |
+            sccache-test-rust-${{ runner.os }}-
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Provision sccache on PATH (pinned nixpkgs)
+        # Hosted runners ship rustup, so tests/test-rust.sh runs the gate with
+        # the system toolchain and never enters the nix shell that would supply
+        # sccache. Put the repo-pinned sccache on PATH (via $GITHUB_PATH, which
+        # propagates to later steps) so the NL_CI_SCCACHE opt-in actually wraps
+        # rustc instead of silently disabling itself when sccache is absent.
+        run: |
+          sccache_bin="$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#sccache)/bin"
+          echo "$sccache_bin" >> "$GITHUB_PATH"
+          "$sccache_bin/sccache" --version
       - name: Rust workspace gate
         run: make test-rust
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
 
   test-proofs:
     needs: tier0
@@ -77,40 +113,117 @@ jobs:
       - name: Proof crates gate
         run: make test-proofs
 
-  test-flake-x86:
+  # ---------------------------------------------------------------------------
+  # Sharded x86_64 flake check. The monolithic `nix flake check` evaluated every
+  # nixosSystem toplevel (eval-minimal/multi-env/graphics/observability/daemon +
+  # fixture-smoke + nix-unit) in ONE evaluator process, OOM-killing the 16 GB
+  # runner (~41 min once we backed it with a 14 GB swapfile to survive). Instead
+  # we enumerate the checks and instantiate each in its OWN runner/process, in
+  # parallel, plus a `flake-eval-x86-outputs` job for the non-`checks` outputs.
+  # The aarch64 leg still runs the full monolithic check. A fail-closed drift
+  # gate (tests/unit/gates/flake-check-matrix-sync.sh, via `make test-drift`)
+  # keeps this matrix in sync with the flake's check set.
+  # ---------------------------------------------------------------------------
+  flake-eval-discover:
     needs: tier0
     runs-on: ubuntu-latest
-    # ~41 min with swap spill (the eval exceeds RAM and pages to /mnt swap).
-    # 60 min gives headroom over the slow swap-backed eval.
-    timeout-minutes: 60
+    timeout-minutes: 10
+    outputs:
+      checks: ${{ steps.list.outputs.checks }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      # `nix flake check --no-build` evaluates several full nixosSystem
-      # toplevels (eval-minimal/multi-env/graphics/observability/daemon +
-      # fixture-smoke + nix-unit) in ONE evaluator process. On a 16 GB hosted
-      # runner the live eval heap OOMs ~8-9 min in (the OOM-killer takes down
-      # the runner agent -> "runner received a shutdown signal"). Back the
-      # evaluator with a large swapfile so it spills to disk instead.
-      - name: Add swap (bound flake-eval peak memory)
-        run: |
-          # Hosted runner images sometimes already ship an active
-          # /mnt/swapfile (fallocate would fail "Text file busy"), so use a
-          # dedicated file and add it on top of whatever swap exists.
-          SWAP=/mnt/nixling-ci-swap
-          sudo swapoff "$SWAP" 2>/dev/null || true
-          sudo rm -f "$SWAP"
-          sudo fallocate -l 14G "$SWAP" || sudo dd if=/dev/zero of="$SWAP" bs=1M count=14336
-          sudo chmod 600 "$SWAP"
-          sudo mkswap "$SWAP"
-          sudo swapon "$SWAP"
-          free -h
       - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Flake check (x86_64-linux)
+      - id: list
+        name: Enumerate flake checks (x86_64-linux)
+        run: |
+          checks=$(make -s test-flake-list)
+          echo "discovered checks: $checks"
+          echo "checks=$checks" >> "$GITHUB_OUTPUT"
+
+  flake-eval-x86:
+    needs: flake-eval-discover
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        check: ${{ fromJSON(needs.flake-eval-discover.outputs.checks) }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Add swap (insurance for the heaviest single check)
+        run: |
+          # A single check instantiates in its own process and fits a 16 GB
+          # runner (heaviest measured ~12 GB), so unlike the old monolith this
+          # rarely touches swap. Add a modest swapfile purely as OOM insurance.
+          SWAP=/mnt/nixling-ci-swap
+          sudo swapoff "$SWAP" 2>/dev/null || true
+          sudo rm -f "$SWAP"
+          sudo fallocate -l 8G "$SWAP" || sudo dd if=/dev/zero of="$SWAP" bs=1M count=8192
+          sudo chmod 600 "$SWAP"
+          sudo mkswap "$SWAP"
+          sudo swapon "$SWAP"
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Flake check shard (x86_64-linux)
+        # NL_FLAKE_CHECK is passed via the step environment, NOT interpolated
+        # into the shell command: a flake check attr name is PR-controlled, so
+        # `NL_FLAKE_CHECK='${{ matrix.check }}' ...` would be a shell-injection
+        # vector. test-flake.sh additionally rejects names outside [A-Za-z0-9._-].
+        env:
+          NL_FLAKE_CHECK: ${{ matrix.check }}
         run: make test-flake
+
+  # x86_64 non-`checks` flake outputs (packages, …). The per-check shards above
+  # only cover `checks.x86_64-linux.*`; `nix flake check` also validates the
+  # other per-system outputs. The aarch64 leg evaluates only aarch64 outputs, so
+  # without this an x86-only broken package output could slip past the required
+  # `test-flake-x86` context. Single light job (no nixosSystem toplevels).
+  flake-eval-x86-outputs:
+    needs: tier0
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Flake non-checks outputs (x86_64-linux)
+        env:
+          NL_FLAKE_OUTPUTS: "1"
+        run: make test-flake
+
+  # Stable required-context aggregator: branch protection requires the
+  # `test-flake-x86` check, and a dynamic matrix cannot itself be a required
+  # context. This job succeeds only when discovery, every shard, and the
+  # non-checks outputs job all succeeded.
+  test-flake-x86:
+    needs: [flake-eval-discover, flake-eval-x86, flake-eval-x86-outputs]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require all x86 flake jobs to pass
+        run: |
+          discover='${{ needs.flake-eval-discover.result }}'
+          shards='${{ needs.flake-eval-x86.result }}'
+          outputs='${{ needs.flake-eval-x86-outputs.result }}'
+          echo "flake-eval-discover=$discover  flake-eval-x86=$shards  flake-eval-x86-outputs=$outputs"
+          if [ "$discover" = success ] && [ "$shards" = success ] && [ "$outputs" = success ]; then
+            echo "All x86_64-linux flake checks + outputs passed."
+          else
+            echo "::error::x86_64 flake gate failed (discover=$discover, shards=$shards, outputs=$outputs)"
+            exit 1
+          fi
 
   test-flake-aarch64:
     needs: tier0

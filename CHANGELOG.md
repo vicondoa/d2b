@@ -10,6 +10,41 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Changed
+
+- CI: the `pr-l1-static-fast` x86_64 flake check is now sharded one job per
+  flake check via a dynamic matrix (`make test-flake-list` enumerates the
+  names; each shard runs `make test-flake` with `NL_FLAKE_CHECK=<name>` to
+  instantiate a single check in its own evaluator process). This replaces the
+  monolithic `nix flake check`, which evaluated every nixosSystem toplevel in
+  one process and OOM-killed the 16 GB runner (kept alive only by a 14 GB
+  swapfile, ~41 min). A companion `flake-eval-x86-outputs` job evaluates the
+  non-`checks` x86 outputs (`packages.*`, via `NL_FLAKE_OUTPUTS=1`) that the
+  per-check shards don't cover and the aarch64 leg (which only evaluates aarch64
+  outputs) would miss. A stable `test-flake-x86` aggregator job gates on all of
+  them to preserve the required status context, and a fail-closed drift gate
+  (`tests/unit/gates/flake-check-matrix-sync.sh`, run by `make test-drift`,
+  regenerate the pin with `make flake-matrix-pin`) keeps the CI shard matrix in
+  sync with the flake's check set. The aarch64 leg still runs the full
+  monolithic check.
+- CI: the `test-rust` gate now restores/saves an sccache **local-disk** cache
+  via `actions/cache` (opt-in through the new `NL_CI_SCCACHE=1`, honored by
+  `tests/test-rust.sh`; the pinned `sccache` is put on `PATH` since hosted
+  runners ship rustup and skip the nix-shell that would otherwise supply it).
+  We deliberately avoid sccache's native GitHub Actions backend: it exports
+  `ACTIONS_RUNTIME_TOKEN` into the job shell environment, where the untrusted
+  crate code the gate compiles and runs could read and exfiltrate it;
+  `actions/cache` keeps that token inside its own action process. The broker's
+  per-feature-pass target dirs are now deterministic siblings (not `mktemp`) so
+  `CARGO_TARGET_DIR`, which sccache hashes, doesn't churn the cache key.
+
+### Removed
+
+- CI: deleted the redundant `pr-cargo-workspace` workflow, which re-ran
+  `make test-rust` + `make test-proofs` already covered by `pr-l1-static-fast`'s
+  `test-rust`/`test-proofs` jobs. Its `ci-uses-make` allowlist entry is removed
+  too, and `cargo-ubuntu` is dropped from `main`'s required status checks.
+
 ### Added
 
 - Internal v2 constellation provider-abstraction crates
@@ -179,6 +214,19 @@ deprecations ship one minor release before removal.
   units at startup, cleans orphaned workloads, and reaps terminal records.
 
 ### Fixed
+
+- The OTel host-bridge runner (`socat UNIX-LISTEN:host-egress.sock,...`)
+  now self-heals across obs-VM restarts. `socat` does not unlink a
+  pre-existing socket path before binding, so a stale `host-egress.sock`
+  left by a previously-drained bridge made the freshly-spawned bridge
+  exit immediately ("address in use"); the readiness probe only checks
+  the socket *file* exists, so the failure was masked and host telemetry
+  silently stopped reaching `sys-obs`. The broker now drops a
+  provably-stale (non-listening) `host-egress.sock` before each
+  `OtelHostBridge` spawn — mirroring the existing cloud-hypervisor / video
+  socket preflight — so restarting the obs VM no longer wedges the host
+  telemetry path. A live listener is never removed, and only sockets under
+  `/run/nixling/otel/` are eligible.
 
 - The privileged broker now compiles under the `layer1-bootstrap`
   feature (and thus `--all-features`): the guest-control `GuestControlSign`

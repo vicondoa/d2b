@@ -31,6 +31,60 @@ cd "$ROOT"
 # contract — see tests/lib.sh nl_flake_ref).
 flake_ref=$(nl_flake_ref "$ROOT")
 
+# Single-check shard mode (CI dynamic matrix): NL_FLAKE_CHECK=<name> instantiates
+# just that one flake check's derivation for the native system, matching the
+# `--no-build` semantics of the full sweep (evaluate + instantiate, do not
+# build). Sharding lets CI fan the checks out across parallel runners so no
+# single evaluator process holds every nixosSystem toplevel at once — the
+# OOM/swap-spill the monolithic `nix flake check` hit on a 16 GB hosted runner.
+# The complementary `test-flake-aarch64` job still runs the full monolithic
+# `nix flake check`, and `NL_FLAKE_OUTPUTS=1` (below) sweeps x86 non-`checks`
+# outputs, so coverage stays equivalent.
+if [ -n "${NL_FLAKE_CHECK:-}" ]; then
+  # Defense in depth: the CI matrix sources these names from the flake's check
+  # attrNames, but reject anything outside a safe charset before it reaches the
+  # nix attr path / any shell so a hostile attr name can neither inject nor
+  # silently no-op a shard.
+  case "$NL_FLAKE_CHECK" in
+    ""|*[!A-Za-z0-9._-]*)
+      fail "NL_FLAKE_CHECK '${NL_FLAKE_CHECK}' has characters outside [A-Za-z0-9._-]"
+      exit 1
+      ;;
+  esac
+  native=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "native")
+  log "--> flake check shard: checks.$native.${NL_FLAKE_CHECK} (instantiate-only)"
+  if nix eval --raw "${flake_ref}#checks.${native}.${NL_FLAKE_CHECK}.drvPath" >/dev/null; then
+    ok "flake check shard: ${NL_FLAKE_CHECK}"
+  else
+    fail "flake check shard: ${NL_FLAKE_CHECK}"
+    exit 1
+  fi
+  log "test-flake (shard ${NL_FLAKE_CHECK}) OK"
+  exit 0
+fi
+
+# Non-`checks` output sweep (CI x86 completeness): the per-check shards above
+# cover `checks.<sys>.*`, but `nix flake check` also validates the other
+# per-system outputs. This flake only exposes `packages.<sys>` with content
+# (apps is empty; lib is system-agnostic), so instantiate every package
+# derivation. This closes the gap where the sharded `test-flake-x86` context
+# could pass with a broken x86 `packages` output that the aarch64 leg (which
+# only evaluates aarch64 outputs) would not catch.
+if [ "${NL_FLAKE_OUTPUTS:-0}" = 1 ]; then
+  native=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "native")
+  log "--> flake non-checks outputs: packages.$native.* (instantiate-only)"
+  if nix eval --raw "${flake_ref}#packages.${native}" --apply \
+       'ps: builtins.concatStringsSep "\n" (builtins.map (p: p.drvPath) (builtins.attrValues ps))' \
+       >/dev/null; then
+    ok "flake non-checks outputs: packages.$native"
+  else
+    fail "flake non-checks outputs: packages.$native"
+    exit 1
+  fi
+  log "test-flake (outputs) OK"
+  exit 0
+fi
+
 systems_flag=()
 if [ "${NL_FLAKE_ALL_SYSTEMS:-0}" = 1 ]; then
   systems_flag=(--all-systems)

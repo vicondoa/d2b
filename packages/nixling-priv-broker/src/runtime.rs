@@ -1757,6 +1757,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             )?;
             cleanup_cloud_hypervisor_stale_sockets(&req.role, &intent.argv)?;
             cleanup_video_stale_socket(&req.role, &intent.argv)?;
+            cleanup_otel_host_bridge_stale_socket(&req.role, &intent.argv)?;
             let plan_input = crate::ops::spawn_runner::SpawnRunnerPlanInput {
                 binary_path: intent.binary_path.clone(),
                 argv: intent.argv.clone(),
@@ -4832,6 +4833,49 @@ fn video_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError> {
     }
     Err(BrokerError::LiveHandler(
         "video socket preflight could not find --socket-path in runner argv".to_owned(),
+    ))
+}
+
+// The OtelHostBridge runner is `socat UNIX-LISTEN:<host-egress.sock>,...`.
+// socat does not unlink a pre-existing socket path before binding, so a
+// stale `host-egress.sock` left behind by a prior bridge instance (e.g.
+// after the obs VM is restarted, draining and respawning the bridge)
+// makes the fresh socat exit immediately with "address in use". The
+// readiness probe only checks the socket *file* exists, so the stale
+// socket masks the failure and host telemetry silently stops flowing.
+// Mirror the cloud-hypervisor / video preflight: drop a provably-stale
+// (non-listening) socket before spawn so obs-VM restarts self-heal.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn cleanup_otel_host_bridge_stale_socket(
+    role: &nixling_ipc::broker_wire::RunnerRole,
+    argv: &[String],
+) -> Result<(), BrokerError> {
+    if !matches!(role, nixling_ipc::broker_wire::RunnerRole::OtelHostBridge) {
+        return Ok(());
+    }
+    let path = otel_host_bridge_socket_path(argv)?;
+    if !path.starts_with("/run/nixling/otel/") {
+        return Err(BrokerError::LiveHandler(format!(
+            "otel-host-bridge socket preflight refusing non-nixling socket path {}",
+            path.display()
+        )));
+    }
+    cleanup_stale_unix_socket_without_probe(&path, "otel-host-bridge socket preflight")
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn otel_host_bridge_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError> {
+    for arg in argv {
+        if let Some(rest) = arg.strip_prefix("UNIX-LISTEN:") {
+            let path = rest.split(',').next().unwrap_or(rest);
+            if !path.is_empty() {
+                return Ok(PathBuf::from(path));
+            }
+        }
+    }
+    Err(BrokerError::LiveHandler(
+        "otel-host-bridge socket preflight could not find UNIX-LISTEN socket in runner argv"
+            .to_owned(),
     ))
 }
 
@@ -8663,6 +8707,64 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn otel_host_bridge_socket_path_extracts_unix_listen_target() {
+        let argv = vec![
+            "/run/current-system/sw/bin/socat".to_owned(),
+            "-d".to_owned(),
+            "-d".to_owned(),
+            "UNIX-LISTEN:/run/nixling/otel/host-egress.sock,fork,reuseaddr,mode=0660".to_owned(),
+            "EXEC:\"/run/current-system/sw/bin/nixling-ch-vsock-connect \
+             /var/lib/nixling/vms/sys-obs/vsock.sock 14317\""
+                .to_owned(),
+        ];
+        let path = otel_host_bridge_socket_path(&argv).expect("extract UNIX-LISTEN target");
+        assert_eq!(
+            path,
+            PathBuf::from("/run/nixling/otel/host-egress.sock"),
+            "the socket path is the UNIX-LISTEN target stripped of socat options"
+        );
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn otel_host_bridge_socket_path_errors_without_unix_listen() {
+        let argv = vec![
+            "/run/current-system/sw/bin/socat".to_owned(),
+            "-d".to_owned(),
+        ];
+        assert!(
+            otel_host_bridge_socket_path(&argv).is_err(),
+            "argv without a UNIX-LISTEN address must be rejected"
+        );
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn cleanup_otel_host_bridge_stale_socket_noop_for_other_role() {
+        use nixling_ipc::broker_wire::RunnerRole;
+        // A non-bridge role must short-circuit Ok before touching argv or
+        // the filesystem, even with an otherwise-dangerous argv.
+        let argv = vec!["UNIX-LISTEN:/etc/shadow,fork".to_owned()];
+        cleanup_otel_host_bridge_stale_socket(&RunnerRole::CloudHypervisor, &argv)
+            .expect("non-bridge role is a no-op");
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn cleanup_otel_host_bridge_stale_socket_rejects_path_outside_otel_runtime_dir() {
+        use nixling_ipc::broker_wire::RunnerRole;
+        // The prefix guard must refuse any socket outside the nixling OTel
+        // runtime dir so a malformed bundle can never unlink an arbitrary
+        // path before the guarded `cleanup_stale_unix_socket_without_probe`.
+        let argv = vec!["UNIX-LISTEN:/tmp/evil.sock,fork".to_owned()];
+        assert!(
+            cleanup_otel_host_bridge_stale_socket(&RunnerRole::OtelHostBridge, &argv).is_err(),
+            "socket path outside /run/nixling/otel/ must be refused"
+        );
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]

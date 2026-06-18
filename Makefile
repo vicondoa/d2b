@@ -7,8 +7,9 @@
         check check-ci check-all check-fast check-tier0 \
         test test-unit \
         test-lint test-rust test-proofs test-flake test-nix-unit \
+        test-flake-list \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
-        ledger ledger-regen check-inventory pr-checklist-gate ci-uses-make nix-unit-pin
+        ledger ledger-regen check-inventory pr-checklist-gate ci-uses-make nix-unit-pin flake-matrix-pin
 
 # Current Nix system double, used to address per-system flake.checks attrs.
 # Falls back to x86_64-linux if `nix` is unavailable (e.g. a docs-only host).
@@ -90,10 +91,19 @@ test-proofs:
 	bash tests/test-proofs.sh
 
 ## test-flake — `nix flake check --no-build` for the native system (bounded
-## memory). CI runs this as a 2-arch matrix (x86_64 + aarch64).
-## Set NL_FLAKE_ALL_SYSTEMS=1 to cross-evaluate both (like `make check`/static.sh).
+## memory). CI shards the x86_64 leg one-job-per-check via a dynamic matrix:
+## set NL_FLAKE_CHECK=<name> to instantiate just that one check (the matrix
+## enumerates names with `make test-flake-list`); the aarch64 leg still runs the
+## full monolithic check. Set NL_FLAKE_ALL_SYSTEMS=1 to cross-evaluate every
+## system (like `make check`/static.sh).
 test-flake:
 	bash tests/test-flake.sh
+
+## test-flake-list — emit the native-system flake check names as a JSON array on
+## stdout (CI dynamic-matrix plumbing for the sharded test-flake; see
+## .github/workflows/pr-l1-static-fast.yml). Invoke as `make -s test-flake-list`.
+test-flake-list:
+	@bash tests/test-flake-list.sh
 
 ## test-nix-unit — build the nix-unit corpus check (focused convenience target;
 ## already covered by test-flake, so NOT in test-unit to avoid double work).
@@ -132,6 +142,13 @@ ledger-regen:
 ## (tests/unit/nix/pinned/*.txt) after adding or removing cases.
 nix-unit-pin:
 	bash tests/tools/gen-nix-unit-pins.sh
+
+## flake-matrix-pin — regenerate the fail-closed CI flake-check-matrix pin
+## (tests/golden/flake-check-matrix/<system>.txt) after adding/removing a flake
+## check. The drift gate (run by `make test-drift`) fails closed until this is
+## rerun, so the sharded x86 CI matrix can't silently change coverage.
+flake-matrix-pin:
+	bash tests/tools/gen-flake-check-matrix-pin.sh
 
 ## W0 policy gates (also run by test-policy).
 pr-checklist-gate:
