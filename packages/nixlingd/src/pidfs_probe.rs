@@ -103,6 +103,17 @@ pub fn probe_pidfs() -> PidfsProbeOutcome {
 /// CI / development hosts that don't actually run VMs).
 pub fn enforce_probe_outcome(outcome: &PidfsProbeOutcome) -> Result<(), TypedError> {
     let allow_soft_fail = std::env::var_os("NIXLING_ALLOW_PIDFS_PROBE_SOFT_FAIL").is_some();
+    enforce_probe_outcome_with(outcome, allow_soft_fail)
+}
+
+/// Variant of [`enforce_probe_outcome`] with the soft-fail opt-in passed
+/// explicitly. [`enforce_probe_outcome`] resolves it from the
+/// `NIXLING_ALLOW_PIDFS_PROBE_SOFT_FAIL` env var; tests pass it directly so
+/// they never mutate process-global env.
+pub(crate) fn enforce_probe_outcome_with(
+    outcome: &PidfsProbeOutcome,
+    allow_soft_fail: bool,
+) -> Result<(), TypedError> {
     match outcome {
         PidfsProbeOutcome::PidfsAvailable { st_dev, st_ino } => {
             tracing::info!(
@@ -186,17 +197,6 @@ fn fstat_for_pidfs(fd: &OwnedFd) -> Result<(u64, u64), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    /// Serializes tests that mutate the process-global
-    /// `NIXLING_ALLOW_PIDFS_PROBE_SOFT_FAIL` env var. Without this,
-    /// cargo's default parallel-test runner can race two tests
-    /// (one set + one unset) and produce a spurious `is_ok()` failure
-    /// in `probe_outcome_unsupported_soft_fail_returns_ok`.
-    fn soft_fail_env_mutex() -> &'static Mutex<()> {
-        static M: OnceLock<Mutex<()>> = OnceLock::new();
-        M.get_or_init(|| Mutex::new(()))
-    }
 
     #[test]
     fn probe_outcome_pidfs_available_returns_ok() {
@@ -204,18 +204,13 @@ mod tests {
             st_dev: 12,
             st_ino: 4567,
         };
-        assert!(enforce_probe_outcome(&outcome).is_ok());
+        assert!(enforce_probe_outcome_with(&outcome, false).is_ok());
     }
 
     #[test]
     fn probe_outcome_unsupported_returns_typed_error_without_soft_fail() {
-        // Ensure env var not set for this test path.
-        let _guard = soft_fail_env_mutex().lock().unwrap();
-        std::env::remove_var("NIXLING_ALLOW_PIDFS_PROBE_SOFT_FAIL");
         let outcome = PidfsProbeOutcome::PidfdOpenUnsupported;
-        let result = enforce_probe_outcome(&outcome);
-        // Drop guard implicitly at scope end; assertions after env restore.
-        match result {
+        match enforce_probe_outcome_with(&outcome, false) {
             Err(TypedError::InternalIo { context, .. }) => {
                 assert_eq!(context, "pidfs-runtime-probe");
             }
@@ -226,12 +221,8 @@ mod tests {
 
     #[test]
     fn probe_outcome_unsupported_soft_fail_returns_ok() {
-        let _guard = soft_fail_env_mutex().lock().unwrap();
-        std::env::set_var("NIXLING_ALLOW_PIDFS_PROBE_SOFT_FAIL", "1");
         let outcome = PidfsProbeOutcome::PidfdOpenUnsupported;
-        let result = enforce_probe_outcome(&outcome);
-        std::env::remove_var("NIXLING_ALLOW_PIDFS_PROBE_SOFT_FAIL");
-        assert!(result.is_ok());
+        assert!(enforce_probe_outcome_with(&outcome, true).is_ok());
     }
 
     #[test]
@@ -239,7 +230,7 @@ mod tests {
         let outcome = PidfsProbeOutcome::UnexpectedError {
             detail: "test-only".to_owned(),
         };
-        assert!(enforce_probe_outcome(&outcome).is_ok());
+        assert!(enforce_probe_outcome_with(&outcome, false).is_ok());
     }
 
     #[test]

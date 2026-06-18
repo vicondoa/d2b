@@ -202,8 +202,18 @@ impl ReadinessWaitConfig {
     /// + `NIXLING_OTEL_BRIDGE_READINESS_STRICT`. Invalid timeout
     ///   values fall back to [`DEFAULT_TIMEOUT`] with a warning.
     pub fn from_env() -> Self {
+        Self::from_values(
+            std::env::var(TIMEOUT_ENV).ok().as_deref(),
+            std::env::var(STRICT_ENV).ok().as_deref(),
+        )
+    }
+
+    /// Build a config from already-resolved raw override strings. The
+    /// [`Self::from_env`] reader supplies the process-env values; tests
+    /// pass values directly so they never mutate process-global env.
+    pub fn from_values(timeout_raw: Option<&str>, strict_raw: Option<&str>) -> Self {
         let mut cfg = Self::default();
-        if let Ok(raw) = std::env::var(TIMEOUT_ENV) {
+        if let Some(raw) = timeout_raw {
             match raw.parse::<u64>() {
                 Ok(ms) => cfg.timeout = Duration::from_millis(ms),
                 Err(error) => tracing::warn!(
@@ -214,7 +224,7 @@ impl ReadinessWaitConfig {
                 ),
             }
         }
-        cfg.strict = std::env::var(STRICT_ENV).map(|v| v == "1").unwrap_or(false);
+        cfg.strict = strict_raw.map(|v| v == "1").unwrap_or(false);
         cfg
     }
 }
@@ -521,32 +531,16 @@ mod tests {
     }
 
     #[test]
-    // These env-var tests race when cargo runs the module's tests
-    // concurrently (TIMEOUT_ENV/STRICT_ENV are
-    // process-global). The asserts here pass in isolation
-    // (`cargo test from_env_falls_back_on_invalid_timeout`) but flake
-    // when interleaved. Mark ignored until a serial-test crate is
-    // added; the code path is already exercised by the env-var-free
-    // happy-path tests above.
-    #[ignore = "integration test: process-global env var races with from_env_honors_strict_flag; run with --test-threads=1 or in isolation"]
-    fn from_env_falls_back_on_invalid_timeout() {
-        std::env::set_var(TIMEOUT_ENV, "not-a-number");
-        std::env::remove_var(STRICT_ENV);
-        let cfg = ReadinessWaitConfig::from_env();
+    fn from_values_falls_back_on_invalid_timeout() {
+        let cfg = ReadinessWaitConfig::from_values(Some("not-a-number"), None);
         assert_eq!(cfg.timeout, DEFAULT_TIMEOUT);
         assert!(!cfg.strict);
-        std::env::remove_var(TIMEOUT_ENV);
     }
 
     #[test]
-    #[ignore = "integration test: process-global env var races with from_env_falls_back_on_invalid_timeout; run with --test-threads=1 or in isolation"]
-    fn from_env_honors_strict_flag() {
-        std::env::set_var(STRICT_ENV, "1");
-        std::env::set_var(TIMEOUT_ENV, "1234");
-        let cfg = ReadinessWaitConfig::from_env();
+    fn from_values_honors_strict_flag() {
+        let cfg = ReadinessWaitConfig::from_values(Some("1234"), Some("1"));
         assert_eq!(cfg.timeout, Duration::from_millis(1234));
         assert!(cfg.strict);
-        std::env::remove_var(TIMEOUT_ENV);
-        std::env::remove_var(STRICT_ENV);
     }
 }
