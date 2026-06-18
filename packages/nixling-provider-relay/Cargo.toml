@@ -25,6 +25,9 @@ tokio = { version = "1", features = ["rt", "net", "io-util", "macros", "time"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", features = ["ring"] }
 futures-util = "0.3"
+serde_json = { workspace = true }
+rustls-pemfile = "2"
+webpki-roots = "0.26"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

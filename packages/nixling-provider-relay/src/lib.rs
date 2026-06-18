@@ -254,12 +254,23 @@ pub async fn connect(
     credential: &RelayCredential,
     ttl_secs: u64,
 ) -> Result<RelayStream, RelayConnectError> {
+    connect_with_ca(endpoint, role, credential, ttl_secs, None).await
+}
+
+/// Like [`connect`], but trusts an extra PEM CA bundle in addition to the
+/// built-in webpki roots. Required **inside an ACA sandbox**, whose
+/// transparent egress proxy terminates TLS with the injected
+/// `adc-egress-proxy-ca`; the gateway (host) side passes `None`.
+pub async fn connect_with_ca(
+    endpoint: &RelayEndpoint,
+    role: RelayRole,
+    credential: &RelayCredential,
+    ttl_secs: u64,
+    ca_pem: Option<&[u8]>,
+) -> Result<RelayStream, RelayConnectError> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
 
-    // Ensure a rustls crypto provider is installed before any TLS connect, so
-    // a consumer never has to remember to. Idempotent / respects a provider
-    // the host application may have already chosen.
     install_crypto_provider();
 
     let connect =
@@ -274,10 +285,50 @@ pub async fn connect(
             HeaderValue::from_str(value).map_err(|_| RelayConnectError::BadRequest)?,
         );
     }
-    let (ws, _resp) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|err| RelayConnectError::Handshake(err.to_string()))?;
+    connect_request(request, ca_pem).await
+}
+
+/// Connect a rendezvous URL (the listener-side accept address; it already
+/// carries its own token) with the optional extra CA.
+async fn connect_raw(url: &str, ca_pem: Option<&[u8]>) -> Result<RelayStream, RelayConnectError> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    install_crypto_provider();
+    let request = url
+        .into_client_request()
+        .map_err(|_| RelayConnectError::BadRequest)?;
+    connect_request(request, ca_pem).await
+}
+
+async fn connect_request(
+    request: tokio_tungstenite::tungstenite::http::Request<()>,
+    ca_pem: Option<&[u8]>,
+) -> Result<RelayStream, RelayConnectError> {
+    let connector = tls_connector(ca_pem)?;
+    let (ws, _resp) =
+        tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector))
+            .await
+            .map_err(|err| RelayConnectError::Handshake(err.to_string()))?;
     Ok(ws)
+}
+
+/// Build a rustls connector trusting the built-in webpki roots plus any extra
+/// CA certificates in `ca_pem`.
+fn tls_connector(ca_pem: Option<&[u8]>) -> Result<tokio_tungstenite::Connector, RelayConnectError> {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    if let Some(pem) = ca_pem {
+        let mut reader = std::io::BufReader::new(pem);
+        for cert in rustls_pemfile::certs(&mut reader) {
+            let cert = cert.map_err(|_| RelayConnectError::BadRequest)?;
+            roots.add(cert).map_err(|_| RelayConnectError::BadRequest)?;
+        }
+    }
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok(tokio_tungstenite::Connector::Rustls(std::sync::Arc::new(
+        config,
+    )))
 }
 
 /// Errors connecting the relay WebSocket.
@@ -304,6 +355,184 @@ impl fmt::Display for RelayConnectError {
 }
 
 impl std::error::Error for RelayConnectError {}
+
+/// A local byte endpoint to bridge a relay stream to/from.
+#[derive(Debug, Clone)]
+pub enum LocalTarget {
+    /// Connect to an existing unix socket (`unix:/path`).
+    UnixConnect(String),
+    /// Bind+listen a unix socket and accept one connection (`unix-listen:/path`).
+    /// Lets the local peer (e.g. `waypipe server`) dial in without a socat hop.
+    UnixListen(String),
+    /// Connect to a TCP `host:port`.
+    TcpConnect(String),
+}
+
+impl LocalTarget {
+    /// Parse the `unix:` / `unix-listen:` / `tcp:` / bare-host:port forms.
+    pub fn parse(spec: &str) -> Self {
+        if let Some(p) = spec.strip_prefix("unix-listen:") {
+            LocalTarget::UnixListen(p.to_owned())
+        } else if let Some(p) = spec.strip_prefix("unix:") {
+            LocalTarget::UnixConnect(p.to_owned())
+        } else if let Some(a) = spec.strip_prefix("tcp:") {
+            LocalTarget::TcpConnect(a.to_owned())
+        } else {
+            LocalTarget::TcpConnect(spec.to_owned())
+        }
+    }
+}
+
+enum LocalIo {
+    Tcp(tokio::net::TcpStream),
+    Unix(tokio::net::UnixStream),
+}
+
+async fn connect_local(target: &LocalTarget) -> std::io::Result<LocalIo> {
+    match target {
+        LocalTarget::UnixListen(path) => {
+            let _ = std::fs::remove_file(path);
+            let listener = tokio::net::UnixListener::bind(path)?;
+            let (stream, _) = listener.accept().await?;
+            Ok(LocalIo::Unix(stream))
+        }
+        LocalTarget::UnixConnect(path) => {
+            Ok(LocalIo::Unix(tokio::net::UnixStream::connect(path).await?))
+        }
+        LocalTarget::TcpConnect(addr) => {
+            Ok(LocalIo::Tcp(tokio::net::TcpStream::connect(addr).await?))
+        }
+    }
+}
+
+/// Pump bytes between the relay WebSocket and a local stream until either
+/// side closes. Binary frames carry the tunneled bytes; pings are answered;
+/// text/close end the pump. This is the productionized form of the POC
+/// bridge's byte loop.
+async fn pump<T>(ws: RelayStream, io: T) -> Result<(), RelayConnectError>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (mut sink, mut stream) = ws.split();
+    let mut io = io;
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        tokio::select! {
+            n = io.read(&mut buf) => {
+                let n = n.map_err(|_| RelayConnectError::Handshake("local read".into()))?;
+                if n == 0 {
+                    let _ = sink.send(Message::Close(None)).await;
+                    return Ok(());
+                }
+                sink.send(Message::Binary(buf[..n].to_vec()))
+                    .await
+                    .map_err(|_| RelayConnectError::Handshake("ws send".into()))?;
+            }
+            msg = stream.next() => {
+                match msg {
+                    Some(Ok(Message::Binary(data))) => {
+                        io.write_all(&data).await
+                            .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
+                    }
+                    Some(Ok(Message::Ping(p))) => { let _ = sink.send(Message::Pong(p)).await; }
+                    Some(Ok(Message::Text(_))) | Some(Ok(Message::Pong(_)))
+                    | Some(Ok(Message::Frame(_))) => {}
+                    Some(Ok(Message::Close(_))) | None => return Ok(()),
+                    Some(Err(_)) => {
+                        return Err(RelayConnectError::Handshake("ws stream error".into()));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Run the **sender** side (in the sandbox): connect to the relay with the
+/// credential (the MI Entra bearer in production), then bridge to `local`.
+/// `ca_pem` is the ACA egress-proxy CA.
+pub async fn run_sender(
+    endpoint: &RelayEndpoint,
+    credential: &RelayCredential,
+    local: &LocalTarget,
+    ttl_secs: u64,
+    ca_pem: Option<&[u8]>,
+) -> Result<(), RelayConnectError> {
+    let ws = connect_with_ca(endpoint, RelayRole::Sender, credential, ttl_secs, ca_pem).await?;
+    let io = connect_local(local)
+        .await
+        .map_err(|_| RelayConnectError::Handshake("local connect".into()))?;
+    match io {
+        LocalIo::Tcp(s) => pump(ws, s).await,
+        LocalIo::Unix(s) => pump(ws, s).await,
+    }
+}
+
+/// Run the **listener** control channel (on the gateway/host): for each
+/// sender rendezvous, open the rendezvous stream and bridge it to a fresh
+/// `local` connection. Returns when the control channel closes (the caller
+/// reconnects). `ca_pem` is `None` on the gateway (public roots).
+pub async fn run_listener(
+    endpoint: &RelayEndpoint,
+    credential: &RelayCredential,
+    local: &LocalTarget,
+    ttl_secs: u64,
+    ca_pem: Option<&[u8]>,
+) -> Result<(), RelayConnectError> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let control =
+        connect_with_ca(endpoint, RelayRole::Listener, credential, ttl_secs, ca_pem).await?;
+    let (mut sink, mut stream) = control.split();
+    while let Some(msg) = stream.next().await {
+        let msg = msg.map_err(|_| RelayConnectError::Handshake("control channel".into()))?;
+        match msg {
+            Message::Text(text) => {
+                let v: serde_json::Value = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if let Some(addr) = v
+                    .get("accept")
+                    .and_then(|a| a.get("address"))
+                    .and_then(|s| s.as_str())
+                {
+                    let address = addr.to_owned();
+                    let local = local.clone();
+                    let ca = ca_pem.map(|c| c.to_vec());
+                    tokio::spawn(async move {
+                        let _ = accept_one(&address, &local, ca.as_deref()).await;
+                    });
+                }
+            }
+            Message::Ping(p) => {
+                let _ = sink.send(Message::Pong(p)).await;
+            }
+            Message::Close(_) => return Ok(()),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+async fn accept_one(
+    address: &str,
+    local: &LocalTarget,
+    ca_pem: Option<&[u8]>,
+) -> Result<(), RelayConnectError> {
+    let ws = connect_raw(address, ca_pem).await?;
+    let io = connect_local(local)
+        .await
+        .map_err(|_| RelayConnectError::Handshake("local connect".into()))?;
+    match io {
+        LocalIo::Tcp(s) => pump(ws, s).await,
+        LocalIo::Unix(s) => pump(ws, s).await,
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -387,5 +616,25 @@ mod tests {
         let b = connect_id();
         assert_ne!(a, b);
         assert_eq!(a.len(), 16);
+    }
+
+    #[test]
+    fn local_target_parses_each_form() {
+        assert!(matches!(
+            LocalTarget::parse("unix-listen:/run/wp.sock"),
+            LocalTarget::UnixListen(p) if p == "/run/wp.sock"
+        ));
+        assert!(matches!(
+            LocalTarget::parse("unix:/run/wpc.sock"),
+            LocalTarget::UnixConnect(p) if p == "/run/wpc.sock"
+        ));
+        assert!(matches!(
+            LocalTarget::parse("tcp:127.0.0.1:8080"),
+            LocalTarget::TcpConnect(a) if a == "127.0.0.1:8080"
+        ));
+        assert!(matches!(
+            LocalTarget::parse("127.0.0.1:9000"),
+            LocalTarget::TcpConnect(a) if a == "127.0.0.1:9000"
+        ));
     }
 }
