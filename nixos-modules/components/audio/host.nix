@@ -349,7 +349,7 @@ in
       system.activationScripts.nixlingAudioStateDirs =
         lib.stringAfter [ "users" ] (lib.concatStringsSep "\n" (lib.mapAttrsToList
           (name: _: ''
-            install -d -m 2770 -o nixlingd -g users /var/lib/nixling/vms/${name} || true
+            install -d -m 3770 -o nixlingd -g users /var/lib/nixling/vms/${name} || true
             install -d -m 0750 -o nixlingd -g nixling /var/lib/nixling/vms/${name}/state || true
             # live-deploy fu9: chown -R to repair any state/
             # dir that was pre-existing root:* before our fix. install

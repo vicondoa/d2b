@@ -24,6 +24,12 @@ pub struct PidfdTable {
     pub(crate) entries: RwLock<BTreeMap<(String, String), PidfdEntry>>,
     pub(crate) state_path: PathBuf,
     broker_reap_log: OnceLock<Arc<BrokerReapLog>>,
+    /// Serializes register/deregister + snapshot sequences so concurrent
+    /// different-VM lifecycle ops cannot interleave a register against a
+    /// snapshot and lose an entry on disk. Callers that perform a
+    /// "mutate the map, then persist" sequence hold this across BOTH
+    /// steps via [`PidfdTable::mutation_guard`].
+    mutation_lock: Mutex<()>,
 }
 
 #[derive(Debug)]
@@ -93,6 +99,25 @@ impl BrokerReapLog {
             .iter()
             .find_map(|(pid, notif)| (notif.runner_id == runner_id).then_some(*pid))?;
         inner.remove(&pid)
+    }
+
+    /// PEEK (non-consuming) the event for a `(vm, role)` runner id, if any.
+    ///
+    /// Unlike [`Self::take_for`] this does NOT remove the entry — the
+    /// readiness liveness probe must only observe so the buffered exit
+    /// status remains available to the mutating teardown path
+    /// (`wait_terminated` / rollback) that owns deregistration.
+    pub fn peek_for(
+        &self,
+        vm: &str,
+        role: &str,
+    ) -> Option<nixling_ipc::broker_wire::ChildReapedNotification> {
+        let runner_id = format!("{vm}:{role}");
+        self.inner
+            .lock()
+            .values()
+            .find(|notif| notif.runner_id == runner_id)
+            .cloned()
     }
 }
 
@@ -196,6 +221,7 @@ impl PidfdTable {
             entries: RwLock::new(BTreeMap::new()),
             state_path,
             broker_reap_log: OnceLock::new(),
+            mutation_lock: Mutex::new(()),
         }
     }
 
@@ -251,6 +277,13 @@ impl PidfdTable {
     /// Returns the number of entries dropped. Snapshot is
     /// re-persisted to disk if any entries were dropped.
     pub fn prune_dead_entries(&self) -> Result<usize, PidfdTableError> {
+        // Serialize the mutate + snapshot sequence against concurrent
+        // register/deregister+snapshot from other VMs (same invariant as
+        // `register_node_pidfd`): without this guard a prune snapshot can
+        // land between another thread's register and snapshot and drop the
+        // newer entry on disk. Neither caller (`is_running`, vm-start
+        // dispatch) holds this guard, so acquiring it here is deadlock-free.
+        let _mguard = self.mutation_guard();
         let mut to_drop: Vec<(String, String)> = Vec::new();
         {
             let entries = self.entries.read();
@@ -462,6 +495,36 @@ impl PidfdTable {
         matches!(read_proc_start_time(pid), Ok(Some(observed)) if observed == start_time_ticks)
     }
 
+    /// Acquire the register/deregister + snapshot serialization guard.
+    ///
+    /// Callers that perform a "mutate the in-memory map, then persist a
+    /// snapshot" sequence hold this guard across BOTH steps so concurrent
+    /// different-VM ops cannot lose an entry on disk (one thread's
+    /// snapshot landing between another thread's register and snapshot).
+    pub fn mutation_guard(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.mutation_lock.lock()
+    }
+
+    /// Duplicate the daemon-held pidfd for `(vm, role)` for a read-only
+    /// liveness poll. Returns the dup'd fd plus the registered
+    /// `(pid, start_time_ticks)`, or `None` when no entry is registered
+    /// (e.g. rollback already removed it) or the dup fails.
+    ///
+    /// This OBSERVES only — it never removes the entry. All
+    /// deregistration stays in the teardown / rollback path.
+    pub fn dup_pidfd_for(&self, vm: &str, role: &str) -> Option<(OwnedFd, i32, u64)> {
+        let entries = self.entries.read();
+        let entry = entries.get(&(vm.to_owned(), role.to_owned()))?;
+        let dup = rustix::io::dup(entry.pidfd.as_fd()).ok()?;
+        Some((dup, entry.pid, entry.start_time_ticks))
+    }
+
+    /// Whether `(vm, role)` is currently registered. Distinguishes a
+    /// rollback-removed entry (`false`) from a live one without mutating.
+    pub fn has_entry(&self, vm: &str, role: &str) -> bool {
+        self.contains(vm, role)
+    }
+
     pub fn snapshot(&self) -> Result<(), PidfdTableError> {
         let persisted = {
             let entries = self.entries.read();
@@ -644,6 +707,13 @@ fn read_proc_start_time(pid: i32) -> Result<Option<u64>, String> {
     }
 }
 
+/// Public read-only `/proc/<pid>/stat` start-time read used by the
+/// readiness liveness probe to distinguish a still-our-process from a
+/// PID-reuse (start-time drift) or a gone process. Never mutates.
+pub fn read_proc_start_time_pub(pid: i32) -> Result<Option<u64>, String> {
+    read_proc_start_time(pid)
+}
+
 pub fn set_child_subreaper_with_self_test() -> Result<(), PidfdTableError> {
     let enable = rustix::process::Pid::from_raw(1);
     rustix::process::set_child_subreaper(enable).map_err(|err| PidfdTableError::RestoreFailed {
@@ -754,6 +824,67 @@ mod tests {
         assert!(table.contains("alpha", "ch"));
         let dropped = table.deregister("alpha", "ch").expect("present");
         assert_eq!(dropped.pid, 4242);
+        assert_eq!(table.len(), 0);
+    }
+
+    #[test]
+    fn observe_only_helpers_do_not_deregister() {
+        // The readiness liveness probe ONLY observes — `dup_pidfd_for`
+        // and the reap-log `peek_for` must never remove an entry, so
+        // the mutating rollback path retains ownership of deregistration.
+        let table = PidfdTable::new(fresh_state_path("observe-only"));
+        table
+            .register(
+                "work".into(),
+                "swtpm".into(),
+                PidfdEntry {
+                    pidfd: pipe_owned_fd(),
+                    pid: 7777,
+                    start_time_ticks: 99,
+                },
+            )
+            .unwrap();
+        assert_eq!(table.len(), 1);
+
+        // Repeated dups never consume the entry.
+        for _ in 0..3 {
+            let (dup, pid, start) = table
+                .dup_pidfd_for("work", "swtpm")
+                .expect("entry present for dup");
+            assert_eq!(pid, 7777);
+            assert_eq!(start, 99);
+            drop(dup);
+        }
+        assert!(table.has_entry("work", "swtpm"));
+        assert_eq!(table.len(), 1, "dup_pidfd_for must not deregister");
+
+        let reap_log = BrokerReapLog::new();
+        reap_log.insert(nixling_ipc::broker_wire::ChildReapedNotification {
+            runner_id: "work:swtpm".to_owned(),
+            pid: 7777,
+            exit_status: nixling_ipc::broker_wire::ChildExitStatus {
+                kind: nixling_ipc::broker_wire::ChildExitKind::Exited,
+                code: Some(1),
+                signal: None,
+            },
+            reaped_at_ms: 0,
+        });
+        // Repeated peeks never consume the reap entry.
+        for _ in 0..3 {
+            let peeked = reap_log
+                .peek_for("work", "swtpm")
+                .expect("reap entry present");
+            assert_eq!(peeked.pid, 7777);
+        }
+        // After observe-only peeks the consuming take_for still finds it.
+        assert!(
+            reap_log.take_for("work", "swtpm").is_some(),
+            "peek_for must not consume the buffered reap status"
+        );
+
+        // Deregistration remains the rollback path's responsibility.
+        let dropped = table.deregister("work", "swtpm").expect("present");
+        assert_eq!(dropped.pid, 7777);
         assert_eq!(table.len(), 0);
     }
 
@@ -1179,6 +1310,53 @@ mod tests {
                 prefix
             );
         }
+    }
+
+    /// fix2b: register + snapshot under the table's `mutation_guard` for two
+    /// distinct VMs concurrently must persist BOTH entries. Without
+    /// serialising the read-modify-persist sequence, a delayed snapshot from
+    /// thread A (taken before B registered) could overwrite the file and drop
+    /// B's entry. The guard makes register+snapshot atomic per op, so the
+    /// final persisted snapshot is the union of every VM's entries.
+    #[test]
+    fn concurrent_different_vm_register_and_snapshot_under_guard_loses_no_entries() {
+        let tmpdir = mktemp_dir();
+        let state_path = tmpdir.join("pidfd-table.json");
+        let table = std::sync::Arc::new(PidfdTable::new(state_path.clone()));
+
+        let mut handles = Vec::new();
+        for vm in ["vm-a", "vm-b", "vm-c", "vm-d"] {
+            let t = std::sync::Arc::clone(&table);
+            handles.push(std::thread::spawn(move || {
+                // Mirror register_node_pidfd's critical section: hold the
+                // mutation guard across register + snapshot.
+                let _g = t.mutation_guard();
+                t.register(
+                    vm.to_owned(),
+                    "swtpm".to_owned(),
+                    PidfdEntry {
+                        pidfd: pipe_owned_fd(),
+                        pid: 4242,
+                        start_time_ticks: 7,
+                    },
+                )
+                .expect("register");
+                t.snapshot().expect("snapshot under guard");
+            }));
+        }
+        for h in handles {
+            h.join().expect("thread join");
+        }
+
+        let bytes = fs::read(&state_path).expect("read final snapshot");
+        let persisted: PersistedPidfdTable =
+            serde_json::from_slice(&bytes).expect("final snapshot is valid JSON");
+        let vms: std::collections::BTreeSet<&str> =
+            persisted.entries.iter().map(|e| e.vm.as_str()).collect();
+        for vm in ["vm-a", "vm-b", "vm-c", "vm-d"] {
+            assert!(vms.contains(vm), "persisted snapshot dropped {vm}: {vms:?}");
+        }
+        assert_eq!(persisted.entries.len(), 4, "no entries lost or duplicated");
     }
 
     fn mktemp_dir() -> PathBuf {

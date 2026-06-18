@@ -872,7 +872,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         id = "swtpm";
         role = "swtpm";
         unit = "nixling-${name}-swtpm.service";
-        readiness = [ (unixSocketExists manifest.tpmSocket) ];
+        readiness = [ (unixSocketListening manifest.tpmSocket) ];
       } // swtpmRunner name))
       ++ shareNodes
       ++ lib.optional (vm.graphics.enable && !vm.graphics.renderNodeOnly) (node name ({

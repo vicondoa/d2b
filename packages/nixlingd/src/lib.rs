@@ -169,6 +169,10 @@ pub mod usbip_state_machine;
 // broker's OpAuditRecord stream (e.g. api-ready timeout).
 pub mod daemon_audit;
 
+/// Accept-loop concurrency primitives: bounded in-flight admission
+/// semaphore + per-VM / global op locks.
+pub mod concurrency;
+
 // ADR 0032: compile-only peer-module skeletons wiring the v2
 // constellation provider/router trait surface. NOT called from the running
 // daemon (zero behavior change); see the module docs.
@@ -182,6 +186,48 @@ pub const DEFAULT_ACCEPTED_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 pub const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/nixling/daemon-state";
 const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 const VM_STOP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default cap on concurrent in-flight connection-handler threads.
+/// Overridable at startup via `NIXLINGD_MAX_INFLIGHT_CONNECTIONS`.
+const DEFAULT_MAX_INFLIGHT_CONNECTIONS: usize = 64;
+/// Write deadline for the typed refusal frame (authz reject / busy) the
+/// accept loop sends before closing — never block the accept loop on a
+/// slow/abusive peer.
+const ACCEPT_REFUSAL_WRITE_DEADLINE: Duration = Duration::from_secs(2);
+/// Read deadline for the initial hello frame, so a connected-but-silent
+/// peer cannot occupy a handler slot indefinitely.
+const HELLO_READ_DEADLINE: Duration = Duration::from_secs(10);
+/// Read deadline for each subsequent request frame on a persistent
+/// connection. A timeout closes the connection gracefully and frees the
+/// handler slot. Cleared before an exec handoff (the exec owner blocks
+/// on the PTY indefinitely).
+const REQUEST_READ_DEADLINE: Duration = Duration::from_secs(60);
+/// Per-`recv` bound for draining a rejected peer's already-buffered input
+/// before the socket is closed. Authz-first / busy refusals are written
+/// BEFORE the peer's hello is read; closing a SEQPACKET socket with unread
+/// input makes the kernel send RST, which the peer observes as a connection
+/// reset instead of cleanly reading the rejection frame. Draining the
+/// pending input first makes the close graceful.
+///
+/// This drain runs on the ACCEPT LOOP (the refusal is decided before a
+/// handler thread is spawned), so the timeout MUST stay short: the refused
+/// peer's hello is already buffered on the SEQPACKET socket, so a
+/// cooperating peer drains in microseconds, and a silent/misbehaving peer is
+/// bounded to a few `recv` timeouts (≈tens of ms) instead of stalling every
+/// other client's `accept()`.
+const REJECTION_DRAIN_DEADLINE: Duration = Duration::from_millis(10);
+
+/// Resolve the in-flight connection cap from the environment, falling
+/// back to [`DEFAULT_MAX_INFLIGHT_CONNECTIONS`]. A value of `0` or an
+/// unparseable value uses the default; the semaphore itself clamps to a
+/// minimum of one.
+fn resolve_max_inflight_connections() -> usize {
+    std::env::var("NIXLINGD_MAX_INFLIGHT_CONNECTIONS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|cap| *cap > 0)
+        .unwrap_or(DEFAULT_MAX_INFLIGHT_CONNECTIONS)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -320,6 +366,14 @@ struct ServerState {
     /// session is a daemon-held authenticated guest-control client owned by a
     /// spawned worker.
     exec_sessions: Arc<exec_session::SessionTable>,
+    /// Bounded admission gate for in-flight connection-handler threads.
+    /// The accept loop performs a non-blocking try-acquire and refuses
+    /// (typed-busy) on a miss rather than ever blocking `accept()`.
+    conn_semaphore: concurrency::ConnSemaphore,
+    /// Per-VM / global in-process op locks. Acquired once on the worker
+    /// thread inside `dispatch_request` so a mutating lifecycle op cannot
+    /// race another op on the same VM (or any per-VM op for a global op).
+    op_locks: concurrency::OpLockManager,
 }
 
 #[cfg_attr(test, derive(Clone))]
@@ -493,6 +547,8 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
             crate::exec_session::ExecSessionCaps::default(),
         )),
+        conn_semaphore: concurrency::ConnSemaphore::new(resolve_max_inflight_connections()),
+        op_locks: crate::concurrency::OpLockManager::new(),
     };
     refresh_broker_reap_log(&state, "startup");
     adopt_orphaned_runners_on_startup(&state);
@@ -654,12 +710,75 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             context: "accept public seqpacket client".to_owned(),
             detail: err.to_string(),
         })?;
-        let result = handle_connection(stream, &state);
-        if let Err(error) = result {
-            eprintln!("{}", error.message());
-        }
+
+        // The `once` test path stays fully synchronous/inline so unit
+        // tests can drive a single connection deterministically.
         if options.once {
+            if let Err(error) = handle_connection(stream, &state, None) {
+                eprintln!("{}", error.message());
+            }
             break;
+        }
+
+        // Authz-first: resolve SO_PEERCRED immediately after accept, before
+        // any blocking frame read, so an unauthorized or silent peer can
+        // neither occupy a handler slot nor stall the accept loop.
+        let peer = match authorize_peer(&stream, &state) {
+            Ok(peer) => peer,
+            Err(error) => {
+                let _ = write_json_frame_deadlined(
+                    &stream,
+                    &wire::hello_rejected(&error),
+                    ACCEPT_REFUSAL_WRITE_DEADLINE,
+                );
+                drain_rejected_peer_input(&stream);
+                eprintln!("{}", error.message());
+                continue;
+            }
+        };
+
+        // Non-blocking admission: never block the accept loop. On a cap
+        // miss refuse immediately with a typed-busy frame (deadlined).
+        let permit = match state.conn_semaphore.try_acquire() {
+            Some(permit) => permit,
+            None => {
+                let busy = TypedError::DaemonBusy;
+                let _ = write_json_frame_deadlined(
+                    &stream,
+                    &wire::error_frame(&busy),
+                    ACCEPT_REFUSAL_WRITE_DEADLINE,
+                );
+                drain_rejected_peer_input(&stream);
+                continue;
+            }
+        };
+
+        // Hand the connection to its own handler thread, moving the RAII
+        // permit in so the in-flight slot is released when the handler —
+        // not the accept loop — finishes. accept() returns immediately.
+        let conn_state = state.clone();
+        if let Err(err) = std::thread::Builder::new()
+            .name("nixling-conn".to_owned())
+            .spawn(move || {
+                // `permit` (and, for an exec session, ownership of it) is
+                // dropped when this handler returns.
+                if let Err(error) =
+                    handle_connection_authorized(stream, &conn_state, peer, Some(permit))
+                {
+                    eprintln!("{}", error.message());
+                }
+            })
+        {
+            // Spawn failure drops the moved closure (and its permit), so
+            // the slot is released; log and keep serving.
+            eprintln!(
+                "{}",
+                TypedError::InternalIo {
+                    context: "spawn connection handler".to_owned(),
+                    detail: err.to_string(),
+                }
+                .message()
+            );
         }
     }
 
@@ -1640,10 +1759,46 @@ mod exec_owner_test_hook {
     }
 }
 
-fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedError> {
-    let hello_bytes = read_frame(&stream)?;
+/// Thin wrapper used by the `options.once` test path and by direct
+/// unit-test callers: authorizes the peer (SO_PEERCRED), then runs the
+/// authorized connection body. The production accept loop authorizes the
+/// peer itself (before admission) and calls
+/// [`handle_connection_authorized`] directly.
+fn handle_connection(
+    stream: Socket,
+    state: &ServerState,
+    permit: Option<concurrency::ConnPermit>,
+) -> Result<(), TypedError> {
     let peer = match authorize_peer(&stream, state) {
         Ok(peer) => peer,
+        Err(error) => {
+            let _ = write_json_frame(&stream, &wire::hello_rejected(&error));
+            // Authz ran before the hello read; drain the unread hello so the
+            // close is graceful and the peer receives the rejection frame.
+            drain_rejected_peer_input(&stream);
+            return Err(error);
+        }
+    };
+    handle_connection_authorized(stream, state, peer, permit)
+}
+
+/// Connection body for an already-authorized peer. Reads the hello frame
+/// (deadlined), negotiates the wire version, then serves requests on a
+/// deadlined per-frame read loop. An attached `Exec::Start` takes over
+/// the connection on a spawned owner thread, moving the admission
+/// `permit` with it so the in-flight slot is held until the exec session
+/// (owner) terminates.
+fn handle_connection_authorized(
+    stream: Socket,
+    state: &ServerState,
+    peer: PeerIdentity,
+    permit: Option<concurrency::ConnPermit>,
+) -> Result<(), TypedError> {
+    // Bound the wait for the initial hello so a connected-but-silent peer
+    // cannot occupy a handler slot indefinitely.
+    set_frame_read_deadline(&stream, Some(HELLO_READ_DEADLINE));
+    let hello_bytes = match read_frame(&stream) {
+        Ok(bytes) => bytes,
         Err(error) => {
             let _ = write_json_frame(&stream, &wire::hello_rejected(&error));
             return Err(error);
@@ -1676,6 +1831,9 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
     write_json_frame(&stream, &hello_ok)?;
 
     loop {
+        // Bound each request read so a half-open / slow-loris peer frees
+        // its handler slot instead of pinning it forever.
+        set_frame_read_deadline(&stream, Some(REQUEST_READ_DEADLINE));
         let frame = match read_frame(&stream) {
             Ok(bytes) => bytes,
             Err(TypedError::InternalIo { .. }) => return Ok(()),
@@ -1694,8 +1852,8 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
         // Exec takes over the connection as the long-lived owner connection.
         // Admin (SO_PEERCRED) is verified here, BEFORE any session work; then
         // the connection + a cheap ServerState clone move to a SPAWNED owner
-        // handler so the serial accept loop is never blocked for the lifetime
-        // of an exec session.
+        // handler. The admission permit moves with it so the in-flight slot
+        // is held for the lifetime of the exec session, not just the read.
         if let wire::Request::Exec(op) = &request {
             if !matches!(peer.role, PeerRole::Admin) {
                 let error = TypedError::AuthzNotAdmin {
@@ -1714,10 +1872,21 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
                 let owner_state = state.clone();
                 let owner_peer = peer.clone();
                 let op = op.clone();
+                // The exec owner blocks on the PTY indefinitely; clear the
+                // request read deadline before handing off the socket.
+                set_frame_read_deadline(&stream, None);
+                let owner_permit = permit;
                 match std::thread::Builder::new()
                     .name("nixling-exec-owner".to_owned())
                     .spawn(move || {
-                        run_exec_owner(stream, owner_state, owner_peer, first_op_id, op);
+                        run_exec_owner(
+                            stream,
+                            owner_state,
+                            owner_peer,
+                            first_op_id,
+                            op,
+                            owner_permit,
+                        );
                     }) {
                     Ok(_) => return Ok(()),
                     Err(err) => {
@@ -1852,6 +2021,26 @@ fn dispatch_request(
             verb: verb.to_owned(),
         });
     }
+    // Acquire the op lock for this verb ONCE, here at the dispatch
+    // boundary on the worker thread (never the accept loop). Read-only
+    // verbs take no lock; per-VM mutating verbs serialize on the VM; a
+    // global verb is mutually exclusive with all per-VM ops. The guard is
+    // held across the whole op (DAG + rollback + cleanup); inner
+    // stop/start helpers invoked by restart/rollback do NOT re-acquire it,
+    // so there is no nested self-deadlock.
+    let _op_lock = state.op_locks.acquire(&request.lock_class());
+    dispatch_request_locked(state, peer, request)
+}
+
+/// Verb dispatch body executed under the op lock already acquired by
+/// [`dispatch_request`]. Restart/rollback paths call the inner
+/// `dispatch_broker_*` helpers directly (never re-entering
+/// `dispatch_request`), so the lock is held exactly once for the op.
+fn dispatch_request_locked(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: wire::Request,
+) -> Result<Value, TypedError> {
     match request {
         wire::Request::List(request) => dispatch_list(state, request),
         wire::Request::Status(request) => dispatch_status(state, request),
@@ -2705,6 +2894,9 @@ fn run_exec_owner(
     peer: PeerIdentity,
     first_op_id: u64,
     first_op: public_wire::ExecOp,
+    // Admission permit held for the lifetime of the exec session so the
+    // in-flight connection slot is released only on owner termination.
+    _conn_permit: Option<concurrency::ConnPermit>,
 ) {
     // Test seam: when an accept-loop test installs the owner-body hook, run it
     // (holding `stream` — and thus the owner session — open for as long as the
@@ -4881,6 +5073,11 @@ impl VmStartRunner<'_> {
         )
         .map_err(|error| error.message())?;
         let role_id = tracked_role_id(node);
+        // Serialize register + snapshot as one unit so a concurrent
+        // different-VM op cannot persist a stale snapshot that drops this
+        // entry (register A, snapshot A reads {A}, register B, snapshot B
+        // writes {A,B}, delayed snapshot A overwrites with {A} — losing B).
+        let _mguard = self.state.pidfd_table.mutation_guard();
         self.state
             .pidfd_table
             .register(
@@ -4897,6 +5094,13 @@ impl VmStartRunner<'_> {
             let _ = self.state.pidfd_table.deregister(vm, &role_id);
             return Err(format!("pidfd-snapshot:{error}"));
         }
+        // The pidfd-table register + snapshot sequence is now complete and
+        // consistent, so release the serialization guard BEFORE
+        // `write_runner_snapshot` (which writes a separate runner-snapshot
+        // file and never touches the pidfd table). Holding it across the
+        // failure path below would self-deadlock: `cleanup_vm_start_registration`
+        // re-acquires this same non-reentrant guard.
+        drop(_mguard);
         if let Err(error) = write_runner_snapshot(
             self.state,
             vm,
@@ -4983,7 +5187,9 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
                 if node.role == ProcessRole::StoreVirtiofsPreflight {
                     self.sync_store_view(vm)?;
                 }
-                wait_for_readiness(node, readiness, budget.readiness)
+                // ReadinessOnly nodes spawn no long-lived runner, so there
+                // is no daemon-held pidfd to observe — no liveness probe.
+                wait_for_readiness(node, readiness, budget.readiness, None)
             }
             VmStartNodeMode::OneShot(runner_role) => {
                 let response = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
@@ -4991,7 +5197,13 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
             }
             VmStartNodeMode::LongLived(runner_role) => {
                 let response = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
-                wait_for_readiness(node, readiness, budget.readiness)?;
+                let liveness = supervisor::readiness_liveness::PidfdLivenessProbe::new(
+                    &self.state.pidfd_table,
+                    &self.state.broker_reap_log,
+                    vm,
+                    tracked_role_id(node),
+                );
+                wait_for_readiness(node, readiness, budget.readiness, Some(&liveness))?;
                 tracing::info!(
                     vm = %vm,
                     node = %node.id.0,
@@ -5030,12 +5242,22 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
 
     async fn probe_api_ready(
         &self,
-        _vm: &str,
+        vm: &str,
         node: &ProcessNode,
         readiness: &[ReadinessPredicate],
         timeout: Duration,
     ) -> supervisor::dag::ApiReadyState {
-        match wait_for_readiness(node, readiness, timeout) {
+        // The split-readiness api-ready phase observes the already-spawned
+        // long-lived runner, so wire in the liveness probe: a runner that
+        // dies before the api-ready socket appears surfaces as an Error
+        // (runner-exited / runner-reused) instead of a full-budget Timeout.
+        let liveness = supervisor::readiness_liveness::PidfdLivenessProbe::new(
+            &self.state.pidfd_table,
+            &self.state.broker_reap_log,
+            vm,
+            tracked_role_id(node),
+        );
+        match wait_for_readiness(node, readiness, timeout, Some(&liveness)) {
             Ok(()) => supervisor::dag::ApiReadyState::Yes,
             Err(error) if error == format!("readiness-timeout:{}", node.id.0) => {
                 supervisor::dag::ApiReadyState::Timeout
@@ -5049,12 +5271,35 @@ fn wait_for_readiness(
     node: &ProcessNode,
     readiness: &[ReadinessPredicate],
     timeout: Duration,
+    liveness: Option<&dyn supervisor::readiness_liveness::LivenessProbe>,
 ) -> Result<(), String> {
+    use supervisor::readiness_liveness::RunnerLiveness;
+
+    // Map a terminal liveness verdict to the fast-fail error string. The
+    // readiness loop returns this immediately instead of blocking to the
+    // readiness deadline when the spawned runner dies (or its PID is
+    // reused) before its readiness signal fires.
+    fn terminal_liveness_error(
+        node: &ProcessNode,
+        liveness: Option<&dyn supervisor::readiness_liveness::LivenessProbe>,
+    ) -> Option<String> {
+        match liveness?.probe() {
+            RunnerLiveness::Exited(_) => Some(format!("runner-exited:{}", node.id.0)),
+            RunnerLiveness::Reused => Some(format!("runner-reused:{}", node.id.0)),
+            RunnerLiveness::Alive | RunnerLiveness::Unknown => None,
+        }
+    }
+
     if readiness.is_empty() {
         return Ok(());
     }
     let deadline = Instant::now() + timeout;
     loop {
+        // Liveness BEFORE readiness: a runner that already exited must
+        // fast-fail rather than spin to the deadline.
+        if let Some(error) = terminal_liveness_error(node, liveness) {
+            return Err(error);
+        }
         let mut all_ready = true;
         for predicate in readiness {
             if !readiness_predicate_ready(predicate)? {
@@ -5063,6 +5308,12 @@ fn wait_for_readiness(
             }
         }
         if all_ready {
+            // Re-confirm liveness BEFORE declaring ready so a stale
+            // listening socket left behind by an exited runner cannot
+            // yield a false-ready.
+            if let Some(error) = terminal_liveness_error(node, liveness) {
+                return Err(error);
+            }
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -5686,6 +5937,7 @@ fn existing_vm_start_response_if_ready(state: &ServerState, vm: &str) -> Option<
 }
 
 fn cleanup_vm_start_registration(state: &ServerState, vm: &str, role_id: &str) {
+    let _mguard = state.pidfd_table.mutation_guard();
     let _ = state.pidfd_table.deregister(vm, role_id);
     if let Err(error) = state.pidfd_table.snapshot() {
         tracing::warn!(vm = %vm, role = %role_id, error = ?error, "failed to persist pidfd table cleanup");
@@ -5729,6 +5981,7 @@ fn rollback_failed_vm_start(
             Duration::from_secs(5),
         )?;
     }
+    let _mguard = state.pidfd_table.mutation_guard();
     if let Err(error) = state.pidfd_table.snapshot() {
         return Err(daemon_failure_response(
             "vm start",
@@ -6950,6 +7203,7 @@ fn dispatch_broker_vm_start(
         readiness: readiness_timeout,
         ..supervisor::dag::NodeBudget::default()
     };
+    let dag_start = Instant::now();
     let report = match block_on_future(
         supervisor::dag::DagExecutor::with_budget(runner, budget).run_split(
             dag,
@@ -7119,10 +7373,164 @@ fn dispatch_broker_vm_start(
         }
         return Ok(response);
     }
+    // Detect the runner-exited / runner-reused fast-fail BEFORE rollback
+    // tears the runner down, so we can peek the buffered broker exit
+    // status and emit a bounded audit event + an actionable, swtpm-aware
+    // failure envelope (broker-error exit contract, not exit 1).
+    let runner_exit = detect_runner_exit_failure(&report, dag);
+    let runner_exit_response = runner_exit.map(|(role_id, reason_kind)| {
+        let exit_status = state
+            .broker_reap_log
+            .peek_for(&request.vm, &role_id)
+            .map(|notif| notif.exit_status);
+        let elapsed_ms = u64::try_from(dag_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        emit_vm_start_runner_exited_audit(
+            state,
+            &request.vm,
+            &role_id,
+            reason_kind,
+            exit_status.as_ref(),
+            elapsed_ms,
+        );
+        vm_start_runner_exited_response(&request.vm, &role_id, reason_kind, exit_status.as_ref())
+    });
     if let Err(response) = rollback_failed_vm_start(state, &request.vm, &tracked_roles) {
         return Ok(response);
     }
+    if let Some(response) = runner_exit_response {
+        return Ok(response);
+    }
     Ok(vm_start_failure_response(&report))
+}
+
+/// Scan the DAG run report for the first node that fast-failed because
+/// its spawned runner exited (or its PID was reused) before readiness.
+/// Returns the runner's tracked `role_id` and the closed reason kind.
+fn detect_runner_exit_failure(
+    report: &supervisor::dag::DagRunReport,
+    dag: &nixling_core::processes::VmProcessDag,
+) -> Option<(String, daemon_audit::VmStartRunnerExitReason)> {
+    for entry in &report.history {
+        let supervisor::dag::NodeOutcome::Failed { reason } = &entry.outcome else {
+            continue;
+        };
+        let (reason_kind, marker) = if reason.contains("runner-exited:") {
+            (
+                daemon_audit::VmStartRunnerExitReason::RunnerExited,
+                "runner-exited:",
+            )
+        } else if reason.contains("runner-reused:") {
+            (
+                daemon_audit::VmStartRunnerExitReason::RunnerReused,
+                "runner-reused:",
+            )
+        } else {
+            continue;
+        };
+        let node_id = reason.rsplit(marker).next().unwrap_or("").trim();
+        let role_id = dag
+            .nodes
+            .iter()
+            .find(|node| node.id.0 == node_id)
+            .map(tracked_role_id)
+            .unwrap_or_else(|| node_id.to_owned());
+        return Some((role_id, reason_kind));
+    }
+    None
+}
+
+/// Bounded, closed-vocabulary cause phrase for a runner exit. Carries no
+/// path, pid, or free-form node-reason text.
+fn bounded_runner_exit_cause(
+    reason_kind: daemon_audit::VmStartRunnerExitReason,
+    status: Option<&nixling_ipc::broker_wire::ChildExitStatus>,
+) -> String {
+    use nixling_ipc::broker_wire::ChildExitKind;
+    if matches!(
+        reason_kind,
+        daemon_audit::VmStartRunnerExitReason::RunnerReused
+    ) {
+        return "PID reused by another process".to_owned();
+    }
+    match status {
+        Some(status) => match status.kind {
+            ChildExitKind::Exited => match status.code {
+                Some(code) => format!("exit code {code}"),
+                None => "exited".to_owned(),
+            },
+            ChildExitKind::Signaled => match status.signal {
+                Some(signal) => format!("terminated by signal {signal}"),
+                None => "terminated by signal".to_owned(),
+            },
+            ChildExitKind::Killed => match status.signal {
+                Some(signal) => format!("killed by signal {signal}"),
+                None => "killed".to_owned(),
+            },
+        },
+        None => "exited before readiness".to_owned(),
+    }
+}
+
+/// Build the actionable, swtpm-aware failure envelope for a runner-exited
+/// fast-fail. Maps to the broker-error outcome (the broker-error exit
+/// contract), NOT exit 1.
+fn vm_start_runner_exited_response(
+    vm: &str,
+    role_id: &str,
+    reason_kind: daemon_audit::VmStartRunnerExitReason,
+    status: Option<&nixling_ipc::broker_wire::ChildExitStatus>,
+) -> Value {
+    let cause = bounded_runner_exit_cause(reason_kind, status);
+    let verb_word = match reason_kind {
+        daemon_audit::VmStartRunnerExitReason::RunnerExited => "exited",
+        daemon_audit::VmStartRunnerExitReason::RunnerReused => "was replaced (PID reused)",
+    };
+    let summary =
+        format!("vm start {vm}: runner '{role_id}' {verb_word} before readiness ({cause})");
+    let remediation = format!(
+        "The '{role_id}' runner {verb_word} before its readiness signal fired ({cause}). \
+         If this is the swtpm (per-VM TPM) runner, the TPM state must not be wiped: \
+         clearing /var/lib/nixling/vms/{vm}/swtpm looks like device tampering to your \
+         identity provider and forces re-enrollment. Admin: inspect \
+         `journalctl -u nixlingd` and `journalctl -u nixling-priv-broker` for the \
+         swtpm exit detail before retrying `nixling vm up {vm}`."
+    );
+    broker_failure_response("vm start", summary, remediation, None)
+}
+
+/// Emit the bounded `VmStartRunnerExited` daemon audit event. Best-effort:
+/// an audit write failure is logged but never aborts the vm-start path.
+fn emit_vm_start_runner_exited_audit(
+    state: &ServerState,
+    vm: &str,
+    role_id: &str,
+    reason_kind: daemon_audit::VmStartRunnerExitReason,
+    status: Option<&nixling_ipc::broker_wire::ChildExitStatus>,
+    elapsed_ms: u64,
+) {
+    use nixling_ipc::broker_wire::ChildExitKind;
+    let exit_kind = status.map(|status| match status.kind {
+        ChildExitKind::Exited => daemon_audit::RunnerExitKind::Exited,
+        ChildExitKind::Signaled => daemon_audit::RunnerExitKind::Signaled,
+        ChildExitKind::Killed => daemon_audit::RunnerExitKind::Killed,
+    });
+    let event = daemon_audit::DaemonEvent::VmStartRunnerExited {
+        vm: vm.to_owned(),
+        role_id: role_id.to_owned(),
+        reason_kind,
+        exit_kind,
+        exit_code: status.and_then(|status| status.code),
+        exit_signal: status.and_then(|status| status.signal),
+        elapsed_ms,
+    };
+    if let Err(error) = state.daemon_audit.write_event(&event) {
+        tracing::warn!(
+            vm = %vm,
+            role_id = %role_id,
+            error = %error,
+            "vm start: failed to write VmStartRunnerExited audit event (non-fatal)",
+        );
+    }
 }
 
 /// Production implementation of
@@ -7239,6 +7647,7 @@ fn dispatch_broker_vm_stop_with_timeout_as(
         }
     }
 
+    let _mguard = state.pidfd_table.mutation_guard();
     if let Err(error) = state.pidfd_table.snapshot() {
         tracing::warn!(vm = %request.vm, error = ?error, "pidfd_table snapshot failed after draining sidecars");
         return Ok(daemon_failure_response(
@@ -8437,6 +8846,8 @@ mod public_status_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         };
         (state, dir)
     }
@@ -9113,6 +9524,49 @@ where
     write_frame(socket, &bytes)
 }
 
+/// Set (or clear, with `None`) the read timeout on a connection socket.
+/// Best-effort: a failure to set the deadline is non-fatal (the read
+/// simply blocks as before). Used to bound hello/request frame reads so
+/// a silent or slow-loris peer cannot pin a handler slot, and to CLEAR
+/// the deadline before handing the socket to a blocking exec owner.
+fn set_frame_read_deadline(socket: &Socket, deadline: Option<Duration>) {
+    let _ = socket.set_read_timeout(deadline);
+}
+
+/// Write a JSON frame with a bounded write deadline, used for the
+/// accept-loop refusal frames (authz reject / typed-busy) so the accept
+/// loop never blocks on a peer that will not read. The deadline is
+/// best-effort and the socket is closed by the caller afterwards.
+fn write_json_frame_deadlined<T>(
+    socket: &Socket,
+    value: &T,
+    deadline: Duration,
+) -> Result<(), TypedError>
+where
+    T: Serialize,
+{
+    let _ = socket.set_write_timeout(Some(deadline));
+    write_json_frame(socket, value)
+}
+
+/// Drain a rejected peer's already-buffered input before the socket is
+/// closed. Authz-first and busy refusals write the rejection frame BEFORE
+/// the peer's hello has been read; closing a `SOCK_SEQPACKET` socket while
+/// input remains unread makes the kernel send RST, which the peer sees as a
+/// connection reset (ECONNRESET) instead of cleanly reading the rejection.
+/// Consuming the pending input first lets the close be graceful so the
+/// rejection is delivered. Bounded by a short read deadline; the loop stops
+/// at EOF, an error (incl. timeout), or after a few frames.
+fn drain_rejected_peer_input(socket: &Socket) {
+    let _ = socket.set_read_timeout(Some(REJECTION_DRAIN_DEADLINE));
+    for _ in 0..4 {
+        match read_frame(socket) {
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
+}
+
 fn write_frame(socket: &impl AsRawFd, body: &[u8]) -> Result<(), TypedError> {
     if body.len() > wire::MAX_FRAME_SIZE {
         return Err(TypedError::WireFrameTooLarge {
@@ -9614,6 +10068,8 @@ mod detached_exec_routing_tests {
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
             exec_sessions: Arc::new(exec_session::SessionTable::new(caps)),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         }
     }
 
@@ -9737,6 +10193,7 @@ mod detached_exec_routing_tests {
                 admin_peer(),
                 77,
                 detached_start("SENTINEL_ARGV"),
+                None,
             );
         });
 
@@ -9786,7 +10243,7 @@ mod detached_exec_routing_tests {
         }));
         let (daemon, client) = seqpacket_pair();
         let run_state = state.clone();
-        let handle = std::thread::spawn(move || handle_connection(daemon, &run_state));
+        let handle = std::thread::spawn(move || handle_connection(daemon, &run_state, None));
 
         write_frame(&client, &hello_frame()).expect("client sends hello");
         let hello_ok = recv_reply(&client);
@@ -10276,8 +10733,17 @@ mod accept_loop_concurrency_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         };
         (state, dir)
+    }
+
+    fn admin_peer_identity() -> PeerIdentity {
+        PeerIdentity {
+            role: PeerRole::Admin,
+            uid: 4242,
+        }
     }
 
     fn hello_frame() -> Vec<u8> {
@@ -10322,6 +10788,22 @@ mod accept_loop_concurrency_tests {
                 uid: 4242,
                 gid: 4242,
                 username: Some("execadmin".to_owned()),
+                groups: Some(Vec::new()),
+            });
+            Self { _lock: lock }
+        }
+
+        /// A peer whose username is in neither `launcher_users` nor
+        /// `admin_users`, so `authorize_peer` rejects it with
+        /// `AuthzNotALauncher` before any frame is read.
+        fn denied() -> Self {
+            let lock = TEST_PEER_OVERRIDE_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = Some(PeerOverride {
+                uid: 9999,
+                gid: 9999,
+                username: Some("nobody-unlisted".to_owned()),
                 groups: Some(Vec::new()),
             });
             Self { _lock: lock }
@@ -10396,7 +10878,7 @@ mod accept_loop_concurrency_tests {
         let state_a = Arc::clone(&state);
         let (done_tx, done_rx) = mpsc::channel();
         let handle_a = std::thread::spawn(move || {
-            let result = handle_connection(server_a, &state_a);
+            let result = handle_connection(server_a, &state_a, None);
             let _ = done_tx.send(result.is_ok());
         });
 
@@ -10463,7 +10945,7 @@ mod accept_loop_concurrency_tests {
             response
         });
 
-        let result_b = handle_connection(server_b, &state);
+        let result_b = handle_connection(server_b, &state, None);
         assert!(
             result_b.is_ok(),
             "the second connection must be served while the exec owner is held \
@@ -10489,6 +10971,151 @@ mod accept_loop_concurrency_tests {
 
         // Connection A's owner session is torn down with its client end.
         drop(client_a);
+    }
+
+    /// fix2b: SO_PEERCRED authorization runs in `handle_connection` BEFORE the
+    /// hello frame is read. A denied peer that never sends a hello must still
+    /// be rejected promptly (it cannot stall a handler waiting on a read), and
+    /// the rejection is the typed `AuthzNotALauncher` envelope.
+    #[test]
+    fn unauthorized_peer_is_rejected_before_reading_hello() {
+        let _env = PeerOverrideEnv::denied();
+        let (state, _state_dir) = admin_exec_state();
+
+        let (server, client) = seqpacket_pair();
+        // The client deliberately sends NO hello frame. If authz ran after the
+        // read, the handler would block here; authz-first returns promptly.
+        let (tx, rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let result = handle_connection(server, &state, None);
+            let _ = tx.send(result);
+        });
+
+        let outcome = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("handle_connection must reject the peer before any read");
+        assert!(
+            matches!(outcome, Err(TypedError::AuthzNotALauncher { .. })),
+            "unauthorized peer must be rejected with AuthzNotALauncher, got {outcome:?}"
+        );
+
+        // The handler also wrote a helloRejected frame the client can observe.
+        let frame = read_frame(&client).expect("client reads rejection frame");
+        let value: serde_json::Value =
+            serde_json::from_slice(&frame).expect("rejection frame is JSON");
+        assert_eq!(value["type"], "helloRejected");
+        handle.join().expect("handler thread joins");
+        drop(client);
+    }
+
+    /// fix2b: the admission permit moved into a handler is released when the
+    /// handler returns, on BOTH the success path (clean EOF) and the error
+    /// path (malformed hello). After each handler returns the in-flight count
+    /// drops back to zero, so a refused slot is never leaked.
+    #[test]
+    fn admission_permit_is_released_on_handler_success_and_error() {
+        let _env = PeerOverrideEnv::admin();
+        let (state, _state_dir) = admin_exec_state();
+        assert_eq!(state.conn_semaphore.in_flight(), 0);
+
+        // --- Success path: hello, helloOk read by client, then EOF. The
+        //     handler runs on a worker thread; a client thread reads the
+        //     helloOk frame then closes, so the request-loop read sees a clean
+        //     EOF and the handler returns Ok. ---
+        {
+            let permit = state
+                .conn_semaphore
+                .try_acquire()
+                .expect("cap admits first permit");
+            assert_eq!(state.conn_semaphore.in_flight(), 1);
+            let (server, client) = seqpacket_pair();
+            std::thread::scope(|scope| {
+                let client_thread = scope.spawn(move || {
+                    write_frame(&client, &hello_frame()).expect("send hello");
+                    let frame = read_frame(&client).expect("client reads helloOk");
+                    let value: serde_json::Value =
+                        serde_json::from_slice(&frame).expect("helloOk is JSON");
+                    assert_eq!(value["type"], "helloOk");
+                    // Drop the client end -> the handler's next read sees EOF.
+                    drop(client);
+                });
+                let result = handle_connection_authorized(
+                    server,
+                    &state,
+                    admin_peer_identity(),
+                    Some(permit),
+                );
+                client_thread.join().expect("client thread joins");
+                assert!(result.is_ok(), "clean EOF handler returns Ok: {result:?}");
+            });
+            assert_eq!(
+                state.conn_semaphore.in_flight(),
+                0,
+                "permit released after success"
+            );
+        }
+
+        // --- Error path: a malformed hello -> handler returns Err. ---
+        {
+            let permit = state
+                .conn_semaphore
+                .try_acquire()
+                .expect("cap admits permit again");
+            assert_eq!(state.conn_semaphore.in_flight(), 1);
+            let (server, client) = seqpacket_pair();
+            write_frame(&client, b"{not valid json").expect("send malformed hello");
+            let result =
+                handle_connection_authorized(server, &state, admin_peer_identity(), Some(permit));
+            assert!(result.is_err(), "malformed hello handler returns Err");
+            drop(client);
+            assert_eq!(
+                state.conn_semaphore.in_flight(),
+                0,
+                "permit released after error"
+            );
+        }
+    }
+
+    /// fix2b: when the in-flight cap is saturated the accept loop refuses the
+    /// connection with the typed `DaemonBusy` envelope. The refusal is
+    /// non-fatal to the daemon (it maps to the broker-error exit contract, not
+    /// exit 1) and carries the stable `daemon-busy` kind.
+    #[test]
+    fn daemon_busy_refusal_frame_is_typed_and_nonfatal() {
+        let busy = TypedError::DaemonBusy;
+        let frame = wire::error_frame(&busy);
+        let value = serde_json::to_value(&frame).expect("encode busy frame");
+        assert_eq!(value["type"], "error");
+        assert_eq!(
+            value["error"]["kind"], "daemon-busy",
+            "busy refusal carries the stable daemon-busy kind"
+        );
+        assert_eq!(
+            busy.exit_code(),
+            75,
+            "DaemonBusy maps to the broker-error exit contract, not exit 1"
+        );
+    }
+
+    /// fix2b: a saturated semaphore refuses further admissions with `None`
+    /// (non-blocking), and a released permit re-opens a slot. This is the
+    /// admission decision the accept loop makes before spawning a handler.
+    #[test]
+    fn semaphore_refuses_at_cap_then_readmits_after_release() {
+        let sem = crate::concurrency::ConnSemaphore::new(2);
+        let p1 = sem.try_acquire().expect("first admit");
+        let p2 = sem.try_acquire().expect("second admit");
+        assert_eq!(sem.in_flight(), 2);
+        assert!(
+            sem.try_acquire().is_none(),
+            "cap-hit must refuse without blocking"
+        );
+        drop(p1);
+        let p3 = sem.try_acquire().expect("slot reopened after release");
+        assert_eq!(sem.in_flight(), 2);
+        drop(p2);
+        drop(p3);
+        assert_eq!(sem.in_flight(), 0);
     }
 }
 
@@ -10609,6 +11236,8 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         }
     }
 
@@ -10636,6 +11265,8 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         }
     }
 
@@ -11958,6 +12589,8 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -12170,6 +12803,8 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         };
 
         let listener = socket(
@@ -12411,6 +13046,8 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
@@ -13758,6 +14395,8 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         };
 
         // Emit the same event that the timeout handler in
@@ -13899,6 +14538,245 @@ mod broker_dispatch_tests {
         );
     }
 
+    // --- fix2a: readiness-loop liveness fast-fail ( W1 ) -----------------
+
+    /// Scripted observe-only liveness fake driving the readiness loop
+    /// through the same call site as production. Pops the next scripted
+    /// verdict each call; repeats the last verdict once exhausted.
+    struct ScriptedLivenessProbe {
+        inner: std::sync::Mutex<(
+            std::collections::VecDeque<super::supervisor::readiness_liveness::RunnerLiveness>,
+            super::supervisor::readiness_liveness::RunnerLiveness,
+        )>,
+    }
+
+    impl ScriptedLivenessProbe {
+        fn always(verdict: super::supervisor::readiness_liveness::RunnerLiveness) -> Self {
+            Self {
+                inner: std::sync::Mutex::new((std::collections::VecDeque::new(), verdict)),
+            }
+        }
+    }
+
+    impl super::supervisor::readiness_liveness::LivenessProbe for ScriptedLivenessProbe {
+        fn probe(&self) -> super::supervisor::readiness_liveness::RunnerLiveness {
+            let mut guard = self.inner.lock().expect("scripted liveness mutex");
+            if let Some(verdict) = guard.0.pop_front() {
+                guard.1 = verdict.clone();
+                verdict
+            } else {
+                guard.1.clone()
+            }
+        }
+    }
+
+    fn readiness_test_node() -> nixling_core::processes::ProcessNode {
+        use nixling_core::processes::{NodeId, ProcessNode, ProcessRole};
+        ProcessNode {
+            id: NodeId("swtpm".to_owned()),
+            role: ProcessRole::Swtpm,
+            unit: None,
+            binary_path: None,
+            argv: vec![],
+            env: vec![],
+            plan_ops: vec![],
+            profile: nixling_core::test_support::RoleProfileBuilder::new()
+                .with_profile_id("swtpm")
+                .with_uid(0)
+                .with_gid(0)
+                .build(),
+            readiness: vec![],
+        }
+    }
+
+    #[test]
+    fn wait_for_readiness_alive_and_ready_is_ok() {
+        use super::supervisor::readiness_liveness::RunnerLiveness;
+        use nixling_core::processes::ReadinessPredicate;
+
+        let node = readiness_test_node();
+        // ComponentSpecific is trivially ready; Alive liveness lets it pass.
+        let ready = vec![ReadinessPredicate::ComponentSpecific("x".to_owned())];
+        let probe = ScriptedLivenessProbe::always(RunnerLiveness::Alive);
+        let result = super::wait_for_readiness(&node, &ready, Duration::from_secs(5), Some(&probe));
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn wait_for_readiness_alive_but_unready_polls_to_timeout() {
+        use super::supervisor::readiness_liveness::RunnerLiveness;
+        use nixling_core::processes::ReadinessPredicate;
+
+        let node = readiness_test_node();
+        // A socket that never exists keeps the predicate false; Alive
+        // liveness means we poll until the (tiny) deadline elapses.
+        let unready = vec![ReadinessPredicate::UnixSocketExists(
+            "/nonexistent/nixling-readiness-test.sock".to_owned(),
+        )];
+        let probe = ScriptedLivenessProbe::always(RunnerLiveness::Alive);
+        let result =
+            super::wait_for_readiness(&node, &unready, Duration::from_millis(50), Some(&probe));
+        assert_eq!(result, Err("readiness-timeout:swtpm".to_owned()));
+    }
+
+    #[test]
+    fn wait_for_readiness_exited_fast_fails_before_deadline() {
+        use super::supervisor::readiness_liveness::RunnerLiveness;
+        use nixling_core::processes::ReadinessPredicate;
+
+        let node = readiness_test_node();
+        let unready = vec![ReadinessPredicate::UnixSocketExists(
+            "/nonexistent/nixling-readiness-test.sock".to_owned(),
+        )];
+        // Exited liveness short-circuits at the top of the loop. A long
+        // deadline proves the fast-fail does NOT wait for the budget.
+        let probe = ScriptedLivenessProbe::always(RunnerLiveness::Exited(None));
+        let started = Instant::now();
+        let result =
+            super::wait_for_readiness(&node, &unready, Duration::from_secs(300), Some(&probe));
+        assert_eq!(result, Err("runner-exited:swtpm".to_owned()));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "runner-exited must fast-fail, not block to the 300s readiness budget"
+        );
+    }
+
+    #[test]
+    fn wait_for_readiness_reused_fast_fails() {
+        use super::supervisor::readiness_liveness::RunnerLiveness;
+        use nixling_core::processes::ReadinessPredicate;
+
+        let node = readiness_test_node();
+        let unready = vec![ReadinessPredicate::UnixSocketExists(
+            "/nonexistent/nixling-readiness-test.sock".to_owned(),
+        )];
+        let probe = ScriptedLivenessProbe::always(RunnerLiveness::Reused);
+        let result =
+            super::wait_for_readiness(&node, &unready, Duration::from_secs(300), Some(&probe));
+        assert_eq!(result, Err("runner-reused:swtpm".to_owned()));
+    }
+
+    #[test]
+    fn wait_for_readiness_stale_listening_socket_not_false_ready() {
+        use super::supervisor::readiness_liveness::RunnerLiveness;
+        use nixling_core::processes::ReadinessPredicate;
+
+        let node = readiness_test_node();
+        // The predicate reports ready (stale listening socket), but the
+        // runner has exited — the liveness re-check must veto false-ready.
+        let ready = vec![ReadinessPredicate::ComponentSpecific("x".to_owned())];
+        let probe = ScriptedLivenessProbe::always(RunnerLiveness::Exited(None));
+        let result =
+            super::wait_for_readiness(&node, &ready, Duration::from_secs(300), Some(&probe));
+        assert_eq!(
+            result,
+            Err("runner-exited:swtpm".to_owned()),
+            "a stale listening socket must not yield false-ready when the runner has exited"
+        );
+    }
+
+    #[test]
+    fn wait_for_readiness_unknown_liveness_keeps_polling() {
+        use super::supervisor::readiness_liveness::RunnerLiveness;
+        use nixling_core::processes::ReadinessPredicate;
+
+        let node = readiness_test_node();
+        let unready = vec![ReadinessPredicate::UnixSocketExists(
+            "/nonexistent/nixling-readiness-test.sock".to_owned(),
+        )];
+        // Unknown is non-terminal: the loop keeps polling to the deadline.
+        let probe = ScriptedLivenessProbe::always(RunnerLiveness::Unknown);
+        let result =
+            super::wait_for_readiness(&node, &unready, Duration::from_millis(50), Some(&probe));
+        assert_eq!(result, Err("readiness-timeout:swtpm".to_owned()));
+    }
+
+    #[test]
+    fn vm_start_runner_exited_response_is_broker_error_with_swtpm_remediation() {
+        use nixling_ipc::broker_wire::{ChildExitKind, ChildExitStatus};
+
+        let status = ChildExitStatus {
+            kind: ChildExitKind::Exited,
+            code: Some(1),
+            signal: None,
+        };
+        let value = super::vm_start_runner_exited_response(
+            "work",
+            "swtpm",
+            super::daemon_audit::VmStartRunnerExitReason::RunnerExited,
+            Some(&status),
+        );
+        assert_eq!(
+            super::response_outcome(&value),
+            Some("broker-error"),
+            "runner-exited maps to the broker-error exit contract, not exit 1"
+        );
+        let remediation = super::response_remediation(&value).unwrap_or_default();
+        assert!(remediation.contains("swtpm"), "remediation names swtpm");
+        assert!(
+            remediation.contains("must not be wiped"),
+            "remediation warns the TPM state must not be wiped"
+        );
+        assert!(
+            remediation.contains("exit code 1"),
+            "remediation carries the bounded underlying cause"
+        );
+    }
+
+    #[test]
+    fn detect_runner_exit_failure_extracts_role_from_reason() {
+        use nixling_core::processes::{
+            NodeId, ProcessNode, ProcessRole, VmProcessDag, VmProcessInvariants,
+        };
+
+        let node = ProcessNode {
+            id: NodeId("swtpm-node".to_owned()),
+            role: ProcessRole::Swtpm,
+            unit: None,
+            binary_path: None,
+            argv: vec![],
+            env: vec![],
+            plan_ops: vec![],
+            profile: nixling_core::test_support::RoleProfileBuilder::new()
+                .with_profile_id("swtpm")
+                .with_uid(0)
+                .with_gid(0)
+                .build(),
+            readiness: vec![],
+        };
+        let dag = VmProcessDag {
+            vm: "work".to_owned(),
+            nodes: vec![node],
+            edges: vec![],
+            invariants: VmProcessInvariants {
+                swtpm_pre_start_flush: false,
+                per_vm_audit_pipeline: true,
+                usbip_gating: false,
+                tpm_ownership_migration_without_running_vm_mutation: false,
+            },
+        };
+        let report = super::supervisor::dag::DagRunReport {
+            vm: "work".to_owned(),
+            history: vec![super::supervisor::dag::NodeHistory {
+                node_id: NodeId("swtpm-node".to_owned()),
+                outcome: super::supervisor::dag::NodeOutcome::Failed {
+                    reason: "runner-exited:swtpm-node".to_owned(),
+                },
+            }],
+            overall_ok: false,
+            api_ready: None,
+        };
+        let detected = super::detect_runner_exit_failure(&report, &dag);
+        assert_eq!(
+            detected,
+            Some((
+                "swtpm-node".to_owned(),
+                super::daemon_audit::VmStartRunnerExitReason::RunnerExited
+            )),
+            "the swtpm node id maps to its tracked role id and runner-exited kind"
+        );
+    }
+
     #[test]
     fn guest_control_health_is_readiness_only_node_mode() {
         use super::{VmStartNodeMode, vm_start_node_mode};
@@ -13944,7 +14822,7 @@ mod broker_dispatch_tests {
         // `wait_for_readiness`, an absent/auth-failing guest-control
         // listener would be reported "ready" with NO authenticated probe.
         assert_eq!(
-            wait_for_readiness(&node, &[], Duration::from_millis(0)),
+            wait_for_readiness(&node, &[], Duration::from_millis(0), None),
             Ok(()),
             "empty readiness is trivially ready; the authenticated probe \
              must be reached via the GuestControlHealth interception, never \

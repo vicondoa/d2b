@@ -59,7 +59,7 @@ Both layers carry a dedicated unit test:
 
 | Path (relative to `/var/lib/nixling/vms/<vm>/`) | Owner | Group | Mode | Kind | Required | Recursive | Rationale |
 |---|---|---|---|---|---|---|---|
-| `.` | `nixlingd` | `users` | `2770` | dir | yes | false | Per-VM state root. `setgid` so role users (runner / gpu / swtpm) inherit the group on files they create. |
+| `.` | `nixlingd` | `users` | `3770` | dir | yes | false | Per-VM state root. `setgid` so role users (runner / gpu / swtpm) inherit the group on files they create; `sticky` (`+t`) so a role UID (which holds rwx via POSIX ACL) cannot rename/unlink entries it does not own — notably the principal-owned `swtpm` NVRAM dir (issue #64). |
 | `state` | `nixlingd` | `nixling` | `0750` | dir | yes | false | Daemon-owned per-VM state (`audio-state.json`, etc.). |
 | `swtpm` | `nixling-<vm>-swtpm` | `nixling-<vm>-swtpm` | `0700` | dir | yes | false | **CRITICAL SUBSYSTEM** (AGENTS.md): per-VM TPM 2.0 NVRAM. Wiping or rechowning this directory looks like device tampering to any IdP (Entra ID / Intune / BitLocker-class policies) and forces re-enrollment. Owned by the per-VM swtpm runner principal. |
 | `sshd-host-keys` | `nixlingd` | `nixling` | `0750` | dir | yes | false | Container for per-VM sshd host keys. The daemon refuses to start the VM if any leaf has drifted (see [ssh-host-key-preflight.md](./ssh-host-key-preflight.md)). |

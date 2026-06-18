@@ -87,6 +87,14 @@ pub enum LiveHandlerError {
     /// NetworkManager reload failure after writing the unmanaged config
     /// snippet.
     NmReload(String),
+    /// swtpm-dir first-run hardening (issue #64) refused to proceed.
+    /// Carries the path-free [`SwtpmDirAudit`] (with `result ==
+    /// FailedClosed`) so the dispatch layer can emit the terminal
+    /// `PrepareSwtpmDir` audit record on the fail-closed path.
+    SwtpmDirHardening {
+        audit: crate::ops::audit_op::SwtpmDirAudit,
+        reason: &'static str,
+    },
 }
 
 impl std::fmt::Display for LiveHandlerError {
@@ -116,6 +124,10 @@ impl std::fmt::Display for LiveHandlerError {
             Self::KeysRotate(detail) => write!(f, "keys rotate: {detail}"),
             Self::HostKey(detail) => write!(f, "host key: {detail}"),
             Self::NmReload(detail) => write!(f, "networkmanager reload: {detail}"),
+            Self::SwtpmDirHardening { reason, .. } => {
+                // PATH-FREE: only the closed-set reason slug.
+                write!(f, "swtpm-dir hardening failed: {reason}")
+            }
         }
     }
 }
@@ -1376,6 +1388,10 @@ pub struct SpawnRunnerResult {
     /// instead of the preferred `clone3(CLONE_PIDFD)`. Used for
     /// audit-record bookkeeping.
     pub used_fork_fallback: bool,
+    /// Path-free swtpm-dir hardening audit (issue #64), present only
+    /// for the `w1-swtpm` role. The dispatch layer emits a terminal
+    /// `PrepareSwtpmDir` `OpAuditRecord` from this on the success path.
+    pub swtpm_dir_audit: Option<crate::ops::audit_op::SwtpmDirAudit>,
 }
 
 fn parse_runner_cgroup_subtree(
@@ -2694,6 +2710,14 @@ pub fn live_spawn_runner(
     let seccomp_program = load_runner_seccomp(&plan)?;
     let cgroup_procs_fd = prepare_runner_cgroup_fd(&plan.cgroup_placement)?;
     refresh_spawn_runner_acls(&plan)?;
+
+    // swtpm-dir first-run hardening (issue #64). Gated on the
+    // `w1-swtpm` role and run BEFORE clone3 so the persistent TPM2
+    // NVRAM dir is provisioned + identity-bound (or fails closed)
+    // before swtpm — which opens the NVRAM by pathname under its user
+    // namespace — is ever spawned. ONLY the persistent state dir is
+    // touched; the `/run` runtime-socket-dir posture is left intact.
+    let swtpm_dir_audit = maybe_harden_swtpm_dir(&plan)?;
     let api_socket_acl_path = cloud_hypervisor_api_socket(&plan);
 
     // Pre-open /dev/dri/renderD128 for gpu-render-node broker-pre-NS
@@ -2782,7 +2806,59 @@ pub fn live_spawn_runner(
         pid: outcome.pid,
         start_time_ticks,
         used_fork_fallback: outcome.used_fork_fallback,
+        swtpm_dir_audit,
     })
+}
+
+/// Run the swtpm-dir first-run hardening step for the `w1-swtpm` role.
+/// Returns `Ok(None)` for every other role (no-op), `Ok(Some(audit))`
+/// on success, and a path-free [`LiveHandlerError::SwtpmDirHardening`]
+/// on fail-closed so the dispatch layer can emit the terminal
+/// `PrepareSwtpmDir` record from the carried audit.
+fn maybe_harden_swtpm_dir(
+    plan: &SpawnRunnerPlan,
+) -> Result<Option<crate::ops::audit_op::SwtpmDirAudit>, LiveHandlerError> {
+    if plan.seccomp_policy_ref.as_deref() != Some("w1-swtpm") {
+        return Ok(None);
+    }
+    let paths = crate::ops::swtpm_dir::derive_paths(plan).map_err(|reason| {
+        LiveHandlerError::SwtpmDirHardening {
+            audit: crate::ops::swtpm_dir::SwtpmHardenError {
+                reason,
+                audit: crate::ops::audit_op::SwtpmDirAudit {
+                    vm_id: String::new(),
+                    base_dir_hash: String::new(),
+                    result: crate::ops::audit_op::SwtpmDirResult::FailedClosed,
+                    mode: 0o700,
+                    owner_uid: plan.uid,
+                    owner_gid: plan.gid,
+                    marker_result: crate::ops::audit_op::SwtpmMarkerResult::FailedClosed,
+                    fail_reason: Some(reason.to_owned()),
+                },
+            }
+            .audit,
+            reason,
+        }
+    })?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let cfg = crate::ops::swtpm_dir::SwtpmHardenConfig {
+        expected_uid: plan.uid,
+        expected_gid: plan.gid,
+        marker_owner_uid: 0,
+        marker_owner_gid: 0,
+        now_ms,
+        enforce_root_parents: true,
+    };
+    match crate::ops::swtpm_dir::harden(&paths, &cfg) {
+        Ok(audit) => Ok(Some(audit)),
+        Err(err) => Err(LiveHandlerError::SwtpmDirHardening {
+            audit: err.audit,
+            reason: err.reason,
+        }),
+    }
 }
 
 #[cfg(test)]

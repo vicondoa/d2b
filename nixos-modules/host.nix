@@ -457,6 +457,6 @@ in
   # Every enabled VM gets a host-owned Cloud Hypervisor base vsock socket,
   # so every per-VM state dir must exist before CH binds `.../vsock.sock`.
   ++ map
-    (name: "d ${vmStateDir name} 2770 microvm kvm -")
+    (name: "d ${vmStateDir name} 3770 microvm kvm -")
     vsockStateDirVmNames;
 }

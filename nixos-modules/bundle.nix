@@ -68,7 +68,7 @@ let
   # presence of this field; the resolver nullifies it before comparing.
   dataWithoutHash = {
     artifactHashes = null;
-    bundleVersion = 4;
+    bundleVersion = 5;
     schemaVersion = "v2";
     publicManifestPath = "/run/current-system/sw/share/nixling/vms.json";
     hostPath = "/etc/nixling/host.json";

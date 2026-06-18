@@ -62,7 +62,7 @@ let
       path = ".";
       owner = "nixlingd";
       group = "users";
-      mode = "2770";
+      mode = "3770";
       description = ''
         Per-VM state root. setgid so role users (runner / gpu / swtpm)
         inherit the group on files they create inside the directory.

@@ -872,6 +872,73 @@ pub mod path_safe {
         .map_err(io_from_rustix)
     }
 
+    /// `fstatat(AT_SYMLINK_NOFOLLOW)` of a single `name` component
+    /// beneath an already-open safe parent dirfd. Returns `Ok(None)`
+    /// when the entry is absent (`ENOENT`). The caller inspects
+    /// `st_mode` (e.g. `S_IFLNK` / `S_IFDIR`), `st_uid`/`st_gid`, and
+    /// `st_dev`/`st_ino` without following a symlink. Used by the
+    /// swtpm-dir hardening step to detect symlink / non-dir / owner
+    /// drift without opening the target.
+    pub fn fstatat_nofollow(parent_fd: &OwnedFd, name: &str) -> io::Result<Option<libc::stat>> {
+        validate_target_name(name)?;
+        let c_name = cstring_from_name(name)?;
+        match fstatat_raw(parent_fd.as_raw_fd(), &c_name, libc::AT_SYMLINK_NOFOLLOW) {
+            Ok(stat) => Ok(Some(stat)),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// `fstat(2)` of an already-open fd. Binds identity (`st_dev` /
+    /// `st_ino`) to the exact inode the held fd refers to, so a
+    /// post-open rename/replace of the path cannot confuse the caller.
+    #[allow(unsafe_code)]
+    pub fn fstat_fd(fd: BorrowedFd<'_>) -> io::Result<libc::stat> {
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: `fstat` writes into the provided `stat` for a valid fd.
+        let ret = unsafe { libc::fstat(fd.as_raw_fd(), &mut stat) };
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(stat)
+    }
+
+    /// Returns whether `fd` carries an extended POSIX ACL xattr. The
+    /// tuple is `(access_present, default_present)` for
+    /// `system.posix_acl_access` and `system.posix_acl_default`. A
+    /// directory with only the base owner/group/other entries (a
+    /// "minimal" ACL) has NO xattr, so both `false` means "clean". An
+    /// `ENODATA`/`ENOATTR`/`ENOTSUP` result is treated as absent so
+    /// filesystems without ACL support don't fail the clean check.
+    #[allow(unsafe_code)]
+    pub fn fd_extended_acl_present(fd: BorrowedFd<'_>) -> io::Result<(bool, bool)> {
+        fn one(fd: RawFd, name: &str) -> io::Result<bool> {
+            let c_name = CString::new(name).expect("static xattr name has no NUL");
+            // SAFETY: fgetxattr with a null value buffer (size 0) only
+            // queries the attribute length / presence; it never writes.
+            let ret = unsafe { libc::fgetxattr(fd, c_name.as_ptr(), std::ptr::null_mut(), 0) };
+            if ret >= 0 {
+                return Ok(true);
+            }
+            let err = io::Error::last_os_error();
+            match err.raw_os_error() {
+                // ENODATA (61) = no such attribute; ENOTSUP/EOPNOTSUPP =
+                // FS without ACL support. Both mean "not present".
+                Some(code)
+                    if code == libc::ENODATA
+                        || code == libc::ENOTSUP
+                        || code == libc::EOPNOTSUPP =>
+                {
+                    Ok(false)
+                }
+                _ => Err(err),
+            }
+        }
+        let access = one(fd.as_raw_fd(), "system.posix_acl_access")?;
+        let default = one(fd.as_raw_fd(), "system.posix_acl_default")?;
+        Ok((access, default))
+    }
+
     /// Create a single file beneath an already-open safe parent dirfd.
     /// `name` must be a single path component; `openat2` enforces the
     /// same beneath/no-symlink/no-magiclink/no-xdev contract as
@@ -1127,6 +1194,23 @@ pub mod path_safe {
             Err(err) if err == rustix::io::Errno::EXIST => Ok(()),
             Err(err) => Err(io_from_rustix(err)),
         }
+    }
+
+    /// Like [`mkdir_at`] but FAILS CLOSED on `EEXIST` (surfaced as
+    /// [`io::ErrorKind::AlreadyExists`]) instead of treating a pre-existing
+    /// entry as success. Used where adopting a directory this call did NOT
+    /// create would be a security bug — e.g. the swtpm NVRAM dir
+    /// fresh-create path (issue #64): a role UID with `rwx` on the sticky
+    /// per-VM root can race-create `swtpm/` between the absence pre-check
+    /// and this `mkdirat`, and the broker must refuse rather than
+    /// stamp/own/marker-trust an attacker-planted directory.
+    pub fn mkdir_at_exclusive(
+        parent_dirfd: BorrowedFd<'_>,
+        name: &Path,
+        mode: u32,
+    ) -> io::Result<()> {
+        use rustix::fs::{Mode, mkdirat};
+        mkdirat(parent_dirfd, name, Mode::from_raw_mode(mode)).map_err(io_from_rustix)
     }
 
     /// Alias retained for callers that still use the older helper name.
@@ -1517,6 +1601,27 @@ pub mod pidfd_sys {
         run_setfacl_op_on_fd(fd, "-m", acl_spec)
     }
 
+    /// Resolve the absolute path to `setfacl` from a FIXED list of
+    /// trusted system locations (never `$PATH`, which a caller could
+    /// poison). NixOS production hosts provide it under
+    /// `/run/current-system/sw/bin`; Debian/Ubuntu (including the CI
+    /// runner where these unit tests execute) under `/usr/bin` or
+    /// `/bin`. Returns the first that exists, falling back to the NixOS
+    /// path so a missing binary surfaces a sensible exec failure.
+    fn resolve_setfacl_path() -> std::ffi::CString {
+        const CANDIDATES: &[&str] = &[
+            "/run/current-system/sw/bin/setfacl",
+            "/usr/bin/setfacl",
+            "/bin/setfacl",
+        ];
+        for cand in CANDIDATES {
+            if std::path::Path::new(cand).exists() {
+                return std::ffi::CString::new(*cand).expect("static setfacl path has no NUL");
+            }
+        }
+        std::ffi::CString::new(CANDIDATES[0]).expect("static setfacl path has no NUL")
+    }
+
     /// Run `setfacl <op> <acl_spec> /proc/self/fd/<fd>` in a forked
     /// child while keeping the target fd CLOEXEC in the broker parent.
     ///
@@ -1525,8 +1630,7 @@ pub mod pidfd_sys {
     /// CLOEXEC rationale.
     #[allow(unsafe_code)]
     pub fn run_setfacl_op_on_fd(fd: BorrowedFd<'_>, op: &str, acl_spec: &str) -> io::Result<()> {
-        let setfacl = std::ffi::CString::new("/run/current-system/sw/bin/setfacl")
-            .expect("static setfacl path has no NUL");
+        let setfacl = resolve_setfacl_path();
         let dash_m = std::ffi::CString::new(op).map_err(|_| {
             io::Error::new(io::ErrorKind::InvalidInput, "setfacl op contains NUL byte")
         })?;
@@ -1589,7 +1693,43 @@ pub mod pidfd_sys {
         }
     }
 
-    /// Read `/proc/<pid>/stat` field 22 (start time in clock ticks).
+    /// Clear BOTH the access ACL and the default ACL on the directory
+    /// referenced by `fd` (the effect of `setfacl -b -k`) by removing the
+    /// POSIX-ACL xattrs directly with `fremovexattr(2)`. Using the syscall
+    /// rather than forking `setfacl` means no external binary is required
+    /// (works on any host/distro, including the non-NixOS CI runner where
+    /// these unit tests execute) and adds no fork/exec to the privileged
+    /// broker. `ENODATA` (no such ACL) and `ENOTSUP`/`EOPNOTSUPP`
+    /// (filesystem without ACL support) are tolerated as "nothing to
+    /// clear", so it stays idempotent on an already-clean inode. The
+    /// caller re-asserts mode `0700` afterwards.
+    #[allow(unsafe_code)]
+    pub fn run_setfacl_clear_on_fd(fd: BorrowedFd<'_>) -> io::Result<()> {
+        fn remove_one(fd: RawFd, name: &str) -> io::Result<()> {
+            let c_name = CString::new(name).expect("static xattr name has no NUL");
+            // SAFETY: fremovexattr removes the named attribute on `fd`;
+            // it reads/writes no caller buffers.
+            let ret = unsafe { libc::fremovexattr(fd, c_name.as_ptr()) };
+            if ret == 0 {
+                return Ok(());
+            }
+            let err = io::Error::last_os_error();
+            match err.raw_os_error() {
+                Some(code)
+                    if code == libc::ENODATA
+                        || code == libc::ENOTSUP
+                        || code == libc::EOPNOTSUPP =>
+                {
+                    Ok(())
+                }
+                _ => Err(err),
+            }
+        }
+        remove_one(fd.as_raw_fd(), "system.posix_acl_access")?;
+        remove_one(fd.as_raw_fd(), "system.posix_acl_default")?;
+        Ok(())
+    }
+
     /// Pure I/O — no syscalls beyond `open`/`read`. Returns `None` if
     /// the file is missing or field 22 isn't parseable.
     pub fn read_proc_stat_start_time(pid: i32) -> io::Result<u64> {

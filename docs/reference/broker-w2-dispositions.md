@@ -3,8 +3,9 @@
 This table tracks the broker request dispositions for the current
 `OperationAuthz.operation` enum plus the daemon-only `Hello`
 handshake. Current broker behavior is described in
-[`privileges.md`](./privileges.md). The table has no
-`compile-time-only` broker rows.
+[`privileges.md`](./privileges.md). The table has exactly one
+`compile-time-only` broker row (`PrepareSwtpmDir`, a `SpawnRunner`
+side-effect audit operation that never reaches the wire dispatcher).
 
 | Variant | Disposition | Note | Target |
 | --- | --- | --- | --- |
@@ -38,6 +39,7 @@ handshake. Current broker behavior is described in
 | PrepareRuntimeDir | promoted-live | Resolves the trusted runtime-dir intent and prepares ownership/mode for the per-VM runtime directory. | live in production broker |
 | PrepareStateDir | promoted-live | Resolves the trusted state-dir intent and prepares ownership/mode for the per-VM state directory. | live in production broker |
 | PrepareStoreView | promoted-live | Resolves the per-VM store-view intent, builds the hardlink farm, and validates the generation marker. | live in production broker |
+| PrepareSwtpmDir | compile-time-only | Audit operation emitted as a `SpawnRunner` side-effect for the `Swtpm` runner (issue #64); it provisions/hardens the persistent per-VM swtpm state dir and writes the identity-bound tamper marker inside the broker's pre-spawn step. It is not a standalone wire request, so it never reaches the wire dispatcher. | broker `SpawnRunner` side-effect |
 | ReadSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret read paths are not implemented. | future work |
 | ResumeBroker | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; broker admin resume controls are not implemented. | future work |
 | RotateSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret rotation is not implemented. | future work |
