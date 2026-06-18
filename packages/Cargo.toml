@@ -13,6 +13,7 @@ members = [
     "nixling-host-providers",
     "nixling-provider-aca",
     "nixling-provider-relay",
+    "nixling-gateway",
     "nixling-host",
     "nixling-guestd",
     "nixling-userd",

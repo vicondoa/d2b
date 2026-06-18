@@ -1,0 +1,28 @@
+[package]
+name = "nixling-gateway"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+# Gateway-mode display-session orchestrator (ADR 0032, P0). Composes the
+# proven providers (nixling-provider-aca WorkloadProvider + nixling-provider-
+# relay TransportProvider + an operator-session Waypipe display runner) into a
+# session-credential-bound display session. The session credential (a
+# gateway-minted one-shot HMAC binding) is what admits display bytes — Azure
+# Relay / the sandbox managed identity stay reachability-only. Pure-logic cores
+# (handshake, ledger, state machine) are injected-deps testable with mocks; no
+# live Azure in unit tests. Host-side leaf crate: nothing in the constellation
+# contract crates depends on it (dep-direction gate).
+[dependencies]
+nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
+hmac = "0.12"
+sha2 = "0.10"
+serde = { workspace = true }
+serde_json = { workspace = true }
