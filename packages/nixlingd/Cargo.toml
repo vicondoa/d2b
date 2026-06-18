@@ -14,7 +14,7 @@ clap = { version = "4.5", features = ["derive"] }
 getrandom = "0.2"
 libc = "0.2"
 nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "process", "poll"] }
-parking_lot = "0.12"
+parking_lot = { version = "0.12", features = ["arc_lock"] }
 rustix = { workspace = true }
 nixling-core = { path = "../nixling-core", version = "0.0.0-bootstrap" }
 nixling-host = { path = "../nixling-host", version = "0.0.0-bootstrap" }

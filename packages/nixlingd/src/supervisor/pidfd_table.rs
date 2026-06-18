@@ -1303,6 +1303,56 @@ mod tests {
         }
     }
 
+    /// fix2b: register + snapshot under the table's `mutation_guard` for two
+    /// distinct VMs concurrently must persist BOTH entries. Without
+    /// serialising the read-modify-persist sequence, a delayed snapshot from
+    /// thread A (taken before B registered) could overwrite the file and drop
+    /// B's entry. The guard makes register+snapshot atomic per op, so the
+    /// final persisted snapshot is the union of every VM's entries.
+    #[test]
+    fn concurrent_different_vm_register_and_snapshot_under_guard_loses_no_entries() {
+        let tmpdir = mktemp_dir();
+        let state_path = tmpdir.join("pidfd-table.json");
+        let table = std::sync::Arc::new(PidfdTable::new(state_path.clone()));
+
+        let mut handles = Vec::new();
+        for vm in ["vm-a", "vm-b", "vm-c", "vm-d"] {
+            let t = std::sync::Arc::clone(&table);
+            handles.push(std::thread::spawn(move || {
+                // Mirror register_node_pidfd's critical section: hold the
+                // mutation guard across register + snapshot.
+                let _g = t.mutation_guard();
+                t.register(
+                    vm.to_owned(),
+                    "swtpm".to_owned(),
+                    PidfdEntry {
+                        pidfd: pipe_owned_fd(),
+                        pid: 4242,
+                        start_time_ticks: 7,
+                    },
+                )
+                .expect("register");
+                t.snapshot().expect("snapshot under guard");
+            }));
+        }
+        for h in handles {
+            h.join().expect("thread join");
+        }
+
+        let bytes = fs::read(&state_path).expect("read final snapshot");
+        let persisted: PersistedPidfdTable =
+            serde_json::from_slice(&bytes).expect("final snapshot is valid JSON");
+        let vms: std::collections::BTreeSet<&str> =
+            persisted.entries.iter().map(|e| e.vm.as_str()).collect();
+        for vm in ["vm-a", "vm-b", "vm-c", "vm-d"] {
+            assert!(
+                vms.contains(vm),
+                "persisted snapshot dropped {vm}: {vms:?}"
+            );
+        }
+        assert_eq!(persisted.entries.len(), 4, "no entries lost or duplicated");
+    }
+
     fn mktemp_dir() -> PathBuf {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();

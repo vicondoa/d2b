@@ -169,6 +169,10 @@ pub mod usbip_state_machine;
 // broker's OpAuditRecord stream (e.g. api-ready timeout).
 pub mod daemon_audit;
 
+/// Accept-loop concurrency primitives: bounded in-flight admission
+/// semaphore + per-VM / global op locks.
+pub mod concurrency;
+
 // ADR 0032: compile-only peer-module skeletons wiring the v2
 // constellation provider/router trait surface. NOT called from the running
 // daemon (zero behavior change); see the module docs.
@@ -182,6 +186,43 @@ pub const DEFAULT_ACCEPTED_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 pub const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/nixling/daemon-state";
 const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 const VM_STOP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default cap on concurrent in-flight connection-handler threads.
+/// Overridable at startup via `NIXLINGD_MAX_INFLIGHT_CONNECTIONS`.
+const DEFAULT_MAX_INFLIGHT_CONNECTIONS: usize = 64;
+/// Write deadline for the typed refusal frame (authz reject / busy) the
+/// accept loop sends before closing — never block the accept loop on a
+/// slow/abusive peer.
+const ACCEPT_REFUSAL_WRITE_DEADLINE: Duration = Duration::from_secs(2);
+/// Read deadline for the initial hello frame, so a connected-but-silent
+/// peer cannot occupy a handler slot indefinitely.
+const HELLO_READ_DEADLINE: Duration = Duration::from_secs(10);
+/// Read deadline for each subsequent request frame on a persistent
+/// connection. A timeout closes the connection gracefully and frees the
+/// handler slot. Cleared before an exec handoff (the exec owner blocks
+/// on the PTY indefinitely).
+const REQUEST_READ_DEADLINE: Duration = Duration::from_secs(60);
+/// Bound for draining a rejected peer's already-buffered input before the
+/// socket is closed. Authz-first / busy refusals are written BEFORE the
+/// peer's hello is read; closing a SEQPACKET socket with unread input makes
+/// the kernel send RST, which the peer observes as a connection reset
+/// instead of cleanly reading the rejection frame. Draining the pending
+/// input first makes the close graceful. The normal case returns in
+/// microseconds (EOF once the peer closes after reading the rejection); this
+/// deadline only bounds a misbehaving peer.
+const REJECTION_DRAIN_DEADLINE: Duration = Duration::from_secs(2);
+
+/// Resolve the in-flight connection cap from the environment, falling
+/// back to [`DEFAULT_MAX_INFLIGHT_CONNECTIONS`]. A value of `0` or an
+/// unparseable value uses the default; the semaphore itself clamps to a
+/// minimum of one.
+fn resolve_max_inflight_connections() -> usize {
+    std::env::var("NIXLINGD_MAX_INFLIGHT_CONNECTIONS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|cap| *cap > 0)
+        .unwrap_or(DEFAULT_MAX_INFLIGHT_CONNECTIONS)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -320,6 +361,14 @@ struct ServerState {
     /// session is a daemon-held authenticated guest-control client owned by a
     /// spawned worker.
     exec_sessions: Arc<exec_session::SessionTable>,
+    /// Bounded admission gate for in-flight connection-handler threads.
+    /// The accept loop performs a non-blocking try-acquire and refuses
+    /// (typed-busy) on a miss rather than ever blocking `accept()`.
+    conn_semaphore: concurrency::ConnSemaphore,
+    /// Per-VM / global in-process op locks. Acquired once on the worker
+    /// thread inside `dispatch_request` so a mutating lifecycle op cannot
+    /// race another op on the same VM (or any per-VM op for a global op).
+    op_locks: concurrency::OpLockManager,
 }
 
 #[cfg_attr(test, derive(Clone))]
@@ -493,6 +542,8 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
             crate::exec_session::ExecSessionCaps::default(),
         )),
+        conn_semaphore: concurrency::ConnSemaphore::new(resolve_max_inflight_connections()),
+        op_locks: crate::concurrency::OpLockManager::new(),
     };
     refresh_broker_reap_log(&state, "startup");
     adopt_orphaned_runners_on_startup(&state);
@@ -654,12 +705,75 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             context: "accept public seqpacket client".to_owned(),
             detail: err.to_string(),
         })?;
-        let result = handle_connection(stream, &state);
-        if let Err(error) = result {
-            eprintln!("{}", error.message());
-        }
+
+        // The `once` test path stays fully synchronous/inline so unit
+        // tests can drive a single connection deterministically.
         if options.once {
+            if let Err(error) = handle_connection(stream, &state, None) {
+                eprintln!("{}", error.message());
+            }
             break;
+        }
+
+        // Authz-first: resolve SO_PEERCRED immediately after accept, before
+        // any blocking frame read, so an unauthorized or silent peer can
+        // neither occupy a handler slot nor stall the accept loop.
+        let peer = match authorize_peer(&stream, &state) {
+            Ok(peer) => peer,
+            Err(error) => {
+                let _ = write_json_frame_deadlined(
+                    &stream,
+                    &wire::hello_rejected(&error),
+                    ACCEPT_REFUSAL_WRITE_DEADLINE,
+                );
+                drain_rejected_peer_input(&stream);
+                eprintln!("{}", error.message());
+                continue;
+            }
+        };
+
+        // Non-blocking admission: never block the accept loop. On a cap
+        // miss refuse immediately with a typed-busy frame (deadlined).
+        let permit = match state.conn_semaphore.try_acquire() {
+            Some(permit) => permit,
+            None => {
+                let busy = TypedError::DaemonBusy;
+                let _ = write_json_frame_deadlined(
+                    &stream,
+                    &wire::error_frame(&busy),
+                    ACCEPT_REFUSAL_WRITE_DEADLINE,
+                );
+                drain_rejected_peer_input(&stream);
+                continue;
+            }
+        };
+
+        // Hand the connection to its own handler thread, moving the RAII
+        // permit in so the in-flight slot is released when the handler —
+        // not the accept loop — finishes. accept() returns immediately.
+        let conn_state = state.clone();
+        if let Err(err) = std::thread::Builder::new()
+            .name("nixling-conn".to_owned())
+            .spawn(move || {
+                // `permit` (and, for an exec session, ownership of it) is
+                // dropped when this handler returns.
+                if let Err(error) =
+                    handle_connection_authorized(stream, &conn_state, peer, Some(permit))
+                {
+                    eprintln!("{}", error.message());
+                }
+            })
+        {
+            // Spawn failure drops the moved closure (and its permit), so
+            // the slot is released; log and keep serving.
+            eprintln!(
+                "{}",
+                TypedError::InternalIo {
+                    context: "spawn connection handler".to_owned(),
+                    detail: err.to_string(),
+                }
+                .message()
+            );
         }
     }
 
@@ -1640,10 +1754,46 @@ mod exec_owner_test_hook {
     }
 }
 
-fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedError> {
-    let hello_bytes = read_frame(&stream)?;
+/// Thin wrapper used by the `options.once` test path and by direct
+/// unit-test callers: authorizes the peer (SO_PEERCRED), then runs the
+/// authorized connection body. The production accept loop authorizes the
+/// peer itself (before admission) and calls
+/// [`handle_connection_authorized`] directly.
+fn handle_connection(
+    stream: Socket,
+    state: &ServerState,
+    permit: Option<concurrency::ConnPermit>,
+) -> Result<(), TypedError> {
     let peer = match authorize_peer(&stream, state) {
         Ok(peer) => peer,
+        Err(error) => {
+            let _ = write_json_frame(&stream, &wire::hello_rejected(&error));
+            // Authz ran before the hello read; drain the unread hello so the
+            // close is graceful and the peer receives the rejection frame.
+            drain_rejected_peer_input(&stream);
+            return Err(error);
+        }
+    };
+    handle_connection_authorized(stream, state, peer, permit)
+}
+
+/// Connection body for an already-authorized peer. Reads the hello frame
+/// (deadlined), negotiates the wire version, then serves requests on a
+/// deadlined per-frame read loop. An attached `Exec::Start` takes over
+/// the connection on a spawned owner thread, moving the admission
+/// `permit` with it so the in-flight slot is held until the exec session
+/// (owner) terminates.
+fn handle_connection_authorized(
+    stream: Socket,
+    state: &ServerState,
+    peer: PeerIdentity,
+    permit: Option<concurrency::ConnPermit>,
+) -> Result<(), TypedError> {
+    // Bound the wait for the initial hello so a connected-but-silent peer
+    // cannot occupy a handler slot indefinitely.
+    set_frame_read_deadline(&stream, Some(HELLO_READ_DEADLINE));
+    let hello_bytes = match read_frame(&stream) {
+        Ok(bytes) => bytes,
         Err(error) => {
             let _ = write_json_frame(&stream, &wire::hello_rejected(&error));
             return Err(error);
@@ -1676,6 +1826,9 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
     write_json_frame(&stream, &hello_ok)?;
 
     loop {
+        // Bound each request read so a half-open / slow-loris peer frees
+        // its handler slot instead of pinning it forever.
+        set_frame_read_deadline(&stream, Some(REQUEST_READ_DEADLINE));
         let frame = match read_frame(&stream) {
             Ok(bytes) => bytes,
             Err(TypedError::InternalIo { .. }) => return Ok(()),
@@ -1694,8 +1847,8 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
         // Exec takes over the connection as the long-lived owner connection.
         // Admin (SO_PEERCRED) is verified here, BEFORE any session work; then
         // the connection + a cheap ServerState clone move to a SPAWNED owner
-        // handler so the serial accept loop is never blocked for the lifetime
-        // of an exec session.
+        // handler. The admission permit moves with it so the in-flight slot
+        // is held for the lifetime of the exec session, not just the read.
         if let wire::Request::Exec(op) = &request {
             if !matches!(peer.role, PeerRole::Admin) {
                 let error = TypedError::AuthzNotAdmin {
@@ -1714,10 +1867,21 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
                 let owner_state = state.clone();
                 let owner_peer = peer.clone();
                 let op = op.clone();
+                // The exec owner blocks on the PTY indefinitely; clear the
+                // request read deadline before handing off the socket.
+                set_frame_read_deadline(&stream, None);
+                let owner_permit = permit;
                 match std::thread::Builder::new()
                     .name("nixling-exec-owner".to_owned())
                     .spawn(move || {
-                        run_exec_owner(stream, owner_state, owner_peer, first_op_id, op);
+                        run_exec_owner(
+                            stream,
+                            owner_state,
+                            owner_peer,
+                            first_op_id,
+                            op,
+                            owner_permit,
+                        );
                     }) {
                     Ok(_) => return Ok(()),
                     Err(err) => {
@@ -1852,6 +2016,26 @@ fn dispatch_request(
             verb: verb.to_owned(),
         });
     }
+    // Acquire the op lock for this verb ONCE, here at the dispatch
+    // boundary on the worker thread (never the accept loop). Read-only
+    // verbs take no lock; per-VM mutating verbs serialize on the VM; a
+    // global verb is mutually exclusive with all per-VM ops. The guard is
+    // held across the whole op (DAG + rollback + cleanup); inner
+    // stop/start helpers invoked by restart/rollback do NOT re-acquire it,
+    // so there is no nested self-deadlock.
+    let _op_lock = state.op_locks.acquire(&request.lock_class());
+    dispatch_request_locked(state, peer, request)
+}
+
+/// Verb dispatch body executed under the op lock already acquired by
+/// [`dispatch_request`]. Restart/rollback paths call the inner
+/// `dispatch_broker_*` helpers directly (never re-entering
+/// `dispatch_request`), so the lock is held exactly once for the op.
+fn dispatch_request_locked(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: wire::Request,
+) -> Result<Value, TypedError> {
     match request {
         wire::Request::List(request) => dispatch_list(state, request),
         wire::Request::Status(request) => dispatch_status(state, request),
@@ -2705,6 +2889,9 @@ fn run_exec_owner(
     peer: PeerIdentity,
     first_op_id: u64,
     first_op: public_wire::ExecOp,
+    // Admission permit held for the lifetime of the exec session so the
+    // in-flight connection slot is released only on owner termination.
+    _conn_permit: Option<concurrency::ConnPermit>,
 ) {
     // Test seam: when an accept-loop test installs the owner-body hook, run it
     // (holding `stream` — and thus the owner session — open for as long as the
@@ -4881,6 +5068,11 @@ impl VmStartRunner<'_> {
         )
         .map_err(|error| error.message())?;
         let role_id = tracked_role_id(node);
+        // Serialize register + snapshot as one unit so a concurrent
+        // different-VM op cannot persist a stale snapshot that drops this
+        // entry (register A, snapshot A reads {A}, register B, snapshot B
+        // writes {A,B}, delayed snapshot A overwrites with {A} — losing B).
+        let _mguard = self.state.pidfd_table.mutation_guard();
         self.state
             .pidfd_table
             .register(
@@ -5733,6 +5925,7 @@ fn existing_vm_start_response_if_ready(state: &ServerState, vm: &str) -> Option<
 }
 
 fn cleanup_vm_start_registration(state: &ServerState, vm: &str, role_id: &str) {
+    let _mguard = state.pidfd_table.mutation_guard();
     let _ = state.pidfd_table.deregister(vm, role_id);
     if let Err(error) = state.pidfd_table.snapshot() {
         tracing::warn!(vm = %vm, role = %role_id, error = ?error, "failed to persist pidfd table cleanup");
@@ -5776,6 +5969,7 @@ fn rollback_failed_vm_start(
             Duration::from_secs(5),
         )?;
     }
+    let _mguard = state.pidfd_table.mutation_guard();
     if let Err(error) = state.pidfd_table.snapshot() {
         return Err(daemon_failure_response(
             "vm start",
@@ -7441,6 +7635,7 @@ fn dispatch_broker_vm_stop_with_timeout_as(
         }
     }
 
+    let _mguard = state.pidfd_table.mutation_guard();
     if let Err(error) = state.pidfd_table.snapshot() {
         tracing::warn!(vm = %request.vm, error = ?error, "pidfd_table snapshot failed after draining sidecars");
         return Ok(daemon_failure_response(
@@ -8639,6 +8834,8 @@ mod public_status_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         };
         (state, dir)
     }
@@ -9315,6 +9512,49 @@ where
     write_frame(socket, &bytes)
 }
 
+/// Set (or clear, with `None`) the read timeout on a connection socket.
+/// Best-effort: a failure to set the deadline is non-fatal (the read
+/// simply blocks as before). Used to bound hello/request frame reads so
+/// a silent or slow-loris peer cannot pin a handler slot, and to CLEAR
+/// the deadline before handing the socket to a blocking exec owner.
+fn set_frame_read_deadline(socket: &Socket, deadline: Option<Duration>) {
+    let _ = socket.set_read_timeout(deadline);
+}
+
+/// Write a JSON frame with a bounded write deadline, used for the
+/// accept-loop refusal frames (authz reject / typed-busy) so the accept
+/// loop never blocks on a peer that will not read. The deadline is
+/// best-effort and the socket is closed by the caller afterwards.
+fn write_json_frame_deadlined<T>(
+    socket: &Socket,
+    value: &T,
+    deadline: Duration,
+) -> Result<(), TypedError>
+where
+    T: Serialize,
+{
+    let _ = socket.set_write_timeout(Some(deadline));
+    write_json_frame(socket, value)
+}
+
+/// Drain a rejected peer's already-buffered input before the socket is
+/// closed. Authz-first and busy refusals write the rejection frame BEFORE
+/// the peer's hello has been read; closing a `SOCK_SEQPACKET` socket while
+/// input remains unread makes the kernel send RST, which the peer sees as a
+/// connection reset (ECONNRESET) instead of cleanly reading the rejection.
+/// Consuming the pending input first lets the close be graceful so the
+/// rejection is delivered. Bounded by a short read deadline; the loop stops
+/// at EOF, an error (incl. timeout), or after a few frames.
+fn drain_rejected_peer_input(socket: &Socket) {
+    let _ = socket.set_read_timeout(Some(REJECTION_DRAIN_DEADLINE));
+    for _ in 0..4 {
+        match read_frame(socket) {
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
+}
+
 fn write_frame(socket: &impl AsRawFd, body: &[u8]) -> Result<(), TypedError> {
     if body.len() > wire::MAX_FRAME_SIZE {
         return Err(TypedError::WireFrameTooLarge {
@@ -9816,6 +10056,8 @@ mod detached_exec_routing_tests {
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
             exec_sessions: Arc::new(exec_session::SessionTable::new(caps)),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         }
     }
 
@@ -9939,6 +10181,7 @@ mod detached_exec_routing_tests {
                 admin_peer(),
                 77,
                 detached_start("SENTINEL_ARGV"),
+                None,
             );
         });
 
@@ -9988,7 +10231,7 @@ mod detached_exec_routing_tests {
         }));
         let (daemon, client) = seqpacket_pair();
         let run_state = state.clone();
-        let handle = std::thread::spawn(move || handle_connection(daemon, &run_state));
+        let handle = std::thread::spawn(move || handle_connection(daemon, &run_state, None));
 
         write_frame(&client, &hello_frame()).expect("client sends hello");
         let hello_ok = recv_reply(&client);
@@ -10478,8 +10721,17 @@ mod accept_loop_concurrency_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         };
         (state, dir)
+    }
+
+    fn admin_peer_identity() -> PeerIdentity {
+        PeerIdentity {
+            role: PeerRole::Admin,
+            uid: 4242,
+        }
     }
 
     fn hello_frame() -> Vec<u8> {
@@ -10524,6 +10776,22 @@ mod accept_loop_concurrency_tests {
                 uid: 4242,
                 gid: 4242,
                 username: Some("execadmin".to_owned()),
+                groups: Some(Vec::new()),
+            });
+            Self { _lock: lock }
+        }
+
+        /// A peer whose username is in neither `launcher_users` nor
+        /// `admin_users`, so `authorize_peer` rejects it with
+        /// `AuthzNotALauncher` before any frame is read.
+        fn denied() -> Self {
+            let lock = TEST_PEER_OVERRIDE_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = Some(PeerOverride {
+                uid: 9999,
+                gid: 9999,
+                username: Some("nobody-unlisted".to_owned()),
                 groups: Some(Vec::new()),
             });
             Self { _lock: lock }
@@ -10598,7 +10866,7 @@ mod accept_loop_concurrency_tests {
         let state_a = Arc::clone(&state);
         let (done_tx, done_rx) = mpsc::channel();
         let handle_a = std::thread::spawn(move || {
-            let result = handle_connection(server_a, &state_a);
+            let result = handle_connection(server_a, &state_a, None);
             let _ = done_tx.send(result.is_ok());
         });
 
@@ -10665,7 +10933,7 @@ mod accept_loop_concurrency_tests {
             response
         });
 
-        let result_b = handle_connection(server_b, &state);
+        let result_b = handle_connection(server_b, &state, None);
         assert!(
             result_b.is_ok(),
             "the second connection must be served while the exec owner is held \
@@ -10691,6 +10959,151 @@ mod accept_loop_concurrency_tests {
 
         // Connection A's owner session is torn down with its client end.
         drop(client_a);
+    }
+
+    /// fix2b: SO_PEERCRED authorization runs in `handle_connection` BEFORE the
+    /// hello frame is read. A denied peer that never sends a hello must still
+    /// be rejected promptly (it cannot stall a handler waiting on a read), and
+    /// the rejection is the typed `AuthzNotALauncher` envelope.
+    #[test]
+    fn unauthorized_peer_is_rejected_before_reading_hello() {
+        let _env = PeerOverrideEnv::denied();
+        let (state, _state_dir) = admin_exec_state();
+
+        let (server, client) = seqpacket_pair();
+        // The client deliberately sends NO hello frame. If authz ran after the
+        // read, the handler would block here; authz-first returns promptly.
+        let (tx, rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let result = handle_connection(server, &state, None);
+            let _ = tx.send(result);
+        });
+
+        let outcome = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("handle_connection must reject the peer before any read");
+        assert!(
+            matches!(outcome, Err(TypedError::AuthzNotALauncher { .. })),
+            "unauthorized peer must be rejected with AuthzNotALauncher, got {outcome:?}"
+        );
+
+        // The handler also wrote a helloRejected frame the client can observe.
+        let frame = read_frame(&client).expect("client reads rejection frame");
+        let value: serde_json::Value =
+            serde_json::from_slice(&frame).expect("rejection frame is JSON");
+        assert_eq!(value["type"], "helloRejected");
+        handle.join().expect("handler thread joins");
+        drop(client);
+    }
+
+    /// fix2b: the admission permit moved into a handler is released when the
+    /// handler returns, on BOTH the success path (clean EOF) and the error
+    /// path (malformed hello). After each handler returns the in-flight count
+    /// drops back to zero, so a refused slot is never leaked.
+    #[test]
+    fn admission_permit_is_released_on_handler_success_and_error() {
+        let _env = PeerOverrideEnv::admin();
+        let (state, _state_dir) = admin_exec_state();
+        assert_eq!(state.conn_semaphore.in_flight(), 0);
+
+        // --- Success path: hello, helloOk read by client, then EOF. The
+        //     handler runs on a worker thread; a client thread reads the
+        //     helloOk frame then closes, so the request-loop read sees a clean
+        //     EOF and the handler returns Ok. ---
+        {
+            let permit = state
+                .conn_semaphore
+                .try_acquire()
+                .expect("cap admits first permit");
+            assert_eq!(state.conn_semaphore.in_flight(), 1);
+            let (server, client) = seqpacket_pair();
+            std::thread::scope(|scope| {
+                let client_thread = scope.spawn(move || {
+                    write_frame(&client, &hello_frame()).expect("send hello");
+                    let frame = read_frame(&client).expect("client reads helloOk");
+                    let value: serde_json::Value =
+                        serde_json::from_slice(&frame).expect("helloOk is JSON");
+                    assert_eq!(value["type"], "helloOk");
+                    // Drop the client end -> the handler's next read sees EOF.
+                    drop(client);
+                });
+                let result = handle_connection_authorized(
+                    server,
+                    &state,
+                    admin_peer_identity(),
+                    Some(permit),
+                );
+                client_thread.join().expect("client thread joins");
+                assert!(result.is_ok(), "clean EOF handler returns Ok: {result:?}");
+            });
+            assert_eq!(
+                state.conn_semaphore.in_flight(),
+                0,
+                "permit released after success"
+            );
+        }
+
+        // --- Error path: a malformed hello -> handler returns Err. ---
+        {
+            let permit = state
+                .conn_semaphore
+                .try_acquire()
+                .expect("cap admits permit again");
+            assert_eq!(state.conn_semaphore.in_flight(), 1);
+            let (server, client) = seqpacket_pair();
+            write_frame(&client, b"{not valid json").expect("send malformed hello");
+            let result =
+                handle_connection_authorized(server, &state, admin_peer_identity(), Some(permit));
+            assert!(result.is_err(), "malformed hello handler returns Err");
+            drop(client);
+            assert_eq!(
+                state.conn_semaphore.in_flight(),
+                0,
+                "permit released after error"
+            );
+        }
+    }
+
+    /// fix2b: when the in-flight cap is saturated the accept loop refuses the
+    /// connection with the typed `DaemonBusy` envelope. The refusal is
+    /// non-fatal to the daemon (it maps to the broker-error exit contract, not
+    /// exit 1) and carries the stable `daemon-busy` kind.
+    #[test]
+    fn daemon_busy_refusal_frame_is_typed_and_nonfatal() {
+        let busy = TypedError::DaemonBusy;
+        let frame = wire::error_frame(&busy);
+        let value = serde_json::to_value(&frame).expect("encode busy frame");
+        assert_eq!(value["type"], "error");
+        assert_eq!(
+            value["error"]["kind"], "daemon-busy",
+            "busy refusal carries the stable daemon-busy kind"
+        );
+        assert_eq!(
+            busy.exit_code(),
+            75,
+            "DaemonBusy maps to the broker-error exit contract, not exit 1"
+        );
+    }
+
+    /// fix2b: a saturated semaphore refuses further admissions with `None`
+    /// (non-blocking), and a released permit re-opens a slot. This is the
+    /// admission decision the accept loop makes before spawning a handler.
+    #[test]
+    fn semaphore_refuses_at_cap_then_readmits_after_release() {
+        let sem = crate::concurrency::ConnSemaphore::new(2);
+        let p1 = sem.try_acquire().expect("first admit");
+        let p2 = sem.try_acquire().expect("second admit");
+        assert_eq!(sem.in_flight(), 2);
+        assert!(
+            sem.try_acquire().is_none(),
+            "cap-hit must refuse without blocking"
+        );
+        drop(p1);
+        let p3 = sem.try_acquire().expect("slot reopened after release");
+        assert_eq!(sem.in_flight(), 2);
+        drop(p2);
+        drop(p3);
+        assert_eq!(sem.in_flight(), 0);
     }
 }
 
@@ -10811,6 +11224,8 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         }
     }
 
@@ -10838,6 +11253,8 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         }
     }
 
@@ -12160,6 +12577,8 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -12372,6 +12791,8 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         };
 
         let listener = socket(
@@ -12613,6 +13034,8 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
@@ -13960,6 +14383,8 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
         };
 
         // Emit the same event that the timeout handler in
