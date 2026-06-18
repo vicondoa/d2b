@@ -18,13 +18,16 @@
 use std::sync::{Arc, Mutex};
 
 pub mod aca_workload;
+pub mod audit_jsonl;
 pub mod display_listener;
 pub mod production;
 pub use aca_workload::{
     AcaGatewayWorkload, AgentBinaries, RelayCoords, build_agent_command, build_cleanup_command,
     default_entra_token_snippet,
 };
+pub use audit_jsonl::{DEFAULT_GATEWAY_AUDIT_RETENTION_DAYS, JsonlGatewayAudit};
 pub use display_listener::{RelayDisplayListener, notifying_verifier};
+pub use production::production_deps_with_audit;
 pub use production::{SystemClock, UrandomIds, production_deps, system_now_fn, system_now_unix};
 
 use nixling_gateway::{

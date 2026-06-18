@@ -43,6 +43,7 @@ use nixling_constellation_core::{
 
 pub mod display_transport;
 pub mod mux_session;
+pub mod secure_session;
 pub mod session;
 pub mod session_lifecycle;
 pub mod target_resolver;
@@ -52,6 +53,9 @@ pub use display_transport::{
     encode_display_preface, verify_display_preface,
 };
 pub use mux_session::MuxSession;
+pub use secure_session::{
+    NonceReplayGuard, SecurePeerIdentity, SecurePeerSession, SecureSessionKey,
+};
 pub use session::{MAX_FRAME_BYTES, PROTOCOL_VERSION, PeerSession};
 pub use session_lifecycle::{LifecycleError, SessionLifecycle, SessionPhase};
 pub use target_resolver::{DispatchTarget, RealmEntrypoint, RealmEntrypointTable, ResolveError};

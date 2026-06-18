@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nixling_gateway::{
-    Clock, DisplayListener, DisplaySessionId, GatewayDeps, GatewayWorkload, IdSource, SECRET_LEN,
-    SessionSecret,
+    Clock, DisplayListener, DisplaySessionId, GatewayAudit, GatewayDeps, GatewayWorkload, IdSource,
+    NoopGatewayAudit, SECRET_LEN, SessionSecret,
 };
 
 use crate::NowFn;
@@ -84,11 +84,21 @@ pub fn production_deps(
     workload: Box<dyn GatewayWorkload>,
     listener: Box<dyn DisplayListener>,
 ) -> GatewayDeps {
+    production_deps_with_audit(workload, listener, Box::new(NoopGatewayAudit))
+}
+
+/// Assemble production [`GatewayDeps`] with an explicit durable audit sink.
+pub fn production_deps_with_audit(
+    workload: Box<dyn GatewayWorkload>,
+    listener: Box<dyn DisplayListener>,
+    audit: Box<dyn GatewayAudit>,
+) -> GatewayDeps {
     GatewayDeps {
         workload,
         listener,
         clock: Box::new(SystemClock),
         ids: Box::new(UrandomIds),
+        audit,
     }
 }
 

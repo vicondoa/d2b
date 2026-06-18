@@ -31,6 +31,7 @@
     ./options-ownership-matrix.nix
     ./assertions.nix
     ./network.nix
+    ./gateway-vm.nix
     (import ./host.nix { inherit inputs; })
     # host-otel-relay-acl.nix retired per ADR 0018.
     # The OTel host-bridge + per-VM relay ACL contract moved into the

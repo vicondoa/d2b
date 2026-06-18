@@ -13,10 +13,12 @@
 
 use async_trait::async_trait;
 
+use crate::audit::{GatewayAudit, GatewayAuditEvent, GatewayAuditKind, display_envelope};
 use crate::error::GatewayError;
 use crate::handshake::{DisplaySessionId, SessionBinding, SessionSecret};
 use crate::ledger::{LedgerLimits, OpOutcome, SessionLedger, SessionState, TargetKey};
 use crate::types::{AppCommand, DisplaySessionContext};
+use nixling_constellation_core::AuthzDecision;
 
 /// How long a minted session credential is valid (seconds) before
 /// `not_after`. The agent must complete its handshake within this window.
@@ -118,6 +120,8 @@ pub struct GatewayDeps {
     pub clock: Box<dyn Clock>,
     /// Id/secret source.
     pub ids: Box<dyn IdSource>,
+    /// Gateway-local audit sink.
+    pub audit: Box<dyn GatewayAudit>,
 }
 
 /// The orchestrator: owns the ledger (one generation) + the injected deps, and
@@ -174,13 +178,19 @@ impl GatewayOrchestrator {
     ) -> Result<OpenSession, GatewayError> {
         let new_id = self.deps.ids.new_session_id();
         // 1. Ledger admission (idempotency / single-session cap / quotas).
-        let outcome = self.ledger.open(
+        let outcome = match self.ledger.open(
             realm_target,
             ctx_seed.principal.as_str(),
             ctx_seed.operation_id.as_str(),
             request_hash,
             new_id,
-        )?;
+        ) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                self.audit_open_denied(&ctx_seed, err.clone())?;
+                return Err(err);
+            }
+        };
         let session_id = match outcome {
             OpOutcome::Replay(id) => {
                 // Idempotent replay: the caller already has a live session for
@@ -217,11 +227,15 @@ impl GatewayOrchestrator {
             not_after,
         );
         let secret = self.deps.ids.new_secret();
+        self.audit_open_admitted(&ctx_seed, &session_id, SessionState::Minting)?;
 
         // 3. Drive the state machine with compensating cleanup on any failure.
         let result = self.drive_open(&ctx, &binding, &secret, &app).await;
         match result {
-            Ok(open) => Ok(open),
+            Ok(open) => {
+                self.audit_running(&ctx_seed, &open.session_id)?;
+                Ok(open)
+            }
             Err(e) => {
                 // Compensate: best-effort cleanup + ledger Failed/Closed.
                 let _ = self.fail_session(&session_id).await;
@@ -283,6 +297,69 @@ impl GatewayOrchestrator {
         let _ = self.ledger.transition(id, SessionState::Closed);
         l.and(a)
     }
+
+    fn audit_open_admitted(
+        &self,
+        seed: &ContextSeed,
+        session_id: &DisplaySessionId,
+        state: SessionState,
+    ) -> Result<(), GatewayError> {
+        let envelope = display_envelope(
+            seed.operation_id.clone(),
+            seed.realm.clone(),
+            seed.principal.clone(),
+            seed.node.clone(),
+            seed.workload.clone(),
+            AuthzDecision::Allow,
+        );
+        self.deps.audit.record(GatewayAuditEvent {
+            kind: GatewayAuditKind::DisplaySessionOpenAdmitted,
+            envelope,
+            session_id: Some(session_id.clone()),
+            state: Some(state),
+            error_slug: None,
+        })
+    }
+
+    fn audit_open_denied(&self, seed: &ContextSeed, err: GatewayError) -> Result<(), GatewayError> {
+        let envelope = display_envelope(
+            seed.operation_id.clone(),
+            seed.realm.clone(),
+            seed.principal.clone(),
+            seed.node.clone(),
+            seed.workload.clone(),
+            AuthzDecision::Deny,
+        );
+        self.deps.audit.record(GatewayAuditEvent {
+            kind: GatewayAuditKind::DisplaySessionOpenDenied,
+            envelope,
+            session_id: None,
+            state: None,
+            error_slug: Some(err.slug()),
+        })
+    }
+
+    fn audit_running(
+        &self,
+        seed: &ContextSeed,
+        session_id: &DisplaySessionId,
+    ) -> Result<(), GatewayError> {
+        let envelope = display_envelope(
+            seed.operation_id.clone(),
+            seed.realm.clone(),
+            seed.principal.clone(),
+            seed.node.clone(),
+            seed.workload.clone(),
+            AuthzDecision::Allow,
+        );
+        self.deps.audit.record(GatewayAuditEvent {
+            kind: GatewayAuditKind::DisplaySessionRunning,
+            envelope,
+            session_id: Some(session_id.clone()),
+            state: Some(SessionState::Running),
+            error_slug: None,
+        })
+    }
 }
 
 /// The non-secret seed the caller supplies to [`GatewayOrchestrator::open`]
@@ -295,6 +372,8 @@ pub struct ContextSeed {
     pub operation_id: nixling_constellation_core::OperationId,
     /// Authorizing caller principal.
     pub principal: nixling_constellation_core::PrincipalId,
+    /// Gateway node handling the operation.
+    pub node: nixling_constellation_core::NodeId,
     /// Workload presenting the UI.
     pub workload: nixling_constellation_core::WorkloadId,
 }
@@ -303,9 +382,11 @@ pub struct ContextSeed {
 mod tests {
     use super::*;
     use crate::handshake::SECRET_LEN;
-    use nixling_constellation_core::{OperationId, PrincipalId, RealmId, RealmPath, WorkloadId};
-    use std::sync::Arc;
+    use nixling_constellation_core::{
+        NodeId, OperationId, PrincipalId, RealmId, RealmPath, WorkloadId,
+    };
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     // ---- mock deps ----
 
@@ -380,7 +461,33 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingAudit {
+        events: Mutex<Vec<crate::GatewayAuditEvent>>,
+    }
+    impl GatewayAudit for RecordingAudit {
+        fn record(&self, event: crate::GatewayAuditEvent) -> Result<(), GatewayError> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+    }
+
+    struct AuditRef(Arc<RecordingAudit>);
+    impl GatewayAudit for AuditRef {
+        fn record(&self, event: crate::GatewayAuditEvent) -> Result<(), GatewayError> {
+            self.0.record(event)
+        }
+    }
+
     fn deps(workload: Arc<MockWorkload>, listener: Arc<MockListener>) -> GatewayDeps {
+        deps_with_audit(workload, listener, None)
+    }
+
+    fn deps_with_audit(
+        workload: Arc<MockWorkload>,
+        listener: Arc<MockListener>,
+        audit: Option<Arc<RecordingAudit>>,
+    ) -> GatewayDeps {
         struct W(Arc<MockWorkload>);
         struct L(Arc<MockListener>);
         #[async_trait]
@@ -419,6 +526,10 @@ mod tests {
             ids: Box::new(SeqIds {
                 n: AtomicU64::new(0),
             }),
+            audit: match audit {
+                Some(a) => Box::new(AuditRef(a)) as Box<dyn GatewayAudit>,
+                None => Box::new(crate::NoopGatewayAudit),
+            },
         }
     }
 
@@ -433,6 +544,7 @@ mod tests {
                 realm,
                 operation_id: OperationId::parse("op-1").unwrap(),
                 principal: PrincipalId::parse("alice").unwrap(),
+                node: NodeId::parse("gateway").unwrap(),
                 workload: WorkloadId::parse("demo").unwrap(),
             },
             AppCommand::new(vec!["foot".into()]).unwrap(),
@@ -450,6 +562,42 @@ mod tests {
         assert_eq!(orch.state(&open.session_id), Some(SessionState::Running));
         assert_eq!(w.spawns.load(Ordering::SeqCst), 1);
         assert_eq!(l.arms.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn open_emits_redacted_typed_audit_events() {
+        let w = Arc::new(MockWorkload::default());
+        let l = Arc::new(MockListener::default());
+        let audit = Arc::new(RecordingAudit::default());
+        let mut orch = GatewayOrchestrator::new(
+            deps_with_audit(w, l, Some(audit.clone())),
+            1,
+            LedgerLimits::default(),
+        );
+        let (tk, cs, app) = seed();
+        let open = orch.open(tk, cs, app, 42).await.unwrap();
+        let events = audit.events.lock().unwrap().clone();
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].kind,
+            crate::GatewayAuditKind::DisplaySessionOpenAdmitted
+        );
+        assert_eq!(events[0].session_id.as_ref(), Some(&open.session_id));
+        assert!(events[0].envelope.is_principal_consistent());
+        assert_eq!(events[0].envelope.realm.target_form(), "work");
+        assert_eq!(
+            events[0].envelope.principal.as_ref().map(|p| p.as_str()),
+            Some("alice")
+        );
+        assert_eq!(
+            events[1].kind,
+            crate::GatewayAuditKind::DisplaySessionRunning
+        );
+        let rendered = format!("{events:?}");
+        assert!(!rendered.contains("SharedAccessKey"));
+        assert!(!rendered.contains("/run/"));
+        assert!(!rendered.contains("foot"));
+        assert!(!rendered.contains("wayland-bytes"));
     }
 
     #[tokio::test]

@@ -105,6 +105,10 @@ examples-with-observability/obs-vm-name
 examples-with-observability/work-app-declared
 examples-with-observability/work-app-obs-enable
 examples-with-observability/work-env-declared
+gateway-vm/admits-framework-sys-prefix
+gateway-vm/auto-declared-env-index
+gateway-vm/auto-declared-name
+gateway-vm/rejects-secret-shaped-credential-path
 guest-config-containment/clean-no-failure
 guest-config-containment/imports-microvm-fires
 guest-config-containment/imports-microvm-names-mem

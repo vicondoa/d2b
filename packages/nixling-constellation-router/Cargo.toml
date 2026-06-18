@@ -24,6 +24,11 @@ nixling-constellation-provider = { path = "../nixling-constellation-provider", v
 # needed here; no runtime/network features (the dep-direction gate still
 # forbids a codec/transport-impl dependency).
 tokio = { version = "1", default-features = false, features = ["io-util"] }
+chacha20poly1305 = "0.10"
+hmac = "0.12"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
 
 [dev-dependencies]
 nixling-constellation-transport = { path = "../nixling-constellation-transport", version = "0.0.0-bootstrap" }

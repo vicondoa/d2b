@@ -16,12 +16,16 @@
 //! on these in the daemon via injected dependencies, so this crate stays
 //! unit-testable with no live Azure.
 
+pub mod audit;
 pub mod error;
 pub mod handshake;
 pub mod ledger;
 pub mod orchestrator;
 pub mod types;
 
+pub use audit::{
+    GatewayAudit, GatewayAuditEvent, GatewayAuditKind, NoopGatewayAudit, display_envelope,
+};
 pub use error::GatewayError;
 pub use handshake::{
     DisplaySessionId, Handshake, HandshakeError, MAX_HANDSHAKE_FRAME, ReplayGuard, SECRET_LEN,
