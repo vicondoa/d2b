@@ -563,9 +563,222 @@ async fn accept_one(
     }
 }
 
+/// A prologue verifier: given the first length-delimited frame's body, decide
+/// whether to admit the connection. The relay treats the frame as **opaque
+/// bytes** (it never depends on the gateway); the gateway supplies a closure
+/// that runs its session-handshake verification.
+pub type PrologueVerifier = std::sync::Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
+
+/// Max prologue frame body the listener will buffer before rejecting.
+const MAX_PROLOGUE: usize = 16 * 1024;
+
+/// Try to extract one length-delimited frame (`u32-be length || body`) from the
+/// front of `buf`. Returns `Ok(Some((body, consumed)))` once a full frame is
+/// present, `Ok(None)` if more bytes are needed, and `Err` if the declared
+/// length exceeds [`MAX_PROLOGUE`]. Pure + unit-testable.
+fn extract_prologue_frame(buf: &[u8]) -> Result<Option<(Vec<u8>, usize)>, RelayConnectError> {
+    if buf.len() < 4 {
+        return Ok(None);
+    }
+    let len = u32::from_be_bytes(buf[..4].try_into().expect("4 bytes")) as usize;
+    if len > MAX_PROLOGUE {
+        return Err(RelayConnectError::Handshake("prologue too large".into()));
+    }
+    if buf.len() < 4 + len {
+        return Ok(None);
+    }
+    Ok(Some((buf[4..4 + len].to_vec(), 4 + len)))
+}
+
+/// Read the prologue frame off the relay WebSocket, returning `(frame_body,
+/// leftover_bytes)`. Leftover bytes belong to the bridged stream and must be
+/// written to the local socket before pumping.
+async fn read_prologue(ws: &mut RelayStream) -> Result<(Vec<u8>, Vec<u8>), RelayConnectError> {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        if let Some((frame, consumed)) = extract_prologue_frame(&buf)? {
+            let leftover = buf[consumed..].to_vec();
+            return Ok((frame, leftover));
+        }
+        match ws.next().await {
+            Some(Ok(Message::Binary(data))) => buf.extend_from_slice(&data),
+            Some(Ok(Message::Ping(_)))
+            | Some(Ok(Message::Pong(_)))
+            | Some(Ok(Message::Text(_)))
+            | Some(Ok(Message::Frame(_))) => {}
+            Some(Ok(Message::Close(_))) | None => {
+                return Err(RelayConnectError::Handshake("prologue eof".into()));
+            }
+            Some(Err(_)) => return Err(RelayConnectError::Handshake("prologue read".into())),
+        }
+    }
+}
+
+/// Like [`run_listener`], but each accepted rendezvous must present a prologue
+/// frame that `verify` admits **before any byte is bridged** to `local`. A
+/// rejected or missing prologue closes the rendezvous with no bytes forwarded.
+/// This is how the gateway makes its per-session credential gate the display
+/// byte stream over the relay.
+pub async fn run_listener_verified(
+    endpoint: &RelayEndpoint,
+    credential: &RelayCredential,
+    local: &LocalTarget,
+    ttl_secs: u64,
+    ca_pem: Option<&[u8]>,
+    verify: PrologueVerifier,
+) -> Result<(), RelayConnectError> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let control =
+        connect_with_ca(endpoint, RelayRole::Listener, credential, ttl_secs, ca_pem).await?;
+    let (mut sink, mut stream) = control.split();
+    while let Some(msg) = stream.next().await {
+        let msg = msg.map_err(|_| RelayConnectError::Handshake("control channel".into()))?;
+        match msg {
+            Message::Text(text) => {
+                let v: serde_json::Value = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if let Some(addr) = v
+                    .get("accept")
+                    .and_then(|a| a.get("address"))
+                    .and_then(|s| s.as_str())
+                {
+                    let address = addr.to_owned();
+                    let local = local.clone();
+                    let ca = ca_pem.map(|c| c.to_vec());
+                    let verify = verify.clone();
+                    tokio::spawn(async move {
+                        let _ = accept_one_verified(&address, &local, ca.as_deref(), verify).await;
+                    });
+                }
+            }
+            Message::Ping(p) => {
+                let _ = sink.send(Message::Pong(p)).await;
+            }
+            Message::Close(_) => return Ok(()),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+async fn accept_one_verified(
+    address: &str,
+    local: &LocalTarget,
+    ca_pem: Option<&[u8]>,
+    verify: PrologueVerifier,
+) -> Result<(), RelayConnectError> {
+    use tokio::io::AsyncWriteExt;
+    let mut ws = connect_raw(address, ca_pem).await?;
+    let (frame, leftover) = read_prologue(&mut ws).await?;
+    if !verify(&frame) {
+        // Fail closed: never connect the local socket, never forward a byte.
+        return Err(RelayConnectError::Handshake("prologue rejected".into()));
+    }
+    let io = connect_local(local)
+        .await
+        .map_err(|_| RelayConnectError::Handshake("local connect".into()))?;
+    match io {
+        LocalIo::Tcp(mut s) => {
+            if !leftover.is_empty() {
+                s.write_all(&leftover)
+                    .await
+                    .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
+            }
+            pump(ws, s).await
+        }
+        LocalIo::Unix(mut s) => {
+            if !leftover.is_empty() {
+                s.write_all(&leftover)
+                    .await
+                    .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
+            }
+            pump(ws, s).await
+        }
+    }
+}
+
+/// Like [`run_sender`], but writes `prologue` as the first bytes on the relay
+/// channel before bridging the local stream. The in-sandbox agent uses this to
+/// present its session handshake frame, which the gateway's
+/// [`run_listener_verified`] consumes and verifies before bridging.
+pub async fn run_sender_with_prologue(
+    endpoint: &RelayEndpoint,
+    credential: &RelayCredential,
+    local: &LocalTarget,
+    ttl_secs: u64,
+    ca_pem: Option<&[u8]>,
+    prologue: &[u8],
+) -> Result<(), RelayConnectError> {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+    let frame = Message::Binary(prologue.to_vec());
+    if let LocalTarget::UnixListen(path) = local {
+        let _ = std::fs::remove_file(path);
+        let listener = tokio::net::UnixListener::bind(path)
+            .map_err(|_| RelayConnectError::Handshake("bind unix-listen".into()))?;
+        let mut ws = connect_sender_retrying(endpoint, credential, ttl_secs, ca_pem).await?;
+        ws.send(frame)
+            .await
+            .map_err(|_| RelayConnectError::Handshake("prologue send".into()))?;
+        let (stream, _) = listener
+            .accept()
+            .await
+            .map_err(|_| RelayConnectError::Handshake("accept unix-listen".into()))?;
+        return pump(ws, stream).await;
+    }
+    let mut ws = connect_sender_retrying(endpoint, credential, ttl_secs, ca_pem).await?;
+    ws.send(frame)
+        .await
+        .map_err(|_| RelayConnectError::Handshake("prologue send".into()))?;
+    let io = connect_local(local)
+        .await
+        .map_err(|_| RelayConnectError::Handshake("local connect".into()))?;
+    match io {
+        LocalIo::Tcp(s) => pump(ws, s).await,
+        LocalIo::Unix(s) => pump(ws, s).await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_prologue_needs_full_length_prefix() {
+        // Fewer than 4 bytes -> need more.
+        assert_eq!(extract_prologue_frame(&[0, 0]).unwrap(), None);
+    }
+
+    #[test]
+    fn extract_prologue_waits_for_full_body() {
+        // length=5 but only 3 body bytes present -> need more.
+        let mut buf = (5u32).to_be_bytes().to_vec();
+        buf.extend_from_slice(b"abc");
+        assert_eq!(extract_prologue_frame(&buf).unwrap(), None);
+    }
+
+    #[test]
+    fn extract_prologue_returns_frame_and_consumed() {
+        let mut buf = (5u32).to_be_bytes().to_vec();
+        buf.extend_from_slice(b"hello");
+        buf.extend_from_slice(b"LEFTOVER");
+        let (frame, consumed) = extract_prologue_frame(&buf).unwrap().unwrap();
+        assert_eq!(frame, b"hello");
+        assert_eq!(consumed, 9); // 4 + 5
+        assert_eq!(&buf[consumed..], b"LEFTOVER");
+    }
+
+    #[test]
+    fn extract_prologue_rejects_oversize() {
+        let buf = (u32::MAX).to_be_bytes().to_vec();
+        assert!(extract_prologue_frame(&buf).is_err());
+    }
 
     fn endpoint() -> RelayEndpoint {
         RelayEndpoint {
