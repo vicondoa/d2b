@@ -23,6 +23,7 @@ nixling-gateway = { path = "../nixling-gateway", version = "0.0.0-bootstrap" }
 nixling-provider-relay = { path = "../nixling-provider-relay", version = "0.0.0-bootstrap" }
 nixling-provider-aca = { path = "../nixling-provider-aca", version = "0.0.0-bootstrap" }
 nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
+nixling-constellation-provider = { path = "../nixling-constellation-provider", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 base64 = "0.22"

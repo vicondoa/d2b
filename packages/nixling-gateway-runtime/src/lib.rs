@@ -22,6 +22,7 @@ pub mod audit_jsonl;
 pub mod credential;
 pub mod display_listener;
 pub mod production;
+pub mod waypipe_display;
 pub use aca_workload::{
     AcaGatewayWorkload, AgentBinaries, RelayCoords, build_agent_command, build_cleanup_command,
     default_entra_token_snippet,
@@ -34,6 +35,11 @@ pub use credential::{
 pub use display_listener::{RelayDisplayListener, notifying_verifier};
 pub use production::production_deps_with_audit;
 pub use production::{SystemClock, UrandomIds, production_deps, system_now_fn, system_now_unix};
+pub use waypipe_display::{
+    WaypipeCompression, WaypipeDisplayProvider, WaypipeRunnerConfig, WaypipeSystemdService,
+    gated_relay_sender_argv, guest_waypipe_server_argv, guest_waypipe_service,
+    host_waypipe_client_argv, host_waypipe_service,
+};
 
 use nixling_gateway::{
     Handshake, SessionBinding, SessionSecret, SetReplayGuard, encode_handshake_frame,

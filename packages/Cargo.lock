@@ -1748,6 +1748,7 @@ dependencies = [
  "async-trait",
  "base64",
  "nixling-constellation-core",
+ "nixling-constellation-provider",
  "nixling-gateway",
  "nixling-provider-aca",
  "nixling-provider-relay",
