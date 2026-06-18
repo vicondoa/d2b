@@ -41,6 +41,10 @@ use nixling_constellation_core::{
     OperationKind, OperationRequest, PrincipalId, RealmPath,
 };
 
+pub mod session;
+
+pub use session::{PeerSession, MAX_FRAME_BYTES, PROTOCOL_VERSION};
+
 /// Default dedup retention window. While a completed key is within this
 /// window a same-request retry resolves to `Replay`; past it the key is
 /// reported expired rather than silently re-executed.
