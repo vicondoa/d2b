@@ -454,6 +454,11 @@ where
 /// Run the **sender** side (in the sandbox): connect to the relay with the
 /// credential (the MI Entra bearer in production), then bridge to `local`.
 /// `ca_pem` is the ACA egress-proxy CA.
+///
+/// For a `unix-listen` target the socket is **bound before** the relay
+/// connect, so the local peer (e.g. `waypipe server`) can connect
+/// immediately and never races the relay handshake; the local connection is
+/// accepted only after the relay side is up.
 pub async fn run_sender(
     endpoint: &RelayEndpoint,
     credential: &RelayCredential,
@@ -461,6 +466,17 @@ pub async fn run_sender(
     ttl_secs: u64,
     ca_pem: Option<&[u8]>,
 ) -> Result<(), RelayConnectError> {
+    if let LocalTarget::UnixListen(path) = local {
+        let _ = std::fs::remove_file(path);
+        let listener = tokio::net::UnixListener::bind(path)
+            .map_err(|_| RelayConnectError::Handshake("bind unix-listen".into()))?;
+        let ws = connect_with_ca(endpoint, RelayRole::Sender, credential, ttl_secs, ca_pem).await?;
+        let (stream, _) = listener
+            .accept()
+            .await
+            .map_err(|_| RelayConnectError::Handshake("accept unix-listen".into()))?;
+        return pump(ws, stream).await;
+    }
     let ws = connect_with_ca(endpoint, RelayRole::Sender, credential, ttl_secs, ca_pem).await?;
     let io = connect_local(local)
         .await
