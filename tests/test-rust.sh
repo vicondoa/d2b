@@ -40,14 +40,15 @@ export pinned_channel
 
 workspace_target_dir=$(nl_cargo_target_dir workspace)
 # Separate target dirs for the broker's three concurrent feature passes so they
-# don't lock-contend. Per the sccache-dedup design (broker .cargo/config sets no
-# target-dir), these are fresh per-run dirs; sccache caches the COMPILATION
-# across runs so a fresh dir is not a full recompile.
+# don't lock-contend. They are DETERMINISTIC siblings of the broker target dir
+# (not mktemp): sccache hashes the inherited CARGO_* environment, including
+# CARGO_TARGET_DIR, so a random per-run target dir would change the cache key
+# and defeat cross-run hits. Stable, distinct dirs keep the key stable (cache
+# hits) while still avoiding lock contention. They are gitignored and reused
+# across runs like the default broker/workspace target dirs.
 broker_target_dir=$(nl_cargo_target_dir broker)
-broker_layer1_target_dir=$(nl_mktemp .nixling-broker-layer1-target.XXXXXX)
-add_cleanup "rm -rf -- \"$broker_layer1_target_dir\""
-broker_fakebackends_target_dir=$(nl_mktemp .nixling-broker-fakebackends-target.XXXXXX)
-add_cleanup "rm -rf -- \"$broker_fakebackends_target_dir\""
+broker_layer1_target_dir="${broker_target_dir%/}-layer1"
+broker_fakebackends_target_dir="${broker_target_dir%/}-fakebackends"
 
 # Keep fixture-dependent contract crates out of generic workspace tests.
 # Full NL_FIXTURES delivery to the sandbox/CI is a tracked W1 deliverable.
@@ -180,18 +181,35 @@ cleanup_package_test_scratch() {
 # sccache: a per-crate compilation cache (keyed on source + flags), shared
 # across the main + broker workspaces and all feature passes — so the broker's
 # rebuilds of crates the main workspace already compiled (nixling-core/host/ipc)
-# and its three separate-target-dir feature passes become cache hits. Use it
-# locally; DISABLE in CI (no persistent backend there → only overhead/failure)
-# and when sccache is unavailable. The per-command `RUSTC_WRAPPER=""` overrides
-# below (xtask gen-schemas) intentionally opt out regardless of this mode.
-if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ] || [ "${NL_NO_SCCACHE:-0}" = 1 ] \
-  || ! command -v sccache >/dev/null 2>&1; then
+# and its three separate-target-dir feature passes become cache hits. Used
+# locally by default. In CI it is OFF unless NL_CI_SCCACHE=1 is set, because it
+# only helps when a persistent backend survives across runs. CI opts in by
+# pointing SCCACHE_DIR at a directory it restores/saves via actions/cache — we
+# deliberately use sccache's LOCAL-DISK backend (NOT SCCACHE_GHA_ENABLED): the
+# native GHA backend needs ACTIONS_RUNTIME_TOKEN exported into this process's
+# environment, where the untrusted crate code this gate compiles and runs
+# (build scripts, proc-macros, `cargo test`) could read and exfiltrate it.
+# actions/cache performs its I/O in its own action process and never exposes
+# that token to `run:` steps. The per-command `RUSTC_WRAPPER=""` overrides below
+# (xtask gen-schemas) intentionally opt out regardless of this mode.
+_ci_active=0
+if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
+  _ci_active=1
+fi
+if [ "${NL_NO_SCCACHE:-0}" = 1 ] || ! command -v sccache >/dev/null 2>&1; then
   export RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER=""
-  log "sccache: disabled (CI or unavailable)"
+  log "sccache: disabled (forced off or unavailable)"
+elif [ "$_ci_active" = 1 ] && [ "${NL_CI_SCCACHE:-0}" != 1 ]; then
+  export RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER=""
+  log "sccache: disabled (CI without NL_CI_SCCACHE opt-in)"
 else
   _sccache_bin=$(command -v sccache)
   export RUSTC_WRAPPER="$_sccache_bin" CARGO_BUILD_RUSTC_WRAPPER="$_sccache_bin"
-  log "sccache: enabled ($_sccache_bin)"
+  if [ "$_ci_active" = 1 ]; then
+    log "sccache: enabled ($_sccache_bin; CI opt-in, local backend at ${SCCACHE_DIR:-default})"
+  else
+    log "sccache: enabled ($_sccache_bin)"
+  fi
 fi
 
 log "--> rust toolchain version"

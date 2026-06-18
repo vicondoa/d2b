@@ -53,26 +53,40 @@ Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
 | `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
 | `make test-rust` | comprehensive Rust gate (fmt, clippy, cargo test, contract, broker ×3, deny/audit) | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
-| `make test-flake` | `nix flake check --no-build` (native system) | local + CI (2-arch matrix) |
+| `make test-flake` | `nix flake check --no-build` (native system); `NL_FLAKE_CHECK=<name>` instantiates one check, `NL_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs | local + CI (x86 sharded per-check matrix + aarch64 monolithic) |
+| `make test-flake-list` | emit native-system flake check names as JSON (CI matrix plumbing) | CI (dynamic matrix) |
 | `make test-nix-unit` | nix-unit corpus (already covered by test-flake; focused convenience target) | local |
-| `make test-drift` | drift-check + vms-json-parity | local + CI |
+| `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
 | `make test-policy` | meta gates (ci-coverage, ci-uses-make, adr-index, etc.) | local + CI |
 | `make test-integration` | type-9 podman container tests | **ubuntu CI + local** (podman) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks | **local NixOS host w/ KVM** (manual; TCG fallback) |
 | `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
 | `make check` | full Layer-1 gate (`tests/static.sh`) | local + CI |
+| `make flake-matrix-pin` | regenerate the CI flake-check-matrix drift pin after adding/removing a flake check | local |
+| `make nix-unit-pin` | regenerate the nix-unit case-presence pins | local |
 | `NL_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests | **manual, against a deployed nixling host** |
 
 CI runs the individual sub-targets (`test-lint`, `test-rust`, etc.) in parallel.
-Locally, `make test-unit` runs them serially.
+The x86 `test-flake` leg is sharded one job per flake check (the matrix is
+enumerated at CI time by `make test-flake-list`; the `test-flake-x86` job is a
+stable aggregator over the shards + the non-`checks` outputs job). The aarch64
+leg runs the full monolithic check. A fail-closed drift gate keeps the matrix
+in sync with the flake (`make flake-matrix-pin` to update its pin).
+Locally, `make test-unit` runs the sub-targets serially and `make test-flake`
+runs the full native check.
 
 Useful knobs:
-- `NL_NO_SCCACHE=1` — disable sccache in the rust gate (it is auto-disabled in CI).
+- `NL_NO_SCCACHE=1` — disable sccache in the rust gate.
+- `NL_CI_SCCACHE=1` — opt the rust gate back into sccache under CI (off by
+  default there; `pr-l1-static-fast` sets it and backs `SCCACHE_DIR` with
+  `actions/cache`, using sccache's local-disk backend — never the native GHA
+  backend, which would export `ACTIONS_RUNTIME_TOKEN` into the build env).
 - `NL_NO_PARALLEL_BROKER=1` — run the broker feature passes serially.
-- The rust gate uses **sccache** locally (a shared per-crate compilation cache)
-  and runs the broker's three feature passes (default / layer1-bootstrap /
-  fake-backends) concurrently with the main workspace.
+- The rust gate uses **sccache** (a shared per-crate compilation cache) and
+  runs the broker's three feature passes (default / layer1-bootstrap /
+  fake-backends) concurrently with the main workspace, on deterministic target
+  dirs so the sccache cache key stays stable.
 
 ## Adding a test
 
