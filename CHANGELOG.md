@@ -10,7 +10,42 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Fixed
+
+- `tpm.enable` first-run: enabling TPM on a VM with no pre-existing
+  `/var/lib/nixling/vms/<vm>/swtpm` state directory no longer wedges
+  the VM's start. The privileged broker now provisions the per-VM
+  swtpm state directory (owner `nixling-<vm>-swtpm`, mode `0700`) on
+  first start, so swtpm no longer dies with a fatal NVRAM `ENOENT`.
+  The documented manual `install -d … swtpm` workaround is no longer
+  needed.
+- A required per-VM runner that exits during VM start (e.g. swtpm)
+  now fails the start fast with a typed, actionable error instead of
+  blocking the daemon for the full readiness budget (~300 s). The
+  swtpm control-socket readiness now waits for an active listener
+  rather than the bare socket inode.
+- The daemon handles client connections concurrently (bounded), so a
+  slow or failing VM start no longer stalls unrelated clients
+  (e.g. host status feeds). Mutating lifecycle operations are
+  serialized per-VM/globally; read-only requests run in parallel.
+
+### Security
+
+- The per-VM state root `/var/lib/nixling/vms/<vm>/` is now `3770`
+  (setgid **+ sticky**) so a non-owner per-VM role UID cannot rename
+  or replace the principal-owned `swtpm` NVRAM directory. The swtpm
+  state directory's inherited ACLs are cleared to owner-only `0700`
+  on provisioning.
+- TPM state-loss is fail-closed: a previously-provisioned swtpm state
+  directory that goes missing or is replaced fails the VM start with
+  `previously-provisioned-swtpm-state-missing` (bound to the
+  directory identity via a root-owned marker outside the
+  role-writable tree) rather than silently re-creating an empty TPM.
+
 ### Changed
+
+- `bundleVersion` 4 → 5: adds the audited `PrepareSwtpmDir` broker
+  operation for per-VM swtpm state-directory provisioning.
 
 - CI: the `pr-l1-static-fast` x86_64 flake check is now sharded one job per
   flake check via a dynamic matrix (`make test-flake-list` enumerates the
