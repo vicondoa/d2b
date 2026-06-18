@@ -1601,6 +1601,27 @@ pub mod pidfd_sys {
         run_setfacl_op_on_fd(fd, "-m", acl_spec)
     }
 
+    /// Resolve the absolute path to `setfacl` from a FIXED list of
+    /// trusted system locations (never `$PATH`, which a caller could
+    /// poison). NixOS production hosts provide it under
+    /// `/run/current-system/sw/bin`; Debian/Ubuntu (including the CI
+    /// runner where these unit tests execute) under `/usr/bin` or
+    /// `/bin`. Returns the first that exists, falling back to the NixOS
+    /// path so a missing binary surfaces a sensible exec failure.
+    fn resolve_setfacl_path() -> std::ffi::CString {
+        const CANDIDATES: &[&str] = &[
+            "/run/current-system/sw/bin/setfacl",
+            "/usr/bin/setfacl",
+            "/bin/setfacl",
+        ];
+        for cand in CANDIDATES {
+            if std::path::Path::new(cand).exists() {
+                return std::ffi::CString::new(*cand).expect("static setfacl path has no NUL");
+            }
+        }
+        std::ffi::CString::new(CANDIDATES[0]).expect("static setfacl path has no NUL")
+    }
+
     /// Run `setfacl <op> <acl_spec> /proc/self/fd/<fd>` in a forked
     /// child while keeping the target fd CLOEXEC in the broker parent.
     ///
@@ -1609,8 +1630,7 @@ pub mod pidfd_sys {
     /// CLOEXEC rationale.
     #[allow(unsafe_code)]
     pub fn run_setfacl_op_on_fd(fd: BorrowedFd<'_>, op: &str, acl_spec: &str) -> io::Result<()> {
-        let setfacl = std::ffi::CString::new("/run/current-system/sw/bin/setfacl")
-            .expect("static setfacl path has no NUL");
+        let setfacl = resolve_setfacl_path();
         let dash_m = std::ffi::CString::new(op).map_err(|_| {
             io::Error::new(io::ErrorKind::InvalidInput, "setfacl op contains NUL byte")
         })?;
@@ -1673,70 +1693,41 @@ pub mod pidfd_sys {
         }
     }
 
-    /// Run `setfacl -b -k /proc/self/fd/<fd>` in a forked child to
-    /// clear BOTH the access ACL (`-b`, remove all extended entries)
-    /// AND the default ACL (`-k`, remove the default ACL) on the held
-    /// fd. A directory with no extended ACL is a no-op success, so
-    /// this is idempotent and tolerates an already-clean inode. See
-    /// [`run_setfacl_op_on_fd`] for the CLOEXEC rationale.
+    /// Clear BOTH the access ACL and the default ACL on the directory
+    /// referenced by `fd` (the effect of `setfacl -b -k`) by removing the
+    /// POSIX-ACL xattrs directly with `fremovexattr(2)`. Using the syscall
+    /// rather than forking `setfacl` means no external binary is required
+    /// (works on any host/distro, including the non-NixOS CI runner where
+    /// these unit tests execute) and adds no fork/exec to the privileged
+    /// broker. `ENODATA` (no such ACL) and `ENOTSUP`/`EOPNOTSUPP`
+    /// (filesystem without ACL support) are tolerated as "nothing to
+    /// clear", so it stays idempotent on an already-clean inode. The
+    /// caller re-asserts mode `0700` afterwards.
     #[allow(unsafe_code)]
     pub fn run_setfacl_clear_on_fd(fd: BorrowedFd<'_>) -> io::Result<()> {
-        let setfacl = std::ffi::CString::new("/run/current-system/sw/bin/setfacl")
-            .expect("static setfacl path has no NUL");
-        let remove_all = std::ffi::CString::new("-b").expect("static flag has no NUL");
-        let remove_default = std::ffi::CString::new("-k").expect("static flag has no NUL");
-        let procfd = std::ffi::CString::new(format!("/proc/self/fd/{}", fd.as_raw_fd()))
-            .expect("formatted fd path has no NUL");
-
-        // SAFETY: fork is used to immediately exec setfacl. The child
-        // performs only async-signal-safe libc calls before exec/_exit.
-        let pid = unsafe { libc::fork() };
-        if pid < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        if pid == 0 {
-            let raw_fd = fd.as_raw_fd();
-            let flags = unsafe { libc::fcntl(raw_fd, libc::F_GETFD) };
-            if flags < 0 {
-                unsafe { libc::_exit(126) };
+        fn remove_one(fd: RawFd, name: &str) -> io::Result<()> {
+            let c_name = CString::new(name).expect("static xattr name has no NUL");
+            // SAFETY: fremovexattr removes the named attribute on `fd`;
+            // it reads/writes no caller buffers.
+            let ret = unsafe { libc::fremovexattr(fd, c_name.as_ptr()) };
+            if ret == 0 {
+                return Ok(());
             }
-            if unsafe { libc::fcntl(raw_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
-                unsafe { libc::_exit(126) };
-            }
-            let argv = [
-                setfacl.as_ptr(),
-                remove_all.as_ptr(),
-                remove_default.as_ptr(),
-                procfd.as_ptr(),
-                std::ptr::null(),
-            ];
-            unsafe {
-                libc::execv(setfacl.as_ptr(), argv.as_ptr());
-                libc::_exit(127);
-            }
-        }
-
-        let mut status = 0;
-        loop {
-            let rc = unsafe { libc::waitpid(pid, &mut status, 0) };
-            if rc == pid {
-                break;
-            }
-            if rc < 0 {
-                let err = io::Error::last_os_error();
-                if err.raw_os_error() == Some(libc::EINTR) {
-                    continue;
+            let err = io::Error::last_os_error();
+            match err.raw_os_error() {
+                Some(code)
+                    if code == libc::ENODATA
+                        || code == libc::ENOTSUP
+                        || code == libc::EOPNOTSUPP =>
+                {
+                    Ok(())
                 }
-                return Err(err);
+                _ => Err(err),
             }
         }
-        if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::other(format!(
-                "setfacl clear exited with wait status {status}"
-            )))
-        }
+        remove_one(fd.as_raw_fd(), "system.posix_acl_access")?;
+        remove_one(fd.as_raw_fd(), "system.posix_acl_default")?;
+        Ok(())
     }
 
     /// Pure I/O — no syscalls beyond `open`/`read`. Returns `None` if

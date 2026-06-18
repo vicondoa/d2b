@@ -81,8 +81,12 @@ jobs:
           key: sccache-test-rust-${{ runner.os }}-${{ hashFiles('packages/Cargo.lock', 'packages/nixling-priv-broker/Cargo.lock', 'packages/rust-toolchain.toml') }}
           restore-keys: |
             sccache-test-rust-${{ runner.os }}-
-      - name: Install ripgrep
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Install ripgrep + acl
+        # acl provides setfacl/getfacl. The broker's swtpm-dir hardening
+        # resolves setfacl from the NixOS system path in production but falls
+        # back to /usr/bin/setfacl; ubuntu-24.04 runners no longer ship acl
+        # preinstalled, so the broker swtpm_dir ACL-add tests need it here.
+        run: sudo apt-get update && sudo apt-get install -y ripgrep acl
       - name: Provision sccache on PATH (pinned nixpkgs)
         # Hosted runners ship rustup, so tests/test-rust.sh runs the gate with
         # the system toolchain and never enters the nix shell that would supply
