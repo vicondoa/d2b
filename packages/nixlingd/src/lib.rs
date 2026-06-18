@@ -1743,17 +1743,28 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
 }
 
 fn authorize_peer(stream: &Socket, state: &ServerState) -> Result<PeerIdentity, TypedError> {
+    // Peer-identity resolution order:
+    //   1. the `#[cfg(test)]` in-process injection slot (lib unit tests that
+    //      drive `handle_connection` directly),
+    //   2. the `NIXLINGD_TEST_PEER_*` env vars (integration tests that spawn
+    //      the real daemon binary and pass them via `Command::env`; reading
+    //      env is safe under edition 2024),
+    //   3. the real `SO_PEERCRED` of the connected socket (production).
     let peer_override = match peer_override_injected() {
         Some(peer) => peer,
-        None => {
-            let peer = getsockopt(stream, PeerCredentials).map_err(io_wrap("read SO_PEERCRED"))?;
-            PeerOverride {
-                uid: peer.uid() as u32,
-                gid: peer.gid() as u32,
-                username: None,
-                groups: None,
+        None => match peer_override_from_env()? {
+            Some(peer) => peer,
+            None => {
+                let peer =
+                    getsockopt(stream, PeerCredentials).map_err(io_wrap("read SO_PEERCRED"))?;
+                PeerOverride {
+                    uid: peer.uid() as u32,
+                    gid: peer.gid() as u32,
+                    username: None,
+                    groups: None,
+                }
             }
-        }
+        },
     };
     let uid = peer_override.uid;
     let _gid = peer_override.gid;
@@ -9285,6 +9296,55 @@ fn peer_override_injected() -> Option<PeerOverride> {
 #[cfg(not(test))]
 fn peer_override_injected() -> Option<PeerOverride> {
     None
+}
+
+/// Read a peer-credential override from the `NIXLINGD_TEST_PEER_*` env vars.
+/// Used by integration tests that spawn the real daemon binary and pass these
+/// via `Command::env`; reading env is safe under edition 2024. Returns `None`
+/// (the normal production case) when `NIXLINGD_TEST_PEER_UID` is unset.
+fn peer_override_from_env() -> Result<Option<PeerOverride>, TypedError> {
+    let uid = match std::env::var("NIXLINGD_TEST_PEER_UID") {
+        Ok(value) => value
+            .parse::<u32>()
+            .map_err(|err| TypedError::InternalConfig {
+                detail: format!("NIXLINGD_TEST_PEER_UID: {err}"),
+            })?,
+        Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(err) => {
+            return Err(TypedError::InternalConfig {
+                detail: format!("NIXLINGD_TEST_PEER_UID: {err}"),
+            });
+        }
+    };
+    let gid = match std::env::var("NIXLINGD_TEST_PEER_GID") {
+        Ok(value) => value
+            .parse::<u32>()
+            .map_err(|err| TypedError::InternalConfig {
+                detail: format!("NIXLINGD_TEST_PEER_GID: {err}"),
+            })?,
+        Err(std::env::VarError::NotPresent) => uid,
+        Err(err) => {
+            return Err(TypedError::InternalConfig {
+                detail: format!("NIXLINGD_TEST_PEER_GID: {err}"),
+            });
+        }
+    };
+    let username = std::env::var("NIXLINGD_TEST_PEER_USERNAME").ok();
+    let groups = std::env::var("NIXLINGD_TEST_PEER_GROUPS")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .filter(|part| !part.is_empty())
+                .map(|part| part.to_owned())
+                .collect::<Vec<_>>()
+        });
+    Ok(Some(PeerOverride {
+        uid,
+        gid,
+        username,
+        groups,
+    }))
 }
 
 fn io_wrap(context: &'static str) -> impl FnOnce(nix::errno::Errno) -> TypedError {
