@@ -2327,6 +2327,23 @@ authentication, and compliance.
 | Exit criteria | A reviewed P0 demo proves end-to-end ACA sandbox lifecycle + exec/logs + full Wayland app forwarding through the constellation stack; validation evidence is attached; expanded panel signoff is unanimous. Full realm rollout may not proceed until this vertical is green or explicitly descoped by a new ADR/panel decision. |
 | Non-goals | Full realm policy, nested realms, whole-constellation observability, full desktop remoting, GPU acceleration in ACA, generic TCP tunneling, or bypassing capability checks for display. |
 
+**P0 placement note (gateway/guestd/systemd services).** P0 is a thin
+vertical: the realm gateway (relay termination, the per-session display
+credential, the host-facing Waypipe bridge) runs **co-located as host-side
+processes/services**, not yet inside a dedicated realm gateway guest VM. The
+guestd-bearing gateway **guest VM** — a real nixling microVM that runs
+`nixling-guestd`, the Azure Relay transport, and the host-facing display
+bridge as **systemd services** — is introduced as a workload profile in
+Wave 1 and gains the in-guest relay in **Wave 10**; P0 explicitly defers it.
+Inside the ACA sandbox there is **no systemd and no guestd**: ACA
+dynamic/custom-container sessions run a container init (PID 1 is the
+container entrypoint, `/sys/fs/cgroup` is read-only), so the in-sandbox
+Waypipe server + relay sender are supervised by the sandbox agent under that
+init, and `nixling vm exec <…>.aca.<realm>` runs commands through the **ACA
+provider exec/log subset** (Wave 15), never through a guestd inside the
+sandbox. Reaching a `guestd` over the relay is **not** a P0 capability and is
+not the ADR's model for provider-managed sandboxes (see Wave 10 and Wave 15).
+
 ### Wave 1 — Realm entrypoint and gateway workload profile
 
 | Field | Detail |
@@ -2447,6 +2464,21 @@ authentication, and compliance.
 | Exit criteria | Gateway guest connects outbound through Azure Relay and supports authenticated exec/log operations to a test node; host stores no realm relay credentials and opens no realm relay sessions. |
 | Non-goals | No Azure-specific orchestration model, no provider provisioning, no display forwarding, no host-side realm relay client. |
 
+**Home for the gateway-guest `guestd` + relay + display services.** This wave
+is where the realm gateway **guest VM** — a real nixling microVM with full
+systemd — runs `nixling-guestd`, the Azure Relay `TransportProvider`, and (with
+Wave 17) the host-facing Waypipe/display bridge as **systemd services**,
+replacing the co-located host-process precursor that Wave P0 ships. The
+operator host reaches the gateway guest's `nixlingd`/`guestd` over **local**
+guest-control (vsock/ttRPC, the `GatewayExecutor` path), and the gateway guest
+then drives the relay outward to providers/peers. Guest-control is **never**
+exposed raw over the relay (it stays local-to-host/guest per the Context
+section); the relay carries constellation peer/provider operations and
+named `control`/`stdio`/`logs`/`display` streams above the E2E session
+security, not a guestd RPC socket. Provider-managed sandboxes (e.g. ACA) are
+**not** given a guestd by this wave — they remain provider-adapter targets
+(Wave 15).
+
 ### Wave 11 — Self-hosted relay, QUIC, and explicit SSH transport adapters
 
 | Field | Detail |
@@ -2507,6 +2539,20 @@ authentication, and compliance.
 | Exit criteria | Provider-managed sandbox can register and perform only its advertised subset, with ACA dynamic/custom-container sessions represented as the first concrete provider. |
 | Non-goals | No full-host emulation, no hidden device/display parity shim, no provider-agnostic security claims beyond delegated provider boundary. |
 
+**No guestd / no systemd inside provider-managed sandboxes.** A provider node
+(e.g. an ACA dynamic/custom-container session) advertises `nixling-guestd`,
+vsock, the broker, and systemd-as-init as **absences**, not parity gaps to be
+shimmed. `nixling vm exec`/log/file against such a node map to the provider's
+own exec/log/file API surface, surfaced as constellation `stdio`/`logs`
+streams — there is no guestd in the sandbox and no guest-control RPC over the
+relay. This is also a hard platform fact for ACA: the sandbox runs a container
+init (PID 1 is the entrypoint, `/sys/fs/cgroup` is read-only), so systemd
+cannot run as PID 1 and in-sandbox helpers (the Waypipe server, the relay
+sender) are agent-supervised under that init. Workloads that genuinely need a
+full host with guestd/systemd belong behind a realm **gateway guest VM**
+(Waves 1/10) or a remote full-host node (Wave 14), not inside a
+provider-managed sandbox.
+
 ### Wave 16 — Runtime/hypervisor provider abstraction
 
 | Field | Detail |
@@ -2530,6 +2576,19 @@ authentication, and compliance.
 | Validation | Local wl-cross-domain Wayland/audio/USB tests remain independent of constellation; capability denial tests for each I/O surface; stream backpressure tests for display/audio; ACA custom-container Wayland app forwarded through Waypipe-style provider over an authorized display stream; audit coverage. |
 | Exit criteria | Every display/I/O surface is explicit, capability-scoped, bounded, and auditable; the P0 provider demo can display a Wayland app from an ACA sandbox without a flat network tunnel. |
 | Non-goals | Full desktop remoting, implicit device access, GPU acceleration in ACA, or "all I/O everywhere" assumptions. |
+
+**Display bridges are managed services, not ad-hoc processes.** The Waypipe-style
+display provider's long-lived endpoints are supervised services tied to
+workload lifecycle (started when the workload is started, stopped when it is
+stopped), never one-off background processes. On a real host/guest with
+systemd — the operator host (compositor-side Waypipe client) and the realm
+gateway guest VM (relay/display bridge) — they are **systemd services**
+(`systemctl --user` for the operator-session, compositor-facing client so it
+can reach `WAYLAND_DISPLAY`; system services in the gateway guest). Inside a
+provider-managed sandbox with no systemd (e.g. ACA, see Wave 15) the in-sandbox
+Waypipe server is supervised by the sandbox agent under the container init. The
+display bridge is brought up at workload start so that `vm exec` only launches
+applications into an already-running Wayland setup.
 
 ### Wave 18 — Realm rollout and work gateway policy
 
