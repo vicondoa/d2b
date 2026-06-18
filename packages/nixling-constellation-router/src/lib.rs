@@ -138,7 +138,9 @@ impl DedupKey {
 enum DedupState {
     /// Accepted and executing; never expires by retention (a long-running
     /// operation must not be dropped out from under an in-flight retry).
-    InProgress,
+    /// `since` records when the lease was taken so a stale lease can be
+    /// *surfaced* for provider-side reconciliation — never auto-dropped.
+    InProgress { since: Instant },
     /// Completed; the retention clock (for `Replay` vs expiry) runs from
     /// `since`. Carries the recorded result for `Replay`.
     Completed {
@@ -248,7 +250,7 @@ impl<C: Clock> OperationRouter<C> {
                     DedupEntry {
                         fingerprint,
                         original_operation_id: req.operation_id.clone(),
-                        state: DedupState::InProgress,
+                        state: DedupState::InProgress { since: now },
                     },
                 );
                 RouteDecision::Accept { scope }
@@ -257,7 +259,7 @@ impl<C: Clock> OperationRouter<C> {
                 match &entry.state {
                     // A still-running attempt never expires; a different
                     // request under the same key is a conflict.
-                    DedupState::InProgress => {
+                    DedupState::InProgress { .. } => {
                         if entry.fingerprint != fingerprint {
                             RouteDecision::IdempotencyKeyConflict
                         } else {
@@ -305,7 +307,7 @@ impl<C: Clock> OperationRouter<C> {
         let now = self.clock.now();
         match self.dedup.get_mut(&dedup_key) {
             Some(entry)
-                if matches!(entry.state, DedupState::InProgress)
+                if matches!(entry.state, DedupState::InProgress { .. })
                     && entry.fingerprint == fingerprint =>
             {
                 entry.state = DedupState::Completed { result, since: now };
@@ -331,7 +333,7 @@ impl<C: Clock> OperationRouter<C> {
         let fingerprint = req.dedup_fingerprint_input();
         match self.dedup.get(&dedup_key) {
             Some(entry)
-                if matches!(entry.state, DedupState::InProgress)
+                if matches!(entry.state, DedupState::InProgress { .. })
                     && entry.fingerprint == fingerprint =>
             {
                 self.dedup.remove(&dedup_key);
@@ -369,6 +371,45 @@ impl<C: Clock> OperationRouter<C> {
     pub fn tracked(&self) -> usize {
         self.dedup.len()
     }
+
+    /// List in-progress leases whose age exceeds `older_than`, oldest first,
+    /// for **provider-side reconciliation**. This is read-only: it surfaces a
+    /// stale lease but never resolves it. An unknown / timed-out operation
+    /// stays `InProgress` until the gateway reconciles it against the
+    /// provider's durable state — recording the durable id with
+    /// [`Self::mark_completed`] if it took effect, or clearing it with
+    /// [`Self::mark_failed`] if it provably did not. Auto-dropping or
+    /// auto-completing a lease would risk a double side effect or a lost
+    /// result, so the router refuses to.
+    pub fn reconcilable_leases(&self, older_than: Duration) -> Vec<ReconcilableLease> {
+        let now = self.clock.now();
+        let mut stale: Vec<ReconcilableLease> = self
+            .dedup
+            .values()
+            .filter_map(|entry| match &entry.state {
+                DedupState::InProgress { since } => {
+                    let age = now.duration_since(*since);
+                    (age > older_than).then(|| ReconcilableLease {
+                        original_operation_id: entry.original_operation_id.clone(),
+                        age,
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        stale.sort_by(|a, b| b.age.cmp(&a.age));
+        stale
+    }
+}
+
+/// A stale in-progress lease surfaced by
+/// [`OperationRouter::reconcilable_leases`] for provider-side reconciliation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconcilableLease {
+    /// The operation id originally accepted for this lease.
+    pub original_operation_id: OperationId,
+    /// How long the lease has been in progress.
+    pub age: Duration,
 }
 
 /// Convenience: the capability an operation requires, derived from its kind
@@ -686,5 +727,44 @@ mod tests {
                 result: result(b"real-result"),
             }
         );
+    }
+
+    #[test]
+    fn reconcilable_leases_surfaces_stale_in_progress_without_resolving() {
+        let clock = ManualClock::new();
+        let mut r = OperationRouter::with_clock(clock.clone());
+        let p = "alice";
+        let op = req_with_op(
+            OperationKind::WorkloadStart,
+            Some("k1"),
+            b"start",
+            p,
+            "op-1",
+        );
+        assert!(matches!(
+            r.route(&op, &principal(p)),
+            RouteDecision::Accept { .. }
+        ));
+
+        // Fresh lease: not yet stale at a 30s threshold.
+        assert!(r.reconcilable_leases(Duration::from_secs(30)).is_empty());
+
+        // Advance past the threshold: the lease is surfaced, still in-progress.
+        clock.advance(Duration::from_secs(31));
+        let stale = r.reconcilable_leases(Duration::from_secs(30));
+        assert_eq!(stale.len(), 1);
+        assert_eq!(
+            stale[0].original_operation_id,
+            OperationId::parse("op-1").unwrap()
+        );
+        // Surfacing did NOT resolve it: it is still InProgress to a retry.
+        assert!(matches!(
+            r.route(&op, &principal(p)),
+            RouteDecision::InProgress { .. }
+        ));
+
+        // Reconciling it (mark_completed) clears it from the stale list.
+        assert!(r.mark_completed(&op, result(b"done")));
+        assert!(r.reconcilable_leases(Duration::from_secs(30)).is_empty());
     }
 }
