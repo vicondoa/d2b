@@ -42,6 +42,7 @@ use serde_json::Value;
 mod doctor;
 mod exec_client;
 mod host_validate;
+mod target_routing;
 
 use exec_client::ExecOwnerTransport as _;
 
@@ -3719,6 +3720,58 @@ fn require_known_vm(context: &Context, vm: &str, json: bool) -> Result<(), CliFa
     Err(CliFailure::new(exit_code, format!("unknown vm: {vm}")))
 }
 
+/// Route a `vm <verb> <target>` argument (ADR 0032, P0). A local VM name routes
+/// to the existing host-daemon fast path (returns `Ok`); a realm/gateway target
+/// surfaces a typed, json-aware diagnostic and a non-zero exit — the host daemon
+/// holds no realm configuration and cannot dispatch into a realm. The realm's
+/// gateway-mode `nixlingd` owns gateway-backed targets.
+fn guard_local_target(raw: &str, json: bool) -> Result<(), CliFailure> {
+    let table = nixling_constellation_router::RealmEntrypointTable::with_local_default();
+    match target_routing::route(raw, &table) {
+        Ok(target_routing::Route::Local { .. }) => Ok(()),
+        Ok(target_routing::Route::Gateway { gateway, target }) => {
+            let exit_code = emit_host_error(
+                &host_error_envelope(
+                    &format!(
+                        "target '{target}' is gateway-backed (gateway '{gateway}'); the host \
+                         daemon cannot dispatch into a realm"
+                    ),
+                    "usage",
+                    2,
+                    "Whether the target addresses a local VM the host daemon can dispatch.",
+                    "gateway-backed realm target",
+                    "Run the verb against the realm gateway's nixlingd; the host daemon holds no \
+                     realm configuration.",
+                    "docs/reference/error-codes.md#usage",
+                ),
+                json,
+            )?;
+            Err(CliFailure::new(
+                exit_code,
+                format!("gateway-backed target: {target}"),
+            ))
+        }
+        Err(err) => {
+            let exit_code = emit_host_error(
+                &host_error_envelope(
+                    &err.to_string(),
+                    "usage",
+                    2,
+                    "Whether the target addresses a local VM the host daemon can dispatch.",
+                    "realm target with no local entrypoint",
+                    "Use a local VM name, or run the verb against the realm gateway's nixlingd.",
+                    "docs/reference/error-codes.md#usage",
+                ),
+                json,
+            )?;
+            Err(CliFailure::new(
+                exit_code,
+                format!("target not dispatchable on the host daemon: {raw}"),
+            ))
+        }
+    }
+}
+
 fn vm_dag_dry_run_summary(verb: &str, vm: &str) -> serde_json::Value {
     // The DAG the supervisor would drive. Mirrors the structure emitted
     // by the processes::VmProcessDag exporter — for the headless alpha
@@ -3776,6 +3829,7 @@ fn cmd_vm_lifecycle_verb(
     json: bool,
 ) -> Result<i32, CliFailure> {
     let flags = require_explicit_mutation_flag(&format!("vm {verb}"), dry_run, apply, json)?;
+    guard_local_target(vm, json)?;
     require_known_vm(context, vm, json)?;
     if (verb == "start" || verb == "restart") && !json {
         warn_pending_staged_config(vm);
@@ -4213,6 +4267,7 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
         Ok(action) => action,
         Err(message) => return exec_usage_terminate(args, message),
     };
+    guard_local_target(&args.vm, action.json)?;
     if let Some(management) = action.management.as_ref() {
         return cmd_vm_exec_management(context, args, management);
     }

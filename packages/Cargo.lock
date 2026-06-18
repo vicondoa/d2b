@@ -1556,6 +1556,8 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "clap",
  "nix 0.29.0",
+ "nixling-constellation-core",
+ "nixling-constellation-router",
  "nixling-core",
  "nixling-ipc",
  "rustix 0.38.44",
