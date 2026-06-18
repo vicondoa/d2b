@@ -369,7 +369,95 @@ in
         `bin/socat`-compatible CLI.
       '';
     };
+
+    # Host edge-collector parity surface (ADR 0033). The host OTel
+    # collector already ships hostmetrics + the StoreSync audit log; these
+    # options bring it to parity with the per-VM guest collector and give
+    # host-origin telemetry the real hostname identity.
+    host = {
+      identityName = lib.mkOption {
+        type = lib.types.str;
+        default = config.networking.hostName;
+        defaultText = lib.literalExpression "config.networking.hostName";
+        description = ''
+          Resource-attribute identity stamped on host-origin telemetry
+          (`vm.name` and `host.name`) at the trusted per-source ingress
+          boundary. Defaults to the host's `networking.hostName`. Set to
+          `"host"` to keep the pre-0.2.x literal label. `vm.role` stays
+          `"host"` regardless, so host-origin telemetry is still
+          selectable as a class independent of the machine name.
+        '';
+      };
+
+      scrapeJournal = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Tail the host's systemd journal via the contrib `journald`
+          receiver and forward it to SigNoz as logs over the existing
+          host -> `sys-obs` vsock bridge (never a LAN). Default off: the
+          host journal can contain auth failures, sudo command lines, and
+          service-logged secrets, and it is forwarded non-redacted (only a
+          PRIORITY->severity parser runs), at parity with the guest
+          journal. Enable only when the `sys-obs` VM is a trusted operator
+          sink. Retention of these logs is governed by SigNoz/ClickHouse
+          TTL inside `sys-obs`, not `nixling.observability.retention.*`.
+        '';
+      };
+
+      otlpIngest = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            Expose a host-local OpenTelemetry ingest endpoint so host-side
+            instrumentation can push traces/logs/metrics through the same
+            host -> `sys-obs` bridge as host metrics. The endpoint is a
+            Unix-domain socket only (no TCP listener), isolated in its own
+            directory at `/run/nixling/otel/ingest/host-otlp.sock` so the
+            collector cannot reach `host-egress.sock`.
+          '';
+        };
+
+        clientGroup = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = ''
+            Optional group granted write access to the host OTLP ingest
+            socket. When null (default) the socket is `0600`
+            (collector + root only). When set, the socket is `0660`
+            group-owned by this group (with `--x` traversal on the parent
+            dirs) so members can emit telemetry. Only the dedicated
+            `ingest/` subdirectory and socket are affected;
+            `host-egress.sock` is never widened.
+          '';
+        };
+      };
+    };
+
+    # Internal: the host OTel collector's pre-serialization config attrset,
+    # surfaced so eval-based tests can assert receiver/pipeline/extension
+    # shape without parsing the generated YAML. Not a stable API.
+    _internal.hostCollectorConfig = lib.mkOption {
+      type = lib.types.attrs;
+      internal = true;
+      default = { };
+      description = "Internal host OTel collector config attrset (test surface).";
+    };
   };
+
+  config.assertions = [
+    {
+      assertion = (!cfg.host.scrapeJournal && !cfg.host.otlpIngest.enable) || cfg.enable;
+      message = ''
+        nixling.observability.host.scrapeJournal and
+        nixling.observability.host.otlpIngest.enable require
+        nixling.observability.enable = true: the host OTel collector only
+        exists when the observability stack is enabled. Enable the stack or
+        unset the host flags.
+      '';
+    }
+  ];
 
   config.warnings = lib.mkIf cfg.enable (
     lib.optional (cfg.retention != defaultRetention) ''

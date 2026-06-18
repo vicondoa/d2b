@@ -229,6 +229,44 @@ fn tempo_stack_signoz_backend_and_collector() {
 }
 
 // ===========================================================================
+// ADR 0033 follow-up: host.name / deployment.environment identity scheme.
+//
+// The central collector stamps `host.name` with the per-source name (the
+// host's name for host telemetry, the VM's name for workloads), and encodes
+// `deployment.environment` as "<host>" for host telemetry and "<host>-<env>"
+// for workload VMs (e.g. ddbus, ddbus-work, ddbus-personal).
+// ===========================================================================
+#[test]
+fn signoz_resource_identity_scheme() {
+    assert!(
+        repo_path_exists(OBS_STACK),
+        "identity-scheme: missing file: {OBS_STACK}"
+    );
+    let stack = read_repo_file(OBS_STACK);
+
+    // host.name is the per-source name (host's name or the VM's name).
+    assert!(
+        any_line_matches(
+            &stack,
+            r#"key[[:space:]]*=[[:space:]]*"host.name";[[:space:]]*value[[:space:]]*=[[:space:]]*source\.vmName"#
+        ),
+        "identity-scheme: host.name must be the per-source name (source.vmName)"
+    );
+
+    // deployment.environment: "<host>" for host, "<host>-<env>" for VMs.
+    for pat in [
+        r#"if source\.role == "host""#,
+        r#"then cfg\.hostName"#,
+        r#"else "\$\{cfg\.hostName\}-\$\{source\.envName\}""#,
+    ] {
+        assert!(
+            any_line_matches(&stack, pat),
+            "identity-scheme: deployment.environment must be host-aware (missing /{pat}/)"
+        );
+    }
+}
+
+// ===========================================================================
 // Migrated from tests/tempo-budget-eval.sh (part 2 of 3): the guest collector
 // shape.
 //

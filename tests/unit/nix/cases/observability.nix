@@ -359,7 +359,7 @@ let
           receiverGrpcPort = 4317;
           receiverHttpPort = 4318;
           role = "host";
-          vmName = "host";
+          vmName = "nixos";
           vsockPort = 14317;
         };
         corpIngress = {
@@ -678,6 +678,201 @@ let
         relayNodeRole = "vsock-relay";
         relayNodeTargetsObs = true;
       };
+    };
+
+    # ----- ADR 0033: host collector parity + hostname identity -----
+
+    obs-host-collector-default-off = {
+      override = { ... }: { nixling.observability.enable = true; };
+      extract = nixos:
+        let
+          cfg = nixos.config.nixling.observability._internal.hostCollectorConfig;
+          svc = nixos.config.systemd.services."nixling-host-otel-collector";
+        in
+        {
+          receiverNames = sortStrings (builtins.attrNames cfg.receivers);
+          pipelineNames = sortStrings (builtins.attrNames cfg.service.pipelines);
+          hasExtensions = cfg ? extensions;
+          resourceHasServiceName = builtins.any (a: (a.key or "") == "service.name") cfg.processors.resource.attributes;
+          readWritePaths = svc.serviceConfig.ReadWritePaths or null;
+          umask = svc.serviceConfig.UMask or null;
+          suppGroups = svc.serviceConfig.SupplementaryGroups or null;
+          tmpfilesHasIngest = builtins.any (r: lib.hasInfix "/run/nixling/otel/ingest" r) nixos.config.systemd.tmpfiles.rules;
+        };
+      expectedExtract = {
+        receiverNames = [ "filelog/store_sync_audit" "hostmetrics" "prometheus" ];
+        pipelineNames = [ "logs/store_sync_audit" "metrics" "metrics/self" ];
+        hasExtensions = false;
+        resourceHasServiceName = false;
+        readWritePaths = null;
+        umask = null;
+        suppGroups = null;
+        tmpfilesHasIngest = false;
+      };
+    };
+
+    obs-host-collector-journal = {
+      override = { ... }: {
+        nixling.observability.enable = true;
+        nixling.observability.host.scrapeJournal = true;
+      };
+      extract = nixos:
+        let
+          cfg = nixos.config.nixling.observability._internal.hostCollectorConfig;
+          svc = nixos.config.systemd.services."nixling-host-otel-collector";
+        in
+        {
+          hasJournald = cfg.receivers ? journald;
+          hasOtlp = cfg.receivers ? otlp;
+          logsReceivers = cfg.service.pipelines.logs.receivers or null;
+          hasFileStorage = (cfg.extensions or { }) ? "file_storage/journald";
+          journaldStorageDir = (cfg.extensions."file_storage/journald" or { }).directory or null;
+          journaldCreateDirectory = (cfg.extensions."file_storage/journald" or { }).create_directory or null;
+          suppGroups = svc.serviceConfig.SupplementaryGroups or null;
+          readWritePaths = svc.serviceConfig.ReadWritePaths or null;
+        };
+      expectedExtract = {
+        hasJournald = true;
+        hasOtlp = false;
+        logsReceivers = [ "journald" ];
+        hasFileStorage = true;
+        journaldStorageDir = "/var/lib/nixling-host-otel-collector/journald";
+        journaldCreateDirectory = false;
+        suppGroups = [ "systemd-journal" ];
+        readWritePaths = null;
+      };
+    };
+
+    obs-host-collector-otlp = {
+      override = { ... }: {
+        nixling.observability.enable = true;
+        nixling.observability.host.otlpIngest.enable = true;
+      };
+      extract = nixos:
+        let
+          cfg = nixos.config.nixling.observability._internal.hostCollectorConfig;
+          svc = nixos.config.systemd.services."nixling-host-otel-collector";
+          endpoint = cfg.receivers.otlp.protocols.grpc.endpoint;
+        in
+        {
+          hasOtlp = cfg.receivers ? otlp;
+          hasJournald = cfg.receivers ? journald;
+          otlpProtocols = sortStrings (builtins.attrNames cfg.receivers.otlp.protocols);
+          otlpEndpoint = endpoint;
+          otlpTransport = cfg.receivers.otlp.protocols.grpc.transport;
+          tracesReceivers = cfg.service.pipelines.traces.receivers or null;
+          metricsReceivers = cfg.service.pipelines.metrics.receivers;
+          logsReceivers = cfg.service.pipelines.logs.receivers or null;
+          readWritePaths = svc.serviceConfig.ReadWritePaths or null;
+          umask = svc.serviceConfig.UMask or null;
+          endpointIsolatedFromEgress = endpoint != "/run/nixling/otel/host-egress.sock";
+          tmpfilesHasIngest = builtins.any (r: lib.hasInfix "/run/nixling/otel/ingest" r) nixos.config.systemd.tmpfiles.rules;
+        };
+      expectedExtract = {
+        hasOtlp = true;
+        hasJournald = false;
+        otlpProtocols = [ "grpc" ];
+        otlpEndpoint = "/run/nixling/otel/ingest/host-otlp.sock";
+        otlpTransport = "unix";
+        tracesReceivers = [ "otlp" ];
+        metricsReceivers = [ "hostmetrics" "otlp" ];
+        logsReceivers = [ "otlp" ];
+        readWritePaths = [ "/run/nixling/otel/ingest" ];
+        umask = "0177";
+        endpointIsolatedFromEgress = true;
+        tmpfilesHasIngest = true;
+      };
+    };
+
+    obs-host-collector-both-processor-split = {
+      override = { ... }: {
+        nixling.observability.enable = true;
+        nixling.observability.host.scrapeJournal = true;
+        nixling.observability.host.otlpIngest.enable = true;
+      };
+      extract = nixos:
+        let
+          cfg = nixos.config.nixling.observability._internal.hostCollectorConfig;
+          hasKey = procName: name: builtins.any (a: (a.key or "") == name) cfg.processors.${procName}.attributes;
+        in
+        {
+          resourceHasServiceName = hasKey "resource" "service.name";
+          selfHasServiceName = hasKey "resource/self" "service.name";
+          storesyncHasServiceName = hasKey "resource/store_sync_audit" "service.name";
+          resourceVmName = (builtins.head cfg.processors.resource.attributes).value;
+          storeSyncVmName = (builtins.head cfg.processors."resource/store_sync_audit".attributes).value;
+          logsReceivers = cfg.service.pipelines.logs.receivers;
+          metricsReceivers = cfg.service.pipelines.metrics.receivers;
+          # Pipeline processor routing: app/journal telemetry must use the
+          # identity-only `resource`; only self-metrics use `resource/self`;
+          # StoreSync keeps `resource/store_sync_audit`.
+          logsProcessors = cfg.service.pipelines.logs.processors;
+          tracesProcessors = cfg.service.pipelines.traces.processors;
+          metricsProcessors = cfg.service.pipelines.metrics.processors;
+          metricsSelfProcessors = cfg.service.pipelines."metrics/self".processors;
+          storeSyncProcessors = cfg.service.pipelines."logs/store_sync_audit".processors;
+          pipelineNames = sortStrings (builtins.attrNames cfg.service.pipelines);
+        };
+      expectedExtract = {
+        resourceHasServiceName = false;
+        selfHasServiceName = true;
+        storesyncHasServiceName = true;
+        resourceVmName = "nixos";
+        storeSyncVmName = "nixos";
+        logsReceivers = [ "otlp" "journald" ];
+        metricsReceivers = [ "hostmetrics" "otlp" ];
+        logsProcessors = [ "memory_limiter" "resource" "batch" ];
+        tracesProcessors = [ "memory_limiter" "resource" "batch" ];
+        metricsProcessors = [ "memory_limiter" "resource" "batch" ];
+        metricsSelfProcessors = [ "memory_limiter" "resource/self" "batch" ];
+        storeSyncProcessors = [ "memory_limiter" "resource/store_sync_audit" "batch" ];
+        pipelineNames = [ "logs" "logs/store_sync_audit" "metrics" "metrics/self" "traces" ];
+      };
+    };
+
+    obs-host-identity-override = {
+      override = { ... }: {
+        nixling.observability.enable = true;
+        nixling.observability.host.identityName = "edge-01";
+      };
+      extract = nixos:
+        let
+          cfg = nixos.config.nixling.observability._internal.hostCollectorConfig;
+          obsVm = nixos.config.nixling.observability.vmName;
+          obsGuest = nixos.config.nixling._computed.${obsVm}.config;
+          hostSource = obsGuest.nixling.observability.ingress.sources.host;
+        in
+        {
+          edgeVmName = (builtins.head cfg.processors.resource.attributes).value;
+          ingressVmName = hostSource.vmName;
+          ingressRole = hostSource.role;
+          ingressEnv = hostSource.envName;
+        };
+      expectedExtract = {
+        edgeVmName = "edge-01";
+        ingressVmName = "edge-01";
+        ingressRole = "host";
+        ingressEnv = "host";
+      };
+    };
+
+    obs-host-otlp-client-group-umask = {
+      override = { ... }: {
+        nixling.observability.enable = true;
+        nixling.observability.host.otlpIngest.enable = true;
+        nixling.observability.host.otlpIngest.clientGroup = "telemetry";
+      };
+      extract = nixos: nixos.config.systemd.services."nixling-host-otel-collector".serviceConfig.UMask or null;
+      expectedExtract = "0117";
+    };
+
+    obs-host-flags-require-enable = {
+      kind = "expect-failure";
+      override = { ... }: {
+        nixling.observability.enable = false;
+        nixling.observability.host.scrapeJournal = true;
+      };
+      expectedSubstring = "the host OTel collector only";
     };
   };
 

@@ -356,15 +356,15 @@ fn store_sync_export() {
         ),
         (
             "StoreSync logs have a dedicated OTel pipeline",
-            r#"pipelines\."logs/store_sync_audit"[[:space:]]*="#,
+            r#""logs/store_sync_audit"[[:space:]]*=[[:space:]]*\{"#,
         ),
         (
             "StoreSync logs forward to the existing OTLP exporter",
             r#"exporters[[:space:]]*=[[:space:]]*\[[[:space:]]*"otlp"[[:space:]]*\]"#,
         ),
         (
-            "StoreSync resource marks vm.name as host",
-            r#"key[[:space:]]*=[[:space:]]*"vm.name";[[:space:]]*value[[:space:]]*=[[:space:]]*"host""#,
+            "StoreSync resource marks vm.name with the host identityName (ADR 0033)",
+            r#"key[[:space:]]*=[[:space:]]*"vm.name";[[:space:]]*value[[:space:]]*=[[:space:]]*identityName"#,
         ),
         (
             "StoreSync resource marks vm.env as host",
@@ -439,6 +439,125 @@ fn store_sync_export() {
     assert!(
         failures.is_empty(),
         "store-sync-export: FAIL —\n{}",
+        failures.join("\n")
+    );
+}
+
+/// ADR 0033: the opt-in host OTLP ingest socket must be isolated in its own
+/// runtime subdirectory with a deterministic lifecycle, so the collector's
+/// bind(2) write authority can never reach `host-egress.sock` (unlink/rename
+/// authority is parent-directory scoped). The unlink + directory-setup logic
+/// lives in the `runtimePrep` shell blob (a `writeShellScript` store path
+/// invisible to eval tests), so it is gated here over the source.
+#[test]
+fn host_otlp_ingest_socket_isolation() {
+    let host_rel = "nixos-modules/components/observability/host.nix";
+    assert!(
+        repo_path_exists(host_rel),
+        "host-otlp-ingest: FAIL — missing required file: {host_rel}"
+    );
+    let code = code_only(&read_repo_file(host_rel));
+
+    let wants: &[(&str, &str)] = &[
+        (
+            "OTLP ingest lives in a dedicated subdir of the otel runtime dir",
+            r#"otelIngestDir[[:space:]]*=.*otelRuntimeDir.*/ingest""#,
+        ),
+        (
+            "the ingest socket lives under the dedicated ingest dir",
+            r#"hostOtlpSocket[[:space:]]*=.*otelIngestDir.*host-otlp\.sock""#,
+        ),
+        (
+            "a stale ingest socket is unlinked before start",
+            r#"rm -f \$\{hostOtlpSocket\}"#,
+        ),
+        (
+            "bind(2) write authority is scoped to the ingest subdir only",
+            r#"ReadWritePaths[[:space:]]*=[[:space:]]*\[[[:space:]]*otelIngestDir[[:space:]]*\]"#,
+        ),
+        (
+            "deterministic ingest socket mode via UMask",
+            r#"UMask[[:space:]]*=[[:space:]]*ingestUmask"#,
+        ),
+        (
+            "the ingest dir is pre-created via tmpfiles before the unit namespace is built",
+            r#"d \$\{otelIngestDir\} \$\{ingestDirMode\} nixling-host-otel-collector \$\{ingestGroup\}"#,
+        ),
+    ];
+
+    let denies: &[(&str, &str)] = &[
+        (
+            "ReadWritePaths never grants the shared otel runtime dir",
+            r#"ReadWritePaths[[:space:]]*=[[:space:]]*\[[[:space:]]*otelRuntimeDir[[:space:]]*\]"#,
+        ),
+        (
+            "the ingest socket is never placed directly in the shared runtime dir",
+            r#"hostOtlpSocket[[:space:]]*=.*otelRuntimeDir.*host-otlp\.sock""#,
+        ),
+    ];
+
+    let mut failures: Vec<String> = Vec::new();
+    for (label, pat) in wants {
+        if !line_matches(&code, pat) {
+            failures.push(format!("want FAIL: {label} (missing /{pat}/)"));
+        }
+    }
+    for (label, pat) in denies {
+        if line_matches(&code, pat) {
+            failures.push(format!("deny FAIL: {label} (found /{pat}/)"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "host-otlp-ingest: FAIL —\n{}",
+        failures.join("\n")
+    );
+}
+
+/// ADR 0033: the host journald `file_storage` cursor directory must be
+/// provisioned by the privileged `ExecStartPre` with explicit perms, not by
+/// the collector's own `create_directory`. The OTLP ingest `UMask` is
+/// process-wide, so a runtime mkdir would strip the directory's owner execute
+/// bit and break journal collection when both flags are enabled. Gated over
+/// the source because the provisioning lives in the `runtimePrep` shell blob.
+#[test]
+fn host_journald_cursor_provisioned() {
+    let host_rel = "nixos-modules/components/observability/host.nix";
+    assert!(
+        repo_path_exists(host_rel),
+        "host-journald-cursor: FAIL — missing required file: {host_rel}"
+    );
+    let code = code_only(&read_repo_file(host_rel));
+
+    let wants: &[(&str, &str)] = &[
+        (
+            "the journald cursor dir is pre-created with explicit 0700 perms",
+            r#"install -d -m 0700 -o nixling-host-otel-collector -g nixling-host-otel-collector \$\{journaldStorageDir\}"#,
+        ),
+        (
+            "the file_storage extension does not self-create the dir (UMask-safe)",
+            r#"create_directory[[:space:]]*=[[:space:]]*false"#,
+        ),
+    ];
+    let denies: &[(&str, &str)] = &[(
+        "the host file_storage extension never relies on create_directory = true",
+        r#"create_directory[[:space:]]*=[[:space:]]*true"#,
+    )];
+
+    let mut failures: Vec<String> = Vec::new();
+    for (label, pat) in wants {
+        if !line_matches(&code, pat) {
+            failures.push(format!("want FAIL: {label} (missing /{pat}/)"));
+        }
+    }
+    for (label, pat) in denies {
+        if line_matches(&code, pat) {
+            failures.push(format!("deny FAIL: {label} (found /{pat}/)"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "host-journald-cursor: FAIL —\n{}",
         failures.join("\n")
     );
 }

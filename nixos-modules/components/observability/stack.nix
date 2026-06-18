@@ -28,6 +28,12 @@ let
   clickhouseDsn = "tcp://127.0.0.1:${toString clickhousePort}";
   defaultIngressSources = {
     host = {
+      # Standalone-only fallback (used when cfg.ingress.sources == {}).
+      # The bundled path always sets ingress.sources via
+      # observability-vm.nix's obsIngressSources, which threads the host's
+      # nixling.observability.host.identityName here instead. Do NOT derive
+      # this from config.networking.hostName: in stack.nix that is the
+      # obs-VM's own hostname, not the physical host (ADR 0033).
       vmName = "host";
       envName = "host";
       role = "host";
@@ -70,13 +76,23 @@ let
         { key = "vm.name"; value = source.vmName; action = "upsert"; }
         { key = "vm.env"; value = source.envName; action = "upsert"; }
         { key = "vm.role"; value = source.role; action = "upsert"; }
+        # host.name is the per-source name: the host's name (cfg.hostName,
+        # via the host source's vmName) for host telemetry, or the VM's name
+        # for workload VMs.
         { key = "host.name"; value = source.vmName; action = "upsert"; }
         { key = "service.namespace"; value = source.envName; action = "upsert"; }
-        # deployment.environment is the physical host the guests run on
-        # (cfg.hostName), so SigNoz's environment dimension groups all
-        # VMs by their host machine. The per-VM env still lives in
+        # deployment.environment encodes the machine, plus the env for VMs:
+        # "<host>" for host telemetry, "<host>-<env>" for workload VMs (e.g.
+        # ddbus, ddbus-work, ddbus-personal). The per-VM env still lives in
         # service.namespace / vm.env and the VM identity in vm.name.
-        { key = "deployment.environment"; value = cfg.hostName; action = "upsert"; }
+        {
+          key = "deployment.environment";
+          value =
+            if source.role == "host"
+            then cfg.hostName
+            else "${cfg.hostName}-${source.envName}";
+          action = "upsert";
+        }
       ];
     }
   ) ingressSources) // {
