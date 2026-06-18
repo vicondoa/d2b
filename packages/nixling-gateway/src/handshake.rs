@@ -79,6 +79,11 @@ pub struct SessionBinding {
     pub generation: u64,
     /// The opaque session id.
     pub session_id: String,
+    /// The reopen epoch: 0 for the first credential, incremented on every
+    /// Degraded->reopen re-mint. The one-shot anti-replay guard is keyed by
+    /// `(session_id, epoch)`, so a reopen gets a fresh single-use credential
+    /// while a true replay of the same epoch is still rejected.
+    pub epoch: u64,
     /// The authorizing operation id.
     pub operation_id: String,
     /// The authorizing caller principal.
@@ -91,10 +96,12 @@ pub struct SessionBinding {
 
 impl SessionBinding {
     /// Build a binding from typed ids.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         realm: &RealmPath,
         generation: u64,
         session_id: &DisplaySessionId,
+        epoch: u64,
         operation_id: &OperationId,
         principal: &PrincipalId,
         workload: &WorkloadId,
@@ -104,11 +111,18 @@ impl SessionBinding {
             realm: realm.target_form(),
             generation,
             session_id: session_id.as_str().to_owned(),
+            epoch,
             operation_id: operation_id.as_str().to_owned(),
             principal: principal.as_str().to_owned(),
             workload: workload.as_str().to_owned(),
             not_after,
         }
+    }
+
+    /// The one-shot anti-replay key: a credential is single-use per
+    /// `(session_id, epoch)`.
+    fn replay_key(&self) -> String {
+        format!("{}:{}", self.session_id, self.epoch)
     }
 
     /// The canonical, unambiguous byte encoding the MAC covers. Each field is
@@ -125,6 +139,7 @@ impl SessionBinding {
         put(&mut buf, self.realm.as_bytes());
         put(&mut buf, &self.generation.to_be_bytes());
         put(&mut buf, self.session_id.as_bytes());
+        put(&mut buf, &self.epoch.to_be_bytes());
         put(&mut buf, self.operation_id.as_bytes());
         put(&mut buf, self.principal.as_bytes());
         put(&mut buf, self.workload.as_bytes());
@@ -173,6 +188,7 @@ impl SessionBinding {
         // 4. Field equality against the authorizing operation.
         if b.realm != expected.realm
             || b.session_id != expected.session_id
+            || b.epoch != expected.epoch
             || b.operation_id != expected.operation_id
             || b.principal != expected.principal
             || b.workload != expected.workload
@@ -181,8 +197,11 @@ impl SessionBinding {
         {
             return Err(HandshakeError::BindingMismatch);
         }
-        // 5. One-shot anti-replay (a session id admits exactly one stream).
-        if !replay.claim(&b.session_id) {
+        // 5. One-shot anti-replay (a credential admits exactly one stream per
+        // (session_id, epoch); a Degraded reopen re-mints with epoch+1). Only
+        // reached after every other check passes, so a rejected attempt never
+        // consumes the one-shot.
+        if !replay.claim(&b.replay_key()) {
             return Err(HandshakeError::Replay);
         }
         Ok(())
@@ -207,22 +226,23 @@ impl Handshake {
     }
 }
 
-/// One-shot anti-replay guard: `claim` returns true the first time a session
-/// id is seen and false on every subsequent call.
+/// One-shot anti-replay guard: `claim` returns true the first time a
+/// credential key (`session_id:epoch`) is seen and false on every subsequent
+/// call.
 pub trait ReplayGuard {
-    /// Claim `session_id`; true iff this is its first claim.
-    fn claim(&mut self, session_id: &str) -> bool;
+    /// Claim `key`; true iff this is its first claim.
+    fn claim(&mut self, key: &str) -> bool;
 }
 
-/// An in-memory [`ReplayGuard`] backed by a set of claimed session ids.
+/// An in-memory [`ReplayGuard`] backed by a set of claimed credential keys.
 #[derive(Debug, Default)]
 pub struct SetReplayGuard {
     seen: std::collections::HashSet<String>,
 }
 
 impl ReplayGuard for SetReplayGuard {
-    fn claim(&mut self, session_id: &str) -> bool {
-        self.seen.insert(session_id.to_owned())
+    fn claim(&mut self, key: &str) -> bool {
+        self.seen.insert(key.to_owned())
     }
 }
 
@@ -302,7 +322,7 @@ mod tests {
     fn binding(generation: u64, not_after: u64) -> (SessionBinding, SessionSecret) {
         let (realm, sid, op, pr, wl) = ids();
         let secret = SessionSecret::from_bytes([7u8; SECRET_LEN]);
-        let b = SessionBinding::new(&realm, generation, &sid, &op, &pr, &wl, not_after);
+        let b = SessionBinding::new(&realm, generation, &sid, 0, &op, &pr, &wl, not_after);
         (b, secret)
     }
 
@@ -375,6 +395,7 @@ mod tests {
             &realm,
             5,
             &sid,
+            0,
             &op,
             &PrincipalId::parse("alice").unwrap(),
             &wl,
@@ -384,6 +405,7 @@ mod tests {
             &realm,
             5,
             &sid,
+            0,
             &op,
             &PrincipalId::parse("mallory").unwrap(),
             &wl,
@@ -394,6 +416,147 @@ mod tests {
         assert_eq!(
             SessionBinding::verify(&hs, &secret, &authorized, 5, 900, &mut replay),
             Err(HandshakeError::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn every_field_mismatch_is_rejected() {
+        // Table-driven: a valid MAC over a binding that differs from the
+        // authorizing binding in exactly one field must be rejected, so
+        // removing any single equality check fails a test.
+        let secret = SessionSecret::from_bytes([7u8; SECRET_LEN]);
+        let realm = RealmPath::new(vec![
+            nixling_constellation_core::RealmId::parse("work").unwrap(),
+        ])
+        .unwrap();
+        let realm2 = RealmPath::new(vec![
+            nixling_constellation_core::RealmId::parse("ops").unwrap(),
+        ])
+        .unwrap();
+        let base = SessionBinding::new(
+            &realm,
+            5,
+            &DisplaySessionId::new("s1"),
+            0,
+            &OperationId::parse("op-1").unwrap(),
+            &PrincipalId::parse("alice").unwrap(),
+            &WorkloadId::parse("demo").unwrap(),
+            1000,
+        );
+        let variants = [
+            SessionBinding {
+                realm: realm2.target_form(),
+                ..base.clone()
+            },
+            SessionBinding {
+                generation: 6,
+                ..base.clone()
+            },
+            SessionBinding {
+                session_id: "s2".into(),
+                ..base.clone()
+            },
+            SessionBinding {
+                epoch: 1,
+                ..base.clone()
+            },
+            SessionBinding {
+                operation_id: "op-2".into(),
+                ..base.clone()
+            },
+            SessionBinding {
+                principal: "bob".into(),
+                ..base.clone()
+            },
+            SessionBinding {
+                workload: "other".into(),
+                ..base.clone()
+            },
+            SessionBinding {
+                not_after: 1001,
+                ..base.clone()
+            },
+        ];
+        for (i, v) in variants.into_iter().enumerate() {
+            // Sign the *variant* (valid MAC) but verify against `base`.
+            let hs = Handshake::sign(v, &secret);
+            let mut replay = SetReplayGuard::default();
+            let r = SessionBinding::verify(&hs, &secret, &base, 5, 900, &mut replay);
+            // generation/expiry have dedicated kinds; all others are mismatch.
+            assert!(
+                matches!(
+                    r,
+                    Err(HandshakeError::BindingMismatch)
+                        | Err(HandshakeError::StaleGeneration)
+                        | Err(HandshakeError::Expired)
+                ),
+                "variant {i} should be rejected, got {r:?}"
+            );
+            assert!(r.is_err(), "variant {i} must not verify");
+        }
+    }
+
+    #[test]
+    fn rejected_attempt_does_not_consume_the_one_shot() {
+        // A bad-MAC attempt for a credential key must NOT consume the replay
+        // guard; the legitimate sender can then still use it exactly once.
+        let (b, secret) = binding(5, 1000);
+        let bad = Handshake::sign(b.clone(), &SessionSecret::from_bytes([0u8; SECRET_LEN]));
+        let good = Handshake::sign(b.clone(), &secret);
+        let mut replay = SetReplayGuard::default();
+        assert_eq!(
+            SessionBinding::verify(&bad, &secret, &b, 5, 900, &mut replay),
+            Err(HandshakeError::BadMac)
+        );
+        // The good handshake (same session_id:epoch) still succeeds.
+        assert_eq!(
+            SessionBinding::verify(&good, &secret, &b, 5, 900, &mut replay),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn reopen_with_next_epoch_is_a_fresh_one_shot() {
+        // epoch 0 consumed; a Degraded->reopen re-mints epoch 1, which the
+        // replay guard treats as a distinct one-shot credential.
+        let (realm, sid, op, pr, wl) = ids();
+        let secret = SessionSecret::from_bytes([7u8; SECRET_LEN]);
+        let e0 = SessionBinding::new(&realm, 5, &sid, 0, &op, &pr, &wl, 1000);
+        let e1 = SessionBinding::new(&realm, 5, &sid, 1, &op, &pr, &wl, 1000);
+        let mut replay = SetReplayGuard::default();
+        assert_eq!(
+            SessionBinding::verify(
+                &Handshake::sign(e0.clone(), &secret),
+                &secret,
+                &e0,
+                5,
+                900,
+                &mut replay
+            ),
+            Ok(())
+        );
+        // epoch 0 replay rejected, epoch 1 accepted.
+        assert_eq!(
+            SessionBinding::verify(
+                &Handshake::sign(e0.clone(), &secret),
+                &secret,
+                &e0,
+                5,
+                900,
+                &mut replay
+            ),
+            Err(HandshakeError::Replay)
+        );
+        assert_eq!(
+            SessionBinding::verify(
+                &Handshake::sign(e1.clone(), &secret),
+                &secret,
+                &e1,
+                5,
+                900,
+                &mut replay
+            ),
+            Ok(())
         );
     }
 

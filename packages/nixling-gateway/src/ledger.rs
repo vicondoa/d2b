@@ -183,8 +183,8 @@ impl SessionLedger {
             if existing.request_hash == request_hash {
                 return Ok(OpOutcome::Replay(existing.id.clone()));
             }
-            // Same key, different request = conflict (fail closed).
-            return Err(GatewayError::Busy);
+            // Same key, different request = non-retryable conflict (fail closed).
+            return Err(GatewayError::Conflict);
         }
         // Single-session cap: one live session per (realm, workload).
         if self
@@ -206,6 +206,11 @@ impl SessionLedger {
             || self.active_for_realm(&target.realm) >= self.limits.max_sessions_per_realm
         {
             return Err(GatewayError::QuotaExceeded);
+        }
+        // Fail closed on an id-source collision: never overwrite a tracked
+        // record (which would silently drop its state + quota accounting).
+        if self.records.contains_key(new_id.as_str()) {
+            return Err(GatewayError::Internal);
         }
         let rec = SessionRecord {
             id: new_id.clone(),
@@ -316,7 +321,112 @@ mod tests {
         let err = l
             .open(key("work", "demo"), "alice", "op-1", 99, id("s2"))
             .unwrap_err();
-        assert_eq!(err, GatewayError::Busy);
+        assert_eq!(err, GatewayError::Conflict);
+    }
+
+    #[test]
+    fn id_source_collision_fails_closed() {
+        let mut l = SessionLedger::new(1, LedgerLimits::default());
+        l.open(key("work", "a"), "alice", "op-1", 1, id("s1"))
+            .unwrap();
+        // A different op/target but a colliding session id must fail closed,
+        // not overwrite the live record.
+        let err = l
+            .open(key("work", "b"), "bob", "op-2", 2, id("s1"))
+            .unwrap_err();
+        assert_eq!(err, GatewayError::Internal);
+        assert_eq!(l.state(&id("s1")), Some(SessionState::Minting)); // original intact
+    }
+
+    #[test]
+    fn per_realm_quota_fails_closed() {
+        let limits = LedgerLimits {
+            max_sessions_per_realm: 1,
+            ..LedgerLimits::default()
+        };
+        let mut l = SessionLedger::new(1, limits);
+        l.open(key("work", "a"), "alice", "op-1", 1, id("s1"))
+            .unwrap();
+        // Different principal + workload, same realm: still capped.
+        let err = l
+            .open(key("work", "b"), "bob", "op-2", 2, id("s2"))
+            .unwrap_err();
+        assert_eq!(err, GatewayError::QuotaExceeded);
+    }
+
+    #[test]
+    fn record_ceiling_gcs_terminal_then_fails_closed_when_all_active() {
+        let limits = LedgerLimits {
+            max_records: 1,
+            max_sessions_per_principal: 8,
+            max_sessions_per_realm: 16,
+        };
+        let mut l = SessionLedger::new(1, limits);
+        l.open(key("work", "a"), "alice", "op-1", 1, id("s1"))
+            .unwrap();
+        // Ceiling reached with an ACTIVE record: a new open fails closed.
+        assert_eq!(
+            l.open(key("work", "b"), "alice", "op-2", 2, id("s2")),
+            Err(GatewayError::QuotaExceeded)
+        );
+        // Close s1 -> it becomes terminal; the next open GCs it and succeeds.
+        l.transition(&id("s1"), SessionState::Stopping).unwrap();
+        l.transition(&id("s1"), SessionState::Closed).unwrap();
+        let out = l
+            .open(key("work", "b"), "alice", "op-3", 3, id("s3"))
+            .unwrap();
+        assert_eq!(out, OpOutcome::Accepted(id("s3")));
+    }
+
+    #[test]
+    fn transition_matrix_is_fail_closed() {
+        use SessionState::*;
+        let legal = [
+            (Minting, AgentSpawning),
+            (AgentSpawning, ListenerArming),
+            (ListenerArming, AwaitingHandshake),
+            (AwaitingHandshake, Running),
+            (Running, Degraded),
+            (Degraded, ListenerArming),
+            (Minting, Stopping),
+            (AgentSpawning, Stopping),
+            (ListenerArming, Stopping),
+            (AwaitingHandshake, Stopping),
+            (Running, Stopping),
+            (Degraded, Stopping),
+            (Stopping, Closed),
+            (Minting, Failed),
+            (AgentSpawning, Failed),
+            (ListenerArming, Failed),
+            (AwaitingHandshake, Failed),
+        ];
+        let all = [
+            Minting,
+            AgentSpawning,
+            ListenerArming,
+            AwaitingHandshake,
+            Running,
+            Degraded,
+            Stopping,
+            Closed,
+            Failed,
+        ];
+        for &from in &all {
+            for &to in &all {
+                let expect = legal.contains(&(from, to));
+                assert_eq!(
+                    from.can_transition(to),
+                    expect,
+                    "edge {from:?} -> {to:?} legality"
+                );
+            }
+            // Terminal states never transition anywhere.
+            if from.is_terminal() {
+                for &to in &all {
+                    assert!(!from.can_transition(to), "terminal {from:?} must not move");
+                }
+            }
+        }
     }
 
     #[test]

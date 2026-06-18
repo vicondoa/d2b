@@ -108,7 +108,9 @@ mod tests {
     fn display_socket_debug_redacts_path() {
         let s = DisplaySocket::new("/run/user/1000/wpc.sock");
         let d = format!("{s:?}");
-        assert!(!d.contains("1000"), "path must be redacted: {d}");
+        // Exact redacted output; no path component may leak.
+        assert_eq!(d, "DisplaySocket(<redacted>)");
+        assert!(!d.contains("1000") && !d.contains("wpc") && !d.contains("run"));
         assert_eq!(s.path(), "/run/user/1000/wpc.sock");
     }
 }

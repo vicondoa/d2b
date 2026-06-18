@@ -16,6 +16,12 @@ pub enum GatewayError {
     GatewayUnavailable,
     /// A session already exists for the target (single-session cap).
     Busy,
+    /// The same operation id was reused with a different request (non-retryable
+    /// idempotency conflict, distinct from a retryable busy/in-progress).
+    Conflict,
+    /// An internal gateway invariant was violated (e.g. an id-source collision);
+    /// fail-closed rather than corrupt session accounting.
+    Internal,
     /// A per-realm/principal/session quota or buffer ceiling was exceeded.
     QuotaExceeded,
     /// The workload provider failed to allocate / exec the agent.
@@ -42,6 +48,8 @@ impl GatewayError {
             GatewayError::NoRealmEntrypoint => ErrorKind::NoRealmEntrypoint,
             GatewayError::GatewayUnavailable => ErrorKind::GatewayUnavailable,
             GatewayError::Busy => ErrorKind::OperationInProgress,
+            GatewayError::Conflict => ErrorKind::IdempotencyKeyConflict,
+            GatewayError::Internal => ErrorKind::GatewayUnavailable,
             GatewayError::QuotaExceeded => ErrorKind::Backpressure,
             GatewayError::ProviderAllocationFailed => ErrorKind::ProviderAllocationFailed,
             GatewayError::RelayUnavailable => ErrorKind::RelayUnavailable,
@@ -59,6 +67,8 @@ impl GatewayError {
             GatewayError::NoRealmEntrypoint => "missing-realm-entrypoint",
             GatewayError::GatewayUnavailable => "gateway-unavailable",
             GatewayError::Busy => "gateway-busy",
+            GatewayError::Conflict => "idempotency-conflict",
+            GatewayError::Internal => "gateway-internal",
             GatewayError::QuotaExceeded => "gateway-quota-exceeded",
             GatewayError::ProviderAllocationFailed => "provider-allocation-failed",
             GatewayError::RelayUnavailable => "relay-unavailable",
@@ -107,23 +117,82 @@ mod tests {
 
     #[test]
     fn slugs_are_stable_and_distinct() {
-        let all = [
-            GatewayError::NoRealmEntrypoint,
-            GatewayError::GatewayUnavailable,
-            GatewayError::Busy,
-            GatewayError::QuotaExceeded,
-            GatewayError::ProviderAllocationFailed,
-            GatewayError::RelayUnavailable,
-            GatewayError::DisplayAuthFailed(HandshakeError::BadMac),
-            GatewayError::MissingWindowForwarding,
-            GatewayError::Timeout,
-            GatewayError::Cancelled,
-            GatewayError::AuditUnavailable,
-        ];
-        let mut slugs: Vec<&str> = all.iter().map(|e| e.slug()).collect();
+        for (e, slug, kind) in cases() {
+            assert_eq!(e.slug(), slug, "slug for {e:?}");
+            assert_eq!(e.kind(), kind, "kind for {e:?}");
+        }
+        let mut slugs: Vec<&str> = cases().iter().map(|(_, s, _)| *s).collect();
         let n = slugs.len();
         slugs.sort_unstable();
         slugs.dedup();
         assert_eq!(slugs.len(), n, "every gateway error slug must be distinct");
+    }
+
+    /// The exact, stable (variant -> slug, kind) contract. A breaking change
+    /// to any slug or kind mapping fails here, not just a uniqueness check.
+    fn cases() -> Vec<(GatewayError, &'static str, ErrorKind)> {
+        vec![
+            (
+                GatewayError::NoRealmEntrypoint,
+                "missing-realm-entrypoint",
+                ErrorKind::NoRealmEntrypoint,
+            ),
+            (
+                GatewayError::GatewayUnavailable,
+                "gateway-unavailable",
+                ErrorKind::GatewayUnavailable,
+            ),
+            (
+                GatewayError::Busy,
+                "gateway-busy",
+                ErrorKind::OperationInProgress,
+            ),
+            (
+                GatewayError::Conflict,
+                "idempotency-conflict",
+                ErrorKind::IdempotencyKeyConflict,
+            ),
+            (
+                GatewayError::Internal,
+                "gateway-internal",
+                ErrorKind::GatewayUnavailable,
+            ),
+            (
+                GatewayError::QuotaExceeded,
+                "gateway-quota-exceeded",
+                ErrorKind::Backpressure,
+            ),
+            (
+                GatewayError::ProviderAllocationFailed,
+                "provider-allocation-failed",
+                ErrorKind::ProviderAllocationFailed,
+            ),
+            (
+                GatewayError::RelayUnavailable,
+                "relay-unavailable",
+                ErrorKind::RelayUnavailable,
+            ),
+            (
+                GatewayError::DisplayAuthFailed(HandshakeError::BadMac),
+                "display-auth-failed",
+                ErrorKind::AuthenticationFailed,
+            ),
+            (
+                GatewayError::MissingWindowForwarding,
+                "missing-window-forwarding",
+                ErrorKind::UnsupportedFeature,
+            ),
+            (GatewayError::Timeout, "gateway-timeout", ErrorKind::Timeout),
+            (
+                GatewayError::Cancelled,
+                "gateway-cancelled",
+                ErrorKind::Cancelled,
+            ),
+            (
+                GatewayError::AuditUnavailable,
+                "audit-unavailable",
+                ErrorKind::AuditUnavailable,
+            ),
+        ]
     }
 }
