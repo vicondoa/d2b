@@ -322,6 +322,7 @@ struct ServerState {
     exec_sessions: Arc<exec_session::SessionTable>,
 }
 
+#[cfg_attr(test, derive(Clone))]
 struct PeerOverride {
     uid: u32,
     gid: u32,
@@ -1743,7 +1744,7 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
 }
 
 fn authorize_peer(stream: &Socket, state: &ServerState) -> Result<PeerIdentity, TypedError> {
-    let peer_override = match peer_override_from_env()? {
+    let peer_override = match peer_override_injected() {
         Some(peer) => peer,
         None => {
             let peer = getsockopt(stream, PeerCredentials).map_err(io_wrap("read SO_PEERCRED"))?;
@@ -9259,49 +9260,33 @@ fn close_received_fds(fds: &[RawFd]) {
     }
 }
 
-fn peer_override_from_env() -> Result<Option<PeerOverride>, TypedError> {
-    let uid = match std::env::var("NIXLINGD_TEST_PEER_UID") {
-        Ok(value) => value
-            .parse::<u32>()
-            .map_err(|err| TypedError::InternalConfig {
-                detail: format!("NIXLINGD_TEST_PEER_UID: {err}"),
-            })?,
-        Err(std::env::VarError::NotPresent) => return Ok(None),
-        Err(err) => {
-            return Err(TypedError::InternalConfig {
-                detail: format!("NIXLINGD_TEST_PEER_UID: {err}"),
-            })
-        }
-    };
-    let gid = match std::env::var("NIXLINGD_TEST_PEER_GID") {
-        Ok(value) => value
-            .parse::<u32>()
-            .map_err(|err| TypedError::InternalConfig {
-                detail: format!("NIXLINGD_TEST_PEER_GID: {err}"),
-            })?,
-        Err(std::env::VarError::NotPresent) => uid,
-        Err(err) => {
-            return Err(TypedError::InternalConfig {
-                detail: format!("NIXLINGD_TEST_PEER_GID: {err}"),
-            })
-        }
-    };
-    let username = std::env::var("NIXLINGD_TEST_PEER_USERNAME").ok();
-    let groups = std::env::var("NIXLINGD_TEST_PEER_GROUPS")
-        .ok()
-        .map(|value| {
-            value
-                .split(',')
-                .filter(|part| !part.is_empty())
-                .map(|part| part.to_owned())
-                .collect::<Vec<_>>()
-        });
-    Ok(Some(PeerOverride {
-        uid,
-        gid,
-        username,
-        groups,
-    }))
+/// Test-only peer-credential injection. The accept path
+/// ([`authorize_peer`]) reads the connecting peer's identity from
+/// `SO_PEERCRED`; the accept-loop tests need to drive `handle_connection`
+/// over an in-process socketpair while pretending the peer is a specific
+/// launcher/admin uid. Rather than mutate process-global env (which is
+/// `unsafe` under edition 2024) this is injected through a `#[cfg(test)]`
+/// `Mutex`. In non-test builds it is compiled out and always `None`, so the
+/// production accept path has no test backdoor at all.
+#[cfg(test)]
+static TEST_PEER_OVERRIDE: std::sync::Mutex<Option<PeerOverride>> = std::sync::Mutex::new(None);
+
+/// Serializes the accept-loop tests that inject a [`PeerOverride`] so two of
+/// them cannot interleave on the process-global injection slot.
+#[cfg(test)]
+static TEST_PEER_OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+fn peer_override_injected() -> Option<PeerOverride> {
+    TEST_PEER_OVERRIDE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+}
+
+#[cfg(not(test))]
+fn peer_override_injected() -> Option<PeerOverride> {
+    None
 }
 
 fn io_wrap(context: &'static str) -> impl FnOnce(nix::errno::Errno) -> TypedError {
@@ -9635,22 +9620,28 @@ mod detached_exec_routing_tests {
         serde_json::to_vec(&value).expect("serialize exec frame")
     }
 
-    struct PeerOverrideEnv;
+    struct PeerOverrideEnv {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
 
     impl PeerOverrideEnv {
         fn launcher() -> Self {
-            std::env::set_var("NIXLINGD_TEST_PEER_UID", "1000");
-            std::env::set_var("NIXLINGD_TEST_PEER_USERNAME", "launcher");
-            std::env::set_var("NIXLINGD_TEST_PEER_GROUPS", "");
-            Self
+            let lock = TEST_PEER_OVERRIDE_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = Some(PeerOverride {
+                uid: 1000,
+                gid: 1000,
+                username: Some("launcher".to_owned()),
+                groups: Some(Vec::new()),
+            });
+            Self { _lock: lock }
         }
     }
 
     impl Drop for PeerOverrideEnv {
         fn drop(&mut self) {
-            std::env::remove_var("NIXLINGD_TEST_PEER_UID");
-            std::env::remove_var("NIXLINGD_TEST_PEER_USERNAME");
-            std::env::remove_var("NIXLINGD_TEST_PEER_GROUPS");
+            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = None;
         }
     }
 
@@ -10256,25 +10247,32 @@ mod accept_loop_concurrency_tests {
         serde_json::to_vec(&value).expect("serialize exec frame")
     }
 
-    /// Scoped guard for the test SO_PEERCRED override env vars so a panic still
-    /// restores process-global state. Only `handle_connection` reads these, and
-    /// only these accept-loop tests drive `handle_connection`.
-    struct PeerOverrideEnv;
+    /// Scoped guard for the test SO_PEERCRED override so a panic still clears
+    /// the process-global injection slot. Only [`authorize_peer`] (via
+    /// `handle_connection`) reads it, and only these accept-loop tests inject
+    /// it; the guard also serializes those tests against each other.
+    struct PeerOverrideEnv {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
 
     impl PeerOverrideEnv {
         fn admin() -> Self {
-            std::env::set_var("NIXLINGD_TEST_PEER_UID", "4242");
-            std::env::set_var("NIXLINGD_TEST_PEER_USERNAME", "execadmin");
-            std::env::set_var("NIXLINGD_TEST_PEER_GROUPS", "");
-            Self
+            let lock = TEST_PEER_OVERRIDE_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = Some(PeerOverride {
+                uid: 4242,
+                gid: 4242,
+                username: Some("execadmin".to_owned()),
+                groups: Some(Vec::new()),
+            });
+            Self { _lock: lock }
         }
     }
 
     impl Drop for PeerOverrideEnv {
         fn drop(&mut self) {
-            std::env::remove_var("NIXLINGD_TEST_PEER_UID");
-            std::env::remove_var("NIXLINGD_TEST_PEER_USERNAME");
-            std::env::remove_var("NIXLINGD_TEST_PEER_GROUPS");
+            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = None;
         }
     }
 
