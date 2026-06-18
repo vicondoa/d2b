@@ -1196,6 +1196,23 @@ pub mod path_safe {
         }
     }
 
+    /// Like [`mkdir_at`] but FAILS CLOSED on `EEXIST` (surfaced as
+    /// [`io::ErrorKind::AlreadyExists`]) instead of treating a pre-existing
+    /// entry as success. Used where adopting a directory this call did NOT
+    /// create would be a security bug — e.g. the swtpm NVRAM dir
+    /// fresh-create path (issue #64): a role UID with `rwx` on the sticky
+    /// per-VM root can race-create `swtpm/` between the absence pre-check
+    /// and this `mkdirat`, and the broker must refuse rather than
+    /// stamp/own/marker-trust an attacker-planted directory.
+    pub fn mkdir_at_exclusive(
+        parent_dirfd: BorrowedFd<'_>,
+        name: &Path,
+        mode: u32,
+    ) -> io::Result<()> {
+        use rustix::fs::{Mode, mkdirat};
+        mkdirat(parent_dirfd, name, Mode::from_raw_mode(mode)).map_err(io_from_rustix)
+    }
+
     /// Alias retained for callers that still use the older helper name.
     pub fn open_dir(path: &Path) -> io::Result<OwnedFd> {
         open_dir_path_safe(path)

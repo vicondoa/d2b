@@ -3578,6 +3578,20 @@ fn register_runner_pidfd(runner_id: &str, pidfd: &OwnedFd) -> Result<(), BrokerE
     let mut registry = runner_pidfd_registry()
         .lock()
         .map_err(|_| BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned()))?;
+    // Refuse to overwrite a still-active registration for the same
+    // runner_id. The registry is keyed by `<vm>:<role>` only; silently
+    // replacing a live entry would let a later spawn's pidfd be dropped by
+    // an EARLIER spawn's post-spawn `targeted_reap_runner`
+    // (`reg.remove(runner_id)`), leaving the live child untracked /
+    // unreapable by the registry. A live child's entry is removed on
+    // exit (SIGCHLD reaper) or on down/stop, so a legitimate re-spawn
+    // never collides here; a collision means a concurrent/duplicate spawn
+    // and must fail closed rather than clobber. See issue #64 work-review.
+    if registry.contains_key(runner_id) {
+        return Err(BrokerError::Protocol(format!(
+            "runner pidfd already registered for {runner_id}; refusing to overwrite an active registration"
+        )));
+    }
     registry.insert(runner_id.to_owned(), duplicated);
     Ok(())
 }
@@ -3977,7 +3991,7 @@ impl DispatchBackend for LiveDispatchBackend {
                 other => BrokerError::LiveHandler(other.to_string()),
             }
         })?;
-        register_runner_pidfd(runner_id, &outcome.pidfd).map_err(|err| {
+        register_runner_pidfd(runner_id, &outcome.pidfd).inspect_err(|_err| {
             // Registration failed: the broker is about to drop this
             // just-spawned child's pidfd. Reap it now (targeted,
             // non-blocking) so a child that has already exited cannot
@@ -3985,7 +3999,6 @@ impl DispatchBackend for LiveDispatchBackend {
             // already absent on the failure path.
             #[cfg(not(feature = "layer1-bootstrap"))]
             targeted_reap_runner(runner_id, outcome.pidfd.as_fd());
-            err
         })?;
         // Close the registration-window race: if the child exited
         // between clone3 and the registry insertion above, its SIGCHLD

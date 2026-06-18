@@ -69,6 +69,7 @@ pub mod reasons {
     pub const OWNER_MISMATCH: &str = "swtpm-dir-owner-mismatch";
     pub const PREV_PROVISIONED_MISSING: &str = "previously-provisioned-swtpm-state-missing";
     pub const CREATE_FAILED: &str = "swtpm-dir-create-failed";
+    pub const RACED_CREATE: &str = "swtpm-dir-raced-create";
     pub const ACL_CLEAR_FAILED: &str = "swtpm-dir-acl-clear-failed";
     pub const ACL_RESIDUAL: &str = "swtpm-dir-acl-residual";
     pub const MARKER_TREE_FAILED: &str = "swtpm-marker-tree-failed";
@@ -499,8 +500,21 @@ fn create_fresh_swtpm_dir(
     per_vm_root_fd: &OwnedFd,
     cfg: &SwtpmHardenConfig,
 ) -> Result<(u64, u64), &'static str> {
-    path_safe::mkdir_at(per_vm_root_fd.as_fd(), Path::new("swtpm"), SWTPM_DIR_MODE)
-        .map_err(|_| reasons::CREATE_FAILED)?;
+    // STRICT create: fail closed on EEXIST. The harden() caller only
+    // enters this path after `fstatat_nofollow` saw `swtpm` ABSENT, and
+    // swtpm-flush + swtpm harden run sequentially in the per-VM DAG, so the
+    // only actor that can have race-created the entry in the meantime is
+    // hostile. Refuse rather than open/fchown/fchmod/clear-ACL/marker-trust
+    // a directory this invocation did not create (would adopt
+    // attacker-planted NVRAM contents). See issue #64.
+    match path_safe::mkdir_at_exclusive(per_vm_root_fd.as_fd(), Path::new("swtpm"), SWTPM_DIR_MODE)
+    {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(reasons::RACED_CREATE);
+        }
+        Err(_) => return Err(reasons::CREATE_FAILED),
+    }
     let dir_fd = path_safe::open_at(
         per_vm_root_fd.as_fd(),
         Path::new("swtpm"),
@@ -529,8 +543,8 @@ fn create_fresh_swtpm_dir(
     Ok((final_stat.st_dev as u64, final_stat.st_ino as u64))
 }
 
-/// Reconcile an existing correct-owner swtpm dir in place: clear access
-/// + default ACLs, re-assert 0700, verify no foreign ACL xattr remains.
+/// Reconcile an existing correct-owner swtpm dir in place: clear the access
+/// and default ACLs, re-assert 0700, verify no foreign ACL xattr remains.
 /// Contents are preserved. Returns whether any reconcile mutation was
 /// needed (extended ACL present OR mode != 0700) so the caller can
 /// classify Reconciled vs VerifiedClean.
@@ -686,6 +700,29 @@ mod tests {
         // Audit/error carry no raw path.
         let json = serde_json::to_string(&audit).unwrap();
         assert!(!json.contains(&s.root.display().to_string()));
+    }
+
+    #[test]
+    fn raced_fresh_create_fails_closed_instead_of_adopting() {
+        // A role UID with rwx on the sticky per-VM root can race a `swtpm`
+        // entry into existence between the broker's absence pre-check and its
+        // mkdirat. The strict create MUST fail closed (RACED_CREATE) rather
+        // than open / fchown / fchmod / clear-ACL / marker-trust a directory
+        // this invocation did not create (which would adopt attacker-planted
+        // NVRAM contents). See issue #64 work-review.
+        let s = Scratch::new("raced");
+        let paths = s.paths("delta");
+        s.make_per_vm_root(&paths);
+        let cfg = s.cfg();
+        // The racer wins the create.
+        fs::create_dir(&paths.swtpm_dir).unwrap();
+        fs::write(paths.swtpm_dir.join("attacker-nvram"), b"evil").unwrap();
+
+        let per_vm_root_fd = path_safe::open_dir_path_safe(&paths.per_vm_root).unwrap();
+        let err = create_fresh_swtpm_dir(&per_vm_root_fd, &cfg).unwrap_err();
+        assert_eq!(err, reasons::RACED_CREATE);
+        // Attacker contents untouched (not adopted / chowned / cleared).
+        assert!(paths.swtpm_dir.join("attacker-nvram").exists());
     }
 
     #[test]
