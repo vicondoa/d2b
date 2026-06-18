@@ -598,9 +598,7 @@ impl TypedError {
             }
             Self::GuestControlReadFailed { kind } => kind.human_message().to_owned(),
             Self::GuestControlExecFailed { kind } => kind.human_message().to_owned(),
-            Self::DaemonBusy => {
-                "the daemon is at its in-flight connection limit".to_owned()
-            }
+            Self::DaemonBusy => "the daemon is at its in-flight connection limit".to_owned(),
         }
     }
 

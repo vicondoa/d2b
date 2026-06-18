@@ -159,8 +159,8 @@ fn production_swtpm_path(p: &Path) -> bool {
 /// swtpm dir (ending `/swtpm`, NOT under `/run`) and the runtime dir
 /// (under `/run/nixling/vms`).
 pub fn derive_paths(plan: &SpawnRunnerPlan) -> Result<SwtpmDirPaths, &'static str> {
-    let vm_id = parse_vm_from_subtree(&plan.cgroup_placement.subtree)
-        .ok_or(reasons::DERIVATION_FAILED)?;
+    let vm_id =
+        parse_vm_from_subtree(&plan.cgroup_placement.subtree).ok_or(reasons::DERIVATION_FAILED)?;
 
     let mut swtpm_dir: Option<PathBuf> = None;
     let mut runtime_dir: Option<PathBuf> = None;
@@ -173,8 +173,7 @@ pub fn derive_paths(plan: &SpawnRunnerPlan) -> Result<SwtpmDirPaths, &'static st
             if path.starts_with("/run/nixling/vms") && runtime_dir.is_none() {
                 runtime_dir = Some(path.to_path_buf());
             }
-        } else if path.file_name().and_then(|s| s.to_str()) == Some("swtpm")
-            && swtpm_dir.is_none()
+        } else if path.file_name().and_then(|s| s.to_str()) == Some("swtpm") && swtpm_dir.is_none()
         {
             swtpm_dir = Some(path.to_path_buf());
         }
@@ -245,9 +244,8 @@ pub fn harden(
 
     // 1. Establish + open the root-owned marker tree, then read any
     //    existing marker (fail closed on tamper).
-    let marker_dir_fd = ensure_marker_tree(paths, cfg).map_err(|reason| {
-        fail(reason, SwtpmMarkerResult::FailedClosed)
-    })?;
+    let marker_dir_fd = ensure_marker_tree(paths, cfg)
+        .map_err(|reason| fail(reason, SwtpmMarkerResult::FailedClosed))?;
     let existing_marker = read_marker(&marker_dir_fd, paths, cfg)
         .map_err(|reason| fail(reason, SwtpmMarkerResult::FailedClosed))?;
 
@@ -365,8 +363,7 @@ pub fn harden(
 
     // 5. Unlink a stale trusted control socket under the runtime dir.
     //    The runtime dir's own posture is left untouched.
-    unlink_stale_socket(&paths.runtime_dir)
-        .map_err(|reason| fail(reason, marker_result))?;
+    unlink_stale_socket(&paths.runtime_dir).map_err(|reason| fail(reason, marker_result))?;
 
     Ok(SwtpmDirAudit {
         vm_id: paths.vm_id.clone(),
@@ -433,7 +430,8 @@ fn read_marker(
     )
     .map_err(|_| reasons::PREV_PROVISIONED_MISSING)?;
     // TOCTOU re-check on the held fd.
-    let fd_stat = path_safe::fstat_fd(file_fd.as_fd()).map_err(|_| reasons::PREV_PROVISIONED_MISSING)?;
+    let fd_stat =
+        path_safe::fstat_fd(file_fd.as_fd()).map_err(|_| reasons::PREV_PROVISIONED_MISSING)?;
     if (fd_stat.st_mode & libc::S_IFMT) != libc::S_IFREG || fd_stat.st_uid != cfg.marker_owner_uid {
         return Err(reasons::PREV_PROVISIONED_MISSING);
     }
@@ -517,8 +515,12 @@ fn create_fresh_swtpm_dir(
         return Err(reasons::CREATE_FAILED);
     }
     // Owner stamp ONLY on the create path.
-    path_safe::fchown(dir_fd.as_fd(), Some(cfg.expected_uid), Some(cfg.expected_gid))
-        .map_err(|_| reasons::CREATE_FAILED)?;
+    path_safe::fchown(
+        dir_fd.as_fd(),
+        Some(cfg.expected_uid),
+        Some(cfg.expected_gid),
+    )
+    .map_err(|_| reasons::CREATE_FAILED)?;
     path_safe::fchmod(dir_fd.as_fd(), SWTPM_DIR_MODE).map_err(|_| reasons::CREATE_FAILED)?;
     pidfd_sys::run_setfacl_clear_on_fd(dir_fd.as_fd()).map_err(|_| reasons::ACL_CLEAR_FAILED)?;
     path_safe::fchmod(dir_fd.as_fd(), SWTPM_DIR_MODE).map_err(|_| reasons::CREATE_FAILED)?;
@@ -699,7 +701,9 @@ mod tests {
         fs::write(&nvram, b"nvram-state").unwrap();
         fs::set_permissions(&paths.swtpm_dir, fs::Permissions::from_mode(0o770)).unwrap();
         let _ = pidfd_sys::run_setfacl_op_on_fd(
-            path_safe::open_dir_path_safe(&paths.swtpm_dir).unwrap().as_fd(),
+            path_safe::open_dir_path_safe(&paths.swtpm_dir)
+                .unwrap()
+                .as_fd(),
             "-m",
             &format!("u:{}:rwx", cur_uid()),
         );
@@ -712,7 +716,9 @@ mod tests {
         assert_eq!(fs::read(&nvram).unwrap(), b"nvram-state");
         // ACL cleared.
         let (a, d) = path_safe::fd_extended_acl_present(
-            path_safe::open_dir_path_safe(&paths.swtpm_dir).unwrap().as_fd(),
+            path_safe::open_dir_path_safe(&paths.swtpm_dir)
+                .unwrap()
+                .as_fd(),
         )
         .unwrap();
         assert!(!a && !d, "extended ACL must be cleared");
@@ -736,7 +742,10 @@ mod tests {
         ));
         assert_eq!(audit.marker_result, SwtpmMarkerResult::Created);
         assert!(paths.marker_dir.join(&paths.marker_name).is_file());
-        assert_eq!(fs::read(paths.swtpm_dir.join("tpm2-00.permall")).unwrap(), b"legacy");
+        assert_eq!(
+            fs::read(paths.swtpm_dir.join("tpm2-00.permall")).unwrap(),
+            b"legacy"
+        );
     }
 
     #[test]
@@ -865,10 +874,15 @@ mod tests {
         harden(&paths, &cfg).expect("harden ok");
         // The per-VM root carries a u:<uid>:--x ACL entry.
         let (access, _default) = path_safe::fd_extended_acl_present(
-            path_safe::open_dir_path_safe(&paths.per_vm_root).unwrap().as_fd(),
+            path_safe::open_dir_path_safe(&paths.per_vm_root)
+                .unwrap()
+                .as_fd(),
         )
         .unwrap();
-        assert!(access, "ancestor traverse ACL must be present on per-VM root");
+        assert!(
+            access,
+            "ancestor traverse ACL must be present on per-VM root"
+        );
     }
 
     #[test]
@@ -933,9 +947,8 @@ mod tests {
     }
 
     #[test]
-    fn derive_paths_picks_state_dir_not_runtime() {        use nixling_core::minijail_profile::{
-            CgroupPlacement, MountPolicy, WritablePath,
-        };
+    fn derive_paths_picks_state_dir_not_runtime() {
+        use nixling_core::minijail_profile::{CgroupPlacement, MountPolicy, WritablePath};
         let plan = SpawnRunnerPlan {
             binary_path: PathBuf::from("/run/current-system/sw/bin/swtpm"),
             argv: vec!["swtpm".into()],
@@ -980,8 +993,14 @@ mod tests {
         };
         let paths = derive_paths(&plan).expect("derive ok");
         assert_eq!(paths.vm_id, "work");
-        assert_eq!(paths.swtpm_dir, PathBuf::from("/var/lib/nixling/vms/work/swtpm"));
-        assert_eq!(paths.per_vm_root, PathBuf::from("/var/lib/nixling/vms/work"));
+        assert_eq!(
+            paths.swtpm_dir,
+            PathBuf::from("/var/lib/nixling/vms/work/swtpm")
+        );
+        assert_eq!(
+            paths.per_vm_root,
+            PathBuf::from("/var/lib/nixling/vms/work")
+        );
         assert_eq!(paths.runtime_dir, PathBuf::from("/run/nixling/vms/work"));
         assert_eq!(paths.marker_dir, PathBuf::from(MARKER_TREE));
         assert_eq!(paths.marker_name, "work");

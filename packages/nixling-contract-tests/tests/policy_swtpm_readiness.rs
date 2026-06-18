@@ -37,7 +37,11 @@ fn swtpm_readiness_uses_unix_socket_listening() {
         .flat_map(|dag| {
             dag.nodes.iter().filter_map(|node| {
                 if node.role == ProcessRole::Swtpm {
-                    Some((dag.vm.as_str(), node.id.0.as_str(), node.readiness.as_slice()))
+                    Some((
+                        dag.vm.as_str(),
+                        node.id.0.as_str(),
+                        node.readiness.as_slice(),
+                    ))
                 } else {
                     None
                 }

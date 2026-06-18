@@ -864,7 +864,9 @@ mod tests {
         });
         // Repeated peeks never consume the reap entry.
         for _ in 0..3 {
-            let peeked = reap_log.peek_for("work", "swtpm").expect("reap entry present");
+            let peeked = reap_log
+                .peek_for("work", "swtpm")
+                .expect("reap entry present");
             assert_eq!(peeked.pid, 7777);
         }
         // After observe-only peeks the consuming take_for still finds it.
@@ -1345,10 +1347,7 @@ mod tests {
         let vms: std::collections::BTreeSet<&str> =
             persisted.entries.iter().map(|e| e.vm.as_str()).collect();
         for vm in ["vm-a", "vm-b", "vm-c", "vm-d"] {
-            assert!(
-                vms.contains(vm),
-                "persisted snapshot dropped {vm}: {vms:?}"
-            );
+            assert!(vms.contains(vm), "persisted snapshot dropped {vm}: {vms:?}");
         }
         assert_eq!(persisted.entries.len(), 4, "no entries lost or duplicated");
     }

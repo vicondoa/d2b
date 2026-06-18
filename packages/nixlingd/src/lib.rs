@@ -14579,8 +14579,8 @@ mod broker_dispatch_tests {
 
     #[test]
     fn wait_for_readiness_alive_and_ready_is_ok() {
-        use nixling_core::processes::ReadinessPredicate;
         use super::supervisor::readiness_liveness::RunnerLiveness;
+        use nixling_core::processes::ReadinessPredicate;
 
         let node = readiness_test_node();
         // ComponentSpecific is trivially ready; Alive liveness lets it pass.
@@ -14592,8 +14592,8 @@ mod broker_dispatch_tests {
 
     #[test]
     fn wait_for_readiness_alive_but_unready_polls_to_timeout() {
-        use nixling_core::processes::ReadinessPredicate;
         use super::supervisor::readiness_liveness::RunnerLiveness;
+        use nixling_core::processes::ReadinessPredicate;
 
         let node = readiness_test_node();
         // A socket that never exists keeps the predicate false; Alive
@@ -14602,14 +14602,15 @@ mod broker_dispatch_tests {
             "/nonexistent/nixling-readiness-test.sock".to_owned(),
         )];
         let probe = ScriptedLivenessProbe::always(RunnerLiveness::Alive);
-        let result = super::wait_for_readiness(&node, &unready, Duration::from_millis(50), Some(&probe));
+        let result =
+            super::wait_for_readiness(&node, &unready, Duration::from_millis(50), Some(&probe));
         assert_eq!(result, Err("readiness-timeout:swtpm".to_owned()));
     }
 
     #[test]
     fn wait_for_readiness_exited_fast_fails_before_deadline() {
-        use nixling_core::processes::ReadinessPredicate;
         use super::supervisor::readiness_liveness::RunnerLiveness;
+        use nixling_core::processes::ReadinessPredicate;
 
         let node = readiness_test_node();
         let unready = vec![ReadinessPredicate::UnixSocketExists(
@@ -14619,7 +14620,8 @@ mod broker_dispatch_tests {
         // deadline proves the fast-fail does NOT wait for the budget.
         let probe = ScriptedLivenessProbe::always(RunnerLiveness::Exited(None));
         let started = Instant::now();
-        let result = super::wait_for_readiness(&node, &unready, Duration::from_secs(300), Some(&probe));
+        let result =
+            super::wait_for_readiness(&node, &unready, Duration::from_secs(300), Some(&probe));
         assert_eq!(result, Err("runner-exited:swtpm".to_owned()));
         assert!(
             started.elapsed() < Duration::from_secs(5),
@@ -14629,29 +14631,31 @@ mod broker_dispatch_tests {
 
     #[test]
     fn wait_for_readiness_reused_fast_fails() {
-        use nixling_core::processes::ReadinessPredicate;
         use super::supervisor::readiness_liveness::RunnerLiveness;
+        use nixling_core::processes::ReadinessPredicate;
 
         let node = readiness_test_node();
         let unready = vec![ReadinessPredicate::UnixSocketExists(
             "/nonexistent/nixling-readiness-test.sock".to_owned(),
         )];
         let probe = ScriptedLivenessProbe::always(RunnerLiveness::Reused);
-        let result = super::wait_for_readiness(&node, &unready, Duration::from_secs(300), Some(&probe));
+        let result =
+            super::wait_for_readiness(&node, &unready, Duration::from_secs(300), Some(&probe));
         assert_eq!(result, Err("runner-reused:swtpm".to_owned()));
     }
 
     #[test]
     fn wait_for_readiness_stale_listening_socket_not_false_ready() {
-        use nixling_core::processes::ReadinessPredicate;
         use super::supervisor::readiness_liveness::RunnerLiveness;
+        use nixling_core::processes::ReadinessPredicate;
 
         let node = readiness_test_node();
         // The predicate reports ready (stale listening socket), but the
         // runner has exited — the liveness re-check must veto false-ready.
         let ready = vec![ReadinessPredicate::ComponentSpecific("x".to_owned())];
         let probe = ScriptedLivenessProbe::always(RunnerLiveness::Exited(None));
-        let result = super::wait_for_readiness(&node, &ready, Duration::from_secs(300), Some(&probe));
+        let result =
+            super::wait_for_readiness(&node, &ready, Duration::from_secs(300), Some(&probe));
         assert_eq!(
             result,
             Err("runner-exited:swtpm".to_owned()),
@@ -14661,8 +14665,8 @@ mod broker_dispatch_tests {
 
     #[test]
     fn wait_for_readiness_unknown_liveness_keeps_polling() {
-        use nixling_core::processes::ReadinessPredicate;
         use super::supervisor::readiness_liveness::RunnerLiveness;
+        use nixling_core::processes::ReadinessPredicate;
 
         let node = readiness_test_node();
         let unready = vec![ReadinessPredicate::UnixSocketExists(
@@ -14670,7 +14674,8 @@ mod broker_dispatch_tests {
         )];
         // Unknown is non-terminal: the loop keeps polling to the deadline.
         let probe = ScriptedLivenessProbe::always(RunnerLiveness::Unknown);
-        let result = super::wait_for_readiness(&node, &unready, Duration::from_millis(50), Some(&probe));
+        let result =
+            super::wait_for_readiness(&node, &unready, Duration::from_millis(50), Some(&probe));
         assert_eq!(result, Err("readiness-timeout:swtpm".to_owned()));
     }
 
@@ -14708,7 +14713,9 @@ mod broker_dispatch_tests {
 
     #[test]
     fn detect_runner_exit_failure_extracts_role_from_reason() {
-        use nixling_core::processes::{NodeId, ProcessNode, ProcessRole, VmProcessDag, VmProcessInvariants};
+        use nixling_core::processes::{
+            NodeId, ProcessNode, ProcessRole, VmProcessDag, VmProcessInvariants,
+        };
 
         let node = ProcessNode {
             id: NodeId("swtpm-node".to_owned()),

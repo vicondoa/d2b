@@ -916,9 +916,7 @@ pub mod path_safe {
             let c_name = CString::new(name).expect("static xattr name has no NUL");
             // SAFETY: fgetxattr with a null value buffer (size 0) only
             // queries the attribute length / presence; it never writes.
-            let ret = unsafe {
-                libc::fgetxattr(fd, c_name.as_ptr(), std::ptr::null_mut(), 0)
-            };
+            let ret = unsafe { libc::fgetxattr(fd, c_name.as_ptr(), std::ptr::null_mut(), 0) };
             if ret >= 0 {
                 return Ok(true);
             }
