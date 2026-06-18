@@ -30,8 +30,8 @@
 //!
 //! Dependency direction: depends ONLY on `nixling-constellation-core` +
 //! `nixling-constellation-provider`. It MUST NOT depend on `prost`, a codec
-//! crate, a transport impl, or any host-only internals (enforced by
-//! `tests/unit/meta/w0-dep-direction.sh`).
+//! crate, a transport impl, or any host-only internals (enforced by the
+//! constellation dependency-direction CI gate).
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -287,17 +287,23 @@ impl<C: Clock> OperationRouter<C> {
     /// Mark a previously-accepted mutating operation complete, recording its
     /// `result` so a same-key + same-request retry resolves to
     /// [`RouteDecision::Replay`]. Returns `true` if a matching in-progress
-    /// record was found. The key is rebuilt from `req` (the full dedup
-    /// namespace), so completion can only resolve the matching record.
+    /// record was found. The record is identified by the full dedup namespace
+    /// AND the request fingerprint, so a same-key/different-request caller
+    /// (one that routed as [`RouteDecision::IdempotencyKeyConflict`] and was
+    /// never accepted) can never terminalize the accepted operation's record.
     pub fn mark_completed(&mut self, req: &OperationRequest, result: OpaquePayload) -> bool {
         let key = match &req.idempotency_key {
             Some(k) => k.clone(),
             None => return false,
         };
         let dedup_key = DedupKey::for_request(req, &key);
+        let fingerprint = req.dedup_fingerprint_input();
         let now = self.clock.now();
         match self.dedup.get_mut(&dedup_key) {
-            Some(entry) if matches!(entry.state, DedupState::InProgress) => {
+            Some(entry)
+                if matches!(entry.state, DedupState::InProgress)
+                    && entry.fingerprint == fingerprint =>
+            {
                 entry.state = DedupState::Completed { result, since: now };
                 true
             }
@@ -308,15 +314,22 @@ impl<C: Clock> OperationRouter<C> {
     /// Mark a previously-accepted mutating operation terminally failed,
     /// removing its in-progress record so a fresh retry is accepted rather
     /// than wedged `InProgress` until expiry. Returns `true` if a matching
-    /// in-progress record was removed.
+    /// in-progress record was removed. Like [`Self::mark_completed`], the
+    /// record is matched on the full dedup namespace AND the request
+    /// fingerprint, so a same-key/different-request (conflicting) caller
+    /// cannot remove the accepted operation's record.
     pub fn mark_failed(&mut self, req: &OperationRequest) -> bool {
         let key = match &req.idempotency_key {
             Some(k) => k.clone(),
             None => return false,
         };
         let dedup_key = DedupKey::for_request(req, &key);
+        let fingerprint = req.dedup_fingerprint_input();
         match self.dedup.get(&dedup_key) {
-            Some(entry) if matches!(entry.state, DedupState::InProgress) => {
+            Some(entry)
+                if matches!(entry.state, DedupState::InProgress)
+                    && entry.fingerprint == fingerprint =>
+            {
                 self.dedup.remove(&dedup_key);
                 true
             }
@@ -631,5 +644,43 @@ mod tests {
         assert!(r.mark_failed(&req));
         // After terminal failure the key is fresh, not wedged InProgress.
         assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
+    }
+
+    #[test]
+    fn conflicting_request_cannot_terminalize_accepted_record() {
+        // A same-key/different-body request routes as a conflict and is never
+        // accepted; it must NOT be able to complete or fail the genuinely
+        // accepted operation's record (which would corrupt replay/dedup).
+        let mut r = OperationRouter::new();
+        let p = principal("alice");
+        let accepted = req(OperationKind::WorkloadStart, Some("k1"), b"real", "alice");
+        let conflicting = req(OperationKind::WorkloadStart, Some("k1"), b"forged", "alice");
+        assert!(matches!(
+            r.route(&accepted, &p),
+            RouteDecision::Accept { .. }
+        ));
+        assert_eq!(
+            r.route(&conflicting, &p),
+            RouteDecision::IdempotencyKeyConflict
+        );
+        // The conflicting caller cannot terminalize the accepted record.
+        assert!(!r.mark_completed(&conflicting, result(b"forged-result")));
+        assert!(!r.mark_failed(&conflicting));
+        // The accepted op is still in progress and still owns its record.
+        assert_eq!(
+            r.route(&accepted, &p),
+            RouteDecision::InProgress {
+                original_operation_id: OperationId::parse("op-1").unwrap(),
+            }
+        );
+        // The legitimate completer (matching fingerprint) still works.
+        assert!(r.mark_completed(&accepted, result(b"real-result")));
+        assert_eq!(
+            r.route(&accepted, &p),
+            RouteDecision::Replay {
+                original_operation_id: OperationId::parse("op-1").unwrap(),
+                result: result(b"real-result"),
+            }
+        );
     }
 }

@@ -42,8 +42,8 @@ pub fn new_shared_router() -> SharedRouter {
 }
 
 /// Terminates a peer session: decodes wire bytes through a [`ProtocolCodec`]
-/// into the semantic frame layer and forwards them to the API service. Wave
-/// 0 carries the seam only.
+/// into the semantic frame layer and forwards them to the API service. The
+/// initial skeleton carries the seam only.
 pub struct ApiFrontend {
     codec: Box<dyn ProtocolCodec>,
 }

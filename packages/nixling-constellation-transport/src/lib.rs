@@ -7,7 +7,8 @@
 //! Dependency direction: depends only on `nixling-constellation-core` +
 //! `nixling-constellation-provider` + `async-trait`/`tokio`. It MUST NOT
 //! depend on a protocol codec, a real transport, or any host-only
-//! broker/daemon internals (enforced by `tests/unit/meta/w0-dep-direction.sh`).
+//! broker/daemon internals (enforced by the constellation
+//! dependency-direction CI gate).
 
 use async_trait::async_trait;
 use nixling_constellation_core::ErrorKind;
