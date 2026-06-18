@@ -6,7 +6,7 @@ mod daemon_state_lock {
     use std::time::Duration;
 
     use super::common::{
-        assert_contains, run_lock_only, spawn_lock_only, wait_for_file, DaemonFixture,
+        DaemonFixture, assert_contains, run_lock_only, spawn_lock_only, wait_for_file,
     };
 
     fn fixture() -> DaemonFixture {

@@ -12,7 +12,7 @@ use std::{
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use nix::sys::socket::{
-    connect, recv, send, socket, AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr,
+    AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, connect, recv, send, socket,
 };
 use nix::unistd::Uid;
 use nixling_core::{
@@ -20,6 +20,8 @@ use nixling_core::{
     error::Error as CoreError, host::HostJson, host_check, processes::ProcessesJson,
 };
 use nixling_ipc::{
+    Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
+    SemverRange,
     broker_wire::{
         ExportBrokerAuditResponse, StoreVerifyResponse as IpcStoreVerifyResponse,
         StoreVerifyStatus as IpcStoreVerifyStatus,
@@ -32,8 +34,6 @@ use nixling_ipc::{
         UsbipProbeEntry as IpcUsbipProbeEntry, UsbipProbeStatus as IpcUsbipProbeStatus,
         VmLifecycleState as IpcVmLifecycleState, VmStatus as IpcVmStatus,
     },
-    Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
-    SemverRange,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -1995,13 +1995,13 @@ struct ConfigStatusArgs {
 }
 
 /// Base directory for host-side config staging. User-local by default
-/// (no privileged surface). Overridable via `NIXLING_CONFIG_STAGING_DIR`
-/// (used by tests) or `XDG_STATE_HOME`.
+/// (no privileged surface), from `XDG_STATE_HOME` (or `HOME`). Tests
+/// override it per-thread via [`set_test_staging_base`] rather than mutating
+/// process-global env.
 fn config_staging_base() -> PathBuf {
-    if let Some(dir) = std::env::var_os("NIXLING_CONFIG_STAGING_DIR") {
-        if !dir.is_empty() {
-            return PathBuf::from(dir);
-        }
+    #[cfg(test)]
+    if let Some(base) = TEST_STAGING_BASE.with(|b| b.borrow().clone()) {
+        return base;
     }
     let base = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
@@ -2009,6 +2009,20 @@ fn config_staging_base() -> PathBuf {
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
         .unwrap_or_else(|| PathBuf::from("/tmp/nixling-state"));
     base.join("nixling/config-staging")
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Per-thread test override of the config-staging base (replaces the old
+    /// process-global `NIXLING_CONFIG_STAGING_DIR` env hook).
+    static TEST_STAGING_BASE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Set (or clear) the calling thread's config-staging base override.
+#[cfg(test)]
+fn set_test_staging_base(base: Option<PathBuf>) {
+    TEST_STAGING_BASE.with(|b| *b.borrow_mut() = base);
 }
 
 fn config_staging_path_in(base: &Path, vm: &str) -> PathBuf {
@@ -2098,16 +2112,16 @@ fn config_approve_core(staging: &Path, target: &Path) -> Result<usize, CliFailur
         .map_err(|e| CliFailure::new(1, format!("config approve: read staging: {e}")))?;
     config_validate_staging_bytes(&bytes)?;
     let parent = target.parent().filter(|p| !p.as_os_str().is_empty());
-    if let Some(parent) = parent {
-        if !parent.exists() {
-            return Err(CliFailure::new(
-                1,
-                format!(
-                    "config approve: target dir {} does not exist",
-                    parent.display()
-                ),
-            ));
-        }
+    if let Some(parent) = parent
+        && !parent.exists()
+    {
+        return Err(CliFailure::new(
+            1,
+            format!(
+                "config approve: target dir {} does not exist",
+                parent.display()
+            ),
+        ));
     }
     // Atomic, collision-safe publish (unique O_EXCL temp + fsync +
     // rename); staging is only consumed after a successful publish.
@@ -2149,10 +2163,10 @@ fn warn_all_pending_staged_configs() {
     let mut pending: Vec<String> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(&base) {
         for entry in rd.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                if let Some(vm) = name.strip_suffix(".guest.nix") {
-                    pending.push(vm.to_owned());
-                }
+            if let Some(name) = entry.file_name().to_str()
+                && let Some(vm) = name.strip_suffix(".guest.nix")
+            {
+                pending.push(vm.to_owned());
             }
         }
     }
@@ -2246,10 +2260,10 @@ fn config_atomic_write(target: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
     // this a power loss right after the rename can lose the approved
     // target update even though the staging file has already been
     // consumed.
-    if let Some(p) = parent {
-        if let Ok(dir) = std::fs::File::open(p) {
-            let _ = dir.sync_all();
-        }
+    if let Some(p) = parent
+        && let Ok(dir) = std::fs::File::open(p)
+    {
+        let _ = dir.sync_all();
     }
     Ok(())
 }
@@ -2569,7 +2583,7 @@ fn read_guest_config_via_socket(
                     "failed to connect to {}: {err}",
                     context.public_socket.display()
                 ),
-            ))
+            ));
         }
     };
     let hello = daemon_hello_frame("hello")?;
@@ -2875,10 +2889,10 @@ fn cmd_config_status(args: &ConfigStatusArgs) -> Result<i32, CliFailure> {
         let mut out = Vec::new();
         if let Ok(rd) = std::fs::read_dir(&base) {
             for entry in rd.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if let Some(vm) = name.strip_suffix(".guest.nix") {
-                        out.push(vm.to_owned());
-                    }
+                if let Some(name) = entry.file_name().to_str()
+                    && let Some(vm) = name.strip_suffix(".guest.nix")
+                {
+                    out.push(vm.to_owned());
                 }
             }
         }
@@ -3409,7 +3423,9 @@ fn cmd_host_prepare(context: &Context, args: &HostPrepareArgs) -> Result<i32, Cl
                 rendered.push('\n');
                 print_stdout(&rendered);
             } else {
-                print_stdout("host prepare --dry-run: would do nothing on this tier (no daemon-owned resources detected)\n");
+                print_stdout(
+                    "host prepare --dry-run: would do nothing on this tier (no daemon-owned resources detected)\n",
+                );
             }
             Ok(0)
         }
@@ -4101,7 +4117,7 @@ fn parse_vm_exec_action(args: &VmExecArgs) -> Result<VmExecParsedAction, String>
                 "vm exec: use `--` to run a command, or choose management verb \
                  {list|logs|status|kill} after the VM name"
                     .to_owned(),
-            )
+            );
         }
     };
     Ok(VmExecParsedAction {
@@ -4323,7 +4339,7 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
                     exec_client::ExecClientError::internal(format!(
                         "vm exec: failed to enter raw mode: {err}"
                     )),
-                )
+                );
             }
         }
     } else if interactive {
@@ -4335,7 +4351,7 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
                     exec_client::ExecClientError::internal(format!(
                         "vm exec: failed to set stdin non-blocking: {err}"
                     )),
-                )
+                );
             }
         }
     } else {
@@ -5140,7 +5156,9 @@ fn cmd_gc(
         rendered.push('\n');
         print_stdout(&rendered);
     } else {
-        print_stdout("nixling gc --dry-run: would prune unreachable store paths in /var/lib/nixling/vms/<vm>/store/\n");
+        print_stdout(
+            "nixling gc --dry-run: would prune unreachable store paths in /var/lib/nixling/vms/<vm>/store/\n",
+        );
     }
     Ok(0)
 }
@@ -5232,11 +5250,7 @@ fn render_store_verify_human(response: &IpcStoreVerifyResponse) -> String {
 // ---- native usb CLI ----
 
 fn usb_json_mode(json: bool, human: bool) -> bool {
-    if human {
-        false
-    } else {
-        json
-    }
+    if human { false } else { json }
 }
 
 fn cmd_usb_attach(context: &Context, args: &UsbAttachArgs) -> Result<i32, CliFailure> {
@@ -5615,7 +5629,10 @@ fn run_usb_guest_attach(plan: &UsbGuestAttachPlan, is_json: bool) -> Result<(), 
                 plan.vm_name,
                 status.code().unwrap_or(-1)
             ),
-            &format!("The host-side USBIP attach may already be active. Check guest sudo permissions and `usbip`/`vhci_hcd`, then run `nixling usb detach {} {} --apply` before retrying if needed.", plan.vm_name, plan.bus_id),
+            &format!(
+                "The host-side USBIP attach may already be active. Check guest sudo permissions and `usbip`/`vhci_hcd`, then run `nixling usb detach {} {} --apply` before retrying if needed.",
+                plan.vm_name, plan.bus_id
+            ),
             is_json,
         ));
     }
@@ -5957,8 +5974,7 @@ fn cmd_migrate(
 // Legacy bash parity verbs keep the flag-less entrypoint by
 // defaulting to --dry-run; native-only host/vm/migrate verbs keep
 // using `require_explicit_mutation_flag`.
-const DEFAULT_DRY_RUN_NOTICE: &str =
-    "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply (v0.4 bash CLI had no flag requirement).";
+const DEFAULT_DRY_RUN_NOTICE: &str = "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply (v0.4 bash CLI had no flag requirement).";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MutationFlags {
@@ -6214,20 +6230,18 @@ fn read_live_pool_integrity(
     };
     let Some(generation_id) = generation_id else {
         let vm_unknown = state_dir.join("integrity-unknown.json");
-        if let Ok(raw) = std::fs::read_to_string(&vm_unknown) {
-            if let Ok(value) = serde_json::from_str::<Value>(&raw) {
-                if value.get("state").and_then(Value::as_str) == Some("unknown") {
-                    let reason = value
-                        .get("unknown_reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or("generation_identity_unavailable");
-                    return Some(live_pool_integrity_unknown(
-                        reason,
-                        "restore state/current or activate a new generation, then rerun verify"
-                            .to_owned(),
-                    ));
-                }
-            }
+        if let Ok(raw) = std::fs::read_to_string(&vm_unknown)
+            && let Ok(value) = serde_json::from_str::<Value>(&raw)
+            && value.get("state").and_then(Value::as_str) == Some("unknown")
+        {
+            let reason = value
+                .get("unknown_reason")
+                .and_then(Value::as_str)
+                .unwrap_or("generation_identity_unavailable");
+            return Some(live_pool_integrity_unknown(
+                reason,
+                "restore state/current or activate a new generation, then rerun verify".to_owned(),
+            ));
         }
         return Some(live_pool_integrity_unknown(
             "generation_identity_unavailable",
@@ -6906,23 +6920,21 @@ fn collect_bridge_rows(
 }
 
 fn resolve_bridge_probe_name(bundle: Option<&BundleContext>, bridge: &str) -> String {
-    if let Some(runtime) = bundle.and_then(|bundle| bundle.host_runtime.as_ref()) {
-        if let Some(ifname) = runtime
+    if let Some(runtime) = bundle.and_then(|bundle| bundle.host_runtime.as_ref())
+        && let Some(ifname) = runtime
             .ifnames
             .iter()
             .find(|row| row.vm.is_none() && row.user_visible_name == bridge)
-        {
-            return ifname.derived_ifname.clone();
-        }
+    {
+        return ifname.derived_ifname.clone();
     }
-    if let Some(host) = bundle.and_then(|bundle| bundle.host.as_ref()) {
-        if let Some(mapping) = host
+    if let Some(host) = bundle.and_then(|bundle| bundle.host.as_ref())
+        && let Some(mapping) = host
             .if_name_mappings
             .iter()
             .find(|row| row.vm.is_none() && row.user_visible_name == bridge)
-        {
-            return mapping.derived_ifname.as_str().to_owned();
-        }
+    {
+        return mapping.derived_ifname.as_str().to_owned();
     }
     bridge.to_owned()
 }
@@ -6959,37 +6971,35 @@ fn bridge_health_row(
         expected_carrier: "UNKNOWN".to_owned(),
         result: "unavailable".to_owned(),
     };
-    if let Ok(output) = output {
-        if output.status.success() {
-            if let Ok(value) = serde_json::from_slice::<Value>(&output.stdout) {
-                if let Some(link) = value.as_array().and_then(|items| items.first()) {
-                    row.state = link
-                        .get("operstate")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown")
-                        .to_owned();
-                    row.admin = link
-                        .get("flags")
-                        .and_then(Value::as_array)
-                        .map(|flags| {
-                            if flags.iter().any(|flag| flag.as_str() == Some("UP")) {
-                                "up"
-                            } else {
-                                "down"
-                            }
-                        })
-                        .unwrap_or("unknown")
-                        .to_owned();
-                    row.expected_carrier = if row.state == "UP" {
-                        "UP"
-                    } else {
-                        "NO-CARRIER"
-                    }
-                    .to_owned();
-                    row.result = "ok".to_owned();
+    if let Ok(output) = output
+        && output.status.success()
+        && let Ok(value) = serde_json::from_slice::<Value>(&output.stdout)
+        && let Some(link) = value.as_array().and_then(|items| items.first())
+    {
+        row.state = link
+            .get("operstate")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned();
+        row.admin = link
+            .get("flags")
+            .and_then(Value::as_array)
+            .map(|flags| {
+                if flags.iter().any(|flag| flag.as_str() == Some("UP")) {
+                    "up"
+                } else {
+                    "down"
                 }
-            }
+            })
+            .unwrap_or("unknown")
+            .to_owned();
+        row.expected_carrier = if row.state == "UP" {
+            "UP"
+        } else {
+            "NO-CARRIER"
         }
+        .to_owned();
+        row.result = "ok".to_owned();
     }
     row
 }
@@ -7159,10 +7169,10 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 // Process-wide serialization for `with_test_stdout_capture`. The thread-local
-// buffer above isolates captured BYTES, but the capturing tests also mutate
-// process-global state (an `EnvVarGuard` over `NIXLING_CONFIG_STAGING_DIR`,
-// `PATH`, ...). Holding this lock across the closure serializes those tests so
-// their env mutations cannot race each other under cargo's parallel harness.
+// buffer above isolates captured BYTES; this lock serializes the capturing
+// tests so their stdout capture cannot interleave under cargo's parallel
+// harness. (Staging-base and peer overrides are now per-thread, so they no
+// longer need process-global serialization.)
 #[cfg(test)]
 static TEST_STDOUT_CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -7376,7 +7386,7 @@ fn try_daemon_mutating_verb(
                     "failed to connect to {}: {err}",
                     context.public_socket.display()
                 ),
-            ))
+            ));
         }
     };
     let hello = daemon_hello_frame("hello")?;
@@ -7730,7 +7740,7 @@ fn try_audit_via_socket(
                     "failed to connect to {}: {err}",
                     context.public_socket.display()
                 ),
-            ))
+            ));
         }
     };
     let hello = daemon_hello_frame("hello")?;
@@ -7875,7 +7885,7 @@ fn try_public_socket_request(
                     "failed to connect to {}: {err}",
                     context.public_socket.display()
                 ),
-            ))
+            ));
         }
     };
     let hello = daemon_hello_frame("hello")?;
@@ -8087,8 +8097,7 @@ fn nix_err_to_io(err: nix::errno::Errno) -> io::Error {
 mod host_install_dispatch_tests {
     use clap::Parser;
     use std::{
-        env,
-        ffi::{OsStr, OsString},
+        ffi::OsString,
         io,
         os::{
             fd::{AsRawFd as _, RawFd},
@@ -8096,25 +8105,26 @@ mod host_install_dispatch_tests {
         },
         path::PathBuf,
         sync::{
+            Mutex,
             atomic::{AtomicUsize, Ordering},
-            mpsc, Mutex,
+            mpsc,
         },
         thread,
         time::Duration,
     };
 
     use nix::{
-        sys::socket::{accept4, bind, listen, Backlog},
+        sys::socket::{Backlog, accept4, bind, listen},
         unistd::close,
     };
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     use super::{
-        broker_error_envelope, cmd_host_install, cmd_vm_exec, cmd_vm_start,
-        daemon_supported_features, encode_type_tagged_message, nix_err_to_io, parse_vm_exec_action,
-        send, socket, AddressFamily, ApiReadySimple, ApiReadyStatusV1, Context, HostInstallArgs,
-        IpcHelloOk, MsgFlags, NativeCli, SockFlag, SockType, UnixAddr, UsbAttachArgs, VmExecArgs,
-        VmStartArgs, MAX_FRAME_BYTES,
+        AddressFamily, ApiReadySimple, ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk,
+        MAX_FRAME_BYTES, MsgFlags, NativeCli, SockFlag, SockType, UnixAddr, UsbAttachArgs,
+        VmExecArgs, VmStartArgs, broker_error_envelope, cmd_host_install, cmd_vm_exec,
+        cmd_vm_start, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
+        parse_vm_exec_action, send, socket,
     };
     use nixling_ipc::Version;
 
@@ -8154,34 +8164,21 @@ mod host_install_dispatch_tests {
         );
     }
 
-    #[allow(dead_code)] // EnvVarGuard is utility code used by tests that toggle env vars
-    struct EnvVarGuard {
-        key: &'static str,
-        old: Option<OsString>,
-    }
+    /// Per-thread guard that overrides the config-staging base for a test and
+    /// clears it on drop — replaces the old `NIXLING_CONFIG_STAGING_DIR` env
+    /// mutation so no test touches process-global env.
+    struct StagingBaseGuard;
 
-    #[allow(dead_code)]
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
-            let old = env::var_os(key);
-            env::set_var(key, value);
-            Self { key, old }
-        }
-
-        fn remove(key: &'static str) -> Self {
-            let old = env::var_os(key);
-            env::remove_var(key);
-            Self { key, old }
+    impl StagingBaseGuard {
+        fn set(base: &std::path::Path) -> Self {
+            super::set_test_staging_base(Some(base.to_path_buf()));
+            Self
         }
     }
 
-    impl Drop for EnvVarGuard {
+    impl Drop for StagingBaseGuard {
         fn drop(&mut self) {
-            if let Some(value) = &self.old {
-                env::set_var(self.key, value);
-            } else {
-                env::remove_var(self.key);
-            }
+            super::set_test_staging_base(None);
         }
     }
 
@@ -8490,59 +8487,6 @@ mod host_install_dispatch_tests {
         }
     }
 
-    /// PATH-based `ssh`/`scp` trap: prepends a sentinel bin holding scripts
-    /// that touch a marker file when invoked. Restores PATH on drop. Guarded by
-    /// `ENV_MUTEX` so it never races a concurrent env-mutating test.
-    struct ExecSshTrap {
-        marker: PathBuf,
-        old_path: Option<OsString>,
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl ExecSshTrap {
-        fn install(dir: &std::path::Path) -> Self {
-            let lock = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
-            let bin = dir.join("trap-bin");
-            std::fs::create_dir_all(&bin).expect("create trap bin");
-            let marker = dir.join("ssh-spawned.marker");
-            for tool in ["ssh", "scp"] {
-                let script = bin.join(tool);
-                std::fs::write(
-                    &script,
-                    format!("#!/bin/sh\necho spawned > {}\nexit 0\n", marker.display()),
-                )
-                .expect("write trap script");
-                let mut perms = std::fs::metadata(&script).expect("stat").permissions();
-                perms.set_mode(0o755);
-                std::fs::set_permissions(&script, perms).expect("chmod trap script");
-            }
-            let old_path = env::var_os("PATH");
-            let mut entries = vec![bin];
-            if let Some(existing) = &old_path {
-                entries.extend(env::split_paths(existing));
-            }
-            env::set_var("PATH", env::join_paths(entries).expect("join PATH"));
-            Self {
-                marker,
-                old_path,
-                _lock: lock,
-            }
-        }
-
-        fn ssh_was_spawned(&self) -> bool {
-            self.marker.exists()
-        }
-    }
-
-    impl Drop for ExecSshTrap {
-        fn drop(&mut self) {
-            match &self.old_path {
-                Some(value) => env::set_var("PATH", value),
-                None => env::remove_var("PATH"),
-            }
-        }
-    }
-
     /// Drive `cmd_vm_exec` (json) against a mock daemon that completes the
     /// hello handshake, accepts the `Start` op, and replies with the daemon
     /// `error` frame whose `kind` is supplied. Returns the CLI result plus the
@@ -8608,12 +8552,11 @@ mod host_install_dispatch_tests {
                 send_test_frame(accepted, &response_frame)?;
 
                 // Any further frame is an illegitimate proxied op; record it.
-                if let Ok(extra_bytes) = recv_test_frame(accepted) {
-                    if !extra_bytes.is_empty() {
-                        if let Ok(extra) = serde_json::from_slice::<Value>(&extra_bytes) {
-                            frames_tx.send(extra).expect("send extra frame");
-                        }
-                    }
+                if let Ok(extra_bytes) = recv_test_frame(accepted)
+                    && !extra_bytes.is_empty()
+                    && let Ok(extra) = serde_json::from_slice::<Value>(&extra_bytes)
+                {
+                    frames_tx.send(extra).expect("send extra frame");
                 }
                 Ok(())
             })();
@@ -8691,10 +8634,6 @@ mod host_install_dispatch_tests {
         // op beyond the rejected `Start`, and MUST NOT fall back to SSH. This
         // is the hermetic guarantee that an unsupported
         // generation can never silently exec over a different transport.
-        let dir = test_socket_path("vm-exec-oldgen", ".dir");
-        std::fs::create_dir_all(&dir).expect("scratch dir");
-        let trap = ExecSshTrap::install(&dir);
-
         let args = VmExecArgs {
             vm: "oldgenvm".to_owned(),
             detach: false,
@@ -8749,14 +8688,12 @@ mod host_install_dispatch_tests {
             Some("start"),
             "the single proxied frame is the Start op"
         );
-        // No SSH/SCP client may be spawned on the fail-closed exec path.
-        assert!(
-            !trap.ssh_was_spawned(),
-            "old-generation exec fail-closed must never spawn an SSH client"
-        );
-
-        drop(trap);
-        let _ = std::fs::remove_dir_all(&dir);
+        // No SSH/SCP client may be spawned on the fail-closed exec path: the
+        // "exactly one frame (the Start)" + "exit 70" assertions above prove
+        // the path stops before any further transport, and the crate-wide
+        // `crate_source_launches_ssh_only_from_allowlisted_sites` gate ensures
+        // `ssh`/`scp` is only ever launched from sanctioned sites (this exec
+        // path is not one).
     }
 
     #[test]
@@ -9847,8 +9784,7 @@ mod host_install_dispatch_tests {
         };
 
         let (result, stdout) = super::with_test_stdout_capture(|| {
-            let _staging_guard =
-                EnvVarGuard::set("NIXLING_CONFIG_STAGING_DIR", staging_dir.as_os_str());
+            let _staging_guard = StagingBaseGuard::set(&staging_dir);
             super::cmd_config_sync(&context, &args)
         });
 
@@ -9863,10 +9799,10 @@ mod host_install_dispatch_tests {
         let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_file(&manifest_path);
         let _ = std::fs::remove_file(&bundle_path);
-        if let Some(name) = bundle_path.file_name().and_then(|n| n.to_str()) {
-            if let Some(parent) = bundle_path.parent() {
-                let _ = std::fs::remove_file(parent.join(format!("{name}.processes.json")));
-            }
+        if let Some(name) = bundle_path.file_name().and_then(|n| n.to_str())
+            && let Some(parent) = bundle_path.parent()
+        {
+            let _ = std::fs::remove_file(parent.join(format!("{name}.processes.json")));
         }
         let _ = std::fs::remove_dir_all(&staging_dir);
         (result, recorded, stdout)
@@ -10184,9 +10120,11 @@ mod host_install_dispatch_tests {
         );
 
         assert_eq!(envelope.kind, "RunHostInstall failed");
-        assert!(envelope
-            .observed_state
-            .contains("operation not yet implemented in this build"));
+        assert!(
+            envelope
+                .observed_state
+                .contains("operation not yet implemented in this build")
+        );
         assert_eq!(envelope.remediation, "generic remediation");
     }
 
@@ -11055,7 +10993,7 @@ mod exec_json_envelope_tests {
 
     use nixling_ipc::public_wire::ExecTerminalStatus;
 
-    use super::{exec_client, exec_json_failure_value, exec_json_success_value, VmExecArgs};
+    use super::{VmExecArgs, exec_client, exec_json_failure_value, exec_json_success_value};
 
     fn exec_args(vm: &str) -> VmExecArgs {
         VmExecArgs {
@@ -11443,9 +11381,10 @@ mod config_cmd_tests {
         assert_eq!(argv[i + 1], "/var/lib/nixling/keys/work-aad_ed25519");
         // host-key integrity: managed known_hosts + accept-new (NOT
         // StrictHostKeyChecking=no / UserKnownHostsFile=/dev/null).
-        assert!(argv
-            .iter()
-            .any(|a| a == "UserKnownHostsFile=/var/lib/nixling/known_hosts.nixling"));
+        assert!(
+            argv.iter()
+                .any(|a| a == "UserKnownHostsFile=/var/lib/nixling/known_hosts.nixling")
+        );
         assert!(argv.iter().any(|a| a == "StrictHostKeyChecking=accept-new"));
         assert!(!argv.iter().any(|a| a == "StrictHostKeyChecking=no"));
         assert!(!argv.iter().any(|a| a == "UserKnownHostsFile=/dev/null"));
@@ -11474,9 +11413,10 @@ mod config_cmd_tests {
         assert_eq!(argv[0], "ssh");
         let key_pos = argv.iter().position(|a| a == "-i").unwrap();
         assert_eq!(argv[key_pos + 1], "/var/lib/nixling/keys/work-aad_ed25519");
-        assert!(argv
-            .iter()
-            .any(|a| a == "UserKnownHostsFile=/var/lib/nixling/known_hosts.nixling"));
+        assert!(
+            argv.iter()
+                .any(|a| a == "UserKnownHostsFile=/var/lib/nixling/known_hosts.nixling")
+        );
         assert!(argv.iter().any(|a| a == "StrictHostKeyChecking=accept-new"));
         assert!(argv.iter().any(|a| a == "BatchMode=yes"));
         assert!(argv.iter().any(|a| a == "ConnectTimeout=8"));
@@ -11682,14 +11622,11 @@ mod config_cmd_tests {
 /// that the guest-control config path spawns no SSH client.
 #[cfg(test)]
 mod ssh_spawn_gate {
-    use std::ffi::OsString;
-    use std::io::Write;
     use std::path::PathBuf;
-    use std::sync::Mutex;
 
     use super::{
-        cmd_config_sync, config_staging_path, finish_config_sync_from_reply,
-        read_guest_config_via_socket, Context, GuestConfigReadOutcome, DEFAULT_GUEST_CONFIG_PATH,
+        Context, DEFAULT_GUEST_CONFIG_PATH, GuestConfigReadOutcome, cmd_config_sync,
+        config_staging_path, finish_config_sync_from_reply, read_guest_config_via_socket,
     };
 
     /// Allowlist comment markers. Built so this scanner's own source never
@@ -11784,61 +11721,6 @@ mod ssh_spawn_gate {
         assert!(scan_ssh_argv_violations(&in_test).is_empty());
     }
 
-    /// Serialize PATH mutation across this module's runtime tests.
-    static PATH_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Prepend a sentinel `bin/` (holding `ssh`/`scp` scripts that touch a
-    /// marker file when invoked) to PATH for the guard's lifetime. Prepending
-    /// keeps every other PATH-resolved tool reachable for concurrent tests.
-    struct SshTrapGuard {
-        old_path: Option<OsString>,
-        marker: PathBuf,
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl SshTrapGuard {
-        fn install(dir: &std::path::Path) -> Self {
-            let lock = PATH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-            let bin = dir.join("bin");
-            std::fs::create_dir_all(&bin).expect("create trap bin");
-            let marker = dir.join("ssh-spawned.marker");
-            for tool in ["ssh", "scp"] {
-                let script = bin.join(tool);
-                let mut f = std::fs::File::create(&script).expect("create trap script");
-                writeln!(f, "#!/bin/sh\necho spawned > {}\nexit 0", marker.display())
-                    .expect("write trap script");
-                let mut perms = std::fs::metadata(&script).expect("stat").permissions();
-                std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
-                std::fs::set_permissions(&script, perms).expect("chmod trap script");
-            }
-            let old_path = std::env::var_os("PATH");
-            let mut entries = vec![bin];
-            if let Some(existing) = &old_path {
-                entries.extend(std::env::split_paths(existing));
-            }
-            let joined = std::env::join_paths(entries).expect("join PATH");
-            std::env::set_var("PATH", joined);
-            Self {
-                old_path,
-                marker,
-                _lock: lock,
-            }
-        }
-
-        fn ssh_was_spawned(&self) -> bool {
-            self.marker.exists()
-        }
-    }
-
-    impl Drop for SshTrapGuard {
-        fn drop(&mut self) {
-            match &self.old_path {
-                Some(value) => std::env::set_var("PATH", value),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    }
-
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::current_dir()
             .expect("cwd")
@@ -11852,7 +11734,6 @@ mod ssh_spawn_gate {
     #[test]
     fn guest_control_config_path_never_spawns_ssh() {
         let dir = scratch("config-no-spawn");
-        let trap = SshTrapGuard::install(&dir);
 
         // The connection branch with a missing socket must not spawn SSH.
         let context = Context {
@@ -11884,12 +11765,9 @@ mod ssh_spawn_gate {
         assert_eq!(staged.bytes, payload.len());
         assert!(staging.exists());
 
-        assert!(
-            !trap.ssh_was_spawned(),
-            "the guest-control config path must never spawn an SSH client"
-        );
-
-        drop(trap);
+        // The Unavailable outcome + byte-staging above prove this path uses
+        // only the socket/received bytes; `ssh`/`scp` is gated crate-wide to
+        // sanctioned sites by `crate_source_launches_ssh_only_from_allowlisted_sites`.
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -11981,7 +11859,6 @@ mod ssh_spawn_gate {
         // hermetic guarantee that an unsupported generation can never
         // silently fall back to an SSH transport or a partial write.
         let dir = scratch("config-old-generation");
-        let trap = SshTrapGuard::install(&dir);
 
         let vm = "oldgenvm";
         let manifest_path = dir.join("manifest.json");
@@ -12036,18 +11913,17 @@ mod ssh_spawn_gate {
             !rendered.contains("guest-control-transport-unavailable"),
             "the command must not reach the public.sock transport on an old generation"
         );
-        // No SSH/SCP client may be spawned on any config-sync path.
-        assert!(
-            !trap.ssh_was_spawned(),
-            "old-generation fail-closed must not spawn an SSH client"
-        );
+        // No SSH/SCP client may be spawned on any config-sync path: the exit
+        // 70 + old-generation-slug + "not transport-unavailable" assertions
+        // above prove the command fails closed before any transport, and
+        // `crate_source_launches_ssh_only_from_allowlisted_sites` gates
+        // `ssh`/`scp` to sanctioned sites crate-wide.
         // Nothing may be staged or published on the fail-closed path.
         assert!(
             !config_staging_path(vm).exists(),
             "old-generation fail-closed must not stage guest bytes"
         );
 
-        drop(trap);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

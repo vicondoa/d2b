@@ -337,10 +337,10 @@ mod tests {
         }
         fn dispatch(&mut self, step: UsbipBusidStep) -> Result<(), String> {
             self.calls.push(step);
-            if let Some((target, reason)) = self.fail_at {
-                if target == step {
-                    return Err(reason.to_owned());
-                }
+            if let Some((target, reason)) = self.fail_at
+                && target == step
+            {
+                return Err(reason.to_owned());
             }
             Ok(())
         }

@@ -164,10 +164,9 @@ fn build_farm_via_namespace(
         .lines()
         .map(str::trim)
         .find(|l| !l.is_empty())
+        && let Ok(typed) = serde_json::from_str::<HardlinkFarmError>(line)
     {
-        if let Ok(typed) = serde_json::from_str::<HardlinkFarmError>(line) {
-            return Err(typed);
-        }
+        return Err(typed);
     }
     Err(HardlinkFarmError::Io {
         path: farm_root.display().to_string(),
@@ -284,10 +283,9 @@ fn build_store_view_via_namespace(
         .lines()
         .map(str::trim)
         .find(|l| !l.is_empty())
+        && let Ok(typed) = serde_json::from_str::<HardlinkFarmError>(line)
     {
-        if let Ok(typed) = serde_json::from_str::<HardlinkFarmError>(line) {
-            return Err(typed);
-        }
+        return Err(typed);
     }
     Err(HardlinkFarmError::Io {
         path: farm_root.display().to_string(),
@@ -363,10 +361,9 @@ fn replace_live_paths_via_namespace(
         .lines()
         .map(str::trim)
         .find(|l| !l.is_empty())
+        && let Ok(typed) = serde_json::from_str::<HardlinkFarmError>(line)
     {
-        if let Ok(typed) = serde_json::from_str::<HardlinkFarmError>(line) {
-            return Err(typed);
-        }
+        return Err(typed);
     }
     Err(HardlinkFarmError::Io {
         path: farm_root.display().to_string(),

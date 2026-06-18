@@ -12,13 +12,13 @@
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
-use nix::sys::stat::{fstat, major, minor, SFlag};
+use nix::sys::stat::{SFlag, fstat, major, minor};
 use serde::{Deserialize, Serialize};
 
 use nixling_core::bundle_resolver::BundleResolver;
 use nixling_host::devices::{
-    read_device_metadata, validate_entry, DeviceClass, DeviceNodeEntry, DeviceNodeKind,
-    DeviceNodeReadback, DeviceValidation,
+    DeviceClass, DeviceNodeEntry, DeviceNodeKind, DeviceNodeReadback, DeviceValidation,
+    read_device_metadata, validate_entry,
 };
 
 use crate::ops::exec_reconcile::SystemLiveExec;
@@ -349,13 +349,13 @@ fn validate_opened_device(
                 return Err(DeviceOpenValidationError::DeviceMajorMinorMismatch {
                     expected,
                     actual,
-                })
+                });
             }
             None => {
                 return Err(DeviceOpenValidationError::DeviceKindMismatch {
                     expected: matrix_entry.entry.kind,
                     actual: "non-device".to_owned(),
-                })
+                });
             }
         }
     }

@@ -635,7 +635,7 @@ fn lookup_group_gid(name: &str) -> Option<u32> {
 ///   `st_gid` ≠ `policy.required_gid` (when Some).
 /// - `"mode"` — low 9 bits of `st_mode` ≠ `policy.required_mode`.
 fn secure_open_and_read(path: &Path, policy: &BundleVerifyPolicy) -> Result<Vec<u8>, Error> {
-    use rustix::fs::{fstat, open, FileType, OFlags};
+    use rustix::fs::{FileType, OFlags, fstat, open};
 
     let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let fd = open(path, flags, rustix::fs::Mode::empty()).map_err(|e| {
@@ -660,10 +660,10 @@ fn secure_open_and_read(path: &Path, policy: &BundleVerifyPolicy) -> Result<Vec<
         return Err(Error::bundle_tampered(path.to_path_buf(), "owner"));
     }
 
-    if let Some(gid) = policy.required_gid {
-        if stat.st_gid != gid {
-            return Err(Error::bundle_tampered(path.to_path_buf(), "owner"));
-        }
+    if let Some(gid) = policy.required_gid
+        && stat.st_gid != gid
+    {
+        return Err(Error::bundle_tampered(path.to_path_buf(), "owner"));
     }
 
     let mode = (stat.st_mode as u32) & 0o777;
@@ -788,10 +788,10 @@ fn verify_bundle_hash(path: &Path, raw_bytes: &[u8]) -> Result<(), Error> {
     // Nullify artifactHashes so the hash input matches what the Nix emitter
     // used: bundleHash = sha256(bundle with artifactHashes:null, no bundleHash).
     // Old bundles that never had this field are left unchanged.
-    if let Some(obj) = value.as_object_mut() {
-        if obj.contains_key("artifactHashes") {
-            obj.insert("artifactHashes".to_owned(), serde_json::Value::Null);
-        }
+    if let Some(obj) = value.as_object_mut()
+        && obj.contains_key("artifactHashes")
+    {
+        obj.insert("artifactHashes".to_owned(), serde_json::Value::Null);
     }
 
     // serde_json without `preserve_order` feature serialises objects with
@@ -1507,7 +1507,10 @@ impl std::fmt::Display for MinijailProfileViolation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EmptyProfileId { vm, node } => {
-                write!(f, "minijail profile for vm={vm} node={node} has empty profile_id")
+                write!(
+                    f,
+                    "minijail profile for vm={vm} node={node} has empty profile_id"
+                )
             }
             Self::RootWithoutCarveOut {
                 profile_id,

@@ -406,7 +406,7 @@ mod tests {
     use super::*;
     use std::fs::{self, File};
     use std::io::{Read, Write};
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::PathBuf;
     use std::thread;

@@ -47,6 +47,46 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Internal v2 constellation provider-abstraction crates
+  ([ADR 0032](docs/adr/0032-nixling-v2-constellation-control-plane.md)),
+  with **no user-facing behavior change**: `nixling-constellation-core`
+  (the pure, codec-neutral model — strongly-typed identifiers with
+  fail-closed deserialization, the capability model, the semantic
+  `ConstellationFrame` with a trusted per-operation required-capability
+  mapping, the redacted audit envelope, and a bounded trace context) and
+  `nixling-constellation-provider` (the async provider trait surface —
+  runtime/workload/display/transport/stream-mux/codec/credential/
+  daemon-access providers — with typed capability descriptors, structured
+  capability-denial errors, byte-carrying transport sessions, and
+  fail-closed mock/conformance fixtures). The same change adds the
+  remaining foundation crates: `nixling-constellation-codec-protobuf`
+  (a `prost` codec behind the `ProtocolCodec` trait, with frame-cap and
+  fail-closed decode validation), `nixling-constellation-transport`
+  (an in-memory loopback transport for conformance),
+  `nixling-constellation-router` (the codec-neutral operation router +
+  single-owner idempotency/dedup store keyed by the full operation
+  namespace), `nixling-daemon-access` (the transport-neutral CLI↔daemon
+  semantic API with its current local-Unix binding), `nixling-host-providers`
+  (byte-identical local adapters over the existing Cloud Hypervisor and
+  cross-domain Wayland argv generators), plus compile-only constellation
+  peer-module skeletons inside `nixlingd`. These crates are the foundation
+  for later ADR 0032 work; they do not change any CLI, daemon, or
+  on-host behavior.
+
+- Documentation for the v2 constellation control plane
+  ([ADR 0032](docs/adr/0032-nixling-v2-constellation-control-plane.md)):
+  the threat model in `docs/explanation/design.md` now describes the
+  realm-gateway trust boundary — the host daemon and broker hold no
+  realm relay/provider credentials, remote node registries, or realm
+  audit (those live inside a per-realm gateway guest VM); a realm relay
+  is an untrusted, ciphertext-only rendezvous transport; relay identity
+  is never local authorization (`SO_PEERCRED` + the `nixling` group
+  remain the only local lifecycle authz surface); and work and personal
+  realms never share a gateway guest or an L2 bridge. `SECURITY.md`,
+  `docs/reference/privileges.md`, `docs/reference/daemon-api.md`, and
+  `docs/reference/daemon-audit-check.md` are updated to state the same
+  relay-is-not-local-auth and no-host-held-realm-credentials boundary.
+
 - Host OTel collector parity (ADR 0033). New
   `nixling.observability.host.*` options bring the host edge collector to
   parity with the per-VM guest collector: `host.scrapeJournal` adds a host
@@ -61,6 +101,10 @@ deprecations ship one minor release before removal.
   [ADR 0033](docs/adr/0033-host-collector-parity.md).
 
 ### Changed
+
+- All Rust workspaces (main + `nixling-priv-broker`) moved to **Rust
+  edition 2024**; the pinned toolchain remains 1.94.1 and `unsafe_code`
+  stays `forbid` (no `unsafe` was introduced for the migration).
 
 - `deployment.environment` is now machine-and-env aware: the central
   collector stamps it `<hostName>` for host telemetry and

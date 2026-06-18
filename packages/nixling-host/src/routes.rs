@@ -5,8 +5,8 @@
 //! host's route + hosts-file + bound-socket state so the same code
 //! drives both the host-prepare path and the pre-VM-start hook.
 
-use crate::ifname::{looks_nixling_owned, DEFAULT_PREFIX};
-use crate::nftables::{evaluate_coexistence_policy, hash_inet_nixling_table, NftError};
+use crate::ifname::{DEFAULT_PREFIX, looks_nixling_owned};
+use crate::nftables::{NftError, evaluate_coexistence_policy, hash_inet_nixling_table};
 use nixling_core::host::IfName;
 use nixling_core::host_w3::{
     CoexistencePolicy, FirewallCoexistencePolicy, FirewallManager, HostsEntry,
@@ -103,10 +103,9 @@ impl std::fmt::Display for RoutePreflightError {
             Self::HostsBlockDrift { .. } => {
                 write!(f, "route-preflight: /etc/hosts managed-block drift")
             }
-            Self::DnsmasqNotBound { ifname, port } => write!(
-                f,
-                "route-preflight: dnsmasq not bound on {ifname:?}:{port}"
-            ),
+            Self::DnsmasqNotBound { ifname, port } => {
+                write!(f, "route-preflight: dnsmasq not bound on {ifname:?}:{port}")
+            }
             Self::FirewallCoexistenceViolation { detected, declared } => write!(
                 f,
                 "route-preflight: firewall coexistence violation (detected={detected:?}, declared={declared:?})"
@@ -461,7 +460,7 @@ pub fn detect_host_lan_cidrs(snapshot: &RouteTableSnapshot, prefix: Option<&str>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ifname::{derive_from_env_vm, DerivedRole};
+    use crate::ifname::{DerivedRole, derive_from_env_vm};
 
     fn lan_if() -> IfName {
         derive_from_env_vm("e", None, DerivedRole::Bridge, None).unwrap()

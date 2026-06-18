@@ -2,7 +2,7 @@ mod common;
 
 mod daemon_socket_acl {
     use super::common::{
-        assert_contains, spawn_nixlingd_serve, test_client, DaemonFixture, TestPeer, HELLO_FRAME,
+        DaemonFixture, HELLO_FRAME, TestPeer, assert_contains, spawn_nixlingd_serve, test_client,
     };
 
     const AUTH_STATUS_FRAME: &str = r#"{"type":"authStatus"}"#;

@@ -48,7 +48,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Canonical location the default-switch auto-flip gate reads from.
 /// Mirrors `nixos-modules/options-daemon.nix:validationEvidenceDir`.
@@ -316,11 +316,11 @@ fn resolve_default_scripts_dir() -> PathBuf {
 pub fn run_host_validate(req: &ValidateRequest) -> ValidateReport {
     let mut waves = Vec::with_capacity(WAVE_CATALOG.len());
     for spec in WAVE_CATALOG {
-        if let Some(only) = &req.only_wave {
-            if only != spec.wave {
-                waves.push(skip_wave(spec, "filtered by --wave"));
-                continue;
-            }
+        if let Some(only) = &req.only_wave
+            && only != spec.wave
+        {
+            waves.push(skip_wave(spec, "filtered by --wave"));
+            continue;
         }
         let validators = inventory_validators(spec, &req.scripts_dir);
         let all_present = !validators.is_empty() && validators.iter().all(|(_, p)| *p);

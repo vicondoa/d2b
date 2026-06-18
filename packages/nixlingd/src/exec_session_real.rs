@@ -23,11 +23,11 @@ use crate::exec_session::{
 #[cfg(test)]
 use crate::guest_control_bridge::connect_and_build_client_for_tests;
 use crate::guest_control_bridge::{
-    connect_and_build_client, host_nonce, BrokerSigner, ProbeParams, GUEST_CONTROL_ATTEMPT_CAP,
-    VMADDR_CID_HOST,
+    BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP, ProbeParams, VMADDR_CID_HOST,
+    connect_and_build_client, host_nonce,
 };
 use crate::guest_control_health::{
-    probe_guest_control_health, AttemptBudget, GuestControlHealthError, TtrpcGuestControlClient,
+    AttemptBudget, GuestControlHealthError, TtrpcGuestControlClient, probe_guest_control_health,
 };
 use nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
 
@@ -123,10 +123,10 @@ impl ExecGuestConnector for RealExecConnector {
             .await
             .map_err(map_op_health_error_for_establish)?;
 
-        if let Some(error) = response.error.as_ref() {
-            if !is_unspecified(error.kind) {
-                return Err(op_to_establish(map_guest_control_error(error)));
-            }
+        if let Some(error) = response.error.as_ref()
+            && !is_unspecified(error.kind)
+        {
+            return Err(op_to_establish(map_guest_control_error(error)));
         }
         let exec_id = response
             .exec_id
@@ -293,10 +293,10 @@ impl ExecGuestClient for RealExecClient {
             .unary_with_timeout("WriteStdin", request, timeout)
             .await
             .map_err(map_op_health_error)?;
-        if let Some(error) = response.error.as_ref() {
-            if !is_unspecified(error.kind) {
-                return Err(map_guest_control_error(error));
-            }
+        if let Some(error) = response.error.as_ref()
+            && !is_unspecified(error.kind)
+        {
+            return Err(map_guest_control_error(error));
         }
         let stdin_closed = matches!(
             response.stdin_state.enum_value(),
@@ -336,10 +336,10 @@ impl ExecGuestClient for RealExecClient {
             .unary_with_timeout("ReadOutput", request, timeout)
             .await
             .map_err(map_op_health_error)?;
-        if let Some(error) = response.error.as_ref() {
-            if !is_unspecified(error.kind) {
-                return Err(map_guest_control_error(error));
-            }
+        if let Some(error) = response.error.as_ref()
+            && !is_unspecified(error.kind)
+        {
+            return Err(map_guest_control_error(error));
         }
         Ok(ReadOutputOutcome {
             data: response.data,
@@ -400,10 +400,10 @@ impl ExecGuestClient for RealExecClient {
             .unary_with_timeout("ExecWait", request, timeout)
             .await
             .map_err(map_op_health_error)?;
-        if let Some(error) = response.error.as_ref() {
-            if !is_unspecified(error.kind) {
-                return Err(map_guest_control_error(error));
-            }
+        if let Some(error) = response.error.as_ref()
+            && !is_unspecified(error.kind)
+        {
+            return Err(map_guest_control_error(error));
         }
         let state = response
             .state
@@ -425,20 +425,20 @@ impl ExecGuestClient for RealExecClient {
             .unary_with_timeout("CloseStdin", request, timeout)
             .await
             .map_err(map_op_health_error)?;
-        if let Some(error) = response.error.as_ref() {
-            if !is_unspecified(error.kind) {
-                return Err(map_guest_control_error(error));
-            }
+        if let Some(error) = response.error.as_ref()
+            && !is_unspecified(error.kind)
+        {
+            return Err(map_guest_control_error(error));
         }
         Ok(())
     }
 }
 
 fn ack_result(ack: &pb::ControlAck) -> Result<(), ExecOpError> {
-    if let Some(error) = ack.error.as_ref() {
-        if !is_unspecified(error.kind) {
-            return Err(map_guest_control_error(error));
-        }
+    if let Some(error) = ack.error.as_ref()
+        && !is_unspecified(error.kind)
+    {
+        return Err(map_guest_control_error(error));
     }
     Ok(())
 }

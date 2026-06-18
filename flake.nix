@@ -57,7 +57,7 @@
           [package]
           name = "nixling-core"
           version = "0.0.0-bootstrap"
-          edition = "2021"
+          edition = "2024"
           publish = false
           license.workspace = true
 
@@ -440,7 +440,7 @@
           [package]
           name = "nixling-core"
           version = "0.0.0-bootstrap"
-          edition = "2021"
+          edition = "2024"
           publish = false
           license.workspace = true
 

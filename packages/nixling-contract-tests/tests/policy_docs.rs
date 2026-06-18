@@ -249,11 +249,9 @@ fn documented_subcommands(manpage: &str) -> BTreeSet<String> {
             in_sub = false;
             continue;
         }
-        if in_sub {
-            if let Some(rest) = line.strip_prefix("nixling\\-") {
-                let rest = rest.strip_suffix("(1)").unwrap_or(rest);
-                out.insert(rest.replace("\\-", "-"));
-            }
+        if in_sub && let Some(rest) = line.strip_prefix("nixling\\-") {
+            let rest = rest.strip_suffix("(1)").unwrap_or(rest);
+            out.insert(rest.replace("\\-", "-"));
         }
     }
     out

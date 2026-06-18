@@ -39,7 +39,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use nixling::{HostCheckOutputV2, HostCheckSeverityV2};
 

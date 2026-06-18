@@ -251,19 +251,19 @@ fn validate_line(line: &str) -> Result<(), Vec<AuditLineProblem>> {
     }
 
     // Enum range checks only when the value is the right shape.
-    if let Some(decision) = obj.get("decision").and_then(Value::as_str) {
-        if !DECISION_VALUES.contains(&decision) {
-            problems.push(AuditLineProblem::UnknownDecision {
-                value: decision.to_owned(),
-            });
-        }
+    if let Some(decision) = obj.get("decision").and_then(Value::as_str)
+        && !DECISION_VALUES.contains(&decision)
+    {
+        problems.push(AuditLineProblem::UnknownDecision {
+            value: decision.to_owned(),
+        });
     }
-    if let Some(authz) = obj.get("authz_result").and_then(Value::as_str) {
-        if !AUTHZ_RESULT_VALUES.contains(&authz) {
-            problems.push(AuditLineProblem::UnknownAuthzResult {
-                value: authz.to_owned(),
-            });
-        }
+    if let Some(authz) = obj.get("authz_result").and_then(Value::as_str)
+        && !AUTHZ_RESULT_VALUES.contains(&authz)
+    {
+        problems.push(AuditLineProblem::UnknownAuthzResult {
+            value: authz.to_owned(),
+        });
     }
 
     // Orphan rule: errored ↔ error_kind non-null. error_kind may
@@ -355,10 +355,10 @@ pub fn run_audit_check(
             if line.trim().is_empty() {
                 continue;
             }
-            if let Some(cutoff) = since_ts_ms {
-                if !line_ts_at_least(line, cutoff) {
-                    continue;
-                }
+            if let Some(cutoff) = since_ts_ms
+                && !line_ts_at_least(line, cutoff)
+            {
+                continue;
             }
             bag.push((file_label.clone(), line.to_owned()));
         }

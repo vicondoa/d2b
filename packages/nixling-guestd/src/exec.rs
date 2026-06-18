@@ -21,8 +21,8 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -1564,7 +1564,7 @@ async fn teardown_tty(
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
-    use tokio::io::{duplex, AsyncWriteExt, DuplexStream};
+    use tokio::io::{AsyncWriteExt, DuplexStream, duplex};
 
     struct SeqIds {
         counter: AtomicUsize,
@@ -2430,19 +2430,19 @@ mod tests {
             .create(owner.clone(), "boot-1".to_owned(), good_input())
             .await
             .unwrap();
-        let gen = snap.state_generation;
+        let r#gen = snap.state_generation;
         // Cancel many in-flight waits by dropping the future mid-park. Passing
         // the current generation makes each wait actually park (the state is
         // unchanged), so the timeout cancels a parked future. Without the
         // CounterGuard the VM-scoped counter would leak and exhaust capacity;
         // with it, capacity is always released.
         for _ in 0..(PENDING_EXEC_WAITS_PER_VM + 5) {
-            let fut = rt.wait(&owner, &exec_id, "boot-1", Some(gen), 1000);
+            let fut = rt.wait(&owner, &exec_id, "boot-1", Some(r#gen), 1000);
             let _ = tokio::time::timeout(Duration::from_millis(1), fut).await;
         }
         // A fresh wait must still be admitted (it times out, not capacity-fails).
         let (_snap, timed_out) = rt
-            .wait(&owner, &exec_id, "boot-1", Some(gen), 30)
+            .wait(&owner, &exec_id, "boot-1", Some(r#gen), 30)
             .await
             .unwrap();
         assert!(timed_out);

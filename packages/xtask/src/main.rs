@@ -19,7 +19,7 @@ use nixling_core::{
     manifest_v04::ManifestV04, minijail_profile::MinijailProfile, privileges::PrivilegesJson,
     processes::ProcessesJson,
 };
-use nixling_ipc::{guest_wire::GuestControlSchema, WireProtocolSchema};
+use nixling_ipc::{WireProtocolSchema, guest_wire::GuestControlSchema};
 use schemars::schema::RootSchema;
 
 const SCHEMA_VERSION: &str = "v2";

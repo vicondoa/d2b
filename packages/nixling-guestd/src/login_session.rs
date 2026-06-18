@@ -529,9 +529,10 @@ john:x:1000:100:John:/home/john:/run/current-system/sw/bin/bash
             assert!(name.ends_with(".service"));
             // Only systemd-legal unit-name characters.
             let stem = name.strip_suffix(".service").unwrap();
-            assert!(stem
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':')));
+            assert!(
+                stem.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
+            );
         }
     }
 

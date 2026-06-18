@@ -572,7 +572,10 @@ where
                 if !gate_matches {
                     (
                         HostCheckSeverity::Pass,
-                        format!("kernel module `{}` is not required on this host", module.module),
+                        format!(
+                            "kernel module `{}` is not required on this host",
+                            module.module
+                        ),
                         "No action required.",
                     )
                 } else {
@@ -981,7 +984,7 @@ mod module_sysctl_tests {
     use std::collections::BTreeMap;
 
     use crate::host::HostJson;
-    use crate::host_check::{run_with_fixture, HostCheckFixture, HostCheckSeverity};
+    use crate::host_check::{HostCheckFixture, HostCheckSeverity, run_with_fixture};
 
     const BASE_HOST_JSON: &str =
         include_str!("../../../tests/fixtures/deny-unknown/host-valid.json");

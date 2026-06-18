@@ -412,10 +412,10 @@ pub mod fake {
             self.log(format!("write_sysctl:{key}={value}"));
             self.sysctls.insert(key.to_owned(), value.to_owned());
             // Simulate post-write foreign drift if configured.
-            if let Some((dk, dv)) = self.drift_after_write.clone() {
-                if dk == key {
-                    self.sysctls.insert(dk, dv);
-                }
+            if let Some((dk, dv)) = self.drift_after_write.clone()
+                && dk == key
+            {
+                self.sysctls.insert(dk, dv);
             }
             Ok(())
         }
@@ -463,7 +463,7 @@ pub mod fake {
 mod tests {
     use super::*;
     use crate::bridge_port::BridgePortFlagSet;
-    use crate::ifname::{derive_from_env_vm, DerivedRole};
+    use crate::ifname::{DerivedRole, derive_from_env_vm};
     use fake::FakeBackend;
     use nixling_core::host_w3::TapRoleW3;
 

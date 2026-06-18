@@ -43,6 +43,7 @@ run_policy_gate() {
 
 run_policy_gate "adr-index-coverage"        tests/unit/meta/adr-index-coverage.sh
 run_policy_gate "ci-uses-make"              tests/unit/meta/ci-uses-make.sh
+run_policy_gate "w0-dep-direction"          tests/unit/meta/w0-dep-direction.sh
 run_policy_gate "deliverable-gate-inventory" tests/unit/meta/deliverable-gate-inventory.sh
 run_policy_gate "layer1-self-inventory"     tests/unit/meta/layer1-self-inventory.sh
 run_policy_gate "no-new-deferral"           tests/unit/meta/no-new-deferral.sh

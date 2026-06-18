@@ -790,6 +790,10 @@ fi
 if [ -x "$ROOT/tests/unit/meta/adr-index-coverage.sh" ]; then
   nl_static_parallel_script_gate "tests/unit/meta/adr-index-coverage.sh" "$ROOT/tests/unit/meta/adr-index-coverage.sh"
 fi
+# ADR 0032 crate-granular dependency-direction + lint-inheritance gate.
+if [ -x "$ROOT/tests/unit/meta/w0-dep-direction.sh" ]; then
+  nl_static_parallel_script_gate "tests/unit/meta/w0-dep-direction.sh" "$ROOT/tests/unit/meta/w0-dep-direction.sh"
+fi
 # I3 invariant enforcement (ADR 0022): no new v1.3 deferrals authored
 # during v1.2 stabilization. ADR 0022 documents this gate, so it must
 # stay wired.

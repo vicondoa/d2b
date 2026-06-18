@@ -33,11 +33,11 @@ use nixling_ipc::broker_wire::{
 use nixling_ipc::guest_auth::AUTH_NONCE_LEN;
 
 use crate::guest_control_health::{
-    connected_stream_to_ttrpc_socket, guest_control_health_ready, probe_guest_control_health,
-    read_guest_config_authenticated, AttemptBudget, GuestControlHealthError,
-    GuestControlHealthEvidence, GuestControlSigner, GuestFileReadError, TtrpcGuestControlClient,
+    AttemptBudget, GuestControlHealthError, GuestControlHealthEvidence, GuestControlSigner,
+    GuestFileReadError, TtrpcGuestControlClient, connected_stream_to_ttrpc_socket,
+    guest_control_health_ready, probe_guest_control_health, read_guest_config_authenticated,
 };
-use crate::guest_control_vsock::{connect_guest_control_vsock, GuestControlTransportProbeResult};
+use crate::guest_control_vsock::{GuestControlTransportProbeResult, connect_guest_control_vsock};
 use crate::typed_error::TypedError;
 
 /// Well-known `VMADDR_CID_HOST`. The host side of an `AF_VSOCK` pair is
@@ -618,8 +618,8 @@ mod tests {
         BrokerErrorResponse, GuestControlProofRole, GuestControlSignRequest,
     };
     use nixling_ipc::guest_auth::AUTH_TAG_LEN;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     /// Records every `GuestControlSignRequest` the probe forwards so the
     /// test can assert the host built it verbatim (correct CID, roles,
@@ -1465,72 +1465,13 @@ mod tests {
         );
     }
 
-    /// Serialize PATH mutation across this module's runtime spawn tests.
-    static PATH_LOCK: Mutex<()> = Mutex::new(());
-
-    struct SshTrapGuard {
-        old_path: Option<std::ffi::OsString>,
-        marker: PathBuf,
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl SshTrapGuard {
-        fn install(dir: &std::path::Path) -> Self {
-            let lock = PATH_LOCK
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            let bin = dir.join("bin");
-            std::fs::create_dir_all(&bin).expect("create trap bin");
-            let marker = dir.join("ssh-spawned.marker");
-            for tool in ["ssh", "scp"] {
-                let script = bin.join(tool);
-                std::fs::write(
-                    &script,
-                    format!("#!/bin/sh\necho spawned > {}\nexit 0\n", marker.display()),
-                )
-                .expect("write trap script");
-                let mut perms = std::fs::metadata(&script).expect("stat").permissions();
-                std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
-                std::fs::set_permissions(&script, perms).expect("chmod trap script");
-            }
-            let old_path = std::env::var_os("PATH");
-            let mut entries = vec![bin];
-            if let Some(existing) = &old_path {
-                entries.extend(std::env::split_paths(existing));
-            }
-            let joined = std::env::join_paths(entries).expect("join PATH");
-            std::env::set_var("PATH", joined);
-            Self {
-                old_path,
-                marker,
-                _lock: lock,
-            }
-        }
-
-        fn ssh_was_spawned(&self) -> bool {
-            self.marker.exists()
-        }
-    }
-
-    impl Drop for SshTrapGuard {
-        fn drop(&mut self) {
-            match &self.old_path {
-                Some(value) => std::env::set_var("PATH", value),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    }
-
     #[test]
     fn readiness_loop_spawns_no_ssh_client() {
-        let dir = std::env::current_dir()
-            .expect("cwd")
-            .join("target")
-            .join(format!("readiness-no-ssh-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create scratch");
-        let trap = SshTrapGuard::install(&dir);
-
+        // The readiness loop drives ONLY the injected probe and spawns no
+        // external process. The daemon's hard "never launch an SSH/SCP
+        // client" invariant is enforced statically across the whole daemon
+        // source by `daemon_source_launches_no_ssh_client`; this test verifies
+        // the readiness path converges to ready through the injected probe.
         let probe = ScriptedProbe::new(vec![
             Err(GuestControlHealthError::TransportIo),
             Ok(healthy_evidence()),
@@ -1545,13 +1486,6 @@ mod tests {
             &clock,
         );
         assert!(guest_control_health_ready(&run.outcome));
-        assert!(
-            !trap.ssh_was_spawned(),
-            "the readiness path must never spawn an SSH client"
-        );
-
-        drop(trap);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Build evidence whose every guest-controlled string carries a

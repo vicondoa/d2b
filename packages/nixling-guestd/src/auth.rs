@@ -13,8 +13,8 @@ use sha2::Sha256;
 use crate::{AuthError, TokenSource};
 
 pub use nixling_ipc::guest_auth::{
-    AuthDirection, AuthPurpose, ProofRole, AUTH_NONCE_LEN, AUTH_TAG_LEN, AUTH_TRANSCRIPT_VERSION,
-    GUEST_CONTROL_AUTH_PORT,
+    AUTH_NONCE_LEN, AUTH_TAG_LEN, AUTH_TRANSCRIPT_VERSION, AuthDirection, AuthPurpose,
+    GUEST_CONTROL_AUTH_PORT, ProofRole,
 };
 pub const CONNECTION_INSTANCE_LEN: usize = 16;
 pub const DEFAULT_CHALLENGE_TTL_MS: u64 = 30_000;

@@ -5,11 +5,11 @@ mod daemon_state_persistence {
     use std::process::{Command, Stdio};
     use std::time::Duration;
 
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     use super::common::{
-        last_non_empty_line, spawn_nixlingd_serve, test_client, DaemonFixture, TestPeer,
-        HELLO_FRAME,
+        DaemonFixture, HELLO_FRAME, TestPeer, last_non_empty_line, spawn_nixlingd_serve,
+        test_client,
     };
 
     const VM_STOP_FRAME: &str = r#"{"type":"vmStop","vm":"corp-vm","apply":true,"json":true}"#;

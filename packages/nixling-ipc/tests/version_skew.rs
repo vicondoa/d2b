@@ -31,7 +31,7 @@
 //! and every W3 broker op enum variant must round-trip through the
 //! wire-tag set.
 
-use nixling_ipc::{BrokerCapabilities, W3BrokerOperation, PROTOCOL_VERSION};
+use nixling_ipc::{BrokerCapabilities, PROTOCOL_VERSION, W3BrokerOperation};
 
 /// W2 broker operation tags — the closed pre-W3 set the version-skew
 /// scenarios pretend an "old daemon" or "old broker" advertised. We

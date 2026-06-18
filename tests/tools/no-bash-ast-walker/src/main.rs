@@ -56,7 +56,10 @@ fn main() {
         );
         std::process::exit(0);
     } else {
-        eprintln!("no-bash-ast-walker: FAIL — {} violation(s):", violations.len());
+        eprintln!(
+            "no-bash-ast-walker: FAIL — {} violation(s):",
+            violations.len()
+        );
         for v in &violations {
             eprintln!("  {v}");
         }
@@ -79,15 +82,15 @@ impl<'ast> syn::visit::Visit<'ast> for BashLiteralVisitor {
                 .map(|s| s.ident.to_string())
                 .collect();
             let is_command_new = segs.windows(2).any(|w| w == ["Command", "new"]);
-            if is_command_new && call.args.len() == 1 {
-                if let syn::Expr::Lit(lit) = &call.args[0] {
-                    if let syn::Lit::Str(s) = &lit.lit {
-                        let val = s.value();
-                        if BASH_LITERALS.iter().any(|b| val == *b) {
-                            self.findings
-                                .push(format!("{}: Command::new({val:?})", self.path.display()));
-                        }
-                    }
+            if is_command_new
+                && call.args.len() == 1
+                && let syn::Expr::Lit(lit) = &call.args[0]
+                && let syn::Lit::Str(s) = &lit.lit
+            {
+                let val = s.value();
+                if BASH_LITERALS.iter().any(|b| val == *b) {
+                    self.findings
+                        .push(format!("{}: Command::new({val:?})", self.path.display()));
                 }
             }
         }

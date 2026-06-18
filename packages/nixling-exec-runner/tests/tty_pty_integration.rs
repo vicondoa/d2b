@@ -16,12 +16,12 @@ use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use rustix::fs::{open, Mode, OFlags};
+use rustix::fs::{Mode, OFlags, open};
 use rustix::io::{ioctl_fionbio, read};
-use rustix::pipe::{pipe_with, PipeFlags};
-use rustix::process::{kill_process, kill_process_group, test_kill_process, Pid, Signal};
-use rustix::pty::{grantpt, openpt, ptsname, unlockpt, OpenptFlags};
-use rustix::termios::{tcgetpgrp, tcgetsid, tcsetwinsize, Winsize};
+use rustix::pipe::{PipeFlags, pipe_with};
+use rustix::process::{Pid, Signal, kill_process, kill_process_group, test_kill_process};
+use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
+use rustix::termios::{Winsize, tcgetpgrp, tcgetsid, tcsetwinsize};
 
 /// Generous wall-clock budget for the signal-/PTY-delivery polls below. The
 /// polls break as soon as their condition is met (~1s on an idle machine), so a
@@ -299,11 +299,11 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
     let mut reaped = false;
     while start.elapsed() < WAIT {
         // test_kill_process is kill(pid, 0): Err(ESRCH) once the pid is gone.
-        if let Some(pid) = Pid::from_raw(bg_pid) {
-            if test_kill_process(pid).is_err() {
-                reaped = true;
-                break;
-            }
+        if let Some(pid) = Pid::from_raw(bg_pid)
+            && test_kill_process(pid).is_err()
+        {
+            reaped = true;
+            break;
         }
         sleep(Duration::from_millis(10));
     }

@@ -30,7 +30,7 @@
 #![allow(unsafe_code)]
 
 use nix::libc;
-use nix::sys::wait::{waitpid, WaitStatus};
+use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd::Pid;
 
 use crate::live_handlers::policy_ref_device_classes;

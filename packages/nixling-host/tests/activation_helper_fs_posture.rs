@@ -13,8 +13,8 @@
 #![cfg(target_os = "linux")]
 
 use std::fs;
-use std::os::unix::fs::symlink;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::Command;
 

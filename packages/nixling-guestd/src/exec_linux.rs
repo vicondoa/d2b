@@ -19,7 +19,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rustix::process::{kill_process_group, Pid, Signal};
+use rustix::process::{Pid, Signal, kill_process_group};
 use tokio::process::{Child, Command};
 
 use crate::exec::{
@@ -27,8 +27,8 @@ use crate::exec::{
     ValidatedCommand,
 };
 use crate::login_session::{
-    login_session_systemd_run_args, sibling_systemctl_path, systemctl_kill_unit,
-    unique_exec_unit_name, SessionMode,
+    SessionMode, login_session_systemd_run_args, sibling_systemctl_path, systemctl_kill_unit,
+    unique_exec_unit_name,
 };
 
 /// Host-fixed workload-user spawn configuration for the non-TTY path.

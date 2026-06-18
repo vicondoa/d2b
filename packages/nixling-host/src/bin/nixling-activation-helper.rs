@@ -44,15 +44,15 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
-use nix::sys::stat::{fchmod, Mode};
-use nix::unistd::{fchown, ftruncate, Gid, Uid};
-use rustix::fs::{Mode as RxMode, OFlags, ResolveFlags, CWD};
-use rustix::mount::{mount_change, unmount, MountPropagationFlags, UnmountFlags};
-use rustix::thread::{unshare, UnshareFlags};
+use nix::sys::stat::{Mode, fchmod};
+use nix::unistd::{Gid, Uid, fchown, ftruncate};
+use rustix::fs::{CWD, Mode as RxMode, OFlags, ResolveFlags};
+use rustix::mount::{MountPropagationFlags, UnmountFlags, mount_change, unmount};
+use rustix::thread::{UnshareFlags, unshare};
 
 use nixling_host::hardlink_farm::{
-    build_farm, build_store_view, replace_live_top_level_paths, BuildStoreViewFarmRequest,
-    BuildStoreViewRequest, ReplaceLivePathsRequest,
+    BuildStoreViewFarmRequest, BuildStoreViewRequest, ReplaceLivePathsRequest, build_farm,
+    build_store_view, replace_live_top_level_paths,
 };
 
 /// v1.1.2fu24 panel-security R5 critical must-fix: open `path`

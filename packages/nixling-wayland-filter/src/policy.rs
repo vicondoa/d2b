@@ -320,7 +320,7 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
     let mut m = HashMap::new();
 
     macro_rules! entry {
-        ($iface:expr, $action:ident, $class:ident) => {
+        ($iface:expr_2021, $action:ident, $class:ident) => {
             m.insert(
                 $iface.to_owned(),
                 PolicyEntry {
@@ -330,7 +330,7 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
                 },
             );
         };
-        ($iface:expr, $action:ident, $class:ident, max=$v:expr) => {
+        ($iface:expr_2021, $action:ident, $class:ident, max=$v:expr_2021) => {
             m.insert(
                 $iface.to_owned(),
                 PolicyEntry {

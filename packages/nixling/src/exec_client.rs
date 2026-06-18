@@ -172,9 +172,7 @@ impl ExecClientError {
                 "the exec session slot was reclaimed before the command reported a terminal status",
                 "retry; the session was reaped after a terminal-cleanup timeout",
             ),
-            _ => Self::protocol(
-                "the guest reported an out-of-contract abnormal terminal status",
-            ),
+            _ => Self::protocol("the guest reported an out-of-contract abnormal terminal status"),
         }
     }
 }
@@ -510,17 +508,17 @@ where
         for signal in signals.drain() {
             match signal {
                 ExecSignal::Winch => {
-                    if config.tty {
-                        if let Some((rows, cols)) = host.window_size() {
-                            let op_id = next_control_op_id;
-                            next_control_op_id += 1;
-                            transport.round_trip(&ExecOp::Resize(ExecResizeArgs {
-                                session: session.to_owned(),
-                                rows,
-                                cols,
-                                op_id,
-                            }))?;
-                        }
+                    if config.tty
+                        && let Some((rows, cols)) = host.window_size()
+                    {
+                        let op_id = next_control_op_id;
+                        next_control_op_id += 1;
+                        transport.round_trip(&ExecOp::Resize(ExecResizeArgs {
+                            session: session.to_owned(),
+                            rows,
+                            cols,
+                            op_id,
+                        }))?;
                     }
                 }
                 other => {
@@ -1065,24 +1063,26 @@ pub fn install_signals() -> io::Result<InstalledSignals> {
     let wait_set = set;
     std::thread::Builder::new()
         .name("nixling-exec-sig".to_owned())
-        .spawn(move || loop {
-            match wait_set.wait() {
-                Ok(signal) => {
-                    let mapped = match signal {
-                        Signal::SIGWINCH => ExecSignal::Winch,
-                        Signal::SIGINT => ExecSignal::Interrupt,
-                        Signal::SIGTERM => ExecSignal::Terminate,
-                        Signal::SIGTSTP => ExecSignal::Stop,
-                        Signal::SIGHUP => ExecSignal::Hangup,
-                        Signal::SIGQUIT => ExecSignal::Quit,
-                        _ => continue,
-                    };
-                    pending_thread
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .push_back(mapped);
+        .spawn(move || {
+            loop {
+                match wait_set.wait() {
+                    Ok(signal) => {
+                        let mapped = match signal {
+                            Signal::SIGWINCH => ExecSignal::Winch,
+                            Signal::SIGINT => ExecSignal::Interrupt,
+                            Signal::SIGTERM => ExecSignal::Terminate,
+                            Signal::SIGTSTP => ExecSignal::Stop,
+                            Signal::SIGHUP => ExecSignal::Hangup,
+                            Signal::SIGQUIT => ExecSignal::Quit,
+                            _ => continue,
+                        };
+                        pending_thread
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push_back(mapped);
+                    }
+                    Err(_) => continue,
                 }
-                Err(_) => continue,
             }
         })?;
 

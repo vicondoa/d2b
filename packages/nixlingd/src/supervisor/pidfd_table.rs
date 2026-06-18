@@ -350,7 +350,7 @@ impl PidfdTable {
         timeout: Duration,
     ) -> Result<WaitTermination, PidfdTableError> {
         use nix::errno::Errno;
-        use nix::sys::wait::{waitid, Id, WaitPidFlag, WaitStatus};
+        use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
 
         let key = (vm.to_owned(), role.to_owned());
         let (pid, start_time_ticks, pidfd) = {
@@ -391,21 +391,21 @@ impl PidfdTable {
                 }
                 Ok(WaitStatus::StillAlive) | Ok(_) => {}
                 Err(Errno::ECHILD) => {
-                    if let Some(log) = self.broker_reap_log.get() {
-                        if let Some(notif) = log.take(pid) {
-                            let mut entries = self.entries.write();
-                            if matches!(
-                                entries.get(&key),
-                                Some(current)
-                                    if current.pid == pid
-                                        && current.start_time_ticks == start_time_ticks
-                            ) {
-                                entries.remove(&key);
-                            }
-                            return Ok(WaitTermination::TerminatedByBroker {
-                                exit_status: notif.exit_status,
-                            });
+                    if let Some(log) = self.broker_reap_log.get()
+                        && let Some(notif) = log.take(pid)
+                    {
+                        let mut entries = self.entries.write();
+                        if matches!(
+                            entries.get(&key),
+                            Some(current)
+                                if current.pid == pid
+                                    && current.start_time_ticks == start_time_ticks
+                        ) {
+                            entries.remove(&key);
                         }
+                        return Ok(WaitTermination::TerminatedByBroker {
+                            exit_status: notif.exit_status,
+                        });
                     }
                     waitid_error = Some((Some(libc::ECHILD), "waitid(P_PIDFD): ECHILD".to_owned()));
                 }
@@ -983,7 +983,7 @@ mod tests {
     /// recorded the corresponding `ChildReaped` notification.
     #[test]
     fn wait_terminated_echild_uses_broker_reap_log() {
-        use nix::sys::wait::{waitid, Id, WaitPidFlag, WaitStatus};
+        use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
         use nixling_ipc::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
 
         let child = Command::new("sleep")

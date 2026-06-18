@@ -319,7 +319,7 @@ mod tests {
     /// Build a minimal v4 manifest JSON for tests. Each `vms` entry
     /// is `(name, env_opt, usbip_yubikey, usbipd_host_ip_opt)`.
     fn manifest_with(vms: &[(&str, Option<&str>, bool, Option<&str>)]) -> ManifestV04 {
-        use serde_json::{json, Value};
+        use serde_json::{Value, json};
         let mut root = serde_json::Map::new();
         root.insert("_manifest".to_owned(), json!({ "manifestVersion": 5 }));
         root.insert(

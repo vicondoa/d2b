@@ -27,7 +27,7 @@ use std::io;
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-use crate::atomicio::{atomic_write, open_read_nofollow, read_file_nofollow, O_NOFOLLOW};
+use crate::atomicio::{O_NOFOLLOW, atomic_write, open_read_nofollow, read_file_nofollow};
 use crate::codec::{DecodeError, Reader, Writer};
 
 const META_MAGIC: u32 = 0x4e4c_534d; // "NLSM"

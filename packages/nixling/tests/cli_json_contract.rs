@@ -396,7 +396,7 @@ fn audit_json_stays_json_on_tty_with_daemon_down_envelope() {
 /// Allocate a pseudo-terminal: open the master (`/dev/ptmx`), grant + unlock
 /// the slave, and return `(master, slave_path)`.
 fn open_pty() -> (OwnedFd, PathBuf) {
-    use rustix::pty::{grantpt, openpt, ptsname, unlockpt, OpenptFlags};
+    use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 
     let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).expect("openpt master");
     grantpt(&master).expect("grantpt");
@@ -409,7 +409,7 @@ fn open_pty() -> (OwnedFd, PathBuf) {
 /// Open the PTY slave (`/dev/pts/N`) read-write without acquiring it as the
 /// controlling terminal.
 fn open_pts_slave(path: &Path) -> OwnedFd {
-    use rustix::fs::{open, Mode, OFlags};
+    use rustix::fs::{Mode, OFlags, open};
     open(path, OFlags::RDWR | OFlags::NOCTTY, Mode::empty()).expect("open pts slave")
 }
 

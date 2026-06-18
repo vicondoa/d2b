@@ -66,10 +66,9 @@ impl std::fmt::Display for ApplyNmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(s) => write!(f, "nm-apply: io: {s}"),
-            Self::DeviceNotUnmanaged { ifname, state } => write!(
-                f,
-                "nm-apply: {ifname:?} is {state:?}, expected `unmanaged`"
-            ),
+            Self::DeviceNotUnmanaged { ifname, state } => {
+                write!(f, "nm-apply: {ifname:?} is {state:?}, expected `unmanaged`")
+            }
             Self::ManagedForeignConflict { ifname, state } => write!(
                 f,
                 "nm-managed-foreign-conflict: {ifname:?} held by foreign NM profile (state {state:?})"
@@ -291,11 +290,11 @@ where
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(io_to_live_handler(&intent.file_path, err)),
     }
-    if intent.reload_behavior == "atomic-reload" {
-        if let Err(err) = reload(&["reload", "NetworkManager"]) {
-            let _ = rollback(&intent.file_path, prior.as_deref());
-            return Err(crate::live_handlers::LiveHandlerError::NmReload(err));
-        }
+    if intent.reload_behavior == "atomic-reload"
+        && let Err(err) = reload(&["reload", "NetworkManager"])
+    {
+        let _ = rollback(&intent.file_path, prior.as_deref());
+        return Err(crate::live_handlers::LiveHandlerError::NmReload(err));
     }
     Ok(())
 }
@@ -334,7 +333,7 @@ fn systemctl_invoke(args: &[&str]) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::ops::exec_reconcile::{FakeReconcileExecutor, ReconcileOp};
-    use nixling_host::ifname::{derive_from_env_vm, DerivedRole};
+    use nixling_host::ifname::{DerivedRole, derive_from_env_vm};
     use std::cell::RefCell;
 
     fn entry(ifn_str: &str) -> NmUnmanagedEntry {

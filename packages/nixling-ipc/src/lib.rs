@@ -1,7 +1,7 @@
 #![doc = "Canonical public and private IPC wire types for nixling."]
 
 use schemars::JsonSchema;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::BTreeSet;
 
 pub mod broker_wire;
@@ -137,8 +137,8 @@ impl JsonSchema for FeatureFlag {
         "FeatureFlag".to_owned()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
-        <String as JsonSchema>::json_schema(gen)
+    fn json_schema(r#gen: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        <String as JsonSchema>::json_schema(r#gen)
     }
 }
 
@@ -364,9 +364,9 @@ fn extract_ifname_error(message: &str) -> Option<nixling_core::host::IfNameError
 #[cfg(test)]
 mod tests {
     use super::{
-        broker_wire::BrokerRequest, decode_frame, encode_frame, negotiate_hello,
-        BrokerCapabilities, FeatureFlag, Hello, KnownFeatureFlag, SemverRange, Version,
-        W3BrokerOperation, MAX_FRAME_SIZE, PROTOCOL_VERSION,
+        BrokerCapabilities, FeatureFlag, Hello, KnownFeatureFlag, MAX_FRAME_SIZE, PROTOCOL_VERSION,
+        SemverRange, Version, W3BrokerOperation, broker_wire::BrokerRequest, decode_frame,
+        encode_frame, negotiate_hello,
     };
 
     #[test]

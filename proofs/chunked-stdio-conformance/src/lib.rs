@@ -657,20 +657,20 @@ impl ChunkedSession {
             }
             return Err(ProtocolError::RequestIdConflict);
         }
-        if let Some((previous_id, previous)) = &self.close_after_request {
-            if *previous_id == write_id {
-                if previous.offset == offset
-                    && previous.hash == Self::hash(data)
-                    && previous.len == data.len()
-                    && close_after
-                {
-                    return Ok(WriteStdinResponse {
-                        next_offset: expected,
-                        disposition: WriteDisposition::Duplicate,
-                    });
-                }
-                return Err(ProtocolError::RequestIdConflict);
+        if let Some((previous_id, previous)) = &self.close_after_request
+            && *previous_id == write_id
+        {
+            if previous.offset == offset
+                && previous.hash == Self::hash(data)
+                && previous.len == data.len()
+                && close_after
+            {
+                return Ok(WriteStdinResponse {
+                    next_offset: expected,
+                    disposition: WriteDisposition::Duplicate,
+                });
             }
+            return Err(ProtocolError::RequestIdConflict);
         }
         if self.stdin_closed {
             return Err(ProtocolError::StdinClosed);

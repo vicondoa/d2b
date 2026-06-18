@@ -16,8 +16,8 @@ use crate::live_handlers::LiveHandlerError;
 use crate::ops::exec_reconcile::{ReconcileExecError, ReconcileExecutor};
 use nixling_core::host_w3::{CoexistencePolicy, FirewallCoexistencePolicy, FirewallManager};
 use nixling_host::nftables::{
-    self, build_inet_nixling_chains, evaluate_coexistence_policy, hash_inet_nixling_table,
-    DetectorProbe, NftBatch, NftError, ParseNftScriptError, Sha256,
+    self, DetectorProbe, NftBatch, NftError, ParseNftScriptError, Sha256,
+    build_inet_nixling_chains, evaluate_coexistence_policy, hash_inet_nixling_table,
 };
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -218,12 +218,9 @@ impl std::fmt::Display for ApplyWithCoexistenceError {
             Self::ParseFailed(err) => {
                 write!(f, "apply-nftables: failed to parse nft script: {err}")
             }
-            Self::CarveoutOrderingViolation(NftError::ForeignNftRuleShadowsNixling {
-                details,
-            }) => write!(
-                f,
-                "apply-nftables: carve-out ordering violation: {details}"
-            ),
+            Self::CarveoutOrderingViolation(NftError::ForeignNftRuleShadowsNixling { details }) => {
+                write!(f, "apply-nftables: carve-out ordering violation: {details}")
+            }
             Self::CarveoutOrderingViolation(err) => {
                 write!(f, "apply-nftables: carve-out ordering violation: {err}")
             }

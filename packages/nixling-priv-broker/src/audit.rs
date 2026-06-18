@@ -98,16 +98,16 @@ impl AuditLog {
         retention_days: u32,
     ) -> io::Result<Self> {
         // Refuse symlink on the audit dir.
-        if let Ok(metadata) = fs::symlink_metadata(audit_dir) {
-            if metadata.file_type().is_symlink() {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!(
-                        "audit directory must not be a symlink: {}",
-                        audit_dir.display()
-                    ),
-                ));
-            }
+        if let Ok(metadata) = fs::symlink_metadata(audit_dir)
+            && metadata.file_type().is_symlink()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "audit directory must not be a symlink: {}",
+                    audit_dir.display()
+                ),
+            ));
         }
 
         crate::sys::path_safe::ensure_dir(
@@ -378,12 +378,10 @@ impl AuditLog {
         // only runs on day-boundary crossings; the cost is bounded
         // by O(retention_days + leftover files).
         drop(guard);
-        if rotated {
-            if let Err(err) = self.prune_expired_daily_files() {
-                // Same swallow as open(): pruning failures must not
-                // break the write path. The next rotation retries.
-                let _ = err;
-            }
+        if rotated && let Err(err) = self.prune_expired_daily_files() {
+            // Same swallow as open(): pruning failures must not
+            // break the write path. The next rotation retries.
+            let _ = err;
         }
         Ok(())
     }
@@ -511,15 +509,16 @@ impl AuditLog {
             let reader = BufReader::new(file);
             for line in reader.lines() {
                 let line = line?;
-                if let Some(since) = since {
-                    if !line.contains(since) && !ts_at_least(&line, since) {
-                        continue;
-                    }
+                if let Some(since) = since
+                    && !line.contains(since)
+                    && !ts_at_least(&line, since)
+                {
+                    continue;
                 }
-                if let Some(filter) = filter {
-                    if !line.contains(filter) {
-                        continue;
-                    }
+                if let Some(filter) = filter
+                    && !line.contains(filter)
+                {
+                    continue;
                 }
                 lines.push(line);
             }
@@ -575,10 +574,9 @@ fn set_root_nixlingd_acl(file: &File, expected_gid: u32, test_mode: bool) -> io:
         file.as_fd(),
         Some(owner_uid.as_raw()),
         Some(group_gid.as_raw()),
-    ) {
-        if !test_mode {
-            return Err(err);
-        }
+    ) && !test_mode
+    {
+        return Err(err);
     }
     Ok(())
 }

@@ -61,7 +61,7 @@
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
 
-use rustix::fs::{renameat_with, RenameFlags, CWD};
+use rustix::fs::{CWD, RenameFlags, renameat_with};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -69,7 +69,7 @@ use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use nix::unistd::{chown, Gid, Uid};
+use nix::unistd::{Gid, Uid, chown};
 
 /// `EXDEV` ("Invalid cross-device link") errno. `link(2)` returns this
 /// when source and destination are on different mounts. Defined locally
@@ -1740,20 +1740,20 @@ mod tests {
         13
     }
 
-    fn make_marker(gen: u32) -> GenerationMarker {
+    fn make_marker(r#gen: u32) -> GenerationMarker {
         GenerationMarker {
             closure_hash: format!("sha256:gen{gen}"),
             nixling_version: "0.4.0".to_owned(),
             activated_at: "2026-05-29T09:00:00Z".to_owned(),
             vm: "corp-vm".to_owned(),
-            generation_number: gen,
+            generation_number: r#gen,
         }
     }
 
-    fn build_generation(store: &Path, gen: u32) {
+    fn build_generation(store: &Path, r#gen: u32) {
         let dir = store.join("generations").join(format!("{gen}"));
         std::fs::create_dir_all(&dir).unwrap();
-        write_generation_marker(&dir, &make_marker(gen)).unwrap();
+        write_generation_marker(&dir, &make_marker(r#gen)).unwrap();
     }
 
     #[test]
@@ -2272,9 +2272,11 @@ mod tests {
         assert!(!live_dir(&farm_root).join("aaa-system").exists());
         assert!(live_dir(&farm_root).join("bbb-system/payload").exists());
         assert!(!stale_path.exists());
-        assert!(live_dir(&farm_root)
-            .join(".nixling-marker-corp-vm")
-            .exists());
+        assert!(
+            live_dir(&farm_root)
+                .join(".nixling-marker-corp-vm")
+                .exists()
+        );
     }
 
     #[test]

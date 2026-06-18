@@ -255,7 +255,7 @@ pub enum OperationFields {
 impl OperationFields {
     pub fn from_operation_value(operation: &str, value: Value) -> serde_json::Result<Self> {
         macro_rules! parse_fields {
-            ($value:expr => $variant:ident { $($field:ident : $ty:ty),* $(,)? }) => {{
+            ($value:expr_2021 => $variant:ident { $($field:ident : $ty:ty),* $(,)? }) => {{
                 #[derive(Deserialize)]
                 #[serde(deny_unknown_fields)]
                 struct Fields {
@@ -266,7 +266,7 @@ impl OperationFields {
                 let Fields { $( $field, )* } = serde_json::from_value($value)?;
                 Ok(Self::$variant { $( $field, )* })
             }};
-            ($value:expr => $variant:ident {}) => {{
+            ($value:expr_2021 => $variant:ident {}) => {{
                 #[derive(Deserialize)]
                 #[serde(deny_unknown_fields)]
                 struct Fields {}
@@ -604,7 +604,7 @@ mod tests {
     use serde_json::json;
 
     macro_rules! roundtrip_test {
-        ($name:ident, $operation:literal, $fields:expr) => {
+        ($name:ident, $operation:literal, $fields:expr_2021) => {
             #[test]
             fn $name() {
                 let fields = $fields;

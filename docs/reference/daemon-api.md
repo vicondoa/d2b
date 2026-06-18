@@ -31,6 +31,22 @@ explicit length prefix so the wire format stays identical if a future
 transport ever needs stream framing. There is never more than one
 request or one response inside a frame.
 
+> **Transport-neutral in v2.** The local Unix socket at
+> `/run/nixling/public.sock` is one transport binding for the Nixling
+> daemon API. A relay-backed or remote daemon-access binding, when
+> configured, carries **daemon API requests only** — it does not
+> expose the broker socket (`/run/nixling/priv.sock`) and does not
+> tunnel raw guest ttRPC traffic. Relay credentials used to
+> authenticate a remote daemon-access session are
+> **node-management credentials**, not realm or provider workload
+> credentials. There is no implicit "remote caller is Admin" mapping:
+> relay identity is never resolved to `nixling-admin`; the
+> `SO_PEERCRED`-based admin/launcher gate remains the sole authn
+> mechanism for the local Unix binding, and any non-local binding
+> requires explicit principal mapping against a daemon-access trust
+> anchor. Realm and provider workload credentials are held inside a
+> gateway guest VM and never transit the daemon API or broker paths.
+
 ## Handshake
 
 Every new connection begins with a `Hello` message. The client presents:
@@ -437,6 +453,18 @@ path (`export_lines`) operate solely against the daily files. The
 broker `serve` CLI takes `--audit-dir <path>` instead of the prior
 `--audit-log-path` flag.
 
+> **Audit boundary.** The broker audit log above is the local
+> root-owned record for broker operations on this host. Any future
+> gateway or realm *aggregate* audit (realm access events, provider
+> operation records) is a separate record that lives inside the
+> per-realm gateway guest VM, not in `/var/lib/nixling/audit/`;
+> a remote full-host node keeps its own broker/audit records on that
+> node's local audit path (broker-mediated and node-owned), not in the
+> gateway guest. Relay or realm identity never enters this local broker
+> audit or auth path: the record's identity fields (e.g. `peer_uid`,
+> `authz_result`) carry only the local `SO_PEERCRED`-derived
+> classification, and `decision` is the local broker operation outcome.
+
 ## Forward-compatibility policy
 
 The protocol deliberately mixes **strict shape checking** with
@@ -452,6 +480,12 @@ The protocol deliberately mixes **strict shape checking** with
 The result is intentionally conservative: callers may discover new
 capabilities, but they do not get silent success from partially
 understood payloads.
+
+> **v2 constellation protocol schemas.** The v2 constellation
+> peer-session, operation-routing, and stream protocol shapes are
+> not yet published as reference `.md` or `.json` contract files in
+> this repository. Do not treat any draft field shape as a stable
+> contract until the corresponding reference document is published.
 
 ## Autostart contract
 

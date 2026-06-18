@@ -8,7 +8,7 @@ use std::{
     sync::Arc,
 };
 
-use nix::sys::memfd::{memfd_create, MemFdCreateFlag};
+use nix::sys::memfd::{MemFdCreateFlag, memfd_create};
 use nix::sys::uio::pread;
 use wl_proxy::protocols::{
     linux_dmabuf_v1::{

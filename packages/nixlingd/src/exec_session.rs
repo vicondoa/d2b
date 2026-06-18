@@ -29,9 +29,9 @@ use async_trait::async_trait;
 
 use nixling_core::base64_codec;
 use nixling_ipc::public_wire::{
-    ExecCloseResult, ExecControlResult, ExecOp, ExecOpResponse, ExecReadOutputResult,
-    ExecStartResult, ExecStream, ExecTerminalStatus, ExecWaitResult, ExecWriteStdinResult,
-    EXEC_MAX_CHUNK_BYTES,
+    EXEC_MAX_CHUNK_BYTES, ExecCloseResult, ExecControlResult, ExecOp, ExecOpResponse,
+    ExecReadOutputResult, ExecStartResult, ExecStream, ExecTerminalStatus, ExecWaitResult,
+    ExecWriteStdinResult,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -573,12 +573,12 @@ async fn worker_main(
                     // then arm the terminal-cleanup reaper. The reaper
                     // only releases the slot AFTER the command is terminal; it
                     // never kills a live command.
-                    if is_wait {
-                        if let Ok(ExecOpResponse::Wait(wait)) = &result {
-                            if wait.terminal_status.is_some() && reaper.mark_terminal() {
-                                arm_terminal_reap(reaper, owner_reaper);
-                            }
-                        }
+                    if is_wait
+                        && let Ok(ExecOpResponse::Wait(wait)) = &result
+                        && wait.terminal_status.is_some()
+                        && reaper.mark_terminal()
+                    {
+                        arm_terminal_reap(reaper, owner_reaper);
                     }
                     let _ = reply.send(result);
                 });
@@ -664,10 +664,10 @@ impl WorkerState {
                     return Err(ExecOpError::Guest(GuestOpError::MaxChunkExceeded));
                 }
                 // Idempotent retry of the most recent write at the same offset.
-                if let Some((offset, cached)) = &self.last_write {
-                    if *offset == args.offset {
-                        return Ok(ExecOpResponse::WriteStdin(cached.clone()));
-                    }
+                if let Some((offset, cached)) = &self.last_write
+                    && *offset == args.offset
+                {
+                    return Ok(ExecOpResponse::WriteStdin(cached.clone()));
                 }
                 if args.offset != self.next_stdin_offset {
                     return Err(ExecOpError::Guest(GuestOpError::OffsetMismatch));
@@ -975,7 +975,7 @@ impl SessionTable {
         self: &Arc<Self>,
         uid: u32,
         vm: &str,
-        mut gen: impl FnMut() -> Option<[u8; 16]>,
+        mut r#gen: impl FnMut() -> Option<[u8; 16]>,
     ) -> Result<SessionSlot, SessionReserveError> {
         let mut inner = self.inner.lock().expect("exec session table poisoned");
         self.enforce_start_rate(&mut inner, uid)?;
@@ -996,7 +996,7 @@ impl SessionTable {
         }
         let mut handle = None;
         for _ in 0..HANDLE_RETRY_LIMIT {
-            let candidate = match gen() {
+            let candidate = match r#gen() {
                 Some(bytes) => hex_encode(&bytes),
                 None => return Err(SessionReserveError::HandleExhausted),
             };

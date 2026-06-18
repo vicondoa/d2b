@@ -141,3 +141,12 @@ Other methods return `405 Method Not Allowed`; other paths return
 See also: `docs/reference/daemon-api.md` §"Audit",
 `docs/reference/daemon-metrics.md`,
 `docs/reference/kernel-module-check.md`.
+
+> **Local scope of this check.** The audit check described in this
+> document covers only the local broker audit log
+> (`/var/lib/nixling/audit/broker-<utc-date>.jsonl`). Any future
+> gateway or realm audit (realm access events, provider operation
+> records) is separate and resides inside the gateway guest VM.
+> Relay or realm identity never enters the local broker audit or
+> auth path: `peer_uid` and `authz_result` in the records above
+> reflect only the local `SO_PEERCRED`-derived classification.

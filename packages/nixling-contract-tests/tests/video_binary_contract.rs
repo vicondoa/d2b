@@ -40,7 +40,10 @@ fn graphics_video_dag<'a>(resolver: &'a BundleResolver, test: &str) -> &'a VmPro
         matches.len(),
         1,
         "{test}: fixture-smoke-full must render exactly one graphics/video VM with video + cloud-hypervisor nodes; saw {:?}",
-        matches.iter().map(|dag| dag.vm.as_str()).collect::<Vec<_>>()
+        matches
+            .iter()
+            .map(|dag| dag.vm.as_str())
+            .collect::<Vec<_>>()
     );
     matches[0]
 }

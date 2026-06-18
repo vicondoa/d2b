@@ -346,9 +346,7 @@ fn virtiofsd_rendered_profiles_match_broker_pre_ns_shape() {
             assert!(
                 p.namespaces.user,
                 "virtiofsd {} (vm {}) must request a user namespace (ADR 0021 broker-pre-NS); got {:?}",
-                p.profile_id,
-                dag.vm,
-                p.namespaces
+                p.profile_id, dag.vm, p.namespaces
             );
         }
     }

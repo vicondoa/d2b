@@ -86,7 +86,10 @@ fn l3_matrix_pins_parse_and_carry_required_keys() {
         let sha = &map["sha256"];
         if sha != "placeholder" {
             assert!(
-                sha.len() == 64 && sha.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+                sha.len() == 64
+                    && sha
+                        .chars()
+                        .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
                 "l3-pin-consistency: {pin}: sha256 must be 'placeholder' or 64-char lowercase hex, got: '{sha}'"
             );
         }

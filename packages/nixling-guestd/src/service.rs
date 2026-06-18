@@ -6,8 +6,8 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     task::{Context, Poll},
     time::{SystemTime, UNIX_EPOCH},
@@ -25,13 +25,14 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     time::Duration,
 };
-use tokio_vsock::{VsockAddr, VsockListener, VMADDR_CID_ANY};
+use tokio_vsock::{VMADDR_CID_ANY, VsockAddr, VsockListener};
 
 use crate::{
     auth::{
-        AuthConnectionContext, AuthDirection, AuthPurpose, BootIdSource, CapabilitiesProvider,
-        CapabilitiesSnapshot, GuestAuthCore, GuestAuthError, InMemoryChallengeStore, NonceRng,
-        SharedSecretToken, AUTH_NONCE_LEN, CONNECTION_INSTANCE_LEN, GUEST_CONTROL_AUTH_PORT,
+        AUTH_NONCE_LEN, AuthConnectionContext, AuthDirection, AuthPurpose, BootIdSource,
+        CONNECTION_INSTANCE_LEN, CapabilitiesProvider, CapabilitiesSnapshot,
+        GUEST_CONTROL_AUTH_PORT, GuestAuthCore, GuestAuthError, InMemoryChallengeStore, NonceRng,
+        SharedSecretToken,
     },
     detached::{RunnerUnitPaths, SystemdRunUnitManager},
     detached_registry::{
@@ -39,13 +40,13 @@ use crate::{
     },
     exec::{
         ExecCreateInput, ExecError, ExecPolicy, ExecRuntime, ExecSnapshot,
-        ExecState as RtExecState, ExitOutcome, Stream as RtStream, TtyStdinSnapshot,
-        ValidatedCommand, HARD_MAX_CHUNK_BYTES, MAX_ARGV, MAX_ARG_BYTES, MAX_CWD_BYTES,
-        MAX_ENV_ENTRIES, MAX_ENV_KEY_BYTES, MAX_ENV_VALUE_BYTES,
+        ExecState as RtExecState, ExitOutcome, HARD_MAX_CHUNK_BYTES, MAX_ARG_BYTES, MAX_ARGV,
+        MAX_CWD_BYTES, MAX_ENV_ENTRIES, MAX_ENV_KEY_BYTES, MAX_ENV_VALUE_BYTES, Stream as RtStream,
+        TtyStdinSnapshot, ValidatedCommand,
     },
     exec_linux::LinuxProcessSpawner,
     exec_pty::linux::LinuxPtyProcessSpawner,
-    generated::guest_control_ttrpc::{create_guest_control, GuestControl},
+    generated::guest_control_ttrpc::{GuestControl, create_guest_control},
 };
 
 /// Absolute path to the guest login shell (NixOS system profile). Interactive
@@ -1318,7 +1319,7 @@ impl GuestControl for GuestControlService {
                 return Err(rpc_status(
                     ttrpc::Code::INVALID_ARGUMENT,
                     "guest-control-stream-invalid",
-                ))
+                ));
             }
         };
         match registry
@@ -1457,7 +1458,7 @@ impl GuestControl for GuestControlService {
                 return Err(rpc_status(
                     ttrpc::Code::INVALID_ARGUMENT,
                     "guest-control-stream-invalid",
-                ))
+                ));
             }
         };
         match self
@@ -1661,7 +1662,7 @@ fn rpc_status(code: ttrpc::Code, message: &'static str) -> ttrpc::Error {
 /// the cap so a file that grows after `fstat` cannot exceed the bound.
 fn read_guest_file_safely(path: &Path) -> Result<Vec<u8>, pb::GuestControlErrorKind> {
     use pb::GuestControlErrorKind as K;
-    use rustix::fs::{fstat, open, openat, FileType, Mode, OFlags};
+    use rustix::fs::{FileType, Mode, OFlags, fstat, open, openat};
     use rustix::io::Errno;
     use std::path::Component;
 
@@ -2129,8 +2130,8 @@ pub struct OsNonceError;
 mod tests {
     use std::{collections::HashMap, fs, os::unix::fs::PermissionsExt};
 
-    use crate::auth::{encode_transcript, ProofRole};
     use crate::TokenSource;
+    use crate::auth::{ProofRole, encode_transcript};
 
     use super::*;
 
@@ -2494,10 +2495,12 @@ mod tests {
 
         authenticate(&service).await;
         assert!(service.health(&ctx, health_request()).await.is_ok());
-        assert!(service
-            .capabilities(&ctx, capabilities_request())
-            .await
-            .is_ok());
+        assert!(
+            service
+                .capabilities(&ctx, capabilities_request())
+                .await
+                .is_ok()
+        );
 
         let other = GuestControlService::new(
             Arc::clone(&service.auth),
@@ -3024,11 +3027,11 @@ mod tests {
     use crate::detached::{ManagedUnit, TransientUnitManager, UnitError};
     use crate::detached_registry::{DetachedCaps, Sleeper, SlotStore, WallClock};
     use crate::exec::{ExecIdSource, ValidatedCommand};
+    use nixling_exec_runner::DETACHED_RETAINED_PER_VM;
     use nixling_exec_runner::filering::{FileRingError, RingChunk, StreamMeta};
     use nixling_exec_runner::paths::Stream as RunnerStream;
     use nixling_exec_runner::record::{DurableRecord, StatusPhase};
     use nixling_exec_runner::spec::ExecSpec;
-    use nixling_exec_runner::DETACHED_RETAINED_PER_VM;
     use std::sync::atomic::AtomicU64;
 
     #[derive(Default)]

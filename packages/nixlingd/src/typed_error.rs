@@ -74,9 +74,7 @@ impl GuestControlReadErrorKind {
             Self::FileNotFound => {
                 "create the editable guest config working copy inside the VM before syncing"
             }
-            Self::FileTooLarge => {
-                "shrink the guest config below the read size cap before syncing"
-            }
+            Self::FileTooLarge => "shrink the guest config below the read size cap before syncing",
             Self::PathUnsafe => {
                 "ensure the guest config path is a regular file with no symlink or parent-escape component"
             }
@@ -211,9 +209,7 @@ impl GuestControlExecErrorKind {
             Self::SessionCapacity => {
                 "wait for an in-flight exec session to finish or close an idle one, then retry"
             }
-            Self::RateLimited => {
-                "reduce the rate of `nixling vm exec` invocations and retry"
-            }
+            Self::RateLimited => "reduce the rate of `nixling vm exec` invocations and retry",
             Self::StaleSession => {
                 "retry after confirming the VM is still running; if the failure persists, restart the VM to refresh guest-control session state"
             }

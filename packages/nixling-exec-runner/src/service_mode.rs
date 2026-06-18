@@ -20,12 +20,12 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use nixling_exec_runner::DETACHED_RETAINED_PER_VM;
 use nixling_exec_runner::atomicio::{atomic_write, read_file_nofollow};
 use nixling_exec_runner::filering::FileRing;
 use nixling_exec_runner::paths::{RunnerPaths, Stream};
 use nixling_exec_runner::record::{StatusPhase, StatusRecord};
 use nixling_exec_runner::spec::{ExecSpec, SpecCodec};
-use nixling_exec_runner::DETACHED_RETAINED_PER_VM;
 
 /// Drain buffer size (mirrors guestd's PIPE_READ_CHUNK).
 const DRAIN_CHUNK: usize = 64 * 1024;
@@ -344,27 +344,30 @@ fn spawn_watcher(
         let poll_ms = poll.as_millis().max(1);
         grace.div_ceil(poll_ms) as u32
     };
-    std::thread::spawn(move || loop {
-        if reaped.load(Ordering::SeqCst) {
-            return;
-        }
-        let ceiling_hit = ceiling_ms > 0 && clock.now_ms().saturating_sub(start_ms) >= ceiling_ms;
-        if cancel.is_cancelled() || ceiling_hit {
-            cancel_requested.store(true, Ordering::SeqCst);
-            signaller.signal_group(pgid, StopSignal::Term);
-            for _ in 0..grace_steps {
-                if reaped.load(Ordering::SeqCst) {
-                    return;
+    std::thread::spawn(move || {
+        loop {
+            if reaped.load(Ordering::SeqCst) {
+                return;
+            }
+            let ceiling_hit =
+                ceiling_ms > 0 && clock.now_ms().saturating_sub(start_ms) >= ceiling_ms;
+            if cancel.is_cancelled() || ceiling_hit {
+                cancel_requested.store(true, Ordering::SeqCst);
+                signaller.signal_group(pgid, StopSignal::Term);
+                for _ in 0..grace_steps {
+                    if reaped.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    std::thread::sleep(poll);
                 }
-                std::thread::sleep(poll);
+                if !reaped.load(Ordering::SeqCst) {
+                    signaller.signal_group(pgid, StopSignal::Kill);
+                    signaller.kill_workload_unit(&workload_unit_name);
+                }
+                return;
             }
-            if !reaped.load(Ordering::SeqCst) {
-                signaller.signal_group(pgid, StopSignal::Kill);
-                signaller.kill_workload_unit(&workload_unit_name);
-            }
-            return;
+            std::thread::sleep(poll);
         }
-        std::thread::sleep(poll);
     })
 }
 
@@ -421,7 +424,7 @@ fn read_spec(paths: &RunnerPaths) -> Result<ExecSpec, ()> {
 /// Validate the slot dir is a real, root-owned directory reached without
 /// traversing a symlink (dir-fd `O_NOFOLLOW` openat on each component).
 fn validate_slot_dir(paths: &RunnerPaths) -> Result<(), ()> {
-    use rustix::fs::{fstat, open, openat, Mode, OFlags};
+    use rustix::fs::{Mode, OFlags, fstat, open, openat};
 
     let dir_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let base = open(paths.base(), dir_flags, Mode::empty()).map_err(|_| ())?;
@@ -444,7 +447,7 @@ mod production {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use rustix::process::{kill_process_group, Pid, Signal};
+    use rustix::process::{Pid, Signal, kill_process_group};
 
     use super::{
         CancelSource, ChildHandle, ChildOutcome, Clock, Signaller, SpawnFailure, Spawner,
@@ -958,8 +961,8 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::{Condvar, Mutex as StdMutex};
 
-    use nixling_exec_runner::filering::FileRingReader;
     use nixling_exec_runner::RunnerEnv;
+    use nixling_exec_runner::filering::FileRingReader;
 
     fn scratch_slot() -> (PathBuf, RunnerPaths) {
         // Always place test scratch under the system temp dir (respects TMPDIR,
@@ -1601,9 +1604,10 @@ ControlGroup=/nixling.slice/nixling-exec.slice/nixling-exec-03.service
             signals.contains(&StopSignal::Kill),
             "KILL backstop fires when TERM is ignored: {signals:?}"
         );
-        assert!(proc
-            .killed_units()
-            .contains(&"nixling-exec-03-w.service".to_owned()));
+        assert!(
+            proc.killed_units()
+                .contains(&"nixling-exec-03-w.service".to_owned())
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1635,9 +1639,10 @@ ControlGroup=/nixling.slice/nixling-exec.slice/nixling-exec-03.service
         );
         assert_eq!(read_phase(&paths), StatusPhase::Cancelled);
         assert_eq!(proc.signals(), vec![StopSignal::Term]);
-        assert!(proc
-            .killed_units()
-            .contains(&"nixling-exec-03-w.service".to_owned()));
+        assert!(
+            proc.killed_units()
+                .contains(&"nixling-exec-03-w.service".to_owned())
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1668,9 +1673,10 @@ ControlGroup=/nixling.slice/nixling-exec.slice/nixling-exec-03.service
         );
         assert_eq!(read_phase(&paths), StatusPhase::Cancelled);
         assert!(proc.signals().contains(&StopSignal::Term));
-        assert!(proc
-            .killed_units()
-            .contains(&"nixling-exec-03-w.service".to_owned()));
+        assert!(
+            proc.killed_units()
+                .contains(&"nixling-exec-03-w.service".to_owned())
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

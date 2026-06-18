@@ -18,9 +18,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use nix::sys::socket::{
-    accept, bind, listen, socket, AddressFamily, Backlog, SockFlag, SockType, UnixAddr,
+    AddressFamily, Backlog, SockFlag, SockType, UnixAddr, accept, bind, listen, socket,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const SYSTEM_STATE_JSON: &str = r#"{
   "units": {

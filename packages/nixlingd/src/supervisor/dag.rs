@@ -809,10 +809,12 @@ mod tests {
             let report = executor.run(&audit_headless_dag()).await.unwrap();
             assert!(report.overall_ok);
             assert_eq!(report.history.len(), 5);
-            assert!(report
-                .history
-                .iter()
-                .all(|h| matches!(&h.outcome, NodeOutcome::Ready)));
+            assert!(
+                report
+                    .history
+                    .iter()
+                    .all(|h| matches!(&h.outcome, NodeOutcome::Ready))
+            );
             executor.runner.observed_order()
         };
         let expected = vec![
@@ -945,10 +947,12 @@ mod tests {
             executor.runner.observed_order(),
             vec!["host-reconcile", "ch"]
         );
-        assert!(report
-            .history
-            .iter()
-            .all(|entry| matches!(&entry.outcome, NodeOutcome::Ready)));
+        assert!(
+            report
+                .history
+                .iter()
+                .all(|entry| matches!(&entry.outcome, NodeOutcome::Ready))
+        );
     }
 
     #[tokio::test]

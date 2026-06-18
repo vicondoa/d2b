@@ -10,7 +10,7 @@ use std::os::fd::AsFd;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
-use nix::unistd::{chown, Gid, Uid};
+use nix::unistd::{Gid, Uid, chown};
 #[cfg(not(test))]
 use nix::unistd::{Group, User};
 use nixling_host::hardlink_farm;

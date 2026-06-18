@@ -550,10 +550,8 @@ fn wave_evidence_schema_cross_check() {
         if in_block && exit_re.is_match(line) {
             in_block = false;
         }
-        if in_block {
-            if let Some(caps) = key_re.captures(line) {
-                waves.push(caps[1].to_string());
-            }
+        if in_block && let Some(caps) = key_re.captures(line) {
+            waves.push(caps[1].to_string());
         }
     }
 

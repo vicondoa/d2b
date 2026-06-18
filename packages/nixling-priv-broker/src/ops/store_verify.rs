@@ -14,13 +14,13 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
-use nix::fcntl::{flock, FlockArg};
+use nix::fcntl::{FlockArg, flock};
 use nixling_core::bundle_resolver::ResolvedStoreViewIntent;
 use nixling_host::hardlink_farm;
 use nixling_ipc::broker_wire::{StoreVerifyResponse, StoreVerifyStatus, StoreVerifyUnknownReason};
 use serde::{Deserialize, Serialize};
 
-use crate::ops::store_sync::{run_store_sync_repair, StoreSyncError, StoreSyncOutcome};
+use crate::ops::store_sync::{StoreSyncError, StoreSyncOutcome, run_store_sync_repair};
 use crate::ops::store_view_posture::{posture_host_only_file, posture_store_view_matrix_paths};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -578,14 +578,13 @@ fn write_drift(
     let drifted = u32::try_from(drift.len()).unwrap_or(u32::MAX);
     let path = generation_integrity_path(store_root, generation_id);
     let mut record = IntegrityRecord::suspect(generation_id, drift);
-    if let Some(existing) = read_integrity_record(&path) {
-        if existing.state == IntegrityState::Suspect
-            && existing.generation_id.as_deref() == Some(generation_id)
-            && existing.drift_signature == record.drift_signature
-        {
-            record.repair_attempted = existing.repair_attempted;
-            record.audit_ref = existing.audit_ref;
-        }
+    if let Some(existing) = read_integrity_record(&path)
+        && existing.state == IntegrityState::Suspect
+        && existing.generation_id.as_deref() == Some(generation_id)
+        && existing.drift_signature == record.drift_signature
+    {
+        record.repair_attempted = existing.repair_attempted;
+        record.audit_ref = existing.audit_ref;
     }
     if let Err(err) = write_integrity_record(&path, &record) {
         return failed(vm, format!("write suspect integrity: {err}"));
@@ -728,10 +727,10 @@ fn write_integrity_record(path: &Path, record: &IntegrityRecord) -> std::io::Res
             format!("posture integrity record: {err}"),
         )
     })?;
-    if let Some(parent) = path.parent() {
-        if let Ok(dir) = File::open(parent) {
-            let _ = dir.sync_all();
-        }
+    if let Some(parent) = path.parent()
+        && let Ok(dir) = File::open(parent)
+    {
+        let _ = dir.sync_all();
     }
     Ok(())
 }
@@ -851,11 +850,13 @@ mod tests {
         assert_eq!(response.status, StoreVerifyStatus::Drift);
         assert_eq!(response.drifted, 1);
         assert_eq!(response.repaired, 0);
-        assert!(response
-            .remediation
-            .as_deref()
-            .unwrap()
-            .contains("rerun with --repair"));
+        assert!(
+            response
+                .remediation
+                .as_deref()
+                .unwrap()
+                .contains("rerun with --repair")
+        );
         let raw = std::fs::read_to_string(generation_integrity_path(
             &intent.hardlink_farm_path,
             &generation_id,
@@ -1005,11 +1006,13 @@ mod tests {
 
         let follow_up = run_store_verify(&intent, false);
         assert_eq!(follow_up.status, StoreVerifyStatus::Drift);
-        assert!(follow_up
-            .remediation
-            .as_deref()
-            .unwrap()
-            .contains("repair already attempted"));
+        assert!(
+            follow_up
+                .remediation
+                .as_deref()
+                .unwrap()
+                .contains("repair already attempted")
+        );
         let raw = std::fs::read_to_string(generation_integrity_path(
             &intent.hardlink_farm_path,
             &generation_id,

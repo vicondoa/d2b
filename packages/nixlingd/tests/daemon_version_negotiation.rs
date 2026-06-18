@@ -2,7 +2,7 @@ mod common;
 
 mod daemon_version_negotiation {
     use super::common::{
-        assert_contains, spawn_nixlingd_serve, test_client, DaemonFixture, TestPeer, HELLO_FRAME,
+        DaemonFixture, HELLO_FRAME, TestPeer, assert_contains, spawn_nixlingd_serve, test_client,
     };
 
     fn run_case(frames: &[&str], expect_rc: i32, expect_a: &str, expect_b: &str) {

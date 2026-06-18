@@ -46,7 +46,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use nixling_core::bundle_resolver::{intent_id_hosts_host, intent_id_nft_env, BundleResolver};
+use nixling_core::bundle_resolver::{BundleResolver, intent_id_hosts_host, intent_id_nft_env};
 use sha2::Digest as _;
 
 /// Default parent dir holding `<env>.conf` for each net VM.

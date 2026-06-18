@@ -4,7 +4,7 @@ mod common;
 
 use serde_json::Value;
 
-use common::{audit_file_metadata, TestBroker};
+use common::{TestBroker, audit_file_metadata};
 
 #[test]
 fn export_audit_requires_admin_and_exports_op_audit_records() {

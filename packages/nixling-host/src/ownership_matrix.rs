@@ -350,10 +350,10 @@ fn walk_children(root: &Path, expected: &Ownership, out: &mut Vec<OwnershipMisma
                 continue;
             }
         };
-        if let Some(dev) = root_dev {
-            if meta.dev() != dev {
-                continue;
-            }
+        if let Some(dev) = root_dev
+            && meta.dev() != dev
+        {
+            continue;
         }
         let actual = Ownership {
             uid: meta.uid(),

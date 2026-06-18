@@ -70,19 +70,19 @@ fn splice_managed_block(existing: &str, new_block: &str) -> String {
 }
 
 fn splice_marker_block(existing: &str, new_block: &str, begin: &str, end: &str) -> String {
-    if let Some(begin_index) = existing.find(begin) {
-        if let Some(end_rel) = existing[begin_index..].find(end) {
-            let end_index = begin_index + end_rel + end.len();
-            let suffix_start = existing[end_index..]
-                .find('\n')
-                .map(|offset| end_index + offset + 1)
-                .unwrap_or(existing.len());
-            let mut out = String::with_capacity(existing.len() + new_block.len());
-            out.push_str(&existing[..begin_index]);
-            out.push_str(new_block);
-            out.push_str(&existing[suffix_start..]);
-            return out;
-        }
+    if let Some(begin_index) = existing.find(begin)
+        && let Some(end_rel) = existing[begin_index..].find(end)
+    {
+        let end_index = begin_index + end_rel + end.len();
+        let suffix_start = existing[end_index..]
+            .find('\n')
+            .map(|offset| end_index + offset + 1)
+            .unwrap_or(existing.len());
+        let mut out = String::with_capacity(existing.len() + new_block.len());
+        out.push_str(&existing[..begin_index]);
+        out.push_str(new_block);
+        out.push_str(&existing[suffix_start..]);
+        return out;
     }
 
     let mut out = String::from(existing);
@@ -182,18 +182,18 @@ pub fn remove_marker_block(
 }
 
 fn remove_marker_block_from_existing(existing: &str, begin: &str, end: &str) -> String {
-    if let Some(begin_index) = existing.find(begin) {
-        if let Some(end_rel) = existing[begin_index..].find(end) {
-            let end_index = begin_index + end_rel + end.len();
-            let suffix_start = existing[end_index..]
-                .find('\n')
-                .map(|offset| end_index + offset + 1)
-                .unwrap_or(existing.len());
-            let mut out = String::with_capacity(existing.len());
-            out.push_str(&existing[..begin_index]);
-            out.push_str(&existing[suffix_start..]);
-            return out;
-        }
+    if let Some(begin_index) = existing.find(begin)
+        && let Some(end_rel) = existing[begin_index..].find(end)
+    {
+        let end_index = begin_index + end_rel + end.len();
+        let suffix_start = existing[end_index..]
+            .find('\n')
+            .map(|offset| end_index + offset + 1)
+            .unwrap_or(existing.len());
+        let mut out = String::with_capacity(existing.len());
+        out.push_str(&existing[..begin_index]);
+        out.push_str(&existing[suffix_start..]);
+        return out;
     }
     existing.to_owned()
 }

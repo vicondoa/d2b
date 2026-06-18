@@ -715,7 +715,7 @@ impl CgroupBackend for RealCgroupBackend {
     }
 
     fn read_file(&self, path: &Path) -> Result<String, CgroupError> {
-        use rustix::fs::{open, Mode, OFlags};
+        use rustix::fs::{Mode, OFlags, open};
         let fd = open(
             path,
             OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -737,7 +737,7 @@ impl CgroupBackend for RealCgroupBackend {
     }
 
     fn write_file(&self, path: &Path, contents: &str) -> Result<(), CgroupError> {
-        use rustix::fs::{open, Mode, OFlags};
+        use rustix::fs::{Mode, OFlags, open};
         let fd = open(
             path,
             OFlags::WRONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -767,7 +767,7 @@ impl CgroupBackend for RealCgroupBackend {
     }
 
     fn fchown(&self, path: &Path, uid: u32, gid: u32) -> Result<(), CgroupError> {
-        use rustix::fs::{open, Mode, OFlags};
+        use rustix::fs::{Mode, OFlags, open};
         // v1.1.1 kernel-correctness fix: O_PATH descriptors can NOT
         // be passed to fchown(2) — the syscall returns EBADF on
         // Linux per `man 2 fchown` because O_PATH fds have no

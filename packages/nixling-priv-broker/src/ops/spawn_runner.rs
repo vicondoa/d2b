@@ -195,7 +195,7 @@ pub fn preflight(input: &SpawnRunnerPlanInput) -> Result<SpawnRunnerPlan, SpawnR
                 return Err(SpawnRunnerError::InvalidEnvEntry {
                     index: i,
                     entry: e.clone(),
-                })
+                });
             }
         }
     }

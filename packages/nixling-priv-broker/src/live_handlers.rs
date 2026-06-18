@@ -30,7 +30,7 @@ use crate::ops::exec_reconcile::{
     GeneratedSshKey, IpRouteVerb, ReconcileExecError, ReconcileExecutor,
 };
 use crate::ops::spawn_runner::{
-    build_cstring_vectors, preflight, SpawnRunnerError, SpawnRunnerPlan, SpawnRunnerPlanInput,
+    SpawnRunnerError, SpawnRunnerPlan, SpawnRunnerPlanInput, build_cstring_vectors, preflight,
 };
 use nixling_core::bundle_resolver::{
     HostRuntime, ResolvedActivationIntent, ResolvedStoreViewIntent,
@@ -38,7 +38,7 @@ use nixling_core::bundle_resolver::{
 use nixling_core::minijail_profile::CgroupPlacement;
 use nixling_host::hardlink_farm;
 use nixling_ipc::broker_wire::ActivationMode;
-use rustix::fs::{Mode, OFlags, ResolveFlags, CWD};
+use rustix::fs::{CWD, Mode, OFlags, ResolveFlags};
 
 /// Aggregate error type for live handlers. Kept narrow so the
 /// dispatch layer can match on the precise failure shape.
@@ -103,10 +103,9 @@ impl std::fmt::Display for LiveHandlerError {
             Self::PidfdOpenFailed { pid, detail } => {
                 write!(f, "pidfd_open({pid}) failed: {detail}")
             }
-            Self::ProcStatReadFailed { pid, detail } => write!(
-                f,
-                "/proc/{pid}/stat read after pidfd_open: {detail}"
-            ),
+            Self::ProcStatReadFailed { pid, detail } => {
+                write!(f, "/proc/{pid}/stat read after pidfd_open: {detail}")
+            }
             Self::SpawnPreflight(e) => write!(f, "spawn preflight rejected: {e}"),
             Self::SpawnFailed { detail } => write!(f, "clone3/spawn failed: {detail}"),
             Self::ReconcileExec(e) => write!(f, "reconcile exec: {e}"),
@@ -338,13 +337,13 @@ pub fn live_run_activation(
             intent.vm, store_view_intent.vm,
         )));
     }
-    if let Some(generation_number) = intent.generation_number {
-        if generation_number != store_view_intent.generation {
-            return Err(LiveHandlerError::Activation(format!(
-                "activation/store-view generation mismatch: activation={} store-view={}",
-                generation_number, store_view_intent.generation,
-            )));
-        }
+    if let Some(generation_number) = intent.generation_number
+        && generation_number != store_view_intent.generation
+    {
+        return Err(LiveHandlerError::Activation(format!(
+            "activation/store-view generation mismatch: activation={} store-view={}",
+            generation_number, store_view_intent.generation,
+        )));
     }
 
     let previous_current = read_current_generation(&store_view_intent.hardlink_farm_path)?;
@@ -829,13 +828,13 @@ pub fn live_usbip_unbind(
     lock_path: &Path,
     vm_name: &str,
 ) -> Result<(), LiveHandlerError> {
-    if let Some(observed) = crate::ops::usbip_lock::peek_owner(lock_path) {
-        if observed != vm_name {
-            return Err(LiveHandlerError::UsbipLock(format!(
-                "usbip unbind refused: bus_id={bus_id} lock at {} owned by {observed} but caller is {vm_name}",
-                lock_path.display()
-            )));
-        }
+    if let Some(observed) = crate::ops::usbip_lock::peek_owner(lock_path)
+        && observed != vm_name
+    {
+        return Err(LiveHandlerError::UsbipLock(format!(
+            "usbip unbind refused: bus_id={bus_id} lock at {} owned by {observed} but caller is {vm_name}",
+            lock_path.display()
+        )));
     }
     // No lock present → idempotent unbind (already released). Still
     // run the shellout so the kernel state catches up.
@@ -1355,13 +1354,13 @@ pub fn live_usbip_proxy_reconcile(
     expectations: &[(String, String, std::path::PathBuf)],
 ) -> Result<(), LiveHandlerError> {
     for (bus_id, vm_name, lock_path) in expectations {
-        if let Some(observed) = crate::ops::usbip_lock::peek_owner(lock_path) {
-            if &observed != vm_name {
-                return Err(LiveHandlerError::UsbipLock(format!(
-                    "usbip proxy reconcile: bus_id={bus_id} lock at {} owned by {observed} but bundle expects {vm_name}",
-                    lock_path.display()
-                )));
-            }
+        if let Some(observed) = crate::ops::usbip_lock::peek_owner(lock_path)
+            && &observed != vm_name
+        {
+            return Err(LiveHandlerError::UsbipLock(format!(
+                "usbip proxy reconcile: bus_id={bus_id} lock at {} owned by {observed} but bundle expects {vm_name}",
+                lock_path.display()
+            )));
         }
     }
     Ok(())
@@ -1486,7 +1485,7 @@ fn prepare_runner_cgroup_fd(
     placement: &CgroupPlacement,
 ) -> Result<Option<OwnedFd>, LiveHandlerError> {
     use nixling_host::cgroup::RealCgroupBackend;
-    use rustix::fs::{open, Mode, OFlags};
+    use rustix::fs::{Mode, OFlags, open};
 
     let backend = RealCgroupBackend::new();
     let uid = rustix::process::geteuid().as_raw();
@@ -1854,17 +1853,17 @@ fn setfacl_verified_device(
         let after_file = File::from(after_fd);
         let after = verified_char_device_metadata(path, &after_file)?;
         if before != after {
-            if operation == "-m" {
-                if let Some(revoke_spec) = acl_spec.rsplit_once(':').map(|(entry, _)| entry) {
-                    let _ = Command::new("/run/current-system/sw/bin/setfacl")
-                        .arg("-x")
-                        .arg(revoke_spec)
-                        .arg(path)
-                        .stdin(Stdio::null())
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::null())
-                        .status();
-                }
+            if operation == "-m"
+                && let Some(revoke_spec) = acl_spec.rsplit_once(':').map(|(entry, _)| entry)
+            {
+                let _ = Command::new("/run/current-system/sw/bin/setfacl")
+                    .arg("-x")
+                    .arg(revoke_spec)
+                    .arg(path)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
             }
             return Err(format!(
                 "setfacl target changed while applying ACL on {}: before={before:?} after={after:?}",
@@ -2360,17 +2359,17 @@ fn grant_guest_control_traversal_acls(leaf: &Path) -> Result<(), String> {
         };
         let needs = dir_needs_daemon_traverse(dir)
             .map_err(|failure| failure.guest_control_detail("grant", target_class))?;
-        if needs == Some(true) {
-            if let Some((dev, ino)) = setfacl_guest_control(
+        if needs == Some(true)
+            && let Some((dev, ino)) = setfacl_guest_control(
                 dir,
                 "-m",
                 &format!("u:{GUEST_CONTROL_DAEMON_PRINCIPAL}:--x"),
                 AclPathKind::Directory,
                 "grant",
                 target_class,
-            )? {
-                audit_guest_control_vsock_acl("grant", target_class, dev, ino);
-            }
+            )?
+        {
+            audit_guest_control_vsock_acl("grant", target_class, dev, ino);
         }
     }
     Ok(())
@@ -3755,7 +3754,10 @@ mod tests {
         let spec = guest_control_fs_socket_acl_spec(1628571);
         assert_eq!(spec, "u:1628571:rw,m::rw");
         assert!(spec.contains("m::rw"), "mask token missing: {spec}");
-        assert!(!spec.contains('x'), "mask/entry must not grant execute: {spec}");
+        assert!(
+            !spec.contains('x'),
+            "mask/entry must not grant execute: {spec}"
+        );
     }
 
     #[test]
@@ -3769,13 +3771,15 @@ mod tests {
             stage: SetfaclStage::Apply,
             errno_kind: std::io::ErrorKind::PermissionDenied,
             raw_os_error: Some(13),
-            legacy_detail:
-                "setfacl -m u:1628571:rw,m::rw on \
+            legacy_detail: "setfacl -m u:1628571:rw,m::rw on \
                  /run/nixling/vms/corp-vm/guest-control/nl-gctl.sock: denied"
-                    .to_owned(),
+                .to_owned(),
         };
         let detail = failure.guest_control_fs_detail("grant", "gctlfs-socket");
-        assert!(!detail.contains('/'), "detail must not embed any path: {detail}");
+        assert!(
+            !detail.contains('/'),
+            "detail must not embed any path: {detail}"
+        );
         assert!(
             !detail.contains("nl-gctl.sock"),
             "detail leaked socket name: {detail}"

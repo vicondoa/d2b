@@ -24,11 +24,11 @@ use std::{
 use clap::Parser;
 use env_logger::Env;
 use nixling_wayland_filter::filter::{
-    build_state, install_client_handlers, FilterClientHandler, FilterStateHandler,
+    FilterClientHandler, FilterStateHandler, build_state, install_client_handlers,
 };
 use nixling_wayland_filter::{
     diag::DiagRateLimiter,
-    dmabuf::{parse_filter as parse_dmabuf_filter, DmabufFilter},
+    dmabuf::{DmabufFilter, parse_filter as parse_dmabuf_filter},
     policy::{FilterPolicy, PolicyInput},
 };
 
@@ -160,14 +160,14 @@ fn main() {
     let listen_path = &args.listen;
 
     // Remove a stale socket if present so restart cycles are idempotent.
-    if listen_path.exists() {
-        if let Err(e) = std::fs::remove_file(listen_path) {
-            eprintln!(
-                "nixling-wayland-filter: failed to remove stale socket `{}`: {e}",
-                listen_path.display()
-            );
-            std::process::exit(1);
-        }
+    if listen_path.exists()
+        && let Err(e) = std::fs::remove_file(listen_path)
+    {
+        eprintln!(
+            "nixling-wayland-filter: failed to remove stale socket `{}`: {e}",
+            listen_path.display()
+        );
+        std::process::exit(1);
     }
 
     let listener = match UnixListener::bind(listen_path) {
