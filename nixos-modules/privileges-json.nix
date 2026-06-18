@@ -773,6 +773,18 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "PrepareSwtpmDir",
+    "subject": "fs",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "CreateOrReconcileUsersGroups",
     "subject": "account",
     "scope": "global/per-role",
