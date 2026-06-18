@@ -277,6 +277,13 @@ impl PidfdTable {
     /// Returns the number of entries dropped. Snapshot is
     /// re-persisted to disk if any entries were dropped.
     pub fn prune_dead_entries(&self) -> Result<usize, PidfdTableError> {
+        // Serialize the mutate + snapshot sequence against concurrent
+        // register/deregister+snapshot from other VMs (same invariant as
+        // `register_node_pidfd`): without this guard a prune snapshot can
+        // land between another thread's register and snapshot and drop the
+        // newer entry on disk. Neither caller (`is_running`, vm-start
+        // dispatch) holds this guard, so acquiring it here is deadlock-free.
+        let _mguard = self.mutation_guard();
         let mut to_drop: Vec<(String, String)> = Vec::new();
         {
             let entries = self.entries.read();

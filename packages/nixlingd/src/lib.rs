@@ -202,15 +202,20 @@ const HELLO_READ_DEADLINE: Duration = Duration::from_secs(10);
 /// handler slot. Cleared before an exec handoff (the exec owner blocks
 /// on the PTY indefinitely).
 const REQUEST_READ_DEADLINE: Duration = Duration::from_secs(60);
-/// Bound for draining a rejected peer's already-buffered input before the
-/// socket is closed. Authz-first / busy refusals are written BEFORE the
-/// peer's hello is read; closing a SEQPACKET socket with unread input makes
-/// the kernel send RST, which the peer observes as a connection reset
-/// instead of cleanly reading the rejection frame. Draining the pending
-/// input first makes the close graceful. The normal case returns in
-/// microseconds (EOF once the peer closes after reading the rejection); this
-/// deadline only bounds a misbehaving peer.
-const REJECTION_DRAIN_DEADLINE: Duration = Duration::from_secs(2);
+/// Per-`recv` bound for draining a rejected peer's already-buffered input
+/// before the socket is closed. Authz-first / busy refusals are written
+/// BEFORE the peer's hello is read; closing a SEQPACKET socket with unread
+/// input makes the kernel send RST, which the peer observes as a connection
+/// reset instead of cleanly reading the rejection frame. Draining the
+/// pending input first makes the close graceful.
+///
+/// This drain runs on the ACCEPT LOOP (the refusal is decided before a
+/// handler thread is spawned), so the timeout MUST stay short: the refused
+/// peer's hello is already buffered on the SEQPACKET socket, so a
+/// cooperating peer drains in microseconds, and a silent/misbehaving peer is
+/// bounded to a few `recv` timeouts (≈tens of ms) instead of stalling every
+/// other client's `accept()`.
+const REJECTION_DRAIN_DEADLINE: Duration = Duration::from_millis(10);
 
 /// Resolve the in-flight connection cap from the environment, falling
 /// back to [`DEFAULT_MAX_INFLIGHT_CONNECTIONS`]. A value of `0` or an
@@ -5089,6 +5094,13 @@ impl VmStartRunner<'_> {
             let _ = self.state.pidfd_table.deregister(vm, &role_id);
             return Err(format!("pidfd-snapshot:{error}"));
         }
+        // The pidfd-table register + snapshot sequence is now complete and
+        // consistent, so release the serialization guard BEFORE
+        // `write_runner_snapshot` (which writes a separate runner-snapshot
+        // file and never touches the pidfd table). Holding it across the
+        // failure path below would self-deadlock: `cleanup_vm_start_registration`
+        // re-acquires this same non-reentrant guard.
+        drop(_mguard);
         if let Err(error) = write_runner_snapshot(
             self.state,
             vm,

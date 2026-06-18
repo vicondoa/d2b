@@ -142,14 +142,10 @@ impl<'a> PidfdLivenessProbe<'a> {
     }
 
     fn gather(&self) -> LivenessInputs {
-        // PEEK the buffered broker exit status (never consumes).
-        let reap_status = self
-            .reap_log
-            .peek_for(&self.vm, &self.role)
-            .map(|notif| notif.exit_status);
-
-        // Dup the daemon-held pidfd for an authoritative, reap-independent
-        // POLLIN poll. Absent entry => rollback already removed it.
+        // Dup the daemon-held pidfd FIRST so we know the currently
+        // registered pid. Absent entry => rollback already removed it; in
+        // that case there is no current runner to attribute a buffered exit
+        // to, so we must not surface a stale reap status.
         let Some((pidfd, pid, registered_start_time)) =
             self.pidfd_table.dup_pidfd_for(&self.vm, &self.role)
         else {
@@ -157,9 +153,20 @@ impl<'a> PidfdLivenessProbe<'a> {
                 entry_present: false,
                 pidfd_readable: None,
                 start_time: StartTimeObs::Unreadable,
-                reap_status,
+                reap_status: None,
             };
         };
+
+        // PEEK the buffered broker exit status (never consumes), but only
+        // accept it when it belongs to the CURRENTLY registered pid. The
+        // reap-log is keyed by `(vm, role)` and can still hold a stale
+        // notification for an OLDER runner of the same role; attributing it
+        // to a freshly-registered pid would falsely fast-fail a live runner.
+        let reap_status = self
+            .reap_log
+            .peek_for(&self.vm, &self.role)
+            .filter(|notif| notif.pid == pid)
+            .map(|notif| notif.exit_status);
 
         let pidfd_readable = poll_pollin(&pidfd);
 
@@ -301,5 +308,67 @@ mod tests {
             reap_status: None,
         };
         assert_eq!(classify(&inputs), RunnerLiveness::Exited(None));
+    }
+
+    /// Regression: a buffered reap notification for an OLDER runner of the
+    /// same `(vm, role)` (different pid) must NOT mark a freshly-registered,
+    /// still-live runner as Exited. The reap-log is keyed by `(vm, role)`, so
+    /// `gather()` must pid-match the peeked notification against the
+    /// currently-registered pid before treating it as terminal.
+    #[test]
+    fn stale_same_role_reap_for_different_pid_does_not_fast_fail_live_runner() {
+        use crate::supervisor::pidfd_table::{BrokerReapLog, PidfdEntry, PidfdTable};
+        use nixling_ipc::broker_wire::{ChildExitStatus, ChildReapedNotification};
+
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id() as i32;
+        let pidfd = rustix::process::pidfd_open(
+            rustix::process::Pid::from_child(&child),
+            rustix::process::PidfdFlags::empty(),
+        )
+        .expect("pidfd_open child");
+        let start_time = read_proc_start_time_pub(pid)
+            .expect("read start time")
+            .expect("child present");
+
+        let table = PidfdTable::new(
+            std::env::temp_dir().join(format!("nl-readiness-liveness-test-{pid}.json")),
+        );
+        table
+            .register(
+                "work".into(),
+                "swtpm".into(),
+                PidfdEntry {
+                    pidfd,
+                    pid,
+                    start_time_ticks: start_time,
+                },
+            )
+            .expect("register live runner");
+
+        let reap_log = BrokerReapLog::new();
+        // STALE reap for the same runner_id but a DIFFERENT (older) pid.
+        reap_log.insert(ChildReapedNotification {
+            runner_id: "work:swtpm".to_owned(),
+            pid: pid.wrapping_sub(1),
+            exit_status: ChildExitStatus {
+                kind: ChildExitKind::Exited,
+                code: Some(1),
+                signal: None,
+            },
+            reaped_at_ms: 0,
+        });
+
+        let probe = PidfdLivenessProbe::new(&table, &reap_log, "work", "swtpm");
+        let liveness = probe.probe();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            !matches!(liveness, RunnerLiveness::Exited(_)),
+            "stale same-role reap for a different pid must not fast-fail a live runner; got {liveness:?}"
+        );
     }
 }
