@@ -981,6 +981,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "nixling-constellation-core",
  "nixling-constellation-provider",
+ "nixling-ipc",
  "prost 0.13.5",
  "serde_json",
 ]

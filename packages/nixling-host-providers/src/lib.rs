@@ -26,10 +26,18 @@ const LOCAL_MICROVM_PROVIDER_ID: &str = "local-microvm";
 const LOCAL_CROSS_DOMAIN_WAYLAND_PROVIDER_ID: &str = "local-cross-domain-wayland";
 
 /// RuntimeProvider adapter for the local Cloud Hypervisor microVM path.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LocalMicroVmProvider {
     provider_id: ProviderId,
     ch_input: ChArgvInput,
+}
+
+impl std::fmt::Debug for LocalMicroVmProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalMicroVmProvider")
+            .field("provider_id", &self.provider_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LocalMicroVmProvider {
@@ -76,11 +84,7 @@ impl RuntimeProvider for LocalMicroVmProvider {
 
     fn capabilities(&self) -> RuntimeCapabilitySet {
         RuntimeCapabilitySet {
-            caps: CapabilitySet::from_caps([
-                Capability::Lifecycle,
-                Capability::Vsock,
-                Capability::Virtiofs,
-            ]),
+            caps: CapabilitySet::from_caps([Capability::Vsock, Capability::Virtiofs]),
         }
     }
 
@@ -113,11 +117,18 @@ impl RuntimeProvider for LocalMicroVmProvider {
 }
 
 /// DisplayProvider adapter for the local cross-domain Wayland proxy path.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LocalCrossDomainWaylandProvider {
     provider_id: ProviderId,
     argv_input: WaylandProxyArgvInput,
-    dmabuf: bool,
+}
+
+impl std::fmt::Debug for LocalCrossDomainWaylandProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalCrossDomainWaylandProvider")
+            .field("provider_id", &self.provider_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LocalCrossDomainWaylandProvider {
@@ -135,16 +146,15 @@ impl LocalCrossDomainWaylandProvider {
         Self::with_provider_id_and_dmabuf(provider_id, argv_input, true)
     }
 
-    /// Construct a provider with an explicit dmabuf advertisement.
+    /// Construct a provider with an explicit dmabuf preference.
     pub fn with_provider_id_and_dmabuf(
         provider_id: ProviderId,
         argv_input: WaylandProxyArgvInput,
-        dmabuf: bool,
+        _dmabuf: bool,
     ) -> Self {
         Self {
             provider_id,
             argv_input,
-            dmabuf,
         }
     }
 
@@ -178,9 +188,9 @@ impl DisplayProvider for LocalCrossDomainWaylandProvider {
 
     fn capabilities(&self) -> DisplayCapabilitySet {
         DisplayCapabilitySet {
-            caps: CapabilitySet::from_caps([Capability::WindowForwarding]),
-            shm_buffers: true,
-            dmabuf: self.dmabuf,
+            caps: CapabilitySet::from_caps([]),
+            shm_buffers: false,
+            dmabuf: false,
             reconnect: false,
         }
     }
@@ -426,6 +436,62 @@ mod tests {
         assert_eq!(from_adapter, direct);
     }
 
+    #[test]
+    fn local_provider_debug_redacts_argv_inputs() {
+        let mut ch_input = representative_ch_input();
+        ch_input.ch_binary_path = "/nix/store/debug-redact-ch-bin/bin/cloud-hypervisor".to_owned();
+        ch_input.kernel_path = "/nix/store/debug-redact-kernel/vmlinux".to_owned();
+        ch_input.cmdline = "debug-redact-cmdline init=/nix/store/debug-redact-init".to_owned();
+        ch_input.api_socket_path = "debug-redact-api.sock".to_owned();
+        ch_input.extra_args = vec![
+            "--debug-redact-extra-flag".to_owned(),
+            "/run/nixling/debug-redact-extra-path".to_owned(),
+        ];
+        ch_input.fs_shares.push(ChFsShare {
+            socket: "debug-redact-virtiofs.sock".to_owned(),
+            tag: "debug-redact-tag".to_owned(),
+        });
+
+        let runtime_debug = format!("{:?}", LocalMicroVmProvider::new(ch_input));
+        assert!(runtime_debug.contains("LocalMicroVmProvider"));
+        assert!(runtime_debug.contains(LOCAL_MICROVM_PROVIDER_ID));
+        for forbidden in [
+            "debug-redact-ch-bin",
+            "debug-redact-kernel",
+            "debug-redact-cmdline",
+            "debug-redact-init",
+            "debug-redact-api.sock",
+            "debug-redact-extra-flag",
+            "debug-redact-extra-path",
+            "debug-redact-virtiofs.sock",
+            "debug-redact-tag",
+        ] {
+            assert!(
+                !runtime_debug.contains(forbidden),
+                "runtime provider Debug leaked {forbidden}: {runtime_debug}"
+            );
+        }
+
+        let wayland_debug = format!(
+            "{:?}",
+            LocalCrossDomainWaylandProvider::new(WaylandProxyArgvInput::for_vm(
+                "debug-redact-wayland"
+            ))
+        );
+        assert!(wayland_debug.contains("LocalCrossDomainWaylandProvider"));
+        assert!(wayland_debug.contains(LOCAL_CROSS_DOMAIN_WAYLAND_PROVIDER_ID));
+        for forbidden in [
+            "debug-redact-wayland",
+            "/run/nixling-wlproxy/debug-redact-wayland",
+            "nixling-debug-redact-wayland-wlproxy",
+        ] {
+            assert!(
+                !wayland_debug.contains(forbidden),
+                "Wayland provider Debug leaked {forbidden}: {wayland_debug}"
+            );
+        }
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn async_trait_methods_complete_on_current_thread_runtime() {
         let runtime_provider = LocalMicroVmProvider::new(representative_ch_input());
@@ -444,6 +510,7 @@ mod tests {
             .await
             .expect_err("start is intentionally not wired");
         assert_eq!(start_err.kind(), ErrorKind::UnsupportedFeature);
+        assert!(!runtime_provider.capabilities().has(Capability::Lifecycle));
 
         let display_provider = LocalCrossDomainWaylandProvider::new(representative_wayland_input());
         let display_err = DisplayProvider::open_display_session(
@@ -455,21 +522,24 @@ mod tests {
         .await
         .expect_err("display opening is intentionally not wired");
         assert_eq!(display_err.kind(), ErrorKind::UnsupportedFeature);
+        assert!(!display_provider
+            .capabilities()
+            .has(Capability::WindowForwarding));
     }
 
     #[test]
     fn local_capabilities_advertise_current_boundaries() {
         let runtime = LocalMicroVmProvider::new(representative_ch_input()).capabilities();
-        assert!(runtime.has(Capability::Lifecycle));
+        assert!(!runtime.has(Capability::Lifecycle));
         assert!(runtime.has(Capability::Vsock));
         assert!(runtime.has(Capability::Virtiofs));
 
         let display =
             LocalCrossDomainWaylandProvider::new(representative_wayland_input()).capabilities();
-        assert!(display.has(Capability::WindowForwarding));
+        assert!(!display.has(Capability::WindowForwarding));
         assert!(!display.has(Capability::Clipboard));
-        assert!(display.shm_buffers);
-        assert!(display.dmabuf);
+        assert!(!display.shm_buffers);
+        assert!(!display.dmabuf);
         assert!(!display.reconnect);
     }
 }

@@ -23,9 +23,9 @@ nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
 # skeletons in src/constellation_stubs.rs against this trait surface; they
 # are compile-only and NOT called from the running daemon (zero behavior
 # change).
-nixling-constellation-core = { path = "../nixling-constellation-core" }
-nixling-constellation-provider = { path = "../nixling-constellation-provider" }
-nixling-constellation-router = { path = "../nixling-constellation-router" }
+nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
+nixling-constellation-provider = { path = "../nixling-constellation-provider", version = "0.0.0-bootstrap" }
+nixling-constellation-router = { path = "../nixling-constellation-router", version = "0.0.0-bootstrap" }
 protobuf = "3.7.2"
 semver = "1"
 serde.workspace = true

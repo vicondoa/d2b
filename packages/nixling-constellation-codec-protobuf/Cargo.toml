@@ -20,8 +20,9 @@ workspace = true
 # This crate is the ONLY contract crate permitted to link `prost`; the
 # routing/operation layer never depends on it (dependency-direction gate).
 [dependencies]
-nixling-constellation-core = { path = "../nixling-constellation-core" }
-nixling-constellation-provider = { path = "../nixling-constellation-provider" }
+nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
+nixling-constellation-provider = { path = "../nixling-constellation-provider", version = "0.0.0-bootstrap" }
+nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
 prost = "0.13"
 
 [dev-dependencies]

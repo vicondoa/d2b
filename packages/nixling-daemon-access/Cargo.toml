@@ -16,8 +16,8 @@ workspace = true
 # public.sock wire (delegates to nixling-ipc public-wire types; no new
 # wire). relay/direct_tls are declared-but-unimplemented slots.
 [dependencies]
-nixling-constellation-core = { path = "../nixling-constellation-core" }
-nixling-constellation-provider = { path = "../nixling-constellation-provider" }
+nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
+nixling-constellation-provider = { path = "../nixling-constellation-provider", version = "0.0.0-bootstrap" }
 nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 nix = { version = "0.29", default-features = false, features = ["socket"] }

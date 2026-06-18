@@ -3,17 +3,16 @@
 //! The local binding intentionally speaks the existing public daemon wire:
 //! AF_UNIX `SOCK_SEQPACKET`, one 4-byte little-endian length-prefixed JSON
 //! body per packet, `hello` negotiation, then the current type-tagged `list`
-//! request. The historical wire has no node id and no exact v2 state for
-//! `pending-restart` or `unknown`; list entries are mapped to
-//! [`WorkloadSummary`] with node id `local`, VM name as workload id, declared
-//! graphics/USB/common VM capabilities, and a fail-closed `Unknown` → `Failed`
-//! state conversion.
+//! request. The primary `vm_list` API returns a daemon-access-local shape that
+//! preserves the public-wire list response exactly; the v2 [`WorkloadSummary`]
+//! projection remains available only as an explicitly lossy compatibility
+//! helper.
 
 pub mod direct_tls;
 pub mod relay;
 
 use std::{
-    io,
+    fmt, io,
     os::{fd::AsRawFd, unix::net::UnixStream as StdUnixStream},
     path::{Path, PathBuf},
 };
@@ -30,7 +29,10 @@ use nixling_constellation_provider::{
     types::{DaemonAccessMode, SafeLabel, TransportSession, TransportTarget},
 };
 use nixling_ipc::{
-    public_wire::{ListEntry, ListRequest, ListResponse, VmLifecycleState},
+    public_wire::{
+        ListEntry, ListRequest, ListResponse, PublicVmServices, RuntimeSummary, VmLifecycle,
+        VmLifecycleState,
+    },
     FeatureFlag, Hello, HelloOk, HelloRejected, KnownFeatureFlag, SemverRange, MAX_FRAME_SIZE,
     PUBLIC_SOCKET_PATH,
 };
@@ -46,12 +48,185 @@ pub const DEFAULT_PUBLIC_SOCKET_PATH: &str = PUBLIC_SOCKET_PATH;
 const DEFAULT_CLIENT_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 const LOCAL_NODE_ID: &str = "local";
 
+/// Lossless daemon list response for the current public socket contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DaemonVmList {
+    pub vms: Vec<DaemonVmListEntry>,
+}
+
+impl DaemonVmList {
+    /// Borrow the daemon-reported VM entries.
+    pub fn entries(&self) -> &[DaemonVmListEntry] {
+        &self.vms
+    }
+
+    /// Consume the list into its daemon-reported VM entries.
+    pub fn into_entries(self) -> Vec<DaemonVmListEntry> {
+        self.vms
+    }
+
+    /// Project the lossless daemon list into v2 workload summaries.
+    ///
+    /// This projection is intentionally lossy: the v2 summary type has no
+    /// fields for daemon runtime detail or pending-restart and cannot
+    /// distinguish every daemon lifecycle state.
+    pub fn workload_summaries_lossy(
+        &self,
+        node_id: &NodeId,
+    ) -> ProviderResult<Vec<WorkloadSummary>> {
+        self.vms
+            .iter()
+            .map(|entry| workload_summary_lossy(entry, node_id))
+            .collect()
+    }
+}
+
+impl From<ListResponse> for DaemonVmList {
+    fn from(response: ListResponse) -> Self {
+        Self {
+            vms: response.vms.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Lossless daemon list entry for one VM.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DaemonVmListEntry {
+    pub env: Option<String>,
+    pub graphics: bool,
+    pub is_net_vm: bool,
+    pub lifecycle: DaemonVmLifecycle,
+    pub name: String,
+    pub runtime: DaemonRuntimeSummary,
+    pub services: DaemonPublicVmServices,
+    pub ssh_user: Option<String>,
+    pub static_ip: Option<String>,
+    pub tpm: bool,
+    pub usbip: bool,
+    pub vm: String,
+}
+
+impl From<ListEntry> for DaemonVmListEntry {
+    fn from(entry: ListEntry) -> Self {
+        Self {
+            env: entry.env,
+            graphics: entry.graphics,
+            is_net_vm: entry.is_net_vm,
+            lifecycle: entry.lifecycle.into(),
+            name: entry.name,
+            runtime: entry.runtime.into(),
+            services: entry.services.into(),
+            ssh_user: entry.ssh_user,
+            static_ip: entry.static_ip,
+            tpm: entry.tpm,
+            usbip: entry.usbip,
+            vm: entry.vm,
+        }
+    }
+}
+
+/// Lossless daemon lifecycle state and pending-restart flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DaemonVmLifecycle {
+    pub pending_restart: bool,
+    pub state: DaemonVmLifecycleState,
+}
+
+impl From<VmLifecycle> for DaemonVmLifecycle {
+    fn from(lifecycle: VmLifecycle) -> Self {
+        Self {
+            pending_restart: lifecycle.pending_restart,
+            state: lifecycle.state.into(),
+        }
+    }
+}
+
+/// Lossless daemon lifecycle states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DaemonVmLifecycleState {
+    Stopped,
+    Starting,
+    Booted,
+    Running,
+    Stopping,
+    Restarting,
+    Failed,
+    Unknown,
+}
+
+impl From<VmLifecycleState> for DaemonVmLifecycleState {
+    fn from(state: VmLifecycleState) -> Self {
+        match state {
+            VmLifecycleState::Stopped => Self::Stopped,
+            VmLifecycleState::Starting => Self::Starting,
+            VmLifecycleState::Booted => Self::Booted,
+            VmLifecycleState::Running => Self::Running,
+            VmLifecycleState::Stopping => Self::Stopping,
+            VmLifecycleState::Restarting => Self::Restarting,
+            VmLifecycleState::Failed => Self::Failed,
+            VmLifecycleState::Unknown => Self::Unknown,
+        }
+    }
+}
+
+/// Lossless daemon runtime detail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DaemonRuntimeSummary {
+    pub detail: String,
+}
+
+impl From<RuntimeSummary> for DaemonRuntimeSummary {
+    fn from(runtime: RuntimeSummary) -> Self {
+        Self {
+            detail: runtime.detail,
+        }
+    }
+}
+
+/// Lossless daemon service-state summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DaemonPublicVmServices {
+    pub gpu: Option<String>,
+    pub microvm: String,
+    pub nixling: String,
+    pub snd: Option<String>,
+    pub swtpm: Option<String>,
+    pub video: Option<String>,
+    pub virtiofsd: String,
+}
+
+impl From<PublicVmServices> for DaemonPublicVmServices {
+    fn from(services: PublicVmServices) -> Self {
+        Self {
+            gpu: services.gpu,
+            microvm: services.microvm,
+            nixling: services.nixling,
+            snd: services.snd,
+            swtpm: services.swtpm,
+            video: services.video,
+            virtiofsd: services.virtiofsd,
+        }
+    }
+}
+
 /// Local public-socket daemon access.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LocalUnixDaemonAccess {
     socket_path: PathBuf,
     transport_id: ProviderId,
     node_id: NodeId,
+}
+
+impl fmt::Debug for LocalUnixDaemonAccess {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalUnixDaemonAccess")
+            .finish_non_exhaustive()
+    }
 }
 
 impl LocalUnixDaemonAccess {
@@ -73,6 +248,24 @@ impl LocalUnixDaemonAccess {
     /// The configured public-socket path.
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
+    }
+
+    /// List VMs through the local daemon socket without losing public-wire
+    /// fields or lifecycle states.
+    pub async fn vm_list(&self) -> ProviderResult<DaemonVmList> {
+        self.raw_vm_list().await.map(Into::into)
+    }
+
+    async fn raw_vm_list(&self) -> ProviderResult<ListResponse> {
+        let request = encode_type_tagged_message(
+            "list",
+            &ListRequest {
+                env: None,
+                vm: None,
+            },
+        )?;
+        let response = self.request("list", &request).await?;
+        parse_list_response(&response)
     }
 
     async fn request(&self, request_type: &'static str, payload: &[u8]) -> ProviderResult<Vec<u8>> {
@@ -154,34 +347,23 @@ impl DaemonAccessTransport for LocalUnixDaemonAccess {
 #[async_trait]
 impl DaemonAccessApi for LocalUnixDaemonAccess {
     async fn vm_list(&self) -> ProviderResult<Vec<WorkloadSummary>> {
-        let request = encode_type_tagged_message(
-            "list",
-            &ListRequest {
-                env: None,
-                vm: None,
-            },
-        )?;
-        let response = self.request("list", &request).await?;
-        let list = parse_list_response(&response)?;
-        workload_summaries_from_list_response(list, &self.node_id)
+        LocalUnixDaemonAccess::vm_list(self)
+            .await?
+            .workload_summaries_lossy(&self.node_id)
     }
 }
 
-/// Map the current daemon list response into v2 workload summaries.
-pub fn workload_summaries_from_list_response(
+/// Lossily project the current daemon list response into v2 workload summaries.
+pub fn workload_summaries_lossy_from_list_response(
     response: ListResponse,
     node_id: &NodeId,
 ) -> ProviderResult<Vec<WorkloadSummary>> {
-    response
-        .vms
-        .into_iter()
-        .map(|entry| workload_summary_from_list_entry(entry, node_id))
-        .collect()
+    DaemonVmList::from(response).workload_summaries_lossy(node_id)
 }
 
-/// Map one current daemon list entry into a v2 workload summary.
-pub fn workload_summary_from_list_entry(
-    entry: ListEntry,
+/// Lossily project one daemon list entry into a v2 workload summary.
+pub fn workload_summary_lossy(
+    entry: &DaemonVmListEntry,
     node_id: &NodeId,
 ) -> ProviderResult<WorkloadSummary> {
     let id = WorkloadId::parse(entry.vm.clone()).map_err(|err| {
@@ -194,11 +376,11 @@ pub fn workload_summary_from_list_entry(
         id,
         node: node_id.clone(),
         state: workload_state_from_lifecycle(entry.lifecycle.state),
-        capabilities: capabilities_from_list_entry(&entry),
+        capabilities: capabilities_from_list_entry(entry),
     })
 }
 
-fn capabilities_from_list_entry(entry: &ListEntry) -> CapabilitySet {
+fn capabilities_from_list_entry(entry: &DaemonVmListEntry) -> CapabilitySet {
     let mut capabilities = CapabilitySet::empty()
         .with(Capability::Lifecycle)
         .with(Capability::Virtiofs)
@@ -214,14 +396,14 @@ fn capabilities_from_list_entry(entry: &ListEntry) -> CapabilitySet {
     capabilities
 }
 
-fn workload_state_from_lifecycle(state: VmLifecycleState) -> WorkloadState {
+fn workload_state_from_lifecycle(state: DaemonVmLifecycleState) -> WorkloadState {
     match state {
-        VmLifecycleState::Stopped => WorkloadState::Stopped,
-        VmLifecycleState::Starting => WorkloadState::Starting,
-        VmLifecycleState::Booted | VmLifecycleState::Running => WorkloadState::Running,
-        VmLifecycleState::Stopping => WorkloadState::Stopping,
-        VmLifecycleState::Restarting => WorkloadState::Starting,
-        VmLifecycleState::Failed | VmLifecycleState::Unknown => WorkloadState::Failed,
+        DaemonVmLifecycleState::Stopped => WorkloadState::Stopped,
+        DaemonVmLifecycleState::Starting => WorkloadState::Starting,
+        DaemonVmLifecycleState::Booted | DaemonVmLifecycleState::Running => WorkloadState::Running,
+        DaemonVmLifecycleState::Stopping => WorkloadState::Stopping,
+        DaemonVmLifecycleState::Restarting => WorkloadState::Starting,
+        DaemonVmLifecycleState::Failed | DaemonVmLifecycleState::Unknown => WorkloadState::Failed,
     }
 }
 
@@ -271,13 +453,19 @@ async fn send_frame(
 async fn recv_frame(
     stream: &mut dyn nixling_constellation_provider::types::ByteStream,
 ) -> ProviderResult<Vec<u8>> {
-    let mut buffer = vec![0_u8; MAX_FRAME_SIZE + 4];
+    let mut buffer = vec![0_u8; MAX_FRAME_SIZE + 5];
     let received = stream.read(&mut buffer).await.map_err(|err| {
         ProviderError::new(
             ErrorKind::GatewayUnavailable,
             format!("daemon socket read failed: {}", err.kind()),
         )
     })?;
+    if received == 0 {
+        return Err(ProviderError::new(
+            ErrorKind::GatewayUnavailable,
+            "daemon closed the public socket before returning a frame",
+        ));
+    }
     if received < 4 {
         return Err(ProviderError::new(
             ErrorKind::MalformedFrame,
@@ -285,7 +473,13 @@ async fn recv_frame(
         ));
     }
     let expected = u32::from_le_bytes(buffer[..4].try_into().expect("frame prefix")) as usize;
-    if expected > MAX_FRAME_SIZE || expected + 4 > received {
+    if expected > MAX_FRAME_SIZE {
+        return Err(ProviderError::new(
+            ErrorKind::FrameTooLarge,
+            "daemon declared a public socket frame above the allowed limit",
+        ));
+    }
+    if received != expected + 4 {
         return Err(ProviderError::new(
             ErrorKind::MalformedFrame,
             "daemon returned a malformed public socket frame",
@@ -394,20 +588,49 @@ where
 }
 
 fn provider_error_from_daemon_error(error: DaemonErrorEnvelope) -> ProviderError {
-    let kind = match error.kind.as_str() {
-        "authz-not-a-launcher" | "authz-audit-requires-admin" => ErrorKind::Unauthorized,
-        "wire-version-mismatch" => ErrorKind::VersionSkew,
-        "wire-frame-too-large" => ErrorKind::FrameTooLarge,
-        "wire-unknown-field" | "wire-ifname-invalid" | "wire-malformed-json" => {
-            ErrorKind::MalformedFrame
-        }
-        "broker-unimplemented" => ErrorKind::UnsupportedFeature,
-        "broker-validation-failed" => ErrorKind::ProviderAllocationFailed,
-        "manifest-parse-error" | "manifest-version-mismatch" => ErrorKind::MalformedFrame,
-        "internal-io" | "bundle-tampered" => ErrorKind::GatewayUnavailable,
-        _ => ErrorKind::MalformedFrame,
-    };
-    ProviderError::new(kind, error.message)
+    let (kind, message) = provider_error_kind_and_message(error.kind.as_str());
+    ProviderError::new(kind, message)
+}
+
+fn provider_error_kind_and_message(daemon_kind: &str) -> (ErrorKind, &'static str) {
+    match daemon_kind {
+        "authz-not-a-launcher" | "authz-audit-requires-admin" => (
+            ErrorKind::Unauthorized,
+            "daemon refused the request because the peer is not authorized",
+        ),
+        "wire-version-mismatch" => (
+            ErrorKind::VersionSkew,
+            "daemon wire version is incompatible with this client",
+        ),
+        "wire-frame-too-large" => (
+            ErrorKind::FrameTooLarge,
+            "daemon rejected a public socket frame above the allowed limit",
+        ),
+        "wire-unknown-field" | "wire-ifname-invalid" | "wire-malformed-json" => (
+            ErrorKind::MalformedFrame,
+            "daemon reported a malformed public socket frame",
+        ),
+        "broker-unimplemented" => (
+            ErrorKind::UnsupportedFeature,
+            "daemon reported that the requested broker feature is unavailable",
+        ),
+        "broker-validation-failed" => (
+            ErrorKind::ProviderAllocationFailed,
+            "daemon rejected the requested provider operation",
+        ),
+        "manifest-parse-error" | "manifest-version-mismatch" => (
+            ErrorKind::MalformedFrame,
+            "daemon reported an incompatible or malformed manifest contract",
+        ),
+        "internal-io" | "bundle-tampered" => (
+            ErrorKind::GatewayUnavailable,
+            "daemon reported that required host state is unavailable",
+        ),
+        _ => (
+            ErrorKind::MalformedFrame,
+            "daemon returned an unrecognized typed error kind",
+        ),
+    }
 }
 
 fn nix_err_to_io(err: nix::errno::Errno) -> io::Error {
@@ -445,7 +668,8 @@ struct ErrorFrame {
 #[serde(rename_all = "camelCase")]
 struct DaemonErrorEnvelope {
     kind: String,
-    message: String,
+    #[serde(rename = "message")]
+    _message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -510,10 +734,92 @@ mod tests {
     }
 
     #[test]
-    fn mapping_preserves_current_list_semantics_that_fit_workload_summary() {
-        let entry = list_entry("work", VmLifecycleState::Running, true, true);
+    fn local_unix_debug_redacts_socket_path_and_node_id() {
+        let socket_path = test_socket_path("debug-redaction");
+        let access = LocalUnixDaemonAccess::with_socket_path(&socket_path);
+
+        let rendered = format!("{access:?}");
+
+        assert_eq!(rendered, "LocalUnixDaemonAccess { .. }");
+        assert!(!rendered.contains(&socket_path.display().to_string()));
+        assert!(!rendered.contains(
+            socket_path
+                .file_name()
+                .expect("socket file name")
+                .to_string_lossy()
+                .as_ref()
+        ));
+        assert!(!rendered.contains(LOCAL_NODE_ID));
+    }
+
+    #[test]
+    fn daemon_error_mapping_redacts_dynamic_message() {
+        let error = provider_error_from_daemon_error(DaemonErrorEnvelope {
+            kind: "internal-io".to_owned(),
+            _message: "open /home/alice/private-vm/secret.sock failed".to_owned(),
+        });
+
+        assert_eq!(error.kind(), ErrorKind::GatewayUnavailable);
+        assert_eq!(
+            error.0.message(),
+            "daemon reported that required host state is unavailable"
+        );
+        assert!(!error.0.message().contains("/home/alice"));
+        assert!(!format!("{error:?}").contains("private-vm"));
+    }
+
+    #[tokio::test]
+    async fn recv_frame_rejects_trailing_bytes() {
+        let mut frame = prefixed_frame(2, b"{}");
+        frame.push(b'!');
+
+        let error = recv_frame_from_bytes(frame)
+            .await
+            .expect_err("trailing bytes are rejected");
+
+        assert_eq!(error.kind(), ErrorKind::MalformedFrame);
+    }
+
+    #[tokio::test]
+    async fn recv_frame_rejects_truncated_body() {
+        let frame = prefixed_frame(4, b"{}");
+
+        let error = recv_frame_from_bytes(frame)
+            .await
+            .expect_err("truncated body is rejected");
+
+        assert_eq!(error.kind(), ErrorKind::MalformedFrame);
+    }
+
+    #[tokio::test]
+    async fn recv_frame_rejects_declared_oversize() {
+        let frame = prefixed_frame(MAX_FRAME_SIZE + 1, b"");
+
+        let error = recv_frame_from_bytes(frame)
+            .await
+            .expect_err("oversize declaration is rejected");
+
+        assert_eq!(error.kind(), ErrorKind::FrameTooLarge);
+    }
+
+    #[tokio::test]
+    async fn recv_frame_rejects_max_sized_packet_with_extra_byte() {
+        let mut frame = prefixed_frame(MAX_FRAME_SIZE, &vec![0_u8; MAX_FRAME_SIZE]);
+        frame.push(0);
+
+        let error = recv_frame_from_bytes(frame)
+            .await
+            .expect_err("max frame with trailing byte is rejected");
+
+        assert_eq!(error.kind(), ErrorKind::MalformedFrame);
+    }
+
+    #[test]
+    fn workload_summary_lossy_projection_is_explicitly_separate() {
+        let entry =
+            DaemonVmListEntry::from(list_entry("work", VmLifecycleState::Running, true, true));
         let node = NodeId::parse("local").expect("node id");
-        let summary = workload_summary_from_list_entry(entry, &node).expect("summary");
+        let summary = workload_summary_lossy(&entry, &node).expect("summary");
 
         assert_eq!(summary.id.as_str(), "work");
         assert_eq!(summary.node.as_str(), "local");
@@ -527,17 +833,99 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_unix_vm_list_round_trips_over_seqpacket_public_wire() {
+    async fn local_unix_vm_list_preserves_all_lifecycle_states_and_runtime_details() {
         let socket_path = test_socket_path("vmlist");
         let listener = bind_seqpacket_listener(&socket_path);
-        let entry = list_entry("work", VmLifecycleState::Running, true, true);
+        let cases = [
+            (
+                "vm-stopped",
+                VmLifecycleState::Stopped,
+                false,
+                "stopped detail",
+            ),
+            (
+                "vm-starting",
+                VmLifecycleState::Starting,
+                false,
+                "starting detail",
+            ),
+            (
+                "vm-booted",
+                VmLifecycleState::Booted,
+                false,
+                "booted detail",
+            ),
+            (
+                "vm-running",
+                VmLifecycleState::Running,
+                false,
+                "running detail",
+            ),
+            (
+                "vm-stopping",
+                VmLifecycleState::Stopping,
+                false,
+                "stopping detail",
+            ),
+            (
+                "vm-restarting",
+                VmLifecycleState::Restarting,
+                false,
+                "restarting detail",
+            ),
+            (
+                "vm-failed",
+                VmLifecycleState::Failed,
+                false,
+                "failed detail",
+            ),
+            (
+                "vm-unknown",
+                VmLifecycleState::Unknown,
+                false,
+                "unknown detail",
+            ),
+            (
+                "vm-pending",
+                VmLifecycleState::Running,
+                true,
+                "pending restart detail",
+            ),
+        ];
+        let entries: Vec<_> = cases
+            .iter()
+            .enumerate()
+            .map(|(index, (vm, state, pending_restart, runtime_detail))| {
+                let mut entry = list_entry_with(
+                    vm,
+                    *state,
+                    *pending_restart,
+                    runtime_detail,
+                    index % 2 == 0,
+                    index % 3 == 0,
+                );
+                entry.is_net_vm = *vm == "vm-booted";
+                entry.tpm = index % 2 == 1;
+                entry.services.snd = Some(format!("nixling-{vm}-snd.service"));
+                entry.services.swtpm = entry.tpm.then(|| format!("nixling-{vm}-swtpm.service"));
+                entry.services.video = entry
+                    .graphics
+                    .then(|| format!("nixling-{vm}-video.service"));
+                entry.ssh_user = (index % 2 == 0).then(|| "alice".to_owned());
+                entry.static_ip = Some(format!("10.20.0.{}", index + 10));
+                entry
+            })
+            .collect();
+        let expected = DaemonVmList::from(ListResponse {
+            vms: entries.clone(),
+        });
         let server = thread::spawn({
-            let response_entry = entry.clone();
-            move || serve_one_list_round_trip(listener, response_entry)
+            let response_entries = entries.clone();
+            move || serve_one_list_round_trip(listener, response_entries)
         });
 
         let access = LocalUnixDaemonAccess::with_socket_path(&socket_path);
-        let summaries = access.vm_list().await.expect("vm_list response");
+        let list = access.vm_list().await.expect("vm_list response");
 
         server
             .join()
@@ -545,27 +933,67 @@ mod tests {
             .expect("server exchange");
         let _ = fs::remove_file(&socket_path);
 
-        assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].id.as_str(), "work");
-        assert_eq!(summaries[0].node.as_str(), "local");
-        assert_eq!(summaries[0].state, WorkloadState::Running);
-        assert!(summaries[0].capabilities.has(Capability::Lifecycle));
-        assert!(summaries[0].capabilities.has(Capability::WindowForwarding));
-        assert!(summaries[0].capabilities.has(Capability::Usb));
+        assert_eq!(list, expected);
+        let states: Vec<_> = list.vms.iter().map(|entry| entry.lifecycle.state).collect();
+        assert_eq!(
+            states,
+            cases
+                .iter()
+                .map(|(_, state, _, _)| DaemonVmLifecycleState::from(*state))
+                .collect::<Vec<_>>()
+        );
+        for (entry, (_, _, pending_restart, runtime_detail)) in list.vms.iter().zip(cases) {
+            assert_eq!(entry.lifecycle.pending_restart, pending_restart);
+            assert_eq!(entry.runtime.detail, runtime_detail);
+        }
+        assert!(list
+            .vms
+            .iter()
+            .any(|entry| entry.lifecycle.state == DaemonVmLifecycleState::Restarting));
+        assert!(list
+            .vms
+            .iter()
+            .any(|entry| entry.lifecycle.state == DaemonVmLifecycleState::Unknown));
+        assert!(list.vms.iter().any(|entry| entry.lifecycle.pending_restart));
+    }
+
+    #[tokio::test]
+    async fn local_unix_vm_list_unavailable_socket_returns_typed_error() {
+        let socket_path = test_socket_path("missing-vmlist");
+        let _ = fs::remove_file(&socket_path);
+        let access = LocalUnixDaemonAccess::with_socket_path(&socket_path);
+
+        let error = access
+            .vm_list()
+            .await
+            .expect_err("unavailable socket returns a typed error");
+
+        assert_eq!(error.kind(), ErrorKind::GatewayUnavailable);
     }
 
     fn list_entry(vm: &str, state: VmLifecycleState, graphics: bool, usbip: bool) -> ListEntry {
+        list_entry_with(vm, state, false, "running", graphics, usbip)
+    }
+
+    fn list_entry_with(
+        vm: &str,
+        state: VmLifecycleState,
+        pending_restart: bool,
+        runtime_detail: &str,
+        graphics: bool,
+        usbip: bool,
+    ) -> ListEntry {
         ListEntry {
             env: Some("dev".to_owned()),
             graphics,
             is_net_vm: false,
             lifecycle: VmLifecycle {
-                pending_restart: false,
+                pending_restart,
                 state,
             },
             name: vm.to_owned(),
             runtime: RuntimeSummary {
-                detail: "running".to_owned(),
+                detail: runtime_detail.to_owned(),
             },
             services: PublicVmServices {
                 gpu: graphics.then(|| format!("nixling-{vm}-gpu.service")),
@@ -582,6 +1010,20 @@ mod tests {
             usbip,
             vm: vm.to_owned(),
         }
+    }
+
+    fn prefixed_frame(declared: usize, body: &[u8]) -> Vec<u8> {
+        let mut frame = Vec::with_capacity(4 + body.len());
+        frame.extend_from_slice(&(declared as u32).to_le_bytes());
+        frame.extend_from_slice(body);
+        frame
+    }
+
+    async fn recv_frame_from_bytes(bytes: Vec<u8>) -> ProviderResult<Vec<u8>> {
+        let (mut stream, mut peer) = tokio::io::duplex(bytes.len().max(1));
+        peer.write_all(&bytes).await.expect("write test frame");
+        drop(peer);
+        recv_frame(&mut stream).await
     }
 
     fn bind_seqpacket_listener(path: &Path) -> std::os::fd::OwnedFd {
@@ -604,7 +1046,7 @@ mod tests {
 
     fn serve_one_list_round_trip(
         listener: std::os::fd::OwnedFd,
-        response_entry: ListEntry,
+        response_entries: Vec<ListEntry>,
     ) -> io::Result<()> {
         let accepted =
             accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).map_err(nix_err_to_io)?;
@@ -633,7 +1075,7 @@ mod tests {
             assert_eq!(request.get("vm"), Some(&Value::Null));
 
             let mut response = serde_json::json!({ "type": "listResponse" });
-            response["vms"] = serde_json::to_value(vec![response_entry])
+            response["vms"] = serde_json::to_value(response_entries)
                 .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
             let response = serde_json::to_vec(&response)
                 .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
@@ -651,7 +1093,7 @@ mod tests {
     }
 
     fn recv_test_frame(fd: RawFd) -> io::Result<Vec<u8>> {
-        let mut buffer = vec![0_u8; MAX_FRAME_SIZE + 4];
+        let mut buffer = vec![0_u8; MAX_FRAME_SIZE + 5];
         let received =
             nix::sys::socket::recv(fd, &mut buffer, MsgFlags::empty()).map_err(nix_err_to_io)?;
         if received < 4 {
@@ -661,7 +1103,13 @@ mod tests {
             ));
         }
         let expected = u32::from_le_bytes(buffer[..4].try_into().expect("frame prefix")) as usize;
-        if expected > MAX_FRAME_SIZE || expected + 4 > received {
+        if expected > MAX_FRAME_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "oversize seqpacket frame",
+            ));
+        }
+        if expected + 4 != received {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "malformed seqpacket frame",

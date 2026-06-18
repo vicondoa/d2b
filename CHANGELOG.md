@@ -23,7 +23,18 @@ deprecations ship one minor release before removal.
   runtime/workload/display/transport/stream-mux/codec/credential/
   daemon-access providers — with typed capability descriptors, structured
   capability-denial errors, byte-carrying transport sessions, and
-  fail-closed mock/conformance fixtures). These crates are the foundation
+  fail-closed mock/conformance fixtures). The same change adds the
+  remaining foundation crates: `nixling-constellation-codec-protobuf`
+  (a `prost` codec behind the `ProtocolCodec` trait, with frame-cap and
+  fail-closed decode validation), `nixling-constellation-transport`
+  (an in-memory loopback transport for conformance),
+  `nixling-constellation-router` (the codec-neutral operation router +
+  single-owner idempotency/dedup store keyed by the full operation
+  namespace), `nixling-daemon-access` (the transport-neutral CLI↔daemon
+  semantic API with its current local-Unix binding), `nixling-host-providers`
+  (byte-identical local adapters over the existing Cloud Hypervisor and
+  cross-domain Wayland argv generators), plus compile-only constellation
+  peer-module skeletons inside `nixlingd`. These crates are the foundation
   for later ADR 0032 work; they do not change any CLI, daemon, or
   on-host behavior.
 

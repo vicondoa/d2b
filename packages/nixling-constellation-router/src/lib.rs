@@ -1,7 +1,7 @@
 //! `nixling-constellation-router` (ADR 0032): the **codec-neutral**
 //! operation router. It reasons only over the semantic
 //! [`OperationRequest`] envelope (never a wire encoding), so it owns the
-//! three cross-cutting invariants the design panel made load-bearing:
+//! three cross-cutting invariants:
 //!
 //! - **Principal binding**: the request principal MUST match the
 //!   authenticated session principal.
@@ -9,9 +9,24 @@
 //!   from [`OperationKind`] in trusted code, never from a caller-supplied
 //!   field.
 //! - **Idempotency + dedup ownership**: the router is the single dedup
-//!   owner. A mutating operation MUST carry an idempotency key;
-//!   same-key/same-request is a replay, same-key/different-request is a
+//!   owner for its scope. Per ADR 0032 the dedup record is keyed by the
+//!   full operation namespace — `(realm, principal, node, operation kind,
+//!   idempotency key)` — NOT the idempotency key alone, so the same opaque
+//!   caller key reused under a different principal/realm/node/kind can never
+//!   collide. A mutating operation MUST carry an idempotency key;
+//!   same-key/same-request is a replay (carrying the original
+//!   `operation_id` + recorded result), same-key/different-request is a
 //!   conflict, and a key reused after the dedup retention window is expired.
+//!   Expired keys leave a tombstone for a longer no-reuse horizon so a
+//!   post-retention reuse fails closed (`IdempotencyKeyExpired`) instead of
+//!   being silently re-executed.
+//!
+//! **Single-owner / shared scope.** The router is the dedup owner for the
+//! node/gateway scope it is constructed at, NOT a per-session object. A peer
+//! session binds a *shared* router (e.g. behind `Arc<Mutex<_>>`) so reconnect
+//! retries on a fresh session still hit the same dedup state — a fresh
+//! per-session router would let reconnect retries bypass dedup and
+//! double-dispatch. See `nixlingd`'s `PeerOperationRouter` for the wiring.
 //!
 //! Dependency direction: depends ONLY on `nixling-constellation-core` +
 //! `nixling-constellation-provider`. It MUST NOT depend on `prost`, a codec
@@ -22,12 +37,20 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use nixling_constellation_core::{
-    AuthorizationScope, Capability, IdempotencyKey, OperationRequest, PrincipalId,
+    AuthorizationScope, Capability, IdempotencyKey, NodeId, OpaquePayload, OperationId,
+    OperationKind, OperationRequest, PrincipalId, RealmPath,
 };
 
-/// Default dedup retention window. A key reused after this window is
-/// reported as expired rather than silently re-executed.
+/// Default dedup retention window. While a completed key is within this
+/// window a same-request retry resolves to `Replay`; past it the key is
+/// reported expired rather than silently re-executed.
 pub const DEFAULT_RETENTION: Duration = Duration::from_secs(15 * 60);
+
+/// Default no-reuse horizon. After a key's [`DEFAULT_RETENTION`] elapses the
+/// router keeps an EXPIRED tombstone until this (longer) horizon so a
+/// post-retention reuse keeps failing closed; only past this horizon is the
+/// record dropped to bound memory.
+pub const DEFAULT_NO_REUSE_HORIZON: Duration = Duration::from_secs(60 * 60);
 
 /// The router's decision for one operation. The caller (provider executor)
 /// acts on `Accept`/`Replay`; every other variant is a typed refusal that
@@ -40,11 +63,23 @@ pub enum RouteDecision {
         scope: AuthorizationScope,
     },
     /// A completed mutating operation with the same key + request is being
-    /// retried; return the prior result instead of re-executing.
-    Replay,
+    /// retried; return the recorded prior result instead of re-executing.
+    /// Carries the ORIGINAL accepted `operation_id` so a lost-reply retry
+    /// can be correlated to its first attempt.
+    Replay {
+        /// The `operation_id` of the original accepted attempt.
+        original_operation_id: OperationId,
+        /// The result recorded at completion of the original attempt.
+        result: OpaquePayload,
+    },
     /// A mutating operation with the same key + request is still running.
-    InProgress,
-    /// Same idempotency key, different request fingerprint (conflict).
+    /// Carries the ORIGINAL accepted `operation_id` so the caller can
+    /// correlate the in-flight attempt.
+    InProgress {
+        /// The `operation_id` of the original accepted attempt.
+        original_operation_id: OperationId,
+    },
+    /// Same dedup key (full namespace), different request fingerprint.
     IdempotencyKeyConflict,
     /// Idempotency key reused after the dedup retention window expired.
     IdempotencyKeyExpired,
@@ -71,24 +106,62 @@ impl Clock for SystemClock {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The ADR 0032 dedup record key: the full operation namespace, NOT the
+/// idempotency key alone. Two different principals/realms/nodes/kinds that
+/// happen to reuse the same opaque idempotency key get distinct records.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DedupKey {
+    realm: RealmPath,
+    principal: PrincipalId,
+    node: NodeId,
+    kind: OperationKind,
+    key: IdempotencyKey,
+}
+
+impl DedupKey {
+    fn for_request(req: &OperationRequest, key: &IdempotencyKey) -> Self {
+        Self {
+            realm: req.realm.clone(),
+            principal: req.principal.clone(),
+            node: req.node.clone(),
+            kind: req.kind,
+            key: key.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 enum DedupState {
+    /// Accepted and executing; never expires by retention (a long-running
+    /// operation must not be dropped out from under an in-flight retry).
     InProgress,
-    Completed,
+    /// Completed; the retention clock (for `Replay` vs expiry) runs from
+    /// `since`. Carries the recorded result for `Replay`.
+    Completed {
+        result: OpaquePayload,
+        since: Instant,
+    },
+    /// Tombstone: the key was consumed and its retention elapsed. Reuse
+    /// fails closed (`IdempotencyKeyExpired`) until the no-reuse horizon
+    /// (measured from `since`) drops the record.
+    Expired { since: Instant },
 }
 
 #[derive(Debug, Clone)]
 struct DedupEntry {
     fingerprint: Vec<u8>,
+    original_operation_id: OperationId,
     state: DedupState,
-    recorded: Instant,
 }
 
-/// The codec-neutral operation router + dedup owner.
+/// The codec-neutral operation router + dedup owner for one node/gateway
+/// scope. Share a single instance across peer sessions (see the module
+/// docs); do not construct one per session.
 pub struct OperationRouter<C: Clock = SystemClock> {
     retention: Duration,
+    no_reuse_horizon: Duration,
     clock: C,
-    dedup: HashMap<IdempotencyKey, DedupEntry>,
+    dedup: HashMap<DedupKey, DedupEntry>,
 }
 
 impl Default for OperationRouter<SystemClock> {
@@ -105,26 +178,39 @@ impl OperationRouter<SystemClock> {
 }
 
 impl<C: Clock> OperationRouter<C> {
-    /// A router with an injected clock (and default retention).
+    /// A router with an injected clock (and default retention/horizon).
     pub fn with_clock(clock: C) -> Self {
         Self {
             retention: DEFAULT_RETENTION,
+            no_reuse_horizon: DEFAULT_NO_REUSE_HORIZON,
             clock,
             dedup: HashMap::new(),
         }
     }
 
-    /// Override the dedup retention window.
+    /// Override the dedup retention window. The no-reuse horizon is kept at
+    /// least one retention window beyond `retention` so an expired key always
+    /// leaves a tombstone.
     pub fn with_retention(mut self, retention: Duration) -> Self {
         self.retention = retention;
+        if self.no_reuse_horizon < retention {
+            self.no_reuse_horizon = retention.saturating_mul(2);
+        }
+        self
+    }
+
+    /// Override the no-reuse horizon (tombstone lifetime past completion).
+    pub fn with_no_reuse_horizon(mut self, horizon: Duration) -> Self {
+        self.no_reuse_horizon = horizon;
         self
     }
 
     /// Route one operation against the authenticated `session_principal`.
     ///
     /// On `Accept` for a mutating operation the key is recorded as
-    /// in-progress; the caller MUST later call [`Self::mark_completed`] so a
-    /// subsequent same-key/same-request retry resolves to `Replay`.
+    /// in-progress; the caller MUST later call [`Self::mark_completed`]
+    /// (success) or [`Self::mark_failed`] (terminal failure) so the dedup
+    /// record reaches a terminal state instead of wedging `InProgress`.
     pub fn route(
         &mut self,
         req: &OperationRequest,
@@ -147,54 +233,122 @@ impl<C: Clock> OperationRouter<C> {
             Some(k) => k.clone(),
             None => return RouteDecision::MissingIdempotencyKey,
         };
+        let dedup_key = DedupKey::for_request(req, &key);
         let fingerprint = req.dedup_fingerprint_input();
         let now = self.clock.now();
 
-        match self.dedup.get(&key) {
+        match self.dedup.get_mut(&dedup_key) {
             None => {
                 self.dedup.insert(
-                    key,
+                    dedup_key,
                     DedupEntry {
                         fingerprint,
+                        original_operation_id: req.operation_id.clone(),
                         state: DedupState::InProgress,
-                        recorded: now,
                     },
                 );
                 RouteDecision::Accept { scope }
             }
             Some(entry) => {
-                if now.duration_since(entry.recorded) > self.retention {
-                    // Key reused after its dedup window expired.
-                    RouteDecision::IdempotencyKeyExpired
-                } else if entry.fingerprint != fingerprint {
-                    RouteDecision::IdempotencyKeyConflict
-                } else {
-                    match entry.state {
-                        DedupState::InProgress => RouteDecision::InProgress,
-                        DedupState::Completed => RouteDecision::Replay,
+                match &entry.state {
+                    // A still-running attempt never expires; a different
+                    // request under the same key is a conflict.
+                    DedupState::InProgress => {
+                        if entry.fingerprint != fingerprint {
+                            RouteDecision::IdempotencyKeyConflict
+                        } else {
+                            RouteDecision::InProgress {
+                                original_operation_id: entry.original_operation_id.clone(),
+                            }
+                        }
                     }
+                    DedupState::Completed { result, since } => {
+                        if now.duration_since(*since) > self.retention {
+                            // Retention elapsed: tombstone it now (lazy) and
+                            // fail closed so the key cannot be re-executed.
+                            entry.state = DedupState::Expired { since: now };
+                            RouteDecision::IdempotencyKeyExpired
+                        } else if entry.fingerprint != fingerprint {
+                            RouteDecision::IdempotencyKeyConflict
+                        } else {
+                            RouteDecision::Replay {
+                                original_operation_id: entry.original_operation_id.clone(),
+                                result: result.clone(),
+                            }
+                        }
+                    }
+                    // Tombstoned: reuse always fails closed until GC drops it.
+                    DedupState::Expired { .. } => RouteDecision::IdempotencyKeyExpired,
                 }
             }
         }
     }
 
-    /// Mark a previously-accepted mutating operation complete so a same-key
-    /// + same-request retry resolves to [`RouteDecision::Replay`].
-    pub fn mark_completed(&mut self, key: &IdempotencyKey) {
-        if let Some(entry) = self.dedup.get_mut(key) {
-            entry.state = DedupState::Completed;
+    /// Mark a previously-accepted mutating operation complete, recording its
+    /// `result` so a same-key + same-request retry resolves to
+    /// [`RouteDecision::Replay`]. Returns `true` if a matching in-progress
+    /// record was found. The key is rebuilt from `req` (the full dedup
+    /// namespace), so completion can only resolve the matching record.
+    pub fn mark_completed(&mut self, req: &OperationRequest, result: OpaquePayload) -> bool {
+        let key = match &req.idempotency_key {
+            Some(k) => k.clone(),
+            None => return false,
+        };
+        let dedup_key = DedupKey::for_request(req, &key);
+        let now = self.clock.now();
+        match self.dedup.get_mut(&dedup_key) {
+            Some(entry) if matches!(entry.state, DedupState::InProgress) => {
+                entry.state = DedupState::Completed { result, since: now };
+                true
+            }
+            _ => false,
         }
     }
 
-    /// Drop dedup entries older than the retention window (bounded memory).
+    /// Mark a previously-accepted mutating operation terminally failed,
+    /// removing its in-progress record so a fresh retry is accepted rather
+    /// than wedged `InProgress` until expiry. Returns `true` if a matching
+    /// in-progress record was removed.
+    pub fn mark_failed(&mut self, req: &OperationRequest) -> bool {
+        let key = match &req.idempotency_key {
+            Some(k) => k.clone(),
+            None => return false,
+        };
+        let dedup_key = DedupKey::for_request(req, &key);
+        match self.dedup.get(&dedup_key) {
+            Some(entry) if matches!(entry.state, DedupState::InProgress) => {
+                self.dedup.remove(&dedup_key);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Bounded-memory maintenance. Never drops `InProgress` records (a
+    /// long-running op must survive). Transitions `Completed` records past
+    /// the retention window into `Expired` tombstones (preserving fail-closed
+    /// refusal of reuse), and only removes `Expired` tombstones older than
+    /// the no-reuse horizon.
     pub fn gc(&mut self) {
         let now = self.clock.now();
         let retention = self.retention;
-        self.dedup
-            .retain(|_, e| now.duration_since(e.recorded) <= retention);
+        let horizon = self.no_reuse_horizon;
+        // First, age completed entries into tombstones.
+        for entry in self.dedup.values_mut() {
+            if let DedupState::Completed { since, .. } = &entry.state {
+                if now.duration_since(*since) > retention {
+                    entry.state = DedupState::Expired { since: now };
+                }
+            }
+        }
+        // Then drop only tombstones older than the no-reuse horizon.
+        self.dedup.retain(|_, e| match &e.state {
+            DedupState::Expired { since } => now.duration_since(*since) <= horizon,
+            _ => true,
+        });
     }
 
-    /// The number of tracked dedup entries (for diagnostics/tests).
+    /// The number of tracked dedup records (for diagnostics/tests).
     pub fn tracked(&self) -> usize {
         self.dedup.len()
     }
@@ -238,8 +392,18 @@ mod tests {
     }
 
     fn req(kind: OperationKind, key: Option<&str>, body: &[u8], p: &str) -> OperationRequest {
+        req_with_op(kind, key, body, p, "op-1")
+    }
+
+    fn req_with_op(
+        kind: OperationKind,
+        key: Option<&str>,
+        body: &[u8],
+        p: &str,
+        op_id: &str,
+    ) -> OperationRequest {
         OperationRequest {
-            operation_id: OperationId::parse("op-1").unwrap(),
+            operation_id: OperationId::parse(op_id).unwrap(),
             idempotency_key: key.map(|k| IdempotencyKey::parse(k).unwrap()),
             realm: RealmPath::local(),
             node: NodeId::parse("gw").unwrap(),
@@ -249,6 +413,10 @@ mod tests {
             trace: None,
             body: OpaquePayload::new(body.to_vec()).unwrap(),
         }
+    }
+
+    fn result(bytes: &[u8]) -> OpaquePayload {
+        OpaquePayload::new(bytes.to_vec()).unwrap()
     }
 
     #[test]
@@ -284,16 +452,27 @@ mod tests {
     }
 
     #[test]
-    fn same_key_same_request_replays_after_completion() {
+    fn accept_then_in_progress_then_replay_carries_original_op_and_result() {
         let mut r = OperationRouter::new();
         let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         let p = principal("alice");
         assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
-        // Still in progress before completion.
-        assert_eq!(r.route(&req, &p), RouteDecision::InProgress);
-        r.mark_completed(&IdempotencyKey::parse("k1").unwrap());
-        // After completion, the same key+request is a replay.
-        assert_eq!(r.route(&req, &p), RouteDecision::Replay);
+        // Still in progress before completion; carries the original op id.
+        assert_eq!(
+            r.route(&req, &p),
+            RouteDecision::InProgress {
+                original_operation_id: OperationId::parse("op-1").unwrap(),
+            }
+        );
+        assert!(r.mark_completed(&req, result(b"started-ok")));
+        // After completion, the same key+request replays the recorded result.
+        assert_eq!(
+            r.route(&req, &p),
+            RouteDecision::Replay {
+                original_operation_id: OperationId::parse("op-1").unwrap(),
+                result: result(b"started-ok"),
+            }
+        );
     }
 
     #[test]
@@ -317,28 +496,140 @@ mod tests {
     }
 
     #[test]
-    fn key_reused_after_retention_is_expired() {
+    fn dedup_key_is_full_namespace_not_idempotency_key_alone() {
+        // The same opaque idempotency key under a different principal must NOT
+        // collide (ADR 0032 keys dedup by realm+principal+node+kind+key).
+        let mut r = OperationRouter::new();
+        let alice = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let bob = req(OperationKind::WorkloadStart, Some("k1"), b"start", "bob");
+        assert!(matches!(
+            r.route(&alice, &principal("alice")),
+            RouteDecision::Accept { .. }
+        ));
+        // Same opaque key, different principal -> independent record, not a
+        // false conflict and not a replay of alice's op.
+        assert!(matches!(
+            r.route(&bob, &principal("bob")),
+            RouteDecision::Accept { .. }
+        ));
+        assert_eq!(r.tracked(), 2);
+    }
+
+    #[test]
+    fn per_attempt_fields_excluded_from_dedup_fingerprint() {
+        // A retry that changes only per-attempt fields (operation_id, trace)
+        // but keeps the same key + request content must dedup as the SAME
+        // request (Replay after completion), never a conflict.
+        let mut r = OperationRouter::new();
+        let p = principal("alice");
+        let first = req_with_op(
+            OperationKind::WorkloadStart,
+            Some("k1"),
+            b"start",
+            "alice",
+            "op-1",
+        );
+        let retry = req_with_op(
+            OperationKind::WorkloadStart,
+            Some("k1"),
+            b"start",
+            "alice",
+            "op-2",
+        );
+        assert!(matches!(r.route(&first, &p), RouteDecision::Accept { .. }));
+        assert!(r.mark_completed(&first, result(b"ok")));
+        // Different operation_id, same fingerprint -> Replay of the original.
+        assert_eq!(
+            r.route(&retry, &p),
+            RouteDecision::Replay {
+                original_operation_id: OperationId::parse("op-1").unwrap(),
+                result: result(b"ok"),
+            }
+        );
+    }
+
+    #[test]
+    fn in_progress_key_does_not_expire() {
+        // A never-completed (still running) op must not be expired/dropped
+        // just because the retention window elapsed.
         let clock = ManualClock::new();
         let mut r =
             OperationRouter::with_clock(clock.clone()).with_retention(Duration::from_secs(60));
         let p = principal("alice");
         let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
+        clock.advance(Duration::from_secs(61));
+        assert_eq!(
+            r.route(&req, &p),
+            RouteDecision::InProgress {
+                original_operation_id: OperationId::parse("op-1").unwrap(),
+            }
+        );
+    }
+
+    #[test]
+    fn completed_key_reused_after_retention_is_expired() {
+        let clock = ManualClock::new();
+        let mut r =
+            OperationRouter::with_clock(clock.clone()).with_retention(Duration::from_secs(60));
+        let p = principal("alice");
+        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
+        assert!(r.mark_completed(&req, result(b"ok")));
         clock.advance(Duration::from_secs(61));
         assert_eq!(r.route(&req, &p), RouteDecision::IdempotencyKeyExpired);
     }
 
     #[test]
-    fn gc_drops_expired_entries() {
+    fn expired_tombstone_survives_gc_until_no_reuse_horizon() {
+        // route -> complete -> expire -> gc -> same key must STILL fail closed
+        // (IdempotencyKeyExpired), not silently re-accept, until the longer
+        // no-reuse horizon drops the tombstone.
+        let clock = ManualClock::new();
+        let mut r = OperationRouter::with_clock(clock.clone())
+            .with_retention(Duration::from_secs(60))
+            .with_no_reuse_horizon(Duration::from_secs(600));
+        let p = principal("alice");
+        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
+        assert!(r.mark_completed(&req, result(b"ok")));
+        clock.advance(Duration::from_secs(61));
+        // Retention elapsed: expired (and tombstoned).
+        assert_eq!(r.route(&req, &p), RouteDecision::IdempotencyKeyExpired);
+        r.gc();
+        // Tombstone kept; reuse still fails closed.
+        assert_eq!(r.tracked(), 1);
+        assert_eq!(r.route(&req, &p), RouteDecision::IdempotencyKeyExpired);
+        // Past the no-reuse horizon the tombstone is dropped.
+        clock.advance(Duration::from_secs(601));
+        r.gc();
+        assert_eq!(r.tracked(), 0);
+        // Only now (after the full no-reuse horizon) is the key fresh again.
+        assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
+    }
+
+    #[test]
+    fn gc_keeps_in_progress_records() {
         let clock = ManualClock::new();
         let mut r =
             OperationRouter::with_clock(clock.clone()).with_retention(Duration::from_secs(60));
         let p = principal("alice");
         let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
-        assert_eq!(r.tracked(), 1);
         clock.advance(Duration::from_secs(61));
         r.gc();
-        assert_eq!(r.tracked(), 0);
+        // In-progress record is never dropped.
+        assert_eq!(r.tracked(), 1);
+    }
+
+    #[test]
+    fn mark_failed_allows_a_fresh_retry() {
+        let mut r = OperationRouter::new();
+        let p = principal("alice");
+        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
+        assert!(r.mark_failed(&req));
+        // After terminal failure the key is fresh, not wedged InProgress.
+        assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
     }
 }

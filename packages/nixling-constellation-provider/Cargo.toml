@@ -16,7 +16,7 @@ workspace = true
 # MUST NOT depend on `prost`/codec crates, transport crates, or host-only
 # broker/daemon internals (dependency-direction gate).
 [dependencies]
-nixling-constellation-core = { path = "../nixling-constellation-core" }
+nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 serde.workspace = true
 schemars.workspace = true

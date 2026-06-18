@@ -8,6 +8,7 @@ use nixling_constellation_core::{
     StreamId, StreamKind, StreamOpen, TraceContext, WorkloadId,
 };
 use nixling_constellation_provider::ProtocolCodec;
+use nixling_ipc::MAX_FRAME_SIZE;
 use prost::Message;
 
 /// Stable codec id negotiated by ADR 0032 protobuf peers.
@@ -39,6 +40,12 @@ impl ProtocolCodec for ProtobufCodec {
     }
 
     fn decode_frame(&self, bytes: &[u8]) -> Result<ConstellationFrame, ConstellationError> {
+        if bytes.len() > MAX_FRAME_SIZE {
+            return Err(frame_too_large(format!(
+                "protobuf frame exceeds maximum size: {len} > {MAX_FRAME_SIZE}",
+                len = bytes.len()
+            )));
+        }
         let frame = ProtoFrame::decode(bytes)
             .map_err(|err| malformed(format!("protobuf frame decode failed: {err}")))?;
         decode_proto_frame(frame)
@@ -896,6 +903,10 @@ fn malformed(message: impl Into<String>) -> ConstellationError {
     ConstellationError::new(ErrorKind::MalformedFrame, message)
 }
 
+fn frame_too_large(message: impl Into<String>) -> ConstellationError {
+    ConstellationError::new(ErrorKind::FrameTooLarge, message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -956,6 +967,78 @@ mod tests {
     }
 
     #[test]
+    fn protobuf_decode_rejects_oversized_input_before_prost_decode() {
+        let codec = ProtobufCodec::new();
+        let oversized = vec![0xff; MAX_FRAME_SIZE + 1];
+
+        assert_frame_too_large(codec.decode_frame(&oversized));
+    }
+
+    #[test]
+    fn protobuf_decode_rejects_unknown_operation_kind_enum_value() {
+        let codec = ProtobufCodec::new();
+        let invalid = ProtoFrame {
+            body: Some(proto_frame::Body::OperationRequest(ProtoOperationRequest {
+                operation_id: "op-1".to_owned(),
+                idempotency_key: None,
+                realm: vec!["work".to_owned()],
+                node: "node-a".to_owned(),
+                workload: None,
+                principal: "principal-1".to_owned(),
+                kind: 99,
+                trace: None,
+                body: Some(ProtoPayload { bytes: Vec::new() }),
+            })),
+        }
+        .encode_to_vec();
+
+        assert_malformed(codec.decode_frame(&invalid));
+    }
+
+    #[test]
+    fn protobuf_decode_rejects_missing_required_stream_id() {
+        let codec = ProtobufCodec::new();
+        let invalid = ProtoFrame {
+            body: Some(proto_frame::Body::StreamClose(ProtoStreamClose {
+                stream: String::new(),
+            })),
+        }
+        .encode_to_vec();
+
+        assert_malformed(codec.decode_frame(&invalid));
+    }
+
+    #[test]
+    fn protobuf_decode_rejects_missing_frame_body() {
+        let codec = ProtobufCodec::new();
+        let invalid = ProtoFrame { body: None }.encode_to_vec();
+
+        assert_malformed(codec.decode_frame(&invalid));
+    }
+
+    #[test]
+    fn protobuf_decode_rejects_inconsistent_stream_open_authz() {
+        let codec = ProtobufCodec::new();
+        let invalid = ProtoFrame {
+            body: Some(proto_frame::Body::StreamOpen(ProtoStreamOpen {
+                descriptor: Some(ProtoStreamDescriptor {
+                    id: "stream-1".to_owned(),
+                    kind: encode_stream_kind(StreamKind::Display).unwrap(),
+                }),
+                operation_id: "op-1".to_owned(),
+                authz: Some(ProtoStreamAuthz {
+                    principal: "principal-1".to_owned(),
+                    realm: vec!["work".to_owned()],
+                    capability: encode_capability(Capability::Exec).unwrap(),
+                }),
+            })),
+        }
+        .encode_to_vec();
+
+        assert_malformed(codec.decode_frame(&invalid));
+    }
+
+    #[test]
     fn alternate_codec_round_trips_the_same_semantic_frames() {
         let protobuf = ProtobufCodec::new();
         let json = JsonCodec;
@@ -975,6 +1058,11 @@ mod tests {
     fn assert_malformed(result: Result<ConstellationFrame, ConstellationError>) {
         let err = result.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::MalformedFrame);
+    }
+
+    fn assert_frame_too_large(result: Result<ConstellationFrame, ConstellationError>) {
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FrameTooLarge);
     }
 
     fn sample_frames() -> Vec<ConstellationFrame> {

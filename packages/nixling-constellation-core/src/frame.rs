@@ -49,7 +49,7 @@ pub struct Handshake {
 
 /// The kind of an operation (ADR 0032 examples). Closed enum; unknown
 /// kinds are rejected at decode (fail-closed).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum OperationKind {
