@@ -871,7 +871,9 @@ fn decode_close_reason(raw: i32) -> Result<StreamCloseReason, ConstellationError
         3 => Ok(StreamCloseReason::TimedOut),
         4 => Ok(StreamCloseReason::Errored),
         5 => Ok(StreamCloseReason::PeerGone),
-        _ => Err(malformed(format!("unknown stream close reason value {raw}"))),
+        _ => Err(malformed(format!(
+            "unknown stream close reason value {raw}"
+        ))),
     }
 }
 

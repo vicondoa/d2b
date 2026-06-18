@@ -70,11 +70,7 @@ impl<C: ProtocolCodec> PeerSession<C> {
         &self.negotiated
     }
 
-    async fn establish(
-        session: TransportSession,
-        codec: C,
-        role: Role,
-    ) -> ProviderResult<Self> {
+    async fn establish(session: TransportSession, codec: C, role: Role) -> ProviderResult<Self> {
         let mut stream = session.into_stream();
         let ours = Handshake {
             protocol_version: PROTOCOL_VERSION,
@@ -274,9 +270,7 @@ mod tests {
             peer: None,
         };
         let bytes = codec.encode_frame(&hs(bogus)).unwrap();
-        write_frame(client_s.stream_mut(), &bytes)
-            .await
-            .unwrap();
+        write_frame(client_s.stream_mut(), &bytes).await.unwrap();
         let err = server.await.unwrap().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::VersionSkew);
     }
@@ -294,9 +288,7 @@ mod tests {
         let frame =
             ConstellationFrame::TypedError(ConstellationError::capability_denied(Capability::Exec));
         let bytes = codec.encode_frame(&frame).unwrap();
-        write_frame(client_s.stream_mut(), &bytes)
-            .await
-            .unwrap();
+        write_frame(client_s.stream_mut(), &bytes).await.unwrap();
         let err = server.await.unwrap().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::MalformedFrame);
     }

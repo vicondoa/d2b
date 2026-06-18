@@ -291,7 +291,10 @@ impl StreamMux {
         }
     }
 
-    fn open_entry_mut(&mut self, stream: &StreamId) -> Result<&mut StreamEntry, ConstellationError> {
+    fn open_entry_mut(
+        &mut self,
+        stream: &StreamId,
+    ) -> Result<&mut StreamEntry, ConstellationError> {
         match self.streams.get_mut(stream) {
             Some(e) if e.state == StreamState::Open => Ok(e),
             Some(_) => Err(ConstellationError::new(
@@ -336,10 +339,7 @@ mod tests {
     fn open_frame(id: &str, kind: StreamKind) -> StreamOpen {
         let principal = crate::ids::PrincipalId::parse("principal-1").unwrap();
         StreamOpen {
-            descriptor: StreamDescriptor {
-                id: sid(id),
-                kind,
-            },
+            descriptor: StreamDescriptor { id: sid(id), kind },
             operation_id: opid(),
             authz: StreamAuthz::for_kind(principal, RealmPath::local(), kind),
         }
@@ -546,8 +546,16 @@ mod tests {
             credits: 2,
         })
         .unwrap();
-        assert_eq!(mux.reserve_send(&sid("s1"), StreamChannel::Primary).unwrap(), 0);
-        assert_eq!(mux.reserve_send(&sid("s1"), StreamChannel::Primary).unwrap(), 1);
+        assert_eq!(
+            mux.reserve_send(&sid("s1"), StreamChannel::Primary)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            mux.reserve_send(&sid("s1"), StreamChannel::Primary)
+                .unwrap(),
+            1
+        );
         assert_eq!(
             mux.reserve_send(&sid("s1"), StreamChannel::Primary)
                 .unwrap_err()

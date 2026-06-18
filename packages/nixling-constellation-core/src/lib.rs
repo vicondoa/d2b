@@ -42,13 +42,11 @@ pub use ids::{
     ExecutionId, GatewayId, IdempotencyKey, NodeId, OperationId, PrincipalId, ProviderId, RealmId,
     StreamCursor, StreamId, WorkloadId,
 };
-pub use mux::{StreamMux, DEFAULT_MAX_OPEN_STREAMS};
+pub use mux::{DEFAULT_MAX_OPEN_STREAMS, StreamMux};
 pub use node::{NodeKind, NodeSummary};
 pub use payload::OpaquePayload;
 pub use realm::{EntrypointMode, RealmPath};
-pub use stream::{
-    StreamAuthz, StreamChannel, StreamCloseReason, StreamDescriptor, StreamKind,
-};
+pub use stream::{StreamAuthz, StreamChannel, StreamCloseReason, StreamDescriptor, StreamKind};
 pub use token::ProtocolToken;
 pub use trace_context::TraceContext;
 pub use workload::{WorkloadSelector, WorkloadState, WorkloadSummary};

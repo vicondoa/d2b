@@ -112,9 +112,7 @@ pub enum StreamChannel {
 /// peer can distinguish an orderly end-of-stream from a cancellation,
 /// timeout, or error without inspecting payload bytes. Closed enum; an
 /// unknown reason is rejected at decode (fail-closed).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum StreamCloseReason {

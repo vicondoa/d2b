@@ -43,7 +43,7 @@ use nixling_constellation_core::{
 
 pub mod session;
 
-pub use session::{PeerSession, MAX_FRAME_BYTES, PROTOCOL_VERSION};
+pub use session::{MAX_FRAME_BYTES, PROTOCOL_VERSION, PeerSession};
 
 /// Default dedup retention window. While a completed key is within this
 /// window a same-request retry resolves to `Replay`; past it the key is

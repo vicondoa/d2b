@@ -533,8 +533,7 @@ mod tests {
         let close = "{\"frame\":\"stream-close\",\"stream\":\"s1\",\"reason\":\"completed\"}";
         assert!(serde_json::from_str::<ConstellationFrame>(close).is_ok());
         // Extra peer-supplied fields are rejected (deny_unknown_fields).
-        let data_extra =
-            "{\"frame\":\"stream-data\",\"stream\":\"s1\",\"sequence\":0,\"data\":[1],\"evil\":true}";
+        let data_extra = "{\"frame\":\"stream-data\",\"stream\":\"s1\",\"sequence\":0,\"data\":[1],\"evil\":true}";
         assert!(serde_json::from_str::<ConstellationFrame>(data_extra).is_err());
         let close_extra =
             "{\"frame\":\"stream-close\",\"stream\":\"s1\",\"reason\":\"completed\",\"evil\":true}";
