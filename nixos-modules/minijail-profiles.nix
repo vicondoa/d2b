@@ -180,6 +180,11 @@ let
   vmProfiles = name: vm:
     let
       manifest = cfg.manifest.${name};
+      gatewayVmNames =
+        lib.mapAttrsToList (_: gw: gw.vmName)
+          (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
+      isGatewayVm = lib.elem name gatewayVmNames;
+      gatewayDisplayRuntimeDir = "/run/nixling-gateway-display/${name}";
       virtiofsdRootException = "ADR 0021 v1.1.1fu14 virtiofsd fake-root via broker pre-established user NS";
       virtiofsShares = lib.filter
         (share: (share.proto or "virtiofs") == "virtiofs")
@@ -681,6 +686,37 @@ let
         capabilities = [ "CAP_NET_RAW" ];
         seccompPolicyRef = "w1-usbip";
         cgroupSubtree = "nixling.slice/${name}/usbip";
+        controllers = serviceControllers;
+      };
+    }
+    // lib.optionalAttrs isGatewayVm {
+      "${profileIdFor name "gateway-waypipe-client"}" = mkProfile {
+        profileId = profileIdFor name "gateway-waypipe-client";
+        role = "gateway-waypipe-client";
+        principal = "nixling-${name}-gw-wp-client";
+        capabilities = [ ];
+        seccompPolicyRef = "w1-gateway-waypipe-client";
+        writablePaths = [
+          (mkWritablePath gatewayDisplayRuntimeDir "Create and own the filtered host-side Waypipe client socket.")
+        ];
+        deviceBinds = [ ];
+        bindMounts = [ ];
+        cgroupSubtree = "nixling.slice/${name}/gateway-waypipe-client";
+        controllers = serviceControllers;
+      };
+
+      "${profileIdFor name "gateway-waypipe-server"}" = mkProfile {
+        profileId = profileIdFor name "gateway-waypipe-server";
+        role = "gateway-waypipe-server";
+        principal = "nixling-${name}-gw-wp-server";
+        capabilities = [ ];
+        seccompPolicyRef = "w1-gateway-waypipe-server";
+        writablePaths = [
+          (mkWritablePath gatewayDisplayRuntimeDir "Create and own the gateway/container-side Waypipe server socket.")
+        ];
+        deviceBinds = [ ];
+        bindMounts = [ ];
+        cgroupSubtree = "nixling.slice/${name}/gateway-waypipe-server";
         controllers = serviceControllers;
       };
     };

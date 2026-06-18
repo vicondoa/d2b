@@ -108,7 +108,9 @@ examples-with-observability/work-env-declared
 gateway-vm/admits-framework-sys-prefix
 gateway-vm/auto-declared-env-index
 gateway-vm/auto-declared-name
+gateway-vm/emits-waypipe-runner-nodes
 gateway-vm/rejects-secret-shaped-credential-path
+gateway-vm/waypipe-profiles-are-jailed-and-device-empty
 guest-config-containment/clean-no-failure
 guest-config-containment/imports-microvm-fires
 guest-config-containment/imports-microvm-names-mem
