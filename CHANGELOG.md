@@ -10,6 +10,8 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-06-18
+
 ### Fixed
 
 - `tpm.enable` first-run: enabling TPM on a VM with no pre-existing
