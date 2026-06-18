@@ -165,16 +165,16 @@ pub fn build_connect(
     credential: &RelayCredential,
     ttl_secs: u64,
 ) -> Result<RelayConnect, RelayError> {
-    let id_param = match role {
-        RelayRole::Sender => format!("&sb-hc-id={}", connect_id()),
-        RelayRole::Listener => String::new(),
-    };
+    // The sender does NOT supply its own `sb-hc-id`. Azure Relay generates the
+    // rendezvous correlation id (a GUID) and embeds it in the accept message's
+    // address; a caller-supplied non-GUID id yields an unserviceable rendezvous
+    // address that the listener's accept connect rejects with 400. This matches
+    // the official Relay SDKs, which omit `sb-hc-id` on connect.
     let base = format!(
-        "wss://{}/$hc/{}?sb-hc-action={}{}",
+        "wss://{}/$hc/{}?sb-hc-action={}",
         endpoint.namespace,
         urlencoding::encode(&endpoint.entity),
         role.action(),
-        id_param,
     );
     match credential {
         RelayCredential::EntraBearer(token) => Ok(RelayConnect {
@@ -189,20 +189,6 @@ pub fn build_connect(
             })
         }
     }
-}
-
-/// A connect id for the sender rendezvous. Deterministic length, non-secret.
-fn connect_id() -> String {
-    // A 16-byte hex id from the system clock + a process-unique counter. No
-    // RNG dependency; uniqueness only needs to hold within a gateway.
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let t = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    format!("{:016x}", t ^ n.rotate_left(32))
 }
 
 /// Errors building relay auth.
@@ -289,7 +275,10 @@ pub async fn connect_with_ca(
 }
 
 /// Connect a rendezvous URL (the listener-side accept address; it already
-/// carries its own token) with the optional extra CA.
+/// carries its own token and rendezvous id) with the optional extra CA. The
+/// relay routes the rendezvous to a per-connection backend host
+/// (`g<N>-prod-…-sb.servicebus.windows.net`); the dial targets that host
+/// verbatim, exactly as the official Relay SDK listeners do.
 async fn connect_raw(url: &str, ca_pem: Option<&[u8]>) -> Result<RelayStream, RelayConnectError> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     install_crypto_provider();
@@ -451,6 +440,29 @@ where
     }
 }
 
+/// Connect as a sender, retrying briefly on a 404. Azure Relay returns 404
+/// to a sender when no listener is registered for the entity yet; the gateway
+/// listener may still be completing its control-channel registration, so a
+/// few short retries close that startup race without masking a real failure.
+async fn connect_sender_retrying(
+    endpoint: &RelayEndpoint,
+    credential: &RelayCredential,
+    ttl_secs: u64,
+    ca_pem: Option<&[u8]>,
+) -> Result<RelayStream, RelayConnectError> {
+    let mut attempt = 0u32;
+    loop {
+        match connect_with_ca(endpoint, RelayRole::Sender, credential, ttl_secs, ca_pem).await {
+            Ok(ws) => return Ok(ws),
+            Err(RelayConnectError::Handshake(ref m)) if m.contains("404") && attempt < 30 => {
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// Run the **sender** side (in the sandbox): connect to the relay with the
 /// credential (the MI Entra bearer in production), then bridge to `local`.
 /// `ca_pem` is the ACA egress-proxy CA.
@@ -458,7 +470,8 @@ where
 /// For a `unix-listen` target the socket is **bound before** the relay
 /// connect, so the local peer (e.g. `waypipe server`) can connect
 /// immediately and never races the relay handshake; the local connection is
-/// accepted only after the relay side is up.
+/// accepted only after the relay side is up. The relay connect retries
+/// briefly on a 404 to ride out the gateway listener's registration race.
 pub async fn run_sender(
     endpoint: &RelayEndpoint,
     credential: &RelayCredential,
@@ -470,14 +483,14 @@ pub async fn run_sender(
         let _ = std::fs::remove_file(path);
         let listener = tokio::net::UnixListener::bind(path)
             .map_err(|_| RelayConnectError::Handshake("bind unix-listen".into()))?;
-        let ws = connect_with_ca(endpoint, RelayRole::Sender, credential, ttl_secs, ca_pem).await?;
+        let ws = connect_sender_retrying(endpoint, credential, ttl_secs, ca_pem).await?;
         let (stream, _) = listener
             .accept()
             .await
             .map_err(|_| RelayConnectError::Handshake("accept unix-listen".into()))?;
         return pump(ws, stream).await;
     }
-    let ws = connect_with_ca(endpoint, RelayRole::Sender, credential, ttl_secs, ca_pem).await?;
+    let ws = connect_sender_retrying(endpoint, credential, ttl_secs, ca_pem).await?;
     let io = connect_local(local)
         .await
         .map_err(|_| RelayConnectError::Handshake("local connect".into()))?;
@@ -583,7 +596,8 @@ mod tests {
         assert!(!c.url.contains("jwt.abc.def"));
         assert!(!c.url.contains("sb-hc-token"));
         assert!(c.url.contains("sb-hc-action=connect"));
-        assert!(c.url.contains("sb-hc-id="));
+        // The sender omits sb-hc-id; the relay generates the rendezvous GUID.
+        assert!(!c.url.contains("sb-hc-id="));
         assert_eq!(c.auth_header.as_deref(), Some("Bearer jwt.abc.def"));
     }
 
@@ -624,14 +638,6 @@ mod tests {
         assert!(!d.contains("jwt.abc.def"));
         assert!(!d.contains("Bearer"));
         assert!(d.contains("<redacted>"));
-    }
-
-    #[test]
-    fn connect_ids_are_unique() {
-        let a = connect_id();
-        let b = connect_id();
-        assert_ne!(a, b);
-        assert_eq!(a.len(), 16);
     }
 
     #[test]
