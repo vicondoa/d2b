@@ -396,6 +396,7 @@ usbip-gating/vm-enabled-site-disabled-kernel-module-absent
 usbip-gating/vm-enabled-site-disabled-proxy-absent
 usbip-gating/vm-enabled-site-disabled-proxy-firewall-rule-absent
 usbip-gating/vm-enabled-site-disabled-socket-absent
+vm-eval-overlays/guest-inherits-host-overlays
 volume-mounts/disk-init-absolute
 volume-mounts/disk-init-non-ext4
 volume-mounts/disk-init-non-raw
