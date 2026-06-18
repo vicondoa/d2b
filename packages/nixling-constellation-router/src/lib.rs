@@ -41,10 +41,17 @@ use nixling_constellation_core::{
     OperationKind, OperationRequest, PrincipalId, RealmPath,
 };
 
+pub mod display_transport;
+pub mod mux_session;
 pub mod session;
 pub mod session_lifecycle;
 pub mod target_resolver;
 
+pub use display_transport::{
+    DISPLAY_TOKEN_LEN, DISPLAY_VSOCK_PORT, DisplayTransportBinding, DisplayTransportToken,
+    encode_display_preface, verify_display_preface,
+};
+pub use mux_session::MuxSession;
 pub use session::{MAX_FRAME_BYTES, PROTOCOL_VERSION, PeerSession};
 pub use session_lifecycle::{LifecycleError, SessionLifecycle, SessionPhase};
 pub use target_resolver::{DispatchTarget, RealmEntrypoint, RealmEntrypointTable, ResolveError};
