@@ -21,6 +21,7 @@ pub mod error;
 pub mod execution;
 pub mod frame;
 pub mod ids;
+pub mod mux;
 pub mod node;
 pub mod payload;
 pub mod realm;
@@ -41,6 +42,7 @@ pub use ids::{
     ExecutionId, GatewayId, IdempotencyKey, NodeId, OperationId, PrincipalId, ProviderId, RealmId,
     StreamCursor, StreamId, WorkloadId,
 };
+pub use mux::{StreamMux, DEFAULT_MAX_OPEN_STREAMS};
 pub use node::{NodeKind, NodeSummary};
 pub use payload::OpaquePayload;
 pub use realm::{EntrypointMode, RealmPath};
