@@ -18,7 +18,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use nix::sys::socket::{connect, socket, AddressFamily, SockFlag, SockType, UnixAddr};
+use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
 use nixling_constellation_core::{
     Capability, CapabilitySet, ErrorKind, NodeId, ProviderId, WorkloadId, WorkloadState,
     WorkloadSummary,
@@ -29,14 +29,14 @@ use nixling_constellation_provider::{
     types::{DaemonAccessMode, SafeLabel, TransportSession, TransportTarget},
 };
 use nixling_ipc::{
+    FeatureFlag, Hello, HelloOk, HelloRejected, KnownFeatureFlag, MAX_FRAME_SIZE,
+    PUBLIC_SOCKET_PATH, SemverRange,
     public_wire::{
         ListEntry, ListRequest, ListResponse, PublicVmServices, RuntimeSummary, VmLifecycle,
         VmLifecycleState,
     },
-    FeatureFlag, Hello, HelloOk, HelloRejected, KnownFeatureFlag, SemverRange, MAX_FRAME_SIZE,
-    PUBLIC_SOCKET_PATH,
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -684,12 +684,12 @@ struct ListResponseFrame {
 mod tests {
     use super::*;
     use nix::{
-        sys::socket::{accept4, bind, listen, send, Backlog, MsgFlags},
+        sys::socket::{Backlog, MsgFlags, accept4, bind, listen, send},
         unistd::close,
     };
     use nixling_ipc::{
-        public_wire::{PublicVmServices, RuntimeSummary, VmLifecycle},
         Version,
+        public_wire::{PublicVmServices, RuntimeSummary, VmLifecycle},
     };
     use std::{
         fs,
@@ -742,13 +742,15 @@ mod tests {
 
         assert_eq!(rendered, "LocalUnixDaemonAccess { .. }");
         assert!(!rendered.contains(&socket_path.display().to_string()));
-        assert!(!rendered.contains(
-            socket_path
-                .file_name()
-                .expect("socket file name")
-                .to_string_lossy()
-                .as_ref()
-        ));
+        assert!(
+            !rendered.contains(
+                socket_path
+                    .file_name()
+                    .expect("socket file name")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
         assert!(!rendered.contains(LOCAL_NODE_ID));
     }
 
@@ -946,14 +948,16 @@ mod tests {
             assert_eq!(entry.lifecycle.pending_restart, pending_restart);
             assert_eq!(entry.runtime.detail, runtime_detail);
         }
-        assert!(list
-            .vms
-            .iter()
-            .any(|entry| entry.lifecycle.state == DaemonVmLifecycleState::Restarting));
-        assert!(list
-            .vms
-            .iter()
-            .any(|entry| entry.lifecycle.state == DaemonVmLifecycleState::Unknown));
+        assert!(
+            list.vms
+                .iter()
+                .any(|entry| entry.lifecycle.state == DaemonVmLifecycleState::Restarting)
+        );
+        assert!(
+            list.vms
+                .iter()
+                .any(|entry| entry.lifecycle.state == DaemonVmLifecycleState::Unknown)
+        );
         assert!(list.vms.iter().any(|entry| entry.lifecycle.pending_restart));
     }
 

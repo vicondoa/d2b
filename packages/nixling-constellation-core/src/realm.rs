@@ -65,7 +65,7 @@ impl RealmPath {
     /// The reserved local realm (`local`).
     pub fn local() -> Self {
         Self(vec![
-            RealmId::parse("local").expect("`local` is a valid label")
+            RealmId::parse("local").expect("`local` is a valid label"),
         ])
     }
 

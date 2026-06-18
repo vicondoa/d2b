@@ -351,9 +351,16 @@ impl NftBatch {
                         ["type", "filter", "hook", hook, "priority", priority] => {
                             (*hook, *priority, None)
                         }
-                        ["type", "filter", "hook", hook, "priority", priority, "policy", policy] => {
-                            (*hook, *priority, Some(*policy))
-                        }
+                        [
+                            "type",
+                            "filter",
+                            "hook",
+                            hook,
+                            "priority",
+                            priority,
+                            "policy",
+                            policy,
+                        ] => (*hook, *priority, Some(*policy)),
                         _ => {
                             return Err(ParseNftScriptError::new(format!(
                                 "line {line_no}: unsupported chain header `{line}`"

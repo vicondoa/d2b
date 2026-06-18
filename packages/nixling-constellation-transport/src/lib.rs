@@ -18,7 +18,7 @@ use nixling_constellation_provider::provider::{TransportListener, TransportProvi
 use nixling_constellation_provider::types::{
     NodeRegistration, SafeLabel, TransportSession, TransportTarget,
 };
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 /// Default in-memory duplex buffer size for a loopback session.
 const LOOPBACK_BUF: usize = 64 * 1024;

@@ -466,8 +466,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Test starter — records every `start` call (so we can
     /// assert ordering / parallelism) and lets each test pick the

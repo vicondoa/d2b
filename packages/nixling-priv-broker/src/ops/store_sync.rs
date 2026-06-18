@@ -36,7 +36,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use nix::fcntl::{flock, FlockArg};
+use nix::fcntl::{FlockArg, flock};
 use nixling_core::bundle_resolver::ResolvedStoreViewIntent;
 use nixling_host::hardlink_farm::{self, GenerationMarker, HardlinkFarmError};
 
@@ -45,7 +45,7 @@ use crate::ops::store_sync_audit::{
     StoreSyncTimings,
 };
 use crate::ops::store_view_posture::{
-    plant_live_marker_with_matrix_posture, posture_store_view_matrix_paths, PostureError,
+    PostureError, plant_live_marker_with_matrix_posture, posture_store_view_matrix_paths,
 };
 
 /// Typed errors for the `StoreSync` handler. Each value classifies the
@@ -772,10 +772,11 @@ mod tests {
         );
 
         // gcroots/generation-<id> planted (host-only).
-        assert!(farm
-            .join("gcroots")
-            .join(format!("generation-{gid}"))
-            .exists());
+        assert!(
+            farm.join("gcroots")
+                .join(format!("generation-{gid}"))
+                .exists()
+        );
 
         // Both currents resolve to the same generation id; no stale tmp.
         let state_current = std::fs::read_link(farm.join("state/current")).unwrap();

@@ -11,10 +11,10 @@ pub mod login_session;
 pub mod service;
 
 use nixling_ipc::guest_wire::{
-    ExecCreateRequest, ExecId, GuestBootId, GuestCapability, GuestControlErrorKind,
-    GuestExecRequestMetadata, GuestSubsystem, HealthOrigin, HealthReason, HealthRemediation,
-    HealthResponse, HealthState, OutputStream, ReadOutputRequest, ReadOutputResponse,
-    GUEST_CONTROL_PROTOCOL_VERSION,
+    ExecCreateRequest, ExecId, GUEST_CONTROL_PROTOCOL_VERSION, GuestBootId, GuestCapability,
+    GuestControlErrorKind, GuestExecRequestMetadata, GuestSubsystem, HealthOrigin, HealthReason,
+    HealthRemediation, HealthResponse, HealthState, OutputStream, ReadOutputRequest,
+    ReadOutputResponse,
 };
 
 pub const MAX_HEALTH_CAPABILITIES: usize = 32;

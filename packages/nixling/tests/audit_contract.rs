@@ -24,7 +24,7 @@ use std::process::Command;
 
 use serde_json::Value;
 
-use common::{spawn_nixlingd_once, TestPeer};
+use common::{TestPeer, spawn_nixlingd_once};
 
 /// Write a non-executable / `exit 99` poison-pill the CLI must never exec.
 fn write_poison_pill(dir: &Path) -> std::path::PathBuf {
@@ -200,7 +200,7 @@ fn audit_admin_rejected_against_live_daemon_without_fallback() {
 /// an `auditResponse` with two lines. Returns the joinable server thread.
 fn spawn_audit_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
     use nix::sys::socket::{
-        accept, bind, listen, socket, AddressFamily, Backlog, SockFlag, SockType, UnixAddr,
+        AddressFamily, Backlog, SockFlag, SockType, UnixAddr, accept, bind, listen, socket,
     };
 
     let _ = std::fs::remove_file(path);

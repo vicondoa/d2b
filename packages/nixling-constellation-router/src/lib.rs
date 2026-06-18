@@ -348,10 +348,10 @@ impl<C: Clock> OperationRouter<C> {
         let horizon = self.no_reuse_horizon;
         // First, age completed entries into tombstones.
         for entry in self.dedup.values_mut() {
-            if let DedupState::Completed { since, .. } = &entry.state {
-                if now.duration_since(*since) > retention {
-                    entry.state = DedupState::Expired { since: now };
-                }
+            if let DedupState::Completed { since, .. } = &entry.state
+                && now.duration_since(*since) > retention
+            {
+                entry.state = DedupState::Expired { since: now };
             }
         }
         // Then drop only tombstones older than the no-reuse horizon.

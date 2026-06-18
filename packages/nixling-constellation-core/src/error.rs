@@ -254,8 +254,7 @@ mod tests {
         // CapabilityDenied must carry the structured missing capability.
         let bad = "{\"kind\":\"capability-denied\",\"message\":\"x\"}";
         assert!(serde_json::from_str::<ConstellationError>(bad).is_err());
-        let ok =
-            "{\"kind\":\"capability-denied\",\"capability\":\"window-forwarding\",\"message\":\"x\"}";
+        let ok = "{\"kind\":\"capability-denied\",\"capability\":\"window-forwarding\",\"message\":\"x\"}";
         let e: ConstellationError = serde_json::from_str(ok).unwrap();
         assert_eq!(e.missing_capability(), Some(Capability::WindowForwarding));
     }

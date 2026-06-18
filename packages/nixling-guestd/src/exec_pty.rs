@@ -781,15 +781,15 @@ pub mod linux {
     use std::pin::Pin;
     use std::process::Stdio;
     use std::sync::Arc;
-    use std::task::{ready, Context, Poll};
+    use std::task::{Context, Poll, ready};
     use std::time::Duration;
 
     use async_trait::async_trait;
     use rustix::fs::{Mode, OFlags};
     use rustix::io::{ioctl_fionbio, read, write};
-    use rustix::process::{kill_process, kill_process_group, Pid, Signal};
-    use rustix::pty::{grantpt, openpt, ptsname, unlockpt, OpenptFlags};
-    use rustix::termios::{tcgetpgrp, tcsetwinsize, Winsize};
+    use rustix::process::{Pid, Signal, kill_process, kill_process_group};
+    use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
+    use rustix::termios::{Winsize, tcgetpgrp, tcsetwinsize};
     use tokio::io::unix::AsyncFd;
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
     use tokio::process::{Child, Command};
@@ -1145,10 +1145,10 @@ pub mod linux {
         fn signal_foreground(&self, signal: TtySignal) {
             // Resolve the foreground process group at delivery time: a
             // job-control shell moves the foreground PG as it runs children.
-            if let Ok(pgid) = tcgetpgrp(self.io.get_ref()) {
-                if let Some(sig) = rustix_signal(signal) {
-                    let _ = kill_process_group(pgid, sig);
-                }
+            if let Ok(pgid) = tcgetpgrp(self.io.get_ref())
+                && let Some(sig) = rustix_signal(signal)
+            {
+                let _ = kill_process_group(pgid, sig);
             }
         }
     }

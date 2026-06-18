@@ -155,7 +155,7 @@ mod tests {
         assert_eq!(decode("Zg==AAAA"), Err(DecodeError));
         // Two-char padding mid-stream.
         assert_eq!(decode("Zm8=AAAA"), Err(DecodeError)); // "fo" + ...
-                                                          // One-char padding mid-stream.
+        // One-char padding mid-stream.
         assert_eq!(decode("Zm9vYg==Zm9v"), Err(DecodeError));
         // A long run with a padded interior quad.
         assert_eq!(decode("Zm9vZg==Zm9v"), Err(DecodeError));

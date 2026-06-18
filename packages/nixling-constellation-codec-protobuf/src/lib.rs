@@ -15,8 +15,7 @@ use prost::Message;
 pub const CODEC_ID: &str = "protobuf.v1";
 
 /// Deterministic fingerprint for the hand-authored prost schema in this crate.
-pub const SCHEMA_FINGERPRINT: &str =
-    "protobuf.v1/frames=8/fields=handshake3,opreq9,opresp2,streamopen3,streamdata2,streamclose1,error3,audit10";
+pub const SCHEMA_FINGERPRINT: &str = "protobuf.v1/frames=8/fields=handshake3,opreq9,opresp2,streamopen3,streamdata2,streamclose1,error3,audit10";
 
 /// A prost-backed constellation frame codec.
 #[derive(Debug, Clone, Copy, Default)]

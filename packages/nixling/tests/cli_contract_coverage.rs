@@ -778,14 +778,13 @@ fn flag_tokens(line: &str) -> Vec<String> {
     })
     .filter_map(|raw| {
         let token = raw.trim_matches(|c: char| matches!(c, '.' | ':' | ';' | '|'));
-        if let Some(rest) = token.strip_prefix("--") {
-            if !rest.is_empty()
-                && rest
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-            {
-                return Some(format!("--{rest}"));
-            }
+        if let Some(rest) = token.strip_prefix("--")
+            && !rest.is_empty()
+            && rest
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            return Some(format!("--{rest}"));
         }
         if token.len() == 2 {
             let mut chars = token.chars();

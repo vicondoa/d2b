@@ -553,7 +553,11 @@ mod tests {
     #[test]
     fn golden_has_exactly_two_shape_lines() {
         let lines = golden_payload_lines();
-        assert_eq!(lines.len(), 2, "golden file must carry exactly two argv shapes (stack vsock-in + guest egress); EXEC form lives in OtelHostBridge's golden");
+        assert_eq!(
+            lines.len(),
+            2,
+            "golden file must carry exactly two argv shapes (stack vsock-in + guest egress); EXEC form lives in OtelHostBridge's golden"
+        );
     }
 
     #[test]

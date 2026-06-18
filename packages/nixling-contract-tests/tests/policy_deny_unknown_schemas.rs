@@ -116,10 +116,10 @@ fn walk_object_schemas<'a>(
             }
         }
     }
-    if let Some(items) = map.get("items") {
-        if items.is_object() {
-            walk_object_schemas(items, root, format!("{path}/items"), seen, visit);
-        }
+    if let Some(items) = map.get("items")
+        && items.is_object()
+    {
+        walk_object_schemas(items, root, format!("{path}/items"), seen, visit);
     }
     for key in ["oneOf", "anyOf", "allOf"] {
         if let Some(Value::Array(subs)) = map.get(key) {

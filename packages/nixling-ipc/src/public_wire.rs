@@ -1,4 +1,4 @@
-use crate::{guest_wire::ExecState, FeatureFlag, Version};
+use crate::{FeatureFlag, Version, guest_wire::ExecState};
 use nixling_core::{error::Error, host::IfName};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

@@ -14,7 +14,7 @@
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
-use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nixling_priv_broker::ops::pidfd::{
     PidfdMethod, PidfdOpError, PidfdPayload, PidfdSpawner, RealPidfdSpawner, StartTime,
 };

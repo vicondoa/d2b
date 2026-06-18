@@ -25,7 +25,7 @@
 //! kill the process (`SECCOMP_RET_KILL_PROCESS`).
 
 use crate::devices::DeviceClass;
-use crate::ioctl_policy::{ioctl_allowlist, RoleResources};
+use crate::ioctl_policy::{RoleResources, ioctl_allowlist};
 
 /// A single BPF instruction.
 ///

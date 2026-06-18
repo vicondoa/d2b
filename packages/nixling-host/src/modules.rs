@@ -40,10 +40,10 @@ impl LoadedModuleSet {
     pub fn parse_proc_modules(contents: &str) -> Self {
         let mut names = BTreeSet::new();
         for line in contents.lines() {
-            if let Some(name) = line.split_whitespace().next() {
-                if !name.is_empty() {
-                    names.insert(name.to_owned());
-                }
+            if let Some(name) = line.split_whitespace().next()
+                && !name.is_empty()
+            {
+                names.insert(name.to_owned());
             }
         }
         Self { names }
@@ -667,10 +667,12 @@ mod tests {
         let result = probe_with(&[], &inputs);
         assert!(result.br_netfilter_present);
         assert_eq!(result.bridge_nf_recommendations.len(), 2);
-        assert!(result
-            .bridge_nf_recommendations
-            .iter()
-            .any(|r| r.key == "net.bridge.bridge-nf-call-iptables"));
+        assert!(
+            result
+                .bridge_nf_recommendations
+                .iter()
+                .any(|r| r.key == "net.bridge.bridge-nf-call-iptables")
+        );
     }
 
     #[test]

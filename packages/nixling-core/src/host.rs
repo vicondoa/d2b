@@ -1,7 +1,7 @@
 use schemars::{
-    gen::SchemaGenerator,
-    schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec, StringValidation},
     JsonSchema,
+    r#gen::SchemaGenerator,
+    schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec, StringValidation},
 };
 use serde::{Deserialize, Deserializer, Serialize};
 

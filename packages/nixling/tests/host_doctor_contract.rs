@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use nix::sys::socket::{
-    bind, listen, socket, AddressFamily, Backlog, SockFlag, SockType, UnixAddr,
+    AddressFamily, Backlog, SockFlag, SockType, UnixAddr, bind, listen, socket,
 };
 use serde_json::Value;
 use std::os::fd::{AsRawFd, OwnedFd};

@@ -3,8 +3,8 @@ use std::io;
 use std::os::fd::RawFd;
 
 use nix::cmsg_space;
-use nix::fcntl::{fcntl, FcntlArg, FdFlag};
-use nix::sys::socket::{recvmsg, sendmsg, ControlMessage, ControlMessageOwned, MsgFlags};
+use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+use nix::sys::socket::{ControlMessage, ControlMessageOwned, MsgFlags, recvmsg, sendmsg};
 use nix::sys::stat::fstat;
 use nix::unistd::close;
 use std::io::{IoSlice, IoSliceMut};
@@ -140,7 +140,7 @@ mod tests {
     use std::os::fd::AsRawFd;
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
-    use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
     use nix::unistd::{dup, pipe, read, write};
 
     fn fd_test_lock() -> MutexGuard<'static, ()> {

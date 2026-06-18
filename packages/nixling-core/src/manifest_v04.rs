@@ -1,8 +1,8 @@
 use crate::error::Error;
 use schemars::{
-    gen::SchemaGenerator,
-    schema::{InstanceType, Metadata, ObjectValidation, Schema, SchemaObject, SingleOrVec},
     JsonSchema,
+    r#gen::SchemaGenerator,
+    schema::{InstanceType, Metadata, ObjectValidation, Schema, SchemaObject, SingleOrVec},
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -111,7 +111,7 @@ impl JsonSchema for ManifestV04 {
         "ManifestV04".to_owned()
     }
 
-    fn json_schema(gen: &mut SchemaGenerator) -> Schema {
+    fn json_schema(r#gen: &mut SchemaGenerator) -> Schema {
         let mut object = SchemaObject {
             instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
             ..Default::default()
@@ -119,16 +119,17 @@ impl JsonSchema for ManifestV04 {
         let mut validation = ObjectValidation::default();
         validation.required.insert("_manifest".to_owned());
         validation.required.insert("_observability".to_owned());
-        validation
-            .properties
-            .insert("_manifest".to_owned(), gen.subschema_for::<ManifestMeta>());
+        validation.properties.insert(
+            "_manifest".to_owned(),
+            r#gen.subschema_for::<ManifestMeta>(),
+        );
         validation.properties.insert(
             "_observability".to_owned(),
-            gen.subschema_for::<ObservabilityMeta>(),
+            r#gen.subschema_for::<ObservabilityMeta>(),
         );
         validation.pattern_properties.insert(
             "^[a-z][a-z0-9-]*$".to_owned(),
-            gen.subschema_for::<VmEntry>(),
+            r#gen.subschema_for::<VmEntry>(),
         );
         validation.additional_properties = Some(Box::new(Schema::Bool(false)));
         object.object = Some(Box::new(validation));
@@ -376,8 +377,10 @@ mod tests {
         )
         .expect_err("future manifest version must fail closed");
         assert_eq!(error.kind().as_str(), "manifest-version-mismatch");
-        assert!(error
-            .message()
-            .contains("opaque reason: manifest-version-mismatch"));
+        assert!(
+            error
+                .message()
+                .contains("opaque reason: manifest-version-mismatch")
+        );
     }
 }

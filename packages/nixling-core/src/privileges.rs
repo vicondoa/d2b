@@ -1,7 +1,7 @@
 use schemars::{
-    gen::SchemaGenerator,
-    schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec},
     JsonSchema,
+    r#gen::SchemaGenerator,
+    schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec},
 };
 use serde::{Deserialize, Serialize};
 
@@ -1275,17 +1275,19 @@ impl PrivilegesJson {
 
 #[cfg(test)]
 mod tests {
-    use super::{PrivilegesJson, BROKER_OPERATION_AUTHZ, PUBLIC_OPERATION_AUTHZ};
+    use super::{BROKER_OPERATION_AUTHZ, PUBLIC_OPERATION_AUTHZ, PrivilegesJson};
 
     #[test]
     fn w1_matrix_contains_public_and_broker_rows() {
         let matrix = PrivilegesJson::w1("v1");
         assert_eq!(matrix.public_operations.len(), PUBLIC_OPERATION_AUTHZ.len());
         assert_eq!(matrix.broker_operations.len(), BROKER_OPERATION_AUTHZ.len());
-        assert!(matrix
-            .broker_operations
-            .iter()
-            .any(|row| row.operation == "DelegateCgroupV2"));
+        assert!(
+            matrix
+                .broker_operations
+                .iter()
+                .any(|row| row.operation == "DelegateCgroupV2")
+        );
     }
 
     #[test]

@@ -4,9 +4,9 @@
 //! are bounded so it cannot become a side channel.
 
 use schemars::{
-    gen::SchemaGenerator,
-    schema::{InstanceType, ObjectValidation, Schema, SchemaObject, SingleOrVec, StringValidation},
     JsonSchema,
+    r#gen::SchemaGenerator,
+    schema::{InstanceType, ObjectValidation, Schema, SchemaObject, SingleOrVec, StringValidation},
 };
 use serde::{Deserialize, Deserializer, Serialize};
 

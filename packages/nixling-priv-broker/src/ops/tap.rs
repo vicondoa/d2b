@@ -26,10 +26,10 @@ use nixling_core::host::{HostJson, TapRole};
 use nixling_core::host_w3::TapRoleW3;
 use nixling_core::manifest_v04::VmEntry;
 use nixling_host::bridge_port::BridgePortFlagSet;
-use nixling_host::ifname::{derive_from_env_vm, DerivedRole, IfName};
+use nixling_host::ifname::{DerivedRole, IfName, derive_from_env_vm};
 use nixling_host::netlink::{
-    fake::FakeBackend, ipv6_off_sequence, readback_bridge_port_flags, LinkKind, LinkSpec,
-    NetlinkBackend, NetlinkError, TapOwner,
+    LinkKind, LinkSpec, NetlinkBackend, NetlinkError, TapOwner, fake::FakeBackend,
+    ipv6_off_sequence, readback_bridge_port_flags,
 };
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
@@ -682,11 +682,7 @@ impl LiveBridgePortTarget {
 }
 
 const fn bool_to_ip_value(value: bool) -> &'static str {
-    if value {
-        "on"
-    } else {
-        "off"
-    }
+    if value { "on" } else { "off" }
 }
 
 /// Convenience constructor used by tests / fuzzers.

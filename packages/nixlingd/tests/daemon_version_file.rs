@@ -7,8 +7,8 @@ mod daemon_version_file {
     use serde_json::Value;
 
     use super::common::{
-        assert_contains, spawn_nixlingd_serve, test_client, wait_for_file, DaemonFixture, TestPeer,
-        HELLO_FRAME,
+        DaemonFixture, HELLO_FRAME, TestPeer, assert_contains, spawn_nixlingd_serve, test_client,
+        wait_for_file,
     };
 
     #[test]

@@ -18,18 +18,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nix::cmsg_space;
-use nix::fcntl::{fcntl, FcntlArg, FdFlag, Flock, FlockArg};
+use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
 use nix::sys::socket::{
-    connect, getsockopt, recv, recvmsg, send, socket, sockopt::PeerCredentials, AddressFamily,
-    ControlMessageOwned, MsgFlags, SockFlag, SockType, UnixAddr,
+    AddressFamily, ControlMessageOwned, MsgFlags, SockFlag, SockType, UnixAddr, connect,
+    getsockopt, recv, recvmsg, send, socket, sockopt::PeerCredentials,
 };
 use nix::unistd::{self, Gid, Group, Uid, User};
 use nixling_core::bundle::Bundle;
 use nixling_core::bundle_resolver::{
-    intent_id_activation, intent_id_gc_host, intent_id_hosts_host, intent_id_installer_host,
-    intent_id_keys_rotate, intent_id_migrate_host, intent_id_nft_host, intent_id_nm_unmanaged_host,
-    intent_id_rotate_known_host, intent_id_route_env, intent_id_runner, intent_id_sysctl,
-    intent_id_trust, intent_id_usbip_firewall, BundleResolver,
+    BundleResolver, intent_id_activation, intent_id_gc_host, intent_id_hosts_host,
+    intent_id_installer_host, intent_id_keys_rotate, intent_id_migrate_host, intent_id_nft_host,
+    intent_id_nm_unmanaged_host, intent_id_rotate_known_host, intent_id_route_env,
+    intent_id_runner, intent_id_sysctl, intent_id_trust, intent_id_usbip_firewall,
 };
 use nixling_core::closures::ClosureMetadata;
 use nixling_core::error::BundleError;
@@ -39,6 +39,7 @@ use nixling_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use nixling_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
 use nixling_host::ssh_keygen;
 use nixling_ipc::{
+    BROKER_SOCKET_PATH, KnownFeatureFlag,
     broker_wire::{
         ActivationMode as BrokerActivationMode, ApplyNftablesRequest as BrokerApplyNftablesRequest,
         ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest,
@@ -62,10 +63,9 @@ use nixling_ipc::{
     },
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
     types::{BundleClosureRef, BundleOpId, RoleId, ScopeId, VmId},
-    KnownFeatureFlag, BROKER_SOCKET_PATH,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use socket2::{Domain, SockAddr, Socket, Type};
 use supervisor::pidfd_table::{
     BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, PidfdTableError, WaitTermination,
@@ -593,10 +593,10 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 );
                 if let Ok(resolver) = load_bundle_resolver(&state) {
                     for (name, vm) in &resolver.manifest.vms {
-                        if let Some(env) = &vm.env {
-                            if failed_envs.contains(env) {
-                                net_pre_degraded_vms.insert(name.clone());
-                            }
+                        if let Some(env) = &vm.env
+                            && failed_envs.contains(env)
+                        {
+                            net_pre_degraded_vms.insert(name.clone());
                         }
                     }
                 }
@@ -685,14 +685,13 @@ pub fn run_test_client(options: TestClientOptions) -> Result<u8, TypedError> {
     for frame in &options.frame_json {
         let response = round_trip(&socket, frame)?;
         println!("{}", String::from_utf8_lossy(&response));
-        if let Ok(value) = serde_json::from_slice::<Value>(&response) {
-            if let Some(code) = value
+        if let Ok(value) = serde_json::from_slice::<Value>(&response)
+            && let Some(code) = value
                 .get("error")
                 .and_then(|error| error.get("exitCode"))
                 .and_then(Value::as_u64)
-            {
-                exit_code = code as u8;
-            }
+        {
+            exit_code = code as u8;
         }
     }
     Ok(exit_code)
@@ -1545,14 +1544,14 @@ fn write_daemon_version_file(config: &DaemonConfig) {
         }
     };
     let path = daemon_version_file_path(config);
-    if let Some(parent) = path.parent() {
-        if let Err(err) = std::fs::create_dir_all(parent) {
-            eprintln!(
-                "nixlingd: could not create {} for version file: {err}",
-                parent.display()
-            );
-            return;
-        }
+    if let Some(parent) = path.parent()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        eprintln!(
+            "nixlingd: could not create {} for version file: {err}",
+            parent.display()
+        );
+        return;
     }
     let tmp = path.with_extension("version.tmp");
     if let Err(err) = std::fs::write(&tmp, &json) {
@@ -3304,10 +3303,10 @@ fn exec_owner_writer(
                     ExecOwnerFrame::Error { error, .. } => wire::error_frame_with_id(op_id, error),
                 };
                 let write_result = write_json_frame(drain_stream.as_ref(), &value);
-                if let ExecOwnerFrame::Error { metric_kind, .. } = &frame {
-                    if write_result.is_ok() {
-                        exec_metric_into(&drain_metrics, "op-error", metric_kind);
-                    }
+                if let ExecOwnerFrame::Error { metric_kind, .. } = &frame
+                    && write_result.is_ok()
+                {
+                    exec_metric_into(&drain_metrics, "op-error", metric_kind);
                 }
                 // Release the in-flight permit only now that this op's reply has
                 // left the writer (or failed to). Explicit for clarity; `permit`
@@ -3398,8 +3397,8 @@ mod exec_metric_tests {
     //! carries nothing else.
 
     use super::{
-        exec_error_kind_label, exec_metric_into, metrics, EXEC_ERROR_KIND_LABELS, EXEC_METRIC,
-        EXEC_OUTCOME_LABELS, EXEC_SUBSYSTEM,
+        EXEC_ERROR_KIND_LABELS, EXEC_METRIC, EXEC_OUTCOME_LABELS, EXEC_SUBSYSTEM,
+        exec_error_kind_label, exec_metric_into, metrics,
     };
     use crate::typed_error::{GuestControlExecErrorKind, TypedError};
 
@@ -3538,14 +3537,14 @@ mod exec_owner_io_tests {
     //! down promptly (the in-flight long-poll is cancelled, not awaited).
 
     use super::{
-        exec_session, metrics, read_frame, run_exec_owner_io, spawn_exec_owner_writer, write_frame,
-        Socket, EXEC_METRIC, EXEC_OWNER_INFLIGHT_CAP, EXEC_OWNER_WRITER_DRAIN_GRACE,
+        EXEC_METRIC, EXEC_OWNER_INFLIGHT_CAP, EXEC_OWNER_WRITER_DRAIN_GRACE, Socket, exec_session,
+        metrics, read_frame, run_exec_owner_io, spawn_exec_owner_writer, write_frame,
     };
     use nixling_ipc::public_wire::{
         ExecCloseArgs, ExecCloseResult, ExecControlResult, ExecOp, ExecOpResponse,
         ExecReadOutputResult, ExecSignalArgs, ExecWaitArgs,
     };
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use tokio::sync::oneshot;
@@ -3553,7 +3552,7 @@ mod exec_owner_io_tests {
     const HANDLE: &str = "h-test-owner";
 
     fn seqpacket_pair() -> (Socket, Socket) {
-        use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+        use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
         let (a, b) = socketpair(
             AddressFamily::Unix,
             SockType::SeqPacket,
@@ -5263,10 +5262,10 @@ fn read_proc_state(pid: i32) -> Result<ProcState, std::io::Error> {
     if let Some(close) = data.rfind(')') {
         let after = &data[close + 1..];
         let mut chars = after.split_whitespace();
-        if let Some(state_str) = chars.next() {
-            if let Some(c) = state_str.chars().next() {
-                return Ok(ProcState::Alive(c));
-            }
+        if let Some(state_str) = chars.next()
+            && let Some(c) = state_str.chars().next()
+        {
+            return Ok(ProcState::Alive(c));
         }
     }
     Ok(ProcState::ParseFailed)
@@ -5286,10 +5285,10 @@ mod proc_state_tests {
         if let Some(close) = data.rfind(')') {
             let after = &data[close + 1..];
             let mut chars = after.split_whitespace();
-            if let Some(state_str) = chars.next() {
-                if let Some(c) = state_str.chars().next() {
-                    return ProcState::Alive(c);
-                }
+            if let Some(state_str) = chars.next()
+                && let Some(c) = state_str.chars().next()
+            {
+                return ProcState::Alive(c);
             }
         }
         ProcState::ParseFailed
@@ -5966,7 +5965,7 @@ fn wait_terminated_with_broker_poll(
         match state.pidfd_table.wait_terminated(vm, role_id, remaining) {
             Ok(WaitTermination::Terminated) => return Ok(WaitTermination::Terminated),
             Ok(WaitTermination::TerminatedByBroker { exit_status }) => {
-                return Ok(WaitTermination::TerminatedByBroker { exit_status })
+                return Ok(WaitTermination::TerminatedByBroker { exit_status });
             }
             Ok(WaitTermination::TimedOut) => return Ok(WaitTermination::TimedOut),
             Err(PidfdTableError::WaitFailed {
@@ -6763,10 +6762,9 @@ fn dispatch_broker_vm_start(
     if std::env::var("NIXLING_HOST_PREP_DAG_EXECUTE")
         .map(|v| v == "1")
         .unwrap_or(false)
+        && let Err(response) = execute_host_prep_dag(state, &request.vm, &host_prep_steps)
     {
-        if let Err(response) = execute_host_prep_dag(state, &request.vm, &host_prep_steps) {
-            return Ok(response);
-        }
+        return Ok(response);
     }
 
     let runner = VmStartRunner {
@@ -9318,7 +9316,7 @@ mod runtime_acl_tests {
 
     use nix::unistd::{self, Gid, Uid};
 
-    use super::{bind_public_socket, validate_lock_parent, RuntimeIdentity};
+    use super::{RuntimeIdentity, bind_public_socket, validate_lock_parent};
 
     fn scratch_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -9530,7 +9528,7 @@ mod detached_exec_routing_tests {
     use super::supervisor::pidfd_table::{BrokerReapLog, PidfdTable};
     use super::*;
 
-    use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
     use nixling_ipc::guest_proto as pb;
     use nixling_ipc::guest_wire::ExecState;
     use nixling_ipc::public_wire::{
@@ -10182,7 +10180,7 @@ mod accept_loop_concurrency_tests {
     use tempfile::TempDir;
 
     fn seqpacket_pair() -> (Socket, Socket) {
-        use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+        use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
         let (a, b) = socketpair(
             AddressFamily::Unix,
             SockType::SeqPacket,
@@ -10450,8 +10448,8 @@ mod broker_dispatch_tests {
     use std::{fs, thread};
 
     use nix::sys::socket::{
-        accept4, bind, listen, recv, sendmsg, socket, AddressFamily, Backlog, ControlMessage,
-        MsgFlags, SockFlag, SockType, UnixAddr,
+        AddressFamily, Backlog, ControlMessage, MsgFlags, SockFlag, SockType, UnixAddr, accept4,
+        bind, listen, recv, sendmsg, socket,
     };
     use nix::unistd::close;
     use nixling_core::processes::ProcessRole;
@@ -10470,23 +10468,23 @@ mod broker_dispatch_tests {
     use serde_json::json;
 
     use super::supervisor::pidfd_table::{
-        force_signal_eperm_for_tests, BrokerReapLog, PidfdEntry, PidfdTable, WaitTermination,
+        BrokerReapLog, PidfdEntry, PidfdTable, WaitTermination, force_signal_eperm_for_tests,
     };
     use super::supervisor::state::{
-        parse_proc_stat_starttime, FilesystemSnapshotStore, PidfdOpener, ProcReader,
-        RunnerSnapshotRecord, SnapshotStore,
+        FilesystemSnapshotStore, PidfdOpener, ProcReader, RunnerSnapshotRecord, SnapshotStore,
+        parse_proc_stat_starttime,
     };
     use super::{
-        adopt_orphaned_runners_on_startup_with, daemon_audit, dispatch_broker_boot,
-        dispatch_broker_gc, dispatch_broker_host_destroy, dispatch_broker_host_prepare,
-        dispatch_broker_keys_rotate, dispatch_broker_rollback, dispatch_broker_rotate_known_host,
-        dispatch_broker_run_host_install, dispatch_broker_run_migrate, dispatch_broker_switch,
-        dispatch_broker_test, dispatch_broker_trust, dispatch_broker_vm_restart,
-        dispatch_broker_vm_start, dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout,
-        dispatch_request, redact_broker_dispatch_failure_for_launcher,
-        redact_broker_error_for_launcher, resolve_store_view_intent_for_vm, vm_start_node_mode,
-        ArtifactPaths, DaemonConfig, PeerIdentity, PeerRole, ServerState, VmStartNodeMode,
-        VM_RUNNER_ROLE_ID,
+        ArtifactPaths, DaemonConfig, PeerIdentity, PeerRole, ServerState, VM_RUNNER_ROLE_ID,
+        VmStartNodeMode, adopt_orphaned_runners_on_startup_with, daemon_audit,
+        dispatch_broker_boot, dispatch_broker_gc, dispatch_broker_host_destroy,
+        dispatch_broker_host_prepare, dispatch_broker_keys_rotate, dispatch_broker_rollback,
+        dispatch_broker_rotate_known_host, dispatch_broker_run_host_install,
+        dispatch_broker_run_migrate, dispatch_broker_switch, dispatch_broker_test,
+        dispatch_broker_trust, dispatch_broker_vm_restart, dispatch_broker_vm_start,
+        dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout, dispatch_request,
+        redact_broker_dispatch_failure_for_launcher, redact_broker_error_for_launcher,
+        resolve_store_view_intent_for_vm, vm_start_node_mode,
     };
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
@@ -11297,20 +11295,24 @@ mod broker_dispatch_tests {
             response.get("outcome").and_then(serde_json::Value::as_str),
             Some("broker-error")
         );
-        assert!(response
-            .get("summary")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|summary| summary.starts_with(expected_summary)));
+        assert!(
+            response
+                .get("summary")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|summary| summary.starts_with(expected_summary))
+        );
         assert_eq!(
             response
                 .get("remediation")
                 .and_then(serde_json::Value::as_str),
             Some(expected_remediation)
         );
-        assert!(response
-            .get("remediation")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|message| !message.contains("broker.sock")));
+        assert!(
+            response
+                .get("remediation")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|message| !message.contains("broker.sock"))
+        );
     }
 
     #[test]
@@ -11370,10 +11372,12 @@ mod broker_dispatch_tests {
                 .and_then(serde_json::Value::as_str),
             Some(expected_remediation.as_str())
         );
-        assert!(response
-            .get("remediation")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|message| !message.contains("broker.sock")));
+        assert!(
+            response
+                .get("remediation")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|message| !message.contains("broker.sock"))
+        );
     }
 
     fn normalize_verb(verb: &str) -> String {
@@ -11841,8 +11845,7 @@ mod broker_dispatch_tests {
             },
         )
         .expect("vm start response");
-        let expected_remediation =
-            "Supervisor DAG aborted before every readiness deadline passed. Admin: inspect `journalctl -u nixlingd` for the per-node supervisor audit.";
+        let expected_remediation = "Supervisor DAG aborted before every readiness deadline passed. Admin: inspect `journalctl -u nixlingd` for the per-node supervisor audit.";
 
         assert_redacted_broker_error(&response, "vm start", "SpawnRunner", expected_remediation);
     }
@@ -11954,11 +11957,13 @@ mod broker_dispatch_tests {
             response.get("outcome").and_then(serde_json::Value::as_str),
             Some("applied")
         );
-        assert!(response
-            .get("summary")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .contains("registered in pidfd_table"));
+        assert!(
+            response
+                .get("summary")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .contains("registered in pidfd_table")
+        );
         assert!(state.pidfd_table.contains("vm-a", VM_RUNNER_ROLE_ID));
 
         let child = broker.join().expect("join broker thread");
@@ -12224,11 +12229,13 @@ mod broker_dispatch_tests {
             response.get("outcome").and_then(serde_json::Value::as_str),
             Some("applied")
         );
-        assert!(response
-            .get("summary")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .contains("registered in pidfd_table"));
+        assert!(
+            response
+                .get("summary")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .contains("registered in pidfd_table")
+        );
         let order = request_order.lock().expect("lock request order").clone();
         assert_eq!(order.len(), 3);
         assert_eq!(order.last().map(String::as_str), Some(VM_RUNNER_ROLE_ID));
@@ -12378,16 +12385,20 @@ mod broker_dispatch_tests {
             response.get("outcome").and_then(serde_json::Value::as_str),
             Some("applied")
         );
-        assert!(response
-            .get("summary")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .contains("pidfd_table"));
+        assert!(
+            response
+                .get("summary")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .contains("pidfd_table")
+        );
         assert!(!state.pidfd_table.contains("vm-a", VM_RUNNER_ROLE_ID));
         let store = FilesystemSnapshotStore::new(&state.daemon_state_dir);
-        assert!(SnapshotStore::list(&store)
-            .expect("list runner snapshots")
-            .is_empty());
+        assert!(
+            SnapshotStore::list(&store)
+                .expect("list runner snapshots")
+                .is_empty()
+        );
         let status = child.wait();
         assert!(!status.success());
     }
@@ -12440,9 +12451,11 @@ mod broker_dispatch_tests {
         ));
         assert!(state.pidfd_table.list_for_vm("vm-a").is_empty());
         let store = FilesystemSnapshotStore::new(&state.daemon_state_dir);
-        assert!(SnapshotStore::list(&store)
-            .expect("list runner snapshots")
-            .is_empty());
+        assert!(
+            SnapshotStore::list(&store)
+                .expect("list runner snapshots")
+                .is_empty()
+        );
         for child in children {
             let status = child.wait();
             assert!(!status.success());
@@ -12475,11 +12488,13 @@ mod broker_dispatch_tests {
             response.get("outcome").and_then(serde_json::Value::as_str),
             Some("applied")
         );
-        assert!(response
-            .get("summary")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .contains("SIGTERM timeout"));
+        assert!(
+            response
+                .get("summary")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .contains("SIGTERM timeout")
+        );
         assert!(!state.pidfd_table.contains("vm-a", VM_RUNNER_ROLE_ID));
         let status = child.wait();
         assert!(!status.success());
@@ -12497,11 +12512,13 @@ mod broker_dispatch_tests {
             response.get("outcome").and_then(serde_json::Value::as_str),
             Some("broker-error")
         );
-        assert!(response
-            .get("summary")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .contains(needle));
+        assert!(
+            response
+                .get("summary")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .contains(needle)
+        );
     }
 
     fn assert_broker_envelope_launcher_role(caller_role_display: &str) {
@@ -12802,11 +12819,13 @@ mod broker_dispatch_tests {
         .expect("stop response");
         force_signal_eperm_for_tests(vm, role, false);
         assert_applied(&response);
-        assert!(response
-            .get("summary")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .contains("SIGTERM timeout"));
+        assert!(
+            response
+                .get("summary")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .contains("SIGTERM timeout")
+        );
         assert!(state.metrics_registry.render().contains(
             "nixling_daemon_broker_request_total{op=\"SignalRunner\",outcome=\"broker-fallback\"} 2"
         ));
@@ -13042,11 +13061,13 @@ mod broker_dispatch_tests {
             second.get("outcome").and_then(serde_json::Value::as_str),
             Some("invalid-request")
         );
-        assert!(second
-            .get("remediation")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .contains("no registered pidfd_table entries"));
+        assert!(
+            second
+                .get("remediation")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .contains("no registered pidfd_table entries")
+        );
         broker.join().expect("broker join");
         let _ = child.wait();
     }
@@ -13218,9 +13239,11 @@ mod broker_dispatch_tests {
         assert_daemon_failure_contains(&response, "pidfd_table SIGTERM failed");
         assert!(state.pidfd_table.contains(vm, role));
         let store = FilesystemSnapshotStore::new(&state.daemon_state_dir);
-        assert!(!SnapshotStore::list(&store)
-            .expect("list snapshots")
-            .is_empty());
+        assert!(
+            !SnapshotStore::list(&store)
+                .expect("list snapshots")
+                .is_empty()
+        );
         broker.join().expect("broker join");
         state.pidfd_table.signal(vm, role, libc::SIGKILL).ok();
         let _ = child.wait();
@@ -13441,8 +13464,7 @@ mod broker_dispatch_tests {
             },
         )
         .expect("vm restart response");
-        let expected_remediation =
-            "Supervisor DAG aborted before every readiness deadline passed. Admin: inspect `journalctl -u nixlingd` for the per-node supervisor audit.";
+        let expected_remediation = "Supervisor DAG aborted before every readiness deadline passed. Admin: inspect `journalctl -u nixlingd` for the per-node supervisor audit.";
 
         assert_redacted_broker_error(&response, "vm restart", "SpawnRunner", expected_remediation);
         assert!(!state.pidfd_table.contains("vm-a", VM_RUNNER_ROLE_ID));
@@ -13479,8 +13501,8 @@ mod broker_dispatch_tests {
     #[test]
     fn host_destroy_deletes_routes_before_restoring_sysctls_and_flushing_nft() {
         use nix::sys::socket::{
-            accept4, bind, listen, recv, send, socket, AddressFamily, Backlog, MsgFlags, SockFlag,
-            SockType, UnixAddr,
+            AddressFamily, Backlog, MsgFlags, SockFlag, SockType, UnixAddr, accept4, bind, listen,
+            recv, send, socket,
         };
         use nix::unistd::close;
         use nixling_ipc::broker_wire::{AckResponse, BrokerRequestEnvelope, BrokerResponse};
@@ -13819,7 +13841,7 @@ mod broker_dispatch_tests {
 
     #[test]
     fn guest_control_health_is_readiness_only_node_mode() {
-        use super::{vm_start_node_mode, VmStartNodeMode};
+        use super::{VmStartNodeMode, vm_start_node_mode};
         use nixling_core::processes::ProcessRole;
 
         // GuestControlHealth must remain a readiness-only node (no runner is
@@ -13833,7 +13855,7 @@ mod broker_dispatch_tests {
 
     #[test]
     fn guest_control_health_empty_readiness_fallthrough_is_intercepted() {
-        use super::{vm_start_node_mode, wait_for_readiness, VmStartNodeMode};
+        use super::{VmStartNodeMode, vm_start_node_mode, wait_for_readiness};
         use nixling_core::processes::{NodeId, ProcessNode, ProcessRole};
         use std::time::Duration;
 

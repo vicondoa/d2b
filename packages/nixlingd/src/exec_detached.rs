@@ -22,16 +22,16 @@ use protobuf::{EnumOrUnknown, MessageField};
 
 use crate::exec_session::{ExecOpDeadlines, ExecOpError, ExecStartSpec, GuestOpError};
 use crate::guest_control_bridge::{
-    connect_and_build_client, host_nonce, BrokerSigner, ProbeParams, GUEST_CONTROL_ATTEMPT_CAP,
-    VMADDR_CID_HOST,
+    BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP, ProbeParams, VMADDR_CID_HOST,
+    connect_and_build_client, host_nonce,
 };
 use crate::guest_control_health::{
-    probe_guest_control_health, AttemptBudget, GuestControlHealthError, TtrpcGuestControlClient,
+    AttemptBudget, GuestControlHealthError, TtrpcGuestControlClient, probe_guest_control_health,
 };
 use crate::typed_error::TypedError;
 use crate::{
-    broker_socket_path, exec_session_real, load_bundle_resolver,
-    resolve_guest_control_probe_params, ServerState,
+    ServerState, broker_socket_path, exec_session_real, load_bundle_resolver,
+    resolve_guest_control_probe_params,
 };
 
 const DETACHED_CREATE_DEADLINE: Duration = Duration::from_secs(12);
@@ -601,23 +601,23 @@ where
             .exec_cancel(request, DETACHED_CANCEL_DEADLINE)
             .await
             .map_err(exec_session_real::map_op_health_error)?;
-        if let Some(error) = response.error.as_ref() {
-            if !exec_session_real::is_unspecified(error.kind) {
-                let mapped = exec_session_real::map_guest_control_error(error);
-                if matches!(mapped, ExecOpError::Guest(GuestOpError::ExecAlreadyExited)) {
-                    let terminal = self.inspect(exec_id).await?;
-                    let terminal_state = map_exec_state(terminal.state)?;
-                    if !is_terminal_state(terminal_state) {
-                        return Err(ExecOpError::Protocol);
-                    }
-                    return Ok(ExecDetachedKillResult {
-                        exec_id: exec_id.to_owned(),
-                        result: ExecDetachedKillOutcome::AlreadyTerminal,
-                        state: terminal_state,
-                    });
+        if let Some(error) = response.error.as_ref()
+            && !exec_session_real::is_unspecified(error.kind)
+        {
+            let mapped = exec_session_real::map_guest_control_error(error);
+            if matches!(mapped, ExecOpError::Guest(GuestOpError::ExecAlreadyExited)) {
+                let terminal = self.inspect(exec_id).await?;
+                let terminal_state = map_exec_state(terminal.state)?;
+                if !is_terminal_state(terminal_state) {
+                    return Err(ExecOpError::Protocol);
                 }
-                return Err(mapped);
+                return Ok(ExecDetachedKillResult {
+                    exec_id: exec_id.to_owned(),
+                    result: ExecDetachedKillOutcome::AlreadyTerminal,
+                    state: terminal_state,
+                });
             }
+            return Err(mapped);
         }
         let after = self.inspect(exec_id).await?;
         let after_state = map_exec_state(after.state)?;
@@ -753,10 +753,10 @@ pub(crate) fn gate_detached_capabilities(
 }
 
 fn check_response_error(error: Option<&pb::GuestControlError>) -> Result<(), ExecOpError> {
-    if let Some(error) = error {
-        if !exec_session_real::is_unspecified(error.kind) {
-            return Err(exec_session_real::map_guest_control_error(error));
-        }
+    if let Some(error) = error
+        && !exec_session_real::is_unspecified(error.kind)
+    {
+        return Err(exec_session_real::map_guest_control_error(error));
     }
     Ok(())
 }
@@ -799,14 +799,14 @@ fn apply_retention_window(
         response.dropped_bytes = response.dropped_bytes.max(window.dropped_bytes);
     }
 
-    if let Some(requested_offset) = requested_offset {
-        if requested_offset < window.start_offset {
-            response.truncated = true;
-            response.dropped_bytes = response
-                .dropped_bytes
-                .max(window.dropped_bytes)
-                .max(window.start_offset - requested_offset);
-        }
+    if let Some(requested_offset) = requested_offset
+        && requested_offset < window.start_offset
+    {
+        response.truncated = true;
+        response.dropped_bytes = response
+            .dropped_bytes
+            .max(window.dropped_bytes)
+            .max(window.start_offset - requested_offset);
     }
 }
 

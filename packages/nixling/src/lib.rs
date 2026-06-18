@@ -12,7 +12,7 @@ use std::{
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use nix::sys::socket::{
-    connect, recv, send, socket, AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr,
+    AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, connect, recv, send, socket,
 };
 use nix::unistd::Uid;
 use nixling_core::{
@@ -20,6 +20,8 @@ use nixling_core::{
     error::Error as CoreError, host::HostJson, host_check, processes::ProcessesJson,
 };
 use nixling_ipc::{
+    Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
+    SemverRange,
     broker_wire::{
         ExportBrokerAuditResponse, StoreVerifyResponse as IpcStoreVerifyResponse,
         StoreVerifyStatus as IpcStoreVerifyStatus,
@@ -32,8 +34,6 @@ use nixling_ipc::{
         UsbipProbeEntry as IpcUsbipProbeEntry, UsbipProbeStatus as IpcUsbipProbeStatus,
         VmLifecycleState as IpcVmLifecycleState, VmStatus as IpcVmStatus,
     },
-    Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
-    SemverRange,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -2112,16 +2112,16 @@ fn config_approve_core(staging: &Path, target: &Path) -> Result<usize, CliFailur
         .map_err(|e| CliFailure::new(1, format!("config approve: read staging: {e}")))?;
     config_validate_staging_bytes(&bytes)?;
     let parent = target.parent().filter(|p| !p.as_os_str().is_empty());
-    if let Some(parent) = parent {
-        if !parent.exists() {
-            return Err(CliFailure::new(
-                1,
-                format!(
-                    "config approve: target dir {} does not exist",
-                    parent.display()
-                ),
-            ));
-        }
+    if let Some(parent) = parent
+        && !parent.exists()
+    {
+        return Err(CliFailure::new(
+            1,
+            format!(
+                "config approve: target dir {} does not exist",
+                parent.display()
+            ),
+        ));
     }
     // Atomic, collision-safe publish (unique O_EXCL temp + fsync +
     // rename); staging is only consumed after a successful publish.
@@ -2163,10 +2163,10 @@ fn warn_all_pending_staged_configs() {
     let mut pending: Vec<String> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(&base) {
         for entry in rd.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                if let Some(vm) = name.strip_suffix(".guest.nix") {
-                    pending.push(vm.to_owned());
-                }
+            if let Some(name) = entry.file_name().to_str()
+                && let Some(vm) = name.strip_suffix(".guest.nix")
+            {
+                pending.push(vm.to_owned());
             }
         }
     }
@@ -2260,10 +2260,10 @@ fn config_atomic_write(target: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
     // this a power loss right after the rename can lose the approved
     // target update even though the staging file has already been
     // consumed.
-    if let Some(p) = parent {
-        if let Ok(dir) = std::fs::File::open(p) {
-            let _ = dir.sync_all();
-        }
+    if let Some(p) = parent
+        && let Ok(dir) = std::fs::File::open(p)
+    {
+        let _ = dir.sync_all();
     }
     Ok(())
 }
@@ -2583,7 +2583,7 @@ fn read_guest_config_via_socket(
                     "failed to connect to {}: {err}",
                     context.public_socket.display()
                 ),
-            ))
+            ));
         }
     };
     let hello = daemon_hello_frame("hello")?;
@@ -2889,10 +2889,10 @@ fn cmd_config_status(args: &ConfigStatusArgs) -> Result<i32, CliFailure> {
         let mut out = Vec::new();
         if let Ok(rd) = std::fs::read_dir(&base) {
             for entry in rd.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if let Some(vm) = name.strip_suffix(".guest.nix") {
-                        out.push(vm.to_owned());
-                    }
+                if let Some(name) = entry.file_name().to_str()
+                    && let Some(vm) = name.strip_suffix(".guest.nix")
+                {
+                    out.push(vm.to_owned());
                 }
             }
         }
@@ -3423,7 +3423,9 @@ fn cmd_host_prepare(context: &Context, args: &HostPrepareArgs) -> Result<i32, Cl
                 rendered.push('\n');
                 print_stdout(&rendered);
             } else {
-                print_stdout("host prepare --dry-run: would do nothing on this tier (no daemon-owned resources detected)\n");
+                print_stdout(
+                    "host prepare --dry-run: would do nothing on this tier (no daemon-owned resources detected)\n",
+                );
             }
             Ok(0)
         }
@@ -4115,7 +4117,7 @@ fn parse_vm_exec_action(args: &VmExecArgs) -> Result<VmExecParsedAction, String>
                 "vm exec: use `--` to run a command, or choose management verb \
                  {list|logs|status|kill} after the VM name"
                     .to_owned(),
-            )
+            );
         }
     };
     Ok(VmExecParsedAction {
@@ -4337,7 +4339,7 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
                     exec_client::ExecClientError::internal(format!(
                         "vm exec: failed to enter raw mode: {err}"
                     )),
-                )
+                );
             }
         }
     } else if interactive {
@@ -4349,7 +4351,7 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
                     exec_client::ExecClientError::internal(format!(
                         "vm exec: failed to set stdin non-blocking: {err}"
                     )),
-                )
+                );
             }
         }
     } else {
@@ -5154,7 +5156,9 @@ fn cmd_gc(
         rendered.push('\n');
         print_stdout(&rendered);
     } else {
-        print_stdout("nixling gc --dry-run: would prune unreachable store paths in /var/lib/nixling/vms/<vm>/store/\n");
+        print_stdout(
+            "nixling gc --dry-run: would prune unreachable store paths in /var/lib/nixling/vms/<vm>/store/\n",
+        );
     }
     Ok(0)
 }
@@ -5246,11 +5250,7 @@ fn render_store_verify_human(response: &IpcStoreVerifyResponse) -> String {
 // ---- native usb CLI ----
 
 fn usb_json_mode(json: bool, human: bool) -> bool {
-    if human {
-        false
-    } else {
-        json
-    }
+    if human { false } else { json }
 }
 
 fn cmd_usb_attach(context: &Context, args: &UsbAttachArgs) -> Result<i32, CliFailure> {
@@ -5629,7 +5629,10 @@ fn run_usb_guest_attach(plan: &UsbGuestAttachPlan, is_json: bool) -> Result<(), 
                 plan.vm_name,
                 status.code().unwrap_or(-1)
             ),
-            &format!("The host-side USBIP attach may already be active. Check guest sudo permissions and `usbip`/`vhci_hcd`, then run `nixling usb detach {} {} --apply` before retrying if needed.", plan.vm_name, plan.bus_id),
+            &format!(
+                "The host-side USBIP attach may already be active. Check guest sudo permissions and `usbip`/`vhci_hcd`, then run `nixling usb detach {} {} --apply` before retrying if needed.",
+                plan.vm_name, plan.bus_id
+            ),
             is_json,
         ));
     }
@@ -5971,8 +5974,7 @@ fn cmd_migrate(
 // Legacy bash parity verbs keep the flag-less entrypoint by
 // defaulting to --dry-run; native-only host/vm/migrate verbs keep
 // using `require_explicit_mutation_flag`.
-const DEFAULT_DRY_RUN_NOTICE: &str =
-    "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply (v0.4 bash CLI had no flag requirement).";
+const DEFAULT_DRY_RUN_NOTICE: &str = "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply (v0.4 bash CLI had no flag requirement).";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MutationFlags {
@@ -6228,20 +6230,18 @@ fn read_live_pool_integrity(
     };
     let Some(generation_id) = generation_id else {
         let vm_unknown = state_dir.join("integrity-unknown.json");
-        if let Ok(raw) = std::fs::read_to_string(&vm_unknown) {
-            if let Ok(value) = serde_json::from_str::<Value>(&raw) {
-                if value.get("state").and_then(Value::as_str) == Some("unknown") {
-                    let reason = value
-                        .get("unknown_reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or("generation_identity_unavailable");
-                    return Some(live_pool_integrity_unknown(
-                        reason,
-                        "restore state/current or activate a new generation, then rerun verify"
-                            .to_owned(),
-                    ));
-                }
-            }
+        if let Ok(raw) = std::fs::read_to_string(&vm_unknown)
+            && let Ok(value) = serde_json::from_str::<Value>(&raw)
+            && value.get("state").and_then(Value::as_str) == Some("unknown")
+        {
+            let reason = value
+                .get("unknown_reason")
+                .and_then(Value::as_str)
+                .unwrap_or("generation_identity_unavailable");
+            return Some(live_pool_integrity_unknown(
+                reason,
+                "restore state/current or activate a new generation, then rerun verify".to_owned(),
+            ));
         }
         return Some(live_pool_integrity_unknown(
             "generation_identity_unavailable",
@@ -6920,23 +6920,21 @@ fn collect_bridge_rows(
 }
 
 fn resolve_bridge_probe_name(bundle: Option<&BundleContext>, bridge: &str) -> String {
-    if let Some(runtime) = bundle.and_then(|bundle| bundle.host_runtime.as_ref()) {
-        if let Some(ifname) = runtime
+    if let Some(runtime) = bundle.and_then(|bundle| bundle.host_runtime.as_ref())
+        && let Some(ifname) = runtime
             .ifnames
             .iter()
             .find(|row| row.vm.is_none() && row.user_visible_name == bridge)
-        {
-            return ifname.derived_ifname.clone();
-        }
+    {
+        return ifname.derived_ifname.clone();
     }
-    if let Some(host) = bundle.and_then(|bundle| bundle.host.as_ref()) {
-        if let Some(mapping) = host
+    if let Some(host) = bundle.and_then(|bundle| bundle.host.as_ref())
+        && let Some(mapping) = host
             .if_name_mappings
             .iter()
             .find(|row| row.vm.is_none() && row.user_visible_name == bridge)
-        {
-            return mapping.derived_ifname.as_str().to_owned();
-        }
+    {
+        return mapping.derived_ifname.as_str().to_owned();
     }
     bridge.to_owned()
 }
@@ -6973,37 +6971,35 @@ fn bridge_health_row(
         expected_carrier: "UNKNOWN".to_owned(),
         result: "unavailable".to_owned(),
     };
-    if let Ok(output) = output {
-        if output.status.success() {
-            if let Ok(value) = serde_json::from_slice::<Value>(&output.stdout) {
-                if let Some(link) = value.as_array().and_then(|items| items.first()) {
-                    row.state = link
-                        .get("operstate")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown")
-                        .to_owned();
-                    row.admin = link
-                        .get("flags")
-                        .and_then(Value::as_array)
-                        .map(|flags| {
-                            if flags.iter().any(|flag| flag.as_str() == Some("UP")) {
-                                "up"
-                            } else {
-                                "down"
-                            }
-                        })
-                        .unwrap_or("unknown")
-                        .to_owned();
-                    row.expected_carrier = if row.state == "UP" {
-                        "UP"
-                    } else {
-                        "NO-CARRIER"
-                    }
-                    .to_owned();
-                    row.result = "ok".to_owned();
+    if let Ok(output) = output
+        && output.status.success()
+        && let Ok(value) = serde_json::from_slice::<Value>(&output.stdout)
+        && let Some(link) = value.as_array().and_then(|items| items.first())
+    {
+        row.state = link
+            .get("operstate")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned();
+        row.admin = link
+            .get("flags")
+            .and_then(Value::as_array)
+            .map(|flags| {
+                if flags.iter().any(|flag| flag.as_str() == Some("UP")) {
+                    "up"
+                } else {
+                    "down"
                 }
-            }
+            })
+            .unwrap_or("unknown")
+            .to_owned();
+        row.expected_carrier = if row.state == "UP" {
+            "UP"
+        } else {
+            "NO-CARRIER"
         }
+        .to_owned();
+        row.result = "ok".to_owned();
     }
     row
 }
@@ -7390,7 +7386,7 @@ fn try_daemon_mutating_verb(
                     "failed to connect to {}: {err}",
                     context.public_socket.display()
                 ),
-            ))
+            ));
         }
     };
     let hello = daemon_hello_frame("hello")?;
@@ -7744,7 +7740,7 @@ fn try_audit_via_socket(
                     "failed to connect to {}: {err}",
                     context.public_socket.display()
                 ),
-            ))
+            ));
         }
     };
     let hello = daemon_hello_frame("hello")?;
@@ -7889,7 +7885,7 @@ fn try_public_socket_request(
                     "failed to connect to {}: {err}",
                     context.public_socket.display()
                 ),
-            ))
+            ));
         }
     };
     let hello = daemon_hello_frame("hello")?;
@@ -8109,25 +8105,26 @@ mod host_install_dispatch_tests {
         },
         path::PathBuf,
         sync::{
+            Mutex,
             atomic::{AtomicUsize, Ordering},
-            mpsc, Mutex,
+            mpsc,
         },
         thread,
         time::Duration,
     };
 
     use nix::{
-        sys::socket::{accept4, bind, listen, Backlog},
+        sys::socket::{Backlog, accept4, bind, listen},
         unistd::close,
     };
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     use super::{
-        broker_error_envelope, cmd_host_install, cmd_vm_exec, cmd_vm_start,
-        daemon_supported_features, encode_type_tagged_message, nix_err_to_io, parse_vm_exec_action,
-        send, socket, AddressFamily, ApiReadySimple, ApiReadyStatusV1, Context, HostInstallArgs,
-        IpcHelloOk, MsgFlags, NativeCli, SockFlag, SockType, UnixAddr, UsbAttachArgs, VmExecArgs,
-        VmStartArgs, MAX_FRAME_BYTES,
+        AddressFamily, ApiReadySimple, ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk,
+        MAX_FRAME_BYTES, MsgFlags, NativeCli, SockFlag, SockType, UnixAddr, UsbAttachArgs,
+        VmExecArgs, VmStartArgs, broker_error_envelope, cmd_host_install, cmd_vm_exec,
+        cmd_vm_start, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
+        parse_vm_exec_action, send, socket,
     };
     use nixling_ipc::Version;
 
@@ -8555,12 +8552,11 @@ mod host_install_dispatch_tests {
                 send_test_frame(accepted, &response_frame)?;
 
                 // Any further frame is an illegitimate proxied op; record it.
-                if let Ok(extra_bytes) = recv_test_frame(accepted) {
-                    if !extra_bytes.is_empty() {
-                        if let Ok(extra) = serde_json::from_slice::<Value>(&extra_bytes) {
-                            frames_tx.send(extra).expect("send extra frame");
-                        }
-                    }
+                if let Ok(extra_bytes) = recv_test_frame(accepted)
+                    && !extra_bytes.is_empty()
+                    && let Ok(extra) = serde_json::from_slice::<Value>(&extra_bytes)
+                {
+                    frames_tx.send(extra).expect("send extra frame");
                 }
                 Ok(())
             })();
@@ -9803,10 +9799,10 @@ mod host_install_dispatch_tests {
         let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_file(&manifest_path);
         let _ = std::fs::remove_file(&bundle_path);
-        if let Some(name) = bundle_path.file_name().and_then(|n| n.to_str()) {
-            if let Some(parent) = bundle_path.parent() {
-                let _ = std::fs::remove_file(parent.join(format!("{name}.processes.json")));
-            }
+        if let Some(name) = bundle_path.file_name().and_then(|n| n.to_str())
+            && let Some(parent) = bundle_path.parent()
+        {
+            let _ = std::fs::remove_file(parent.join(format!("{name}.processes.json")));
         }
         let _ = std::fs::remove_dir_all(&staging_dir);
         (result, recorded, stdout)
@@ -10124,9 +10120,11 @@ mod host_install_dispatch_tests {
         );
 
         assert_eq!(envelope.kind, "RunHostInstall failed");
-        assert!(envelope
-            .observed_state
-            .contains("operation not yet implemented in this build"));
+        assert!(
+            envelope
+                .observed_state
+                .contains("operation not yet implemented in this build")
+        );
         assert_eq!(envelope.remediation, "generic remediation");
     }
 
@@ -10995,7 +10993,7 @@ mod exec_json_envelope_tests {
 
     use nixling_ipc::public_wire::ExecTerminalStatus;
 
-    use super::{exec_client, exec_json_failure_value, exec_json_success_value, VmExecArgs};
+    use super::{VmExecArgs, exec_client, exec_json_failure_value, exec_json_success_value};
 
     fn exec_args(vm: &str) -> VmExecArgs {
         VmExecArgs {
@@ -11383,9 +11381,10 @@ mod config_cmd_tests {
         assert_eq!(argv[i + 1], "/var/lib/nixling/keys/work-aad_ed25519");
         // host-key integrity: managed known_hosts + accept-new (NOT
         // StrictHostKeyChecking=no / UserKnownHostsFile=/dev/null).
-        assert!(argv
-            .iter()
-            .any(|a| a == "UserKnownHostsFile=/var/lib/nixling/known_hosts.nixling"));
+        assert!(
+            argv.iter()
+                .any(|a| a == "UserKnownHostsFile=/var/lib/nixling/known_hosts.nixling")
+        );
         assert!(argv.iter().any(|a| a == "StrictHostKeyChecking=accept-new"));
         assert!(!argv.iter().any(|a| a == "StrictHostKeyChecking=no"));
         assert!(!argv.iter().any(|a| a == "UserKnownHostsFile=/dev/null"));
@@ -11414,9 +11413,10 @@ mod config_cmd_tests {
         assert_eq!(argv[0], "ssh");
         let key_pos = argv.iter().position(|a| a == "-i").unwrap();
         assert_eq!(argv[key_pos + 1], "/var/lib/nixling/keys/work-aad_ed25519");
-        assert!(argv
-            .iter()
-            .any(|a| a == "UserKnownHostsFile=/var/lib/nixling/known_hosts.nixling"));
+        assert!(
+            argv.iter()
+                .any(|a| a == "UserKnownHostsFile=/var/lib/nixling/known_hosts.nixling")
+        );
         assert!(argv.iter().any(|a| a == "StrictHostKeyChecking=accept-new"));
         assert!(argv.iter().any(|a| a == "BatchMode=yes"));
         assert!(argv.iter().any(|a| a == "ConnectTimeout=8"));
@@ -11625,8 +11625,8 @@ mod ssh_spawn_gate {
     use std::path::PathBuf;
 
     use super::{
-        cmd_config_sync, config_staging_path, finish_config_sync_from_reply,
-        read_guest_config_via_socket, Context, GuestConfigReadOutcome, DEFAULT_GUEST_CONFIG_PATH,
+        Context, DEFAULT_GUEST_CONFIG_PATH, GuestConfigReadOutcome, cmd_config_sync,
+        config_staging_path, finish_config_sync_from_reply, read_guest_config_via_socket,
     };
 
     /// Allowlist comment markers. Built so this scanner's own source never

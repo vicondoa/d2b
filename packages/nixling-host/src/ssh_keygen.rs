@@ -150,7 +150,7 @@ pub fn parse_ssh_keygen_lf(stdout: &str) -> Result<SshKeyFingerprint, SshKeygenE
         _ => {
             return Err(SshKeygenError::OutputUnparseable {
                 stdout: stdout.to_owned(),
-            })
+            });
         }
     };
     let mut parts = rest.splitn(3, char::is_whitespace);

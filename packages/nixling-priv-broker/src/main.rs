@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use nixling_priv_broker::runtime::{parse_command, run, RunError};
+use nixling_priv_broker::runtime::{RunError, parse_command, run};
 
 fn main() -> ExitCode {
     // Enable RUST_LOG-driven env filter so the broker surfaces

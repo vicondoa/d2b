@@ -16,7 +16,9 @@ struct Config {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: nixling-host-activation-helper chgrp-by-numeric-gid --root PATH --legacy-gids GID[,GID...] --target-gid GID [--no-follow-symlinks] [--skip-while-lock-held PATH] [--fail-closed]");
+    eprintln!(
+        "usage: nixling-host-activation-helper chgrp-by-numeric-gid --root PATH --legacy-gids GID[,GID...] --target-gid GID [--no-follow-symlinks] [--skip-while-lock-held PATH] [--fail-closed]"
+    );
     process::exit(64);
 }
 
@@ -131,11 +133,7 @@ fn open_root(path: &std::path::Path) -> io::Result<libc::c_int> {
             libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         )
     };
-    if fd < 0 {
-        Err(last_errno())
-    } else {
-        Ok(fd)
-    }
+    if fd < 0 { Err(last_errno()) } else { Ok(fd) }
 }
 
 fn gid_for_fd(fd: libc::c_int) -> io::Result<libc::gid_t> {
@@ -277,24 +275,24 @@ fn errno_clear() {
 }
 
 fn run(cfg: Config) -> io::Result<i32> {
-    if let Some(lock) = &cfg.skip_while_lock_held {
-        if lock_is_held(lock)? {
-            eprintln!("nixling-group-migration: {lock:?} is locked; skipping legacy gid migration");
-            if !cfg.fail_closed {
-                return Ok(0);
-            }
-            let mut leftovers = 0;
-            scan_for_leftovers(&cfg, &mut leftovers)?;
-            return Ok(if leftovers > 0 {
-                eprintln!(
-                    "nixling-group-migration: {leftovers} entries still have a legacy gid under {:?}",
-                    cfg.root
-                );
-                1
-            } else {
-                0
-            });
+    if let Some(lock) = &cfg.skip_while_lock_held
+        && lock_is_held(lock)?
+    {
+        eprintln!("nixling-group-migration: {lock:?} is locked; skipping legacy gid migration");
+        if !cfg.fail_closed {
+            return Ok(0);
         }
+        let mut leftovers = 0;
+        scan_for_leftovers(&cfg, &mut leftovers)?;
+        return Ok(if leftovers > 0 {
+            eprintln!(
+                "nixling-group-migration: {leftovers} entries still have a legacy gid under {:?}",
+                cfg.root
+            );
+            1
+        } else {
+            0
+        });
     }
 
     let root_fd = open_root(&cfg.root)?;
@@ -441,12 +439,14 @@ mod tests {
             fail_closed: true,
         };
 
-        assert!(lock_is_held(
-            cfg.skip_while_lock_held
-                .as_ref()
-                .expect("configured lock path")
-        )
-        .expect("lock probe"));
+        assert!(
+            lock_is_held(
+                cfg.skip_while_lock_held
+                    .as_ref()
+                    .expect("configured lock path")
+            )
+            .expect("lock probe")
+        );
         let exit_code = run(cfg).expect("run migration");
 
         assert_ne!(exit_code, 0);

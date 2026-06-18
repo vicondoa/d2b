@@ -30,7 +30,7 @@ use std::process::Command;
 use rustix::io::{fcntl_dupfd_cloexec, write};
 use rustix::process::{ioctl_tiocsctty, setsid};
 use rustix::stdio::{dup2_stderr, dup2_stdout, stdin, stdout};
-use rustix::termios::{tcsetwinsize, Winsize};
+use rustix::termios::{Winsize, tcsetwinsize};
 
 /// Lowest fd the inherited status pipe is duplicated to. Kept clear of the
 /// standard fds (0/1/2) so the `dup2` of the slave onto stdout/stderr cannot
@@ -230,10 +230,12 @@ mod tests {
 
     #[test]
     fn rejects_unknown_flag() {
-        assert!(TtyHelperArgs::parse(&argv(&[
-            "--rows", "24", "--cols", "80", "--bogus", "--", "/bin/sh"
-        ]))
-        .is_none());
+        assert!(
+            TtyHelperArgs::parse(&argv(&[
+                "--rows", "24", "--cols", "80", "--bogus", "--", "/bin/sh"
+            ]))
+            .is_none()
+        );
     }
 
     #[test]

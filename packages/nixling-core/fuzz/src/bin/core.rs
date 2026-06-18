@@ -4,11 +4,10 @@ mod harness;
 use nixling_core::{
     bundle::{Bundle, BundleGeneration, BundleManagedKeys},
     bundle_resolver::{
-        intent_id_activation, intent_id_gc_host, intent_id_hosts_host, intent_id_keys_rotate,
-        intent_id_nft_env, intent_id_nft_host, intent_id_nm_unmanaged_host,
+        BundleResolver, intent_id_activation, intent_id_gc_host, intent_id_hosts_host,
+        intent_id_keys_rotate, intent_id_nft_env, intent_id_nft_host, intent_id_nm_unmanaged_host,
         intent_id_rotate_known_host, intent_id_route_env, intent_id_runner, intent_id_socket,
         intent_id_sysctl, intent_id_trust, intent_id_usbip_bind, intent_id_usbip_firewall,
-        BundleResolver,
     },
     closures::{ClosureGeneration, ClosureMetadata},
     error::{BrokerOp, Error, SemverRange, Version},
@@ -19,7 +18,7 @@ use nixling_core::{
     },
     manifest_v04::ManifestV04,
     minijail_profile::CgroupPlacement,
-    privileges::{PrivilegesJson, BROKER_OPERATION_AUTHZ, PUBLIC_OPERATION_AUTHZ},
+    privileges::{BROKER_OPERATION_AUTHZ, PUBLIC_OPERATION_AUTHZ, PrivilegesJson},
     processes::{
         DagEdge, NodeId, ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate, VmProcessDag,
         VmProcessInvariants,
@@ -211,10 +210,12 @@ fn w1_matrix_contains_public_and_broker_rows() {
     let matrix = PrivilegesJson::w1("v1");
     assert_eq!(matrix.public_operations.len(), PUBLIC_OPERATION_AUTHZ.len());
     assert_eq!(matrix.broker_operations.len(), BROKER_OPERATION_AUTHZ.len());
-    assert!(matrix
-        .broker_operations
-        .iter()
-        .any(|row| row.operation == "DelegateCgroupV2"));
+    assert!(
+        matrix
+            .broker_operations
+            .iter()
+            .any(|row| row.operation == "DelegateCgroupV2")
+    );
 }
 
 fn manifest_baseline_round_trips_compact() {
@@ -629,9 +630,10 @@ fn bundle_resolver_uses_real_bus_ids_when_present() {
         bind.lock_path.to_str(),
         Some("/run/nixling/locks/usbip/1-1.5")
     );
-    assert!(r
-        .find_usbip_bind_intent(&intent_id_usbip_bind("work", "work-vm", "pending"))
-        .is_none());
+    assert!(
+        r.find_usbip_bind_intent(&intent_id_usbip_bind("work", "work-vm", "pending"))
+            .is_none()
+    );
 }
 
 fn bundle_resolver_round_trips_runner_intents() {
@@ -645,11 +647,13 @@ fn bundle_resolver_round_trips_runner_intents() {
     assert_eq!(intent.gid, 5001);
     assert!(!intent.root_carve_out);
     assert_eq!(intent.profile_id, "ch-runner-default");
-    assert!(intent
-        .binary_path
-        .to_str()
-        .unwrap()
-        .ends_with("cloud-hypervisor"));
+    assert!(
+        intent
+            .binary_path
+            .to_str()
+            .unwrap()
+            .ends_with("cloud-hypervisor")
+    );
     assert_eq!(
         intent.argv,
         vec![
@@ -691,10 +695,12 @@ fn bundle_resolver_round_trips_gc_intent() {
     let r = build_synthetic_resolver();
     let intent = r.find_gc_intent(&intent_id_gc_host()).expect("gc");
     assert_eq!(intent.retained_store_paths.len(), 2);
-    assert!(intent
-        .retained_store_paths
-        .iter()
-        .any(|path| path == &std::path::PathBuf::from("/nix/store/work-vm-system")));
+    assert!(
+        intent
+            .retained_store_paths
+            .iter()
+            .any(|path| path == &std::path::PathBuf::from("/nix/store/work-vm-system"))
+    );
 }
 
 fn bundle_resolver_round_trips_key_management_intents() {
@@ -710,9 +716,11 @@ fn bundle_resolver_round_trips_key_management_intents() {
         .expect("trust");
     assert_eq!(trust.static_ip, "10.20.0.10");
     assert!(trust.known_hosts_path.ends_with("known_hosts.nixling"));
-    assert!(trust
-        .host_public_key_path
-        .ends_with("sshd-host-keys/ssh_host_ed25519_key.pub"));
+    assert!(
+        trust
+            .host_public_key_path
+            .ends_with("sshd-host-keys/ssh_host_ed25519_key.pub")
+    );
 
     let rotate = r
         .find_rotate_known_host_intent(&intent_id_rotate_known_host("work-vm"))
@@ -725,16 +733,19 @@ fn bundle_resolver_unknown_intent_returns_none() {
     let r = build_synthetic_resolver();
     assert!(r.find_nft_intent("nft:env:does-not-exist").is_none());
     assert!(r.find_route_intent("route:env:work:9999").is_none());
-    assert!(r
-        .find_runner_intent("runner:vm:no-such-vm:role:x")
-        .is_none());
-    assert!(r
-        .find_activation_intent("activation:vm:no-such-vm")
-        .is_none());
+    assert!(
+        r.find_runner_intent("runner:vm:no-such-vm:role:x")
+            .is_none()
+    );
+    assert!(
+        r.find_activation_intent("activation:vm:no-such-vm")
+            .is_none()
+    );
     assert!(r.find_gc_intent("gc:missing").is_none());
-    assert!(r
-        .find_keys_rotate_intent("keys-rotate:vm:no-such-vm")
-        .is_none());
+    assert!(
+        r.find_keys_rotate_intent("keys-rotate:vm:no-such-vm")
+            .is_none()
+    );
 }
 
 fn bundle_resolver_intent_ids_are_sorted_and_deterministic() {

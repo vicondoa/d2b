@@ -261,7 +261,7 @@ pub fn release_lock(lock_path: &Path, expected_owner: &str) -> Result<(), UsbipL
             return Err(UsbipLockError::Io {
                 path: full_lock_path.clone(),
                 detail: e.to_string(),
-            })
+            });
         }
     };
     if observed != expected_owner {
@@ -397,7 +397,7 @@ pub fn peek_owner(lock_path: &Path) -> Option<String> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
     use tempfile::TempDir;
 
     fn temp_lock_dir() -> TempDir {

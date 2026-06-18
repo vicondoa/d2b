@@ -3,10 +3,10 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::path::Path;
 
 use nix::sys::socket::{
-    bind, connect, listen, recv, send, socket, AddressFamily, Backlog, MsgFlags, SockFlag,
-    SockType, UnixAddr,
+    AddressFamily, Backlog, MsgFlags, SockFlag, SockType, UnixAddr, bind, connect, listen, recv,
+    send, socket,
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
 

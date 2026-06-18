@@ -17,7 +17,7 @@
 
 use std::os::fd::AsRawFd;
 
-use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
 use nix::unistd::{close, pipe, read, write};
 use nixling_priv_broker::fd_passing::recv_fds;
 use nixling_priv_broker::protocol::{recv_json_frame, send_json_frame, send_json_frame_with_fds};

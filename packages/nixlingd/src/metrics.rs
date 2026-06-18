@@ -572,8 +572,11 @@ mod tests {
         assert!(body.contains(
             "nixling_daemon_broker_request_duration_seconds_bucket{op=\"OpenPidfd\",le=\"+Inf\"} 1"
         ));
-        assert!(body
-            .contains("nixling_daemon_broker_request_duration_seconds_count{op=\"OpenPidfd\"} 1"));
+        assert!(
+            body.contains(
+                "nixling_daemon_broker_request_duration_seconds_count{op=\"OpenPidfd\"} 1"
+            )
+        );
     }
 
     #[test]
@@ -735,7 +738,9 @@ mod tests {
         assert!(s.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(s.contains("# TYPE nixling_daemon_uptime_seconds gauge"));
         assert!(s.contains("# TYPE nixling_vm_ch_api_up gauge"));
-        assert!(s.contains("nixling_vm_ch_api_up{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 0"));
+        assert!(
+            s.contains("nixling_vm_ch_api_up{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 0")
+        );
     }
 
     #[test]

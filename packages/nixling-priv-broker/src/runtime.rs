@@ -21,7 +21,7 @@ use crate::sys::{owned_fd_from_raw, path_safe, peer_credentials};
 use hmac::{Hmac, Mac};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use nix::libc;
-use nix::sys::socket::{accept4, SockFlag};
+use nix::sys::socket::{SockFlag, accept4};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use nix::unistd::dup;
 use serde_json::Value;
@@ -31,7 +31,7 @@ use tracing::warn;
 
 use crate::audit::AuditLog;
 #[cfg(not(feature = "layer1-bootstrap"))]
-use crate::audit::{new_event_id, result_for_decision, BROKER_VERSION};
+use crate::audit::{BROKER_VERSION, new_event_id, result_for_decision};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use crate::ops::audit_op::{OpAuditRecord, OperationFields};
 #[cfg(feature = "layer1-bootstrap")]
@@ -497,13 +497,13 @@ fn adopt_listen_fd() -> Option<Result<OwnedFd, RunError>> {
     }
 
     // Step 3: If LISTEN_FDNAMES is present it must equal "priv.sock".
-    if let Ok(fdnames) = env::var("LISTEN_FDNAMES") {
-        if fdnames != "priv.sock" {
-            return Some(Err(RunError::Usage(format!(
-                "socket activation: expected LISTEN_FDNAMES=priv.sock, \
+    if let Ok(fdnames) = env::var("LISTEN_FDNAMES")
+        && fdnames != "priv.sock"
+    {
+        return Some(Err(RunError::Usage(format!(
+            "socket activation: expected LISTEN_FDNAMES=priv.sock, \
                  got {fdnames:?}"
-            ))));
-        }
+        ))));
     }
 
     // Steps 4–5: verify fd 3 + set CLOEXEC + wrap in OwnedFd (sys.rs). The
@@ -520,7 +520,7 @@ fn adopt_listen_fd() -> Option<Result<OwnedFd, RunError>> {
 /// This preserves behaviour in environments that do not use systemd
 /// supervision (tests, containers).
 fn sd_notify_ready() {
-    use nix::sys::socket::{sendto, socket, AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr};
+    use nix::sys::socket::{AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, sendto, socket};
 
     let notify_socket = match env::var("NOTIFY_SOCKET") {
         Ok(s) if !s.is_empty() => s,
@@ -3282,8 +3282,8 @@ fn guest_control_transcript(
 ) -> Result<Vec<u8>, BrokerError> {
     use nixling_ipc::broker_wire::GuestControlProofRole;
     use nixling_ipc::guest_auth::{
-        self, AuthDirection, AuthPurpose, GuestAuthTranscript, ProofRole, AUTH_NONCE_LEN,
-        GUEST_CONTROL_AUTH_PORT,
+        self, AUTH_NONCE_LEN, AuthDirection, AuthPurpose, GUEST_CONTROL_AUTH_PORT,
+        GuestAuthTranscript, ProofRole,
     };
     req.validate_shape()
         .map_err(|reason| BrokerError::GuestControlSignRefused { reason })?;
@@ -3465,8 +3465,8 @@ fn runner_pidfd_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
 /// a `std::sync::Mutex` so both the tokio reap task and the synchronous
 /// accept loop can access it safely.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn child_reap_buffer(
-) -> &'static Mutex<std::collections::VecDeque<nixling_ipc::broker_wire::ChildReapedNotification>> {
+fn child_reap_buffer()
+-> &'static Mutex<std::collections::VecDeque<nixling_ipc::broker_wire::ChildReapedNotification>> {
     use std::collections::VecDeque;
 
     static BUFFER: OnceLock<Mutex<VecDeque<nixling_ipc::broker_wire::ChildReapedNotification>>> =
@@ -4467,16 +4467,15 @@ fn grant_usbip_backend_device_acl(
                 last_error = Some(err.to_string());
             }
         }
-        if granted {
-            if let Err(error) =
+        if granted
+            && let Err(error) =
                 verify_usbip_device_unchanged(intent, expected_identity, &expected_device_node)
-            {
-                let _ = crate::live_handlers::live_revoke_verified_device_acl(
-                    &expected_device_node,
-                    runner.uid,
-                );
-                return Err(error);
-            }
+        {
+            let _ = crate::live_handlers::live_revoke_verified_device_acl(
+                &expected_device_node,
+                runner.uid,
+            );
+            return Err(error);
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
@@ -4871,7 +4870,7 @@ fn cleanup_stale_unix_socket(path: &Path) -> Result<(), BrokerError> {
             return Err(BrokerError::LiveHandler(format!(
                 "cloud-hypervisor socket preflight could not stat {}: {err}",
                 path.display()
-            )))
+            )));
         }
     };
     if !metadata.file_type().is_socket() {
@@ -4914,7 +4913,7 @@ fn cleanup_stale_unix_socket_without_probe(path: &Path, context: &str) -> Result
             return Err(BrokerError::LiveHandler(format!(
                 "{context} could not stat {}: {err}",
                 path.display()
-            )))
+            )));
         }
     };
     if !metadata.file_type().is_socket() {
@@ -5860,9 +5859,7 @@ impl BrokerError {
                 "unknown-operation",
                 operation,
                 Some("W6"),
-                &format!(
-                    "{operation} is USBIP live-device-routing and is not yet implemented."
-                ),
+                &format!("{operation} is USBIP live-device-routing and is not yet implemented."),
                 "USBIP live-device-routing is not yet implemented; only `UsbipBindFirewallRule` skeleton support ships today.",
             ),
             Self::AuditRequiresAdmin => authz_audit_requires_admin_response(),
@@ -5912,9 +5909,7 @@ impl BrokerError {
                 "Broker.StoreViewFilesystemMismatch",
                 "PrepareStoreView",
                 Some("W7"),
-                &format!(
-                    "paths on different filesystems: {a} (dev={a_dev}) vs {b} (dev={b_dev})"
-                ),
+                &format!("paths on different filesystems: {a} (dev={a_dev}) vs {b} (dev={b_dev})"),
                 "Keep /nix/store and the VM store-view root on the same filesystem, then retry.",
             ),
             Self::StoreViewMarkerMissing { generation_dir } => error_response(
@@ -6156,7 +6151,7 @@ fn start_sigchld_reaper(audit_log: Arc<AuditLog>) -> tokio::runtime::Runtime {
         .expect("broker sigchld reaper tokio runtime");
 
     rt.spawn(async move {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
 
         let mut sigchld = match signal(SignalKind::child()) {
             Ok(s) => s,
@@ -6188,7 +6183,7 @@ fn start_sigchld_reaper(audit_log: Arc<AuditLog>) -> tokio::runtime::Runtime {
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn reap_all_pidfds(audit_log: &AuditLog) {
     use nix::errno::Errno;
-    use nix::sys::wait::{waitid, Id, WaitPidFlag, WaitStatus};
+    use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
     use nixling_ipc::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
 
     let runner_ids: Vec<String> = match runner_pidfd_registry().lock() {
@@ -6374,8 +6369,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let path = root.join(format!("{test_name}-{}-{unique}", std::process::id()));
-        path
+
+        root.join(format!("{test_name}-{}-{unique}", std::process::id()))
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -6696,7 +6691,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn broker_bundle_load_sees_rewritten_processes_without_restart() {
-        use nixling_core::bundle_resolver::{intent_id_runner, BundleVerifyPolicy};
+        use nixling_core::bundle_resolver::{BundleVerifyPolicy, intent_id_runner};
         use nixling_core::minijail_profile::{CgroupPlacement, WritablePath};
         use nixling_core::processes::{NodeId, ProcessNode, ProcessRole, ProcessesJson};
         use nixling_core::test_support::RoleProfileBuilder;
@@ -8752,7 +8747,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn spawn_runner_rejects_otel_host_bridge_intent_for_non_obs_vm() {
-        use nixling_core::bundle_resolver::{intent_id_runner, BundleVerifyPolicy};
+        use nixling_core::bundle_resolver::{BundleVerifyPolicy, intent_id_runner};
         use nixling_core::minijail_profile::{CgroupPlacement, WritablePath};
         use nixling_core::processes::{NodeId, ProcessNode, ProcessRole, ProcessesJson};
         use nixling_core::test_support::RoleProfileBuilder;
@@ -9112,7 +9107,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     mod reap_tests {
         use super::*;
-        use nix::sys::signal::{kill, Signal};
+        use nix::sys::signal::{Signal, kill};
         use nix::unistd::Pid;
         use nixling_ipc::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
         use std::process::Command;

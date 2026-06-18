@@ -1,8 +1,8 @@
 use crate::host::IfNameError;
 use schemars::{
-    gen::SchemaGenerator,
-    schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec, StringValidation},
     JsonSchema,
+    r#gen::SchemaGenerator,
+    schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec, StringValidation},
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt, path::PathBuf, str::FromStr};
@@ -65,8 +65,7 @@ static ERROR_KIND_RECORDS: [ErrorKindRecord; 13] = [
         exit_code: 10,
         owning_command: "daemon-api/Hello",
         message_template: "peer uid {peer_uid} is not authorized to use the launcher API",
-        remediation:
-            "Add the caller to nixling.site.launcherUsers or retry with an authorized launcher account.",
+        remediation: "Add the caller to nixling.site.launcherUsers or retry with an authorized launcher account.",
         docs_anchor: "#authz-not-a-launcher",
     },
     ErrorKindRecord {
@@ -74,18 +73,15 @@ static ERROR_KIND_RECORDS: [ErrorKindRecord; 13] = [
         exit_code: 11,
         owning_command: "audit",
         message_template: "peer uid {peer_uid} is not authorized to read broker audit records",
-        remediation:
-            "Add the caller to nixling.site.adminUsers before retrying the audit read path.",
+        remediation: "Add the caller to nixling.site.adminUsers before retrying the audit read path.",
         docs_anchor: "#authz-audit-requires-admin",
     },
     ErrorKindRecord {
         kind: Kind::WireVersionMismatch,
         exit_code: 20,
         owning_command: "daemon-api/Hello",
-        message_template:
-            "client version requirement {client} does not include server version {server}",
-        remediation:
-            "Upgrade or downgrade the client so its declared semver range includes the server version.",
+        message_template: "client version requirement {client} does not include server version {server}",
+        remediation: "Upgrade or downgrade the client so its declared semver range includes the server version.",
         docs_anchor: "#wire-version-mismatch",
     },
     ErrorKindRecord {
@@ -109,16 +105,14 @@ static ERROR_KIND_RECORDS: [ErrorKindRecord; 13] = [
         exit_code: 23,
         owning_command: "daemon-api/request",
         message_template: "wire interface name is invalid: {reason}",
-        remediation:
-            "Use a Linux interface name that fits in IFNAMSIZ-1 and only contains [A-Za-z0-9_-].",
+        remediation: "Use a Linux interface name that fits in IFNAMSIZ-1 and only contains [A-Za-z0-9_-].",
         docs_anchor: "#wire-ifname-invalid",
     },
     ErrorKindRecord {
         kind: Kind::WireMalformedJson,
         exit_code: 24,
         owning_command: "daemon-api/request",
-        message_template:
-            "{type_name} could not be decoded from JSON (opaque reason: {opaque_reason})",
+        message_template: "{type_name} could not be decoded from JSON (opaque reason: {opaque_reason})",
         remediation: "Send a complete JSON object that matches the documented wire schema.",
         docs_anchor: "#wire-malformed-json",
     },
@@ -126,8 +120,7 @@ static ERROR_KIND_RECORDS: [ErrorKindRecord; 13] = [
         kind: Kind::BrokerUnimplemented,
         exit_code: 30,
         owning_command: "daemon-api/broker",
-        message_template:
-            "broker operation {operation} is not implemented in this build",
+        message_template: "broker operation {operation} is not implemented in this build",
         remediation: "Upgrade to a build that implements this operation.",
         docs_anchor: "#broker-unimplemented",
     },
@@ -136,28 +129,23 @@ static ERROR_KIND_RECORDS: [ErrorKindRecord; 13] = [
         exit_code: 31,
         owning_command: "daemon-api/broker",
         message_template: "broker validation failed for opaque target {what}",
-        remediation:
-            "Re-render the trusted bundle artifacts and retry with the newly emitted opaque identifiers.",
+        remediation: "Re-render the trusted bundle artifacts and retry with the newly emitted opaque identifiers.",
         docs_anchor: "#broker-validation-failed",
     },
     ErrorKindRecord {
         kind: Kind::ManifestParseError,
         exit_code: 40,
         owning_command: "status",
-        message_template:
-            "could not parse manifest artifact {artifact} (opaque reason: {opaque_reason})",
-        remediation:
-            "Re-render the manifest bundle and retry with the committed schema-compatible artifact set.",
+        message_template: "could not parse manifest artifact {artifact} (opaque reason: {opaque_reason})",
+        remediation: "Re-render the manifest bundle and retry with the committed schema-compatible artifact set.",
         docs_anchor: "#manifest-parse-error",
     },
     ErrorKindRecord {
         kind: Kind::ManifestVersionMismatch,
         exit_code: 41,
         owning_command: "status",
-        message_template:
-            "manifest {artifact} declared an incompatible manifestVersion (opaque reason: {opaque_reason})",
-        remediation:
-            "Re-run `nixos-rebuild switch` against an updated nixling input pinning the daemon's supported manifestVersion. Manifest version changes do not ship a compatibility window.",
+        message_template: "manifest {artifact} declared an incompatible manifestVersion (opaque reason: {opaque_reason})",
+        remediation: "Re-run `nixos-rebuild switch` against an updated nixling input pinning the daemon's supported manifestVersion. Manifest version changes do not ship a compatibility window.",
         docs_anchor: "#manifest-version-mismatch",
     },
     ErrorKindRecord {
@@ -165,18 +153,15 @@ static ERROR_KIND_RECORDS: [ErrorKindRecord; 13] = [
         exit_code: 50,
         owning_command: "daemon-api/internal",
         message_template: "an internal I/O step failed (opaque reason: {opaque_reason})",
-        remediation:
-            "Retry the command; if the error persists, inspect the daemon logs with the opaque reason token.",
+        remediation: "Retry the command; if the error persists, inspect the daemon logs with the opaque reason token.",
         docs_anchor: "#internal-io",
     },
     ErrorKindRecord {
         kind: Kind::BundleTampered,
         exit_code: 60,
         owning_command: "bundle-load",
-        message_template:
-            "bundle artifact {path} failed tamper-resistance check: {reason}",
-        remediation:
-            "Re-run `nixos-rebuild switch` to restore the bundle artifacts to their signed state.",
+        message_template: "bundle artifact {path} failed tamper-resistance check: {reason}",
+        remediation: "Re-run `nixos-rebuild switch` to restore the bundle artifacts to their signed state.",
         docs_anchor: "#bundle-tampered",
     },
 ];
@@ -884,8 +869,8 @@ impl JsonSchema for Error {
         "Error".to_owned()
     }
 
-    fn json_schema(gen: &mut SchemaGenerator) -> Schema {
-        ErrorEnvelope::json_schema(gen)
+    fn json_schema(r#gen: &mut SchemaGenerator) -> Schema {
+        ErrorEnvelope::json_schema(r#gen)
     }
 }
 

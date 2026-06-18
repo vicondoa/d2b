@@ -1,6 +1,6 @@
 use std::os::fd::AsRawFd;
 
-use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use nixling_core::{
     bundle::{Bundle, BundleGeneration, BundleManagedKeys},

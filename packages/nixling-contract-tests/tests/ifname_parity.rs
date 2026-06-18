@@ -1,5 +1,5 @@
 use nixling_contract_tests::load_bundle_resolver_from_env;
-use nixling_host::ifname::{looks_nixling_owned, DEFAULT_PREFIX};
+use nixling_host::ifname::{DEFAULT_PREFIX, looks_nixling_owned};
 
 #[test]
 fn rendered_host_json_ifname_mappings_pass_looks_nixling_owned() {

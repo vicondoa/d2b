@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use nixlingd::{
-    banner, banner_note, lock_only, run_test_client, serve, LockOnlyOptions, ServeOptions,
-    TestClientOptions, DEFAULT_CONFIG_PATH,
+    DEFAULT_CONFIG_PATH, LockOnlyOptions, ServeOptions, TestClientOptions, banner, banner_note,
+    lock_only, run_test_client, serve,
 };
 
 #[derive(Debug, Parser)]

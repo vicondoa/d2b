@@ -22,8 +22,8 @@ use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 
 use crate::detached::{
-    exec_start_raw_fields, parse_exec_start, unit_name, workload_unit_name, ManagedUnit,
-    ManagedUnitKind, RunnerUnitPaths, TransientUnitManager, UnitIdentity,
+    ManagedUnit, ManagedUnitKind, RunnerUnitPaths, TransientUnitManager, UnitIdentity,
+    exec_start_raw_fields, parse_exec_start, unit_name, workload_unit_name,
 };
 use crate::exec::{
     ExecError, ExecIdSource, ExecSnapshot, ExecState, ExitOutcome, Stream as RtStream,
@@ -35,8 +35,8 @@ use nixling_exec_runner::paths::{RunnerPaths, Stream as RunnerStream};
 use nixling_exec_runner::record::{DurableRecord, RecordState, StatusPhase};
 use nixling_exec_runner::spec::ExecSpec;
 use nixling_exec_runner::{
-    RunnerEnv, DETACHED_ACTIVE_PER_VM, DETACHED_LOG_QUOTA_BYTES, DETACHED_RETAINED_PER_VM,
-    DETACHED_STREAM_LOG_BYTES,
+    DETACHED_ACTIVE_PER_VM, DETACHED_LOG_QUOTA_BYTES, DETACHED_RETAINED_PER_VM,
+    DETACHED_STREAM_LOG_BYTES, RunnerEnv,
 };
 
 /// Max wait for the runner's first phase marker before create resolves via a
@@ -303,11 +303,11 @@ impl RegistryState {
     /// Release the active counter exactly once for an entry that just became
     /// terminal.
     fn release_active(&mut self, slot: u32) {
-        if let Some(entry) = self.slots.get_mut(&slot) {
-            if entry.active_counted {
-                entry.active_counted = false;
-                self.active = self.active.saturating_sub(1);
-            }
+        if let Some(entry) = self.slots.get_mut(&slot)
+            && entry.active_counted
+        {
+            entry.active_counted = false;
+            self.active = self.active.saturating_sub(1);
         }
     }
 
@@ -1819,7 +1819,7 @@ impl RunSlotStore {
     /// Validate the parent and slot directories are root-owned 0700 dirs via
     /// dir-fd `openat`/`O_NOFOLLOW` (mirrors the runner's `validate_slot_dir`).
     fn validate_slot_dir(&self, paths: &RunnerPaths) -> Result<(), ExecError> {
-        use rustix::fs::{fstat, open, openat, Mode, OFlags};
+        use rustix::fs::{Mode, OFlags, fstat, open, openat};
         let dir_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
         let base = open(paths.base(), dir_flags, Mode::empty()).map_err(|_| ExecError::Internal)?;
         let base_stat = fstat(&base).map_err(|_| ExecError::Internal)?;
@@ -1867,7 +1867,7 @@ impl Default for RunSlotStore {
 
 impl SlotStore for RunSlotStore {
     fn prepare_slot_dir(&self, slot: u32) -> Result<(), ExecError> {
-        use rustix::fs::{fstat, open, Mode, OFlags};
+        use rustix::fs::{Mode, OFlags, fstat, open};
         use std::os::unix::fs::DirBuilderExt;
         let paths = self.paths(slot);
         // The parent must exist and be root-owned 0700 (created by the nixos
@@ -2019,7 +2019,7 @@ impl SlotStore for RunSlotStore {
     }
 
     fn validate_authenticity(&self, slot: u32) -> Result<(), ExecError> {
-        use rustix::fs::{fstat, open, openat, Mode, OFlags};
+        use rustix::fs::{Mode, OFlags, fstat, open, openat};
         let paths = self.paths(slot);
         let dir_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
         // Base dir: root-owned 0700 directory.
@@ -2059,10 +2059,10 @@ impl SlotStore for RunSlotStore {
             let Some(rest) = name.strip_prefix("slot-") else {
                 continue;
             };
-            if let Ok(slot) = rest.parse::<u32>() {
-                if (slot as usize) < DETACHED_RETAINED_PER_VM {
-                    slots.push(slot);
-                }
+            if let Ok(slot) = rest.parse::<u32>()
+                && (slot as usize) < DETACHED_RETAINED_PER_VM
+            {
+                slots.push(slot);
             }
         }
         slots.sort_unstable();
@@ -2075,8 +2075,8 @@ mod tests {
     use super::*;
     use crate::detached::UnitError;
     use std::collections::HashMap;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Condvar;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     const RUNNER_PATH: &str = "/run/current-system/sw/bin/nixling-exec-runner";
 
@@ -2803,27 +2803,34 @@ mod tests {
         assert_eq!(spec.exec_user, "alice");
         assert_eq!(spec.exec_uid, 1000);
         assert!(spec.systemd_run_args.contains(&"--uid=alice".to_owned()));
-        assert!(spec
-            .systemd_run_args
-            .contains(&"--unit=nixling-exec-07-w.service".to_owned()));
-        assert!(spec
-            .systemd_run_args
-            .contains(&"--slice=nixling-exec.slice".to_owned()));
-        assert!(spec
-            .systemd_run_args
-            .contains(&"--property=PAMName=login".to_owned()));
-        assert!(spec
-            .systemd_run_args
-            .contains(&"--property=BindsTo=nixling-exec-07.service".to_owned()));
-        assert!(spec
-            .systemd_run_args
-            .contains(&"--property=PartOf=nixling-exec-07.service".to_owned()));
-        assert!(spec
-            .systemd_run_args
-            .contains(&"--property=After=nixling-exec-07.service".to_owned()));
-        assert!(spec
-            .systemd_run_args
-            .contains(&"--expand-environment=no".to_owned()));
+        assert!(
+            spec.systemd_run_args
+                .contains(&"--unit=nixling-exec-07-w.service".to_owned())
+        );
+        assert!(
+            spec.systemd_run_args
+                .contains(&"--slice=nixling-exec.slice".to_owned())
+        );
+        assert!(
+            spec.systemd_run_args
+                .contains(&"--property=PAMName=login".to_owned())
+        );
+        assert!(
+            spec.systemd_run_args
+                .contains(&"--property=BindsTo=nixling-exec-07.service".to_owned())
+        );
+        assert!(
+            spec.systemd_run_args
+                .contains(&"--property=PartOf=nixling-exec-07.service".to_owned())
+        );
+        assert!(
+            spec.systemd_run_args
+                .contains(&"--property=After=nixling-exec-07.service".to_owned())
+        );
+        assert!(
+            spec.systemd_run_args
+                .contains(&"--expand-environment=no".to_owned())
+        );
         assert!(!spec.systemd_run_args.iter().any(|arg| arg == "User=root"));
         let sentinel = spec
             .systemd_run_args
@@ -3433,10 +3440,12 @@ mod tests {
         )
         .is_none());
         // No leading brace (e.g. a captured continuation line) also fails closed.
-        assert!(exec_start_raw_fields(
-            "path=/x ; argv[]=/x -l -c exec \"$@\" nl-exec id ; ignore_errors=no }"
-        )
-        .is_none());
+        assert!(
+            exec_start_raw_fields(
+                "path=/x ; argv[]=/x -l -c exec \"$@\" nl-exec id ; ignore_errors=no }"
+            )
+            .is_none()
+        );
     }
 
     #[tokio::test]
@@ -4298,10 +4307,12 @@ mod tests {
         let entry = &list[0];
         assert_eq!(entry.exec_id, id);
         assert_eq!(entry.argv_sha256.len(), 64);
-        assert!(entry
-            .argv_sha256
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+        assert!(
+            entry
+                .argv_sha256
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        );
         let rendered = format!("{entry:?}");
         assert!(
             !rendered.contains("/bin/sleep"),

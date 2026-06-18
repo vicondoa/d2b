@@ -354,10 +354,12 @@ mod tests {
         let mut input = happy_input();
         input.declared_runner_argv[0].argv_hash.clear();
         let report = runner_shape_preflight(&input, None);
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.kind == RunnerShapeKind::RunnerShapeDrift));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == RunnerShapeKind::RunnerShapeDrift)
+        );
     }
 
     #[test]
@@ -365,10 +367,12 @@ mod tests {
         let mut input = happy_input();
         input.ch_capabilities_packaged.retain(|c| c != "virtio-fs");
         let report = runner_shape_preflight(&input, None);
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.kind == RunnerShapeKind::CapabilityMismatch));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == RunnerShapeKind::CapabilityMismatch)
+        );
     }
 
     #[test]
@@ -376,10 +380,12 @@ mod tests {
         let mut input = happy_input();
         input.vsock_transports[0].transport = "ip".into();
         let report = runner_shape_preflight(&input, None);
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.kind == RunnerShapeKind::VsockTransportInvalid));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == RunnerShapeKind::VsockTransportInvalid)
+        );
     }
 
     #[test]
@@ -387,10 +393,12 @@ mod tests {
         let mut input = happy_input();
         input.sidecar_nodes[0].dag_node_id = "nope".into();
         let report = runner_shape_preflight(&input, None);
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.kind == RunnerShapeKind::SidecarDagMismatch));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == RunnerShapeKind::SidecarDagMismatch)
+        );
     }
 
     #[test]
@@ -435,30 +443,40 @@ mod tests {
             report.findings
         );
         // Capability mismatch (vhost-user-net declared but not packaged).
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.kind == RunnerShapeKind::CapabilityMismatch));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == RunnerShapeKind::CapabilityMismatch)
+        );
         // RunnerShapeDrift on empty argv hash.
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.kind == RunnerShapeKind::RunnerShapeDrift));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == RunnerShapeKind::RunnerShapeDrift)
+        );
         // ApiSocketPathOwnershipMismatch on empty owner.
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.kind == RunnerShapeKind::ApiSocketPathOwnershipMismatch));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == RunnerShapeKind::ApiSocketPathOwnershipMismatch)
+        );
         // VsockTransportInvalid for "ip".
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.kind == RunnerShapeKind::VsockTransportInvalid));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == RunnerShapeKind::VsockTransportInvalid)
+        );
         // SidecarDagMismatch for missing-node.
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.kind == RunnerShapeKind::SidecarDagMismatch));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == RunnerShapeKind::SidecarDagMismatch)
+        );
     }
 
     #[test]
@@ -589,7 +607,7 @@ pub fn runner_shape_preflight_from_bundle(
             return Err(RunnerShapeError::Io {
                 path: processes_path,
                 detail: err.to_string(),
-            })
+            });
         }
     };
 

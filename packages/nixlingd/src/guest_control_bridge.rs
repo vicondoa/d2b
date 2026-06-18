@@ -33,11 +33,11 @@ use nixling_ipc::broker_wire::{
 use nixling_ipc::guest_auth::AUTH_NONCE_LEN;
 
 use crate::guest_control_health::{
-    connected_stream_to_ttrpc_socket, guest_control_health_ready, probe_guest_control_health,
-    read_guest_config_authenticated, AttemptBudget, GuestControlHealthError,
-    GuestControlHealthEvidence, GuestControlSigner, GuestFileReadError, TtrpcGuestControlClient,
+    AttemptBudget, GuestControlHealthError, GuestControlHealthEvidence, GuestControlSigner,
+    GuestFileReadError, TtrpcGuestControlClient, connected_stream_to_ttrpc_socket,
+    guest_control_health_ready, probe_guest_control_health, read_guest_config_authenticated,
 };
-use crate::guest_control_vsock::{connect_guest_control_vsock, GuestControlTransportProbeResult};
+use crate::guest_control_vsock::{GuestControlTransportProbeResult, connect_guest_control_vsock};
 use crate::typed_error::TypedError;
 
 /// Well-known `VMADDR_CID_HOST`. The host side of an `AF_VSOCK` pair is
@@ -618,8 +618,8 @@ mod tests {
         BrokerErrorResponse, GuestControlProofRole, GuestControlSignRequest,
     };
     use nixling_ipc::guest_auth::AUTH_TAG_LEN;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     /// Records every `GuestControlSignRequest` the probe forwards so the
     /// test can assert the host built it verbatim (correct CID, roles,

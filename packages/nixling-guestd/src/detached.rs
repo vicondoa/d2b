@@ -154,10 +154,10 @@ pub fn parse_exec_start(value: &str) -> Option<ParsedExecStart> {
             if exe.is_none() {
                 exe = Some(v.trim().to_owned());
             }
-        } else if let Some(v) = field.strip_prefix("argv[]=") {
-            if argv.is_none() {
-                argv = Some(parse_exec_argv(v.trim())?);
-            }
+        } else if let Some(v) = field.strip_prefix("argv[]=")
+            && argv.is_none()
+        {
+            argv = Some(parse_exec_argv(v.trim())?);
         }
     }
 
@@ -443,27 +443,27 @@ impl TransientUnitManager for SystemdRunUnitManager {
         for unit in &units {
             show.arg(unit.name());
         }
-        if let Ok(show_out) = show.output().await {
-            if show_out.status.success() {
-                let show_text = String::from_utf8_lossy(&show_out.stdout);
-                let blocks = parse_show_blocks(&show_text);
-                for unit in &mut units {
-                    let name = unit.name();
-                    if let Some(block) = blocks.iter().find(|b| b.id == name) {
-                        // A malformed block (a multi-line/continuation property
-                        // value — only possible for a foreign or crafted unit,
-                        // since our own argv is newline-free) is left Unqueried
-                        // so the active unit classifies Unknown (retry), never a
-                        // confident identity match against a truncated value.
-                        if !block.malformed {
-                            unit.identity = UnitIdentity::Queried {
-                                slice: block.slice.clone(),
-                                exec_start: block.exec_start.clone(),
-                                binds_to: block.binds_to.clone(),
-                                part_of: block.part_of.clone(),
-                                after: block.after.clone(),
-                            };
-                        }
+        if let Ok(show_out) = show.output().await
+            && show_out.status.success()
+        {
+            let show_text = String::from_utf8_lossy(&show_out.stdout);
+            let blocks = parse_show_blocks(&show_text);
+            for unit in &mut units {
+                let name = unit.name();
+                if let Some(block) = blocks.iter().find(|b| b.id == name) {
+                    // A malformed block (a multi-line/continuation property
+                    // value — only possible for a foreign or crafted unit,
+                    // since our own argv is newline-free) is left Unqueried
+                    // so the active unit classifies Unknown (retry), never a
+                    // confident identity match against a truncated value.
+                    if !block.malformed {
+                        unit.identity = UnitIdentity::Queried {
+                            slice: block.slice.clone(),
+                            exec_start: block.exec_start.clone(),
+                            binds_to: block.binds_to.clone(),
+                            part_of: block.part_of.clone(),
+                            after: block.after.clone(),
+                        };
                     }
                 }
             }
@@ -713,9 +713,10 @@ mod tests {
         let runner = PathBuf::from("/nix/store/abc/bin/nixling-exec-runner");
         // ceiling 0 => indefinite => no RuntimeMaxSec flag.
         let none = systemd_run_argv(3, 0, &runner);
-        assert!(none
-            .iter()
-            .all(|a| !a.to_string_lossy().starts_with("RuntimeMaxSec=")));
+        assert!(
+            none.iter()
+                .all(|a| !a.to_string_lossy().starts_with("RuntimeMaxSec="))
+        );
         // ceiling > 0 => the backstop is emitted, and STRICTLY larger than the
         // runner's own ceiling so systemd does not SIGKILL before the runner
         // writes `cancelled`.
@@ -848,11 +849,13 @@ ExecStart={ path=/bin/false ; argv[]=/bin/false ; ignore_errors=no }
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].id, "nixling-exec-07.service");
         assert_eq!(blocks[0].slice.as_deref(), Some("nixling-exec.slice"));
-        assert!(blocks[0]
-            .exec_start
-            .as_deref()
-            .unwrap()
-            .contains("--slot 07"));
+        assert!(
+            blocks[0]
+                .exec_start
+                .as_deref()
+                .unwrap()
+                .contains("--slot 07")
+        );
         assert_eq!(
             blocks[0].binds_to.as_deref(),
             Some("nixling-exec-07.service")

@@ -34,7 +34,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use nixling_core::manifest_v04::ManifestV04;
 
@@ -1130,28 +1130,28 @@ struct PersistedEnvEntry {
 /// declared" and suppresses the fallback.
 fn collect_bridge_names(daemon_state_dir: &Path) -> Vec<String> {
     let envs_path = daemon_state_dir.join("envs.json");
-    if let Ok(bytes) = std::fs::read(&envs_path) {
-        if let Ok(parsed) = serde_json::from_slice::<PersistedEnvsJson>(&bytes) {
-            // Successfully parsed — use declared bridges only; do NOT
-            // fall back to sysfs so that an empty envs.json correctly
-            // signals "no envs" rather than triggering a sysfs scan.
-            let mut bridges: Vec<String> = Vec::new();
-            for env in &parsed.envs {
-                if let Some(b) = &env.lan_bridge {
-                    if !b.is_empty() {
-                        bridges.push(b.clone());
-                    }
-                }
-                if let Some(b) = &env.uplink_bridge {
-                    if !b.is_empty() {
-                        bridges.push(b.clone());
-                    }
-                }
+    if let Ok(bytes) = std::fs::read(&envs_path)
+        && let Ok(parsed) = serde_json::from_slice::<PersistedEnvsJson>(&bytes)
+    {
+        // Successfully parsed — use declared bridges only; do NOT
+        // fall back to sysfs so that an empty envs.json correctly
+        // signals "no envs" rather than triggering a sysfs scan.
+        let mut bridges: Vec<String> = Vec::new();
+        for env in &parsed.envs {
+            if let Some(b) = &env.lan_bridge
+                && !b.is_empty()
+            {
+                bridges.push(b.clone());
             }
-            bridges.sort();
-            bridges.dedup();
-            return bridges;
+            if let Some(b) = &env.uplink_bridge
+                && !b.is_empty()
+            {
+                bridges.push(b.clone());
+            }
         }
+        bridges.sort();
+        bridges.dedup();
+        return bridges;
     }
     // envs.json absent or unparseable — fall back to sysfs scan.
     sysfs_nixling_bridges()

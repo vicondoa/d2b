@@ -20,11 +20,11 @@
 
 use std::os::fd::AsRawFd;
 
-use nix::fcntl::{fcntl, FcntlArg, FdFlag};
-use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
 use nixling_priv_broker::fd_passing::{recv_fds, send_fds};
 use nixling_priv_broker::ops::pidfd::test_harness::FakePidfdSpawner;
-use nixling_priv_broker::ops::pidfd::{assert_cloexec, PidfdPayload, PidfdSpawner};
+use nixling_priv_broker::ops::pidfd::{PidfdPayload, PidfdSpawner, assert_cloexec};
 
 fn cloexec_set(fd: i32) -> bool {
     let flags = fcntl(fd, FcntlArg::F_GETFD).expect("fcntl F_GETFD");

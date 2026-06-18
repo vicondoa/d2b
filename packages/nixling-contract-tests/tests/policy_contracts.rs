@@ -712,10 +712,11 @@ fn walk_rust_files(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<
                 Some("target") | Some("vendor") | Some("generated") | Some(".git") => continue,
                 _ => walk_rust_files(&path, root, out),
             }
-        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
-            if let Ok(rel) = path.strip_prefix(root) {
-                out.push(rel.to_string_lossy().replace('\\', "/"));
-            }
+        } else if file_type.is_file()
+            && path.extension().is_some_and(|ext| ext == "rs")
+            && let Ok(rel) = path.strip_prefix(root)
+        {
+            out.push(rel.to_string_lossy().replace('\\', "/"));
         }
     }
 }

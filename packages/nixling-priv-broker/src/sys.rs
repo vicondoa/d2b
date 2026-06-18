@@ -98,19 +98,21 @@ pub fn adopt_listen_fd_from_fd3() -> io::Result<OwnedFd> {
 /// `fd` must be a valid open file descriptor.
 #[allow(unsafe_code)]
 unsafe fn getsockopt_int(fd: RawFd, optname: libc::c_int) -> io::Result<libc::c_int> {
-    let mut val: libc::c_int = 0;
-    let mut optlen = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
-    let rc = libc::getsockopt(
-        fd,
-        libc::SOL_SOCKET,
-        optname,
-        std::ptr::addr_of_mut!(val).cast::<libc::c_void>(),
-        &mut optlen,
-    );
-    if rc < 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(val)
+    unsafe {
+        let mut val: libc::c_int = 0;
+        let mut optlen = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        let rc = libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            optname,
+            std::ptr::addr_of_mut!(val).cast::<libc::c_void>(),
+            &mut optlen,
+        );
+        if rc < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(val)
+        }
     }
 }
 
@@ -717,7 +719,7 @@ pub mod path_safe {
                             return Ok(File::from(fd));
                         }
                         Err(open_err) if open_err.kind() == io::ErrorKind::AlreadyExists => {
-                            continue
+                            continue;
                         }
                         Err(open_err) => return Err(open_err),
                     }
@@ -835,7 +837,7 @@ pub mod path_safe {
                     {
                         Ok(()) => return install_stage_name(dir_fd, &stage_name, &target_name),
                         Err(proc_err) if proc_err.kind() == io::ErrorKind::AlreadyExists => {
-                            continue
+                            continue;
                         }
                         Err(proc_err) => return Err(proc_err),
                     }
@@ -859,7 +861,7 @@ pub mod path_safe {
         path: &Path,
         flags: rustix::fs::OFlags,
     ) -> io::Result<OwnedFd> {
-        use rustix::fs::{openat2, Mode, OFlags, ResolveFlags};
+        use rustix::fs::{Mode, OFlags, ResolveFlags, openat2};
         openat2(
             dirfd,
             path,
@@ -894,7 +896,7 @@ pub mod path_safe {
     /// fd-based `fchmod` wrapper around rustix; replaces every
     /// path-string `chmod` call site in broker fs ops.
     pub fn fchmod(fd: BorrowedFd<'_>, mode: u32) -> io::Result<()> {
-        use rustix::fs::{fchmod as rfchmod, Mode};
+        use rustix::fs::{Mode, fchmod as rfchmod};
         rfchmod(fd, Mode::from_raw_mode(mode)).map_err(io_from_rustix)
     }
 
@@ -1119,7 +1121,7 @@ pub mod path_safe {
     /// `mkdirat` on a parent dirfd. `EEXIST` is folded into `Ok(())`
     /// so callers can use this as a one-shot idempotent dir create.
     pub fn mkdir_at(parent_dirfd: BorrowedFd<'_>, name: &Path, mode: u32) -> io::Result<()> {
-        use rustix::fs::{mkdirat, Mode};
+        use rustix::fs::{Mode, mkdirat};
         match mkdirat(parent_dirfd, name, Mode::from_raw_mode(mode)) {
             Ok(()) => Ok(()),
             Err(err) if err == rustix::io::Errno::EXIST => Ok(()),
@@ -1848,7 +1850,7 @@ pub mod pidfd_sys {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!("unknown Linux capability {name}"),
-                ))
+                ));
             }
         };
         Ok(cap)
@@ -2740,12 +2742,12 @@ pub mod pidfd_sys {
                     }
                 }
             }
-            if let Some(fd) = cgroup_procs_fd.as_ref() {
-                if write_self_to_cgroup(fd.as_raw_fd()).is_err() {
-                    let m = b"DEBUG: write_self_to_cgroup failed\n";
-                    libc::write(2, m.as_ptr() as *const _, m.len());
-                    libc::_exit(CHILD_EXIT_CGROUP);
-                }
+            if let Some(fd) = cgroup_procs_fd.as_ref()
+                && write_self_to_cgroup(fd.as_raw_fd()).is_err()
+            {
+                let m = b"DEBUG: write_self_to_cgroup failed\n";
+                libc::write(2, m.as_ptr() as *const _, m.len());
+                libc::_exit(CHILD_EXIT_CGROUP);
             }
             // Credential changes here MUST go through the RAW syscalls, not
             // the glibc `setgroups`/`setgid`/`setuid` wrappers. glibc routes
@@ -2842,10 +2844,10 @@ pub mod pidfd_sys {
                 // Clear CLOEXEC so the fd survives execve.
                 libc::fcntl(dst_fd, libc::F_SETFD, 0);
             }
-            if let Some(program) = seccomp_program.as_ref() {
-                if apply_seccomp(program).is_err() {
-                    libc::_exit(CHILD_EXIT_SECCOMP);
-                }
+            if let Some(program) = seccomp_program.as_ref()
+                && apply_seccomp(program).is_err()
+            {
+                libc::_exit(CHILD_EXIT_SECCOMP);
             }
             let m = b"DEBUG: about to execve\n";
             libc::write(2, m.as_ptr() as *const _, m.len());
@@ -2976,7 +2978,7 @@ pub mod pidfd_sys {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     use tempfile::tempdir;
 
@@ -3078,7 +3080,7 @@ mod tests {
     // SHAPE of the request, not the kernel-level fork+map dance (which
     // requires root and is tested by integration tests in live_handlers.rs).
 
-    use super::pidfd_sys::{clone3_spawn_runner, RunnerIsolationSpec, UserNamespaceSpec};
+    use super::pidfd_sys::{RunnerIsolationSpec, UserNamespaceSpec, clone3_spawn_runner};
     use nixling_core::minijail_profile::{MountPolicy, NamespaceSet};
     use std::ffi::CString;
 
@@ -3260,7 +3262,7 @@ mod tests {
     /// (clone3 returns EPERM before any child runs).
     #[test]
     fn apply_mount_actions_skipped_in_user_ns() {
-        use nix::sys::wait::{waitpid, WaitStatus};
+        use nix::sys::wait::{WaitStatus, waitpid};
         use nix::unistd::Pid;
 
         // /bin/true is absent on NixOS; probe common locations.

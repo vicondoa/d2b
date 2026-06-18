@@ -328,7 +328,7 @@ mod tests {
     use super::*;
     use std::fs::{self, File};
     use std::io::Write;
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     /// Materialize a sshd-host-keys directory with one key file.
     /// Returns (dir, key_path). The key is mode 0o400 but its owner

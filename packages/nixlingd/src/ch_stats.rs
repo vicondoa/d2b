@@ -242,10 +242,10 @@ pub fn render_ch_stats(
         out.push_str(&format!("nixling_vm_ch_api_up{{{labels}}} {api_up}\n"));
 
         let mut states: Vec<&str> = KNOWN_STATES.to_vec();
-        if let Some(s) = stats.state.as_deref() {
-            if !states.contains(&s) {
-                states.push(s);
-            }
+        if let Some(s) = stats.state.as_deref()
+            && !states.contains(&s)
+        {
+            states.push(s);
         }
         for st in &states {
             let v = if Some(*st) == stats.state.as_deref() {
@@ -407,8 +407,11 @@ mod tests {
         assert!(
             body.contains("nixling_vm_running{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 1")
         );
-        assert!(body
-            .contains("nixling_vm_ch_vcpu_count{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 4"));
+        assert!(
+            body.contains(
+                "nixling_vm_ch_vcpu_count{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 4"
+            )
+        );
         assert!(body.contains(
             "nixling_vm_ch_memory_bytes{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 2147483648"
         ));

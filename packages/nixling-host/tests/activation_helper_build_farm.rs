@@ -192,16 +192,20 @@ fn build_store_view_verb_writes_split_tree_and_emits_counts() {
     assert_eq!(counts.skipped, 0);
 
     // Split tree: guest meta under meta/, host metadata under state/.
-    assert!(farm_root
-        .join("meta/generations")
-        .join(&gid)
-        .join("meta.json")
-        .exists());
-    assert!(farm_root
-        .join("state/generations")
-        .join(&gid)
-        .join("marker.json")
-        .exists());
+    assert!(
+        farm_root
+            .join("meta/generations")
+            .join(&gid)
+            .join("meta.json")
+            .exists()
+    );
+    assert!(
+        farm_root
+            .join("state/generations")
+            .join(&gid)
+            .join("marker.json")
+            .exists()
+    );
     let farmed = farm_root.join("live/aaaaaaaaaaaaaaaa-fake-0/bin/payload");
     assert_eq!(
         std::fs::metadata(&farmed).unwrap().ino(),

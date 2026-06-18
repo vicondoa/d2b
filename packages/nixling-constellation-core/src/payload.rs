@@ -5,9 +5,9 @@
 //! audit line).
 
 use schemars::{
-    gen::SchemaGenerator,
-    schema::{ArrayValidation, InstanceType, Schema, SchemaObject, SingleOrVec},
     JsonSchema,
+    r#gen::SchemaGenerator,
+    schema::{ArrayValidation, InstanceType, Schema, SchemaObject, SingleOrVec},
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -89,11 +89,11 @@ impl JsonSchema for OpaquePayload {
         "OpaquePayload".to_owned()
     }
 
-    fn json_schema(gen: &mut SchemaGenerator) -> Schema {
+    fn json_schema(r#gen: &mut SchemaGenerator) -> Schema {
         Schema::Object(SchemaObject {
             instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Array))),
             array: Some(Box::new(ArrayValidation {
-                items: Some(SingleOrVec::Single(Box::new(gen.subschema_for::<u8>()))),
+                items: Some(SingleOrVec::Single(Box::new(r#gen.subschema_for::<u8>()))),
                 max_items: Some(MAX_PAYLOAD_LEN as u32),
                 ..Default::default()
             })),

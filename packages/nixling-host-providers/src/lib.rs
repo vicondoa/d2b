@@ -7,17 +7,17 @@
 use async_trait::async_trait;
 use nixling_constellation_core::{Capability, CapabilitySet, ErrorKind, ProviderId};
 use nixling_constellation_provider::{
+    DisplayProvider, RuntimeProvider,
     capabilities::{DisplayCapabilitySet, RuntimeCapabilitySet},
     error::{ProviderError, ProviderResult},
     types::{
         DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest, RuntimeHandle, RuntimePlan,
         RuntimeStatus, WorkloadSpec,
     },
-    DisplayProvider, RuntimeProvider,
 };
 use nixling_host::{
-    ch_argv::{generate_ch_argv, ChArgvError},
-    wayland_proxy_argv::{generate_wayland_proxy_argv, WaylandProxyArgvError},
+    ch_argv::{ChArgvError, generate_ch_argv},
+    wayland_proxy_argv::{WaylandProxyArgvError, generate_wayland_proxy_argv},
 };
 
 pub use nixling_host::{ch_argv::ChArgvInput, wayland_proxy_argv::WaylandProxyArgvInput};
@@ -275,7 +275,7 @@ mod tests {
     use nixling_constellation_core::{ErrorKind, WorkloadId};
     use nixling_constellation_provider::types::{DisplaySessionRequest, WorkloadSpec};
     use nixling_host::{
-        ch_argv::{generate_ch_argv, ChFsShare, ChNetHandoff, ChNetIface, ChVsock},
+        ch_argv::{ChFsShare, ChNetHandoff, ChNetIface, ChVsock, generate_ch_argv},
         wayland_proxy_argv::generate_wayland_proxy_argv,
     };
 
@@ -522,9 +522,11 @@ mod tests {
         .await
         .expect_err("display opening is intentionally not wired");
         assert_eq!(display_err.kind(), ErrorKind::UnsupportedFeature);
-        assert!(!display_provider
-            .capabilities()
-            .has(Capability::WindowForwarding));
+        assert!(
+            !display_provider
+                .capabilities()
+                .has(Capability::WindowForwarding)
+        );
     }
 
     #[test]

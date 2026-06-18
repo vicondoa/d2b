@@ -33,7 +33,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use nix::sys::socket::{
-    bind, listen, socket, AddressFamily, Backlog, SockFlag, SockType, UnixAddr,
+    AddressFamily, Backlog, SockFlag, SockType, UnixAddr, bind, listen, socket,
 };
 use nixling_ipc::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, HelloRequest,

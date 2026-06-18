@@ -131,8 +131,10 @@ mod tests {
         assert!(paths.status().ends_with("slot-07/status"));
         assert!(paths.cancel().ends_with("slot-07/cancel"));
         assert!(paths.data(Stream::Stdout).ends_with("slot-07/stdout"));
-        assert!(paths
-            .sidecar(Stream::Stderr)
-            .ends_with("slot-07/stderr.meta"));
+        assert!(
+            paths
+                .sidecar(Stream::Stderr)
+                .ends_with("slot-07/stderr.meta")
+        );
     }
 }

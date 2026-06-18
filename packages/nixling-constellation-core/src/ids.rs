@@ -13,9 +13,9 @@
 //! [`IdError`] rather than silently accepted (fail-closed).
 
 use schemars::{
-    gen::SchemaGenerator,
-    schema::{InstanceType, Schema, SchemaObject, SingleOrVec, StringValidation},
     JsonSchema,
+    r#gen::SchemaGenerator,
+    schema::{InstanceType, Schema, SchemaObject, SingleOrVec, StringValidation},
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -67,7 +67,7 @@ fn is_opaque_token(s: &str) -> bool {
 }
 
 macro_rules! id_newtype {
-    ($(#[$meta:meta])* $name:ident, $validate:expr, $pattern:expr) => {
+    ($(#[$meta:meta])* $name:ident, $validate:expr_2021, $pattern:expr_2021) => {
         $(#[$meta])*
         #[derive(
             Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize,

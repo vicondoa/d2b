@@ -40,15 +40,15 @@
 use nixling_core::bundle_resolver::ResolvedRunnerIntent;
 use nixling_core::processes::ProcessRole;
 
-use crate::audio_argv::{generate_audio_argv, AudioArgvInput};
-use crate::ch_argv::{generate_ch_argv, ChArgvInput};
-use crate::gpu_argv::{generate_gpu_argv, GpuArgvInput};
-use crate::otel_host_bridge_argv::{generate_otel_host_bridge_argv, OtelHostBridgeArgvInputs};
-use crate::swtpm_argv::{generate_swtpm_argv, SwtpmArgvInput};
-use crate::usbip_argv::{generate_usbip_argv, UsbipArgvInput, UsbipSubcommand};
-use crate::video_argv::{generate_video_argv, VideoArgvInput};
-use crate::virtiofsd_argv::{generate_virtiofsd_argv, VirtiofsdArgvInput};
-use crate::vsock_relay_argv::{generate_vsock_relay_argv, VsockRelayArgvInput};
+use crate::audio_argv::{AudioArgvInput, generate_audio_argv};
+use crate::ch_argv::{ChArgvInput, generate_ch_argv};
+use crate::gpu_argv::{GpuArgvInput, generate_gpu_argv};
+use crate::otel_host_bridge_argv::{OtelHostBridgeArgvInputs, generate_otel_host_bridge_argv};
+use crate::swtpm_argv::{SwtpmArgvInput, generate_swtpm_argv};
+use crate::usbip_argv::{UsbipArgvInput, UsbipSubcommand, generate_usbip_argv};
+use crate::video_argv::{VideoArgvInput, generate_video_argv};
+use crate::virtiofsd_argv::{VirtiofsdArgvInput, generate_virtiofsd_argv};
+use crate::vsock_relay_argv::{VsockRelayArgvInput, generate_vsock_relay_argv};
 
 /// Errors that can occur during regeneration.
 #[derive(Debug)]

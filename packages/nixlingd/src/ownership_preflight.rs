@@ -36,7 +36,7 @@
 
 use nix::unistd::{Gid, Group, Uid, User};
 use nixling_host::ownership_matrix::{
-    check_ownership_matrix, EntryKind, OwnershipEntry, OwnershipMismatch,
+    EntryKind, OwnershipEntry, OwnershipMismatch, check_ownership_matrix,
 };
 use std::path::Path;
 

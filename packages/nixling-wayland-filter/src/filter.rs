@@ -17,6 +17,7 @@ use wl_proxy::{
     client::{Client, ClientHandler},
     object::{Object, ObjectCoreApi, ObjectRcUtils},
     protocols::{
+        ObjectInterface,
         linux_dmabuf_v1::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
         stream::{
             wl_eglstream::WlEglstreamHandleType,
@@ -34,7 +35,6 @@ use wl_proxy::{
             xdg_toplevel::{XdgToplevel, XdgToplevelHandler},
             xdg_wm_base::{XdgWmBase, XdgWmBaseHandler},
         },
-        ObjectInterface,
     },
     state::{Destructor, State, StateHandler},
 };
@@ -218,18 +218,26 @@ impl WlRegistryHandler for FilterRegistryHandler {
 
         // Install per-interface handlers before forwarding, so we can
         // intercept the object's lifecycle from the first message.
-        if let Some(wm_base) = id.try_downcast::<XdgWmBase>() {
-            wm_base.set_handler(FilterXdgWmBaseHandler {
-                policy: self.policy.clone(),
-            });
-        } else if let Some(eglstream_display) = id.try_downcast::<WlEglstreamDisplay>() {
-            eglstream_display.set_handler(FilterEglstreamDisplayHandler {
-                vm: self.policy.vm_name.clone(),
-            });
-        } else if let Some(dmabuf) = id.try_downcast::<ZwpLinuxDmabufV1>() {
-            if !self.policy.dmabuf_filters.is_empty() {
-                dmabuf.set_handler(DmabufHandler::new(self.policy.dmabuf_filters.clone()));
+        match id.try_downcast::<XdgWmBase>() {
+            Some(wm_base) => {
+                wm_base.set_handler(FilterXdgWmBaseHandler {
+                    policy: self.policy.clone(),
+                });
             }
+            _ => match id.try_downcast::<WlEglstreamDisplay>() {
+                Some(eglstream_display) => {
+                    eglstream_display.set_handler(FilterEglstreamDisplayHandler {
+                        vm: self.policy.vm_name.clone(),
+                    });
+                }
+                _ => {
+                    if let Some(dmabuf) = id.try_downcast::<ZwpLinuxDmabufV1>()
+                        && !self.policy.dmabuf_filters.is_empty()
+                    {
+                        dmabuf.set_handler(DmabufHandler::new(self.policy.dmabuf_filters.clone()));
+                    }
+                }
+            },
         }
 
         slf.send_bind(name, id);

@@ -101,7 +101,7 @@ macro_rules! bounded_string {
             }
 
             fn json_schema(
-                _gen: &mut schemars::gen::SchemaGenerator,
+                _gen: &mut schemars::r#gen::SchemaGenerator,
             ) -> schemars::schema::Schema {
                 schemars::schema::Schema::Object(schemars::schema::SchemaObject {
                     instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
@@ -132,7 +132,7 @@ macro_rules! bounded_bytes {
             }
 
             fn json_schema(
-                _gen: &mut schemars::gen::SchemaGenerator,
+                _gen: &mut schemars::r#gen::SchemaGenerator,
             ) -> schemars::schema::Schema {
                 let item = schemars::schema::Schema::Object(schemars::schema::SchemaObject {
                     instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
