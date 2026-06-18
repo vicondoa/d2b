@@ -2327,14 +2327,30 @@ authentication, and compliance.
 | Exit criteria | A reviewed P0 demo proves end-to-end ACA sandbox lifecycle + exec/logs + full Wayland app forwarding through the constellation stack; validation evidence is attached; expanded panel signoff is unanimous. Full realm rollout may not proceed until this vertical is green or explicitly descoped by a new ADR/panel decision. |
 | Non-goals | Full realm policy, nested realms, whole-constellation observability, full desktop remoting, GPU acceleration in ACA, generic TCP tunneling, or bypassing capability checks for display. |
 
-**P0 placement note (gateway/guestd/systemd services).** P0 is a thin
-vertical: the realm gateway (relay termination, the per-session display
-credential, the host-facing Waypipe bridge) runs **co-located as host-side
-processes/services**, not yet inside a dedicated realm gateway guest VM. The
-guestd-bearing gateway **guest VM** — a real nixling microVM that runs
+**P0 placement note (gateway/guestd/systemd services).** The **P0 exit state
+preserves the host-no-realm-relay-credentials invariant** (Authentication and
+trust boundaries, item 2; the Wave P0 validation row): the host opens no realm
+relay session and stores no realm relay/provider credentials. Relay
+termination, the per-session display credential, and the realm-scoped
+gateway authority therefore live **inside the realm gateway guest VM**, not on
+the host. That gateway guest — a real nixling microVM running
 `nixling-guestd`, the Azure Relay transport, and the host-facing display
-bridge as **systemd services** — is introduced as a workload profile in
-Wave 1 and gains the in-guest relay in **Wave 10**; P0 explicitly defers it.
+bridge as **systemd services** — is introduced as a workload profile in Wave 1
+and gains the in-guest relay in **Wave 10**, so the full P0 exit depends on
+those waves; the host side is a credential-free facade plus an
+operator-session display endpoint (a `systemctl --user` Waypipe client that
+holds no relay credential and only consumes an already-authorized display
+stream).
+
+A **pre-P0 development spike** may co-locate the relay listener/sender and the
+gateway logic as host-side processes to prove the ACA + Wayland + relay
+vertical end-to-end before the gateway guest exists. That spike **knowingly
+violates the host-no-relay-credentials invariant** (the host transiently holds
+the gateway relay credential) and is therefore **explicitly not a valid P0
+exit state**: P0 may not close until relay termination and realm credentials
+have moved into the gateway guest. The spike is a scoped, time-boxed
+exception, called out here so it is never mistaken for the shipped boundary.
+
 Inside the ACA sandbox there is **no systemd and no guestd**: ACA
 dynamic/custom-container sessions run a container init (PID 1 is the
 container entrypoint, `/sys/fs/cgroup` is read-only), so the in-sandbox
@@ -2343,6 +2359,12 @@ init, and `nixling vm exec <…>.aca.<realm>` runs commands through the **ACA
 provider exec/log subset** (Wave 15), never through a guestd inside the
 sandbox. Reaching a `guestd` over the relay is **not** a P0 capability and is
 not the ADR's model for provider-managed sandboxes (see Wave 10 and Wave 15).
+
+`nixling vm exec` **never implicitly starts** a stopped workload or a
+not-yet-started display bridge: if the workload is not running or its display
+channel is unavailable, exec fails with a typed, actionable diagnostic
+(`vm not running; run nixling vm start <target>` / `display unavailable`),
+never a silent implicit start or an opaque GUI failure.
 
 ### Wave 1 — Realm entrypoint and gateway workload profile
 
@@ -2589,6 +2611,19 @@ provider-managed sandbox with no systemd (e.g. ACA, see Wave 15) the in-sandbox
 Waypipe server is supervised by the sandbox agent under the container init. The
 display bridge is brought up at workload start so that `vm exec` only launches
 applications into an already-running Wayland setup.
+
+**Display-bridge desired-state owner + reconciliation.** Wave 17 names a
+**single desired-state owner** — the workload's lifecycle controller in
+`nixlingd` — for the whole display bridge across its segments (the operator
+`systemctl --user` Waypipe client, the gateway-guest system services, and the
+in-sandbox agent-supervised helpers). That owner runs one reconcile loop that
+converges actual to desired across daemon restart, operator user-manager /
+compositor restart, gateway-guest restart, provider-sandbox restart, and crash
+recovery, including stale-unit / stale-socket cleanup and a generation marker
+so a survivor from a prior owner generation cannot re-attach (mirroring the
+gateway session-credential generation check). Each segment exposes a
+queryable health/state so the owner can mark the bridge degraded and drive
+re-establishment rather than leaving orphaned services or half-open streams.
 
 ### Wave 18 — Realm rollout and work gateway policy
 
