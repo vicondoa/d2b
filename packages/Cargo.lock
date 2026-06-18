@@ -1010,8 +1010,11 @@ dependencies = [
 name = "nixling-constellation-router"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "nixling-constellation-codec-protobuf",
  "nixling-constellation-core",
  "nixling-constellation-provider",
+ "nixling-constellation-transport",
+ "tokio",
 ]
 
 [[package]]
