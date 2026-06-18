@@ -1,0 +1,30 @@
+[package]
+name = "nixling-provider-aca"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+# Azure Container Apps sandbox WorkloadProvider (ADR 0032, P0). Plane-1
+# control-plane auth is the operator's ambient Entra identity via the Azure
+# CLI, surfaced through azure_identity::AzureCliCredential; nixling stores no
+# Azure secret of its own. Data-plane REST calls go to the ADC endpoint.
+[dependencies]
+nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
+nixling-constellation-provider = { path = "../nixling-constellation-provider", version = "0.0.0-bootstrap" }
+async-trait = "0.1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["rt", "macros"] }
+azure_core = "1.0.0"
+azure_identity = "1.0.0"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }

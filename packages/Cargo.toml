@@ -11,6 +11,7 @@ members = [
     "nixling-constellation-router",
     "nixling-daemon-access",
     "nixling-host-providers",
+    "nixling-provider-aca",
     "nixling-host",
     "nixling-guestd",
     "nixling-userd",
