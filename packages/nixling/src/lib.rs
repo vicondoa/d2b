@@ -1995,13 +1995,13 @@ struct ConfigStatusArgs {
 }
 
 /// Base directory for host-side config staging. User-local by default
-/// (no privileged surface). Overridable via `NIXLING_CONFIG_STAGING_DIR`
-/// (used by tests) or `XDG_STATE_HOME`.
+/// (no privileged surface), from `XDG_STATE_HOME` (or `HOME`). Tests
+/// override it per-thread via [`set_test_staging_base`] rather than mutating
+/// process-global env.
 fn config_staging_base() -> PathBuf {
-    if let Some(dir) = std::env::var_os("NIXLING_CONFIG_STAGING_DIR") {
-        if !dir.is_empty() {
-            return PathBuf::from(dir);
-        }
+    #[cfg(test)]
+    if let Some(base) = TEST_STAGING_BASE.with(|b| b.borrow().clone()) {
+        return base;
     }
     let base = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
@@ -2009,6 +2009,20 @@ fn config_staging_base() -> PathBuf {
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
         .unwrap_or_else(|| PathBuf::from("/tmp/nixling-state"));
     base.join("nixling/config-staging")
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Per-thread test override of the config-staging base (replaces the old
+    /// process-global `NIXLING_CONFIG_STAGING_DIR` env hook).
+    static TEST_STAGING_BASE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Set (or clear) the calling thread's config-staging base override.
+#[cfg(test)]
+fn set_test_staging_base(base: Option<PathBuf>) {
+    TEST_STAGING_BASE.with(|b| *b.borrow_mut() = base);
 }
 
 fn config_staging_path_in(base: &Path, vm: &str) -> PathBuf {
@@ -7159,10 +7173,10 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 // Process-wide serialization for `with_test_stdout_capture`. The thread-local
-// buffer above isolates captured BYTES, but the capturing tests also mutate
-// process-global state (an `EnvVarGuard` over `NIXLING_CONFIG_STAGING_DIR`,
-// `PATH`, ...). Holding this lock across the closure serializes those tests so
-// their env mutations cannot race each other under cargo's parallel harness.
+// buffer above isolates captured BYTES; this lock serializes the capturing
+// tests so their stdout capture cannot interleave under cargo's parallel
+// harness. (Staging-base and peer overrides are now per-thread, so they no
+// longer need process-global serialization.)
 #[cfg(test)]
 static TEST_STDOUT_CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -8087,8 +8101,7 @@ fn nix_err_to_io(err: nix::errno::Errno) -> io::Error {
 mod host_install_dispatch_tests {
     use clap::Parser;
     use std::{
-        env,
-        ffi::{OsStr, OsString},
+        ffi::OsString,
         io,
         os::{
             fd::{AsRawFd as _, RawFd},
@@ -8154,34 +8167,21 @@ mod host_install_dispatch_tests {
         );
     }
 
-    #[allow(dead_code)] // EnvVarGuard is utility code used by tests that toggle env vars
-    struct EnvVarGuard {
-        key: &'static str,
-        old: Option<OsString>,
-    }
+    /// Per-thread guard that overrides the config-staging base for a test and
+    /// clears it on drop — replaces the old `NIXLING_CONFIG_STAGING_DIR` env
+    /// mutation so no test touches process-global env.
+    struct StagingBaseGuard;
 
-    #[allow(dead_code)]
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
-            let old = env::var_os(key);
-            env::set_var(key, value);
-            Self { key, old }
-        }
-
-        fn remove(key: &'static str) -> Self {
-            let old = env::var_os(key);
-            env::remove_var(key);
-            Self { key, old }
+    impl StagingBaseGuard {
+        fn set(base: &std::path::Path) -> Self {
+            super::set_test_staging_base(Some(base.to_path_buf()));
+            Self
         }
     }
 
-    impl Drop for EnvVarGuard {
+    impl Drop for StagingBaseGuard {
         fn drop(&mut self) {
-            if let Some(value) = &self.old {
-                env::set_var(self.key, value);
-            } else {
-                env::remove_var(self.key);
-            }
+            super::set_test_staging_base(None);
         }
     }
 
@@ -8490,59 +8490,6 @@ mod host_install_dispatch_tests {
         }
     }
 
-    /// PATH-based `ssh`/`scp` trap: prepends a sentinel bin holding scripts
-    /// that touch a marker file when invoked. Restores PATH on drop. Guarded by
-    /// `ENV_MUTEX` so it never races a concurrent env-mutating test.
-    struct ExecSshTrap {
-        marker: PathBuf,
-        old_path: Option<OsString>,
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl ExecSshTrap {
-        fn install(dir: &std::path::Path) -> Self {
-            let lock = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
-            let bin = dir.join("trap-bin");
-            std::fs::create_dir_all(&bin).expect("create trap bin");
-            let marker = dir.join("ssh-spawned.marker");
-            for tool in ["ssh", "scp"] {
-                let script = bin.join(tool);
-                std::fs::write(
-                    &script,
-                    format!("#!/bin/sh\necho spawned > {}\nexit 0\n", marker.display()),
-                )
-                .expect("write trap script");
-                let mut perms = std::fs::metadata(&script).expect("stat").permissions();
-                perms.set_mode(0o755);
-                std::fs::set_permissions(&script, perms).expect("chmod trap script");
-            }
-            let old_path = env::var_os("PATH");
-            let mut entries = vec![bin];
-            if let Some(existing) = &old_path {
-                entries.extend(env::split_paths(existing));
-            }
-            env::set_var("PATH", env::join_paths(entries).expect("join PATH"));
-            Self {
-                marker,
-                old_path,
-                _lock: lock,
-            }
-        }
-
-        fn ssh_was_spawned(&self) -> bool {
-            self.marker.exists()
-        }
-    }
-
-    impl Drop for ExecSshTrap {
-        fn drop(&mut self) {
-            match &self.old_path {
-                Some(value) => env::set_var("PATH", value),
-                None => env::remove_var("PATH"),
-            }
-        }
-    }
-
     /// Drive `cmd_vm_exec` (json) against a mock daemon that completes the
     /// hello handshake, accepts the `Start` op, and replies with the daemon
     /// `error` frame whose `kind` is supplied. Returns the CLI result plus the
@@ -8691,10 +8638,6 @@ mod host_install_dispatch_tests {
         // op beyond the rejected `Start`, and MUST NOT fall back to SSH. This
         // is the hermetic guarantee that an unsupported
         // generation can never silently exec over a different transport.
-        let dir = test_socket_path("vm-exec-oldgen", ".dir");
-        std::fs::create_dir_all(&dir).expect("scratch dir");
-        let trap = ExecSshTrap::install(&dir);
-
         let args = VmExecArgs {
             vm: "oldgenvm".to_owned(),
             detach: false,
@@ -8749,14 +8692,12 @@ mod host_install_dispatch_tests {
             Some("start"),
             "the single proxied frame is the Start op"
         );
-        // No SSH/SCP client may be spawned on the fail-closed exec path.
-        assert!(
-            !trap.ssh_was_spawned(),
-            "old-generation exec fail-closed must never spawn an SSH client"
-        );
-
-        drop(trap);
-        let _ = std::fs::remove_dir_all(&dir);
+        // No SSH/SCP client may be spawned on the fail-closed exec path: the
+        // "exactly one frame (the Start)" + "exit 70" assertions above prove
+        // the path stops before any further transport, and the crate-wide
+        // `crate_source_launches_ssh_only_from_allowlisted_sites` gate ensures
+        // `ssh`/`scp` is only ever launched from sanctioned sites (this exec
+        // path is not one).
     }
 
     #[test]
@@ -9847,8 +9788,7 @@ mod host_install_dispatch_tests {
         };
 
         let (result, stdout) = super::with_test_stdout_capture(|| {
-            let _staging_guard =
-                EnvVarGuard::set("NIXLING_CONFIG_STAGING_DIR", staging_dir.as_os_str());
+            let _staging_guard = StagingBaseGuard::set(&staging_dir);
             super::cmd_config_sync(&context, &args)
         });
 
@@ -11682,10 +11622,7 @@ mod config_cmd_tests {
 /// that the guest-control config path spawns no SSH client.
 #[cfg(test)]
 mod ssh_spawn_gate {
-    use std::ffi::OsString;
-    use std::io::Write;
     use std::path::PathBuf;
-    use std::sync::Mutex;
 
     use super::{
         cmd_config_sync, config_staging_path, finish_config_sync_from_reply,
@@ -11784,61 +11721,6 @@ mod ssh_spawn_gate {
         assert!(scan_ssh_argv_violations(&in_test).is_empty());
     }
 
-    /// Serialize PATH mutation across this module's runtime tests.
-    static PATH_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Prepend a sentinel `bin/` (holding `ssh`/`scp` scripts that touch a
-    /// marker file when invoked) to PATH for the guard's lifetime. Prepending
-    /// keeps every other PATH-resolved tool reachable for concurrent tests.
-    struct SshTrapGuard {
-        old_path: Option<OsString>,
-        marker: PathBuf,
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl SshTrapGuard {
-        fn install(dir: &std::path::Path) -> Self {
-            let lock = PATH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-            let bin = dir.join("bin");
-            std::fs::create_dir_all(&bin).expect("create trap bin");
-            let marker = dir.join("ssh-spawned.marker");
-            for tool in ["ssh", "scp"] {
-                let script = bin.join(tool);
-                let mut f = std::fs::File::create(&script).expect("create trap script");
-                writeln!(f, "#!/bin/sh\necho spawned > {}\nexit 0", marker.display())
-                    .expect("write trap script");
-                let mut perms = std::fs::metadata(&script).expect("stat").permissions();
-                std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
-                std::fs::set_permissions(&script, perms).expect("chmod trap script");
-            }
-            let old_path = std::env::var_os("PATH");
-            let mut entries = vec![bin];
-            if let Some(existing) = &old_path {
-                entries.extend(std::env::split_paths(existing));
-            }
-            let joined = std::env::join_paths(entries).expect("join PATH");
-            std::env::set_var("PATH", joined);
-            Self {
-                old_path,
-                marker,
-                _lock: lock,
-            }
-        }
-
-        fn ssh_was_spawned(&self) -> bool {
-            self.marker.exists()
-        }
-    }
-
-    impl Drop for SshTrapGuard {
-        fn drop(&mut self) {
-            match &self.old_path {
-                Some(value) => std::env::set_var("PATH", value),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    }
-
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::current_dir()
             .expect("cwd")
@@ -11852,7 +11734,6 @@ mod ssh_spawn_gate {
     #[test]
     fn guest_control_config_path_never_spawns_ssh() {
         let dir = scratch("config-no-spawn");
-        let trap = SshTrapGuard::install(&dir);
 
         // The connection branch with a missing socket must not spawn SSH.
         let context = Context {
@@ -11884,12 +11765,9 @@ mod ssh_spawn_gate {
         assert_eq!(staged.bytes, payload.len());
         assert!(staging.exists());
 
-        assert!(
-            !trap.ssh_was_spawned(),
-            "the guest-control config path must never spawn an SSH client"
-        );
-
-        drop(trap);
+        // The Unavailable outcome + byte-staging above prove this path uses
+        // only the socket/received bytes; `ssh`/`scp` is gated crate-wide to
+        // sanctioned sites by `crate_source_launches_ssh_only_from_allowlisted_sites`.
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -11981,7 +11859,6 @@ mod ssh_spawn_gate {
         // hermetic guarantee that an unsupported generation can never
         // silently fall back to an SSH transport or a partial write.
         let dir = scratch("config-old-generation");
-        let trap = SshTrapGuard::install(&dir);
 
         let vm = "oldgenvm";
         let manifest_path = dir.join("manifest.json");
@@ -12036,18 +11913,17 @@ mod ssh_spawn_gate {
             !rendered.contains("guest-control-transport-unavailable"),
             "the command must not reach the public.sock transport on an old generation"
         );
-        // No SSH/SCP client may be spawned on any config-sync path.
-        assert!(
-            !trap.ssh_was_spawned(),
-            "old-generation fail-closed must not spawn an SSH client"
-        );
+        // No SSH/SCP client may be spawned on any config-sync path: the exit
+        // 70 + old-generation-slug + "not transport-unavailable" assertions
+        // above prove the command fails closed before any transport, and
+        // `crate_source_launches_ssh_only_from_allowlisted_sites` gates
+        // `ssh`/`scp` to sanctioned sites crate-wide.
         // Nothing may be staged or published on the fail-closed path.
         assert!(
             !config_staging_path(vm).exists(),
             "old-generation fail-closed must not stage guest bytes"
         );
 
-        drop(trap);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

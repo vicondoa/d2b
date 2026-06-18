@@ -476,10 +476,13 @@ pub fn run(command: BrokerMode) -> Result<(), RunError> {
 /// - `Some(Err(_))` if `LISTEN_FDNAMES` is present but is not `"priv.sock"`,
 ///   or if the fd-level validation in `sys::adopt_listen_fd_from_fd3` fails.
 ///
-/// On success (or on hard error after confirming the vars target this
-/// process) `LISTEN_PID`, `LISTEN_FDS`, and `LISTEN_FDNAMES` are removed
-/// from the environment so child processes do not inherit them
-/// (per `sd_listen_fds(3)` convention).
+/// The `LISTEN_*` vars are NOT unset after adoption. The `sd_listen_fds(3)`
+/// protocol is self-scoping: a reader only honours the vars when
+/// `LISTEN_PID` equals its own PID, so any spawned child (a different PID)
+/// ignores inherited `LISTEN_*` regardless. The broker also never re-reads
+/// them after this function, and per-runner processes receive an explicit
+/// (non-inherited) environment via `execve`, so leaving the vars in the
+/// broker's own short-lived environment is inert.
 fn adopt_listen_fd() -> Option<Result<OwnedFd, RunError>> {
     // Step 1: LISTEN_PID must match this process.
     let listen_pid = env::var("LISTEN_PID").ok()?;
@@ -496,11 +499,6 @@ fn adopt_listen_fd() -> Option<Result<OwnedFd, RunError>> {
     // Step 3: If LISTEN_FDNAMES is present it must equal "priv.sock".
     if let Ok(fdnames) = env::var("LISTEN_FDNAMES") {
         if fdnames != "priv.sock" {
-            // Unset before returning the hard error so the caller does not
-            // need to clean up.
-            env::remove_var("LISTEN_PID");
-            env::remove_var("LISTEN_FDS");
-            env::remove_var("LISTEN_FDNAMES");
             return Some(Err(RunError::Usage(format!(
                 "socket activation: expected LISTEN_FDNAMES=priv.sock, \
                  got {fdnames:?}"
@@ -508,16 +506,10 @@ fn adopt_listen_fd() -> Option<Result<OwnedFd, RunError>> {
         }
     }
 
-    // Steps 4–5–7: verify fd 3 + set CLOEXEC + wrap in OwnedFd (sys.rs).
-    let result = crate::sys::adopt_listen_fd_from_fd3().map_err(RunError::Io);
-
-    // Step 6: Unset per sd_listen_fds(3) convention regardless of fd
-    // validation outcome (vars have already been confirmed to target us).
-    env::remove_var("LISTEN_PID");
-    env::remove_var("LISTEN_FDS");
-    env::remove_var("LISTEN_FDNAMES");
-
-    Some(result)
+    // Steps 4–5: verify fd 3 + set CLOEXEC + wrap in OwnedFd (sys.rs). The
+    // `LISTEN_*` vars are intentionally left in place; see the fn docs for
+    // why that is inert (LISTEN_PID self-scoping + explicit runner env).
+    Some(crate::sys::adopt_listen_fd_from_fd3().map_err(RunError::Io))
 }
 
 /// Send `READY=1` (and `MAINPID=<pid>`) to `$NOTIFY_SOCKET` via the
