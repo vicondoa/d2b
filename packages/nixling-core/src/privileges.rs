@@ -750,6 +750,26 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         BrokerRequirement::Yes,
         AuditMode::Yes,
     ),
+    // PrepareSwtpmDir is a `SpawnRunner` side-effect (not a standalone
+    // wire request) for the long-lived `Swtpm` runner: the broker
+    // provisions/hardens the persistent per-VM swtpm state dir
+    // (`${stateDir}/swtpm`, 0700) and writes an identity-bound tamper
+    // marker before the userNS child opens the TPM2 NVRAM by pathname
+    // (issue #64). It mkdir/fchown/fchmod/setfacls under trusted
+    // root-owned dirs, so it is destructive in the same sense as
+    // PrepareStateDir. SecretAccess is MetadataOnly: the step touches
+    // the TPM2 NVRAM dir's metadata (owner/mode/ACLs) but never reads
+    // the EK seed / NVRAM contents.
+    row(
+        "PrepareSwtpmDir",
+        "fs",
+        "per-VM",
+        &["nixlingd"],
+        true,
+        SecretAccess::MetadataOnly,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
     row(
         "CreateOrReconcileUsersGroups",
         "account",

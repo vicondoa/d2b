@@ -24,6 +24,8 @@ pub mod hosts;
 pub mod nm;
 pub mod route;
 pub mod state_dir;
+// Per-VM swtpm state-dir first-run hardening (issue #64).
+pub mod swtpm_dir;
 pub mod sysctl;
 pub mod tap;
 // Nftables + USBIP firewall skeleton ops.

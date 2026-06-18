@@ -17,6 +17,7 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -37,6 +38,27 @@ pub enum DetachedExecAuditResult {
     Cancelling,
     AlreadyTerminal,
     Error,
+}
+
+/// Closed reason a vm-start runner node fast-failed before readiness.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum VmStartRunnerExitReason {
+    /// The spawned runner terminated before its readiness signal fired.
+    RunnerExited,
+    /// The runner's PID was reused by a different process (start-time
+    /// drift) — our runner is gone.
+    RunnerReused,
+}
+
+/// Closed, bounded runner exit kind mirrored from the broker reap
+/// notification. Carries no high-cardinality detail.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunnerExitKind {
+    Exited,
+    Signaled,
+    Killed,
 }
 
 /// Daemon-side audit event variants.
@@ -109,6 +131,35 @@ pub enum DaemonEvent {
         result: DetachedExecAuditResult,
         exec_id: String,
     },
+    /// Emitted when a `vm start` long-lived runner node fast-fails because
+    /// the spawned runner terminated (or its PID was reused) BEFORE its
+    /// readiness signal fired — the `tpm.enable` first-run wedge fix.
+    ///
+    /// Bounded by construction: carries ONLY the VM name, the closed
+    /// `role_id` of the failed node, a closed reason kind, the optional
+    /// closed broker exit kind/code/signal, and the elapsed wall-clock
+    /// milliseconds. No node-reason string, pid, or path label is
+    /// recorded.
+    VmStartRunnerExited {
+        /// VM name (matches the `vmStart` request).
+        vm: String,
+        /// Role id of the runner node that exited (e.g. `swtpm`,
+        /// `ch-runner`).
+        role_id: String,
+        /// Closed reason kind: exited vs PID-reused.
+        reason_kind: VmStartRunnerExitReason,
+        /// Bounded broker exit kind, when a reap status was buffered.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_kind: Option<RunnerExitKind>,
+        /// Exit code, when `exit_kind == "exited"`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        /// Signal number, when `exit_kind` is `signaled`/`killed`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_signal: Option<i32>,
+        /// Wall-clock milliseconds from DAG dispatch to fast-fail.
+        elapsed_ms: u64,
+    },
 }
 
 /// JSONL audit-log writer for daemon-side events.
@@ -118,19 +169,42 @@ pub enum DaemonEvent {
 ///   daemon-state directory.
 /// - **Tests that don't care about audit output**: use
 ///   [`DaemonAuditLog::no_op`]; all writes are silently discarded.
+///
+/// Appends are serialized behind a single in-process writer mutex so
+/// concurrent connection-handler threads cannot interleave bytes within
+/// a JSONL line. Retention is enforced best-effort: stale
+/// `daemon-events-*.jsonl` files older than [`AUDIT_RETENTION_DAYS`] are
+/// pruned on open and again whenever a write crosses a day boundary
+/// (the file name itself provides day-boundary rotation).
 #[derive(Debug)]
 pub struct DaemonAuditLog {
     state_dir: Option<PathBuf>,
+    writer: Arc<Mutex<AuditWriterState>>,
     #[cfg(test)]
     pub(crate) captured: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
+/// Default retention window for daemon audit JSONL files (days).
+pub const AUDIT_RETENTION_DAYS: i64 = 14;
+
+/// Serialization + day-boundary bookkeeping for the single audit appender.
+#[derive(Debug, Default)]
+struct AuditWriterState {
+    /// UTC date string (`YYYY-MM-DD`) of the most recent append. Used to
+    /// detect a day-boundary crossing so retention pruning re-runs.
+    last_date: Option<String>,
+}
+
 impl DaemonAuditLog {
     /// Production constructor. Events are appended to the day's JSONL
-    /// file under `state_dir`.
+    /// file under `state_dir`. Prunes stale logs once on open
+    /// (best-effort).
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
+        let state_dir = state_dir.into();
+        prune_old_audit_logs(&state_dir, AUDIT_RETENTION_DAYS);
         Self {
-            state_dir: Some(state_dir.into()),
+            state_dir: Some(state_dir),
+            writer: Arc::new(Mutex::new(AuditWriterState::default())),
             #[cfg(test)]
             captured: Default::default(),
         }
@@ -140,6 +214,7 @@ impl DaemonAuditLog {
     pub fn no_op() -> Self {
         Self {
             state_dir: None,
+            writer: Arc::new(Mutex::new(AuditWriterState::default())),
             #[cfg(test)]
             captured: Default::default(),
         }
@@ -150,6 +225,11 @@ impl DaemonAuditLog {
     /// This method is best-effort: callers MUST NOT abort the surrounding
     /// operation on audit failure. They should log the error (if any) and
     /// continue.
+    ///
+    /// The actual file append is serialized behind a single writer mutex
+    /// so concurrent handler threads produce a valid, line-atomic JSONL
+    /// stream. A day-boundary crossing triggers best-effort retention
+    /// pruning of stale `daemon-events-*.jsonl` files.
     pub fn write_event(&self, event: &DaemonEvent) -> io::Result<()> {
         let ts_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -174,14 +254,24 @@ impl DaemonAuditLog {
         }
 
         if let Some(ref state_dir) = self.state_dir {
-            write_jsonl_line(state_dir, &line)?;
+            let mut writer = self
+                .writer
+                .lock()
+                .map_err(|_| io::Error::other("DaemonAuditLog writer mutex poisoned"))?;
+            let today = utc_date_string();
+            // First write of the process or a day-boundary crossing:
+            // re-run retention pruning (best-effort) before appending.
+            if writer.last_date.as_deref() != Some(today.as_str()) {
+                prune_old_audit_logs(state_dir, AUDIT_RETENTION_DAYS);
+                writer.last_date = Some(today.clone());
+            }
+            write_jsonl_line_for_date(state_dir, &today, &line)?;
         }
         Ok(())
     }
 }
 
-fn write_jsonl_line(state_dir: &Path, line: &str) -> io::Result<()> {
-    let today = utc_date_string();
+fn write_jsonl_line_for_date(state_dir: &Path, today: &str, line: &str) -> io::Result<()> {
     let path = state_dir.join(format!("daemon-events-{today}.jsonl"));
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -191,6 +281,50 @@ fn write_jsonl_line(state_dir: &Path, line: &str) -> io::Result<()> {
         .append(true)
         .open(&path)?;
     file.write_all(line.as_bytes())
+}
+
+/// Best-effort retention: delete `daemon-events-YYYY-MM-DD.jsonl` files
+/// whose date is older than `retention_days` before today (UTC). All
+/// errors are swallowed — retention must never abort an audit write.
+fn prune_old_audit_logs(state_dir: &Path, retention_days: i64) {
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let cutoff = ymd_from_unix(now_secs - retention_days * 86_400);
+    let Ok(entries) = fs::read_dir(state_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(date) = name
+            .strip_prefix("daemon-events-")
+            .and_then(|rest| rest.strip_suffix(".jsonl"))
+        else {
+            continue;
+        };
+        if let Some(parsed) = parse_ymd(date)
+            && parsed < cutoff
+        {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Parse a `YYYY-MM-DD` stamp into a comparable `(year, month, day)`
+/// tuple. Returns `None` on any malformed component.
+fn parse_ymd(date: &str) -> Option<(i32, u32, u32)> {
+    let mut parts = date.split('-');
+    let y = parts.next()?.parse::<i32>().ok()?;
+    let m = parts.next()?.parse::<u32>().ok()?;
+    let d = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    Some((y, m, d))
 }
 
 fn utc_date_string() -> String {
@@ -539,5 +673,79 @@ mod tests {
             parsed.get("apiReady").and_then(|v| v.as_str()),
             Some("timeout"),
         );
+    }
+
+    #[test]
+    fn concurrent_writes_produce_valid_jsonl() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let log = std::sync::Arc::new(DaemonAuditLog::new(dir.path()));
+
+        let mut handles = Vec::new();
+        for thread_idx in 0..8 {
+            let log = std::sync::Arc::clone(&log);
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..25 {
+                    log.write_event(&DaemonEvent::VmStartRunnerExited {
+                        vm: format!("vm-{thread_idx}"),
+                        role_id: "swtpm".to_owned(),
+                        reason_kind: VmStartRunnerExitReason::RunnerExited,
+                        exit_kind: Some(RunnerExitKind::Exited),
+                        exit_code: Some(1),
+                        exit_signal: None,
+                        elapsed_ms: 12,
+                    })
+                    .expect("concurrent write");
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("join writer thread");
+        }
+
+        let today = utc_date_string();
+        let path = dir.path().join(format!("daemon-events-{today}.jsonl"));
+        let content = std::fs::read_to_string(&path).expect("read jsonl file");
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 8 * 25, "every concurrent append must land");
+        for line in &lines {
+            let parsed: serde_json::Value =
+                serde_json::from_str(line).expect("each line is valid, line-atomic JSON");
+            assert_eq!(
+                parsed.get("source").and_then(|v| v.as_str()),
+                Some("nixlingd"),
+            );
+        }
+    }
+
+    #[test]
+    fn retention_prunes_stale_logs_on_open() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+
+        // A file dated well beyond the retention window must be pruned.
+        let stale = dir.path().join("daemon-events-2000-01-01.jsonl");
+        std::fs::write(&stale, "{}\n").expect("write stale log");
+        // A foreign file must be left untouched.
+        let foreign = dir.path().join("unrelated.txt");
+        std::fs::write(&foreign, "keep me").expect("write foreign file");
+        // A current-day file must survive.
+        let today = utc_date_string();
+        let fresh = dir.path().join(format!("daemon-events-{today}.jsonl"));
+        std::fs::write(&fresh, "{}\n").expect("write fresh log");
+
+        // Construction prunes on open.
+        let _log = DaemonAuditLog::new(dir.path());
+
+        assert!(!stale.exists(), "stale audit log must be pruned on open");
+        assert!(foreign.exists(), "foreign files must not be touched");
+        assert!(fresh.exists(), "current-day log must survive retention");
+    }
+
+    #[test]
+    fn parse_ymd_rejects_malformed_dates() {
+        assert_eq!(parse_ymd("2024-03-09"), Some((2024, 3, 9)));
+        assert_eq!(parse_ymd("2024-13-01"), None);
+        assert_eq!(parse_ymd("2024-03"), None);
+        assert_eq!(parse_ymd("2024-03-09-10"), None);
+        assert_eq!(parse_ymd("not-a-date"), None);
     }
 }

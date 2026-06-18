@@ -91,6 +91,48 @@ impl Request {
             Self::Exec(_) => "exec",
         }
     }
+
+    /// Concurrency lock class for this request. Read-only verbs take no
+    /// lock and run fully in parallel; per-VM mutating verbs serialize on
+    /// the named VM; global mutating verbs are mutually exclusive with
+    /// every per-VM op. The accept loop never holds this lock — it is
+    /// acquired on the worker thread inside `dispatch_request`.
+    pub fn lock_class(&self) -> crate::concurrency::OpLockClass {
+        use crate::concurrency::OpLockClass;
+        match self {
+            // Per-VM mutating lifecycle verbs (all carry a `vm` field).
+            Self::VmStart(req) | Self::VmStop(req) | Self::VmRestart(req) => {
+                OpLockClass::PerVm(req.vm.clone())
+            }
+            Self::Switch(req) | Self::Boot(req) | Self::Test(req) | Self::Rollback(req) => {
+                OpLockClass::PerVm(req.vm.clone())
+            }
+            Self::UsbipBind(req) => OpLockClass::PerVm(req.vm.clone()),
+            Self::UsbipUnbind(req) => OpLockClass::PerVm(req.vm.clone()),
+            Self::StoreVerify(req) => OpLockClass::PerVm(req.vm.clone()),
+            Self::RotateKnownHost(req) => OpLockClass::PerVm(req.vm.clone()),
+            // Global mutating verbs: mutually exclusive with all per-VM ops.
+            Self::Gc(_)
+            | Self::KeysRotate(_)
+            | Self::Trust(_)
+            | Self::Migrate(_)
+            | Self::HostPrepare(_)
+            | Self::HostDestroy(_)
+            | Self::HostInstall(_)
+            | Self::HostReconcile(_) => OpLockClass::Global,
+            // Read-only / status / session-managed verbs: no lock.
+            Self::List(_)
+            | Self::Status(_)
+            | Self::Audit(_)
+            | Self::HostCheck(_)
+            | Self::AuthStatus
+            | Self::KeysList
+            | Self::KeysShow(_)
+            | Self::UsbipProbe
+            | Self::ReadGuestConfig(_)
+            | Self::Exec(_) => OpLockClass::ReadOnly,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

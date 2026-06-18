@@ -266,20 +266,20 @@ in
 
   # TPM VMs need an explicit traverse ACL for the dedicated swtpm user on
   # the parent VM state dir, regardless of whether the VM is graphics-backed
-  # or headless. The swtpm StateDirectory itself is 0700-owned by the swtpm
-  # user; this parent-dir grant is only for the path walk into `swtpm/`.
+  # or headless. The swtpm subdir itself is broker-provisioned at VM start
+  # (issue #64); this parent-dir grant is only for the path walk into `swtpm/`.
   system.activationScripts.nixlingTpmStatePerms = lib.stringAfter [ "users" ]
     (lib.concatStringsSep "\n" (lib.mapAttrsToList
       (name: _: ''
         if [ -d /var/lib/nixling/vms/${name} ]; then
-          # v0.1.4 fix: nixling-${name}-swtpm needs +x on the parent
-          # state dir to traverse into its `swtpm/` subdir (where
-          # systemd's StateDirectory= places it). Without this grant
-          # the swtpm service starts but fails to open
-          # tpm2-00.permall with EACCES, libtpms enters failure mode,
-          # and the VM boots with a freshly-initialised TPM —
-          # triggering Entra/Intune device-tampering alerts for
-          # tenant-enrolled VMs.
+          # nixling-${name}-swtpm needs +x on the parent state dir to
+          # traverse into its `swtpm/` subdir. The swtpm dir is
+          # provisioned by the broker before the swtpm runner spawns
+          # (not by systemd StateDirectory=). Without this traverse
+          # grant the swtpm runner fails to open tpm2-00.permall with
+          # EACCES, libtpms enters failure mode, and the VM boots with
+          # a freshly-initialised TPM — triggering Entra/Intune
+          # device-tampering alerts for tenant-enrolled VMs.
           ${pkgs.acl}/bin/setfacl -m "u:nixling-${name}-swtpm:--x" /var/lib/nixling/vms/${name} || true
         fi
       '')
