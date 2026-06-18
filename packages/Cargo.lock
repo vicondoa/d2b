@@ -1683,9 +1683,13 @@ dependencies = [
 name = "nixling-gateway-runtime"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
+ "base64",
  "nixling-constellation-core",
  "nixling-gateway",
+ "nixling-provider-aca",
  "nixling-provider-relay",
+ "tokio",
 ]
 
 [[package]]
