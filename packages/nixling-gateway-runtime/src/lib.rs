@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 
 pub mod aca_workload;
 pub mod audit_jsonl;
+pub mod credential;
 pub mod display_listener;
 pub mod production;
 pub use aca_workload::{
@@ -26,6 +27,10 @@ pub use aca_workload::{
     default_entra_token_snippet,
 };
 pub use audit_jsonl::{DEFAULT_GATEWAY_AUDIT_RETENTION_DAYS, JsonlGatewayAudit};
+pub use credential::{
+    CredentialError, CredentialFilePolicy, GATEWAY_CREDENTIAL_MODE, GatewayCredential,
+    MintedRelaySendToken,
+};
 pub use display_listener::{RelayDisplayListener, notifying_verifier};
 pub use production::production_deps_with_audit;
 pub use production::{SystemClock, UrandomIds, production_deps, system_now_fn, system_now_unix};
