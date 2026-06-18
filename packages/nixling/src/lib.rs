@@ -8219,6 +8219,23 @@ mod host_install_dispatch_tests {
         );
     }
 
+    #[test]
+    fn gateway_target_guard_fails_before_manifest_or_socket_access() {
+        let err = super::guard_local_target("demo.gw.work.nixling", false)
+            .expect_err("realm target must fail closed on host daemon");
+        assert_eq!(err.exit_code, 2);
+        assert!(err.message.contains("target not dispatchable"));
+        assert!(!err.message.contains("failed to read"));
+        assert!(!err.message.contains("public.sock"));
+    }
+
+    #[test]
+    fn local_fast_path_targets_pass_gateway_guard() {
+        super::guard_local_target("vm-a", false).expect("bare VM names stay local");
+        super::guard_local_target("demo.aca.work", false)
+            .expect("unqualified dotted names stay with legacy local validation");
+    }
+
     /// Per-thread guard that overrides the config-staging base for a test and
     /// clears it on drop — replaces the old `NIXLING_CONFIG_STAGING_DIR` env
     /// mutation so no test touches process-global env.
