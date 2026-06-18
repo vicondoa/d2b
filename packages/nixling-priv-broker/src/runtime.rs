@@ -252,6 +252,17 @@ enum BrokerError {
     GuestControlSignRefused {
         reason: &'static str,
     },
+    /// swtpm-dir first-run hardening (issue #64) refused to proceed.
+    /// Carries the path-free [`OperationFields::PrepareSwtpmDir`] audit
+    /// so the SpawnRunner dispatch arm emits exactly one terminal
+    /// `PrepareSwtpmDir` record (its [`BrokerError::audit`] is a no-op,
+    /// mirroring `StoreSyncFailed`). The wire envelope surfaces only the
+    /// closed-set, path-free `reason` slug.
+    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    SwtpmDirHardening {
+        audit: crate::ops::audit_op::SwtpmDirAudit,
+        reason: &'static str,
+    },
 }
 
 pub fn parse_command<I>(args: I) -> Result<BrokerMode, RunError>
@@ -1783,7 +1794,52 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 umask: intent.umask,
             };
             let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
-            let outcome = backend.spawn_runner(runner_id.as_str(), &plan_input)?;
+            let outcome = match backend.spawn_runner(runner_id.as_str(), &plan_input) {
+                Ok(outcome) => outcome,
+                // swtpm-dir hardening fail-closed: emit the terminal
+                // path-free PrepareSwtpmDir record here (exactly once),
+                // then surface the closed-set reason on the wire. The
+                // SpawnRunner success record is NOT written because the
+                // runner was never spawned.
+                Err(BrokerError::SwtpmDirHardening { audit, reason }) => {
+                    write_decision_op_record!(
+                        audit_log,
+                        bundle_metadata,
+                        "PrepareSwtpmDir",
+                        req.bundle_runner_intent_ref.as_str(),
+                        caller_uid,
+                        caller_gid,
+                        &caller_role,
+                        req.vm_id.as_str(),
+                        req.role_id.as_str(),
+                        tracing_span_id_str(req.tracing_span_id.as_ref()),
+                        "denied-refused",
+                        Some(reason),
+                        OperationFields::PrepareSwtpmDir(audit.clone()),
+                    )?;
+                    return Err(BrokerError::SwtpmDirHardening { audit, reason });
+                }
+                Err(other) => return Err(other),
+            };
+            // On the success path, emit the terminal PrepareSwtpmDir
+            // record (for the w1-swtpm role only) BEFORE the SpawnRunner
+            // record so an operator sees the hardening disposition that
+            // gated the spawn.
+            if let Some(swtpm_audit) = &outcome.swtpm_dir_audit {
+                write_success_op_record!(
+                    audit_log,
+                    bundle_metadata,
+                    "PrepareSwtpmDir",
+                    req.bundle_runner_intent_ref.as_str(),
+                    caller_uid,
+                    caller_gid,
+                    &caller_role,
+                    req.vm_id.as_str(),
+                    req.role_id.as_str(),
+                    tracing_span_id_str(req.tracing_span_id.as_ref()),
+                    OperationFields::PrepareSwtpmDir(swtpm_audit.clone()),
+                )?;
+            }
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3910,7 +3966,16 @@ impl DispatchBackend for LiveDispatchBackend {
                 error = %err,
                 "live_spawn_runner failed"
             );
-            BrokerError::LiveHandler(err.to_string())
+            // swtpm-dir hardening fail-closed carries a structured,
+            // path-free audit that the dispatch arm must emit as a
+            // terminal PrepareSwtpmDir record; preserve it instead of
+            // collapsing to the opaque LiveHandler envelope.
+            match err {
+                crate::live_handlers::LiveHandlerError::SwtpmDirHardening { audit, reason } => {
+                    BrokerError::SwtpmDirHardening { audit, reason }
+                }
+                other => BrokerError::LiveHandler(other.to_string()),
+            }
         })?;
         register_runner_pidfd(runner_id, &outcome.pidfd)?;
         Ok(outcome)
@@ -5888,6 +5953,12 @@ impl BrokerError {
             // terminal record per attempt). Writing the generic error entry
             // here would emit a duplicate, so this is a deliberate no-op.
             Self::StoreSyncFailed { .. } => {}
+            // The SpawnRunner dispatch arm already wrote the terminal
+            // path-free `PrepareSwtpmDir` record for the fail-closed
+            // hardening step; writing the generic error entry here would
+            // duplicate it, so this is a deliberate no-op (mirrors
+            // `StoreSyncFailed`).
+            Self::SwtpmDirHardening { .. } => {}
             _ => {}
         }
         Ok(())
@@ -6067,6 +6138,15 @@ impl BrokerError {
                 None,
                 &format!("StoreSync failed ({error_stage}): {message}"),
                 "Inspect the signed StoreSync audit record (operation_fields.error_stage) for the failing phase; retry after resolving the underlying condition.",
+            ),
+            Self::SwtpmDirHardening { reason, .. } => error_response(
+                "Broker.SwtpmDirHardening",
+                "PrepareSwtpmDir",
+                None,
+                // PATH-FREE: only the closed-set reason slug reaches the
+                // wire envelope.
+                &format!("swtpm-dir hardening refused: {reason}"),
+                "Inspect the signed PrepareSwtpmDir audit record (operation_fields.fail_reason) for the refusal cause; do NOT delete or recreate the per-VM swtpm state dir — that destroys the TPM2 NVRAM and forces IdP re-enrollment.",
             ),
         }
     }
@@ -7178,6 +7258,7 @@ mod tests {
                 pid: 4242,
                 start_time_ticks: 123456,
                 used_fork_fallback: false,
+                swtpm_dir_audit: None,
             })
         }
 

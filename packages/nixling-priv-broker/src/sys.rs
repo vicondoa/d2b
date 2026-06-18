@@ -872,6 +872,75 @@ pub mod path_safe {
         .map_err(io_from_rustix)
     }
 
+    /// `fstatat(AT_SYMLINK_NOFOLLOW)` of a single `name` component
+    /// beneath an already-open safe parent dirfd. Returns `Ok(None)`
+    /// when the entry is absent (`ENOENT`). The caller inspects
+    /// `st_mode` (e.g. `S_IFLNK` / `S_IFDIR`), `st_uid`/`st_gid`, and
+    /// `st_dev`/`st_ino` without following a symlink. Used by the
+    /// swtpm-dir hardening step to detect symlink / non-dir / owner
+    /// drift without opening the target.
+    pub fn fstatat_nofollow(parent_fd: &OwnedFd, name: &str) -> io::Result<Option<libc::stat>> {
+        validate_target_name(name)?;
+        let c_name = cstring_from_name(name)?;
+        match fstatat_raw(parent_fd.as_raw_fd(), &c_name, libc::AT_SYMLINK_NOFOLLOW) {
+            Ok(stat) => Ok(Some(stat)),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// `fstat(2)` of an already-open fd. Binds identity (`st_dev` /
+    /// `st_ino`) to the exact inode the held fd refers to, so a
+    /// post-open rename/replace of the path cannot confuse the caller.
+    #[allow(unsafe_code)]
+    pub fn fstat_fd(fd: BorrowedFd<'_>) -> io::Result<libc::stat> {
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: `fstat` writes into the provided `stat` for a valid fd.
+        let ret = unsafe { libc::fstat(fd.as_raw_fd(), &mut stat) };
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(stat)
+    }
+
+    /// Returns whether `fd` carries an extended POSIX ACL xattr. The
+    /// tuple is `(access_present, default_present)` for
+    /// `system.posix_acl_access` and `system.posix_acl_default`. A
+    /// directory with only the base owner/group/other entries (a
+    /// "minimal" ACL) has NO xattr, so both `false` means "clean". An
+    /// `ENODATA`/`ENOATTR`/`ENOTSUP` result is treated as absent so
+    /// filesystems without ACL support don't fail the clean check.
+    #[allow(unsafe_code)]
+    pub fn fd_extended_acl_present(fd: BorrowedFd<'_>) -> io::Result<(bool, bool)> {
+        fn one(fd: RawFd, name: &str) -> io::Result<bool> {
+            let c_name = CString::new(name).expect("static xattr name has no NUL");
+            // SAFETY: fgetxattr with a null value buffer (size 0) only
+            // queries the attribute length / presence; it never writes.
+            let ret = unsafe {
+                libc::fgetxattr(fd, c_name.as_ptr(), std::ptr::null_mut(), 0)
+            };
+            if ret >= 0 {
+                return Ok(true);
+            }
+            let err = io::Error::last_os_error();
+            match err.raw_os_error() {
+                // ENODATA (61) = no such attribute; ENOTSUP/EOPNOTSUPP =
+                // FS without ACL support. Both mean "not present".
+                Some(code)
+                    if code == libc::ENODATA
+                        || code == libc::ENOTSUP
+                        || code == libc::EOPNOTSUPP =>
+                {
+                    Ok(false)
+                }
+                _ => Err(err),
+            }
+        }
+        let access = one(fd.as_raw_fd(), "system.posix_acl_access")?;
+        let default = one(fd.as_raw_fd(), "system.posix_acl_default")?;
+        Ok((access, default))
+    }
+
     /// Create a single file beneath an already-open safe parent dirfd.
     /// `name` must be a single path component; `openat2` enforces the
     /// same beneath/no-symlink/no-magiclink/no-xdev contract as
@@ -1589,7 +1658,72 @@ pub mod pidfd_sys {
         }
     }
 
-    /// Read `/proc/<pid>/stat` field 22 (start time in clock ticks).
+    /// Run `setfacl -b -k /proc/self/fd/<fd>` in a forked child to
+    /// clear BOTH the access ACL (`-b`, remove all extended entries)
+    /// AND the default ACL (`-k`, remove the default ACL) on the held
+    /// fd. A directory with no extended ACL is a no-op success, so
+    /// this is idempotent and tolerates an already-clean inode. See
+    /// [`run_setfacl_op_on_fd`] for the CLOEXEC rationale.
+    #[allow(unsafe_code)]
+    pub fn run_setfacl_clear_on_fd(fd: BorrowedFd<'_>) -> io::Result<()> {
+        let setfacl = std::ffi::CString::new("/run/current-system/sw/bin/setfacl")
+            .expect("static setfacl path has no NUL");
+        let remove_all = std::ffi::CString::new("-b").expect("static flag has no NUL");
+        let remove_default = std::ffi::CString::new("-k").expect("static flag has no NUL");
+        let procfd = std::ffi::CString::new(format!("/proc/self/fd/{}", fd.as_raw_fd()))
+            .expect("formatted fd path has no NUL");
+
+        // SAFETY: fork is used to immediately exec setfacl. The child
+        // performs only async-signal-safe libc calls before exec/_exit.
+        let pid = unsafe { libc::fork() };
+        if pid < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if pid == 0 {
+            let raw_fd = fd.as_raw_fd();
+            let flags = unsafe { libc::fcntl(raw_fd, libc::F_GETFD) };
+            if flags < 0 {
+                unsafe { libc::_exit(126) };
+            }
+            if unsafe { libc::fcntl(raw_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
+                unsafe { libc::_exit(126) };
+            }
+            let argv = [
+                setfacl.as_ptr(),
+                remove_all.as_ptr(),
+                remove_default.as_ptr(),
+                procfd.as_ptr(),
+                std::ptr::null(),
+            ];
+            unsafe {
+                libc::execv(setfacl.as_ptr(), argv.as_ptr());
+                libc::_exit(127);
+            }
+        }
+
+        let mut status = 0;
+        loop {
+            let rc = unsafe { libc::waitpid(pid, &mut status, 0) };
+            if rc == pid {
+                break;
+            }
+            if rc < 0 {
+                let err = io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::EINTR) {
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+        if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "setfacl clear exited with wait status {status}"
+            )))
+        }
+    }
+
     /// Pure I/O — no syscalls beyond `open`/`read`. Returns `None` if
     /// the file is missing or field 22 isn't parseable.
     pub fn read_proc_stat_start_time(pid: i32) -> io::Result<u64> {
