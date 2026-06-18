@@ -225,6 +225,86 @@ impl fmt::Display for RelayError {
 
 impl std::error::Error for RelayError {}
 
+/// A connected relay WebSocket stream (TLS over TCP).
+pub type RelayStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Install the process-global rustls crypto provider (ring) if one is not
+/// already installed. [`connect`] calls this lazily, so consumers normally do
+/// not need to; it is exposed so an application that wants to pick the
+/// provider can install its own first (this call then no-ops). Idempotent.
+pub fn install_crypto_provider() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        // install_default() returns Err if a provider is already installed
+        // (e.g. the host application chose one); respect that and no-op.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
+/// Connect to the relay for `role` with `credential`, returning the live
+/// WebSocket stream. This is the host/gateway-side connect; it uses the
+/// public webpki roots (the ACA egress-proxy CA is only needed *inside* the
+/// sandbox, not on the gateway). The Entra bearer, when present, is sent in
+/// the `ServiceBusAuthorization` header — never in the URL.
+pub async fn connect(
+    endpoint: &RelayEndpoint,
+    role: RelayRole,
+    credential: &RelayCredential,
+    ttl_secs: u64,
+) -> Result<RelayStream, RelayConnectError> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
+
+    // Ensure a rustls crypto provider is installed before any TLS connect, so
+    // a consumer never has to remember to. Idempotent / respects a provider
+    // the host application may have already chosen.
+    install_crypto_provider();
+
+    let connect =
+        build_connect(endpoint, role, credential, ttl_secs).map_err(RelayConnectError::Auth)?;
+    let mut request = connect
+        .url
+        .into_client_request()
+        .map_err(|_| RelayConnectError::BadRequest)?;
+    if let Some(value) = &connect.auth_header {
+        request.headers_mut().insert(
+            HeaderName::from_static("servicebusauthorization"),
+            HeaderValue::from_str(value).map_err(|_| RelayConnectError::BadRequest)?,
+        );
+    }
+    let (ws, _resp) = tokio_tungstenite::connect_async(request)
+        .await
+        .map_err(|err| RelayConnectError::Handshake(err.to_string()))?;
+    Ok(ws)
+}
+
+/// Errors connecting the relay WebSocket.
+#[derive(Debug)]
+pub enum RelayConnectError {
+    /// Building the auth (SAS mint / header) failed.
+    Auth(RelayError),
+    /// The connect URL/header could not be turned into a request.
+    BadRequest,
+    /// The relay rejected or failed the WebSocket handshake (e.g. a 401 when
+    /// the credential is unauthorized). The message is the bounded tungstenite
+    /// error class; it never carries the token.
+    Handshake(String),
+}
+
+impl fmt::Display for RelayConnectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RelayConnectError::Auth(e) => write!(f, "relay auth: {e}"),
+            RelayConnectError::BadRequest => write!(f, "relay connect request was malformed"),
+            RelayConnectError::Handshake(m) => write!(f, "relay websocket handshake failed: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for RelayConnectError {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
