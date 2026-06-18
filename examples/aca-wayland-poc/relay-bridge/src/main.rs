@@ -145,7 +145,7 @@ fn sas_token(namespace: &str, entity: &str, key_name: &str, key: &str, ttl: u64)
 fn rand_id() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
-    (0..16).map(|_| format!("{:02x}", rng.gen::<u8>())).collect()
+    (0..16).map(|_| format!("{:02x}", rng.r#gen::<u8>())).collect()
 }
 
 /// A local byte target: a connected unix or tcp stream, type-erased.
