@@ -10,6 +10,12 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Fixed
+
+- Per-VM NixOS evaluations now inherit the host's `nixpkgs.overlays` in
+  addition to `nixpkgs.config`, so consumer security overlays patch VM
+  closures as well as host closures.
+
 ### Changed
 
 - CI: the `pr-l1-static-fast` x86_64 flake check is now sharded one job per
