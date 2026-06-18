@@ -24,8 +24,8 @@ pub mod types;
 
 pub use error::GatewayError;
 pub use handshake::{
-    DisplaySessionId, Handshake, HandshakeError, MAX_HANDSHAKE_FRAME, ReplayGuard, SessionBinding,
-    SessionSecret, SetReplayGuard, encode_handshake_frame, verify_handshake_frame,
+    DisplaySessionId, Handshake, HandshakeError, MAX_HANDSHAKE_FRAME, ReplayGuard, SECRET_LEN,
+    SessionBinding, SessionSecret, SetReplayGuard, encode_handshake_frame, verify_handshake_frame,
 };
 pub use ledger::{LedgerLimits, OpOutcome, SessionLedger, SessionRecord, SessionState, TargetKey};
 pub use orchestrator::{

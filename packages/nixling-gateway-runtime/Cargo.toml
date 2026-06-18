@@ -1,0 +1,26 @@
+[package]
+name = "nixling-gateway-runtime"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+# Top-level gateway composition (ADR 0032, P0): ties the codec-neutral
+# nixling-gateway orchestrator/handshake to the concrete Azure Relay transport
+# (nixling-provider-relay) and the ACA workload provider (nixling-provider-aca).
+# This is the only crate that depends on both the gateway and the providers; it
+# is where the per-session handshake becomes the relay prologue that gates the
+# display byte stream. Nothing else depends on it (it is the composition root
+# consumed by the gateway-mode daemon).
+[dependencies]
+nixling-gateway = { path = "../nixling-gateway", version = "0.0.0-bootstrap" }
+nixling-provider-relay = { path = "../nixling-provider-relay", version = "0.0.0-bootstrap" }
+
+[dev-dependencies]
+nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }

@@ -14,6 +14,7 @@ members = [
     "nixling-provider-aca",
     "nixling-provider-relay",
     "nixling-gateway",
+    "nixling-gateway-runtime",
     "nixling-host",
     "nixling-guestd",
     "nixling-userd",

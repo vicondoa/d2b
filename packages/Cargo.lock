@@ -1670,11 +1670,22 @@ dependencies = [
 name = "nixling-gateway"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "hmac",
  "nixling-constellation-core",
  "serde",
  "serde_json",
  "sha2",
+ "tokio",
+]
+
+[[package]]
+name = "nixling-gateway-runtime"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "nixling-constellation-core",
+ "nixling-gateway",
+ "nixling-provider-relay",
 ]
 
 [[package]]
