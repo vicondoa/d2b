@@ -1,0 +1,26 @@
+[package]
+name = "nixling-provider-relay"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+# Azure Relay transport auth/credential core (ADR 0032, P0). The gateway
+# holds the relay Listen credential; per the three-plane model the container
+# authenticates to Relay with an Entra bearer token from its managed identity
+# (plane 2), so a minted SAS here is gateway-side / transitional. All secret
+# material (SAS keys, minted tokens, bearer tokens) is treated as secret:
+# redacted Debug, never logged.
+[dependencies]
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+urlencoding = "2"
+
+[dev-dependencies]

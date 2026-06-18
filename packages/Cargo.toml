@@ -12,6 +12,7 @@ members = [
     "nixling-daemon-access",
     "nixling-host-providers",
     "nixling-provider-aca",
+    "nixling-provider-relay",
     "nixling-host",
     "nixling-guestd",
     "nixling-userd",
