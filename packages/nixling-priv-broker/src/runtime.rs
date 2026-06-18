@@ -3578,21 +3578,32 @@ fn register_runner_pidfd(runner_id: &str, pidfd: &OwnedFd) -> Result<(), BrokerE
     let mut registry = runner_pidfd_registry()
         .lock()
         .map_err(|_| BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned()))?;
-    // Refuse to overwrite a still-active registration for the same
-    // runner_id. The registry is keyed by `<vm>:<role>` only; silently
-    // replacing a live entry would let a later spawn's pidfd be dropped by
-    // an EARLIER spawn's post-spawn `targeted_reap_runner`
-    // (`reg.remove(runner_id)`), leaving the live child untracked /
-    // unreapable by the registry. A live child's entry is removed on
-    // exit (SIGCHLD reaper) or on down/stop, so a legitimate re-spawn
-    // never collides here; a collision means a concurrent/duplicate spawn
-    // and must fail closed rather than clobber. See issue #64 work-review.
+    registry.insert(runner_id.to_owned(), duplicated);
+    Ok(())
+}
+
+/// Refuse to start a SECOND live runner for an already-registered
+/// `runner_id` (`<vm>:<role>`). Checked BEFORE the child is spawned so a
+/// duplicate is never created: rejecting AFTER the spawn would leak an
+/// orphan child (a non-blocking targeted reap is a no-op for a live
+/// process), and reaping that orphan would also pollute the existing
+/// same-`runner_id` registry entry + push a spurious `ChildReaped` for the
+/// live runner. A `runner_id` has at most one live registration — the
+/// daemon serializes per-VM lifecycle (per-VM start flock + DAG) and a live
+/// entry is cleared on exit (SIGCHLD reaper) or on down/stop — so a
+/// legitimate re-spawn never collides here; a collision is a
+/// concurrent/duplicate spawn and must fail closed. See issue #64
+/// work-review (W1fu1/fu2).
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn reserve_runner_id_for_spawn(runner_id: &str) -> Result<(), BrokerError> {
+    let registry = runner_pidfd_registry()
+        .lock()
+        .map_err(|_| BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned()))?;
     if registry.contains_key(runner_id) {
         return Err(BrokerError::Protocol(format!(
-            "runner pidfd already registered for {runner_id}; refusing to overwrite an active registration"
+            "runner {runner_id} already has an active registration; refusing duplicate spawn"
         )));
     }
-    registry.insert(runner_id.to_owned(), duplicated);
     Ok(())
 }
 
@@ -3971,6 +3982,11 @@ impl DispatchBackend for LiveDispatchBackend {
         runner_id: &str,
         plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
+        // Reserve the runner_id BEFORE spawning the child: refuse a
+        // duplicate active registration up front so we never create an
+        // orphan child (see `reserve_runner_id_for_spawn`).
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        reserve_runner_id_for_spawn(runner_id)?;
         let outcome = crate::live_handlers::live_spawn_runner(plan_input).map_err(|err| {
             // Log the actual LiveHandlerError detail before wrapping it
             // in the opaque BrokerError::LiveHandler envelope so
