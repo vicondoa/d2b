@@ -19,11 +19,13 @@ use std::sync::{Arc, Mutex};
 
 pub mod aca_workload;
 pub mod display_listener;
+pub mod production;
 pub use aca_workload::{
     AcaGatewayWorkload, AgentBinaries, RelayCoords, build_agent_command, build_cleanup_command,
     default_entra_token_snippet,
 };
 pub use display_listener::{RelayDisplayListener, notifying_verifier};
+pub use production::{SystemClock, UrandomIds, production_deps, system_now_fn, system_now_unix};
 
 use nixling_gateway::{
     Handshake, SessionBinding, SessionSecret, SetReplayGuard, encode_handshake_frame,
