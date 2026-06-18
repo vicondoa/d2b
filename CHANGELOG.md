@@ -30,6 +30,9 @@ deprecations ship one minor release before removal.
   slow or failing VM start no longer stalls unrelated clients
   (e.g. host status feeds). Mutating lifecycle operations are
   serialized per-VM/globally; read-only requests run in parallel.
+- Per-VM NixOS evaluations now inherit the host's `nixpkgs.overlays` in
+  addition to `nixpkgs.config`, so consumer security overlays patch VM
+  closures as well as host closures.
 
 ### Security
 

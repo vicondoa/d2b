@@ -143,14 +143,17 @@ let
       };
     };
 
-  # `nixpkgs` is read by vm-evaluator.nix (`config.nixpkgs.config`), so
-  # its sink seeds a `.config` attr.
+  # `nixpkgs` is read by vm-evaluator.nix (`config.nixpkgs.config` and
+  # `config.nixpkgs.overlays`), so its sink seeds both attrs.
   nixpkgsSink =
     { lib, ... }:
     {
       options.nixpkgs = lib.mkOption {
         type = lib.types.anything;
-        default = { config = { }; };
+        default = {
+          config = { };
+          overlays = [ ];
+        };
       };
     };
 
