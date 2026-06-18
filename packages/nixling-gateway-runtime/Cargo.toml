@@ -21,6 +21,9 @@ workspace = true
 [dependencies]
 nixling-gateway = { path = "../nixling-gateway", version = "0.0.0-bootstrap" }
 nixling-provider-relay = { path = "../nixling-provider-relay", version = "0.0.0-bootstrap" }
+nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+base64 = "0.22"
 
 [dev-dependencies]
 nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
