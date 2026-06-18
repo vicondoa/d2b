@@ -19,6 +19,7 @@
 pub mod error;
 pub mod handshake;
 pub mod ledger;
+pub mod orchestrator;
 pub mod types;
 
 pub use error::GatewayError;
@@ -27,4 +28,8 @@ pub use handshake::{
     SetReplayGuard,
 };
 pub use ledger::{LedgerLimits, OpOutcome, SessionLedger, SessionRecord, SessionState, TargetKey};
+pub use orchestrator::{
+    AgentHandle, AgentSpawnRequest, Clock, ContextSeed, DEFAULT_SESSION_TTL_SECS, DisplayListener,
+    GatewayDeps, GatewayOrchestrator, GatewayWorkload, IdSource, ListenerHandle, OpenSession,
+};
 pub use types::{AppCommand, DisplaySessionContext, DisplaySocket};
