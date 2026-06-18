@@ -26,10 +26,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use nixling_constellation_core::{OperationRequest, PrincipalId, RealmPath};
+use nixling_constellation_core::{OperationRequest, PrincipalId, TargetName};
 use nixling_constellation_provider::error::ProviderResult;
 use nixling_constellation_provider::provider::{ProtocolCodec, WorkloadProvider};
-use nixling_constellation_router::{OperationRouter, RouteDecision};
+use nixling_constellation_router::{
+    DispatchTarget, OperationRouter, RealmEntrypointTable, ResolveError, RouteDecision,
+};
 
 /// A node/gateway-scoped [`OperationRouter`] shared across peer sessions.
 /// Constructed once per node and injected into every [`PeerOperationRouter`]
@@ -76,27 +78,42 @@ impl Default for ApiService {
     }
 }
 
-/// Resolves a realm-path target to the node/provider that serves it
-/// (skeleton). Resolves to the local node until the realm/node registry
-/// lands.
-pub struct TargetResolver;
+/// Resolves a constellation [`TargetName`] to the [`DispatchTarget`] that
+/// serves it, by consulting the node's [`RealmEntrypointTable`] (ADR 0032
+/// `TargetResolver`). The table is seeded with the reserved `local` realm as
+/// host-resident; gateway-mode config wiring populates the rest. Resolution
+/// is fail-closed — an unknown realm is rejected rather than defaulted to
+/// local dispatch.
+pub struct TargetResolver {
+    table: RealmEntrypointTable,
+}
 
 impl TargetResolver {
-    /// Build the resolver.
-    pub fn new() -> Self {
-        Self
+    /// Build a resolver over an entrypoint table.
+    pub fn new(table: RealmEntrypointTable) -> Self {
+        Self { table }
     }
 
-    /// Resolve a target realm path. Returns the input unchanged (local-only)
-    /// until later ADR 0032 work consults the realm/node registry.
-    pub fn resolve(&self, realm: RealmPath) -> RealmPath {
-        realm
+    /// A resolver that only knows the local (host-resident) realm — the
+    /// host-mode default until realm config lands.
+    pub fn local_only() -> Self {
+        Self::new(RealmEntrypointTable::with_local_default())
+    }
+
+    /// Resolve a target to its dispatch decision.
+    pub fn resolve(&self, target: &TargetName) -> Result<DispatchTarget, ResolveError> {
+        self.table.resolve(target)
+    }
+
+    /// Borrow the underlying entrypoint table (e.g. to extend it from config).
+    pub fn table(&self) -> &RealmEntrypointTable {
+        &self.table
     }
 }
 
 impl Default for TargetResolver {
     fn default() -> Self {
-        Self::new()
+        Self::local_only()
     }
 }
 
@@ -273,7 +290,7 @@ impl DaemonModeConfig {
 mod tests {
     use super::*;
     use nixling_constellation_core::{
-        IdempotencyKey, NodeId, OpaquePayload, OperationId, OperationKind,
+        IdempotencyKey, NodeId, OpaquePayload, OperationId, OperationKind, RealmPath,
     };
 
     fn list_req(principal: &PrincipalId) -> OperationRequest {
@@ -342,10 +359,25 @@ mod tests {
     }
 
     #[test]
-    fn target_resolver_resolves_local_target_unchanged() {
-        let resolver = TargetResolver::new();
-        let realm = RealmPath::local();
-        assert_eq!(resolver.resolve(realm.clone()), realm);
+    fn target_resolver_resolves_local_target_host_resident() {
+        let resolver = TargetResolver::local_only();
+        let target = TargetName::parse("demo.nixling").unwrap();
+        assert!(matches!(
+            resolver.resolve(&target),
+            Ok(DispatchTarget::HostResident { .. })
+        ));
+    }
+
+    #[test]
+    fn target_resolver_unknown_realm_fails_closed() {
+        // The local-only table has no entry for a named realm: resolution
+        // must fail closed rather than silently default to local dispatch.
+        let resolver = TargetResolver::local_only();
+        let target = TargetName::parse("demo.aca.work.nixling").unwrap();
+        assert!(matches!(
+            resolver.resolve(&target),
+            Err(ResolveError::NoEntrypoint(_))
+        ));
     }
 
     #[test]
