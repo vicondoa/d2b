@@ -4983,7 +4983,9 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
                 if node.role == ProcessRole::StoreVirtiofsPreflight {
                     self.sync_store_view(vm)?;
                 }
-                wait_for_readiness(node, readiness, budget.readiness)
+                // ReadinessOnly nodes spawn no long-lived runner, so there
+                // is no daemon-held pidfd to observe — no liveness probe.
+                wait_for_readiness(node, readiness, budget.readiness, None)
             }
             VmStartNodeMode::OneShot(runner_role) => {
                 let response = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
@@ -4991,7 +4993,13 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
             }
             VmStartNodeMode::LongLived(runner_role) => {
                 let response = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
-                wait_for_readiness(node, readiness, budget.readiness)?;
+                let liveness = supervisor::readiness_liveness::PidfdLivenessProbe::new(
+                    &self.state.pidfd_table,
+                    &self.state.broker_reap_log,
+                    vm,
+                    tracked_role_id(node),
+                );
+                wait_for_readiness(node, readiness, budget.readiness, Some(&liveness))?;
                 tracing::info!(
                     vm = %vm,
                     node = %node.id.0,
@@ -5030,12 +5038,22 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
 
     async fn probe_api_ready(
         &self,
-        _vm: &str,
+        vm: &str,
         node: &ProcessNode,
         readiness: &[ReadinessPredicate],
         timeout: Duration,
     ) -> supervisor::dag::ApiReadyState {
-        match wait_for_readiness(node, readiness, timeout) {
+        // The split-readiness api-ready phase observes the already-spawned
+        // long-lived runner, so wire in the liveness probe: a runner that
+        // dies before the api-ready socket appears surfaces as an Error
+        // (runner-exited / runner-reused) instead of a full-budget Timeout.
+        let liveness = supervisor::readiness_liveness::PidfdLivenessProbe::new(
+            &self.state.pidfd_table,
+            &self.state.broker_reap_log,
+            vm,
+            tracked_role_id(node),
+        );
+        match wait_for_readiness(node, readiness, timeout, Some(&liveness)) {
             Ok(()) => supervisor::dag::ApiReadyState::Yes,
             Err(error) if error == format!("readiness-timeout:{}", node.id.0) => {
                 supervisor::dag::ApiReadyState::Timeout
@@ -5049,12 +5067,35 @@ fn wait_for_readiness(
     node: &ProcessNode,
     readiness: &[ReadinessPredicate],
     timeout: Duration,
+    liveness: Option<&dyn supervisor::readiness_liveness::LivenessProbe>,
 ) -> Result<(), String> {
+    use supervisor::readiness_liveness::RunnerLiveness;
+
+    // Map a terminal liveness verdict to the fast-fail error string. The
+    // readiness loop returns this immediately instead of blocking to the
+    // readiness deadline when the spawned runner dies (or its PID is
+    // reused) before its readiness signal fires.
+    fn terminal_liveness_error(
+        node: &ProcessNode,
+        liveness: Option<&dyn supervisor::readiness_liveness::LivenessProbe>,
+    ) -> Option<String> {
+        match liveness?.probe() {
+            RunnerLiveness::Exited(_) => Some(format!("runner-exited:{}", node.id.0)),
+            RunnerLiveness::Reused => Some(format!("runner-reused:{}", node.id.0)),
+            RunnerLiveness::Alive | RunnerLiveness::Unknown => None,
+        }
+    }
+
     if readiness.is_empty() {
         return Ok(());
     }
     let deadline = Instant::now() + timeout;
     loop {
+        // Liveness BEFORE readiness: a runner that already exited must
+        // fast-fail rather than spin to the deadline.
+        if let Some(error) = terminal_liveness_error(node, liveness) {
+            return Err(error);
+        }
         let mut all_ready = true;
         for predicate in readiness {
             if !readiness_predicate_ready(predicate)? {
@@ -5063,6 +5104,12 @@ fn wait_for_readiness(
             }
         }
         if all_ready {
+            // Re-confirm liveness BEFORE declaring ready so a stale
+            // listening socket left behind by an exited runner cannot
+            // yield a false-ready.
+            if let Some(error) = terminal_liveness_error(node, liveness) {
+                return Err(error);
+            }
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -6950,6 +6997,7 @@ fn dispatch_broker_vm_start(
         readiness: readiness_timeout,
         ..supervisor::dag::NodeBudget::default()
     };
+    let dag_start = Instant::now();
     let report = match block_on_future(
         supervisor::dag::DagExecutor::with_budget(runner, budget).run_split(
             dag,
@@ -7119,10 +7167,164 @@ fn dispatch_broker_vm_start(
         }
         return Ok(response);
     }
+    // Detect the runner-exited / runner-reused fast-fail BEFORE rollback
+    // tears the runner down, so we can peek the buffered broker exit
+    // status and emit a bounded audit event + an actionable, swtpm-aware
+    // failure envelope (broker-error exit contract, not exit 1).
+    let runner_exit = detect_runner_exit_failure(&report, dag);
+    let runner_exit_response = runner_exit.map(|(role_id, reason_kind)| {
+        let exit_status = state
+            .broker_reap_log
+            .peek_for(&request.vm, &role_id)
+            .map(|notif| notif.exit_status);
+        let elapsed_ms = u64::try_from(dag_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        emit_vm_start_runner_exited_audit(
+            state,
+            &request.vm,
+            &role_id,
+            reason_kind,
+            exit_status.as_ref(),
+            elapsed_ms,
+        );
+        vm_start_runner_exited_response(&request.vm, &role_id, reason_kind, exit_status.as_ref())
+    });
     if let Err(response) = rollback_failed_vm_start(state, &request.vm, &tracked_roles) {
         return Ok(response);
     }
+    if let Some(response) = runner_exit_response {
+        return Ok(response);
+    }
     Ok(vm_start_failure_response(&report))
+}
+
+/// Scan the DAG run report for the first node that fast-failed because
+/// its spawned runner exited (or its PID was reused) before readiness.
+/// Returns the runner's tracked `role_id` and the closed reason kind.
+fn detect_runner_exit_failure(
+    report: &supervisor::dag::DagRunReport,
+    dag: &nixling_core::processes::VmProcessDag,
+) -> Option<(String, daemon_audit::VmStartRunnerExitReason)> {
+    for entry in &report.history {
+        let supervisor::dag::NodeOutcome::Failed { reason } = &entry.outcome else {
+            continue;
+        };
+        let (reason_kind, marker) = if reason.contains("runner-exited:") {
+            (
+                daemon_audit::VmStartRunnerExitReason::RunnerExited,
+                "runner-exited:",
+            )
+        } else if reason.contains("runner-reused:") {
+            (
+                daemon_audit::VmStartRunnerExitReason::RunnerReused,
+                "runner-reused:",
+            )
+        } else {
+            continue;
+        };
+        let node_id = reason.rsplit(marker).next().unwrap_or("").trim();
+        let role_id = dag
+            .nodes
+            .iter()
+            .find(|node| node.id.0 == node_id)
+            .map(tracked_role_id)
+            .unwrap_or_else(|| node_id.to_owned());
+        return Some((role_id, reason_kind));
+    }
+    None
+}
+
+/// Bounded, closed-vocabulary cause phrase for a runner exit. Carries no
+/// path, pid, or free-form node-reason text.
+fn bounded_runner_exit_cause(
+    reason_kind: daemon_audit::VmStartRunnerExitReason,
+    status: Option<&nixling_ipc::broker_wire::ChildExitStatus>,
+) -> String {
+    use nixling_ipc::broker_wire::ChildExitKind;
+    if matches!(
+        reason_kind,
+        daemon_audit::VmStartRunnerExitReason::RunnerReused
+    ) {
+        return "PID reused by another process".to_owned();
+    }
+    match status {
+        Some(status) => match status.kind {
+            ChildExitKind::Exited => match status.code {
+                Some(code) => format!("exit code {code}"),
+                None => "exited".to_owned(),
+            },
+            ChildExitKind::Signaled => match status.signal {
+                Some(signal) => format!("terminated by signal {signal}"),
+                None => "terminated by signal".to_owned(),
+            },
+            ChildExitKind::Killed => match status.signal {
+                Some(signal) => format!("killed by signal {signal}"),
+                None => "killed".to_owned(),
+            },
+        },
+        None => "exited before readiness".to_owned(),
+    }
+}
+
+/// Build the actionable, swtpm-aware failure envelope for a runner-exited
+/// fast-fail. Maps to the broker-error outcome (the broker-error exit
+/// contract), NOT exit 1.
+fn vm_start_runner_exited_response(
+    vm: &str,
+    role_id: &str,
+    reason_kind: daemon_audit::VmStartRunnerExitReason,
+    status: Option<&nixling_ipc::broker_wire::ChildExitStatus>,
+) -> Value {
+    let cause = bounded_runner_exit_cause(reason_kind, status);
+    let verb_word = match reason_kind {
+        daemon_audit::VmStartRunnerExitReason::RunnerExited => "exited",
+        daemon_audit::VmStartRunnerExitReason::RunnerReused => "was replaced (PID reused)",
+    };
+    let summary =
+        format!("vm start {vm}: runner '{role_id}' {verb_word} before readiness ({cause})");
+    let remediation = format!(
+        "The '{role_id}' runner {verb_word} before its readiness signal fired ({cause}). \
+         If this is the swtpm (per-VM TPM) runner, the TPM state must not be wiped: \
+         clearing /var/lib/nixling/vms/{vm}/swtpm looks like device tampering to your \
+         identity provider and forces re-enrollment. Admin: inspect \
+         `journalctl -u nixlingd` and `journalctl -u nixling-priv-broker` for the \
+         swtpm exit detail before retrying `nixling vm up {vm}`."
+    );
+    broker_failure_response("vm start", summary, remediation, None)
+}
+
+/// Emit the bounded `VmStartRunnerExited` daemon audit event. Best-effort:
+/// an audit write failure is logged but never aborts the vm-start path.
+fn emit_vm_start_runner_exited_audit(
+    state: &ServerState,
+    vm: &str,
+    role_id: &str,
+    reason_kind: daemon_audit::VmStartRunnerExitReason,
+    status: Option<&nixling_ipc::broker_wire::ChildExitStatus>,
+    elapsed_ms: u64,
+) {
+    use nixling_ipc::broker_wire::ChildExitKind;
+    let exit_kind = status.map(|status| match status.kind {
+        ChildExitKind::Exited => daemon_audit::RunnerExitKind::Exited,
+        ChildExitKind::Signaled => daemon_audit::RunnerExitKind::Signaled,
+        ChildExitKind::Killed => daemon_audit::RunnerExitKind::Killed,
+    });
+    let event = daemon_audit::DaemonEvent::VmStartRunnerExited {
+        vm: vm.to_owned(),
+        role_id: role_id.to_owned(),
+        reason_kind,
+        exit_kind,
+        exit_code: status.and_then(|status| status.code),
+        exit_signal: status.and_then(|status| status.signal),
+        elapsed_ms,
+    };
+    if let Err(error) = state.daemon_audit.write_event(&event) {
+        tracing::warn!(
+            vm = %vm,
+            role_id = %role_id,
+            error = %error,
+            "vm start: failed to write VmStartRunnerExited audit event (non-fatal)",
+        );
+    }
 }
 
 /// Production implementation of
@@ -13899,6 +14101,238 @@ mod broker_dispatch_tests {
         );
     }
 
+    // --- fix2a: readiness-loop liveness fast-fail ( W1 ) -----------------
+
+    /// Scripted observe-only liveness fake driving the readiness loop
+    /// through the same call site as production. Pops the next scripted
+    /// verdict each call; repeats the last verdict once exhausted.
+    struct ScriptedLivenessProbe {
+        inner: std::sync::Mutex<(
+            std::collections::VecDeque<super::supervisor::readiness_liveness::RunnerLiveness>,
+            super::supervisor::readiness_liveness::RunnerLiveness,
+        )>,
+    }
+
+    impl ScriptedLivenessProbe {
+        fn always(verdict: super::supervisor::readiness_liveness::RunnerLiveness) -> Self {
+            Self {
+                inner: std::sync::Mutex::new((std::collections::VecDeque::new(), verdict)),
+            }
+        }
+    }
+
+    impl super::supervisor::readiness_liveness::LivenessProbe for ScriptedLivenessProbe {
+        fn probe(&self) -> super::supervisor::readiness_liveness::RunnerLiveness {
+            let mut guard = self.inner.lock().expect("scripted liveness mutex");
+            if let Some(verdict) = guard.0.pop_front() {
+                guard.1 = verdict.clone();
+                verdict
+            } else {
+                guard.1.clone()
+            }
+        }
+    }
+
+    fn readiness_test_node() -> nixling_core::processes::ProcessNode {
+        use nixling_core::processes::{NodeId, ProcessNode, ProcessRole};
+        ProcessNode {
+            id: NodeId("swtpm".to_owned()),
+            role: ProcessRole::Swtpm,
+            unit: None,
+            binary_path: None,
+            argv: vec![],
+            env: vec![],
+            plan_ops: vec![],
+            profile: nixling_core::test_support::RoleProfileBuilder::new()
+                .with_profile_id("swtpm")
+                .with_uid(0)
+                .with_gid(0)
+                .build(),
+            readiness: vec![],
+        }
+    }
+
+    #[test]
+    fn wait_for_readiness_alive_and_ready_is_ok() {
+        use nixling_core::processes::ReadinessPredicate;
+        use super::supervisor::readiness_liveness::RunnerLiveness;
+
+        let node = readiness_test_node();
+        // ComponentSpecific is trivially ready; Alive liveness lets it pass.
+        let ready = vec![ReadinessPredicate::ComponentSpecific("x".to_owned())];
+        let probe = ScriptedLivenessProbe::always(RunnerLiveness::Alive);
+        let result = super::wait_for_readiness(&node, &ready, Duration::from_secs(5), Some(&probe));
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn wait_for_readiness_alive_but_unready_polls_to_timeout() {
+        use nixling_core::processes::ReadinessPredicate;
+        use super::supervisor::readiness_liveness::RunnerLiveness;
+
+        let node = readiness_test_node();
+        // A socket that never exists keeps the predicate false; Alive
+        // liveness means we poll until the (tiny) deadline elapses.
+        let unready = vec![ReadinessPredicate::UnixSocketExists(
+            "/nonexistent/nixling-readiness-test.sock".to_owned(),
+        )];
+        let probe = ScriptedLivenessProbe::always(RunnerLiveness::Alive);
+        let result = super::wait_for_readiness(&node, &unready, Duration::from_millis(50), Some(&probe));
+        assert_eq!(result, Err("readiness-timeout:swtpm".to_owned()));
+    }
+
+    #[test]
+    fn wait_for_readiness_exited_fast_fails_before_deadline() {
+        use nixling_core::processes::ReadinessPredicate;
+        use super::supervisor::readiness_liveness::RunnerLiveness;
+
+        let node = readiness_test_node();
+        let unready = vec![ReadinessPredicate::UnixSocketExists(
+            "/nonexistent/nixling-readiness-test.sock".to_owned(),
+        )];
+        // Exited liveness short-circuits at the top of the loop. A long
+        // deadline proves the fast-fail does NOT wait for the budget.
+        let probe = ScriptedLivenessProbe::always(RunnerLiveness::Exited(None));
+        let started = Instant::now();
+        let result = super::wait_for_readiness(&node, &unready, Duration::from_secs(300), Some(&probe));
+        assert_eq!(result, Err("runner-exited:swtpm".to_owned()));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "runner-exited must fast-fail, not block to the 300s readiness budget"
+        );
+    }
+
+    #[test]
+    fn wait_for_readiness_reused_fast_fails() {
+        use nixling_core::processes::ReadinessPredicate;
+        use super::supervisor::readiness_liveness::RunnerLiveness;
+
+        let node = readiness_test_node();
+        let unready = vec![ReadinessPredicate::UnixSocketExists(
+            "/nonexistent/nixling-readiness-test.sock".to_owned(),
+        )];
+        let probe = ScriptedLivenessProbe::always(RunnerLiveness::Reused);
+        let result = super::wait_for_readiness(&node, &unready, Duration::from_secs(300), Some(&probe));
+        assert_eq!(result, Err("runner-reused:swtpm".to_owned()));
+    }
+
+    #[test]
+    fn wait_for_readiness_stale_listening_socket_not_false_ready() {
+        use nixling_core::processes::ReadinessPredicate;
+        use super::supervisor::readiness_liveness::RunnerLiveness;
+
+        let node = readiness_test_node();
+        // The predicate reports ready (stale listening socket), but the
+        // runner has exited — the liveness re-check must veto false-ready.
+        let ready = vec![ReadinessPredicate::ComponentSpecific("x".to_owned())];
+        let probe = ScriptedLivenessProbe::always(RunnerLiveness::Exited(None));
+        let result = super::wait_for_readiness(&node, &ready, Duration::from_secs(300), Some(&probe));
+        assert_eq!(
+            result,
+            Err("runner-exited:swtpm".to_owned()),
+            "a stale listening socket must not yield false-ready when the runner has exited"
+        );
+    }
+
+    #[test]
+    fn wait_for_readiness_unknown_liveness_keeps_polling() {
+        use nixling_core::processes::ReadinessPredicate;
+        use super::supervisor::readiness_liveness::RunnerLiveness;
+
+        let node = readiness_test_node();
+        let unready = vec![ReadinessPredicate::UnixSocketExists(
+            "/nonexistent/nixling-readiness-test.sock".to_owned(),
+        )];
+        // Unknown is non-terminal: the loop keeps polling to the deadline.
+        let probe = ScriptedLivenessProbe::always(RunnerLiveness::Unknown);
+        let result = super::wait_for_readiness(&node, &unready, Duration::from_millis(50), Some(&probe));
+        assert_eq!(result, Err("readiness-timeout:swtpm".to_owned()));
+    }
+
+    #[test]
+    fn vm_start_runner_exited_response_is_broker_error_with_swtpm_remediation() {
+        use nixling_ipc::broker_wire::{ChildExitKind, ChildExitStatus};
+
+        let status = ChildExitStatus {
+            kind: ChildExitKind::Exited,
+            code: Some(1),
+            signal: None,
+        };
+        let value = super::vm_start_runner_exited_response(
+            "work",
+            "swtpm",
+            super::daemon_audit::VmStartRunnerExitReason::RunnerExited,
+            Some(&status),
+        );
+        assert_eq!(
+            super::response_outcome(&value),
+            Some("broker-error"),
+            "runner-exited maps to the broker-error exit contract, not exit 1"
+        );
+        let remediation = super::response_remediation(&value).unwrap_or_default();
+        assert!(remediation.contains("swtpm"), "remediation names swtpm");
+        assert!(
+            remediation.contains("must not be wiped"),
+            "remediation warns the TPM state must not be wiped"
+        );
+        assert!(
+            remediation.contains("exit code 1"),
+            "remediation carries the bounded underlying cause"
+        );
+    }
+
+    #[test]
+    fn detect_runner_exit_failure_extracts_role_from_reason() {
+        use nixling_core::processes::{NodeId, ProcessNode, ProcessRole, VmProcessDag, VmProcessInvariants};
+
+        let node = ProcessNode {
+            id: NodeId("swtpm-node".to_owned()),
+            role: ProcessRole::Swtpm,
+            unit: None,
+            binary_path: None,
+            argv: vec![],
+            env: vec![],
+            plan_ops: vec![],
+            profile: nixling_core::test_support::RoleProfileBuilder::new()
+                .with_profile_id("swtpm")
+                .with_uid(0)
+                .with_gid(0)
+                .build(),
+            readiness: vec![],
+        };
+        let dag = VmProcessDag {
+            vm: "work".to_owned(),
+            nodes: vec![node],
+            edges: vec![],
+            invariants: VmProcessInvariants {
+                swtpm_pre_start_flush: false,
+                per_vm_audit_pipeline: true,
+                usbip_gating: false,
+                tpm_ownership_migration_without_running_vm_mutation: false,
+            },
+        };
+        let report = super::supervisor::dag::DagRunReport {
+            vm: "work".to_owned(),
+            history: vec![super::supervisor::dag::NodeHistory {
+                node_id: NodeId("swtpm-node".to_owned()),
+                outcome: super::supervisor::dag::NodeOutcome::Failed {
+                    reason: "runner-exited:swtpm-node".to_owned(),
+                },
+            }],
+            overall_ok: false,
+            api_ready: None,
+        };
+        let detected = super::detect_runner_exit_failure(&report, &dag);
+        assert_eq!(
+            detected,
+            Some((
+                "swtpm-node".to_owned(),
+                super::daemon_audit::VmStartRunnerExitReason::RunnerExited
+            )),
+            "the swtpm node id maps to its tracked role id and runner-exited kind"
+        );
+    }
+
     #[test]
     fn guest_control_health_is_readiness_only_node_mode() {
         use super::{VmStartNodeMode, vm_start_node_mode};
@@ -13944,7 +14378,7 @@ mod broker_dispatch_tests {
         // `wait_for_readiness`, an absent/auth-failing guest-control
         // listener would be reported "ready" with NO authenticated probe.
         assert_eq!(
-            wait_for_readiness(&node, &[], Duration::from_millis(0)),
+            wait_for_readiness(&node, &[], Duration::from_millis(0), None),
             Ok(()),
             "empty readiness is trivially ready; the authenticated probe \
              must be reached via the GuestControlHealth interception, never \

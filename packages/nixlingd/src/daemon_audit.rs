@@ -39,6 +39,27 @@ pub enum DetachedExecAuditResult {
     Error,
 }
 
+/// Closed reason a vm-start runner node fast-failed before readiness.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum VmStartRunnerExitReason {
+    /// The spawned runner terminated before its readiness signal fired.
+    RunnerExited,
+    /// The runner's PID was reused by a different process (start-time
+    /// drift) — our runner is gone.
+    RunnerReused,
+}
+
+/// Closed, bounded runner exit kind mirrored from the broker reap
+/// notification. Carries no high-cardinality detail.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunnerExitKind {
+    Exited,
+    Signaled,
+    Killed,
+}
+
 /// Daemon-side audit event variants.
 ///
 /// Additive-only: new variants may be added; existing ones must not be
@@ -108,6 +129,35 @@ pub enum DaemonEvent {
         action: DetachedExecAuditAction,
         result: DetachedExecAuditResult,
         exec_id: String,
+    },
+    /// Emitted when a `vm start` long-lived runner node fast-fails because
+    /// the spawned runner terminated (or its PID was reused) BEFORE its
+    /// readiness signal fired — the `tpm.enable` first-run wedge fix.
+    ///
+    /// Bounded by construction: carries ONLY the VM name, the closed
+    /// `role_id` of the failed node, a closed reason kind, the optional
+    /// closed broker exit kind/code/signal, and the elapsed wall-clock
+    /// milliseconds. No node-reason string, pid, or path label is
+    /// recorded.
+    VmStartRunnerExited {
+        /// VM name (matches the `vmStart` request).
+        vm: String,
+        /// Role id of the runner node that exited (e.g. `swtpm`,
+        /// `ch-runner`).
+        role_id: String,
+        /// Closed reason kind: exited vs PID-reused.
+        reason_kind: VmStartRunnerExitReason,
+        /// Bounded broker exit kind, when a reap status was buffered.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_kind: Option<RunnerExitKind>,
+        /// Exit code, when `exit_kind == "exited"`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        /// Signal number, when `exit_kind` is `signaled`/`killed`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_signal: Option<i32>,
+        /// Wall-clock milliseconds from DAG dispatch to fast-fail.
+        elapsed_ms: u64,
     },
 }
 
