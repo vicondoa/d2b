@@ -91,6 +91,11 @@ fn denylist_patterns() -> Vec<(String, Regex)> {
         r"nixling-ch-exporter".to_string(),
         r"nixling-otel-host-bridge\.service".to_string(),
         format!("nixling-sys-{NAMEPART}-usbipd-"),
+        // Per-VM swtpm systemd unit retired by ADR 0015 daemon-only clean
+        // break. The `(\.service)?` suffix is optional so the needle catches
+        // BOTH the attr-name form (`systemd.services."nixling-<vm>-swtpm"`)
+        // AND the unit-string form (`nixling-<vm>-swtpm.service`).
+        format!("nixling-{NAMEPART}-swtpm(\\.service)?"),
     ];
     raw.into_iter()
         .map(|p| {
@@ -400,6 +405,8 @@ fn legacy_unit_denylist_patterns_match_representative_refs() {
         "g:nixling-ch-exporter",
         "nixling-otel-host-bridge.service",
         "nixling-sys-work-usbipd-3-1.service",
+        // swtpm: attr-name form (no .service suffix)
+        r#"systemd.services."nixling-work-swtpm" = {"#,
     ];
     let patterns = denylist_patterns();
     assert_eq!(
@@ -424,5 +431,76 @@ fn legacy_unit_denylist_patterns_match_representative_refs() {
     assert!(
         snd.is_match(r#"nixling-${cfg.vmName}-snd"#),
         "NAMEPART interpolation branch must match a Nix string-interpolation token"
+    );
+
+    // swtpm needle: the suffix-optional pattern must match BOTH the attr-name
+    // form AND the `.service`-string form (two representative retired-unit
+    // reference shapes from the pre-ADR-0015 bash CLI era).
+    let swtpm_pat = &patterns[14].1;
+    assert!(
+        swtpm_pat.is_match(r#"systemd.services."nixling-work-swtpm" = {};"#),
+        "swtpm denylist pattern must catch the attr-name form (no .service suffix)"
+    );
+    assert!(
+        swtpm_pat.is_match("nixling-work-swtpm.service"),
+        "swtpm denylist pattern must catch the .service-string form"
+    );
+    assert!(
+        swtpm_pat.is_match(r#"systemd.services."nixling-${name}-swtpm" = {};"#),
+        "swtpm denylist pattern must catch the Nix interpolation attr-name form"
+    );
+}
+
+/// swtpm-specific denylist coverage: both retired-unit forms flag LIVE in
+/// non-exempt modules; processes-json.nix (bundle metadata) stays SKIP.
+#[test]
+fn legacy_unit_denylist_swtpm_forms() {
+    // Attr-name form (`systemd.services."nixling-<vm>-swtpm"`) in a
+    // non-exempt module must be flagged LIVE.
+    assert_eq!(
+        classify(
+            "nixos-modules/host.nix",
+            0,
+            &[r#"    systemd.services."nixling-work-swtpm" = {"#.to_string()]
+        ),
+        Verdict::Live,
+        "swtpm attr-name form in a non-exempt module must be flagged LIVE"
+    );
+
+    // Unit-string form (`nixling-<vm>-swtpm.service`) in a non-exempt
+    // module must also be flagged LIVE.
+    assert_eq!(
+        classify(
+            "nixos-modules/host.nix",
+            0,
+            &["    nixling-work-swtpm.service".to_string()]
+        ),
+        Verdict::Live,
+        "swtpm .service-string form in a non-exempt module must be flagged LIVE"
+    );
+
+    // processes-json.nix carries the swtpm unit string as a bundle-metadata
+    // `unit = "nixling-${name}-swtpm.service"` field — NOT a systemd unit
+    // declaration. The file-level allowlist must keep it SKIP.
+    assert_eq!(
+        classify(
+            "nixos-modules/processes-json.nix",
+            0,
+            &[r#"        unit = "nixling-${name}-swtpm.service";"#.to_string()]
+        ),
+        Verdict::Skip,
+        "processes-json.nix bundle-metadata swtpm unit string must be SKIP (file allowlist)"
+    );
+
+    // manifest.nix may carry a tpmService metadata string; the file-level
+    // allowlist must keep it SKIP.
+    assert_eq!(
+        classify(
+            "nixos-modules/manifest.nix",
+            0,
+            &[r#"    tpmService = "nixling-${m.name}-swtpm";"#.to_string()]
+        ),
+        Verdict::Skip,
+        "manifest.nix tpmService bundle-metadata string must be SKIP (file allowlist)"
     );
 }
