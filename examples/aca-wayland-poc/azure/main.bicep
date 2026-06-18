@@ -90,6 +90,7 @@ module sandbox 'modules/sandbox.bicep' = {
     prefixes: prefixes
     tags: tags
     managedIdentityPrincipalId: registry.outputs.managedIdentityPrincipalId
+    managedIdentityResourceId: registry.outputs.managedIdentityResourceId
     operatorPrincipalId: operatorPrincipalId
     operatorPrincipalType: operatorPrincipalType
   }
