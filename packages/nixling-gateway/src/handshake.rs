@@ -208,7 +208,40 @@ impl SessionBinding {
     }
 }
 
-/// The handshake the agent sends as the first display-stream bytes.
+/// Verify a raw received handshake **frame** (the first bytes on the display
+/// channel) before any further byte is bridged. The transport adapter (the
+/// relay listener, or a test duplex) reads exactly one length-delimited frame
+/// off the channel and hands the JSON bytes here; this deserializes and runs
+/// the full [`SessionBinding::verify`] check. Fail-closed: a malformed frame
+/// is rejected just like a bad MAC, and the one-shot replay guard is only
+/// consumed on a fully-valid handshake.
+pub fn verify_handshake_frame(
+    frame: &[u8],
+    secret: &SessionSecret,
+    expected: &SessionBinding,
+    current_generation: u64,
+    now: u64,
+    replay: &mut dyn ReplayGuard,
+) -> Result<(), HandshakeError> {
+    let hs: Handshake = serde_json::from_slice(frame).map_err(|_| HandshakeError::Malformed)?;
+    SessionBinding::verify(&hs, secret, expected, current_generation, now, replay)
+}
+
+/// Encode a handshake as a length-delimited frame: a 4-byte big-endian length
+/// prefix followed by the JSON body. This is the exact wire the agent writes
+/// as the first bytes on the display channel and [`verify_handshake_frame`]
+/// reads (after the adapter strips the length prefix).
+pub fn encode_handshake_frame(hs: &Handshake) -> Vec<u8> {
+    let body = serde_json::to_vec(hs).expect("Handshake serializes");
+    let mut out = Vec::with_capacity(4 + body.len());
+    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    out.extend_from_slice(&body);
+    out
+}
+
+/// The maximum handshake frame body the listener will read before rejecting
+/// (a bound so a hostile sender cannot force unbounded buffering).
+pub const MAX_HANDSHAKE_FRAME: usize = 8 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Handshake {
     /// The binding the agent claims.
@@ -261,6 +294,8 @@ pub enum HandshakeError {
     BindingMismatch,
     /// The session id was already claimed (replay).
     Replay,
+    /// The handshake frame was not a valid encoded handshake.
+    Malformed,
 }
 
 impl core::fmt::Display for HandshakeError {
@@ -271,6 +306,7 @@ impl core::fmt::Display for HandshakeError {
             HandshakeError::Expired => "session credential expired",
             HandshakeError::BindingMismatch => "session binding mismatch",
             HandshakeError::Replay => "session credential already used",
+            HandshakeError::Malformed => "session handshake frame is malformed",
         };
         f.write_str(s)
     }
@@ -589,5 +625,52 @@ mod tests {
     fn secret_debug_is_redacted() {
         let s = SessionSecret::from_bytes([1u8; SECRET_LEN]);
         assert_eq!(format!("{s:?}"), "SessionSecret(<redacted>)");
+    }
+
+    #[test]
+    fn frame_round_trip_verifies() {
+        let (b, secret) = binding(5, 1000);
+        let hs = Handshake::sign(b.clone(), &secret);
+        let frame = encode_handshake_frame(&hs);
+        // Strip the 4-byte length prefix the adapter would consume.
+        let body = &frame[4..];
+        assert_eq!(
+            u32::from_be_bytes(frame[..4].try_into().unwrap()) as usize,
+            body.len()
+        );
+        let mut replay = SetReplayGuard::default();
+        assert_eq!(
+            verify_handshake_frame(body, &secret, &b, 5, 900, &mut replay),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn malformed_frame_rejected() {
+        let (b, secret) = binding(5, 1000);
+        let mut replay = SetReplayGuard::default();
+        assert_eq!(
+            verify_handshake_frame(b"not json", &secret, &b, 5, 900, &mut replay),
+            Err(HandshakeError::Malformed)
+        );
+    }
+
+    #[test]
+    fn frame_with_bad_mac_rejected_without_consuming_replay() {
+        let (b, secret) = binding(5, 1000);
+        let other = SessionSecret::from_bytes([9u8; SECRET_LEN]);
+        let frame = encode_handshake_frame(&Handshake::sign(b.clone(), &secret));
+        let body = frame[4..].to_vec();
+        let mut replay = SetReplayGuard::default();
+        // Wrong secret -> BadMac, replay not consumed.
+        assert_eq!(
+            verify_handshake_frame(&body, &other, &b, 5, 900, &mut replay),
+            Err(HandshakeError::BadMac)
+        );
+        // Correct secret still works (one-shot intact).
+        assert_eq!(
+            verify_handshake_frame(&body, &secret, &b, 5, 900, &mut replay),
+            Ok(())
+        );
     }
 }
