@@ -177,6 +177,98 @@ impl Default for PeerDaemon {
     }
 }
 
+/// Which role a single `nixlingd` instance plays. There is exactly one
+/// binary; the mode is selected from resolved config, never a separate
+/// program. ADR 0015 keeps the host daemon as the sole local lifecycle
+/// authority, while a realm gateway runs its own `nixlingd` in gateway mode
+/// inside the gateway guest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonMode {
+    /// The host daemon: supervises local VMs through the broker and is the
+    /// only lifecycle authority for the host. Holds no realm
+    /// provider/relay/entrypoint config.
+    Host,
+    /// A realm-scoped gateway daemon inside a gateway guest: terminates peer
+    /// sessions and dispatches accepted operations to providers. Holds no
+    /// host-broker / local-VM-lifecycle responsibility.
+    Gateway,
+}
+
+/// The mode-relevant slice of a `nixlingd` instance's resolved config. It is
+/// used both to **select** the mode (a realm entrypoint ⇒ gateway) and to
+/// **guard** that the rest of the config matches the selected mode, so the
+/// daemon refuses to start cross-wired (host mode carrying realm config, or
+/// gateway mode carrying host-lifecycle responsibility).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DaemonModeConfig {
+    /// A realm entrypoint is configured. Its presence selects gateway mode.
+    pub has_realm_entrypoint: bool,
+    /// Realm provider/relay config is present (only legal in gateway mode).
+    pub has_provider_or_relay_config: bool,
+    /// Host-broker / local-VM-lifecycle responsibility is present (only legal
+    /// in host mode).
+    pub has_host_lifecycle: bool,
+}
+
+/// Why a [`DaemonModeConfig`] was rejected at startup (fail-closed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonModeError {
+    /// Host mode carries realm provider/relay config it must not own.
+    HostCarriesRealmConfig,
+    /// Gateway mode carries host-broker / local-lifecycle responsibility it
+    /// must not own.
+    GatewayCarriesHostLifecycle,
+}
+
+impl core::fmt::Display for DaemonModeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            DaemonModeError::HostCarriesRealmConfig => write!(
+                f,
+                "host-mode nixlingd must not carry realm provider/relay config"
+            ),
+            DaemonModeError::GatewayCarriesHostLifecycle => write!(
+                f,
+                "gateway-mode nixlingd must not carry host-broker/local-lifecycle responsibility"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DaemonModeError {}
+
+impl DaemonModeConfig {
+    /// The mode this config implies: a realm entrypoint selects gateway,
+    /// otherwise host.
+    pub fn selected_mode(&self) -> DaemonMode {
+        if self.has_realm_entrypoint {
+            DaemonMode::Gateway
+        } else {
+            DaemonMode::Host
+        }
+    }
+
+    /// Validate the config against its selected mode (fail-closed). Host mode
+    /// rejects realm provider/relay config; gateway mode rejects
+    /// host-broker/local-lifecycle responsibility.
+    pub fn validate(&self) -> Result<DaemonMode, DaemonModeError> {
+        match self.selected_mode() {
+            DaemonMode::Host => {
+                if self.has_provider_or_relay_config {
+                    return Err(DaemonModeError::HostCarriesRealmConfig);
+                }
+                Ok(DaemonMode::Host)
+            }
+            DaemonMode::Gateway => {
+                if self.has_host_lifecycle {
+                    return Err(DaemonModeError::GatewayCarriesHostLifecycle);
+                }
+                Ok(DaemonMode::Gateway)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +346,53 @@ mod tests {
         let resolver = TargetResolver::new();
         let realm = RealmPath::local();
         assert_eq!(resolver.resolve(realm.clone()), realm);
+    }
+
+    #[test]
+    fn daemon_mode_is_selected_by_realm_entrypoint() {
+        let host = DaemonModeConfig::default();
+        assert_eq!(host.selected_mode(), DaemonMode::Host);
+        let gateway = DaemonModeConfig {
+            has_realm_entrypoint: true,
+            ..Default::default()
+        };
+        assert_eq!(gateway.selected_mode(), DaemonMode::Gateway);
+    }
+
+    #[test]
+    fn host_mode_refuses_realm_provider_relay_config() {
+        // A bare host config validates as Host.
+        assert_eq!(DaemonModeConfig::default().validate(), Ok(DaemonMode::Host));
+        // Realm provider/relay config without an entrypoint is host-mode
+        // carrying realm config — rejected fail-closed.
+        let cross_wired = DaemonModeConfig {
+            has_provider_or_relay_config: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            cross_wired.validate(),
+            Err(DaemonModeError::HostCarriesRealmConfig)
+        );
+    }
+
+    #[test]
+    fn gateway_mode_refuses_host_lifecycle_responsibility() {
+        // A gateway with provider/relay config but no host lifecycle is fine.
+        let gateway = DaemonModeConfig {
+            has_realm_entrypoint: true,
+            has_provider_or_relay_config: true,
+            has_host_lifecycle: false,
+        };
+        assert_eq!(gateway.validate(), Ok(DaemonMode::Gateway));
+        // A gateway that also claims host lifecycle is cross-wired — rejected.
+        let cross_wired = DaemonModeConfig {
+            has_realm_entrypoint: true,
+            has_host_lifecycle: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            cross_wired.validate(),
+            Err(DaemonModeError::GatewayCarriesHostLifecycle)
+        );
     }
 }
