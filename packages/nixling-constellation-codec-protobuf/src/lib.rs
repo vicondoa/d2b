@@ -4,8 +4,9 @@ use nixling_constellation_core::{
     AuditEnvelope, AuthorizationScope, AuthzDecision, Capability, ConstellationError,
     ConstellationFrame, ErrorKind, ExecutionId, Handshake, IdempotencyKey, NodeId, OpaquePayload,
     OperationId, OperationKind, OperationRequest, OperationResponse, PeerContext, PrincipalId,
-    ProtocolToken, RealmId, RealmPath, StreamAuthz, StreamClose, StreamData, StreamDescriptor,
-    StreamId, StreamKind, StreamOpen, TraceContext, WorkloadId,
+    ProtocolToken, RealmId, RealmPath, StreamAuthz, StreamChannel, StreamClose, StreamCloseReason,
+    StreamCursor, StreamData, StreamDescriptor, StreamFlow, StreamId, StreamKind, StreamOpen,
+    TraceContext, WorkloadId,
 };
 use nixling_constellation_provider::ProtocolCodec;
 use nixling_ipc::MAX_FRAME_SIZE;
@@ -15,7 +16,7 @@ use prost::Message;
 pub const CODEC_ID: &str = "protobuf.v1";
 
 /// Deterministic fingerprint for the hand-authored prost schema in this crate.
-pub const SCHEMA_FINGERPRINT: &str = "protobuf.v1/frames=8/fields=handshake3,opreq9,opresp2,streamopen3,streamdata2,streamclose1,error3,audit10";
+pub const SCHEMA_FINGERPRINT: &str = "protobuf.v1/frames=9/fields=handshake3,opreq9,opresp2,streamopen3,streamdata5,streamflow2,streamclose2,error3,audit10";
 
 /// A prost-backed constellation frame codec.
 #[derive(Debug, Clone, Copy, Default)]
@@ -57,7 +58,7 @@ impl ProtocolCodec for ProtobufCodec {
 
 #[derive(Clone, PartialEq, prost::Message)]
 struct ProtoFrame {
-    #[prost(oneof = "proto_frame::Body", tags = "1, 2, 3, 4, 5, 6, 7, 8")]
+    #[prost(oneof = "proto_frame::Body", tags = "1, 2, 3, 4, 5, 6, 7, 8, 9")]
     body: Option<proto_frame::Body>,
 }
 
@@ -80,6 +81,8 @@ mod proto_frame {
         TypedError(super::ProtoError),
         #[prost(message, tag = "8")]
         AdmissionAudit(super::ProtoAuditEnvelope),
+        #[prost(message, tag = "9")]
+        StreamFlow(super::ProtoStreamFlow),
     }
 }
 
@@ -167,12 +170,28 @@ struct ProtoStreamData {
     stream: String,
     #[prost(message, optional, tag = "2")]
     data: Option<ProtoPayload>,
+    #[prost(uint64, tag = "3")]
+    sequence: u64,
+    #[prost(int32, tag = "4")]
+    channel: i32,
+    #[prost(string, optional, tag = "5")]
+    cursor: Option<String>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct ProtoStreamFlow {
+    #[prost(string, tag = "1")]
+    stream: String,
+    #[prost(uint32, tag = "2")]
+    credits: u32,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
 struct ProtoStreamClose {
     #[prost(string, tag = "1")]
     stream: String,
+    #[prost(int32, tag = "2")]
+    reason: i32,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -263,6 +282,9 @@ fn encode_proto_frame(frame: &ConstellationFrame) -> Result<ProtoFrame, Constell
         ConstellationFrame::StreamData(frame) => {
             proto_frame::Body::StreamData(encode_stream_data(frame))
         }
+        ConstellationFrame::StreamFlow(frame) => {
+            proto_frame::Body::StreamFlow(encode_stream_flow(frame))
+        }
         ConstellationFrame::StreamClose(frame) => {
             proto_frame::Body::StreamClose(encode_stream_close(frame))
         }
@@ -296,6 +318,9 @@ fn decode_proto_frame(frame: ProtoFrame) -> Result<ConstellationFrame, Constella
         }
         proto_frame::Body::StreamData(frame) => {
             decode_stream_data(frame).map(ConstellationFrame::StreamData)
+        }
+        proto_frame::Body::StreamFlow(frame) => {
+            decode_stream_flow(frame).map(ConstellationFrame::StreamFlow)
         }
         proto_frame::Body::StreamClose(frame) => {
             decode_stream_close(frame).map(ConstellationFrame::StreamClose)
@@ -488,25 +513,53 @@ fn encode_stream_data(frame: &StreamData) -> ProtoStreamData {
     ProtoStreamData {
         stream: frame.stream.as_str().to_owned(),
         data: Some(encode_payload(&frame.data)),
+        sequence: frame.sequence,
+        channel: encode_stream_channel(frame.channel),
+        cursor: frame.cursor.as_ref().map(|c| c.as_str().to_owned()),
     }
 }
 
 fn decode_stream_data(frame: ProtoStreamData) -> Result<StreamData, ConstellationError> {
     Ok(StreamData {
         stream: parse_stream_id(frame.stream, "stream_data stream")?,
+        sequence: frame.sequence,
+        channel: decode_stream_channel(frame.channel)?,
+        cursor: frame
+            .cursor
+            .map(|c| parse_stream_cursor(c, "stream_data cursor"))
+            .transpose()?,
         data: decode_payload(frame.data, "stream_data data")?,
+    })
+}
+
+fn encode_stream_flow(frame: &StreamFlow) -> ProtoStreamFlow {
+    ProtoStreamFlow {
+        stream: frame.stream.as_str().to_owned(),
+        credits: frame.credits,
+    }
+}
+
+fn decode_stream_flow(frame: ProtoStreamFlow) -> Result<StreamFlow, ConstellationError> {
+    if frame.credits == 0 {
+        return Err(malformed("stream_flow credit grant must be non-zero"));
+    }
+    Ok(StreamFlow {
+        stream: parse_stream_id(frame.stream, "stream_flow stream")?,
+        credits: frame.credits,
     })
 }
 
 fn encode_stream_close(frame: &StreamClose) -> ProtoStreamClose {
     ProtoStreamClose {
         stream: frame.stream.as_str().to_owned(),
+        reason: encode_close_reason(frame.reason),
     }
 }
 
 fn decode_stream_close(frame: ProtoStreamClose) -> Result<StreamClose, ConstellationError> {
     Ok(StreamClose {
         stream: parse_stream_id(frame.stream, "stream_close stream")?,
+        reason: decode_close_reason(frame.reason)?,
     })
 }
 
@@ -702,6 +755,7 @@ parse_id_fn!(parse_node_id, NodeId);
 parse_id_fn!(parse_workload_id, WorkloadId);
 parse_id_fn!(parse_principal_id, PrincipalId);
 parse_id_fn!(parse_stream_id, StreamId);
+parse_id_fn!(parse_stream_cursor, StreamCursor);
 parse_id_fn!(parse_execution_id, ExecutionId);
 parse_id_fn!(parse_protocol_token, ProtocolToken);
 
@@ -778,6 +832,46 @@ fn decode_stream_kind(raw: i32) -> Result<StreamKind, ConstellationError> {
         11 => Ok(StreamKind::DeviceHid),
         12 => Ok(StreamKind::DeviceUsb),
         _ => Err(malformed(format!("unknown stream kind value {raw}"))),
+    }
+}
+
+fn encode_stream_channel(channel: StreamChannel) -> i32 {
+    match channel {
+        StreamChannel::Primary => 0,
+        StreamChannel::Stdout => 1,
+        StreamChannel::Stderr => 2,
+        _ => 0,
+    }
+}
+
+fn decode_stream_channel(raw: i32) -> Result<StreamChannel, ConstellationError> {
+    match raw {
+        0 => Ok(StreamChannel::Primary),
+        1 => Ok(StreamChannel::Stdout),
+        2 => Ok(StreamChannel::Stderr),
+        _ => Err(malformed(format!("unknown stream channel value {raw}"))),
+    }
+}
+
+fn encode_close_reason(reason: StreamCloseReason) -> i32 {
+    match reason {
+        StreamCloseReason::Completed => 1,
+        StreamCloseReason::Cancelled => 2,
+        StreamCloseReason::TimedOut => 3,
+        StreamCloseReason::Errored => 4,
+        StreamCloseReason::PeerGone => 5,
+        _ => 4,
+    }
+}
+
+fn decode_close_reason(raw: i32) -> Result<StreamCloseReason, ConstellationError> {
+    match raw {
+        1 => Ok(StreamCloseReason::Completed),
+        2 => Ok(StreamCloseReason::Cancelled),
+        3 => Ok(StreamCloseReason::TimedOut),
+        4 => Ok(StreamCloseReason::Errored),
+        5 => Ok(StreamCloseReason::PeerGone),
+        _ => Err(malformed(format!("unknown stream close reason value {raw}"))),
     }
 }
 
@@ -1000,6 +1094,7 @@ mod tests {
         let invalid = ProtoFrame {
             body: Some(proto_frame::Body::StreamClose(ProtoStreamClose {
                 stream: String::new(),
+                reason: encode_close_reason(StreamCloseReason::Completed),
             })),
         }
         .encode_to_vec();
@@ -1108,10 +1203,25 @@ mod tests {
             }),
             ConstellationFrame::StreamData(StreamData {
                 stream: stream.clone(),
+                sequence: 0,
+                channel: StreamChannel::Primary,
+                cursor: None,
                 data: payload(b"stream-data"),
+            }),
+            ConstellationFrame::StreamData(StreamData {
+                stream: stream.clone(),
+                sequence: 1,
+                channel: StreamChannel::Stderr,
+                cursor: Some(StreamCursor::parse("cur-1").unwrap()),
+                data: payload(b"logs-chunk"),
+            }),
+            ConstellationFrame::StreamFlow(StreamFlow {
+                stream: stream.clone(),
+                credits: 8,
             }),
             ConstellationFrame::StreamClose(StreamClose {
                 stream: stream.clone(),
+                reason: StreamCloseReason::Completed,
             }),
             ConstellationFrame::TypedError(ConstellationError::capability_denied(
                 Capability::WindowForwarding,
