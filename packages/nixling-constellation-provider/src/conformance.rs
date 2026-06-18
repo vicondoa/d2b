@@ -98,7 +98,9 @@ mod tests {
     use super::*;
     use crate::mock::{HeadlessDisplayProvider, LoopbackStreamMux, MockWorkloadProvider};
     use crate::types::DisplaySessionRequest;
-    use nixling_constellation_core::WorkloadId;
+    use nixling_constellation_core::{
+        OperationId, PrincipalId, RealmPath, StreamAuthz, StreamId, StreamKind, WorkloadId,
+    };
 
     #[tokio::test]
     async fn mock_workload_passes_conformance() {
@@ -111,6 +113,13 @@ mod tests {
         let p = HeadlessDisplayProvider;
         let req = DisplaySessionRequest {
             workload: WorkloadId::parse("demo").unwrap(),
+            operation_id: OperationId::parse("op-display-1").unwrap(),
+            display_stream: StreamId::parse("disp-1").unwrap(),
+            authz: StreamAuthz::for_kind(
+                PrincipalId::parse("principal-1").unwrap(),
+                RealmPath::local(),
+                StreamKind::Display,
+            ),
         };
         assert!(display_fails_closed_when_unsupported(&p, req).await);
     }

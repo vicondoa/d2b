@@ -517,6 +517,14 @@ mod tests {
             &display_provider,
             DisplaySessionRequest {
                 workload: workload_id("corp-vm"),
+                operation_id: nixling_constellation_core::OperationId::parse("op-display-1")
+                    .unwrap(),
+                display_stream: nixling_constellation_core::StreamId::parse("disp-1").unwrap(),
+                authz: nixling_constellation_core::StreamAuthz::for_kind(
+                    nixling_constellation_core::PrincipalId::parse("principal-1").unwrap(),
+                    nixling_constellation_core::RealmPath::local(),
+                    nixling_constellation_core::StreamKind::Display,
+                ),
             },
         )
         .await

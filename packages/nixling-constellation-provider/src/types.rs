@@ -3,7 +3,10 @@
 //! deliberately NOT `serde`/`Clone`/`Eq` and redact their contents in
 //! `Debug`.
 
-use nixling_constellation_core::{NodeId, ProviderId, StreamId, WorkloadId, WorkloadSelector};
+use nixling_constellation_core::{
+    ExecutionId, NodeId, OpaquePayload, OperationId, ProviderId, StreamAuthz, StreamCursor,
+    StreamId, WorkloadId, WorkloadSelector,
+};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -50,26 +53,60 @@ pub struct WorkloadStatus {
     pub running: bool,
 }
 
-/// A request to start an execution in a workload. Argv/env/stdio are
-/// opaque payload carried elsewhere; only the workload + tty flag are
-/// modeled here.
+/// A request to start an execution in a workload. The `command` is an
+/// opaque, codec-defined payload (argv + env + stdio policy) so the
+/// provider trait never has to model shell semantics; its bytes are never
+/// logged/audited as content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecStartRequest {
     /// Workload to exec in.
     pub workload: WorkloadId,
     /// Whether a TTY is requested.
     pub tty: bool,
+    /// Opaque, bounded command payload (argv/env/stdio descriptor).
+    pub command: OpaquePayload,
+}
+
+/// A request to fetch (and optionally resume) the logs of an execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecLogsRequest {
+    /// Workload the execution belongs to.
+    pub workload: WorkloadId,
+    /// Execution whose logs are requested.
+    pub execution: ExecutionId,
+    /// Resume from this durable cursor; `None` streams from the start.
+    pub cursor: Option<StreamCursor>,
+}
+
+/// A request to cancel a running execution (idempotent at the provider).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecCancelRequest {
+    /// Workload the execution belongs to.
+    pub workload: WorkloadId,
+    /// Execution to cancel.
+    pub execution: ExecutionId,
 }
 
 /// A display-session id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DisplaySessionId(pub String);
 
-/// A request to open a display session for a workload.
+/// A request to open a display session for a workload. The request carries
+/// the **authorized display-stream binding** the mux must already hold: a
+/// Waypipe byte never flows until there is an accepted `StreamOpen` for
+/// `display_stream` under `authz`, bound to `operation_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DisplaySessionRequest {
     /// Workload presenting the UI.
     pub workload: WorkloadId,
+    /// The operation that authorized this display session (audit +
+    /// idempotency binding).
+    pub operation_id: OperationId,
+    /// The authorized display stream this session drives.
+    pub display_stream: StreamId,
+    /// The authorization context (principal/realm/derived capability) the
+    /// gateway validated for the display stream.
+    pub authz: StreamAuthz,
 }
 
 /// An opaque handle to an open display session.
