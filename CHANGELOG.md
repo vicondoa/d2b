@@ -136,6 +136,19 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- The OTel host-bridge runner (`socat UNIX-LISTEN:host-egress.sock,...`)
+  now self-heals across obs-VM restarts. `socat` does not unlink a
+  pre-existing socket path before binding, so a stale `host-egress.sock`
+  left by a previously-drained bridge made the freshly-spawned bridge
+  exit immediately ("address in use"); the readiness probe only checks
+  the socket *file* exists, so the failure was masked and host telemetry
+  silently stopped reaching `sys-obs`. The broker now drops a
+  provably-stale (non-listening) `host-egress.sock` before each
+  `OtelHostBridge` spawn — mirroring the existing cloud-hypervisor / video
+  socket preflight — so restarting the obs VM no longer wedges the host
+  telemetry path. A live listener is never removed, and only sockets under
+  `/run/nixling/otel/` are eligible.
+
 - The privileged broker now compiles under the `layer1-bootstrap`
   feature (and thus `--all-features`): the guest-control `GuestControlSign`
   audit-redaction arm in `request_fields_value` is gated to the real-wire
