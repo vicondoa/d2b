@@ -2747,19 +2747,40 @@ pub mod pidfd_sys {
                     libc::_exit(CHILD_EXIT_CGROUP);
                 }
             }
+            // Credential changes here MUST go through the RAW syscalls, not
+            // the glibc `setgroups`/`setgid`/`setuid` wrappers. glibc routes
+            // those wrappers through its SETXID machinery (`__nptl_setxid`),
+            // which broadcasts the credential change to every thread in the
+            // process and blocks on a futex until all of them acknowledge via
+            // a signal. In this `clone3`/`fork` child of the MULTITHREADED
+            // broker (and, under test, the multithreaded `cargo test` runner)
+            // the inherited glibc thread list still names the parent's other
+            // threads — none of which exist in the single-threaded child — so
+            // the wrapper waits forever on a futex no one will ever post. That
+            // is a classic fork-in-a-multithreaded-program deadlock and it
+            // wedges the child before `execve`, leaking every inherited fd
+            // (including other operations' held `flock`'d `sync.lock` fds,
+            // which then never release). The raw syscalls change only the
+            // calling (sole) thread's credentials, which is exactly what we
+            // want immediately before `execve`, and they are async-signal-safe.
+            //
             // Skip setgroups when in a broker-pre-NS spawn (parent wrote
             // setgroups=deny so any call would EPERM).
             if !in_ns_credentials
-                && libc::setgroups(supplementary_groups.len(), supplementary_groups.as_ptr()) < 0
+                && libc::syscall(
+                    libc::SYS_setgroups,
+                    supplementary_groups.len(),
+                    supplementary_groups.as_ptr(),
+                ) < 0
             {
                 libc::_exit(CHILD_EXIT_SETGROUPS);
             }
-            if libc::setgid(target_gid) < 0 {
+            if libc::syscall(libc::SYS_setgid, target_gid) < 0 {
                 let m = b"DEBUG: setgid failed\n";
                 libc::write(2, m.as_ptr() as *const _, m.len());
                 libc::_exit(CHILD_EXIT_SETGID);
             }
-            if libc::setuid(target_uid) < 0 {
+            if libc::syscall(libc::SYS_setuid, target_uid) < 0 {
                 let m = b"DEBUG: setuid failed\n";
                 libc::write(2, m.as_ptr() as *const _, m.len());
                 libc::_exit(CHILD_EXIT_SETUID);
