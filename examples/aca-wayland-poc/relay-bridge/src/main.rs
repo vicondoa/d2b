@@ -16,7 +16,7 @@
 //! outbound. The SAS token is passed in at run time (the gateway mints a
 //! short-lived Send token); it is never baked into the sandbox image.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use clap::{Parser, Subcommand};
 use futures_util::{SinkExt, StreamExt};
@@ -26,8 +26,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UnixListener, UnixStream};
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::Connector;
+use tokio_tungstenite::tungstenite::Message;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -60,19 +60,18 @@ async fn ws_connect(
     url: &str,
     connector: &Connector,
 ) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>> {
-    let (ws, _resp) = tokio_tungstenite::connect_async_tls_with_config(
-        url,
-        None,
-        false,
-        Some(connector.clone()),
-    )
-    .await
-    .context("websocket connect")?;
+    let (ws, _resp) =
+        tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector.clone()))
+            .await
+            .context("websocket connect")?;
     Ok(ws)
 }
 
 #[derive(Parser)]
-#[command(name = "nixling-relay-bridge", about = "Tunnel a byte stream over an Azure Relay Hybrid Connection")]
+#[command(
+    name = "nixling-relay-bridge",
+    about = "Tunnel a byte stream over an Azure Relay Hybrid Connection"
+)]
 struct Cli {
     /// Relay namespace FQDN, e.g. relns-xxxx.servicebus.windows.net.
     #[arg(long, env = "NIXLING_RELAY_NAMESPACE")]
@@ -128,12 +127,10 @@ fn sas_token(namespace: &str, entity: &str, key_name: &str, key: &str, ttl: u64)
     // Resource URI: the http form of the entity address, URL-encoded, lowercased.
     let resource = format!("http://{namespace}/{entity}");
     let resource_enc = urlencoding::encode(&resource).to_lowercase();
-    let expiry = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_secs()
-        + ttl;
+    let expiry = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() + ttl;
     let to_sign = format!("{resource_enc}\n{expiry}");
-    let mut mac = HmacSha256::new_from_slice(key.as_bytes()).map_err(|e| anyhow!("hmac key: {e}"))?;
+    let mut mac =
+        HmacSha256::new_from_slice(key.as_bytes()).map_err(|e| anyhow!("hmac key: {e}"))?;
     mac.update(to_sign.as_bytes());
     let sig = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
     let sig_enc = urlencoding::encode(&sig);
@@ -145,7 +142,9 @@ fn sas_token(namespace: &str, entity: &str, key_name: &str, key: &str, ttl: u64)
 fn rand_id() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
-    (0..16).map(|_| format!("{:02x}", rng.r#gen::<u8>())).collect()
+    (0..16)
+        .map(|_| format!("{:02x}", rng.r#gen::<u8>()))
+        .collect()
 }
 
 /// A local byte target: a connected unix or tcp stream, type-erased.
@@ -160,17 +159,33 @@ async fn connect_local(target: &str) -> Result<Local> {
         // local peer, e.g. `waypipe server`, dials in). Removes the need
         // for an intermediary socat in the sandbox.
         let _ = std::fs::remove_file(path);
-        let listener = UnixListener::bind(path).with_context(|| format!("bind unix-listen:{path}"))?;
+        let listener =
+            UnixListener::bind(path).with_context(|| format!("bind unix-listen:{path}"))?;
         eprintln!("[relay-bridge] waiting for local connection on unix:{path}");
-        let (stream, _) = listener.accept().await.with_context(|| format!("accept unix-listen:{path}"))?;
+        let (stream, _) = listener
+            .accept()
+            .await
+            .with_context(|| format!("accept unix-listen:{path}"))?;
         Ok(Local::Unix(stream))
     } else if let Some(path) = target.strip_prefix("unix:") {
-        Ok(Local::Unix(UnixStream::connect(path).await.with_context(|| format!("connect unix:{path}"))?))
+        Ok(Local::Unix(
+            UnixStream::connect(path)
+                .await
+                .with_context(|| format!("connect unix:{path}"))?,
+        ))
     } else if let Some(addr) = target.strip_prefix("tcp:") {
-        Ok(Local::Tcp(TcpStream::connect(addr).await.with_context(|| format!("connect tcp:{addr}"))?))
+        Ok(Local::Tcp(
+            TcpStream::connect(addr)
+                .await
+                .with_context(|| format!("connect tcp:{addr}"))?,
+        ))
     } else {
         // bare host:port defaults to tcp
-        Ok(Local::Tcp(TcpStream::connect(target).await.with_context(|| format!("connect {target}"))?))
+        Ok(Local::Tcp(
+            TcpStream::connect(target)
+                .await
+                .with_context(|| format!("connect {target}"))?,
+        ))
     }
 }
 
@@ -227,7 +242,13 @@ where
 }
 
 async fn run_send(cli: &Cli, target: &str, connector: &Connector) -> Result<()> {
-    let token = sas_token(&cli.namespace, &cli.entity, &cli.key_name, &cli.key, cli.token_ttl)?;
+    let token = sas_token(
+        &cli.namespace,
+        &cli.entity,
+        &cli.key_name,
+        &cli.key,
+        cli.token_ttl,
+    )?;
     let url = format!(
         "wss://{}/$hc/{}?sb-hc-action=connect&sb-hc-id={}&sb-hc-token={}",
         cli.namespace,
@@ -235,8 +256,13 @@ async fn run_send(cli: &Cli, target: &str, connector: &Connector) -> Result<()> 
         rand_id(),
         urlencoding::encode(&token),
     );
-    eprintln!("[relay-bridge] sender connecting to relay for entity {}", cli.entity);
-    let ws = ws_connect(&url, connector).await.context("relay sender connect")?;
+    eprintln!(
+        "[relay-bridge] sender connecting to relay for entity {}",
+        cli.entity
+    );
+    let ws = ws_connect(&url, connector)
+        .await
+        .context("relay sender connect")?;
     eprintln!("[relay-bridge] sender connected; bridging to {target}");
     let local = connect_local(target).await?;
     pump(ws, local).await
@@ -257,15 +283,26 @@ async fn run_listen(cli: &Cli, target: &str, connector: &Connector) -> Result<()
 }
 
 async fn listen_control_once(cli: &Cli, target: &str, connector: &Connector) -> Result<()> {
-    let token = sas_token(&cli.namespace, &cli.entity, &cli.key_name, &cli.key, cli.token_ttl)?;
+    let token = sas_token(
+        &cli.namespace,
+        &cli.entity,
+        &cli.key_name,
+        &cli.key,
+        cli.token_ttl,
+    )?;
     let url = format!(
         "wss://{}/$hc/{}?sb-hc-action=listen&sb-hc-token={}",
         cli.namespace,
         urlencoding::encode(&cli.entity),
         urlencoding::encode(&token),
     );
-    eprintln!("[relay-bridge] listener opening control channel for entity {}", cli.entity);
-    let mut control = ws_connect(&url, connector).await.context("relay listen connect")?;
+    eprintln!(
+        "[relay-bridge] listener opening control channel for entity {}",
+        cli.entity
+    );
+    let mut control = ws_connect(&url, connector)
+        .await
+        .context("relay listen connect")?;
     eprintln!("[relay-bridge] listener ready; waiting for sender connections");
 
     while let Some(msg) = control.next().await {
@@ -275,7 +312,11 @@ async fn listen_control_once(cli: &Cli, target: &str, connector: &Connector) -> 
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                if let Some(addr) = v.get("accept").and_then(|a| a.get("address")).and_then(|s| s.as_str()) {
+                if let Some(addr) = v
+                    .get("accept")
+                    .and_then(|a| a.get("address"))
+                    .and_then(|s| s.as_str())
+                {
                     let address = addr.to_string();
                     let target = target.to_string();
                     let connector = connector.clone();
@@ -287,7 +328,9 @@ async fn listen_control_once(cli: &Cli, target: &str, connector: &Connector) -> 
                     });
                 }
             }
-            Message::Ping(p) => { control.send(Message::Pong(p)).await.ok(); }
+            Message::Ping(p) => {
+                control.send(Message::Pong(p)).await.ok();
+            }
             Message::Close(_) => return Ok(()),
             _ => {}
         }
@@ -296,7 +339,9 @@ async fn listen_control_once(cli: &Cli, target: &str, connector: &Connector) -> 
 }
 
 async fn accept_one(address: &str, target: &str, connector: Connector) -> Result<()> {
-    let ws = ws_connect(address, &connector).await.context("rendezvous connect")?;
+    let ws = ws_connect(address, &connector)
+        .await
+        .context("rendezvous connect")?;
     let local = connect_local(target).await?;
     eprintln!("[relay-bridge] rendezvous up; bridging to {target}");
     pump(ws, local).await

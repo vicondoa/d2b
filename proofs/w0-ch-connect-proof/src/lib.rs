@@ -16,7 +16,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use ttrpc::asynchronous::transport::{Listener, Socket};
 use ttrpc::asynchronous::{Client, MethodHandler, Server, Service, TtrpcContext};
 use ttrpc::proto::{Code, Request, Response};
-use ttrpc::{get_status, Result as TtrpcResult};
+use ttrpc::{Result as TtrpcResult, get_status};
 
 const SERVICE: &str = "proof.Echo";
 const METHOD: &str = "Ping";
