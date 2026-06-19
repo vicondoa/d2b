@@ -397,6 +397,7 @@ mod tests {
         NodeRegistration, TransportSession, TransportTarget,
     };
     use nixling_constellation_transport::LoopbackTransport;
+    use sha2::{Digest, Sha256};
     use std::sync::Arc;
 
     async fn connected_pair() -> (TransportSession, TransportSession) {
@@ -430,6 +431,10 @@ mod tests {
         }
     }
 
+    fn test_nonce(label: &str) -> [u8; 32] {
+        Sha256::digest(label.as_bytes()).into()
+    }
+
     #[tokio::test]
     async fn mutual_auth_then_encrypted_frame_round_trip() {
         let (client_s, server_s) = connected_pair().await;
@@ -447,7 +452,7 @@ mod tests {
                 server_key,
                 server_server_id,
                 server_client_id,
-                [2u8; 32],
+                test_nonce("server-round-trip"),
                 &mut guard,
             )
             .await
@@ -460,7 +465,7 @@ mod tests {
             key,
             client_id,
             server_id,
-            [1u8; 32],
+            test_nonce("client-round-trip"),
         )
         .await
         .unwrap();
@@ -481,7 +486,7 @@ mod tests {
             &key,
             ProtobufCodec::new().codec_id(),
             client_id.clone(),
-            [1u8; 32],
+            test_nonce("wrong-principal"),
             &[],
         )
         .unwrap();
@@ -497,8 +502,9 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::AuthenticationFailed);
 
         let mut guard = NonceReplayGuard::default();
-        assert!(guard.claim([1u8; 32]));
-        assert!(!guard.claim([1u8; 32]));
+        let nonce = test_nonce("replayed");
+        assert!(guard.claim(nonce));
+        assert!(!guard.claim(nonce));
     }
 
     #[test]
@@ -511,7 +517,7 @@ mod tests {
             &key,
             codec.codec_id(),
             client_id.clone(),
-            [1u8; 32],
+            test_nonce("invalid-mac"),
             &[],
         )
         .unwrap();
@@ -529,7 +535,7 @@ mod tests {
             &key,
             codec.codec_id(),
             client_id.clone(),
-            [1u8; 32],
+            test_nonce("invalid-version"),
             &[],
         )
         .unwrap();
@@ -546,7 +552,7 @@ mod tests {
             &key,
             codec.codec_id(),
             client_id.clone(),
-            [1u8; 32],
+            test_nonce("invalid-codec"),
             &[],
         )
         .unwrap();
