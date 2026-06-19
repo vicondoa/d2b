@@ -24,6 +24,7 @@ let
   };
 
   goodCfg = (mkEval [ base ]).config;
+  gatewayGuestCfg = goodCfg.nixling._computed."sys-work-gateway".config;
   gatewayProc = lib.findFirst (vm: vm.vm == "sys-work-gateway") null
     goodCfg.nixling._bundle.processesJson.data.vms;
   badCfg = (mkEval [
@@ -71,4 +72,20 @@ in
     expected = false;
   };
 
+  "gateway-vm/guest-services-installed-without-static-waypipe" = {
+    expr = {
+      hasNixlingd = builtins.hasAttr "nixlingd" gatewayGuestCfg.systemd.services;
+      gatewayJson = builtins.hasAttr "nixling/gateway.json" gatewayGuestCfg.environment.etc;
+      daemonJson = builtins.hasAttr "nixling/daemon-config.json" gatewayGuestCfg.environment.etc;
+      hasWaypipeClient = builtins.hasAttr "nixling-gateway-waypipe-client" gatewayGuestCfg.systemd.services;
+      hasWaypipeServer = builtins.hasAttr "nixling-gateway-waypipe-server" gatewayGuestCfg.systemd.services;
+    };
+    expected = {
+      hasNixlingd = true;
+      gatewayJson = true;
+      daemonJson = true;
+      hasWaypipeClient = false;
+      hasWaypipeServer = false;
+    };
+  };
 }

@@ -14,7 +14,7 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -68,8 +68,8 @@ use nixling_ipc::{
 use nixling_gateway::{
     AgentHandle, AgentSpawnRequest, AppCommand, Clock, ContextSeed, DisplayListener,
     DisplaySessionContext, GatewayDeps, GatewayError, GatewayOrchestrator, GatewayWorkload,
-    IdSource, LedgerLimits, ListenerHandle, NoopGatewayAudit, SECRET_LEN, SessionBinding,
-    SessionSecret, TargetKey,
+    IdSource, LedgerLimits, ListenerHandle, NoopGatewayAudit, OpenSession, SECRET_LEN,
+    SessionBinding, SessionSecret, TargetKey,
 };
 use nixling_constellation_core::TargetName;
 use serde::{Deserialize, Serialize};
@@ -328,6 +328,43 @@ struct ServerState {
     /// session is a daemon-held authenticated guest-control client owned by a
     /// spawned worker.
     exec_sessions: Arc<exec_session::SessionTable>,
+    /// Gateway display orchestrator state. Persisted for the daemon lifetime so
+    /// Open/List/Close share the same ledger and resource handles.
+    gateway_display: Arc<GatewayDisplayRuntime>,
+}
+
+struct GatewayDisplayRuntime {
+    inner: Mutex<GatewayDisplayInner>,
+}
+
+impl std::fmt::Debug for GatewayDisplayRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("GatewayDisplayRuntime(<state>)")
+    }
+}
+
+struct GatewayDisplayInner {
+    orchestrator: GatewayOrchestrator,
+    sessions: HashMap<String, GatewayDisplaySession>,
+}
+
+#[derive(Debug, Clone)]
+struct GatewayDisplaySession {
+    target: String,
+    open: OpenSession,
+}
+
+fn new_gateway_display_runtime() -> Arc<GatewayDisplayRuntime> {
+    Arc::new(GatewayDisplayRuntime {
+        inner: Mutex::new(GatewayDisplayInner {
+            orchestrator: GatewayOrchestrator::new(
+                daemon_gateway_deps(),
+                1,
+                LedgerLimits::default(),
+            ),
+            sessions: HashMap::new(),
+        }),
+    })
 }
 
 #[cfg_attr(test, derive(Clone))]
@@ -501,6 +538,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
             crate::exec_session::ExecSessionCaps::default(),
         )),
+        gateway_display: crate::new_gateway_display_runtime(),
     };
     refresh_broker_reap_log(&state, "startup");
     adopt_orphaned_runners_on_startup(&state);
@@ -1913,7 +1951,7 @@ fn dispatch_request(
 }
 
 fn dispatch_gateway_display(
-    _state: &ServerState,
+    state: &ServerState,
     _peer: &PeerIdentity,
     op: public_wire::GatewayDisplayOp,
 ) -> Result<Value, TypedError> {
@@ -1925,6 +1963,7 @@ fn dispatch_gateway_display(
             })
         }
         public_wire::GatewayDisplayOp::Open(args) => {
+            let target_text = args.target.clone();
             let target = TargetName::parse(&args.target).map_err(|err| {
                 TypedError::WireInvalidFrame {
                     detail: format!("gatewayDisplay target parse failed: {err}"),
@@ -1957,26 +1996,85 @@ fn dispatch_gateway_display(
                 node: target.node,
                 workload: target.workload,
             };
-            let mut orch = GatewayOrchestrator::new(
-                daemon_gateway_deps(),
-                1,
-                LedgerLimits::default(),
-            );
-            let open = block_on_future(orch.open(target_key, seed, app, args.request_hash))
+            let mut inner = state
+                .gateway_display
+                .inner
+                .lock()
+                .map_err(|_| TypedError::InternalIo {
+                    context: "lock gateway display runtime".to_owned(),
+                    detail: "mutex poisoned".to_owned(),
+                })?;
+            let open = block_on_future(
+                inner
+                    .orchestrator
+                    .open(target_key, seed, app, args.request_hash),
+            )
                 .map_err(gateway_error_to_typed)?;
+            let session_id = open.session_id.to_string();
+            inner.sessions.insert(
+                session_id.clone(),
+                GatewayDisplaySession {
+                    target: target_text,
+                    open,
+                },
+            );
             public_wire::GatewayDisplayOpResponse::Open(public_wire::GatewayDisplayOpenResult {
-                session_id: open.session_id.to_string(),
+                session_id,
                 state: "running".to_owned(),
             })
         }
-        public_wire::GatewayDisplayOp::Close(_args) => {
+        public_wire::GatewayDisplayOp::Close(args) => {
+            let mut inner = state
+                .gateway_display
+                .inner
+                .lock()
+                .map_err(|_| TypedError::InternalIo {
+                    context: "lock gateway display runtime".to_owned(),
+                    detail: "mutex poisoned".to_owned(),
+                })?;
+            let closed = if let Some(session) = inner.sessions.remove(&args.session_id) {
+                block_on_future(inner.orchestrator.close(&session.open))
+                    .map_err(gateway_error_to_typed)?;
+                true
+            } else {
+                false
+            };
             public_wire::GatewayDisplayOpResponse::Close(public_wire::GatewayDisplayCloseResult {
-                closed: true,
+                closed,
             })
         }
-        public_wire::GatewayDisplayOp::List(_args) => {
+        public_wire::GatewayDisplayOp::List(args) => {
+            let inner = state
+                .gateway_display
+                .inner
+                .lock()
+                .map_err(|_| TypedError::InternalIo {
+                    context: "lock gateway display runtime".to_owned(),
+                    detail: "mutex poisoned".to_owned(),
+                })?;
+            let sessions = inner
+                .sessions
+                .values()
+                .filter(|session| {
+                    args.target
+                        .as_ref()
+                        .is_none_or(|target| target == &session.target)
+                })
+                .map(|session| {
+                    let state = inner
+                        .orchestrator
+                        .state(&session.open.session_id)
+                        .map(|s| format!("{s:?}").to_ascii_lowercase())
+                        .unwrap_or_else(|| "unknown".to_owned());
+                    public_wire::GatewayDisplaySessionSummary {
+                        session_id: session.open.session_id.to_string(),
+                        target: session.target.clone(),
+                        state,
+                    }
+                })
+                .collect();
             public_wire::GatewayDisplayOpResponse::List(public_wire::GatewayDisplayListResult {
-                sessions: Vec::new(),
+                sessions,
             })
         }
     };
@@ -8615,6 +8713,7 @@ mod public_status_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
         };
         (state, dir)
     }
@@ -8665,6 +8764,66 @@ mod public_status_tests {
                 .and_then(|r| r.get("state"))
                 .and_then(Value::as_str),
             Some("running")
+        );
+        let session_id = value
+            .get("result")
+            .and_then(|r| r.get("sessionId"))
+            .and_then(Value::as_str)
+            .expect("open response has session id")
+            .to_owned();
+
+        let list = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+                public_wire::GatewayDisplayListArgs { target: None },
+            )),
+        )
+        .expect("gateway display list dispatches");
+        let sessions = list
+            .get("result")
+            .and_then(|r| r.get("sessions"))
+            .and_then(Value::as_array)
+            .expect("list response sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].get("sessionId").and_then(Value::as_str),
+            Some(session_id.as_str())
+        );
+
+        let close = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
+                public_wire::GatewayDisplayCloseArgs {
+                    session_id: session_id.clone(),
+                },
+            )),
+        )
+        .expect("gateway display close dispatches");
+        assert_eq!(
+            close
+                .get("result")
+                .and_then(|r| r.get("closed"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let empty = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+                public_wire::GatewayDisplayListArgs { target: None },
+            )),
+        )
+        .expect("gateway display list after close dispatches");
+        assert_eq!(
+            empty
+                .get("result")
+                .and_then(|r| r.get("sessions"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
         );
     }
 
@@ -9851,6 +10010,7 @@ mod detached_exec_routing_tests {
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
             exec_sessions: Arc::new(exec_session::SessionTable::new(caps)),
+            gateway_display: crate::new_gateway_display_runtime(),
         }
     }
 
@@ -10513,6 +10673,7 @@ mod accept_loop_concurrency_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
         };
         (state, dir)
     }
@@ -10846,6 +11007,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
         }
     }
 
@@ -10873,6 +11035,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
         }
     }
 
@@ -12195,6 +12358,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -12407,6 +12571,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
         };
 
         let listener = socket(
@@ -12648,6 +12813,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
@@ -13995,6 +14161,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
         };
 
         // Emit the same event that the timeout handler in
