@@ -51,9 +51,13 @@ jobs:
       # caching) instead, which caches ALL compiled artifacts including
       # proc-macros and bin/lib crates that sccache cannot cache (~60% of
       # compilations are "non-cacheable" by sccache due to crate-type).
+      # CARGO_BUILD_RUSTC_WRAPPER="" overrides packages/.cargo/config.toml's
+      # `rustc-wrapper = "sccache"` for ALL steps (including rust-cache's
+      # own `cargo metadata` pre/post steps where sccache is unavailable).
       # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts
       # are non-deterministic and bloat the cache without benefit for CI
       # (each PR run starts from a different commit).
+      CARGO_BUILD_RUSTC_WRAPPER: ""
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
