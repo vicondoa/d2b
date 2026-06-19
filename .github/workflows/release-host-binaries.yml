@@ -1,0 +1,162 @@
+name: release-host-binaries
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  detect-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.detect.outputs.version }}
+      tag: ${{ steps.detect.outputs.tag }}
+      skip: ${{ steps.detect.outputs.skip }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: detect
+        name: Detect changelog release cut
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(perl -e 'use strict; use warnings;
+            open my $fh, q{<}, q{CHANGELOG.md} or die qq{open CHANGELOG.md: $!\\n};
+            while (my $line = <$fh>) {
+              if ($line =~ /^## \[([0-9]+\.[0-9]+\.[0-9]+)\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$/) {
+                print $1;
+                exit 0;
+              }
+            }
+            die qq{No numbered release header found in CHANGELOG.md\\n};
+          ')
+          tag="v$version"
+          if git tag -l "$tag" | grep -qx "$tag"; then
+            skip=true
+          else
+            skip=false
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          printf 'skip=%s\n' "$skip" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: detect-version
+    if: needs.detect-version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ""
+      ACTIONS_RUNTIME_TOKEN: ""
+      CARGO_INCREMENTAL: "0"
+    permissions: {}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: |
+            packages -> target
+            packages/nixling-priv-broker -> target
+          cache-directories: |
+            packages/nixling-priv-broker/target-layer1
+            packages/nixling-priv-broker/target-fakebackends
+          prefix-key: "v0-rust"
+          shared-key: "test-rust-${{ runner.os }}"
+          save-if: "true"
+      - name: Install ripgrep + acl
+        run: sudo apt-get update && sudo apt-get install -y ripgrep acl
+      - name: Build release binaries
+        env:
+          VERSION: ${{ needs.detect-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cargo build --release --package nixlingd --manifest-path packages/Cargo.toml
+          cargo build --release --package nixling --manifest-path packages/Cargo.toml
+          cargo build --release --package nixling-wayland-filter --manifest-path packages/Cargo.toml
+          cargo build --release --bin nixling-activation-helper --package nixling-host --manifest-path packages/Cargo.toml
+          cargo build --release --package nixling-priv-broker --manifest-path packages/nixling-priv-broker/Cargo.toml
+
+          rm -rf dist
+          mkdir -p dist/bin
+          cp packages/target/release/nixlingd dist/bin/
+          cp packages/target/release/nixling dist/bin/
+          cp packages/target/release/nixling-wayland-filter dist/bin/
+          cp packages/target/release/nixling-activation-helper dist/bin/
+          cp packages/nixling-priv-broker/target/release/nixling-priv-broker dist/bin/
+
+          for binary in \
+            nixlingd \
+            nixling \
+            nixling-wayland-filter \
+            nixling-activation-helper \
+            nixling-priv-broker
+          do
+            tar -C dist/bin -czf "dist/${binary}-${VERSION}-x86_64-linux.tar.gz" "$binary"
+          done
+
+          (
+            cd dist
+            sha256sum ./*.tar.gz > SHA256SUMS
+          )
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: host-binaries-${{ needs.detect-version.outputs.version }}
+          path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+  release:
+    needs: [detect-version, build]
+    if: needs.detect-version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: host-binaries-${{ needs.detect-version.outputs.version }}
+          path: dist
+      - name: Extract release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ needs.detect-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          perl -0ne '
+            my $version = $ENV{VERSION};
+            if (/^## \[\Q$version\E\] - [0-9]{4}-[0-9]{2}-[0-9]{2}\n(.*?)(?=^## |\z)/ms) {
+              my $section = $1;
+              $section =~ s/\A\s+//;
+              $section =~ s/\s+\z/\n/;
+              print $section;
+              exit 0;
+            }
+            die "missing changelog section for $version\n";
+          ' CHANGELOG.md > release-notes.md
+      - name: Create annotated tag
+        env:
+          TAG: ${{ needs.detect-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.detect-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            dist/*.tar.gz \
+            dist/SHA256SUMS \
+            --title "$TAG" \
+            --notes-file release-notes.md

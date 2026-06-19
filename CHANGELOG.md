@@ -10,6 +10,21 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- CI: merging `main` after cutting a new dated changelog section now
+  auto-tags the release and publishes pre-built `x86_64-linux` host
+  binary tarballs for `nixlingd`, `nixling`, `nixling-priv-broker`,
+  `nixling-wayland-filter`, and `nixling-activation-helper`, alongside
+  `SHA256SUMS`, on the matching GitHub Release.
+
+### Changed
+
+- CI: pull requests now fail closed when Rust/Nix/Cargo changes do not
+  update `CHANGELOG.md`, or when the changelog is missing
+  `## [Unreleased]`, uses duplicate/out-of-order version headers, or
+  carries non-semver versions / non-ISO release dates.
+
 ## [1.3.1] - 2026-06-18
 
 ### Fixed
@@ -820,7 +835,7 @@ deprecations ship one minor release before removal.
   and repairs the affected CI validation gates so the hardening can
   merge through the normal PR checks.
 
-## [1.2] - 2026-06-03
+## [1.2.0] - 2026-06-03
 
 Primarily a stabilization release per
 [ADR 0022](docs/adr/0022-stabilization-mode-releases.md): deferrals
@@ -1032,7 +1047,7 @@ Closes every v1.1 deferral.
 - `fchownat(AT_EMPTY_PATH)` replaces broken `fchown` on `O_PATH`
   descriptors in the cgroup module.
 
-## [1.1] - 2026-05-31
+## [1.1.0] - 2026-05-31
 
 Daemon-only follow-through. Nixling now owns its per-VM microVM
 substrate end-to-end; the `microvm.nix` flake input is gone.
