@@ -17,7 +17,8 @@ use nixling::{
 use nixling_core::{
     bundle::Bundle, closures::ClosureMetadata, error::Error, host::HostJson,
     manifest_v04::ManifestV04, minijail_profile::MinijailProfile, privileges::PrivilegesJson,
-    processes::ProcessesJson, storage::StorageJson, sync::SyncJson,
+    processes::ProcessesJson, storage::StorageJson, storage_lifecycle::StorageLifecycleReport,
+    sync::SyncJson,
 };
 use nixling_ipc::{WireProtocolSchema, guest_wire::GuestControlSchema};
 use schemars::schema::RootSchema;
@@ -217,12 +218,16 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         .join(SCHEMA_VERSION);
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 11] = [
+    let schemas: [(&str, RootSchema); 12] = [
         ("bundle.json", schemars::schema_for!(Bundle)),
         ("host.json", schemars::schema_for!(HostJson)),
         ("processes.json", schemars::schema_for!(ProcessesJson)),
         ("storage.json", schemars::schema_for!(StorageJson)),
         ("sync.json", schemars::schema_for!(SyncJson)),
+        (
+            "storage-lifecycle-report.json",
+            schemars::schema_for!(StorageLifecycleReport),
+        ),
         ("privileges.json", schemars::schema_for!(PrivilegesJson)),
         ("closures.json", schemars::schema_for!(ClosureMetadata)),
         (

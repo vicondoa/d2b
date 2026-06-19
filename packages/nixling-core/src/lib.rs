@@ -17,6 +17,7 @@ pub mod privileges_w3;
 pub mod processes;
 pub mod static_invariants;
 pub mod storage;
+pub mod storage_lifecycle;
 pub mod sync;
 
 // `test_support` is needed both by external crates (which opt in via the
