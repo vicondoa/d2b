@@ -8,8 +8,7 @@
 //! host kernel modules: KVM for hardware-assisted virtualization,
 //! `vhost_net` + `tun` for the TAP-fd data path, `virtio_*` for the
 //! guest-side device drivers, plus the per-feature add-ons
-//! (`virtiofs` for the per-VM `/nix/store` share, `udmabuf` +
-//! `drm_virtgpu` for graphics VMs, `usbip_host` for USBIP
+//! (`virtiofs` for the per-VM `/nix/store` share, `udmabuf` for graphics VMs, `usbip_host` for USBIP
 //! passthrough, `tpm_vtpm_proxy` for swtpm). If any of those are
 //! missing at daemon startup the eventual VM-start request fails
 //! deep inside `cloud-hypervisor` with a generic ENODEV that takes
@@ -23,7 +22,7 @@
 //!
 //! * `required` — modules every VM in the bundle conditionally
 //!   demands (kvm_*, vhost_net, tun, virtio_*, plus virtiofs /
-//!   udmabuf / drm_virtgpu when the bundle uses them).
+//!   udmabuf when the bundle uses them).
 //! * `present` — required modules detected loaded.
 //! * `missing_required` — required modules NOT loaded. Non-empty →
 //!   daemon refuses to start.
@@ -51,7 +50,7 @@ use std::fs;
 
 use nixling_core::bundle_resolver::BundleResolver;
 use nixling_core::processes::ProcessRole;
-use nixling_host::modules::LoadedModuleSet;
+use nixling_host::modules::{KernelConfig, LoadedModuleSet, read_kernel_config};
 use serde::{Deserialize, Serialize};
 
 use crate::typed_error::TypedError;
@@ -79,8 +78,9 @@ pub const REQUIRED_IF_VIRTIOFS: &str = "virtiofs";
 
 /// Required if and only if at least one VM in the bundle is a
 /// graphics VM (= manifest `graphics = true` and/or `Gpu` process
-/// node).
-pub const REQUIRED_IF_GRAPHICS: &[&str] = &["udmabuf", "drm_virtgpu"];
+/// node). `udmabuf` may be built into the host kernel; the startup
+/// wrapper maps `CONFIG_UDMABUF=y` to this module name.
+pub const REQUIRED_IF_GRAPHICS: &[&str] = &["udmabuf"];
 
 /// Optional accelerator modules for nvidia-equipped graphics
 /// hosts. Absence is warn-only — VMs continue to autostart with
@@ -354,6 +354,27 @@ pub fn check_kernel_modules(
     }
 }
 
+fn kernel_config_builtin_modules(config: &KernelConfig) -> BTreeSet<String> {
+    [
+        ("kvm_intel", "CONFIG_KVM_INTEL"),
+        ("kvm_amd", "CONFIG_KVM_AMD"),
+        ("vhost_net", "CONFIG_VHOST_NET"),
+        ("tun", "CONFIG_TUN"),
+        ("virtio_net", "CONFIG_VIRTIO_NET"),
+        ("virtio_blk", "CONFIG_VIRTIO_BLK"),
+        ("virtio_pci", "CONFIG_VIRTIO_PCI"),
+        ("virtio_console", "CONFIG_VIRTIO_CONSOLE"),
+        ("virtiofs", "CONFIG_VIRTIO_FS"),
+        ("udmabuf", "CONFIG_UDMABUF"),
+        ("usbip_host", "CONFIG_USBIP_HOST"),
+        ("tpm_vtpm_proxy", "CONFIG_TCG_VTPM_PROXY"),
+    ]
+    .into_iter()
+    .filter_map(|(module, config_key)| (config.get(config_key) == Some("y")).then_some(module))
+    .map(str::to_owned)
+    .collect()
+}
+
 /// Default path used by [`run_kernel_module_check`] when the
 /// `proc_modules_override` is `None`. Exposed so tests can assert
 /// the production read path is `/proc/modules`.
@@ -382,16 +403,10 @@ pub fn run_kernel_module_check(resolver: &BundleResolver) -> ModuleCheckReport {
             LoadedModuleSet::default()
         }
     };
-    // Built-in detection is intentionally conservative here: we
-    // pass an empty set. The same fail-closed logic above applies
-    // — a host whose required modules are all built-in is rare
-    // enough on the supported tiers (Tier 0 NixOS loads them as
-    // modules, Tier 1+ load via modprobe) that requiring an
-    // explicit modprobe on those targets is acceptable. The
-    // signature accepts a builtin set so tests / future work can
-    // wire `nixling_host::modules::BuiltinModuleSet` once the
-    // probe path is daemon-callable.
-    let builtin = BTreeSet::new();
+    let mut builtin = BTreeSet::new();
+    if let Some(config) = read_kernel_config() {
+        builtin.extend(kernel_config_builtin_modules(&config));
+    }
     check_kernel_modules(resolver, &loaded, &builtin)
 }
 
@@ -594,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    fn graphics_vm_requires_udmabuf_and_drm_virtgpu() {
+    fn graphics_vm_requires_udmabuf() {
         let resolver = build_resolver(
             |vms| {
                 vms.get_mut("corp-vm").unwrap().graphics = true;
@@ -605,7 +620,15 @@ mod tests {
         let report = check_kernel_modules(&resolver, &loaded, &empty_builtin());
         assert!(report.is_fatal());
         assert!(report.missing_required.contains("udmabuf"));
-        assert!(report.missing_required.contains("drm_virtgpu"));
+        assert!(!report.required.contains("drm_virtgpu"));
+    }
+
+    #[test]
+    fn kernel_config_y_counts_as_builtin_module() {
+        let config = KernelConfig::parse("CONFIG_UDMABUF=y\nCONFIG_DRM_VIRTIO_GPU=m\n");
+        let builtins = kernel_config_builtin_modules(&config);
+        assert!(builtins.contains("udmabuf"));
+        assert!(!builtins.contains("virtio_gpu"));
     }
 
     #[test]
@@ -682,7 +705,6 @@ mod tests {
             "virtio_pci",
             "virtio_console",
             "udmabuf",
-            "drm_virtgpu",
         ]);
         let report = check_kernel_modules(&resolver, &loaded, &empty_builtin());
         assert!(!report.is_fatal(), "{:?}", report);

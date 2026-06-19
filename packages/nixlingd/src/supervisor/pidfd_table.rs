@@ -3,6 +3,7 @@ use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::os::fd::{AsFd, OwnedFd};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -626,6 +627,15 @@ fn write_snapshot(path: &Path, snapshot: &PersistedPidfdTable) -> Result<(), Pid
         path: path.to_path_buf(),
         detail: err.to_string(),
     })?;
+    if let Err(err) = file.set_permissions(fs::Permissions::from_mode(0o644)) {
+        if let Err(rm_err) = fs::remove_file(&tmp) {
+            tracing::debug!(?tmp, %rm_err, "pidfd-table: tmpfile cleanup failed (chmod path)");
+        }
+        return Err(PidfdTableError::SnapshotFailed {
+            path: path.to_path_buf(),
+            detail: err.to_string(),
+        });
+    }
     if let Err(err) = file.write_all(&bytes) {
         // panel-rust v1.1.2-final-R1 should-fix: log cleanup
         // failures so disk-full / permission regressions surface.
