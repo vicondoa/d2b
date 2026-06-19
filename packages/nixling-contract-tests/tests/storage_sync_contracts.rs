@@ -58,6 +58,53 @@ fn storage_and_sync_schemas_are_committed_and_closed() {
 }
 
 #[test]
+fn storage_lifecycle_report_schema_and_reference_are_committed() {
+    let schema = read_repo_file("docs/reference/schemas/v2/storage-lifecycle-report.json");
+    let reference = read_repo_file("docs/reference/storage-lifecycle-report.md");
+    let xtask = read_repo_file("packages/xtask/src/main.rs");
+    let schema: serde_json::Value =
+        serde_json::from_str(&schema).expect("storage lifecycle report schema parses as JSON");
+
+    assert_eq!(schema["title"], "StorageLifecycleReport");
+    assert!(schema["properties"].get("schemaVersion").is_some());
+
+    let issue_variants = schema["definitions"]["StorageLifecycleIssue"]["oneOf"]
+        .as_array()
+        .expect("StorageLifecycleIssue oneOf variants");
+    let legacy_variant = issue_variants
+        .iter()
+        .find(|variant| {
+            variant["properties"]["kind"]["enum"]
+                .as_array()
+                .is_some_and(|values| {
+                    values
+                        .iter()
+                        .any(|value| value == "legacy-bundle-contracts-unavailable")
+                })
+        })
+        .expect("legacy bundle issue variant in schema");
+    assert!(legacy_variant["properties"].get("bundleVersion").is_some());
+    assert!(legacy_variant["properties"].get("bundle_version").is_none());
+
+    for kind in ["missing-restart-policy", "adoptable-missing-cgroup-leaf"] {
+        let role_variant = issue_variants
+            .iter()
+            .find(|variant| {
+                variant["properties"]["kind"]["enum"]
+                    .as_array()
+                    .is_some_and(|values| values.iter().any(|value| value == kind))
+            })
+            .unwrap_or_else(|| panic!("{kind} issue variant in schema"));
+        assert!(role_variant["properties"].get("roleId").is_some());
+        assert!(role_variant["properties"].get("role_id").is_none());
+    }
+
+    assert!(reference.contains("/var/lib/nixling/daemon-state/storage-lifecycle-report.json"));
+    assert!(reference.contains("./schemas/v2/storage-lifecycle-report.json"));
+    assert!(xtask.contains("\"storage-lifecycle-report.json\""));
+}
+
+#[test]
 fn rendered_storage_contract_covers_process_writable_paths_when_fixture_available() {
     let Some(dir) = env::var_os("NL_FIXTURES").map(PathBuf::from) else {
         eprintln!("  (skipping rendered storage/sync contract check; NL_FIXTURES unset)");
