@@ -23,6 +23,9 @@ deprecations ship one minor release before removal.
 - Daemon: startup now performs a read-only storage/restart/sync contract
   check and persists `storage-lifecycle-report.json` for degraded-state
   adoption work and future doctor/status UX.
+- CLI: `nixling host doctor --read-only` now surfaces
+  `storage-lifecycle-report.json` with bounded issue kinds and inline
+  remediation for storage/restart/sync contract drift.
 - Tests: added storage lifecycle report schema and serialization
   regression coverage so doctor/status consumers see the same camelCase
   contract that the daemon writes.
@@ -49,6 +52,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- CI: the PR aarch64 flake leg now runs only the lightweight
+  `smoke-eval-aarch64.nix` check instead of the full native aarch64
+  flake sweep.
 - `bundleVersion` 5 → 6: adds the private storage lifecycle and
   synchronization artifacts to the trusted bundle.
 - CI: pull requests now fail closed when Rust/Nix/Cargo changes do not

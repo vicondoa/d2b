@@ -56,7 +56,8 @@ const DEFAULT_CLIENT_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 const RUNTIME_UNKNOWN: &str = "unknown";
 const MAX_FRAME_BYTES: usize = 1024 * 1024;
 /// Location of daemon-persisted state files (`pidfd-table.json`,
-/// `kernel-module-report.json`, `autostart-report.json`) that
+/// `kernel-module-report.json`, `autostart-report.json`,
+/// `storage-lifecycle-report.json`) that
 /// `nixling host doctor --read-only` inspects. Mirrors
 /// `nixlingd::DEFAULT_DAEMON_STATE_DIR`.
 const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/nixling/daemon-state";

@@ -63,6 +63,20 @@ assert_wf "shard runs NL_FLAKE_CHECK make test-flake" 'NL_FLAKE_CHECK'
 assert_wf "aggregator needs the shard matrix" 'needs:\s*\[flake-eval-discover,\s*flake-eval-x86'
 # non-checks x86 outputs are still evaluated (packages, etc.)
 assert_wf "x86 non-checks outputs are evaluated" 'NL_FLAKE_OUTPUTS'
+# aarch64 stays a lightweight smoke eval, not a full monolithic flake check.
+assert_wf "aarch64 job uses smoke eval" 'smoke-eval-aarch64\.nix'
+
+aarch64_block=$(awk '
+  /^  test-flake-aarch64:/ { in_block = 1 }
+  in_block { print }
+  in_block && /^  test-drift:/ { exit }
+' "$wf")
+if grep -q 'make test-flake' <<<"$aarch64_block"; then
+  fail "wiring: aarch64 job must not run make test-flake"
+  rc=1
+else
+  ok "wiring: aarch64 job no longer runs make test-flake"
+fi
 
 if [ "$rc" -eq 0 ]; then
   log "flake-check-matrix-sync OK"

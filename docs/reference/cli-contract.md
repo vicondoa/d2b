@@ -1951,6 +1951,10 @@ persists during startup. Probed surfaces:
 - **autostart-status** — reads `<daemon-state>/autostart-report.json`
   (written after the daemon's autostart pass, see
   [`daemon-autostart`](./daemon-autostart.md)).
+- **storage-lifecycle-report** — reads
+  `<daemon-state>/storage-lifecycle-report.json` (written by the daemon's
+  startup storage/restart/sync contract check, see
+  [`storage-lifecycle-report`](./storage-lifecycle-report.md)).
 
 Doctor never calls a privileged broker operation. The `--read-only`
 flag is currently mandatory; mutation forms are later deliverables. The

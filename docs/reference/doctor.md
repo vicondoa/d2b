@@ -93,6 +93,20 @@ Each probe is a passive, read-only check. Exit codes: `0` = all pass,
 | Warn | Any outcome with kind `degraded` |
 | Fail | Any outcome with kind `failed` |
 
+### `storage-lifecycle-report`
+
+| Field | Value |
+|-------|-------|
+| Invariant | The daemon's startup storage/restart/sync contract check is clean |
+| Source | `<daemon-state-dir>/storage-lifecycle-report.json` |
+| Pass | No storage lifecycle issues |
+| Warn | Report missing/unreadable/unparseable, or a legacy bundle predates the storage/sync contracts |
+| Fail | Current-bundle contract drift, invalid storage/sync contracts, missing restart policies, missing adoptable cgroup leaves, or bundle resolver unavailable |
+
+Every non-pass detail includes a safe remediation command. The JSON
+`data.issueKinds` field is a bounded, deduplicated taxonomy string; dynamic
+VM/role details remain in `data.issues[]` only.
+
 ---
 
 ## v1.2 invariant probes

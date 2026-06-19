@@ -73,6 +73,16 @@ const AUTOSTART_DEGRADED_JSON: &str = r#"{
   ]
 }"#;
 
+const STORAGE_LIFECYCLE_CLEAN_JSON: &str = r#"{
+  "schemaVersion": "v2",
+  "storageContractPresent": true,
+  "syncContractPresent": true,
+  "pathCount": 12,
+  "restartPolicyCount": 4,
+  "lockCount": 3,
+  "issues": []
+}"#;
+
 /// Hermetic sandbox: a scratch tempdir holding the daemon-state report
 /// JSONs + a pinned manifest, with closed loopback/socket paths so the
 /// broker, daemon, and metrics probes surface predictable failures.
@@ -234,6 +244,7 @@ fn host_doctor_baseline_no_state_reports_broker_fail_exit_2() {
             "otel-host-bridge-runner",
             "pre-ns-posture",
             "seccomp-bpf-loaded",
+            "storage-lifecycle-report",
             "usbipd-runners",
         ],
         "baseline doctor checks[] name set drift (signoz-ui-endpoint must be \
@@ -246,8 +257,8 @@ fn host_doctor_baseline_no_state_reports_broker_fail_exit_2() {
         "baseline must have >=1 fail (broker unreachable); summary:\n{summary:#}"
     );
     assert!(
-        summary["warn"].as_u64().expect("summary.warn") >= 4,
-        "baseline must warn on >=4 missing-state probes; summary:\n{summary:#}"
+        summary["warn"].as_u64().expect("summary.warn") >= 5,
+        "baseline must warn on >=5 missing-state probes; summary:\n{summary:#}"
     );
 }
 
@@ -307,6 +318,32 @@ fn host_doctor_missing_required_kernel_module_fails_exit_2() {
         env["exitCode"].as_i64(),
         Some(2),
         "envelope exitCode must agree with the process exit code"
+    );
+}
+
+// --- 4c. storage-lifecycle-report.json clean → pass -----------------
+
+#[test]
+fn host_doctor_clean_storage_lifecycle_report_passes() {
+    let sandbox = Sandbox::new();
+    sandbox.write_state(
+        "storage-lifecycle-report.json",
+        STORAGE_LIFECYCLE_CLEAN_JSON,
+    );
+    let (_code, env) = sandbox.run_doctor_json();
+    let check = check(&env, "storage-lifecycle-report");
+    assert_eq!(
+        check["status"], "pass",
+        "clean storage-lifecycle-report must yield storage-lifecycle-report=pass"
+    );
+    assert_eq!(
+        check["data"]["issueCount"].as_u64(),
+        Some(0),
+        "clean storage lifecycle report should have no issues"
+    );
+    assert!(
+        check["data"].get("remediation").is_none(),
+        "clean storage lifecycle report must not carry remediation"
     );
 }
 
