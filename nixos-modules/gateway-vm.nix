@@ -96,7 +96,6 @@ let
           };
         };
         environment.systemPackages = with pkgs; [
-          waypipe
           curl
           nixlingdPackage
           gatewayRelayPackage
@@ -104,7 +103,6 @@ let
         systemd.tmpfiles.rules = [
           "d /run/nixling 0750 nixlingd nixling -"
           "d /run/nixling/locks 0750 nixlingd nixling -"
-          "d /run/nixling-gateway-display/${gw.vmName} 0750 gateway gateway -"
           "d ${gw.stateDir} 0700 gateway gateway -"
         ];
         systemd.services.nixlingd = {
@@ -117,30 +115,6 @@ let
             Restart = "on-failure";
             User = "root";
             Group = "root";
-          };
-        };
-        systemd.services.nixling-gateway-waypipe-client = {
-          description = "nixling gateway Waypipe client";
-          wantedBy = [ "multi-user.target" ];
-          after = [ "nixlingd.service" ];
-          serviceConfig = {
-            ExecStartPre = "${pkgs.coreutils}/bin/rm -f /run/nixling-gateway-display/${gw.vmName}/host-waypipe.sock";
-            ExecStart = "${pkgs.waypipe}/bin/waypipe --no-gpu -c ${gw.display.waypipeCompression} -s /run/nixling-gateway-display/${gw.vmName}/host-waypipe.sock client";
-            Restart = "on-failure";
-            User = "gateway";
-            Group = "gateway";
-          };
-        };
-        systemd.services.nixling-gateway-waypipe-server = {
-          description = "nixling gateway Waypipe server";
-          wantedBy = [ "multi-user.target" ];
-          after = [ "nixlingd.service" ];
-          serviceConfig = {
-            ExecStartPre = "${pkgs.coreutils}/bin/rm -f /run/nixling-gateway-display/${gw.vmName}/agent-waypipe.sock";
-            ExecStart = "${pkgs.waypipe}/bin/waypipe --no-gpu -c ${gw.display.waypipeCompression} -s /run/nixling-gateway-display/${gw.vmName}/agent-waypipe.sock --display wayland-nl server -- sleep infinity";
-            Restart = "on-failure";
-            User = "gateway";
-            Group = "gateway";
           };
         };
       };

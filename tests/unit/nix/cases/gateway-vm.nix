@@ -24,7 +24,6 @@ let
   };
 
   goodCfg = (mkEval [ base ]).config;
-  gatewayGuestCfg = goodCfg.nixling._computed."sys-work-gateway".config;
   gatewayProc = lib.findFirst (vm: vm.vm == "sys-work-gateway") null
     goodCfg.nixling._bundle.processesJson.data.vms;
   badCfg = (mkEval [
@@ -72,35 +71,4 @@ in
     expected = false;
   };
 
-  "gateway-vm/guest-services-installed" = {
-    expr = {
-      hasNixlingd = builtins.hasAttr "nixlingd" gatewayGuestCfg.systemd.services;
-      hasWaypipeClient = builtins.hasAttr "nixling-gateway-waypipe-client" gatewayGuestCfg.systemd.services;
-      hasWaypipeServer = builtins.hasAttr "nixling-gateway-waypipe-server" gatewayGuestCfg.systemd.services;
-      gatewayJson = builtins.hasAttr "nixling/gateway.json" gatewayGuestCfg.environment.etc;
-      daemonJson = builtins.hasAttr "nixling/daemon-config.json" gatewayGuestCfg.environment.etc;
-    };
-    expected = {
-      hasNixlingd = true;
-      hasWaypipeClient = true;
-      hasWaypipeServer = true;
-      gatewayJson = true;
-      daemonJson = true;
-    };
-  };
-
-  "gateway-vm/guest-waypipe-services-clean-stale-sockets" = {
-    expr = {
-      clientPre =
-        lib.hasSuffix "rm -f /run/nixling-gateway-display/sys-work-gateway/host-waypipe.sock"
-          gatewayGuestCfg.systemd.services.nixling-gateway-waypipe-client.serviceConfig.ExecStartPre;
-      serverPre =
-        lib.hasSuffix "rm -f /run/nixling-gateway-display/sys-work-gateway/agent-waypipe.sock"
-          gatewayGuestCfg.systemd.services.nixling-gateway-waypipe-server.serviceConfig.ExecStartPre;
-    };
-    expected = {
-      clientPre = true;
-      serverPre = true;
-    };
-  };
 }
