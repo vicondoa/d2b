@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# nixling sandbox agent (ADR 0032, P0 — productionized, MI-authed).
+# nixling sandbox agent (ADR 0032, P0 — historical MI relay probe).
 #
 # Runs inside an Azure Container Apps sandbox. Exposes a Wayland-native app
 # over `waypipe server` (SHM-only) and tunnels the byte stream out over an
@@ -54,7 +54,7 @@ log "waypipe $(waypipe --version 2>/dev/null | head -1 || echo '?'); app=$APP_CM
 log "fetching managed-identity Entra token for relay.azure.net ..."
 TOKEN="$(fetch_mi_token)"
 [ -n "$TOKEN" ] || { log "failed to acquire MI token"; exit 1; }
-log "MI token acquired (${#TOKEN} chars); starting nixling-relay sender (no SAS)"
+log "MI token acquired (${#TOKEN} chars); starting nixling-relay sender"
 
 # Start the productionized sender: binds+listens the waypipe socket, then
 # dials the relay outbound authenticated by the MI bearer.

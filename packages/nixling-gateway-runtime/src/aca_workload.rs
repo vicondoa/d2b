@@ -11,8 +11,9 @@
 //!      `NL_SESSION_SECRET_B64`, and shreds the file (so `S` is never a
 //!      long-lived process argv);
 //!   2. exports the binding fields as `NL_SESSION_*`;
-//!   3. fetches the sandbox Managed-Identity token for `relay.azure.net`
-//!      (no SAS handed to the container) into `NIXLING_RELAY_ENTRA_TOKEN`;
+//!   3. installs relay sender auth: either a gateway-minted short-lived Send
+//!      bearer in `NIXLING_RELAY_SAS_TOKEN` (P0's live path) or an ACA
+//!      Managed-Identity token in `NIXLING_RELAY_ENTRA_TOKEN`;
 //!   4. starts the gated `nixling-gateway-relay sender` (which writes the
 //!      handshake prologue), then launches the requested app as the child of
 //!      `waypipe server`.
@@ -39,6 +40,9 @@ pub struct RelayCoords {
     /// In-sandbox path to the egress-proxy CA the relay TLS is terminated by
     /// (ACA terminates egress TLS); `None` for direct egress.
     pub ca_file: Option<String>,
+    /// Optional user-assigned managed identity client id for ACA's MSI
+    /// endpoint. Some ACA sandboxes return 500 unless this is supplied.
+    pub managed_identity_client_id: Option<String>,
 }
 
 /// In-image binary + tunable names for the agent command.
@@ -65,10 +69,12 @@ impl Default for AgentBinaries {
     }
 }
 
-/// The shell expression that must set `NIXLING_RELAY_ENTRA_TOKEN` to a bearer
-/// token for `https://relay.azure.net` (so the container authenticates to the
-/// relay with its Managed Identity, never a handed SAS key). The default uses
-/// the ACA-injected `IDENTITY_ENDPOINT`/`IDENTITY_HEADER` MSI endpoint.
+/// The shell expression that sets `NIXLING_RELAY_ENTRA_TOKEN` to a bearer token
+/// for `https://relay.azure.net`. The default uses the ACA-injected
+/// `IDENTITY_ENDPOINT`/`IDENTITY_HEADER` MSI endpoint; production P0 can
+/// override this with [`relay_sas_token_snippet`] to avoid the observed ACA
+/// Entra Relay substream close while still never handing the SAS rule key to
+/// the container.
 pub fn default_entra_token_snippet() -> String {
     // The ACA minimal image lacks grep/sed; `nixling-gateway-relay` reads the
     // token from env, so we extract it with a here-doc-free, tool-light
@@ -76,7 +82,14 @@ pub fn default_entra_token_snippet() -> String {
     // helper would normally parse it, but to keep the agent self-contained we
     // rely on the image's baked `nl-msi-token` helper (provisioned in
     // image.nix) which prints the bare access_token for a resource.
-    "NIXLING_RELAY_ENTRA_TOKEN=\"$(nl-msi-token https://relay.azure.net/)\"".to_owned()
+    "NIXLING_RELAY_ENTRA_TOKEN=\"$(nl-msi-token https://relay.azure.net/ \"${NIXLING_MI_CLIENT_ID:-}\")\"".to_owned()
+}
+
+/// Build a relay-auth snippet from a gateway-minted short-lived SAS bearer.
+/// This passes only the bearer token to the sandbox, never the authorization
+/// rule key; the per-session handshake still gates display-byte admission.
+pub fn relay_sas_token_snippet(token: &str) -> String {
+    format!("NIXLING_RELAY_SAS_TOKEN={}", sh_quote(token))
 }
 
 /// The production [`GatewayWorkload`]: drives the in-sandbox agent over ACA
@@ -86,7 +99,7 @@ pub struct AcaGatewayWorkload {
     sandbox: AcaSandboxRef,
     relay: RelayCoords,
     bins: AgentBinaries,
-    entra_token_snippet: String,
+    relay_auth_snippet: String,
 }
 
 #[derive(Debug, Clone)]
@@ -107,7 +120,7 @@ impl AcaGatewayWorkload {
             sandbox: AcaSandboxRef::FixedId(sandbox_id.into()),
             relay,
             bins: AgentBinaries::default(),
-            entra_token_snippet: default_entra_token_snippet(),
+            relay_auth_snippet: default_entra_token_snippet(),
         }
     }
 
@@ -119,7 +132,7 @@ impl AcaGatewayWorkload {
             sandbox: AcaSandboxRef::WorkloadLabel,
             relay,
             bins: AgentBinaries::default(),
-            entra_token_snippet: default_entra_token_snippet(),
+            relay_auth_snippet: default_entra_token_snippet(),
         }
     }
 
@@ -131,7 +144,13 @@ impl AcaGatewayWorkload {
 
     /// Override the MI-token-fetch shell snippet (e.g. for a SAS test rig).
     pub fn with_entra_token_snippet(mut self, snippet: impl Into<String>) -> Self {
-        self.entra_token_snippet = snippet.into();
+        self.relay_auth_snippet = snippet.into();
+        self
+    }
+
+    /// Override the relay-auth shell snippet.
+    pub fn with_relay_auth_snippet(mut self, snippet: impl Into<String>) -> Self {
+        self.relay_auth_snippet = snippet.into();
         self
     }
 
@@ -193,7 +212,7 @@ pub fn build_agent_command(
     req: &AgentSpawnRequest,
     relay: &RelayCoords,
     bins: &AgentBinaries,
-    entra_token_snippet: &str,
+    relay_auth_snippet: &str,
 ) -> String {
     let b: &SessionBinding = &req.binding;
     let secret_b64 = base64::engine::general_purpose::STANDARD.encode(req.secret.expose());
@@ -223,8 +242,16 @@ pub fn build_agent_command(
     ] {
         s.push_str(&format!("{k}={}\n", sh_quote(v)));
     }
-    // Container -> Azure auth (Managed Identity, no SAS).
-    s.push_str(entra_token_snippet);
+    // Relay sender auth. The default uses container MI; production P0 can
+    // override this with a gateway-minted short-lived Send bearer.
+    if let Some(client_id) = relay
+        .managed_identity_client_id
+        .as_ref()
+        .filter(|client_id| !client_id.trim().is_empty())
+    {
+        s.push_str(&format!("NIXLING_MI_CLIENT_ID={}\n", sh_quote(client_id)));
+    }
+    s.push_str(relay_auth_snippet);
     s.push('\n');
     // Relay coordinates for the gated sender.
     s.push_str(&format!(
@@ -247,6 +274,7 @@ pub fn build_agent_command(
         "NL_SESSION_WORKLOAD",
         "NL_SESSION_NOT_AFTER",
         "NIXLING_RELAY_ENTRA_TOKEN",
+        "NIXLING_RELAY_SAS_TOKEN",
         "NIXLING_RELAY_NAMESPACE",
         "NIXLING_RELAY_ENTITY",
         "NIXLING_RELAY_TARGET",
@@ -327,7 +355,7 @@ fn decode_agent_handle(handle: &AgentHandle) -> Option<(String, String)> {
 impl GatewayWorkload for AcaGatewayWorkload {
     async fn spawn_agent(&self, req: &AgentSpawnRequest) -> Result<AgentHandle, GatewayError> {
         let sandbox_id = self.resolve_sandbox_id(req).await?;
-        let cmd = build_agent_command(req, &self.relay, &self.bins, &self.entra_token_snippet);
+        let cmd = build_agent_command(req, &self.relay, &self.bins, &self.relay_auth_snippet);
         let result = self
             .provider
             .exec_shell(&sandbox_id, &cmd)
@@ -413,6 +441,7 @@ mod tests {
             namespace: "relns-test.servicebus.windows.net".into(),
             entity: "hc-nixling-display".into(),
             ca_file: Some("/etc/ssl/certs/adc-egress-proxy-ca.crt".into()),
+            managed_identity_client_id: None,
         }
     }
 
@@ -443,6 +472,42 @@ mod tests {
         assert!(cmd.contains("NIXLING_RELAY_TARGET=\"unix-listen:$W/wp.sock\""));
         // Workdir handle is the last line.
         assert!(cmd.trim_end().ends_with("echo \"NL_AGENT_WORKDIR=$W\""));
+    }
+
+    #[test]
+    fn command_can_pass_managed_identity_client_id_to_token_helper() {
+        let mut relay = coords();
+        relay.managed_identity_client_id = Some("b3ad7d90-e6d5-4d12-84e9-c9ef77b80b02".to_owned());
+        let cmd = build_agent_command(
+            &req(vec!["foot"]),
+            &relay,
+            &AgentBinaries::default(),
+            &default_entra_token_snippet(),
+        );
+        assert!(cmd.contains("NIXLING_MI_CLIENT_ID='b3ad7d90-e6d5-4d12-84e9-c9ef77b80b02'"));
+        assert!(cmd.contains(
+            "NIXLING_RELAY_ENTRA_TOKEN=\"$(nl-msi-token https://relay.azure.net/ \"${NIXLING_MI_CLIENT_ID:-}\")\""
+        ));
+        let app_line = cmd
+            .lines()
+            .find(|l| l.contains("server -- 'foot'"))
+            .unwrap();
+        assert!(!app_line.contains("NIXLING_MI_CLIENT_ID"));
+    }
+
+    #[test]
+    fn command_accepts_gateway_minted_sas_token_without_key_material() {
+        let cmd = build_agent_command(
+            &req(vec!["foot"]),
+            &coords(),
+            &AgentBinaries::default(),
+            &relay_sas_token_snippet("SharedAccessSignature sr=x&sig=y"),
+        );
+        assert!(cmd.contains("NIXLING_RELAY_SAS_TOKEN='SharedAccessSignature sr=x&sig=y'"));
+        assert!(cmd.contains("export NL_SESSION_SECRET_B64"));
+        assert!(cmd.contains("NIXLING_RELAY_SAS_TOKEN"));
+        assert!(!cmd.contains("NIXLING_RELAY_KEY="));
+        assert!(!cmd.contains("NIXLING_RELAY_KEY_NAME="));
     }
 
     #[test]

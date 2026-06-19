@@ -28,6 +28,7 @@ let
         image = "registry.example.azurecr.io/nixling-wayland:mi";
         diskName = "nixling-wayland-mi";
         managedIdentityResourceId = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/nixling";
+        managedIdentityClientId = "11111111-1111-1111-1111-111111111111";
       };
       display.waypipeSocket = "/run/user/1000/wpc.sock";
     };
@@ -112,6 +113,7 @@ in
         region = gatewayJson.aca.region;
         image = gatewayJson.aca.image;
         diskName = gatewayJson.aca.diskName;
+        managedIdentityClientId = gatewayJson.aca.managedIdentityClientId;
         cpu = gatewayJson.aca.cpu;
         memory = gatewayJson.aca.memory;
         autoSuspendIntervalSecs = gatewayJson.aca.autoSuspendIntervalSecs;
@@ -131,6 +133,7 @@ in
         region = "centralus";
         image = "registry.example.azurecr.io/nixling-wayland:mi";
         diskName = "nixling-wayland-mi";
+        managedIdentityClientId = "11111111-1111-1111-1111-111111111111";
         cpu = "1000m";
         memory = "2048Mi";
         autoSuspendIntervalSecs = 600;

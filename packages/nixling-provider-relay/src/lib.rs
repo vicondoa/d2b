@@ -11,11 +11,11 @@
 //!   opens the listener control channel. Listen auth is a gateway-side SAS
 //!   minted from the `gateway-listen` rule key, or (later) the gateway's own
 //!   Entra **Listener** role.
-//! - The **container** (sandbox sender) authenticates with an **Entra bearer
-//!   token from its managed identity** (plane 2) — the productionized path,
-//!   so **no SAS key ever enters the sandbox**. The token is presented in the
-//!   `ServiceBusAuthorization` WebSocket header (Azure Relay's Entra
-//!   data-plane auth), never in the URL.
+//! - The **container** (sandbox sender) authenticates with either an **Entra
+//!   bearer token from its managed identity** or a **gateway-minted,
+//!   short-lived Send SAS bearer**. The live P0 path uses the latter because
+//!   ACA Relay Entra substreams closed during Waypipe forwarding; the long-lived
+//!   SAS rule key still never enters the sandbox.
 //!
 //! Every secret ([`RelayCredential`] material, minted SAS, bearer token) has
 //! a redacted `Debug` so it can never reach a log, span, or audit record.
@@ -75,6 +75,10 @@ pub enum RelayCredential {
         /// The rule's key. Secret.
         key: String,
     },
+    /// A pre-minted Shared Access Signature bearer. The gateway uses this for
+    /// short-lived Send tokens handed to ACA sandboxes without exposing the
+    /// underlying rule key.
+    SasToken(String),
     /// A Microsoft Entra bearer token acquired by a managed identity for
     /// [`RELAY_TOKEN_RESOURCE`]. The productionized container path. Secret.
     EntraBearer(String),
@@ -89,6 +93,7 @@ impl fmt::Debug for RelayCredential {
                 .field("key_name", key_name)
                 .field("key", &"<redacted>")
                 .finish(),
+            RelayCredential::SasToken(_) => f.write_str("RelayCredential::SasToken(<redacted>)"),
             RelayCredential::EntraBearer(_) => {
                 f.write_str("RelayCredential::EntraBearer(<redacted>)")
             }
@@ -159,7 +164,9 @@ pub fn mint_sas(
 /// Build the relay WebSocket connect contract for `role` using `credential`.
 /// SAS authentication mints a token into the `sb-hc-token` query parameter;
 /// Entra authentication leaves the URL token-free and returns the
-/// `ServiceBusAuthorization: Bearer <jwt>` header.
+/// `ServiceBusAuthorization: Bearer <jwt>` header. A pre-minted SAS bearer is
+/// also accepted for the P0 ACA path; it is already scoped/expiring, so this
+/// function only URL-encodes it into `sb-hc-token`.
 pub fn build_connect(
     endpoint: &RelayEndpoint,
     role: RelayRole,
@@ -181,6 +188,10 @@ pub fn build_connect(
         RelayCredential::EntraBearer(token) => Ok(RelayConnect {
             url: base,
             auth_header: Some(format!("Bearer {token}")),
+        }),
+        RelayCredential::SasToken(token) => Ok(RelayConnect {
+            url: format!("{base}&sb-hc-token={}", urlencoding::encode(token)),
+            auth_header: None,
         }),
         RelayCredential::Sas { key_name, key } => {
             let token = mint_sas(endpoint, key_name, key, ttl_secs)?;
@@ -537,7 +548,9 @@ pub async fn run_listener(
                     let local = local.clone();
                     let ca = ca_pem.map(|c| c.to_vec());
                     tokio::spawn(async move {
-                        let _ = accept_one(&address, &local, ca.as_deref()).await;
+                        if let Err(err) = accept_one(&address, &local, ca.as_deref()).await {
+                            tracing::warn!(error = %err, "relay rendezvous ended");
+                        }
                     });
                 }
             }
@@ -656,7 +669,11 @@ pub async fn run_listener_verified(
                     let ca = ca_pem.map(|c| c.to_vec());
                     let verify = verify.clone();
                     tokio::spawn(async move {
-                        let _ = accept_one_verified(&address, &local, ca.as_deref(), verify).await;
+                        if let Err(err) =
+                            accept_one_verified(&address, &local, ca.as_deref(), verify).await
+                        {
+                            tracing::warn!(error = %err, "verified relay rendezvous ended");
+                        }
                     });
                 }
             }
@@ -722,13 +739,13 @@ pub async fn run_sender_with_prologue(
     use tokio_tungstenite::tungstenite::Message;
     let frame = Message::Binary(prologue.to_vec());
     if let LocalTarget::UnixListen(path) = local {
+        let _ = std::fs::remove_file(path);
+        let listener = tokio::net::UnixListener::bind(path)
+            .map_err(|_| RelayConnectError::Handshake("bind unix-listen".into()))?;
         let mut ws = connect_sender_retrying(endpoint, credential, ttl_secs, ca_pem).await?;
         ws.send(frame)
             .await
             .map_err(|_| RelayConnectError::Handshake("prologue send".into()))?;
-        let _ = std::fs::remove_file(path);
-        let listener = tokio::net::UnixListener::bind(path)
-            .map_err(|_| RelayConnectError::Handshake("bind unix-listen".into()))?;
         let (stream, _) = listener
             .accept()
             .await
@@ -843,6 +860,20 @@ mod tests {
         let bearer = RelayCredential::EntraBearer("jwt.secret.token".into());
         let d = format!("{bearer:?}");
         assert!(!d.contains("jwt.secret.token"));
+        let token = RelayCredential::SasToken("SharedAccessSignature secret".into());
+        let d = format!("{token:?}");
+        assert!(!d.contains("SharedAccessSignature secret"));
+    }
+
+    #[test]
+    fn pre_minted_sas_sender_puts_token_in_url_without_key() {
+        let ep = endpoint();
+        let cred = RelayCredential::SasToken("SharedAccessSignature sr=x&sig=y".into());
+        let c = build_connect(&ep, RelayRole::Sender, &cred, 3600).unwrap();
+        assert!(c.url.contains("sb-hc-action=connect"));
+        assert!(c.url.contains("sb-hc-token="));
+        assert!(!c.url.contains("sb-hc-id="));
+        assert!(c.auth_header.is_none());
     }
 
     #[test]
