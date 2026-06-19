@@ -1482,6 +1482,84 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             let _ = intent_id_nm_unmanaged_host;
             Ok(DispatchResult::no_fds(ack_response("ApplyNmUnmanaged")))
         }
+        RealBrokerRequest::ReconcileStorageScope(req) => {
+            let resolver = require_resolver(resolver)?;
+            let response = crate::ops::storage_contract::reconcile_storage_scope(
+                resolver,
+                &req.storage_ref,
+                req.apply,
+            )
+            .map_err(|err| match err {
+                crate::ops::storage_contract::StorageContractError::UnknownStorage(id) => {
+                    BrokerError::BundleIntentMissing {
+                        kind: "storage",
+                        intent_id: id,
+                    }
+                }
+                other => BrokerError::LiveHandler(other.to_string()),
+            })?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "ReconcileStorageScope",
+                req.storage_ref.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                response.scope.as_str(),
+                req.storage_ref.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::ReconcileStorageScope {
+                    storage_ref: response.storage_ref.as_str().to_owned(),
+                    scope: response.scope.clone(),
+                    kind: response.kind.clone(),
+                    status: format!("{:?}", response.status),
+                    applied: response.applied,
+                    path_hash: response.path_hash.clone(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::ReconcileStorageScope(response),
+            ))
+        }
+        RealBrokerRequest::ValidateLockSpec(req) => {
+            let resolver = require_resolver(resolver)?;
+            let response =
+                crate::ops::storage_contract::validate_lock_spec(resolver, &req.lock_ref).map_err(
+                    |err| match err {
+                        crate::ops::storage_contract::StorageContractError::UnknownLock(id) => {
+                            BrokerError::BundleIntentMissing {
+                                kind: "sync-lock",
+                                intent_id: id,
+                            }
+                        }
+                        other => BrokerError::LiveHandler(other.to_string()),
+                    },
+                )?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "ValidateLockSpec",
+                req.lock_ref.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                response.scope.as_str(),
+                req.lock_ref.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::ValidateLockSpec {
+                    lock_ref: response.lock_ref.as_str().to_owned(),
+                    scope: response.scope.clone(),
+                    kind: response.kind.clone(),
+                    cloexec_required: response.cloexec_required,
+                    fd_passing_mechanism: response.fd_passing_mechanism.clone(),
+                    order_key: response.order_key.clone(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(BrokerResponse::ValidateLockSpec(
+                response,
+            )))
+        }
         RealBrokerRequest::OpenPidfd(req) => {
             // OpenPidfd is the only arm that needs an SCM_RIGHTS-bearing
             // response.

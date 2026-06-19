@@ -1121,6 +1121,22 @@ impl BundleResolver {
         self.rotate_known_host_intents.get(id)
     }
 
+    pub fn find_storage_path_spec(&self, id: &str) -> Option<&crate::storage::StoragePathSpec> {
+        self.storage
+            .as_ref()?
+            .paths
+            .iter()
+            .find(|spec| spec.id.as_str() == id)
+    }
+
+    pub fn find_sync_lock_spec(&self, id: &str) -> Option<&crate::sync::LockSpec> {
+        self.sync
+            .as_ref()?
+            .locks
+            .iter()
+            .find(|spec| spec.id.as_str() == id)
+    }
+
     pub fn find_manifest_vm(&self, vm_id: &str) -> Option<&VmEntry> {
         self.manifest.vms.get(vm_id)
     }

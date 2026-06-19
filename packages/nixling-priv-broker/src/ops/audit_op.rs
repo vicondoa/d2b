@@ -324,6 +324,22 @@ pub enum OperationFields {
         ops_skipped: u32,
         target_paths_hash: String,
     },
+    ReconcileStorageScope {
+        storage_ref: String,
+        scope: String,
+        kind: String,
+        status: String,
+        applied: bool,
+        path_hash: String,
+    },
+    ValidateLockSpec {
+        lock_ref: String,
+        scope: String,
+        kind: String,
+        cloexec_required: bool,
+        fd_passing_mechanism: String,
+        order_key: String,
+    },
 }
 
 impl OperationFields {
@@ -562,6 +578,22 @@ impl OperationFields {
                 ops_created: u32,
                 ops_skipped: u32,
                 target_paths_hash: String,
+            }),
+            "ReconcileStorageScope" => parse_fields!(value => ReconcileStorageScope {
+                storage_ref: String,
+                scope: String,
+                kind: String,
+                status: String,
+                applied: bool,
+                path_hash: String,
+            }),
+            "ValidateLockSpec" => parse_fields!(value => ValidateLockSpec {
+                lock_ref: String,
+                scope: String,
+                kind: String,
+                cloexec_required: bool,
+                fd_passing_mechanism: String,
+                order_key: String,
             }),
             other => Err(serde_json::Error::io(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -940,6 +972,30 @@ mod tests {
         OperationFields::ExportBrokerAudit {
             since: Some("2026-01-01T00:00:00Z".to_owned()),
             filter: Some(r#"{"kind":"op-name","contains":"Run"}"#.to_owned()),
+        }
+    );
+    roundtrip_test!(
+        reconcile_storage_scope_round_trip,
+        "ReconcileStorageScope",
+        OperationFields::ReconcileStorageScope {
+            storage_ref: "path:run-root".to_owned(),
+            scope: "host".to_owned(),
+            kind: "Directory".to_owned(),
+            status: "Clean".to_owned(),
+            applied: false,
+            path_hash: "fnv1a64:abc".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        validate_lock_spec_round_trip,
+        "ValidateLockSpec",
+        OperationFields::ValidateLockSpec {
+            lock_ref: "lock:daemon".to_owned(),
+            scope: "host".to_owned(),
+            kind: "Ofd".to_owned(),
+            cloexec_required: true,
+            fd_passing_mechanism: "None".to_owned(),
+            order_key: "Global:run:lock:daemon:lock:daemon".to_owned(),
         }
     );
     roundtrip_test!(
