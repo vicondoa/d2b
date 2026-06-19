@@ -259,7 +259,9 @@ ok "cargo test"
 # against it — this is what gates the fixture -> nixling-core DTO contract
 # layer (e.g. the privileges Rust-vs-Nix matrix parity). Without this step
 # the contract crate never runs in the gate.
-if command -v nix >/dev/null 2>&1; then
+if [ "${NL_SKIP_FIXTURE_BUILD:-0}" = 1 ]; then
+  log "  SKIP: nixling-contract-tests (NL_SKIP_FIXTURE_BUILD=1; fixtures validated by flake-eval shards)"
+elif command -v nix >/dev/null 2>&1; then
   log "--> cargo test -p nixling-contract-tests (NL_FIXTURES = fixture-smoke)"
   contract_system=$(nix eval --extra-experimental-features 'nix-command flakes' \
     --raw --impure --expr builtins.currentSystem 2>/dev/null || echo x86_64-linux)

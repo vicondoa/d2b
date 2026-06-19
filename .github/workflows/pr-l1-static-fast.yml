@@ -111,6 +111,13 @@ jobs:
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
       - name: Rust workspace gate
+        # Skip the fixture nix-build (~35 min) — the same fixtures are
+        # already evaluated by the flake-eval-x86 (fixture-smoke) and
+        # (fixture-smoke-full) shards. The contract tests that depend on
+        # NL_FIXTURES still run in those shards' eval; here we test only
+        # the Rust compilation + unit/integration tests.
+        env:
+          NL_SKIP_FIXTURE_BUILD: "1"
         run: make test-rust
 
   test-proofs:
