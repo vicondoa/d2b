@@ -338,7 +338,10 @@ mod tests {
 
     #[test]
     fn owned_roots_are_closed() {
-        assert!(validate_owned_root(Path::new("/run/nixling"), "x").is_ok());
+        assert_eq!(
+            owned_root_for(Path::new("/run/nixling")).unwrap(),
+            Path::new("/run/nixling")
+        );
         assert!(
             validate_owned_root(Path::new("/var/lib/nixling/../../etc/malicious"), "x").is_err()
         );
