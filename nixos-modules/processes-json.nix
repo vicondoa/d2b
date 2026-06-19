@@ -38,12 +38,7 @@ let
   # nixling-wayland-filter: host-side Wayland filter proxy.
   # Built from the workspace so the binary path is available for the
   # wayland-proxy DAG node's binaryPath field.
-  packagesSrc = lib.cleanSourceWith {
-    src = ../packages;
-    filter = path: type:
-      let rel = lib.removePrefix (toString ../packages + "/") (toString path);
-      in !(lib.hasInfix "target" rel || lib.hasInfix ".cargo/registry" rel);
-  };
+  packagesSrc = nl.cleanRustPackagesSource ../packages;
   nixlingWaylandFilterPackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling-wayland-filter";
     version = "0.0.0";

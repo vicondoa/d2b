@@ -16,15 +16,11 @@
 
 let
   cfg = config.nixling;
+  nl = import ./lib.nix { inherit lib; };
 
   # filter out `target/` dev caches from the source
   # so the Nix copy stays small (broker target alone is ~6 GB).
-  packagesSrc = lib.cleanSourceWith {
-    src = ../packages;
-    filter = path: type:
-      let rel = lib.removePrefix (toString ../packages + "/") (toString path);
-      in !(lib.hasInfix "target" rel || lib.hasInfix ".cargo/registry" rel);
-  };
+  packagesSrc = nl.cleanRustPackagesSource ../packages;
 
   brokerPackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling-priv-broker";

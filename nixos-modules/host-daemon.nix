@@ -2,15 +2,11 @@
 
 let
   cfg = config.nixling;
+  nl = import ./lib.nix { inherit lib; };
 
   # filter out `target/` dev caches from the source
   # so the Nix copy stays small (workspace target alone is ~17 GB).
-  packagesSrc = lib.cleanSourceWith {
-    src = ../packages;
-    filter = path: type:
-      let rel = lib.removePrefix (toString ../packages + "/") (toString path);
-      in !(lib.hasInfix "target" rel || lib.hasInfix ".cargo/registry" rel);
-  };
+  packagesSrc = nl.cleanRustPackagesSource ../packages;
   cargoLock = {
     lockFile = ../packages/Cargo.lock;
     outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";

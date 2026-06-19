@@ -77,6 +77,17 @@ rec {
   inherit hex2;
   inherit nixlingReadAudioState;
 
+  cleanRustPackagesSource = packagesPath:
+    lib.cleanSourceWith {
+      src = packagesPath;
+      filter = path: type:
+        let rel = lib.removePrefix (toString packagesPath + "/") (toString path);
+        in !(
+          (type == "directory" && baseNameOf path == "target")
+          || lib.hasInfix ".cargo/registry" rel
+        );
+    };
+
   vmRuntimeKind = vm: vm.runtime.kind or "nixos";
   isNixosVm = vm: vmRuntimeKind vm == "nixos";
   isQemuMediaVm = vm: vmRuntimeKind vm == "qemu-media";

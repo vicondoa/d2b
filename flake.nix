@@ -423,8 +423,6 @@
         rustPackagesSrc = pkgs.runCommand "nixling-rust-src" { } ''
           mkdir -p $out/packages
           cp -r ${./packages}/. $out/packages/
-          install -m 0644 ${./packages/nixling-constellation-core/src/target.rs} \
-            $out/packages/nixling-constellation-core/src/target.rs
           mkdir -p $out/tests
           cp -r ${./tests/golden} $out/tests/golden
           cp -r ${./tests/fixtures} $out/tests/fixtures
