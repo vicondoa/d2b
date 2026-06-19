@@ -173,6 +173,7 @@
             "PrepareStoreView",
             "PrepareSwtpmDir",
             "QemuMediaAttach",
+            "QemuMediaBoot",
             "QemuMediaDetach",
             "QemuMediaEnroll",
             "ReadSecretById",

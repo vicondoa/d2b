@@ -1140,6 +1140,16 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
+        "QemuMediaBoot",
+        "qemu-media boot media",
+        "per-VM/per-media-ref",
+        &["nixlingd"],
+        true,
+        SecretAccess::RedactedOnly,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
         "QemuMediaDetach",
         "qemu-media hotplug",
         "per-VM/per-media-ref",

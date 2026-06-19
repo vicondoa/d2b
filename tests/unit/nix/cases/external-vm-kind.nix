@@ -4,7 +4,7 @@
 # land in later runtime todos. These cases pin the option schema,
 # qemu-media incompatibility assertions, the structural skip that keeps
 # external media VMs out of the per-VM NixOS evaluator / store emitters, and
-# the QMP-only qemu-media runner contract.
+# the QMP-ready qemu-media runner contract.
 { mkEval, lib, flakeRoot, ... }:
 
 let

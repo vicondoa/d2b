@@ -39,8 +39,8 @@ pub mod runner_shape;
 // Pure CH argv generator. Consumed by nixlingd via the SpawnRunner
 // broker wire.
 pub mod ch_argv;
-// Pure QEMU media argv scaffold. It emits a QMP-only not-live baseline for
-// the qemu-media runtime without exposing media paths.
+// Pure QEMU media argv scaffold. It emits a paused QMP-ready baseline for
+// broker-owned media fd passing without exposing media paths.
 pub mod qemu_media_argv;
 // Pure virtiofsd argv generator (one instance per `microvm.shares` row;
 // consumed by nixlingd via SpawnRunner).

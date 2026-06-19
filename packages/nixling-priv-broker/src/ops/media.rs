@@ -5,11 +5,13 @@
 //! direct image paths come only from trusted operator-authored Nix config.
 
 use std::collections::BTreeSet;
-use std::io;
+use std::io::{self, BufRead, BufReader, Write};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use nix::libc;
 use nixling_core::bundle_resolver::BundleResolver;
@@ -18,10 +20,12 @@ use nixling_host::media::{
     MediaAccessMode, QemuMediaHotplugAction, QemuMediaHotplugScaffold, UsbPhysicalIdentity,
 };
 use nixling_ipc::broker_wire::{
-    QemuMediaEnrollRequest, QemuMediaEnrollResponse, QemuMediaHotplugEvent,
-    QemuMediaHotplugRequest, QemuMediaHotplugResponse, QemuMediaHotplugStatus,
+    QemuMediaBootRequest, QemuMediaEnrollRequest, QemuMediaEnrollResponse,
+    QemuMediaHotplugEvent, QemuMediaHotplugRequest, QemuMediaHotplugResponse,
+    QemuMediaHotplugStatus,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 #[derive(Debug)]
 pub enum MediaOpError {
@@ -44,6 +48,7 @@ pub enum MediaOpError {
     Open(String),
     ImageBusy(String),
     QmpScaffold(String),
+    Qmp(String),
 }
 
 impl std::fmt::Display for MediaOpError {
@@ -72,6 +77,7 @@ impl std::fmt::Display for MediaOpError {
             Self::Open(reason) => write!(f, "open:{reason}"),
             Self::ImageBusy(reason) => write!(f, "qemu-media-image-busy:{reason}"),
             Self::QmpScaffold(reason) => write!(f, "qmp-scaffold:{reason}"),
+            Self::Qmp(reason) => write!(f, "qmp:{reason}"),
         }
     }
 }
@@ -166,62 +172,376 @@ pub fn enroll(
     })
 }
 
-pub fn attach_scaffold(
+pub fn boot(
+    resolver: &BundleResolver,
+    req: &QemuMediaBootRequest,
+) -> Result<HotplugOutcome, MediaOpError> {
+    let source = resolve_boot_source(resolver, req.vm_id.as_str())?;
+    let opened = open_declared_source(resolver, source)?;
+    run_attach_transaction(req.vm_id.as_str(), opened, true)
+}
+
+pub fn attach(
     resolver: &BundleResolver,
     req: &QemuMediaHotplugRequest,
 ) -> Result<HotplugOutcome, MediaOpError> {
-    hotplug_scaffold(resolver, req, QemuMediaHotplugAction::Attach, true)
+    let opened = open_runtime_selector_source(resolver, req)?;
+    run_attach_transaction(req.vm_id.as_str(), opened, false)
 }
 
-pub fn detach_scaffold(
+pub fn detach(
     resolver: &BundleResolver,
     req: &QemuMediaHotplugRequest,
-) -> Result<HotplugOutcome, MediaOpError> {
-    hotplug_scaffold(resolver, req, QemuMediaHotplugAction::Detach, false)
-}
-
-fn hotplug_scaffold(
-    resolver: &BundleResolver,
-    req: &QemuMediaHotplugRequest,
-    action: QemuMediaHotplugAction,
-    open_for_attach: bool,
 ) -> Result<HotplugOutcome, MediaOpError> {
     nixling_host::media::validate_usb_busid(&req.bus_id)
         .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
     let identity = read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id)?;
     let (record, source) = resolve_runtime_selector(resolver, req.vm_id.as_str(), &identity)?;
-    if open_for_attach {
-        preflight_identity_not_busy(Path::new("/sys"), &identity)?;
-        let fd = open_block_device(&identity.block_device, access_mode(source))?;
-        drop(fd);
-    }
-    let scaffold =
-        nixling_host::media::qemu_media_hotplug_scaffold(&record.media_ref, &source.slot, action)
-            .map_err(|err| MediaOpError::QmpScaffold(format!("{err:?}")))?;
+    let scaffold = qmp_scaffold(&record.media_ref, &source.slot, QemuMediaHotplugAction::Detach)?;
+    let mut client = QmpClient::connect(&qmp_socket_path(req.vm_id.as_str()))?;
+    let commands = qmp_detach(&mut client, &scaffold)?;
     Ok(HotplugOutcome {
-        response: hotplug_response(req, source, scaffold),
+        response: hotplug_response(
+            req.vm_id.as_str(),
+            source,
+            scaffold,
+            commands,
+            vec![
+                QemuMediaHotplugStatus::IdentityResolved,
+                QemuMediaHotplugStatus::QmpConnected,
+                QemuMediaHotplugStatus::QmpCapabilities,
+                QemuMediaHotplugStatus::DeviceDeleted,
+                QemuMediaHotplugStatus::BlockdevDeleted,
+                QemuMediaHotplugStatus::FdRemoved,
+            ],
+        ),
+    })
+}
+
+struct OpenedMedia<'a> {
+    source: &'a QemuMediaSourceIntent,
+    fd: OwnedFd,
+}
+
+fn open_runtime_selector_source<'a>(
+    resolver: &'a BundleResolver,
+    req: &QemuMediaHotplugRequest,
+) -> Result<OpenedMedia<'a>, MediaOpError> {
+    nixling_host::media::validate_usb_busid(&req.bus_id)
+        .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
+    let identity = read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id)?;
+    let (_record, source) = resolve_runtime_selector(resolver, req.vm_id.as_str(), &identity)?;
+    preflight_identity_not_busy(Path::new("/sys"), &identity)?;
+    let fd = open_block_device(&identity.block_device, access_mode(source))?;
+    Ok(OpenedMedia { source, fd })
+}
+
+fn open_declared_source<'a>(
+    resolver: &'a BundleResolver,
+    source: &'a QemuMediaSourceIntent,
+) -> Result<OpenedMedia<'a>, MediaOpError> {
+    let access = access_mode(source);
+    let fd = match source.source_kind {
+        QemuMediaSourceKind::PhysicalUsb => {
+            let record = read_registry_record(resolver, source.vm.as_str(), source.media_ref.as_str())?;
+            let identity = read_usb_identity(
+                Path::new("/sys"),
+                Path::new("/dev/disk/by-id"),
+                &record.identity.bus_id,
+            )?;
+            verify_identity_matches_record(&record, &identity)?;
+            preflight_identity_not_busy(Path::new("/sys"), &identity)?;
+            open_block_device(&identity.block_device, access)?
+        }
+        QemuMediaSourceKind::ImageFile => open_image_file(source, access)?,
+    };
+    Ok(OpenedMedia { source, fd })
+}
+
+fn run_attach_transaction(
+    vm: &str,
+    opened: OpenedMedia<'_>,
+    continue_vm: bool,
+) -> Result<HotplugOutcome, MediaOpError> {
+    let source = opened.source;
+    let scaffold = qmp_scaffold(
+        source.media_ref.as_str(),
+        source.slot.as_str(),
+        QemuMediaHotplugAction::Attach,
+    )?;
+    let mut client = QmpClient::connect(&qmp_socket_path(vm))?;
+    let mut statuses = vec![
+        QemuMediaHotplugStatus::IdentityResolved,
+        QemuMediaHotplugStatus::QmpConnected,
+        QemuMediaHotplugStatus::QmpCapabilities,
+    ];
+    let mut commands = qmp_attach(&mut client, &scaffold, opened.fd.as_raw_fd(), source.read_only)?;
+    statuses.extend([
+        QemuMediaHotplugStatus::FdAdded,
+        QemuMediaHotplugStatus::BlockdevAdded,
+        QemuMediaHotplugStatus::DeviceAdded,
+    ]);
+    if continue_vm {
+        client.execute("cont", json!({}), None)?;
+        commands.push("cont".to_owned());
+        statuses.push(QemuMediaHotplugStatus::VmContinued);
+    }
+    Ok(HotplugOutcome {
+        response: hotplug_response(vm, source, scaffold, commands, statuses),
     })
 }
 
 fn hotplug_response(
-    req: &QemuMediaHotplugRequest,
+    vm: &str,
     source: &QemuMediaSourceIntent,
     scaffold: QemuMediaHotplugScaffold,
+    qmp_commands: Vec<String>,
+    statuses: Vec<QemuMediaHotplugStatus>,
 ) -> QemuMediaHotplugResponse {
     QemuMediaHotplugResponse {
-        vm_id: req.vm_id.clone(),
+        vm_id: nixling_ipc::types::VmId::new(vm.to_owned()),
         media_ref: nixling_ipc::types::MediaRef::new(scaffold.media_ref),
         slot: scaffold.slot,
         read_only: source.read_only,
-        qmp_commands: scaffold.qmp_commands,
-        events: vec![
-            QemuMediaHotplugEvent {
-                status: QemuMediaHotplugStatus::IdentityResolved,
-            },
-            QemuMediaHotplugEvent {
-                status: QemuMediaHotplugStatus::QmpScaffolded,
-            },
-        ],
+        qmp_commands,
+        events: statuses
+            .into_iter()
+            .map(|status| QemuMediaHotplugEvent { status })
+            .collect(),
+    }
+}
+
+fn resolve_boot_source<'a>(
+    resolver: &'a BundleResolver,
+    vm: &str,
+) -> Result<&'a QemuMediaSourceIntent, MediaOpError> {
+    resolver
+        .host
+        .qemu_media
+        .as_ref()
+        .and_then(|qemu_media| {
+            qemu_media
+                .sources
+                .iter()
+                .find(|source| source.vm == vm && source.slot == "boot")
+        })
+        .ok_or(MediaOpError::MissingBundlePolicy)
+}
+
+fn qmp_scaffold(
+    media_ref: &str,
+    slot: &str,
+    action: QemuMediaHotplugAction,
+) -> Result<QemuMediaHotplugScaffold, MediaOpError> {
+    nixling_host::media::qemu_media_hotplug_scaffold(media_ref, slot, action)
+        .map_err(|err| MediaOpError::QmpScaffold(format!("{err:?}")))
+}
+
+fn qmp_socket_path(vm: &str) -> PathBuf {
+    PathBuf::from("/run/nixling/vms").join(vm).join("qmp.sock")
+}
+
+fn qemu_media_fdset_id(vm: &str, media_ref: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in vm.bytes().chain([b':']).chain(media_ref.bytes()) {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    1_000 + (hash % 1_000_000)
+}
+
+fn qemu_media_file_node_id(media_ref: &str) -> String {
+    format!("nl-file-{media_ref}")
+}
+
+fn qmp_attach(
+    client: &mut QmpClient,
+    scaffold: &QemuMediaHotplugScaffold,
+    fd: i32,
+    read_only: bool,
+) -> Result<Vec<String>, MediaOpError> {
+    let fdset_id = qemu_media_fdset_id(client.vm(), &scaffold.media_ref);
+    let file_node_id = qemu_media_file_node_id(&scaffold.media_ref);
+    client.execute(
+        "add-fd",
+        json!({
+            "fdset-id": fdset_id,
+            "opaque": format!("nixling:{}", scaffold.media_ref),
+        }),
+        Some(fd),
+    )?;
+    client.execute(
+        "blockdev-add",
+        json!({
+            "driver": "file",
+            "filename": format!("/dev/fdset/{fdset_id}"),
+            "node-name": file_node_id.as_str(),
+            "read-only": read_only,
+        }),
+        None,
+    )?;
+    client.execute(
+        "blockdev-add",
+        json!({
+            "driver": "raw",
+            "file": qemu_media_file_node_id(&scaffold.media_ref),
+            "node-name": scaffold.blockdev_id.as_str(),
+            "read-only": read_only,
+        }),
+        None,
+    )?;
+    let mut device_args = json!({
+        "driver": "usb-storage",
+        "drive": scaffold.blockdev_id.as_str(),
+        "id": scaffold.device_id.as_str(),
+        "bus": "xhci.0",
+    });
+    if scaffold.slot == "boot"
+        && let Some(args) = device_args.as_object_mut()
+    {
+        args.insert("bootindex".to_owned(), json!(1));
+    }
+    client.execute("device_add", device_args, None)?;
+    Ok(vec![
+        "add-fd".to_owned(),
+        "blockdev-add:file".to_owned(),
+        "blockdev-add:raw".to_owned(),
+        "device_add".to_owned(),
+    ])
+}
+
+fn qmp_detach(
+    client: &mut QmpClient,
+    scaffold: &QemuMediaHotplugScaffold,
+) -> Result<Vec<String>, MediaOpError> {
+    let fdset_id = qemu_media_fdset_id(client.vm(), &scaffold.media_ref);
+    let file_node_id = qemu_media_file_node_id(&scaffold.media_ref);
+    client.execute("device_del", json!({ "id": scaffold.device_id.as_str() }), None)?;
+    client.wait_for_device_deleted(&scaffold.device_id)?;
+    client.execute("blockdev-del", json!({ "node-name": scaffold.blockdev_id.as_str() }), None)?;
+    client.execute("blockdev-del", json!({ "node-name": file_node_id.as_str() }), None)?;
+    client.execute("remove-fd", json!({ "fdset-id": fdset_id }), None)?;
+    Ok(vec![
+        "device_del".to_owned(),
+        "DEVICE_DELETED".to_owned(),
+        "blockdev-del:raw".to_owned(),
+        "blockdev-del:file".to_owned(),
+        "remove-fd".to_owned(),
+    ])
+}
+
+struct QmpClient {
+    vm: String,
+    writer: UnixStream,
+    reader: BufReader<UnixStream>,
+}
+
+impl QmpClient {
+    fn connect(path: &Path) -> Result<Self, MediaOpError> {
+        let vm = path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .unwrap_or("unknown")
+            .to_owned();
+        let writer = UnixStream::connect(path).map_err(|err| MediaOpError::Qmp(format!("connect:{err}")))?;
+        writer
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|err| MediaOpError::Qmp(format!("timeout:{err}")))?;
+        writer
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .map_err(|err| MediaOpError::Qmp(format!("timeout:{err}")))?;
+        let reader_stream = writer
+            .try_clone()
+            .map_err(|err| MediaOpError::Qmp(format!("clone:{err}")))?;
+        reader_stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|err| MediaOpError::Qmp(format!("timeout:{err}")))?;
+        let mut client = Self {
+            vm,
+            writer,
+            reader: BufReader::new(reader_stream),
+        };
+        let greeting = client.read_message()?;
+        if greeting.get("QMP").is_none() {
+            return Err(MediaOpError::Qmp("missing-greeting".to_owned()));
+        }
+        client.execute("qmp_capabilities", json!({}), None)?;
+        Ok(client)
+    }
+
+    fn vm(&self) -> &str {
+        &self.vm
+    }
+
+    fn execute(
+        &mut self,
+        command: &str,
+        arguments: Value,
+        fd: Option<i32>,
+    ) -> Result<Value, MediaOpError> {
+        let request = json!({
+            "execute": command,
+            "arguments": arguments,
+        });
+        let mut payload = serde_json::to_vec(&request)
+            .map_err(|err| MediaOpError::Qmp(format!("encode:{command}:{err}")))?;
+        payload.push(b'\n');
+        if let Some(fd) = fd {
+            crate::fd_passing::send_fds(self.writer.as_raw_fd(), &payload, &[fd])
+                .map_err(|err| MediaOpError::Qmp(format!("send-fd:{command}:{err}")))?;
+        } else {
+            self.writer
+                .write_all(&payload)
+                .map_err(|err| MediaOpError::Qmp(format!("write:{command}:{err}")))?;
+            self.writer
+                .flush()
+                .map_err(|err| MediaOpError::Qmp(format!("flush:{command}:{err}")))?;
+        }
+        loop {
+            let message = self.read_message()?;
+            if message.get("event").is_some() {
+                continue;
+            }
+            if let Some(error) = message.get("error") {
+                let class = error
+                    .get("class")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                return Err(MediaOpError::Qmp(format!("{command}:{class}")));
+            }
+            if let Some(ret) = message.get("return") {
+                return Ok(ret.clone());
+            }
+        }
+    }
+
+    fn wait_for_device_deleted(&mut self, device_id: &str) -> Result<(), MediaOpError> {
+        loop {
+            let message = self.read_message()?;
+            if message.get("event").and_then(Value::as_str) != Some("DEVICE_DELETED") {
+                continue;
+            }
+            let observed = message
+                .get("data")
+                .and_then(|data| data.get("device"))
+                .and_then(Value::as_str);
+            if observed.is_none() || observed == Some(device_id) {
+                return Ok(());
+            }
+        }
+    }
+
+    fn read_message(&mut self) -> Result<Value, MediaOpError> {
+        let mut line = String::new();
+        let bytes = self
+            .reader
+            .read_line(&mut line)
+            .map_err(|err| MediaOpError::Qmp(format!("read:{err}")))?;
+        if bytes == 0 {
+            return Err(MediaOpError::Qmp("eof".to_owned()));
+        }
+        serde_json::from_str(&line).map_err(|err| MediaOpError::Qmp(format!("decode:{err}")))
     }
 }
 
@@ -887,6 +1207,8 @@ fn reload_udev_rules() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixListener;
 
     fn registry_record() -> MediaRegistryRecord {
         MediaRegistryRecord {
@@ -916,6 +1238,64 @@ mod tests {
             by_id_names: vec!["usb-Vendor_SecretSerial".to_owned()],
             block_device: "sdb".to_owned(),
         }
+    }
+
+    #[test]
+    fn qmp_attach_sends_fd_and_device_commands() {
+            let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
+            let socket = dir.path().join("qmp.sock");
+            let listener = UnixListener::bind(&socket).expect("bind qmp");
+            let server = std::thread::spawn(move || {
+                let (stream, _) = listener.accept().expect("accept qmp");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("server read timeout");
+                let mut writer = stream.try_clone().expect("clone qmp writer");
+                let mut reader = BufReader::new(stream.try_clone().expect("clone qmp reader"));
+                writer
+                    .write_all(br#"{"QMP":{"version":{"qemu":{"major":9,"minor":0,"micro":0}},"capabilities":[]}}"#)
+                    .expect("write greeting");
+                writer.write_all(b"\n").expect("write greeting newline");
+
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read capabilities");
+                assert!(line.contains("qmp_capabilities"));
+                writer.write_all(br#"{"return":{}}"#).expect("capabilities return");
+                writer.write_all(b"\n").expect("capabilities newline");
+
+                let (payload, fds) = crate::fd_passing::recv_fds(stream.as_raw_fd())
+                    .expect("add-fd must carry SCM_RIGHTS");
+                assert_eq!(fds.len(), 1);
+                let add_fd = String::from_utf8(payload).expect("add-fd utf8");
+                assert!(add_fd.contains(r#""execute":"add-fd""#));
+                writer.write_all(br#"{"return":{"fdset-id":1000,"fd":0}}"#).expect("add-fd return");
+                writer.write_all(b"\n").expect("add-fd newline");
+
+                for expected in ["blockdev-add", "blockdev-add", "device_add"] {
+                    line.clear();
+                    reader.read_line(&mut line).expect("read qmp command");
+                    assert!(line.contains(expected), "missing {expected} in {line}");
+                    writer.write_all(br#"{"return":{}}"#).expect("command return");
+                    writer.write_all(b"\n").expect("command newline");
+                }
+            });
+
+            let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
+            let file = std::fs::File::open("/dev/null").expect("open harmless fd");
+            let scaffold =
+                qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Attach).expect("scaffold");
+            let commands =
+                qmp_attach(&mut client, &scaffold, file.as_raw_fd(), true).expect("qmp attach");
+            assert_eq!(
+                commands,
+                [
+                    "add-fd",
+                    "blockdev-add:file",
+                    "blockdev-add:raw",
+                    "device_add"
+                ]
+            );
+            server.join().expect("fake qmp server joins");
     }
 
     #[test]

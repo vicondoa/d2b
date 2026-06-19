@@ -544,7 +544,7 @@ enum NativeCommand {
     List(ListArgs),
     /// Show per-VM runtime status plus bridge health.
     Status(StatusArgs),
-    /// USBIP attach / detach / probe.
+    /// USB enroll / attach / detach / probe.
     Usb(UsbArgs),
     /// Foreground serial console bridge for headless VMs (not yet implemented).
     Console(ConsoleArgs),
@@ -633,7 +633,7 @@ enum UsbCommand {
     Detach(UsbDetachArgs),
     /// Enroll a physical USB disk for an opaque qemu-media ref.
     Enroll(UsbEnrollArgs),
-    /// List daemon-declared USBIP busid claims and lock owners.
+    /// List daemon-declared USBIP claims and qemu-media USB candidates.
     Probe(UsbProbeArgs),
 }
 
@@ -4253,7 +4253,7 @@ fn vm_is_qemu_media_runtime(context: &Context, vm: &str) -> Result<bool, CliFail
         .is_some_and(|runtime| runtime.kind == "qemu-media"))
 }
 
-fn vm_dag_dry_run_summary(verb: &str, vm: &str) -> serde_json::Value {
+fn vm_dag_dry_run_summary(verb: &str, vm: &str, qemu_media: bool) -> serde_json::Value {
     // The DAG the supervisor would drive. Mirrors the structure emitted
     // by the processes::VmProcessDag exporter — for the headless alpha
     // shape (host-reconcile → store-preflight → virtiofsd-ro-store → ch
@@ -4267,26 +4267,43 @@ fn vm_dag_dry_run_summary(verb: &str, vm: &str) -> serde_json::Value {
     // operator sees the same DAG the daemon bridge will drive.
     let stopping = matches!(verb, "stop");
     let restarting = matches!(verb, "restart");
-    let forward_nodes: Vec<serde_json::Value> = vec![
-        serde_json::json!({"id": "host-reconcile",        "role": "host-reconcile"}),
-        serde_json::json!({"id": "store-preflight",       "role": "store-virtiofs-preflight"}),
-        serde_json::json!({"id": "virtiofsd-ro-store",    "role": "virtiofsd"}),
-        serde_json::json!({"id": "ch",                    "role": "cloud-hypervisor-runner"}),
-        serde_json::json!({"id": "guest-control-health",  "role": "guest-control-health"}),
-    ];
-    let forward_edges = serde_json::json!([
-        {"from": "host-reconcile",     "to": "store-preflight"},
-        {"from": "store-preflight",    "to": "virtiofsd-ro-store"},
-        {"from": "virtiofsd-ro-store", "to": "ch"},
-        {"from": "ch",                 "to": "guest-control-health"},
-    ]);
-    let stop_order = serde_json::json!([
-        "guest-control-health",
-        "ch",
-        "virtiofsd-ro-store",
-        "store-preflight",
-        "host-reconcile",
-    ]);
+    let (forward_nodes, forward_edges, stop_order, notes) = if qemu_media {
+        (
+            vec![
+                serde_json::json!({"id": "host-reconcile", "role": "host-reconcile"}),
+                serde_json::json!({"id": "qemu-media", "role": "qemu-media-runner", "readiness": "qmp-listening", "postReady": "QemuMediaBoot"}),
+            ],
+            serde_json::json!([
+                {"from": "host-reconcile", "to": "qemu-media"},
+            ]),
+            serde_json::json!(["qemu-media", "host-reconcile"]),
+            "vm dry-run reports the qemu-media DAG the supervisor would drive (start: host-reconcile → qemu-media → QemuMediaBoot; stop: reverse topo). --apply routes through nixlingd → broker (v1.0 daemon-only per ADR 0015).",
+        )
+    } else {
+        (
+            vec![
+                serde_json::json!({"id": "host-reconcile",        "role": "host-reconcile"}),
+                serde_json::json!({"id": "store-preflight",       "role": "store-virtiofs-preflight"}),
+                serde_json::json!({"id": "virtiofsd-ro-store",    "role": "virtiofsd"}),
+                serde_json::json!({"id": "ch",                    "role": "cloud-hypervisor-runner"}),
+                serde_json::json!({"id": "guest-control-health",  "role": "guest-control-health"}),
+            ],
+            serde_json::json!([
+                {"from": "host-reconcile",     "to": "store-preflight"},
+                {"from": "store-preflight",    "to": "virtiofsd-ro-store"},
+                {"from": "virtiofsd-ro-store", "to": "ch"},
+                {"from": "ch",                 "to": "guest-control-health"},
+            ]),
+            serde_json::json!([
+                "guest-control-health",
+                "ch",
+                "virtiofsd-ro-store",
+                "store-preflight",
+                "host-reconcile",
+            ]),
+            "vm dry-run reports the DAG the supervisor would drive (start: topo order; stop: reverse topo). --apply routes through nixlingd → broker (v1.0 daemon-only per ADR 0015).",
+        )
+    };
     serde_json::json!({
         "command": format!("vm {verb}"),
         "mode": "dry-run",
@@ -4296,7 +4313,7 @@ fn vm_dag_dry_run_summary(verb: &str, vm: &str) -> serde_json::Value {
             "edges": forward_edges,
         },
         "stopOrder": if stopping || restarting { Some(stop_order) } else { None::<serde_json::Value> },
-        "notes": "vm dry-run reports the DAG the supervisor would drive (start: topo order; stop: reverse topo). --apply routes through nixlingd → broker (v1.0 daemon-only per ADR 0015).",
+        "notes": notes,
     })
 }
 
@@ -4349,7 +4366,8 @@ fn cmd_vm_lifecycle_verb(
             json,
         );
     }
-    let summary = vm_dag_dry_run_summary(verb, vm);
+    let qemu_media = vm_is_qemu_media_runtime(context, vm)?;
+    let summary = vm_dag_dry_run_summary(verb, vm, qemu_media);
     if json {
         let mut rendered = serde_json::to_string_pretty(&summary).map_err(|err| {
             CliFailure::new(1, format!("failed to serialize vm dry-run summary: {err}"))
@@ -4357,9 +4375,15 @@ fn cmd_vm_lifecycle_verb(
         rendered.push('\n');
         print_stdout(&rendered);
     } else {
-        print_stdout(&format!(
-            "vm {verb} --dry-run: would drive the 5-node DAG for vm '{vm}' (host-reconcile → store-preflight → virtiofsd-ro-store → ch → guest-control-health)\n"
-        ));
+        if qemu_media {
+            print_stdout(&format!(
+                "vm {verb} --dry-run: would drive the qemu-media DAG for vm '{vm}' (host-reconcile → qemu-media → QemuMediaBoot)\n"
+            ));
+        } else {
+            print_stdout(&format!(
+                "vm {verb} --dry-run: would drive the 5-node DAG for vm '{vm}' (host-reconcile → store-preflight → virtiofsd-ro-store → ch → guest-control-health)\n"
+            ));
+        }
     }
     Ok(0)
 }
@@ -5983,12 +6007,12 @@ fn usb_mutating_verb(
             vec![
                 "QemuMediaResolveRuntimeSelector",
                 "OpenEnrolledMediaByRegistryIdentity",
-                "QmpHotplugScaffold(blockdev-add,device_add)",
+                "QmpHotplug(add-fd,blockdev-add,device_add)",
             ]
         } else {
             vec![
                 "QemuMediaResolveRuntimeSelector",
-                "QmpHotplugScaffold(device_del,blockdev-del)",
+                "QmpHotplug(device_del,blockdev-del,remove-fd)",
             ]
         };
         let summary = serde_json::json!({
@@ -6007,9 +6031,9 @@ fn usb_mutating_verb(
             print_stdout(&rendered);
         } else {
             let action = if verb == "usb attach" {
-                "resolve the runtime USB selector through the root-only media registry and scaffold QMP attach"
+                "resolve the runtime USB selector through the root-only media registry and execute QMP attach"
             } else {
-                "resolve the runtime USB selector through the root-only media registry and scaffold QMP detach"
+                "resolve the runtime USB selector through the root-only media registry and execute QMP detach"
             };
             print_stdout(&format!(
                 "nixling {verb} --dry-run: would {action} for qemu-media vm '{vm}' (runtime busid redacted)\n"
@@ -6339,11 +6363,11 @@ fn cmd_usb_probe(context: &Context, args: &UsbProbeArgs) -> Result<i32, CliFailu
         }
         UsbProbeSocketOutcome::Unavailable => emit_host_error(
             &host_error_envelope(
-                "USBIP probe requires a reachable nixlingd",
+                "USB media probe requires a reachable nixlingd",
                 "daemon-down",
                 1,
-                "Daemon connectivity at /run/nixling/public.sock and USBIP probe support.",
-                "nixlingd is unreachable or does not expose the native USBIP probe request.",
+                "Daemon connectivity at /run/nixling/public.sock and USB media probe support.",
+                "nixlingd is unreachable or does not expose the native USB probe request.",
                 "Start nixlingd on the host, then re-run `nixling usb probe`.",
                 "docs/reference/error-codes.md#daemon-down",
             ),
@@ -6416,6 +6440,7 @@ fn usb_probe_status_label(status: IpcUsbipProbeStatus) -> &'static str {
         IpcUsbipProbeStatus::Unbound => "unbound",
         IpcUsbipProbeStatus::Enrollable => "enrollable",
         IpcUsbipProbeStatus::Enrolled => "enrolled",
+        IpcUsbipProbeStatus::Stale => "stale",
         IpcUsbipProbeStatus::DirectConfig => "direct-config",
     }
 }
@@ -7477,6 +7502,7 @@ fn render_list_human(output: &ListOutputV2) -> String {
                     qemu.runner.qmp_readiness.as_deref().unwrap_or("unknown")
                 ));
             }
+            label.push_str(", unsupported=exec,guest-control,config-sync,keys,store-sync");
             label
         } else {
             item.status.clone()
@@ -11261,7 +11287,7 @@ mod host_install_dispatch_tests {
                 "type": "mutatingVerbResponse",
                 "verb": "usb attach",
                 "outcome": "applied",
-                "summary": "nixling usb attach --apply: qemu-media attached ref 'installer-usb' in slot 'cdrom' for vm 'media' via QMP scaffold (commands=blockdev-add,device_add)"
+                "summary": "nixling usb attach --apply: qemu-media attached ref 'installer-usb' in slot 'cdrom' for vm 'media' via QMP (commands=add-fd,blockdev-add:file,blockdev-add:raw,device_add)"
             }),
             write_qemu_media_manifest,
             |context| super::cmd_usb_attach(context, &args),
@@ -11300,7 +11326,7 @@ mod host_install_dispatch_tests {
                 "type": "mutatingVerbResponse",
                 "verb": "usb detach",
                 "outcome": "applied",
-                "summary": "nixling usb detach --apply: qemu-media detached ref 'installer-usb' in slot 'cdrom' for vm 'media' via QMP scaffold (commands=device_del,blockdev-del)"
+                "summary": "nixling usb detach --apply: qemu-media detached ref 'installer-usb' in slot 'cdrom' for vm 'media' via QMP (commands=device_del,DEVICE_DELETED,blockdev-del:raw,blockdev-del:file,remove-fd)"
             }),
             write_qemu_media_manifest,
             |context| super::cmd_usb_detach(context, &args),

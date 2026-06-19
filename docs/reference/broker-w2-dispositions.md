@@ -40,8 +40,9 @@ side-effect audit operation that never reaches the wire dispatcher).
 | PrepareStateDir | promoted-live | Resolves the trusted state-dir intent and prepares ownership/mode for the per-VM state directory. | live in production broker |
 | PrepareStoreView | promoted-live | Resolves the per-VM store-view intent, builds the hardlink farm, and validates the generation marker. | live in production broker |
 | PrepareSwtpmDir | compile-time-only | Audit operation emitted as a `SpawnRunner` side-effect for the `Swtpm` runner (issue #64); it provisions/hardens the persistent per-VM swtpm state dir and writes the identity-bound tamper marker inside the broker's pre-spawn step. It is not a standalone wire request, so it never reaches the wire dispatcher. | broker `SpawnRunner` side-effect |
-| QemuMediaAttach | promoted-live | Resolves an enrolled qemu-media slot and returns redacted QMP attach scaffold metadata. | live in production broker |
-| QemuMediaDetach | promoted-live | Resolves an enrolled qemu-media slot and returns redacted QMP detach scaffold metadata. | live in production broker |
+| QemuMediaAttach | promoted-live | Resolves an enrolled qemu-media slot, passes the media fd to QEMU over QMP, and returns only redacted command labels. | live in production broker |
+| QemuMediaBoot | promoted-live | Resolves the declared boot source, passes the media fd to QEMU over QMP, attaches the boot USB storage device, and continues the paused runner. | live in production broker |
+| QemuMediaDetach | promoted-live | Resolves an enrolled qemu-media slot, removes the QMP device/block/fd nodes, and returns only redacted command labels. | live in production broker |
 | QemuMediaEnroll | promoted-live | Enrolls a physical USB device into root-only qemu-media registry state and reconciles runtime automount-inhibition rules. | live in production broker |
 | ReadSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret read paths are not implemented. | future work |
 | ResumeBroker | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; broker admin resume controls are not implemented. | future work |

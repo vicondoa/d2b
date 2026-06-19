@@ -942,6 +942,13 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
         }));
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
+    if let BrokerRequest::QemuMediaBoot(req) = request {
+        return Ok(serde_json::json!({
+            "vmId": req.vm_id.as_str(),
+            "tracingSpanIdPresent": req.tracing_span_id.is_some(),
+        }));
+    }
+    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaAttach(req) | BrokerRequest::QemuMediaDetach(req) = request {
         return Ok(serde_json::json!({
             "vmId": req.vm_id.as_str(),
@@ -2180,9 +2187,36 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 outcome.response,
             )))
         }
+        RealBrokerRequest::QemuMediaBoot(req) => {
+            let resolver = require_resolver(resolver)?;
+            let outcome = crate::ops::media::boot(resolver, &req)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "QemuMediaBoot",
+                outcome.response.media_ref.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                outcome.response.vm_id.as_str(),
+                outcome.response.media_ref.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::QemuMediaBoot {
+                    vm_id: outcome.response.vm_id.as_str().to_owned(),
+                    media_ref: outcome.response.media_ref.as_str().to_owned(),
+                    slot: outcome.response.slot.clone(),
+                    read_only: outcome.response.read_only,
+                    qmp_commands: outcome.response.qmp_commands.clone(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(BrokerResponse::QemuMediaBoot(
+                outcome.response,
+            )))
+        }
         RealBrokerRequest::QemuMediaAttach(req) => {
             let resolver = require_resolver(resolver)?;
-            let outcome = crate::ops::media::attach_scaffold(resolver, &req)
+            let outcome = crate::ops::media::attach(resolver, &req)
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
             write_success_op_record!(
                 audit_log,
@@ -2209,7 +2243,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         }
         RealBrokerRequest::QemuMediaDetach(req) => {
             let resolver = require_resolver(resolver)?;
-            let outcome = crate::ops::media::detach_scaffold(resolver, &req)
+            let outcome = crate::ops::media::detach(resolver, &req)
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
             write_success_op_record!(
                 audit_log,
@@ -6824,6 +6858,23 @@ mod tests {
         assert_eq!(fields["busIdProvided"], true);
         let rendered = fields.to_string();
         assert!(!rendered.contains("1-2.3"));
+        assert!(!rendered.contains("/dev/"));
+        assert!(!rendered.contains("usb-Vendor_SecretSerial"));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn qemu_media_boot_request_fields_are_vm_only() {
+        let request =
+            BrokerRequest::QemuMediaBoot(nixling_ipc::broker_wire::QemuMediaBootRequest {
+                vm_id: nixling_ipc::types::VmId::new("media"),
+                tracing_span_id: None,
+            });
+
+        let fields = request_fields_value(&request).expect("redacted fields");
+        assert_eq!(fields["vmId"], "media");
+        let rendered = fields.to_string();
+        assert!(!rendered.contains("bus"));
         assert!(!rendered.contains("/dev/"));
         assert!(!rendered.contains("usb-Vendor_SecretSerial"));
     }

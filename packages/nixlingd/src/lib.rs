@@ -60,6 +60,7 @@ use nixling_ipc::{
         ApplySysctlRequest as BrokerApplySysctlRequest, BrokerCallerRole, BrokerRequest,
         BrokerRequestEnvelope, BrokerResponse, DeregisterRunnerPidfdRequest,
         OpenPidfdRequest as BrokerOpenPidfdRequest,
+        QemuMediaBootRequest as BrokerQemuMediaBootRequest,
         QemuMediaEnrollRequest as BrokerQemuMediaEnrollRequest,
         QemuMediaHotplugRequest as BrokerQemuMediaHotplugRequest,
         RunActivationRequest as BrokerRunActivationRequest, RunGcRequest as BrokerRunGcRequest,
@@ -3372,7 +3373,7 @@ fn qemu_media_hotplug_summary(
     response: &nixling_ipc::broker_wire::QemuMediaHotplugResponse,
 ) -> String {
     format!(
-        "nixling {verb} --apply: qemu-media {action} ref '{}' in slot '{}' for vm '{}' via QMP scaffold (commands={})",
+        "nixling {verb} --apply: qemu-media {action} ref '{}' in slot '{}' for vm '{}' via QMP (commands={})",
         response.media_ref.as_str(),
         response.slot,
         response.vm_id.as_str(),
@@ -3569,14 +3570,17 @@ fn qemu_media_probe_entries(resolver: &BundleResolver) -> Vec<public_wire::Usbip
     let Some(qemu_media) = resolver.host.qemu_media.as_ref() else {
         return Vec::new();
     };
-    let candidates = nixling_host::media::safe_usb_block_candidates(
+    const MAX_QEMU_MEDIA_PROBE_CANDIDATES: usize = 16;
+    let mut candidates = nixling_host::media::safe_usb_block_candidates(
         Path::new("/sys"),
         Path::new("/dev/disk/by-id"),
     );
+    candidates.truncate(MAX_QEMU_MEDIA_PROBE_CANDIDATES);
     let candidate_bus_ids: Vec<String> = candidates
         .iter()
         .map(|candidate| candidate.bus_id.clone())
         .collect();
+    let registry_records = qemu_media_probe_registry_records(&qemu_media.registry_dir);
     let mut entries = Vec::new();
     for source in &qemu_media.sources {
         let source_kind = match source.source_kind {
@@ -3608,13 +3612,20 @@ fn qemu_media_probe_entries(resolver: &BundleResolver) -> Vec<public_wire::Usbip
                 .find_manifest_vm(&source.vm)
                 .and_then(|vm| vm.env.as_deref())
                 .unwrap_or("-");
+            let has_registry_record = registry_records
+                .iter()
+                .any(|record| record.vm == source.vm && record.media_ref == source.media_ref);
             entries.push(qemu_media_probe_entry(
                 source,
                 env,
                 "-",
-                &candidate_bus_ids,
+                &[],
                 source_kind,
-                public_wire::UsbipProbeStatus::Unbound,
+                if has_registry_record {
+                    public_wire::UsbipProbeStatus::Stale
+                } else {
+                    public_wire::UsbipProbeStatus::Unbound
+                },
                 None,
             ));
             continue;
@@ -3623,22 +3634,107 @@ fn qemu_media_probe_entries(resolver: &BundleResolver) -> Vec<public_wire::Usbip
             .find_manifest_vm(&source.vm)
             .and_then(|vm| vm.env.as_deref())
             .unwrap_or("-");
-        for bus_id in &candidate_bus_ids {
+        let matching_records: Vec<_> = registry_records
+            .iter()
+            .filter(|record| record.vm == source.vm && record.media_ref == source.media_ref)
+            .collect();
+        let mut any_enrolled_candidate = false;
+        for candidate in &candidates {
+            let enrolled = matching_records
+                .iter()
+                .any(|record| qemu_media_probe_candidate_matches_record(candidate, record));
+            any_enrolled_candidate |= enrolled;
+            let bus_id = candidate.bus_id.as_str();
             entries.push(qemu_media_probe_entry(
                 source,
                 env,
                 bus_id,
-                &candidate_bus_ids,
+                std::slice::from_ref(&candidate.bus_id),
                 source_kind.clone(),
-                public_wire::UsbipProbeStatus::Enrollable,
-                Some(format!(
-                    "nixling usb enroll {} {} --busid {} --apply",
-                    source.vm, source.media_ref, bus_id
-                )),
+                if enrolled {
+                    public_wire::UsbipProbeStatus::Enrolled
+                } else {
+                    public_wire::UsbipProbeStatus::Enrollable
+                },
+                if enrolled {
+                    Some(format!(
+                        "nixling usb attach {} --busid {} --apply",
+                        source.vm, bus_id
+                    ))
+                } else {
+                    Some(format!(
+                        "nixling usb enroll {} {} --busid {} --apply",
+                        source.vm, source.media_ref, bus_id
+                    ))
+                },
+            ));
+        }
+        if !matching_records.is_empty() && !any_enrolled_candidate {
+            entries.push(qemu_media_probe_entry(
+                source,
+                env,
+                "-",
+                &[],
+                source_kind,
+                public_wire::UsbipProbeStatus::Stale,
+                None,
             ));
         }
     }
     entries
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QemuMediaProbeRegistryRecord {
+    vm: String,
+    media_ref: String,
+    identity: QemuMediaProbeRegistryIdentity,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QemuMediaProbeRegistryIdentity {
+    by_id_names: Vec<String>,
+}
+
+fn qemu_media_probe_registry_records(registry_dir: &str) -> Vec<QemuMediaProbeRegistryRecord> {
+    let mut records = Vec::new();
+    let Ok(vm_dirs) = fs::read_dir(registry_dir) else {
+        return records;
+    };
+    for vm_dir in vm_dirs.flatten() {
+        let Ok(file_type) = vm_dir.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let Ok(files) = fs::read_dir(vm_dir.path()) else {
+            continue;
+        };
+        for file in files.flatten() {
+            if file.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(bytes) = fs::read(file.path()) else {
+                continue;
+            };
+            if let Ok(record) = serde_json::from_slice(&bytes) {
+                records.push(record);
+            }
+        }
+    }
+    records
+}
+
+fn qemu_media_probe_candidate_matches_record(
+    candidate: &nixling_host::media::SafeUsbCandidate,
+    record: &QemuMediaProbeRegistryRecord,
+) -> bool {
+    let expected: BTreeSet<_> = record.identity.by_id_names.iter().collect();
+    let actual: BTreeSet<_> = candidate.by_id_names.iter().collect();
+    !expected.is_empty() && expected == actual
 }
 
 fn qemu_media_probe_entry(
@@ -6368,6 +6464,65 @@ impl VmStartRunner<'_> {
         Ok(())
     }
 
+    fn boot_qemu_media(
+        &self,
+        vm: &str,
+        node: &ProcessNode,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        match dispatch_broker_request_with_timeout(
+            self.state,
+            BrokerRequest::QemuMediaBoot(BrokerQemuMediaBootRequest {
+                vm_id: VmId::new(vm),
+                tracing_span_id: None,
+            }),
+            timeout,
+        ) {
+            Ok(BrokerResponse::QemuMediaBoot(response)) => {
+                tracing::info!(
+                    vm = %vm,
+                    node = %node.id.0,
+                    role_id = %tracked_role_id(node),
+                    media_ref = %response.media_ref.as_str(),
+                    slot = %response.slot,
+                    qmp_commands = ?response.qmp_commands,
+                    "qemu-media boot source attached and runner continued"
+                );
+                Ok(())
+            }
+            Ok(BrokerResponse::Error(error)) => {
+                tracing::warn!(
+                    vm = %vm,
+                    node = %node.id.0,
+                    broker_kind = %error.kind,
+                    broker_operation = %error.operation,
+                    broker_message = %error.message,
+                    broker_action = %error.action,
+                    "qemu-media boot transaction failed"
+                );
+                Err(format!("broker-error:QemuMediaBoot:{}", error.kind))
+            }
+            Ok(other) => {
+                tracing::warn!(
+                    vm = %vm,
+                    node = %node.id.0,
+                    broker_response_kind = %broker_response_kind(&other),
+                    "qemu-media boot transaction returned unexpected response"
+                );
+                Err("broker-protocol:QemuMediaBoot".to_owned())
+            }
+            Err(error) => {
+                tracing::warn!(
+                    vm = %vm,
+                    node = %node.id.0,
+                    error = ?error,
+                    "qemu-media boot transaction dispatch failed"
+                );
+                Err("broker-dispatch:QemuMediaBoot".to_owned())
+            }
+        }
+    }
+
     /// State-aware readiness for a `GuestControlHealth` node. Resolves the
     /// per-VM probe parameters from the trusted bundle and runs the
     /// authenticated Health probe on a dedicated current-thread runtime
@@ -6457,6 +6612,9 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
                     tracked_role_id(node),
                 );
                 wait_for_readiness(node, readiness, budget.readiness, Some(&liveness))?;
+                if node.role == ProcessRole::QemuMediaRunner {
+                    self.boot_qemu_media(vm, node, budget.readiness)?;
+                }
                 tracing::info!(
                     vm = %vm,
                     node = %node.id.0,

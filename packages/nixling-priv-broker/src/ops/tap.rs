@@ -216,6 +216,7 @@ pub fn live_create_tap_fd(
             detail: e.to_string(),
         }
     })?;
+    attach_tap_to_bridge(&intent.tap_ifname, &intent.bridge_ifname)?;
     Ok(LiveCreateTapOutcome {
         bridge_ifname: Some(intent.bridge_ifname),
         tap_ifname: intent.tap_ifname,
@@ -266,11 +267,49 @@ pub fn live_create_persistent_tap(
         path: PathBuf::from("/dev/net/tun"),
         detail: e.to_string(),
     })?;
+    attach_tap_to_bridge(&intent.tap_ifname, &intent.bridge_ifname)?;
     Ok(LiveCreateTapOutcome {
         bridge_ifname: Some(intent.bridge_ifname),
         tap_ifname: intent.tap_ifname,
         fd: None,
     })
+}
+
+fn attach_tap_to_bridge(
+    tap_ifname: &nixling_core::host::IfName,
+    bridge_ifname: &nixling_core::host::IfName,
+) -> Result<(), super::OpError> {
+    let ip = ip_binary_path();
+    run_ip_link(
+        &ip,
+        &[
+            "link",
+            "set",
+            "dev",
+            tap_ifname.as_str(),
+            "master",
+            bridge_ifname.as_str(),
+        ],
+    )?;
+    run_ip_link(&ip, &["link", "set", "dev", tap_ifname.as_str(), "up"])
+}
+
+fn run_ip_link(ip: &Path, args: &[&str]) -> Result<(), super::OpError> {
+    let output = Command::new(ip)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|err| super::OpError::Io {
+            path: ip.to_path_buf(),
+            detail: err.to_string(),
+        })?;
+    if !output.status.success() {
+        return Err(super::OpError::Io {
+            path: ip.to_path_buf(),
+            detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

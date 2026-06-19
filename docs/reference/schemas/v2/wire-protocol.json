@@ -884,7 +884,26 @@
           }
         },
         {
-          "description": "Resolve an enrolled physical USB selector and scaffold qemu-media QMP attach. The busid is a runtime selector only and is redacted from every success response/audit field.",
+          "description": "Resolve and attach the declared boot source, then continue the paused qemu-media runner. The broker resolves physical USB registry state or direct image-file policy from the trusted bundle; the daemon supplies only the VM id.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaBoot"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaBootRequest"
+            }
+          }
+        },
+        {
+          "description": "Resolve an enrolled physical USB selector and execute qemu-media QMP attach. The busid is a runtime selector only and is redacted from every success response/audit field.",
           "type": "object",
           "required": [
             "kind",
@@ -903,7 +922,7 @@
           }
         },
         {
-          "description": "Resolve an enrolled physical USB selector and scaffold qemu-media QMP detach. The busid is a runtime selector only and is redacted from every success response/audit field.",
+          "description": "Resolve an enrolled physical USB selector and execute qemu-media QMP detach. The busid is a runtime selector only and is redacted from every success response/audit field.",
           "type": "object",
           "required": [
             "kind",
@@ -1839,6 +1858,24 @@
             },
             "payload": {
               "$ref": "#/definitions/QemuMediaEnrollResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaBoot"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaHotplugResponse"
             }
           }
         },
@@ -6134,6 +6171,26 @@
       },
       "additionalProperties": false
     },
+    "QemuMediaBootRequest": {
+      "description": "qemu-media boot request keyed by VM id only.\n\nThe broker resolves the VM's declared boot source from the trusted bundle. Physical USB boot sources use the root-only enrollment registry; image-file boot sources use the trusted bundle path. Media fds stay inside the broker until QMP consumes them.",
+      "type": "object",
+      "required": [
+        "vmId"
+      ],
+      "properties": {
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "QemuMediaEnrollRequest": {
       "description": "Physical USB enrollment for qemu-media.\n\n`bus_id` is a transient selector used only by the privileged broker to locate the device under sysfs at enrollment time. It is intentionally not echoed in the success response and is never emitted into Nix-store-backed artifacts.",
       "type": "object",
@@ -6207,7 +6264,7 @@
       "additionalProperties": false
     },
     "QemuMediaHotplugRequest": {
-      "description": "qemu-media hotplug request keyed by a runtime USB busid selector.\n\nThe broker compares the current sysfs identity behind `bus_id` with the root-only registry records for `vm_id` and returns only opaque slot/ref information plus QMP scaffold metadata. The success response never echoes the busid, by-id names, serials, block paths, or the registry path.",
+      "description": "qemu-media hotplug request keyed by a runtime USB busid selector.\n\nThe broker compares the current sysfs identity behind `bus_id` with the root-only registry records for `vm_id` and returns only opaque slot/ref information plus QMP command names. The success response never echoes the busid, by-id names, serials, block paths, or the registry path.",
       "type": "object",
       "required": [
         "busId",
@@ -6272,7 +6329,15 @@
       "type": "string",
       "enum": [
         "identity-resolved",
-        "qmp-scaffolded"
+        "qmp-connected",
+        "qmp-capabilities",
+        "fd-added",
+        "blockdev-added",
+        "device-added",
+        "device-deleted",
+        "blockdev-deleted",
+        "fd-removed",
+        "vm-continued"
       ]
     },
     "QemuMediaRegistryStatus": {
@@ -7779,6 +7844,7 @@
         "unbound",
         "enrollable",
         "enrolled",
+        "stale",
         "direct-config"
       ]
     },

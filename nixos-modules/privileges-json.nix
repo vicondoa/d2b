@@ -1217,6 +1217,18 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "QemuMediaBoot",
+    "subject": "qemu-media boot media",
+    "scope": "per-VM/per-media-ref",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "redacted-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "QemuMediaDetach",
     "subject": "qemu-media hotplug",
     "scope": "per-VM/per-media-ref",

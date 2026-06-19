@@ -1698,15 +1698,12 @@ fn validate_qemu_media_runner_hardening(plan: &SpawnRunnerPlan) -> Result<(), Li
             detail: "qemu-media runner must hide device nodes by default".to_owned(),
         });
     }
-    const FORBIDDEN_DEVICE_BINDS: &[&str] = &["/dev/bus/usb", "/dev/net/tun", "/dev/vhost-net"];
-    if let Some(device) = plan
-        .mount_policy
-        .device_binds
-        .iter()
-        .find(|device| FORBIDDEN_DEVICE_BINDS.contains(&device.as_str()))
-    {
+    if plan.mount_policy.device_binds != ["/dev/kvm"] {
         return Err(LiveHandlerError::SpawnFailed {
-            detail: format!("qemu-media runner forbids device bind {device}"),
+            detail: format!(
+                "qemu-media runner permits exactly /dev/kvm by path; got {:?}",
+                plan.mount_policy.device_binds
+            ),
         });
     }
     if plan.mount_policy.bind_mounts.iter().any(|bm| {
@@ -2240,6 +2237,47 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
                     .map_err(|detail| LiveHandlerError::SpawnFailed {
                         detail: format!(
                             "revoke audio socket ACL for wayland-proxy uid {}: {detail}",
+                            plan.uid
+                        ),
+                    })?;
+            }
+        }
+    }
+    if plan.seccomp_policy_ref.as_deref() == Some("w1-qemu-media") {
+        // qemu-media uses QEMU's GTK/Wayland display path. Grant only the
+        // compositor socket plus directory traversal; keep audio sockets denied.
+        let runtime_dir = env_value(plan, "XDG_RUNTIME_DIR");
+        if let Some(runtime_dir) = runtime_dir {
+            let runtime = Path::new(runtime_dir);
+            let wayland_display = env_value(plan, "WAYLAND_DISPLAY").unwrap_or("wayland-0");
+            setfacl_fd_safe(
+                runtime,
+                &format!("u:{}:rx", plan.uid),
+                AclPathKind::Directory,
+            )
+            .map_err(|detail| LiveHandlerError::SpawnFailed {
+                detail: format!(
+                    "refresh session runtime ACL for qemu-media uid {}: {detail}",
+                    plan.uid
+                ),
+            })?;
+            setfacl_fd_safe(
+                &runtime.join(wayland_display),
+                &format!("u:{}:rwx", plan.uid),
+                AclPathKind::Socket,
+            )
+            .map_err(|detail| LiveHandlerError::SpawnFailed {
+                detail: format!(
+                    "refresh host compositor socket ACL for qemu-media uid {}: {detail}",
+                    plan.uid
+                ),
+            })?;
+            for socket in ["pipewire-0", "pulse/native"] {
+                let path = runtime.join(socket);
+                setfacl_fd_safe(&path, &format!("u:{}:---", plan.uid), AclPathKind::Socket)
+                    .map_err(|detail| LiveHandlerError::SpawnFailed {
+                        detail: format!(
+                            "revoke audio socket ACL for qemu-media uid {}: {detail}",
                             plan.uid
                         ),
                     })?;
@@ -3776,7 +3814,7 @@ mod tests {
             ],
             nix_store_read_only: true,
             hide_device_nodes_by_default: true,
-            device_binds: vec![],
+            device_binds: vec!["/dev/kvm".to_owned()],
             bind_mounts: vec![],
         };
         plan
@@ -3797,13 +3835,18 @@ mod tests {
         let cap_err = validate_qemu_media_runner_hardening(&cap_plan).unwrap_err();
         assert!(cap_err.to_string().contains("empty capabilities"));
 
+        let mut missing_kvm_plan = hardened_qemu_media_plan();
+        missing_kvm_plan.mount_policy.device_binds.clear();
+        let missing_kvm_err = validate_qemu_media_runner_hardening(&missing_kvm_plan).unwrap_err();
+        assert!(missing_kvm_err.to_string().contains("exactly /dev/kvm"));
+
         let mut vhost_plan = hardened_qemu_media_plan();
         vhost_plan
             .mount_policy
             .device_binds
             .push("/dev/vhost-net".to_owned());
         let vhost_err = validate_qemu_media_runner_hardening(&vhost_plan).unwrap_err();
-        assert!(vhost_err.to_string().contains("/dev/vhost-net"));
+        assert!(vhost_err.to_string().contains("exactly /dev/kvm"));
 
         let mut media_bind_plan = hardened_qemu_media_plan();
         media_bind_plan

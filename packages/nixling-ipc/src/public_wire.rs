@@ -1242,6 +1242,7 @@ pub enum UsbipProbeStatus {
     Unbound,
     Enrollable,
     Enrolled,
+    Stale,
     DirectConfig,
 }
 

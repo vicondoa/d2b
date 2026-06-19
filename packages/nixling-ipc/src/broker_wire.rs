@@ -49,11 +49,16 @@ pub enum BrokerRequest {
     /// broker resolves declared policy from the trusted bundle, reads physical
     /// identity as root, and writes root-only registry/rules outside the store.
     QemuMediaEnroll(QemuMediaEnrollRequest),
-    /// Resolve an enrolled physical USB selector and scaffold qemu-media QMP
+    /// Resolve and attach the declared boot source, then continue the paused
+    /// qemu-media runner. The broker resolves physical USB registry state or
+    /// direct image-file policy from the trusted bundle; the daemon supplies
+    /// only the VM id.
+    QemuMediaBoot(QemuMediaBootRequest),
+    /// Resolve an enrolled physical USB selector and execute qemu-media QMP
     /// attach. The busid is a runtime selector only and is redacted from every
     /// success response/audit field.
     QemuMediaAttach(QemuMediaHotplugRequest),
-    /// Resolve an enrolled physical USB selector and scaffold qemu-media QMP
+    /// Resolve an enrolled physical USB selector and execute qemu-media QMP
     /// detach. The busid is a runtime selector only and is redacted from every
     /// success response/audit field.
     QemuMediaDetach(QemuMediaHotplugRequest),
@@ -186,6 +191,7 @@ impl BrokerRequest {
             Self::OpenFuse(_) => "OpenFuse",
             Self::OpenKvm(_) => "OpenKvm",
             Self::QemuMediaEnroll(_) => "QemuMediaEnroll",
+            Self::QemuMediaBoot(_) => "QemuMediaBoot",
             Self::QemuMediaAttach(_) => "QemuMediaAttach",
             Self::QemuMediaDetach(_) => "QemuMediaDetach",
             Self::OpenPidfd(_) => "OpenPidfd",
@@ -431,6 +437,7 @@ pub enum BrokerResponse {
     Hello(HelloResponse),
     GuestControlSign(GuestControlSignResponse),
     QemuMediaEnroll(QemuMediaEnrollResponse),
+    QemuMediaBoot(QemuMediaHotplugResponse),
     QemuMediaAttach(QemuMediaHotplugResponse),
     QemuMediaDetach(QemuMediaHotplugResponse),
     /// OpenPidfd response. The pidfd itself is returned via SCM_RIGHTS
@@ -797,11 +804,25 @@ pub struct QemuMediaEnrollResponse {
     pub udev_reloaded: bool,
 }
 
+/// qemu-media boot request keyed by VM id only.
+///
+/// The broker resolves the VM's declared boot source from the trusted bundle.
+/// Physical USB boot sources use the root-only enrollment registry; image-file
+/// boot sources use the trusted bundle path. Media fds stay inside the broker
+/// until QMP consumes them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaBootRequest {
+    pub vm_id: VmId,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
 /// qemu-media hotplug request keyed by a runtime USB busid selector.
 ///
 /// The broker compares the current sysfs identity behind `bus_id` with the
 /// root-only registry records for `vm_id` and returns only opaque slot/ref
-/// information plus QMP scaffold metadata. The success response never echoes the
+/// information plus QMP command names. The success response never echoes the
 /// busid, by-id names, serials, block paths, or the registry path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -816,7 +837,15 @@ pub struct QemuMediaHotplugRequest {
 #[serde(rename_all = "kebab-case")]
 pub enum QemuMediaHotplugStatus {
     IdentityResolved,
-    QmpScaffolded,
+    QmpConnected,
+    QmpCapabilities,
+    FdAdded,
+    BlockdevAdded,
+    DeviceAdded,
+    DeviceDeleted,
+    BlockdevDeleted,
+    FdRemoved,
+    VmContinued,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

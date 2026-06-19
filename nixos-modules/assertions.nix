@@ -798,7 +798,7 @@ let
   # set the options the framework needs for the features it enables).
   needsWaylandUser =
     lib.any
-      (vm: vm.enable && (vm.graphics.enable || vm.audio.enable))
+      (vm: vm.enable && (vm.graphics.enable || vm.audio.enable || vm.runtime.kind == "qemu-media"))
       (lib.attrValues cfg.vms);
 
   siteAssertions =
@@ -821,17 +821,18 @@ let
       }
     ]
     ++
-    # If any VM uses graphics or audio, the host MUST point at a
-    # Wayland user — that's the user whose XDG_RUNTIME_DIR the GPU /
-    # audio sidecars bind into.
+    # If any VM uses graphics, audio, or qemu-media, the host MUST point
+    # at a Wayland user — that's the user whose XDG_RUNTIME_DIR holds the
+    # compositor / PipeWire sockets those host-side processes need.
     lib.optional needsWaylandUser {
       assertion = cfg.site.waylandUser != null;
       message = ''
-        nixling: at least one declared VM has graphics.enable = true
-        or audio.enable = true, but `nixling.site.waylandUser` is
-        unset (null). The GPU + audio sidecars need a Wayland user
-        so they can find the host compositor's pipewire-0 / wayland-0
-        sockets under /run/user/<uid>/.
+        nixling: at least one declared VM has graphics.enable = true,
+        audio.enable = true, or runtime.kind = "qemu-media", but
+        `nixling.site.waylandUser` is unset (null). The host-side
+        display/audio processes need a Wayland user so they can find the
+        host compositor's pipewire-0 / wayland-0 sockets under
+        /run/user/<uid>/.
 
         Set the option to the Plasma / sway / Hyprland user that
         invokes `nixling up <vm>`:

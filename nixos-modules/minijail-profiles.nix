@@ -710,7 +710,7 @@ let
       seccompPolicyRef = "w1-qemu-media";
       readOnlyPaths = [ "/" ];
       writablePaths = [
-        (mkWritablePath "/run/nixling/vms/${name}" "Create the QMP scaffold socket without exposing media paths.")
+        (mkWritablePath "/run/nixling/vms/${name}" "Create the QMP control socket without exposing media paths.")
         (mkWritablePath (stateDirOf name) "Write only qemu-media runner state under this VM's state directory.")
       ];
       deviceBinds = [ "/dev/kvm" ];
