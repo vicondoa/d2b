@@ -62,6 +62,11 @@ let
     })
   ]).config;
   multiGatewayMessages = map (a: a.message) (lib.filter (a: !a.assertion) multiGatewayCfg.assertions);
+  sourceToolsCfg = (mkEval [
+    (lib.recursiveUpdate base {
+      nixling.site.usePrebuiltHostTools = false;
+    })
+  ]).config;
 in
 {
   "gateway-vm/auto-declared-name" = {
@@ -171,6 +176,12 @@ in
     expr = lib.any
       (m: lib.hasInfix "at most one enabled gateway" m)
       multiGatewayMessages;
+    expected = true;
+  };
+
+  "gateway-vm/source-host-tools-opt-out-selects-source-daemon" = {
+    expr = lib.hasInfix "nixlingd-0.0.0-bootstrap"
+      (toString sourceToolsCfg.systemd.services.nixlingd.serviceConfig.ExecStart);
     expected = true;
   };
 }

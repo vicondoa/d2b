@@ -55,6 +55,17 @@
       '';
     };
 
+    usePrebuiltHostTools = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Use release prebuilt host binaries for `nixling`, `nixlingd`, and the
+        activation helper when they are available. Set to `false` on
+        development hosts that intentionally validate the checked-out flake's
+        Rust sources before a release artifact exists.
+      '';
+    };
+
     ch = {
       netHandoffMode = lib.mkOption {
         type = lib.types.enum [ "tap-fd" "persistent-tap" ];
