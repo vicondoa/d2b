@@ -84,18 +84,6 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Nix store cache (fixture builds + nixpkgs eval)
-        # Caches /nix (the Nix store) using the GitHub Actions cache API.
-        # This avoids rebuilding fixture-smoke / fixture-smoke-full / sccache
-        # derivations on every run (~10-15 min of Nix eval+build saved).
-        # The action runs in its own JavaScript process — no tokens are
-        # exposed to `run:` steps.
-        uses: nix-community/cache-nix-action@8351fb9f51c580c96c509987ebb99e38aed956ce
-        with:
-          primary-key: nix-test-rust-${{ runner.os }}-${{ hashFiles('flake.lock') }}
-          restore-prefixes-first-match: |
-            nix-test-rust-${{ runner.os }}-
-          gc-max-store-size-linux: 4G
       - name: Rust dependency cache (target dirs + cargo registry)
         # Swatinem/rust-cache caches dependency artifacts in target dirs
         # and the cargo registry. It performs all I/O in its own action
@@ -119,12 +107,21 @@ jobs:
           # Save cache on main merges AND PR runs so subsequent re-runs on
           # the same PR branch also get cache hits.
           save-if: "true"
-      - name: Install ripgrep + acl
-        # acl provides setfacl/getfacl. The broker's swtpm-dir hardening
-        # resolves setfacl from the NixOS system path in production but falls
-        # back to /usr/bin/setfacl; ubuntu-24.04 runners no longer ship acl
-        # preinstalled, so the broker swtpm_dir ACL-add tests need it here.
-        run: sudo apt-get update && sudo apt-get install -y ripgrep acl
+      - name: Install ripgrep + acl + pinned Rust toolchain
+        # acl provides setfacl/getfacl; ubuntu-24.04 runners no longer ship
+        # it preinstalled.
+        #
+        # Install the pinned Rust toolchain via rustup so test-rust.sh finds
+        # rustup on PATH and uses 1.94.1 (matching rust-toolchain.toml).
+        # Without this, the script falls through to `nix shell` which
+        # installs a DIFFERENT Rust version from nixpkgs (~1.95.0),
+        # invalidating the entire Swatinem/rust-cache (keyed on 1.94.1).
+        run: |
+          sudo apt-get update && sudo apt-get install -y ripgrep acl
+          PINNED=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' packages/rust-toolchain.toml | head -1)
+          rustup toolchain install "$PINNED" --profile minimal --component rustfmt --component clippy
+          rustup default "$PINNED"
+          echo "Rust toolchain: $(rustc --version)"
       - name: Rust workspace gate
         run: make test-rust
 
