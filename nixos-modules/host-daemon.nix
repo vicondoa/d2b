@@ -105,7 +105,7 @@ EOF
     install -Dm644 ${../docs/completions/nixling.fish} "$out/share/fish/vendor_completions.d/nixling.fish"
   '';
 
-  daemonConfigJson = pkgs.writeText "nixlingd-daemon-config.json" (builtins.toJSON {
+  daemonConfigJson = builtins.toJSON {
     publicSocketPath = "/run/nixling/public.sock";
     brokerSocketPath = "/run/nixling/priv.sock";
     stateLockPath = "/run/nixling/daemon.lock";
@@ -124,7 +124,7 @@ EOF
       processesPath = "/etc/nixling/processes.json";
       closuresDir = "/etc/nixling/closures";
     };
-  });
+  };
 in
 {
   options.nixling.host.usbip.allowlist = lib.mkOption {
@@ -192,7 +192,7 @@ in
     environment.systemPackages = [ nixlingdPackage nixlingCliPackage nixlingCliShellArtifactsPackage nixlingActivationHelperPackage ];
 
     environment.etc."nixling/daemon-config.json" = {
-      source = daemonConfigJson;
+      text = daemonConfigJson;
       mode = "0640";
       user = "root";
       group = "nixlingd";

@@ -36,7 +36,7 @@ let
   goodCfg = (mkEval [ base ]).config;
   gatewayGuestCfg = goodCfg.nixling._computed."sys-work-gateway".config;
   gatewayJson = builtins.fromJSON gatewayGuestCfg.environment.etc."nixling/gateway.json".text;
-  hostDaemonJson = builtins.fromJSON (builtins.readFile goodCfg.environment.etc."nixling/daemon-config.json".source);
+  hostDaemonJson = builtins.fromJSON goodCfg.environment.etc."nixling/daemon-config.json".text;
   gatewayProc = lib.findFirst (vm: vm.vm == "sys-work-gateway") null
     goodCfg.nixling._bundle.processesJson.data.vms;
   badCfg = (mkEval [
