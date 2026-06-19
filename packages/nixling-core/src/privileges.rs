@@ -750,6 +750,26 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         BrokerRequirement::Yes,
         AuditMode::Yes,
     ),
+    row(
+        "ReconcileStorageScope",
+        "fs",
+        "global/per-VM/per-role",
+        &["nixlingd"],
+        true,
+        SecretAccess::MetadataOnly,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
+        "ValidateLockSpec",
+        "lock",
+        "global/per-VM/per-role",
+        &["nixlingd"],
+        false,
+        SecretAccess::MetadataOnly,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
     // PrepareSwtpmDir is a `SpawnRunner` side-effect (not a standalone
     // wire request) for the long-lived `Swtpm` runner: the broker
     // provisions/hardens the persistent per-VM swtpm state dir

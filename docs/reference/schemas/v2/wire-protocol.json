@@ -976,6 +976,42 @@
             "kind": {
               "type": "string",
               "enum": [
+                "ReconcileStorageScope"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ReconcileStorageScopeRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ValidateLockSpec"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ValidateLockSpecRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
                 "PrepareStoreView"
               ]
             },
@@ -1815,6 +1851,24 @@
             "kind": {
               "type": "string",
               "enum": [
+                "ReconcileStorageScope"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ReconcileStorageScopeResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
                 "SetBridgePortFlags"
               ]
             },
@@ -1912,6 +1966,24 @@
             },
             "payload": {
               "$ref": "#/definitions/StoreVerifyResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ValidateLockSpec"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ValidateLockSpecResponse"
             }
           }
         },
@@ -5999,6 +6071,62 @@
       },
       "additionalProperties": false
     },
+    "ReconcileStorageScopeRequest": {
+      "description": "Broker-side storage reconciliation request.\n\nThe daemon supplies only a bundle-resolved storage id. The broker looks up the concrete path, owner, mode, kind, cleanup/repair policy, and invariants in its trusted `storage.json`; no raw path or mode crosses the wire.",
+      "type": "object",
+      "required": [
+        "storageRef"
+      ],
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "storageRef": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReconcileStorageScopeResponse": {
+      "type": "object",
+      "required": [
+        "applied",
+        "kind",
+        "pathHash",
+        "scope",
+        "status",
+        "storageRef"
+      ],
+      "properties": {
+        "applied": {
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "pathHash": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/StorageReconcileStatus"
+        },
+        "storageRef": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "RotateKnownHostRequest": {
       "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
       "type": "object",
@@ -6884,6 +7012,17 @@
       },
       "additionalProperties": false
     },
+    "StorageReconcileStatus": {
+      "type": "string",
+      "enum": [
+        "clean",
+        "created",
+        "reused",
+        "checked-only",
+        "template-unexpanded",
+        "refused"
+      ]
+    },
     "StoreSyncRequest": {
       "description": "Store-sync request. The broker resolves the closure intent row from the plain per-VM `vm_id` and refuses the op if `bundle_closure_ref` does not match. The broker also refuses if the wire-supplied `generation_token` does not match the bundle's resolved generation. The token is a content-derived stable equality value (see `closures-json.nix`), not a monotonic counter: the daemon and broker both read it from the same trusted bundle, so a mismatch means a stale daemon is racing the activator and the op is refused fail-closed. It is a display/wire token only and is never used as the on-disk generation key — the broker derives the collision-free `generation_id` (full closure identity, ADR 0027) from its trusted closure copy.",
       "type": "object",
@@ -7340,6 +7479,58 @@
       "properties": {
         "valid": {
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ValidateLockSpecRequest": {
+      "description": "Broker-side synchronization contract validation request.\n\nThe daemon supplies only a lock id. The broker resolves and validates the lock row from trusted `sync.json`; it does not accept raw lock paths or fd-transfer policy from the caller.",
+      "type": "object",
+      "required": [
+        "lockRef"
+      ],
+      "properties": {
+        "lockRef": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ValidateLockSpecResponse": {
+      "type": "object",
+      "required": [
+        "cloexecRequired",
+        "fdPassingMechanism",
+        "kind",
+        "lockRef",
+        "orderKey",
+        "scope"
+      ],
+      "properties": {
+        "cloexecRequired": {
+          "type": "boolean"
+        },
+        "fdPassingMechanism": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "lockRef": {
+          "type": "string"
+        },
+        "orderKey": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
         }
       },
       "additionalProperties": false
