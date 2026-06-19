@@ -102,7 +102,93 @@ in
             type = lib.types.nullOr lib.types.str;
             default = null;
             example = "https://example.eastus.azurecontainerapps.io";
-            description = "ACA data-plane endpoint (non-secret).";
+            description = ''
+              Legacy ACA data-plane endpoint coordinate (non-secret). New
+              deployments should set `region`; the daemon derives the preview
+              endpoint from it.
+            '';
+          };
+
+          subscription = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "00000000-0000-0000-0000-000000000000";
+            description = "Azure subscription id for ACA sandbox data-plane calls (non-secret).";
+          };
+
+          resourceGroup = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "rg-nixling-centralus";
+            description = "Azure resource group containing the ACA sandbox group (non-secret).";
+          };
+
+          sandboxGroup = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "casbx-nixling-demo";
+            description = "ACA sandbox group name (non-secret).";
+          };
+
+          region = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "centralus";
+            description = "Azure region selecting the ACA preview data-plane endpoint.";
+          };
+
+          diskImageId = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "7d9de4d2-f953-4a4c-84ae-e90bf208f9cf";
+            description = ''
+              Existing ACA private disk image id to use for sandbox creation.
+              If unset, `image` is registered as a disk image using the REST
+              data-plane `PUT /diskimages` contract.
+            '';
+          };
+
+          image = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "registry.example.azurecr.io/nixling-wayland:mi";
+            description = "Container image reference registered as an ACA disk image (non-secret).";
+          };
+
+          diskName = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "nixling-wayland-mi";
+            description = "Stable ACA disk image label/name used for idempotent disk reuse.";
+          };
+
+          managedIdentityResourceId = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "/subscriptions/.../resourceGroups/.../providers/Microsoft.ManagedIdentity/userAssignedIdentities/nixling";
+            description = ''
+              Optional user-assigned managed identity resource id used by ACA
+              to pull the configured private image. This is an Azure resource
+              id, not a credential.
+            '';
+          };
+
+          cpu = lib.mkOption {
+            type = lib.types.str;
+            default = "1000m";
+            description = "ACA sandbox CPU request for provider-created sandboxes.";
+          };
+
+          memory = lib.mkOption {
+            type = lib.types.str;
+            default = "2048Mi";
+            description = "ACA sandbox memory request for provider-created sandboxes.";
+          };
+
+          autoSuspendIntervalSecs = lib.mkOption {
+            type = lib.types.ints.positive;
+            default = 600;
+            description = "ACA auto-suspend interval for provider-created sandboxes.";
           };
         };
 
@@ -117,6 +203,13 @@ in
             type = lib.types.enum [ "zstd" "lz4" "none" ];
             default = "zstd";
             description = "Waypipe compression setting used by the gateway display bridge.";
+          };
+
+          waypipeSocket = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "/run/user/1000/wpc.sock";
+            description = "Operator-side Waypipe client socket for the display relay bridge.";
           };
         };
       };

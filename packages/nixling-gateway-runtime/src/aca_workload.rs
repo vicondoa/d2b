@@ -23,6 +23,7 @@
 
 use async_trait::async_trait;
 use base64::Engine;
+use nixling_constellation_core::WorkloadId;
 use nixling_gateway::{
     AgentHandle, AgentSpawnRequest, GatewayError, GatewayWorkload, SessionBinding,
 };
@@ -82,14 +83,20 @@ pub fn default_entra_token_snippet() -> String {
 /// `executeShellCommand`.
 pub struct AcaGatewayWorkload {
     provider: AcaWorkloadProvider,
-    sandbox_id: String,
+    sandbox: AcaSandboxRef,
     relay: RelayCoords,
     bins: AgentBinaries,
     entra_token_snippet: String,
 }
 
+#[derive(Debug, Clone)]
+enum AcaSandboxRef {
+    FixedId(String),
+    WorkloadLabel,
+}
+
 impl AcaGatewayWorkload {
-    /// Build the adapter for one sandbox.
+    /// Build the adapter for one already-known sandbox.
     pub fn new(
         provider: AcaWorkloadProvider,
         sandbox_id: impl Into<String>,
@@ -97,7 +104,19 @@ impl AcaGatewayWorkload {
     ) -> Self {
         Self {
             provider,
-            sandbox_id: sandbox_id.into(),
+            sandbox: AcaSandboxRef::FixedId(sandbox_id.into()),
+            relay,
+            bins: AgentBinaries::default(),
+            entra_token_snippet: default_entra_token_snippet(),
+        }
+    }
+
+    /// Build the adapter that resolves/creates sandboxes by the workload alias
+    /// carried in each authorized gateway request.
+    pub fn for_workload_labels(provider: AcaWorkloadProvider, relay: RelayCoords) -> Self {
+        Self {
+            provider,
+            sandbox: AcaSandboxRef::WorkloadLabel,
             relay,
             bins: AgentBinaries::default(),
             entra_token_snippet: default_entra_token_snippet(),
@@ -114,6 +133,25 @@ impl AcaGatewayWorkload {
     pub fn with_entra_token_snippet(mut self, snippet: impl Into<String>) -> Self {
         self.entra_token_snippet = snippet.into();
         self
+    }
+
+    async fn resolve_sandbox_id(&self, req: &AgentSpawnRequest) -> Result<String, GatewayError> {
+        match &self.sandbox {
+            AcaSandboxRef::FixedId(id) => Ok(id.clone()),
+            AcaSandboxRef::WorkloadLabel => {
+                let workload = WorkloadId::parse(req.binding.workload.clone())
+                    .map_err(|_| GatewayError::ProviderAllocationFailed)?;
+                self.provider
+                    .find_workload_sandbox(&workload)
+                    .await
+                    .map_err(|err| {
+                        tracing::warn!(error = %err, "aca gateway workload sandbox lookup failed");
+                        GatewayError::ProviderAllocationFailed
+                    })?
+                    .map(|sandbox| sandbox.id)
+                    .ok_or(GatewayError::ProviderAllocationFailed)
+            }
+        }
     }
 }
 
@@ -150,6 +188,7 @@ pub fn build_agent_command(
     let mut s = String::new();
     s.push_str("set -e\n");
     s.push_str("W=$(mktemp -d /tmp/nl-disp.XXXXXX)\n");
+    s.push_str("echo \"NL_AGENT_WORKDIR=$W\"\n");
     s.push_str("export XDG_RUNTIME_DIR=\"$W\"\n");
     // Secret: arrives in the exec body, written to a file, read into env, then
     // shredded so it is never a long-lived process argv.
@@ -258,24 +297,56 @@ fn parse_workdir(stdout: &str) -> Option<String> {
     })
 }
 
+fn encode_agent_handle(sandbox_id: &str, workdir: &str) -> AgentHandle {
+    let workdir_b64 = base64::engine::general_purpose::STANDARD.encode(workdir.as_bytes());
+    AgentHandle(format!("aca:{sandbox_id}:{workdir_b64}"))
+}
+
+fn decode_agent_handle(handle: &AgentHandle) -> Option<(String, String)> {
+    let rest = handle.0.strip_prefix("aca:")?;
+    let (sandbox_id, workdir_b64) = rest.split_once(':')?;
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(workdir_b64)
+        .ok()?;
+    let workdir = String::from_utf8(raw).ok()?;
+    Some((sandbox_id.to_owned(), workdir))
+}
+
 #[async_trait]
 impl GatewayWorkload for AcaGatewayWorkload {
     async fn spawn_agent(&self, req: &AgentSpawnRequest) -> Result<AgentHandle, GatewayError> {
+        let sandbox_id = self.resolve_sandbox_id(req).await?;
         let cmd = build_agent_command(req, &self.relay, &self.bins, &self.entra_token_snippet);
         let result = self
             .provider
-            .exec_shell(&self.sandbox_id, &cmd)
+            .exec_shell(&sandbox_id, &cmd)
             .await
-            .map_err(|_| GatewayError::ProviderAllocationFailed)?;
+            .map_err(|err| {
+                tracing::warn!(error = %err, "aca gateway workload agent exec failed");
+                GatewayError::ProviderAllocationFailed
+            })?;
         let workdir =
             parse_workdir(&result.stdout).ok_or(GatewayError::ProviderAllocationFailed)?;
-        Ok(AgentHandle(workdir))
+        if result.exit_code != 0 {
+            let _ = self
+                .provider
+                .exec_shell(&sandbox_id, &build_cleanup_command(&workdir))
+                .await;
+            tracing::warn!(
+                exit_code = result.exit_code,
+                "aca gateway workload agent setup exited nonzero"
+            );
+            return Err(GatewayError::ProviderAllocationFailed);
+        }
+        Ok(encode_agent_handle(&sandbox_id, &workdir))
     }
 
     async fn cleanup(&self, handle: &AgentHandle) -> Result<(), GatewayError> {
-        let cmd = build_cleanup_command(&handle.0);
+        let (sandbox_id, workdir) =
+            decode_agent_handle(handle).ok_or(GatewayError::ProviderAllocationFailed)?;
+        let cmd = build_cleanup_command(&workdir);
         // Best-effort: a cleanup failure must not wedge teardown.
-        let _ = self.provider.exec_shell(&self.sandbox_id, &cmd).await;
+        let _ = self.provider.exec_shell(&sandbox_id, &cmd).await;
         Ok(())
     }
 }
@@ -406,5 +477,76 @@ mod tests {
             "noise\nNL_AGENT_WORKDIR=/tmp/nl-disp.X\nmore noise\nNL_AGENT_WORKDIR=/tmp/nl-disp.Y\n";
         assert_eq!(parse_workdir(out).as_deref(), Some("/tmp/nl-disp.Y"));
         assert_eq!(parse_workdir("nothing here"), None);
+    }
+
+    #[test]
+    fn agent_handle_carries_sandbox_id_and_workdir() {
+        let handle =
+            encode_agent_handle("7d9de4d2-f953-4a4c-84ae-e90bf208f9cf", "/tmp/nl-disp.abc");
+        assert_eq!(
+            decode_agent_handle(&handle),
+            Some((
+                "7d9de4d2-f953-4a4c-84ae-e90bf208f9cf".to_owned(),
+                "/tmp/nl-disp.abc".to_owned()
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_agent_handle_fails_cleanup_closed() {
+        use azure_core::credentials::{AccessToken, TokenRequestOptions};
+        use nixling_provider_aca::{AcaConfig, AcaWorkloadProvider, HttpResponse, HttpTransport};
+        use std::sync::Arc;
+        use std::time::SystemTime;
+
+        #[derive(Debug)]
+        struct FakeCredential;
+        #[async_trait]
+        impl azure_core::credentials::TokenCredential for FakeCredential {
+            async fn get_token(
+                &self,
+                _scopes: &[&str],
+                _options: Option<TokenRequestOptions<'_>>,
+            ) -> azure_core::Result<AccessToken> {
+                let expires_on = (SystemTime::now() + std::time::Duration::from_secs(3600)).into();
+                Ok(AccessToken::new("fake-token", expires_on))
+            }
+        }
+
+        #[derive(Debug)]
+        struct NeverHttp;
+        #[async_trait]
+        impl HttpTransport for NeverHttp {
+            async fn request(
+                &self,
+                _method: nixling_provider_aca::HttpMethod,
+                _url: &str,
+                _bearer: &str,
+                _body: Option<String>,
+            ) -> nixling_constellation_provider::error::ProviderResult<HttpResponse> {
+                panic!("invalid handle cleanup must not call provider")
+            }
+        }
+
+        let provider = AcaWorkloadProvider::with_parts(
+            AcaConfig {
+                subscription: "sub".into(),
+                resource_group: "rg".into(),
+                sandbox_group: "sg".into(),
+                region: "centralus".into(),
+                endpoint: None,
+            },
+            nixling_constellation_core::NodeId::parse("gateway").unwrap(),
+            Arc::new(FakeCredential),
+            Arc::new(NeverHttp),
+        );
+        let workload = AcaGatewayWorkload::new(provider, "sandbox-1", coords());
+        assert_eq!(
+            workload
+                .cleanup(&AgentHandle("not-an-aca-handle".to_owned()))
+                .await
+                .unwrap_err(),
+            GatewayError::ProviderAllocationFailed
+        );
     }
 }

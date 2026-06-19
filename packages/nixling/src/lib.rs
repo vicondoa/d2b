@@ -3859,6 +3859,23 @@ fn cmd_gateway_vm_start(context: &Context, target: String) -> Result<i32, CliFai
     )
 }
 
+fn cmd_gateway_vm_stop(context: &Context, target: String) -> Result<i32, CliFailure> {
+    dispatch_gateway_display(
+        context,
+        public_wire::GatewayDisplayOp::Stop(public_wire::GatewayDisplayStopArgs {
+            operation_id: gateway_operation_id("gw-stop", &target),
+            principal: gateway_principal(),
+            request_hash: gateway_request_hash(&target, &[]),
+            target,
+        }),
+    )
+}
+
+fn cmd_gateway_vm_restart(context: &Context, target: String) -> Result<i32, CliFailure> {
+    cmd_gateway_vm_stop(context, target.clone())?;
+    cmd_gateway_vm_start(context, target)
+}
+
 fn cmd_gateway_vm_exec(
     context: &Context,
     target: String,
@@ -3933,11 +3950,15 @@ fn cmd_vm_lifecycle_verb(
     json: bool,
 ) -> Result<i32, CliFailure> {
     let flags = require_explicit_mutation_flag(&format!("vm {verb}"), dry_run, apply, json)?;
-    if verb == "start"
-        && flags.apply
+    if flags.apply
         && let Some(target) = gateway_target_from_manifest(context, vm)?
     {
-        return cmd_gateway_vm_start(context, target);
+        return match verb {
+            "start" => cmd_gateway_vm_start(context, target),
+            "stop" => cmd_gateway_vm_stop(context, target),
+            "restart" => cmd_gateway_vm_restart(context, target),
+            _ => unreachable!("unknown gateway lifecycle verb"),
+        };
     }
     guard_local_target(vm, json)?;
     require_known_vm(context, vm, json)?;
@@ -8396,7 +8417,7 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
-    fn gateway_display_frame_serializes_start_and_open_requests() {
+    fn gateway_display_frame_serializes_lifecycle_and_open_requests() {
         let start = super::gateway_display_frame(&public_wire::GatewayDisplayOp::Start(
             public_wire::GatewayDisplayStartArgs {
                 target: "nl://demo.gw.work.nixling".to_owned(),
@@ -8412,6 +8433,22 @@ mod host_install_dispatch_tests {
             Some("gatewayDisplay")
         );
         assert_eq!(start_v.get("op").and_then(Value::as_str), Some("start"));
+
+        let stop = super::gateway_display_frame(&public_wire::GatewayDisplayOp::Stop(
+            public_wire::GatewayDisplayStopArgs {
+                target: "nl://demo.gw.work.nixling".to_owned(),
+                operation_id: "gw-stop-1".to_owned(),
+                principal: "uid-1000".to_owned(),
+                request_hash: 9,
+            },
+        ))
+        .unwrap();
+        let stop_v: Value = serde_json::from_slice(&stop).unwrap();
+        assert_eq!(
+            stop_v.get("type").and_then(Value::as_str),
+            Some("gatewayDisplay")
+        );
+        assert_eq!(stop_v.get("op").and_then(Value::as_str), Some("stop"));
 
         let open = super::gateway_display_frame(&public_wire::GatewayDisplayOp::Open(
             public_wire::GatewayDisplayOpenArgs {

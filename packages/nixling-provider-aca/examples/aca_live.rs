@@ -12,6 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         resource_group: std::env::var("ACA_RESOURCE_GROUP")?,
         sandbox_group: std::env::var("ACA_SANDBOX_GROUP")?,
         region: std::env::var("ACA_REGION")?,
+        endpoint: std::env::var("ACA_ENDPOINT").ok(),
     };
     let sandbox = std::env::var("ACA_SANDBOX_ID")?;
     let cmd = std::env::var("ACA_CMD")

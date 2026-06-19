@@ -16,6 +16,13 @@ deprecations ship one minor release before removal.
   define the planned generated contracts for managed paths, process
   restart/adoption, synchronization, lock ownership, degraded-state
   reporting, and the one-time storage cutover.
+- ADR 0032 gateway lifecycle: gateway-mode `nixling vm
+  start/stop/restart <aca target>` now routes through lifecycle
+  operations backed by the ACA preview REST data plane. Gateway config
+  can declare non-secret ACA subscription/resource-group/sandbox-group/
+  region/image coordinates, and the provider creates/reuses disk images
+  and sandboxes by nixling workload labels instead of shelling out to the
+  preview `aca` CLI.
 - CI: merging `main` after cutting a new dated changelog section now
   auto-tags the release and publishes pre-built `x86_64-linux` host
   binary tarballs for `nixlingd`, `nixling`, `nixling-priv-broker`,

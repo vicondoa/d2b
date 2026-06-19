@@ -141,6 +141,7 @@ pub enum PublicResponse {
 #[serde(tag = "op", content = "args", rename_all = "kebab-case")]
 pub enum GatewayDisplayOp {
     Start(GatewayDisplayStartArgs),
+    Stop(GatewayDisplayStopArgs),
     Open(GatewayDisplayOpenArgs),
     Close(GatewayDisplayCloseArgs),
     List(GatewayDisplayListArgs),
@@ -149,6 +150,15 @@ pub enum GatewayDisplayOp {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GatewayDisplayStartArgs {
+    pub target: String,
+    pub operation_id: String,
+    pub principal: String,
+    pub request_hash: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayDisplayStopArgs {
     pub target: String,
     pub operation_id: String,
     pub principal: String,
@@ -182,6 +192,7 @@ pub struct GatewayDisplayListArgs {
 #[serde(tag = "op", content = "result", rename_all = "kebab-case")]
 pub enum GatewayDisplayOpResponse {
     Start(GatewayDisplayStartResult),
+    Stop(GatewayDisplayStopResult),
     Open(GatewayDisplayOpenResult),
     Close(GatewayDisplayCloseResult),
     List(GatewayDisplayListResult),
@@ -190,6 +201,13 @@ pub enum GatewayDisplayOpResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GatewayDisplayStartResult {
+    pub target: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayDisplayStopResult {
     pub target: String,
     pub state: String,
 }
