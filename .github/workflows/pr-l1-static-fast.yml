@@ -74,16 +74,24 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          # Full history + tags: the nixling-contract-tests release-policy
-          # tests assert the annotated `v1.1` tag exists and resolves to a
-          # commit (migrated from tests/release-tag-eval.sh). A shallow
-          # checkout has no tags, so they fail-closed without this.
           fetch-depth: 0
       - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Install pinned Rust toolchain + ripgrep + acl
+        # MUST run BEFORE Swatinem/rust-cache: the cache action reads
+        # `rustc --version` to compute its key hash, so the pinned
+        # toolchain must be the active default when the cache step runs.
+        # Without this, the runner's pre-installed 1.96.0 is hashed,
+        # and the cache is keyed on the wrong compiler version.
+        run: |
+          PINNED=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' packages/rust-toolchain.toml | head -1)
+          rustup toolchain install "$PINNED" --profile minimal --component rustfmt --component clippy
+          rustup default "$PINNED"
+          echo "Rust toolchain: $(rustc --version)"
+          sudo apt-get update && sudo apt-get install -y ripgrep acl
       - name: Rust dependency cache (target dirs + cargo registry)
         # Swatinem/rust-cache caches dependency artifacts in target dirs
         # and the cargo registry. It performs all I/O in its own action
@@ -93,35 +101,15 @@ jobs:
         # `cargo test`) executes.
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          # Cache both workspaces: main packages/ and sibling broker.
           workspaces: |
             packages -> target
             packages/nixling-priv-broker -> target
-          # Also cache the broker's parallel feature-pass target dirs.
           cache-directories: |
             packages/nixling-priv-broker/target-layer1
             packages/nixling-priv-broker/target-fakebackends
-          # Key on toolchain so a Rust version bump rotates the cache.
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
-          # Save cache on main merges AND PR runs so subsequent re-runs on
-          # the same PR branch also get cache hits.
           save-if: "true"
-      - name: Install ripgrep + acl + pinned Rust toolchain
-        # acl provides setfacl/getfacl; ubuntu-24.04 runners no longer ship
-        # it preinstalled.
-        #
-        # Install the pinned Rust toolchain via rustup so test-rust.sh finds
-        # rustup on PATH and uses 1.94.1 (matching rust-toolchain.toml).
-        # Without this, the script falls through to `nix shell` which
-        # installs a DIFFERENT Rust version from nixpkgs (~1.95.0),
-        # invalidating the entire Swatinem/rust-cache (keyed on 1.94.1).
-        run: |
-          sudo apt-get update && sudo apt-get install -y ripgrep acl
-          PINNED=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' packages/rust-toolchain.toml | head -1)
-          rustup toolchain install "$PINNED" --profile minimal --component rustfmt --component clippy
-          rustup default "$PINNED"
-          echo "Rust toolchain: $(rustc --version)"
       - name: Rust workspace gate
         run: make test-rust
 
