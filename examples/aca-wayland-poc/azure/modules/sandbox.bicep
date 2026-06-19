@@ -114,7 +114,7 @@ resource hybridConnection 'Microsoft.Relay/namespaces/hybridConnections@2024-01-
   }
 }
 
-@description('Grant the sandbox group identity the Azure Relay Sender role on the namespace, so a workload inside a sandbox can authenticate to the hybrid connection with an Entra token from its managed identity (plane 2) instead of a Relay SAS token. This is the productionized container -> Relay path; no SAS key ever enters the sandbox.')
+@description('Grant the sandbox group identity the Azure Relay Sender role on the namespace. This keeps the Entra Relay path available for later waves, although P0 uses a gateway-minted short-lived Send bearer because ACA Entra Relay substreams proved unreliable for Waypipe. No SAS rule key is emitted.')
 resource relaySender 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(relayNamespace.id, managedIdentityPrincipalId, relaySenderRoleId)
   scope: relayNamespace
@@ -136,7 +136,7 @@ resource listenRule 'Microsoft.Relay/namespaces/hybridConnections/authorizationR
   }
 }
 
-@description('SAS policy granting Send on the hybrid connection. SUPERSEDED by the Azure Relay Sender role on the sandbox identity (plane 2): the productionized container authenticates to Relay with an Entra token from its managed identity, so no SAS key/token enters the sandbox. Retained for the transitional gateway-minted-token path and for non-MI senders.')
+@description('SAS policy granting Send on the hybrid connection. The realm gateway uses this rule only to mint short-lived Send bearers for ACA agents; the long-lived rule key stays in gateway runtime state and is never emitted as a deployment output.')
 resource sendRule 'Microsoft.Relay/namespaces/hybridConnections/authorizationRules@2024-01-01' = {
   parent: hybridConnection
   name: 'gateway-send'

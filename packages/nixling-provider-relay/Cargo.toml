@@ -13,9 +13,9 @@ workspace = true
 
 # Azure Relay transport (ADR 0032, P0): the credential model + connect
 # contract + the WebSocket transport for the realm gateway. The gateway holds
-# the Listen credential; per the three-plane model the container authenticates
-# to Relay with an Entra bearer token from its managed identity (plane 2), so
-# no SAS key enters the sandbox. All secret material has a redacted Debug.
+# the Listen credential; P0 hands the container a gateway-minted short-lived
+# Send bearer (not the SAS rule key) because ACA Entra Relay substreams are not
+# reliable enough for Waypipe. All secret material has a redacted Debug.
 [dependencies]
 hmac = "0.12"
 sha2 = "0.10"
@@ -28,6 +28,7 @@ futures-util = "0.3"
 serde_json = { workspace = true }
 rustls-pki-types = "1"
 webpki-roots = "0.26"
+tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

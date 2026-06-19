@@ -2,7 +2,7 @@
 
 let
   cfg = config.nixling;
-  prebuilt = import ./prebuilt-packages.nix { inherit pkgs lib; };
+  prebuilt = if cfg.site.usePrebuiltHostTools then import ./prebuilt-packages.nix { inherit pkgs lib; } else { };
 
   # filter out `target/` dev caches from the source
   # so the Nix copy stays small (workspace target alone is ~17 GB).
@@ -160,6 +160,7 @@ EOF
             image
             diskName
             managedIdentityResourceId
+            managedIdentityClientId
             cpu
             memory
             autoSuspendIntervalSecs

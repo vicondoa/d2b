@@ -25,9 +25,9 @@ let
 
   # The handshake-gated relay endpoint binary, built from the main workspace.
   # The gateway-generated in-sandbox command runs `nixling-gateway-relay
-  # sender` authenticated by the sandbox managed identity (Entra bearer,
-  # plane 2) and sends the nixling per-session display credential as the relay
-  # prologue before any Waypipe byte flows.
+  # sender` with relay auth supplied by the gateway (P0: a short-lived Send
+  # bearer, never the rule key) and sends the nixling per-session display
+  # credential as the relay prologue before any Waypipe byte flows.
   nixlingRelaySrc = builtins.path {
     name = "nixling-packages-src";
     path = ../../../packages;
@@ -64,7 +64,8 @@ let
     ];
     text = ''
       set -euo pipefail
-      resource="''${1:?usage: nl-msi-token <resource>}"
+      resource="''${1:?usage: nl-msi-token <resource> [client-id]}"
+      client_id="''${2:-''${NIXLING_MI_CLIENT_ID:-}}"
       ep="''${IDENTITY_ENDPOINT:?IDENTITY_ENDPOINT not injected}"
       rest="''${ep#http://}"
       hostport="''${rest%%/*}"
@@ -75,6 +76,9 @@ let
       resource_enc="''${resource//:/%3A}"
       resource_enc="''${resource_enc//\\//%2F}"
       q="?api-version=2019-08-01&resource=$resource_enc"
+      if [ -n "$client_id" ]; then
+        q="$q&client_id=$client_id"
+      fi
       exec 3<>"/dev/tcp/$host/$port"
       printf 'GET %s%s HTTP/1.1\r\nHost: %s\r\nX-IDENTITY-HEADER: %s\r\nMetadata: true\r\nConnection: close\r\n\r\n' \
         "$path" "$q" "$host" "''${IDENTITY_HEADER:-}" >&3

@@ -102,6 +102,7 @@ let
               image
               diskName
               managedIdentityResourceId
+              managedIdentityClientId
               cpu
               memory
               autoSuspendIntervalSecs
