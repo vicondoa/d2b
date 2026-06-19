@@ -34,8 +34,9 @@ Every entry in `checks[]` has `name`, `status` (`pass`/`warn`/`fail`),
 | `usbipd-runners`          | Counts `role: "usbip"` entries (one per env that owns USB).                                                | `pass` (zero or more); `data.count` + per-runner `vm`/`pid`/`startTimeTicks` snapshot.       | `count`, `entries[]`                                         |
 | `kernel-module-matrix`    | Reads `kernel-module-report.json` written by the daemon on startup.                                       | `pass` clean; `warn` if optional missing or the report file is absent; `fail` if required missing. | `requiredMissing[]`, `optionalMissing[]`                     |
 | `autostart-status`        | Reads `autostart-report.json` written by the daemon after its autostart pass.                             | `pass` all started; `warn` if any degraded; `fail` if any failed; `warn` if report absent. | `started`, `alreadyRunning`, `degraded`, `failed`, `degradedTotal` |
+| `storage-lifecycle-report` | Reads `storage-lifecycle-report.json` written by daemon startup.                                         | `pass` clean; `warn` if report absent/unreadable/unparseable or legacy bundle contracts unavailable; `fail` if current-bundle storage/restart/sync contract checks are degraded. | `schemaVersion`, `storageContractPresent`, `syncContractPresent`, `pathCount`, `restartPolicyCount`, `lockCount`, `issueCount`, `issueKinds`, `issues[]`, `remediation` on non-pass |
 
-The daemon persists the two report files under
+The daemon persists these report files under
 `$NIXLING_DAEMON_STATE_DIR` (default `/var/lib/nixling/daemon-state`)
 during startup. Missing files are treated as "daemon hasn't run / has
 been skipped" and surface as warnings rather than failures so the doctor
@@ -47,7 +48,7 @@ remains usable on fresh hosts.
 | ------------------------- | ---------------------------------------- | ------------------------------------------------------------ |
 | `NIXLING_BROKER_SOCKET`   | `/run/nixling/broker.sock`               | Probe target for `broker-ready`.                             |
 | `NIXLING_PUBLIC_SOCKET`   | `/run/nixling/public.sock`               | Probe target for `daemon-ready`.                             |
-| `NIXLING_DAEMON_STATE_DIR` | `/var/lib/nixling/daemon-state`         | Directory the daemon writes pidfd/module/autostart reports to. |
+| `NIXLING_DAEMON_STATE_DIR` | `/var/lib/nixling/daemon-state`         | Directory the daemon writes pidfd/module/autostart/storage-lifecycle reports to. |
 | `NIXLING_METRICS_URL`     | `http://127.0.0.1:9101/metrics`          | URL probed by `metrics-endpoint`.                            |
 
 ## Exit-code semantics
@@ -81,7 +82,8 @@ remains usable on fresh hosts.
     { "name": "otel-host-bridge-runner", "status": "pass", "detail": "1 OtelHostBridge runner registered", "data": { "count": 1, "entries": [{ "vm": "obs-net", "pid": 1001, "startTimeTicks": 5 }] } },
     { "name": "usbipd-runners",          "status": "pass", "detail": "2 per-env usbipd runner(s) registered", "data": { "count": 2, "entries": [{ "vm": "corp-net", "pid": 1002, "startTimeTicks": 5 }, { "vm": "work-net", "pid": 1003, "startTimeTicks": 5 }] } },
     { "name": "kernel-module-matrix",    "status": "pass", "detail": "all required kernel modules present", "data": { "requiredMissing": [], "optionalMissing": [] } },
-    { "name": "autostart-status",        "status": "warn", "detail": "1 VM(s) degraded", "data": { "started": 1, "alreadyRunning": 0, "degraded": 1, "failed": 0, "degradedTotal": 1 } }
+    { "name": "autostart-status",        "status": "warn", "detail": "1 VM(s) degraded", "data": { "started": 1, "alreadyRunning": 0, "degraded": 1, "failed": 0, "degradedTotal": 1 } },
+    { "name": "storage-lifecycle-report", "status": "pass", "detail": "storage lifecycle startup contract check clean: paths=12 restartPolicies=4 locks=3", "data": { "schemaVersion": "v2", "storageContractPresent": true, "syncContractPresent": true, "pathCount": 12, "restartPolicyCount": 4, "lockCount": 3, "issueCount": 0, "issueKinds": "", "issues": [] } }
   ]
 }
 ```

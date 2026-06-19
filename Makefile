@@ -93,9 +93,9 @@ test-proofs:
 ## test-flake — `nix flake check --no-build` for the native system (bounded
 ## memory). CI shards the x86_64 leg one-job-per-check via a dynamic matrix:
 ## set NL_FLAKE_CHECK=<name> to instantiate just that one check (the matrix
-## enumerates names with `make test-flake-list`); the aarch64 leg still runs the
-## full monolithic check. Set NL_FLAKE_ALL_SYSTEMS=1 to cross-evaluate every
-## system (like `make check`/static.sh).
+## enumerates names with `make test-flake-list`); the aarch64 PR leg runs only a
+## lightweight smoke eval. Set NL_FLAKE_ALL_SYSTEMS=1 to cross-evaluate every
+## system locally (like `make check`/static.sh).
 test-flake:
 	bash tests/test-flake.sh
 

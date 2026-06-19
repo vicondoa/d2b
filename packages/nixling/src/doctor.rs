@@ -23,6 +23,9 @@
 //!   missing optionals = warn; clean = pass.
 //! - `autostart_status` — read daemon-persisted
 //!   `autostart-report.json`. Report the degraded + failed count.
+//! - `storage_lifecycle_report` — read daemon-persisted
+//!   `storage-lifecycle-report.json`. Report storage/restart/sync
+//!   contract drift and the safe remediation command.
 //!
 //! Tests can redirect probes via the env knobs `NIXLING_BROKER_SOCKET`,
 //! `NIXLING_PUBLIC_SOCKET`, `NIXLING_DAEMON_STATE_DIR`, and
@@ -36,7 +39,10 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use nixling_core::manifest_v04::ManifestV04;
+use nixling_core::{
+    manifest_v04::ManifestV04,
+    storage_lifecycle::{StorageLifecycleIssue, StorageLifecycleReport},
+};
 
 use crate::{Context, SeqpacketUnixSocket};
 
@@ -159,6 +165,7 @@ pub fn run_doctor(context: &Context) -> DoctorReport {
     check_usbipd_runners(&pidfd_entries, &mut report);
     check_kernel_module_matrix(&context.daemon_state_dir, &mut report);
     check_autostart_status(&context.daemon_state_dir, &mut report);
+    check_storage_lifecycle_report(&context.daemon_state_dir, &mut report);
     // v1.2 invariant probes
     check_seccomp_bpf_loaded(&pidfd_entries, &mut report);
     check_pre_ns_posture(&pidfd_entries, &mut report);
@@ -769,6 +776,116 @@ fn check_autostart_status(daemon_state_dir: &Path, report: &mut DoctorReport) {
         "autostart: started={started} already_running={already} failed={failed} degraded={degraded} (degraded_total={degraded_total})"
     );
     report.push_with_data("autostart-status", status, detail, data);
+}
+
+// ---------------------------------------------------------------
+// storage-lifecycle-report.json
+// ---------------------------------------------------------------
+
+const STORAGE_LIFECYCLE_REMEDIATION: &str = "rebuild the host configuration so /etc/nixling storage/sync contracts are regenerated, then restart nixlingd";
+
+fn check_storage_lifecycle_report(daemon_state_dir: &Path, report: &mut DoctorReport) {
+    let path = daemon_state_dir.join("storage-lifecycle-report.json");
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            report.push(
+                "storage-lifecycle-report",
+                DoctorStatus::Warn,
+                format!(
+                    "daemon storage-lifecycle-report.json missing at {}; daemon may not have run the startup contract check; remediation: restart nixlingd after rebuilding host configuration",
+                    path.display()
+                ),
+            );
+            return;
+        }
+        Err(err) => {
+            report.push(
+                "storage-lifecycle-report",
+                DoctorStatus::Warn,
+                format!(
+                    "read {}: {err}; remediation: restart nixlingd to rewrite the storage lifecycle report",
+                    path.display()
+                ),
+            );
+            return;
+        }
+    };
+
+    let parsed = match serde_json::from_slice::<StorageLifecycleReport>(&bytes) {
+        Ok(report) => report,
+        Err(err) => {
+            report.push(
+                "storage-lifecycle-report",
+                DoctorStatus::Warn,
+                format!(
+                    "parse {}: {err}; remediation: restart nixlingd to rewrite the storage lifecycle report",
+                    path.display()
+                ),
+            );
+            return;
+        }
+    };
+
+    let issue_kinds = parsed.issue_kinds_csv();
+    let issue_count = parsed.issues.len();
+    let legacy_only = parsed.has_only_legacy_contract_issue();
+    let mut data = json!({
+        "schemaVersion": parsed.schema_version.clone(),
+        "storageContractPresent": parsed.storage_contract_present,
+        "syncContractPresent": parsed.sync_contract_present,
+        "pathCount": parsed.path_count,
+        "restartPolicyCount": parsed.restart_policy_count,
+        "lockCount": parsed.lock_count,
+        "issueCount": issue_count,
+        "issueKinds": issue_kinds.clone(),
+        "issues": parsed.issues.clone(),
+    });
+
+    if legacy_only {
+        data["remediation"] = Value::String(STORAGE_LIFECYCLE_REMEDIATION.to_owned());
+        let bundle_version = parsed
+            .issues
+            .iter()
+            .find_map(|issue| match issue {
+                StorageLifecycleIssue::LegacyBundleContractsUnavailable { bundle_version } => {
+                    Some(*bundle_version)
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
+        report.push_with_data(
+            "storage-lifecycle-report",
+            DoctorStatus::Warn,
+            format!(
+                "legacy bundle (bundleVersion={bundle_version}) has no storage/sync contracts; remediation: {STORAGE_LIFECYCLE_REMEDIATION}"
+            ),
+            data,
+        );
+    } else if parsed.is_degraded() {
+        data["remediation"] = Value::String(STORAGE_LIFECYCLE_REMEDIATION.to_owned());
+        report.push_with_data(
+            "storage-lifecycle-report",
+            DoctorStatus::Fail,
+            format!(
+                "storage lifecycle startup contract check degraded: issueKinds={}; remediation: {}",
+                issue_kinds, STORAGE_LIFECYCLE_REMEDIATION
+            ),
+            data,
+        );
+    } else {
+        report.push_with_data(
+            "storage-lifecycle-report",
+            DoctorStatus::Pass,
+            format!(
+                "storage lifecycle startup contract check clean: paths={} restartPolicies={} locks={}",
+                data["pathCount"].as_u64().unwrap_or_default(),
+                data["restartPolicyCount"].as_u64().unwrap_or_default(),
+                data["lockCount"].as_u64().unwrap_or_default(),
+            ),
+            data,
+        );
+    }
 }
 
 // ---------------------------------------------------------------
@@ -1593,6 +1710,154 @@ mod tests {
         let mut report = DoctorReport::default();
         check_autostart_status(&dir, &mut report);
         assert_eq!(report.checks[0].status, DoctorStatus::Pass);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn storage_lifecycle_report_clean_is_pass() {
+        let dir = unique_scratch("storage-life-pass");
+        write_state(
+            &dir,
+            "storage-lifecycle-report.json",
+            serde_json::json!({
+                "schemaVersion": "v2",
+                "storageContractPresent": true,
+                "syncContractPresent": true,
+                "pathCount": 12,
+                "restartPolicyCount": 4,
+                "lockCount": 3,
+                "issues": [],
+            }),
+        );
+        let mut report = DoctorReport::default();
+        check_storage_lifecycle_report(&dir, &mut report);
+        assert_eq!(report.checks[0].status, DoctorStatus::Pass);
+        let data = report.checks[0].data.as_ref().unwrap();
+        assert_eq!(data["pathCount"].as_u64(), Some(12));
+        assert_eq!(data["issueKinds"].as_str(), Some(""));
+        assert!(data.get("remediation").is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn storage_lifecycle_report_degraded_is_fail_without_dynamic_detail_leak() {
+        let dir = unique_scratch("storage-life-fail");
+        write_state(
+            &dir,
+            "storage-lifecycle-report.json",
+            serde_json::json!({
+                "schemaVersion": "v2",
+                "storageContractPresent": true,
+                "syncContractPresent": true,
+                "pathCount": 12,
+                "restartPolicyCount": 4,
+                "lockCount": 3,
+                "issues": [{
+                    "kind": "missing-restart-policy",
+                    "vm": "corp-vm",
+                    "roleId": "cloud-hypervisor"
+                }, {
+                    "kind": "adoptable-missing-cgroup-leaf",
+                    "vm": "another-vm",
+                    "roleId": "vhost-device-sound"
+                }, {
+                    "kind": "storage-contract-invalid",
+                    "reason": "duplicate-storage-path-id"
+                }, {
+                    "kind": "sync-contract-invalid",
+                    "reason": "duplicate-lock-id"
+                }],
+            }),
+        );
+        let mut report = DoctorReport::default();
+        check_storage_lifecycle_report(&dir, &mut report);
+        let check = &report.checks[0];
+        assert_eq!(check.status, DoctorStatus::Fail);
+        assert!(check.detail.contains("missing-restart-policy"));
+        assert!(check.detail.contains("adoptable-missing-cgroup-leaf"));
+        assert!(check.detail.contains("storage-contract-invalid"));
+        assert!(check.detail.contains("sync-contract-invalid"));
+        assert!(!check.detail.contains("corp-vm"));
+        assert!(!check.detail.contains("cloud-hypervisor"));
+        assert!(!check.detail.contains("another-vm"));
+        assert!(!check.detail.contains("vhost-device-sound"));
+        assert!(!check.detail.contains("duplicate-storage-path-id"));
+        assert!(!check.detail.contains("duplicate-lock-id"));
+        assert!(check.detail.contains("remediation:"));
+        let data = check.data.as_ref().unwrap();
+        assert_eq!(
+            data["issueKinds"].as_str(),
+            Some(
+                "adoptable-missing-cgroup-leaf,missing-restart-policy,storage-contract-invalid,sync-contract-invalid"
+            )
+        );
+        assert_eq!(data["issues"][0]["vm"].as_str(), Some("corp-vm"));
+        assert_eq!(
+            data["remediation"].as_str(),
+            Some(STORAGE_LIFECYCLE_REMEDIATION)
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn storage_lifecycle_report_legacy_bundle_is_warn_with_remediation() {
+        let dir = unique_scratch("storage-life-legacy");
+        write_state(
+            &dir,
+            "storage-lifecycle-report.json",
+            serde_json::json!({
+                "schemaVersion": "v2",
+                "storageContractPresent": false,
+                "syncContractPresent": false,
+                "pathCount": 0,
+                "restartPolicyCount": 0,
+                "lockCount": 0,
+                "issues": [{
+                    "kind": "legacy-bundle-contracts-unavailable",
+                    "bundleVersion": 5
+                }],
+            }),
+        );
+        let mut report = DoctorReport::default();
+        check_storage_lifecycle_report(&dir, &mut report);
+        let check = &report.checks[0];
+        assert_eq!(check.status, DoctorStatus::Warn);
+        assert!(check.detail.contains("bundleVersion=5"));
+        assert!(check.detail.contains("remediation:"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn storage_lifecycle_report_missing_is_warn() {
+        let dir = unique_scratch("storage-life-missing");
+        let mut report = DoctorReport::default();
+        check_storage_lifecycle_report(&dir, &mut report);
+        assert_eq!(report.checks[0].status, DoctorStatus::Warn);
+        assert!(report.checks[0].detail.contains("remediation:"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn storage_lifecycle_report_unparseable_is_warn() {
+        let dir = unique_scratch("storage-life-unparseable");
+        std::fs::write(dir.join("storage-lifecycle-report.json"), b"{not-json").unwrap();
+        let mut report = DoctorReport::default();
+        check_storage_lifecycle_report(&dir, &mut report);
+        assert_eq!(report.checks[0].status, DoctorStatus::Warn);
+        assert!(report.checks[0].detail.contains("parse "));
+        assert!(report.checks[0].detail.contains("remediation:"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn storage_lifecycle_report_io_error_is_warn() {
+        let dir = unique_scratch("storage-life-io");
+        std::fs::create_dir(dir.join("storage-lifecycle-report.json")).unwrap();
+        let mut report = DoctorReport::default();
+        check_storage_lifecycle_report(&dir, &mut report);
+        assert_eq!(report.checks[0].status, DoctorStatus::Warn);
+        assert!(report.checks[0].detail.contains("read "));
+        assert!(report.checks[0].detail.contains("remediation:"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

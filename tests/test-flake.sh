@@ -2,12 +2,13 @@
 # tests/test-flake.sh — `make test-flake`: `nix flake check` for the build's
 # NATIVE system only (bounded memory).
 #
-# CI runs this as a matrix across architectures (x86_64-linux on ubuntu-latest,
-# aarch64-linux on ubuntu-24.04-arm), so each evaluator process holds a single
-# system's checks. The previous monolithic `nix flake check --all-systems`
-# cross-evaluated both architectures in one process and OOM-killed the 16 GB
-# GitHub runner once the rearchitecture grew flake.checks (nix-unit corpus,
-# cargo-deny/cargo-audit derivations, more example evals).
+# CI shards the x86_64-linux checks one-job-per-check. The aarch64 PR job is a
+# lightweight smoke eval only, not a full flake check, to avoid spending ARM
+# runner resources on the longest evaluation leg. The previous monolithic
+# `nix flake check --all-systems` cross-evaluated both architectures in one
+# process and OOM-killed the 16 GB GitHub runner once the rearchitecture grew
+# flake.checks (nix-unit corpus, cargo-deny/cargo-audit derivations, more
+# example evals).
 #
 # Set NL_FLAKE_ALL_SYSTEMS=1 to cross-evaluate every supported system in one
 # process (the heavier `make check` / tests/static.sh local gate does this on a
@@ -37,9 +38,9 @@ flake_ref=$(nl_flake_ref "$ROOT")
 # build). Sharding lets CI fan the checks out across parallel runners so no
 # single evaluator process holds every nixosSystem toplevel at once — the
 # OOM/swap-spill the monolithic `nix flake check` hit on a 16 GB hosted runner.
-# The complementary `test-flake-aarch64` job still runs the full monolithic
-# `nix flake check`, and `NL_FLAKE_OUTPUTS=1` (below) sweeps x86 non-`checks`
-# outputs, so coverage stays equivalent.
+# The complementary `test-flake-aarch64` job runs only the dedicated
+# smoke-eval-aarch64 expression. `NL_FLAKE_OUTPUTS=1` (below) sweeps x86
+# non-`checks` outputs.
 if [ -n "${NL_FLAKE_CHECK:-}" ]; then
   # Defense in depth: the CI matrix sources these names from the flake's check
   # attrNames, but reject anything outside a safe charset before it reaches the
@@ -68,8 +69,8 @@ fi
 # per-system outputs. This flake only exposes `packages.<sys>` with content
 # (apps is empty; lib is system-agnostic), so instantiate every package
 # derivation. This closes the gap where the sharded `test-flake-x86` context
-# could pass with a broken x86 `packages` output that the aarch64 leg (which
-# only evaluates aarch64 outputs) would not catch.
+# could pass with a broken x86 `packages` output that the lightweight aarch64
+# smoke job would not catch.
 if [ "${NL_FLAKE_OUTPUTS:-0}" = 1 ]; then
   native=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "native")
   log "--> flake non-checks outputs: packages.$native.* (instantiate-only)"
