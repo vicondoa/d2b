@@ -10,6 +10,16 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-06-18
+
+### Fixed
+
+- USBIP lock acquire is now idempotent for the same VM: when a VM is
+  restarted (`nixling down` + `nixling up`), the broker no longer
+  refuses to re-bind a busid that the same VM already owns. Previously,
+  every VM restart required a manual `nixling usb detach` + `nixling usb
+  attach` cycle because the lock file persisted across the stop/start.
+
 ## [1.3.0] - 2026-06-18
 
 ### Fixed
