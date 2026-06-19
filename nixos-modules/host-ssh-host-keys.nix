@@ -63,6 +63,7 @@ let
 
     install -d -m 3770 -o nixlingd -g users "${cfg.site.stateDir}/vms/${name}" 2>/dev/null || true
     install -d -m 0750 -o nixlingd -g nixling "$vm_host_keys_dir"
+    chmod g-s "$vm_host_keys_dir"
 
     if [ ! -f "$priv" ]; then
       umask 077

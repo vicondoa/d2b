@@ -352,7 +352,11 @@ fn collect_block_devices_under(path: &Path, depth: u8, out: &mut BTreeSet<String
             }
             continue;
         }
-        collect_block_devices_under(&entry.path(), depth + 1, out);
+        let child_path = entry.path();
+        if child_path.join("idVendor").is_file() && child_path.join("idProduct").is_file() {
+            continue;
+        }
+        collect_block_devices_under(&child_path, depth + 1, out);
     }
 }
 
@@ -554,5 +558,35 @@ mod tests {
         assert!(!summary.contains("1-2.3"));
         assert!(!summary.contains("usb-Vendor_Serial"));
         assert!(!summary.contains("/dev/"));
+    }
+
+    #[test]
+    fn block_scan_does_not_promote_nested_usb_device_to_parent_candidate() {
+        let root = std::env::temp_dir().join(format!(
+            "nixling-usb-scan-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let parent = root.join("2-10");
+        let child = parent.join("2-10.2");
+        let interface_block = child.join("2-10.2:1.0/host0/target0/0:0:0:0/block/sdc");
+        std::fs::create_dir_all(&interface_block).expect("fake block sysfs");
+        for dir in [&parent, &child] {
+            std::fs::write(dir.join("idVendor"), "abcd").expect("vendor");
+            std::fs::write(dir.join("idProduct"), "1234").expect("product");
+        }
+
+        let mut parent_blocks = BTreeSet::new();
+        collect_block_devices_under(&parent, 0, &mut parent_blocks);
+        assert!(parent_blocks.is_empty());
+
+        let mut child_blocks = BTreeSet::new();
+        collect_block_devices_under(&child, 0, &mut child_blocks);
+        assert_eq!(child_blocks, BTreeSet::from(["sdc".to_owned()]));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -388,8 +388,25 @@ in
         (name: _: ''
           guest_control_virtiofsd_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.id == "virtiofsd-nl-gctl") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
           guest_control_ch_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.id == "cloud-hypervisor") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+          qemu_media_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "qemu-media-runner") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
           ${activationHelper} clear-acl-on-path --path "/var/lib/nixling/guest-control-${name}" --require-kind directory --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
           ${activationHelper} clear-acl-on-path --path "/var/lib/nixling/guest-control-${name}/token" --require-kind regular --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
+          for uid in $qemu_media_session_uids; do
+            [ "$uid" = "0" ] && continue
+            ${pkgs.coreutils}/bin/mkdir -p /var/lib/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chown "$uid:$uid" /var/lib/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chmod 0750 /var/lib/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chmod g-s /var/lib/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/nixling 2>/dev/null || true
+            ${pkgs.coreutils}/bin/mkdir -p /run/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/nixling/vms 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/vms/${name} 2>/dev/null || true
+          done
           for uid in $guest_control_virtiofsd_uids; do
             [ "$uid" = "0" ] && continue
             ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /var/lib/nixling 2>/dev/null || true
@@ -463,7 +480,6 @@ in
             wlproxy_wayland_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "wayland-proxy") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             audio_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "audio") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             gpu_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "gpu" or .role == "gpu-render-node") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
-            qemu_media_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "qemu-media-runner") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             otel_host_bridge_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "otel-host-bridge") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             otel_obs_connect_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | .nodes[] | select(.role == "vsock-relay" or .role == "otel-host-bridge") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             overlay_uid=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | .ownerUid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)

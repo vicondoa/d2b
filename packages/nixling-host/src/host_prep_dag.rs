@@ -330,9 +330,11 @@ impl std::error::Error for CycleError {}
 /// The set of steps is derived from the VM's properties in the
 /// trusted bundle:
 ///
-/// - Every VM emits `SshHostKeyPreflight`, `OwnershipMatrixCheck`,
+/// - NixOS VMs emit `SshHostKeyPreflight`, `OwnershipMatrixCheck`,
 ///   `ApplyNftablesRules`, `BringUpTapInterface`, `PreOpenVhostNetFd`,
 ///   and `BindMountFromHardlinkFarm`.
+/// - QEMU media VMs skip the NixOS-only SSH, ownership-matrix, store,
+///   and vhost-net steps.
 /// - Net VMs (`VmEntry::is_net_vm`) additionally emit
 ///   `SeedDnsmasqLease`.
 ///
@@ -394,16 +396,18 @@ pub fn build_host_prep_dag_for_runtime(
             },
         });
     }
-    steps.push(HostPrepStep {
-        id: id(HostPrepStepKind::OwnershipMatrixCheck),
-        depends_on: vec![],
-        kind: HostPrepStepKind::OwnershipMatrixCheck,
-        bundle_ref: BundleStepRef {
-            vm_id: vm_id.clone(),
-            scope_id: None,
-            bundle_op_id: None,
-        },
-    });
+    if !is_qemu_media {
+        steps.push(HostPrepStep {
+            id: id(HostPrepStepKind::OwnershipMatrixCheck),
+            depends_on: vec![],
+            kind: HostPrepStepKind::OwnershipMatrixCheck,
+            bundle_ref: BundleStepRef {
+                vm_id: vm_id.clone(),
+                scope_id: None,
+                bundle_op_id: None,
+            },
+        });
+    }
 
     // P2fu1 kernel-r1-1: NetworkManager unmanage must run BEFORE tap
     // creation so NM doesn't race the broker's TUNSETIFF + master-set
@@ -423,11 +427,9 @@ pub fn build_host_prep_dag_for_runtime(
     // Nftables: per-env scope, gated on both preflights + NM unmanage
     // (so the chain exists AND the tap-parent bridge is daemon-owned
     // before the tap is added to it).
-    let mut nft_deps = vec![
-        id(HostPrepStepKind::OwnershipMatrixCheck),
-        id(HostPrepStepKind::ApplyNmUnmanaged),
-    ];
+    let mut nft_deps = vec![id(HostPrepStepKind::ApplyNmUnmanaged)];
     if !is_qemu_media {
+        nft_deps.push(id(HostPrepStepKind::OwnershipMatrixCheck));
         nft_deps.push(id(HostPrepStepKind::SshHostKeyPreflight));
     }
     steps.push(HostPrepStep {
@@ -672,6 +674,7 @@ mod tests {
         let ids: Vec<&str> = steps.iter().map(|s| s.id.as_str()).collect();
 
         assert!(!ids.contains(&"media:ssh-host-key-preflight"));
+        assert!(!ids.contains(&"media:ownership-matrix-check"));
         assert!(!ids.contains(&"media:bind-mount-from-hardlink-farm"));
         assert!(!ids.contains(&"media:pre-open-vhost-net-fd"));
         assert!(ids.contains(&"media:bring-up-tap-interface"));

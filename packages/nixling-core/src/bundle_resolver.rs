@@ -1593,6 +1593,7 @@ fn module_allows_modprobe(requirement: &ModuleRequirement) -> bool {
 
 fn score_writable_path(node: &ProcessNode, exact: bool) -> u8 {
     match (&node.role, exact) {
+        (ProcessRole::QemuMediaRunner, true) => 5,
         (ProcessRole::HostReconcile, true) => 4,
         (_, true) => 3,
         (ProcessRole::HostReconcile, false) => 2,
@@ -2780,6 +2781,40 @@ mod tests {
                 delegated: true,
             })
             .build()
+    }
+
+    #[test]
+    fn qemu_media_runner_wins_exact_writable_path_owner_score() {
+        let state_dir = "/var/lib/nixling/vms/media";
+        let host = ProcessNode {
+            id: NodeId("host-reconcile".to_owned()),
+            role: ProcessRole::HostReconcile,
+            unit: None,
+            binary_path: None,
+            argv: Vec::new(),
+            env: Vec::new(),
+            profile: role_profile(
+                1100,
+                1100,
+                &[state_dir],
+                "nixling.slice/media/host-reconcile",
+            ),
+            readiness: Vec::new(),
+            plan_ops: Vec::new(),
+        };
+        let qemu = ProcessNode {
+            id: NodeId("qemu-media".to_owned()),
+            role: ProcessRole::QemuMediaRunner,
+            unit: None,
+            binary_path: None,
+            argv: Vec::new(),
+            env: Vec::new(),
+            profile: role_profile(1200, 1200, &[state_dir], "nixling.slice/media/qemu-media"),
+            readiness: Vec::new(),
+            plan_ops: Vec::new(),
+        };
+
+        assert!(score_writable_path(&qemu, true) > score_writable_path(&host, true));
     }
 
     fn build_personal_dev_bundle(root: &Path) -> BundleResolver {
