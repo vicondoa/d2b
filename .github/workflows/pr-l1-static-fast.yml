@@ -84,6 +84,18 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Nix store cache (fixture builds + nixpkgs eval)
+        # Caches /nix (the Nix store) using the GitHub Actions cache API.
+        # This avoids rebuilding fixture-smoke / fixture-smoke-full / sccache
+        # derivations on every run (~10-15 min of Nix eval+build saved).
+        # The action runs in its own JavaScript process — no tokens are
+        # exposed to `run:` steps.
+        uses: nix-community/cache-nix-action@8351fb9f51c580c96c509987ebb99e38aed956ce
+        with:
+          primary-key: nix-test-rust-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: |
+            nix-test-rust-${{ runner.os }}-
+          gc-max-store-size-linux: 4G
       - name: Rust dependency cache (target dirs + cargo registry)
         # Swatinem/rust-cache caches dependency artifacts in target dirs
         # and the cargo registry. It performs all I/O in its own action
