@@ -22,8 +22,10 @@ let
   packagesSrc = lib.cleanSourceWith {
     src = ../packages;
     filter = path: type:
-      let rel = lib.removePrefix (toString ../packages + "/") (toString path);
-      in !(lib.hasInfix "target" rel || lib.hasInfix ".cargo/registry" rel);
+      let
+        rel = lib.removePrefix (toString ../packages + "/") (toString path);
+        parts = lib.splitString "/" rel;
+      in !(builtins.elem "target" parts || lib.hasPrefix ".cargo/registry/" rel || lib.hasInfix "/.cargo/registry/" rel);
   };
 
   brokerPackage = pkgs.rustPlatform.buildRustPackage {
