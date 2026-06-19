@@ -53,7 +53,7 @@ Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
 | `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
 | `make test-rust` | comprehensive Rust gate (fmt, clippy, cargo test, contract, broker ×3, deny/audit) | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
-| `make test-flake` | `nix flake check --no-build` (native system); `NL_FLAKE_CHECK=<name>` instantiates one check, `NL_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs | local + CI (x86 sharded per-check matrix + aarch64 monolithic) |
+| `make test-flake` | `nix flake check --no-build` (native system); `NL_FLAKE_CHECK=<name>` instantiates one check, `NL_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
 | `make test-flake-list` | emit native-system flake check names as JSON (CI matrix plumbing) | CI (dynamic matrix) |
 | `make test-nix-unit` | nix-unit corpus (already covered by test-flake; focused convenience target) | local |
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
@@ -71,8 +71,9 @@ CI runs the individual sub-targets (`test-lint`, `test-rust`, etc.) in parallel.
 The x86 `test-flake` leg is sharded one job per flake check (the matrix is
 enumerated at CI time by `make test-flake-list`; the `test-flake-x86` job is a
 stable aggregator over the shards + the non-`checks` outputs job). The aarch64
-leg runs the full monolithic check. A fail-closed drift gate keeps the matrix
-in sync with the flake (`make flake-matrix-pin` to update its pin).
+leg runs only the lightweight `smoke-eval-aarch64.nix` expression. A fail-closed
+drift gate keeps the matrix and smoke wiring in sync with the flake (`make
+flake-matrix-pin` to update its pin).
 Locally, `make test-unit` runs the sub-targets serially and `make test-flake`
 runs the full native check.
 

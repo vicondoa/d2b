@@ -149,7 +149,8 @@ pub fn write_daemon_config(fixture: &DaemonFixture, launcher_users: &[&str], adm
         "launcherUsers": launcher_users,
         "adminUsers": admin_users,
         "serverVersion": "0.4.0",
-        "acceptedClientVersionRange": ">=0.4.0, <0.5.0"
+        "acceptedClientVersionRange": ">=0.4.0, <0.5.0",
+        "gatewayConfigPath": path_string(&fixture.root().join("gateway.json"))
     });
     let mut file = fs::File::create(&fixture.config_path).expect("create daemon config");
     file.write_all(

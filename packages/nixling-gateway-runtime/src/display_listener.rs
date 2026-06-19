@@ -122,7 +122,7 @@ impl DisplayListener for RelayDisplayListener {
             // The relay periodically closes the listener control channel;
             // re-arm until the session is closed (the task is aborted).
             loop {
-                let _ = nixling_provider_relay::run_listener_verified(
+                if let Err(err) = nixling_provider_relay::run_listener_verified(
                     &endpoint,
                     &credential,
                     &target,
@@ -130,7 +130,10 @@ impl DisplayListener for RelayDisplayListener {
                     ca.as_deref(),
                     verify.clone(),
                 )
-                .await;
+                .await
+                {
+                    tracing::warn!(error = %err, "gateway relay listener ended before handshake");
+                }
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
         });

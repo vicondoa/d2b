@@ -153,6 +153,8 @@ pub mod net_route_preflight;
 // Defense-in-depth alongside the static `tests/v1.1-kernel-floor-eval.sh`
 // gate. Per ADR 0008 + ADR 0018.
 pub mod pidfs_probe;
+// ADR 0034 startup contract check for generated storage/restart/sync artifacts.
+pub mod storage_lifecycle;
 // Contract for bringing autostart VMs up on daemon startup (net VMs
 // first, concurrency cap, degraded-mode tolerant, idempotent). See
 // docs/reference/daemon-autostart.md.
@@ -295,6 +297,8 @@ pub struct DaemonConfig {
     pub accepted_client_version_range: String,
     #[serde(default)]
     pub artifacts: ArtifactPaths,
+    #[serde(default = "default_gateway_config_path")]
+    pub gateway_config_path: PathBuf,
     /// Concurrency cap for the autostart pass that runs on daemon
     /// startup. Default `3`.
     /// Mirrors `nixling.daemon.autostart.parallelism`.
@@ -304,6 +308,10 @@ pub struct DaemonConfig {
 
 fn default_autostart_parallelism() -> usize {
     autostart::DEFAULT_PARALLELISM
+}
+
+fn default_gateway_config_path() -> PathBuf {
+    PathBuf::from(DEFAULT_GATEWAY_CONFIG_PATH)
 }
 
 impl Default for DaemonConfig {
@@ -321,6 +329,7 @@ impl Default for DaemonConfig {
             server_version: default_server_version(),
             accepted_client_version_range: default_accepted_version_range(),
             artifacts: ArtifactPaths::default(),
+            gateway_config_path: default_gateway_config_path(),
             autostart_parallelism: autostart::DEFAULT_PARALLELISM,
         }
     }
@@ -557,6 +566,30 @@ pub fn autostart_report_path(daemon_state_dir: &Path) -> PathBuf {
     daemon_state_dir.join("autostart-report.json")
 }
 
+/// Path of the persisted storage/restart/sync startup contract report.
+pub fn storage_lifecycle_report_path(daemon_state_dir: &Path) -> PathBuf {
+    daemon_state_dir.join("storage-lifecycle-report.json")
+}
+
+fn persist_json_report(path: &Path, json: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    {
+        let mut file = File::create(&tmp)?;
+        file.write_all(json)?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
+    if let Some(parent) = path.parent()
+        && let Ok(parent_dir) = File::open(parent)
+    {
+        let _ = parent_dir.sync_all();
+    }
+    Ok(())
+}
+
 /// Persist the latest kernel-module-check report to
 /// `kernel-module-report.json`. Best-effort: a write failure logs a
 /// warning but does NOT abort daemon startup.
@@ -572,10 +605,7 @@ fn persist_kernel_module_report(
             return;
         }
     };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Err(err) = std::fs::write(&path, &json) {
+    if let Err(err) = persist_json_report(&path, &json) {
         tracing::warn!(
             error = %err,
             path = %path.display(),
@@ -596,14 +626,32 @@ fn persist_autostart_report(daemon_state_dir: &Path, report: &autostart::Autosta
             return;
         }
     };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Err(err) = std::fs::write(&path, &json) {
+    if let Err(err) = persist_json_report(&path, &json) {
         tracing::warn!(
             error = %err,
             path = %path.display(),
             "autostart: persist report failed",
+        );
+    }
+}
+
+fn persist_storage_lifecycle_report(
+    daemon_state_dir: &Path,
+    report: &storage_lifecycle::StorageLifecycleReport,
+) {
+    let path = storage_lifecycle_report_path(daemon_state_dir);
+    let json = match serde_json::to_vec_pretty(report) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            tracing::warn!(error = %err, "storage-lifecycle: serialize report failed");
+            return;
+        }
+    };
+    if let Err(err) = persist_json_report(&path, &json) {
+        tracing::warn!(
+            error = %err,
+            path = %path.display(),
+            "storage-lifecycle: persist report failed",
         );
     }
 }
@@ -703,13 +751,12 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     )?);
     pidfd_table.set_broker_reap_log(Arc::clone(&broker_reap_log));
 
-    let gateway_display = if let Some(gateway_config) =
-        load_gateway_file_config(Path::new(DEFAULT_GATEWAY_CONFIG_PATH))?
-    {
-        crate::new_gateway_display_runtime_from_config(gateway_config)?
-    } else {
-        crate::new_gateway_display_runtime()
-    };
+    let gateway_display =
+        if let Some(gateway_config) = load_gateway_file_config(&config.gateway_config_path)? {
+            crate::new_gateway_display_runtime_from_config(gateway_config)?
+        } else {
+            crate::new_gateway_display_runtime()
+        };
 
     let state = ServerState {
         daemon_uid: runtime_identity.daemon_uid.as_raw(),
@@ -727,6 +774,66 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         op_locks: crate::concurrency::OpLockManager::new(),
     };
     refresh_broker_reap_log(&state, "startup");
+
+    match load_bundle_resolver(&state) {
+        Ok(resolver) => {
+            let report = storage_lifecycle::run_startup_contract_check(&resolver);
+            let report_path = storage_lifecycle_report_path(&state.daemon_state_dir);
+            if report.has_only_legacy_contract_issue() {
+                tracing::info!(
+                    bundle_version = resolver.bundle.bundle_version,
+                    report_path = %report_path.display(),
+                    "storage-lifecycle: legacy bundle lacks storage/sync contracts; rebuild host configuration to enable startup contract checks",
+                );
+            } else if report.is_degraded() {
+                let issue_kinds = report.issue_kinds_csv();
+                tracing::warn!(
+                    issue_count = report.issues.len(),
+                    issue_kinds = %issue_kinds,
+                    path_count = report.path_count,
+                    restart_policy_count = report.restart_policy_count,
+                    lock_count = report.lock_count,
+                    report_path = %report_path.display(),
+                    "storage-lifecycle: startup contract check degraded",
+                );
+            } else {
+                tracing::info!(
+                    path_count = report.path_count,
+                    restart_policy_count = report.restart_policy_count,
+                    lock_count = report.lock_count,
+                    report_path = %report_path.display(),
+                    "storage-lifecycle: startup contract check clean",
+                );
+            }
+            persist_storage_lifecycle_report(&state.daemon_state_dir, &report);
+        }
+        Err(error) => {
+            let report_path = storage_lifecycle_report_path(&state.daemon_state_dir);
+            // Fail closed for doctor/status consumers if the replacement
+            // report cannot be written below: stale clean evidence is worse
+            // than an absent report.
+            match std::fs::remove_file(&report_path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    tracing::warn!(
+                        error = %err,
+                        report_path = %report_path.display(),
+                        "storage-lifecycle: remove stale report failed",
+                    );
+                }
+            }
+            let report = storage_lifecycle::bundle_resolver_unavailable_report();
+            persist_storage_lifecycle_report(&state.daemon_state_dir, &report);
+            let issue_kinds = report.issue_kinds_csv();
+            tracing::warn!(
+                error = %error.message(),
+                issue_kinds = %issue_kinds,
+                report_path = %report_path.display(),
+                "storage-lifecycle: skipped (bundle resolver unavailable)",
+            );
+        }
+    }
     adopt_orphaned_runners_on_startup(&state);
 
     // Startup self-check on the kernel-module matrix the bundle requires.
@@ -2530,6 +2637,10 @@ fn close_gateway_sessions_for_target(state: &ServerState, target: &str) -> Resul
 }
 
 fn gateway_error_to_typed(error: GatewayError) -> TypedError {
+    tracing::warn!(
+        gateway_error = error.slug(),
+        "gateway display request failed"
+    );
     TypedError::GatewayDisplayUnavailable {
         detail: error.slug().to_owned(),
     }
@@ -2610,6 +2721,11 @@ impl DisplayListener for ConfiguredDisplayListener {
     ) -> Result<ListenerHandle, GatewayError> {
         let listener = Arc::new(display_listener_from_config(&self.config)?);
         let handle = listener.arm(ctx, binding, secret).await?;
+        // Azure Relay listener registration is asynchronous after the control
+        // channel is spawned. Give the listener a short head start before the
+        // sandbox sender dials; otherwise the service can reset the sender
+        // rendezvous instead of returning the retryable 404.
+        tokio::time::sleep(Duration::from_secs(2)).await;
         self.listeners
             .lock()
             .map_err(|_| GatewayError::ProviderAllocationFailed)?
@@ -2645,7 +2761,7 @@ fn relay_coords_from_config(config: &GatewayFileConfig) -> Result<RelayCoords, G
     Ok(RelayCoords {
         namespace: required_gateway_field(&config.relay.namespace)?,
         entity: required_gateway_field(&config.relay.entity)?,
-        ca_file: None,
+        ca_file: Some("/etc/ssl/certs/adc-egress-proxy-ca.crt".to_owned()),
     })
 }
 
@@ -2840,6 +2956,7 @@ fn aca_provider_from_gateway_config(
     defaults.cpu = aca.cpu.clone().unwrap_or_else(|| "1000m".to_owned());
     defaults.memory = aca.memory.clone().unwrap_or_else(|| "2048Mi".to_owned());
     defaults.auto_suspend_interval_secs = aca.auto_suspend_interval_secs.unwrap_or(600);
+    defaults.managed_identity_resource_id = aca.managed_identity_resource_id.clone();
     defaults
         .labels
         .insert("nixling-realm".to_owned(), config.realm.clone());

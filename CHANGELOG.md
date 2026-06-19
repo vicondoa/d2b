@@ -12,6 +12,27 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Bundle: the private manifest bundle now emits `storage.json` and
+  `sync.json` contracts for managed paths, process restart/adoption
+  policies, degraded-state taxonomy, and lock/lease synchronization
+  policy.
+- Broker: added bundle-resolved `ReconcileStorageScope` and
+  `ValidateLockSpec` operations so storage and synchronization contracts
+  can be inspected and, for static directory specs, reconciled without
+  daemon-supplied raw paths.
+- Daemon: startup now performs a read-only storage/restart/sync contract
+  check and persists `storage-lifecycle-report.json` for degraded-state
+  adoption work and future doctor/status UX.
+- CLI: `nixling host doctor --read-only` now surfaces
+  `storage-lifecycle-report.json` with bounded issue kinds and inline
+  remediation for storage/restart/sync contract drift.
+- CLI: added `nixling host migrate-storage --dry-run`, which emits a
+  checkpoint ID, exact rollback command, preserved-data inventory,
+  cutover-only cleanup candidates, and fail-closed hazards for the
+  planned storage layout migration.
+- Tests: added storage lifecycle report schema and serialization
+  regression coverage so doctor/status consumers see the same camelCase
+  contract that the daemon writes.
 - Documentation: ADR 0034 and the storage lifecycle explanation now
   define the planned generated contracts for managed paths, process
   restart/adoption, synchronization, lock ownership, degraded-state
@@ -42,6 +63,11 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- CI: the PR aarch64 flake leg now runs only the lightweight
+  `smoke-eval-aarch64.nix` check instead of the full native aarch64
+  flake sweep.
+- `bundleVersion` 5 → 6: adds the private storage lifecycle and
+  synchronization artifacts to the trusted bundle.
 - CI: pull requests now fail closed when Rust/Nix/Cargo changes do not
   update `CHANGELOG.md`, or when the changelog is missing
   `## [Unreleased]`, uses duplicate/out-of-order version headers, or
@@ -58,6 +84,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Nix packaging now keeps legitimate source files whose names contain
+  `target` (for example `nixling-constellation-core/src/target.rs`) while
+  still filtering Cargo `target/` build directories out of package sources.
 - USBIP lock acquire is now idempotent for the same VM: when a VM is
   restarted (`nixling down` + `nixling up`), the broker no longer
   refuses to re-bind a busid that the same VM already owns. Previously,

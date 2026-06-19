@@ -1,20 +1,8 @@
 { pkgs, lib }:
 
 # Reads nix/prebuilt.json and provides pre-built binary derivations.
-# When a release has been published and hashes committed, this returns
-# real fetchurl derivations. Otherwise returns null so callers can
-# fall back to building from source.
-#
-# Usage in NixOS modules (e.g., host-daemon.nix):
-#
-#   let
-#     prebuilt = import ../nix/prebuilt.nix { inherit pkgs lib; };
-#     nixlingdBinary =
-#       if prebuilt != null && prebuilt ? nixlingd
-#       then "${prebuilt.nixlingd}/bin/nixlingd"
-#       else "${nixlingdPackage}/bin/nixlingd";
-#   in
-#   ...
+# Uses autoPatchelfHook to fix library paths for the consumer's nixpkgs.
+# Returns null when no release is available (callers fall back to source).
 
 let
   manifest = builtins.fromJSON (builtins.readFile ./prebuilt.json);
@@ -29,6 +17,8 @@ let
       src = pkgs.fetchurl {
         inherit (spec) url hash;
       };
+      nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+      buildInputs = [ pkgs.stdenv.cc.cc.lib ];
       dontConfigure = true;
       dontBuild = true;
       unpackPhase = ''

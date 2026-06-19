@@ -247,6 +247,18 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "host migrate-storage --apply",
+    "subject": "host/storage",
+    "scope": "global",
+    "allowedGroups": [
+      "nixling-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "possible-paths-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "up",
     "subject": "VM/env",
     "scope": "per-VM/per-env",
@@ -1225,6 +1237,30 @@ let
     ],
     "destructive": false,
     "secretAccess": "redacted-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "ReconcileStorageScope",
+    "subject": "fs/storage-contract",
+    "scope": "global/per-VM/per-role",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "ValidateLockSpec",
+    "subject": "lock/sync-contract",
+    "scope": "global/per-VM/per-role",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": false,
+    "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
   },

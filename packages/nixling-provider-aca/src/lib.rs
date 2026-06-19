@@ -109,6 +109,10 @@ pub struct AcaSandboxDefaults {
     pub memory: String,
     /// Auto-suspend interval in seconds.
     pub auto_suspend_interval_secs: u32,
+    /// Optional user-assigned managed identity resource id assigned to created
+    /// sandboxes. Required for the in-sandbox Relay sender to acquire MI
+    /// tokens.
+    pub managed_identity_resource_id: Option<String>,
     /// Extra non-secret sandbox labels, e.g. `nixling-realm=work`.
     pub labels: BTreeMap<String, String>,
 }
@@ -121,6 +125,7 @@ impl AcaSandboxDefaults {
             cpu: "1000m".to_owned(),
             memory: "2048Mi".to_owned(),
             auto_suspend_interval_secs: 600,
+            managed_identity_resource_id: None,
             labels: BTreeMap::new(),
         }
     }
@@ -1155,7 +1160,7 @@ fn sandbox_create_body(
     defaults: &AcaSandboxDefaults,
     labels: &BTreeMap<String, String>,
 ) -> ProviderResult<String> {
-    serde_json::to_string(&serde_json::json!({
+    let mut body = serde_json::json!({
         "labels": labels,
         "lifecycle": {
             "autoSuspendPolicy": {
@@ -1173,8 +1178,25 @@ fn sandbox_create_body(
                 "id": disk_id,
             },
         },
-    }))
-    .map_err(|_| {
+    });
+    if let Some(id) = defaults
+        .managed_identity_resource_id
+        .as_ref()
+        .filter(|id| !id.trim().is_empty())
+    {
+        let mut user_assigned = serde_json::Map::new();
+        user_assigned.insert(id.clone(), serde_json::json!({}));
+        body.as_object_mut()
+            .expect("sandbox create body is an object")
+            .insert(
+                "identity".to_owned(),
+                serde_json::json!({
+                    "type": "UserAssigned",
+                    "userAssignedIdentities": user_assigned,
+                }),
+            );
+    }
+    serde_json::to_string(&body).map_err(|_| {
         ProviderError::new(
             ErrorKind::MalformedFrame,
             "failed to serialize aca sandbox create body",
@@ -1320,6 +1342,9 @@ mod tests {
             cpu: "1000m".to_owned(),
             memory: "2048Mi".to_owned(),
             auto_suspend_interval_secs: 600,
+            managed_identity_resource_id: Some(
+                "/subscriptions/24f3458d-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id".to_owned(),
+            ),
             labels,
         }
     }
@@ -1582,6 +1607,14 @@ mod tests {
         assert_eq!(
             sandbox_body["lifecycle"]["autoSuspendPolicy"]["interval"],
             600
+        );
+        assert_eq!(sandbox_body["identity"]["type"], "UserAssigned");
+        assert!(
+            sandbox_body["identity"]["userAssignedIdentities"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .any(|key| key.contains("/userAssignedIdentities/id"))
         );
         assert_eq!(sandbox_body["labels"]["nixling-workload"], "demo");
         assert_eq!(sandbox_body["labels"]["nixling-realm"], "work");

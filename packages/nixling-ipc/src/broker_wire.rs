@@ -81,6 +81,8 @@ pub enum BrokerRequest {
     PollChildReaped,
     PrepareRuntimeDir(PrepareDirRequest),
     PrepareStateDir(PrepareDirRequest),
+    ReconcileStorageScope(ReconcileStorageScopeRequest),
+    ValidateLockSpec(ValidateLockSpecRequest),
     PrepareStoreView(PrepareStoreViewRequest),
     /// Typed broker op that hardlink-farms a VM's resolved closure into
     /// `/var/lib/nixling/vms/<vm>/store/` and atomically swaps the
@@ -205,6 +207,8 @@ impl BrokerRequest {
             Self::PollChildReaped => "PollChildReaped",
             Self::PrepareRuntimeDir(_) => "PrepareRuntimeDir",
             Self::PrepareStateDir(_) => "PrepareStateDir",
+            Self::ReconcileStorageScope(_) => "ReconcileStorageScope",
+            Self::ValidateLockSpec(_) => "ValidateLockSpec",
             Self::PrepareStoreView(_) => "PrepareStoreView",
             Self::StoreSync(_) => "StoreSync",
             Self::StoreVerify(_) => "StoreVerify",
@@ -452,6 +456,7 @@ pub enum BrokerResponse {
     OpenPidfd(OpenPidfdResponse),
     /// Drain response for `BrokerRequest::PollChildReaped`.
     PollChildReaped(PollChildReapedResponse),
+    ReconcileStorageScope(ReconcileStorageScopeResponse),
     SetBridgePortFlags(BridgePortFlagsResponse),
     SignalRunner(SignalRunnerResponse),
     DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse),
@@ -464,6 +469,7 @@ pub enum BrokerResponse {
     StoreSync(StoreSyncResponse),
     /// Result of an explicit live-pool verification request.
     StoreVerify(StoreVerifyResponse),
+    ValidateLockSpec(ValidateLockSpecResponse),
     ValidateBundle(ValidateBundleResponse),
 }
 
@@ -1514,6 +1520,68 @@ pub struct SshHostKeyPreflightRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
+/// Broker-side storage reconciliation request.
+///
+/// The daemon supplies only a bundle-resolved storage id. The broker looks
+/// up the concrete path, owner, mode, kind, cleanup/repair policy, and
+/// invariants in its trusted `storage.json`; no raw path or mode crosses
+/// the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReconcileStorageScopeRequest {
+    pub storage_ref: BundleOpId,
+    #[serde(default)]
+    pub apply: bool,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum StorageReconcileStatus {
+    Clean,
+    Created,
+    Reused,
+    CheckedOnly,
+    TemplateUnexpanded,
+    Refused,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReconcileStorageScopeResponse {
+    pub storage_ref: BundleOpId,
+    pub scope: String,
+    pub kind: String,
+    pub status: StorageReconcileStatus,
+    pub applied: bool,
+    pub path_hash: String,
+}
+
+/// Broker-side synchronization contract validation request.
+///
+/// The daemon supplies only a lock id. The broker resolves and validates the
+/// lock row from trusted `sync.json`; it does not accept raw lock paths or
+/// fd-transfer policy from the caller.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ValidateLockSpecRequest {
+    pub lock_ref: BundleOpId,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ValidateLockSpecResponse {
+    pub lock_ref: BundleOpId,
+    pub scope: String,
+    pub kind: String,
+    pub cloexec_required: bool,
+    pub fd_passing_mechanism: String,
+    pub order_key: String,
+}
+
 /// Disk-image provisioning request.
 ///
 /// The daemon sends the VM's opaque `vm_id`; the broker resolves
@@ -1715,6 +1783,41 @@ mod tests {
             serde_json::from_str(&rotate_json).expect("decode rotate");
         assert_eq!(decoded_trust, trust);
         assert_eq!(decoded_rotate, rotate);
+    }
+
+    #[test]
+    fn storage_and_sync_requests_are_opaque_only() {
+        let storage = encode_frame(&serde_json::json!({
+            "kind": "ReconcileStorageScope",
+            "payload": {
+                "storageRef": "path:run-root",
+                "apply": false
+            }
+        }))
+        .expect("encodes");
+        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &storage).expect("decodes");
+        match decoded {
+            BrokerRequest::ReconcileStorageScope(req) => {
+                assert_eq!(req.storage_ref.as_str(), "path:run-root");
+                assert!(!req.apply);
+            }
+            other => panic!("expected ReconcileStorageScope, got {other:?}"),
+        }
+
+        let lock = encode_frame(&serde_json::json!({
+            "kind": "ValidateLockSpec",
+            "payload": {
+                "lockRef": "lock:daemon"
+            }
+        }))
+        .expect("encodes");
+        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &lock).expect("decodes");
+        match decoded {
+            BrokerRequest::ValidateLockSpec(req) => {
+                assert_eq!(req.lock_ref.as_str(), "lock:daemon");
+            }
+            other => panic!("expected ValidateLockSpec, got {other:?}"),
+        }
     }
 
     #[test]

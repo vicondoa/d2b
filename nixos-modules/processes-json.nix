@@ -4,6 +4,7 @@ let
   clean = builtins.unsafeDiscardStringContext;
 
   cfg = config.nixling;
+  prebuilt = import ./prebuilt-packages.nix { inherit pkgs lib; };
   # nixling-owned access helpers (see lib.nix).
   nl = import ./lib.nix { inherit lib pkgs; };
   normalNixosVms = nl.normalNixosVms cfg.vms;
@@ -39,7 +40,7 @@ let
   # Built from the workspace so the binary path is available for the
   # wayland-proxy DAG node's binaryPath field.
   packagesSrc = nl.cleanRustPackagesSource ../packages;
-  nixlingWaylandFilterPackage = pkgs.rustPlatform.buildRustPackage {
+  nixlingWaylandFilterSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling-wayland-filter";
     version = "0.0.0";
     src = packagesSrc;
@@ -64,6 +65,7 @@ EOF
       runHook postInstall
     '';
   };
+  nixlingWaylandFilterPackage = if prebuilt ? "nixling-wayland-filter" then prebuilt."nixling-wayland-filter" else nixlingWaylandFilterSourcePackage;
   nixlingWaylandFilterBinary = "${nixlingWaylandFilterPackage}/bin/nixling-wayland-filter";
 
   envPortMap = lib.listToAttrs (

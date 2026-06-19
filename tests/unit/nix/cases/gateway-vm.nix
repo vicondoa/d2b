@@ -37,6 +37,7 @@ let
   gatewayGuestCfg = goodCfg.nixling._computed."sys-work-gateway".config;
   gatewayJson = builtins.fromJSON gatewayGuestCfg.environment.etc."nixling/gateway.json".text;
   hostDaemonJson = builtins.fromJSON goodCfg.environment.etc."nixling/daemon-config.json".text;
+  hostGatewayJson = builtins.fromJSON goodCfg.environment.etc."nixling/gateway.json".text;
   gatewayProc = lib.findFirst (vm: vm.vm == "sys-work-gateway") null
     goodCfg.nixling._bundle.processesJson.data.vms;
   badCfg = (mkEval [
@@ -141,8 +142,26 @@ in
   };
 
   "gateway-vm/host-daemon-stays-credential-free-facade" = {
-    expr = hostDaemonJson ? gateway;
-    expected = false;
+    expr = {
+      daemonConfigCarriesGateway = hostDaemonJson ? gateway;
+      hostGateway = {
+        gateway = hostGatewayJson.gateway;
+        realm = hostGatewayJson.realm;
+        credentialPath = hostGatewayJson.credentialPath;
+        relayEntity = hostGatewayJson.relay.entity;
+        waypipeSocket = hostGatewayJson.display.waypipeSocket;
+      };
+    };
+    expected = {
+      daemonConfigCarriesGateway = false;
+      hostGateway = {
+        gateway = "work";
+        realm = "work";
+        credentialPath = "/var/lib/nixling/gateways/work/credential.json";
+        relayEntity = "hc-nixling-display";
+        waypipeSocket = "/run/user/1000/wpc.sock";
+      };
+    };
   };
 
   "gateway-vm/rejects-multiple-enabled-gateways" = {

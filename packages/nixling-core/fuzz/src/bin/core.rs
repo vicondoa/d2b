@@ -315,6 +315,8 @@ fn build_synthetic_resolver() -> BundleResolver {
         host_path: "/etc/nixling/host.json".to_owned(),
         processes_path: "/etc/nixling/processes.json".to_owned(),
         privileges_path: "/etc/nixling/privileges.json".to_owned(),
+        storage_path: None,
+        sync_path: None,
         closures: Vec::new(),
         minijail_profiles: Vec::new(),
         managed_keys: BundleManagedKeys::default(),

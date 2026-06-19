@@ -110,15 +110,16 @@ complete -c nixling -n "__fish_nixling_using_subcommand audit" -l strict
 complete -c nixling -n "__fish_nixling_using_subcommand audit" -l json
 complete -c nixling -n "__fish_nixling_using_subcommand audit" -l human
 complete -c nixling -n "__fish_nixling_using_subcommand audit" -s h -l help -d 'Print help'
-complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor install reconcile validate help" -s h -l help -d 'Print help'
-complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor install reconcile validate help" -f -a "check" -d 'Read-only preflight: inventories host posture without mutation'
-complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor install reconcile validate help" -f -a "prepare" -d 'Reconcile host-side state (bridges, nftables, sysctls). --apply mutates'
-complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor install reconcile validate help" -f -a "destroy" -d 'Tear down host-side state owned by nixling. --apply mutates'
-complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor install reconcile validate help" -f -a "doctor" -d 'Read-only deep diagnostics for the daemon + broker state'
-complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor install reconcile validate help" -f -a "install" -d 'Install nixlingd + broker units onto the host. --apply mutates'
-complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor install reconcile validate help" -f -a "reconcile" -d 'Recover host network state after the daemon engaged operator-only mode'
-complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor install reconcile validate help" -f -a "validate" -d 'Run the host-side validator suite and write evidence records'
-complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor install reconcile validate help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -s h -l help -d 'Print help'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "check" -d 'Read-only preflight: inventories host posture without mutation'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "prepare" -d 'Reconcile host-side state (bridges, nftables, sysctls). --apply mutates'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "destroy" -d 'Tear down host-side state owned by nixling. --apply mutates'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "doctor" -d 'Read-only deep diagnostics for the daemon + broker state'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "migrate-storage" -d 'Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "install" -d 'Install nixlingd + broker units onto the host. --apply mutates'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "reconcile" -d 'Recover host network state after the daemon engaged operator-only mode'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "validate" -d 'Run the host-side validator suite and write evidence records'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from check" -l read-only
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from check" -l strict
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from check" -l json
@@ -138,6 +139,13 @@ complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_su
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from doctor" -l json
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from doctor" -l human
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from doctor" -s h -l help -d 'Print help'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from migrate-storage" -l from-checkpoint -d 'Checkpoint ID to roll back' -r
+complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from migrate-storage" -l dry-run -d 'Plan the storage cutover without mutating host state'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from migrate-storage" -l apply -d 'Apply the storage cutover. Currently fails closed until broker support lands'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from migrate-storage" -l rollback -d 'Roll back from a named storage cutover checkpoint'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from migrate-storage" -l json
+complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from migrate-storage" -l human
+complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from migrate-storage" -s h -l help -d 'Print help'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from install" -l dry-run -d 'Report the planned install steps without mutating'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from install" -l apply -d 'Perform the install through the daemon → broker `RunHostInstall` path'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from install" -l enable -d 'After `--apply`, enable nixlingd.service via systemctl'
@@ -165,6 +173,7 @@ complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_su
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "prepare" -d 'Reconcile host-side state (bridges, nftables, sysctls). --apply mutates'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "destroy" -d 'Tear down host-side state owned by nixling. --apply mutates'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "doctor" -d 'Read-only deep diagnostics for the daemon + broker state'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "migrate-storage" -d 'Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "install" -d 'Install nixlingd + broker units onto the host. --apply mutates'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "reconcile" -d 'Recover host network state after the daemon engaged operator-only mode'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "validate" -d 'Run the host-side validator suite and write evidence records'
@@ -387,6 +396,7 @@ complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_su
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "prepare" -d 'Reconcile host-side state (bridges, nftables, sysctls). --apply mutates'
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "destroy" -d 'Tear down host-side state owned by nixling. --apply mutates'
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "doctor" -d 'Read-only deep diagnostics for the daemon + broker state'
+complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "migrate-storage" -d 'Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands'
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "install" -d 'Install nixlingd + broker units onto the host. --apply mutates'
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "reconcile" -d 'Recover host network state after the daemon engaged operator-only mode'
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "validate" -d 'Run the host-side validator suite and write evidence records'

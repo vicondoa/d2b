@@ -45,6 +45,7 @@ const EXPECTED_DISPOSITION: &[(&str, &str)] = &[
     ("host check", "rust-native"),
     ("host prepare", "rust-native"),
     ("host destroy", "rust-native"),
+    ("host migrate-storage", "rust-native"),
     ("auth status", "rust-native"),
 ];
 
@@ -60,6 +61,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
     ("store verify", &["store verify"]),
     ("audit", &["audit"]),
     ("host check", &["host check"]),
+    ("host migrate-storage", &["host migrate-storage"]),
     ("auth status", &["auth status"]),
 ];
 
@@ -241,6 +243,46 @@ const FLAG_INVOCATIONS: &[CommandFlagMatrix] = &[
             ),
             ("--json", &["host", "check", "--read-only", "--json"]),
             ("--human", &["host", "check", "--read-only", "--human"]),
+        ],
+    ),
+    (
+        "host migrate-storage",
+        &[
+            (
+                "--dry-run",
+                &["host", "migrate-storage", "--dry-run", "--human"],
+            ),
+            ("--apply", &["host", "migrate-storage", "--apply", "--json"]),
+            (
+                "--rollback",
+                &[
+                    "host",
+                    "migrate-storage",
+                    "--rollback",
+                    "--from-checkpoint",
+                    "storage-cutover-test",
+                    "--json",
+                ],
+            ),
+            (
+                "--from-checkpoint",
+                &[
+                    "host",
+                    "migrate-storage",
+                    "--rollback",
+                    "--from-checkpoint",
+                    "storage-cutover-test",
+                    "--json",
+                ],
+            ),
+            (
+                "--json",
+                &["host", "migrate-storage", "--dry-run", "--json"],
+            ),
+            (
+                "--human",
+                &["host", "migrate-storage", "--dry-run", "--human"],
+            ),
         ],
     ),
     (

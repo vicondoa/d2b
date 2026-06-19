@@ -91,6 +91,37 @@ fn is_excluded_dir(rel: &str) -> bool {
         .any(|c| matches!(*c, "target" | "tests" | ".git"))
 }
 
+#[test]
+fn nix_package_source_filters_are_path_segment_based() {
+    let files = [
+        "nixos-modules/host-daemon.nix",
+        "nixos-modules/host-broker.nix",
+        "nixos-modules/host-activation.nix",
+        "nixos-modules/processes-json.nix",
+        "nixos-modules/gateway-vm.nix",
+    ];
+
+    for rel in files {
+        let content = read_repo_file(rel);
+        assert!(
+            !content.contains("hasInfix \"target\" rel"),
+            "{rel}: package source filters must not substring-match `target`; \
+             that excludes legitimate files like \
+             packages/nixling-constellation-core/src/target.rs"
+        );
+        assert!(
+            content.contains("nl.cleanRustPackagesSource ../packages"),
+            "{rel}: package source filters must use the centralized segment-based helper"
+        );
+    }
+
+    let helper = read_repo_file("nixos-modules/lib.nix");
+    assert!(
+        helper.contains(r#"type == "directory" && baseNameOf path == "target""#),
+        "nixos-modules/lib.nix: cleanRustPackagesSource must exclude only a directory segment named `target`"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Migrated from tests/no-bash-exec-eval.sh (v1.1 / ADR 0017: "the Rust CLI
 // never executes bash").

@@ -61,7 +61,8 @@ const DEFAULT_CLIENT_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 const RUNTIME_UNKNOWN: &str = "unknown";
 const MAX_FRAME_BYTES: usize = 1024 * 1024;
 /// Location of daemon-persisted state files (`pidfd-table.json`,
-/// `kernel-module-report.json`, `autostart-report.json`) that
+/// `kernel-module-report.json`, `autostart-report.json`,
+/// `storage-lifecycle-report.json`) that
 /// `nixling host doctor --read-only` inspects. Mirrors
 /// `nixlingd::DEFAULT_DAEMON_STATE_DIR`.
 const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/nixling/daemon-state";
@@ -715,6 +716,9 @@ enum HostCommand {
     Destroy(HostDestroyArgs),
     /// Read-only deep diagnostics for the daemon + broker state.
     Doctor(HostDoctorArgs),
+    /// Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands.
+    #[command(name = "migrate-storage")]
+    MigrateStorage(HostMigrateStorageArgs),
     /// Install nixlingd + broker units onto the host. --apply mutates.
     Install(HostInstallArgs),
     /// Recover host network state after the daemon engaged operator-only mode.
@@ -797,6 +801,26 @@ struct HostDoctorArgs {
     /// Mandatory: doctor is read-only. Mutating forms are separate verbs.
     #[arg(long)]
     read_only: bool,
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
+#[derive(Debug, Args)]
+struct HostMigrateStorageArgs {
+    /// Plan the storage cutover without mutating host state.
+    #[arg(long, conflicts_with_all = ["apply", "rollback"])]
+    dry_run: bool,
+    /// Apply the storage cutover. Currently fails closed until broker support lands.
+    #[arg(long, conflicts_with_all = ["dry_run", "rollback"])]
+    apply: bool,
+    /// Roll back from a named storage cutover checkpoint.
+    #[arg(long, conflicts_with_all = ["dry_run", "apply"], requires = "from_checkpoint")]
+    rollback: bool,
+    /// Checkpoint ID to roll back.
+    #[arg(long, value_name = "ID", requires = "rollback")]
+    from_checkpoint: Option<String>,
     #[arg(long, conflicts_with = "human")]
     json: bool,
     #[arg(long, conflicts_with = "json")]
@@ -1885,6 +1909,7 @@ fn dispatch(
             HostCommand::Prepare(args) => cmd_host_prepare(context, args),
             HostCommand::Destroy(args) => cmd_host_destroy(context, args),
             HostCommand::Doctor(args) => cmd_host_doctor(context, args),
+            HostCommand::MigrateStorage(args) => cmd_host_migrate_storage(context, args),
             HostCommand::Install(args) => cmd_host_install(context, args, original_args),
             HostCommand::Reconcile(args) => cmd_host_reconcile(context, args, original_args),
             HostCommand::Validate(args) => cmd_host_validate(context, args),
@@ -3869,6 +3894,163 @@ fn cmd_host_doctor(context: &Context, args: &HostDoctorArgs) -> Result<i32, CliF
         print_stdout(&doctor::render_human(&report));
     }
     Ok(exit_code)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageMigrationPlan {
+    command: &'static str,
+    mode: &'static str,
+    checkpoint_id: String,
+    rollback_command: String,
+    vm_count: usize,
+    vms: Vec<String>,
+    preflight_requirements: Vec<&'static str>,
+    preserve: Vec<&'static str>,
+    cutover_only_cleanup: Vec<&'static str>,
+    fail_closed_hazards: Vec<&'static str>,
+    apply_status: &'static str,
+}
+
+fn storage_migration_checkpoint_id(vms: &[String]) -> String {
+    let mut basis = String::from("storage-cutover-v1\n");
+    let mut sorted = vms.to_vec();
+    sorted.sort();
+    for vm in &sorted {
+        let _ = writeln!(basis, "{vm}");
+    }
+    let digest = sha256_hex(basis.as_bytes());
+    let suffix = digest
+        .strip_prefix("sha256:")
+        .unwrap_or(digest.as_str())
+        .chars()
+        .take(12)
+        .collect::<String>();
+    format!("storage-cutover-{suffix}")
+}
+
+fn build_storage_migration_plan(manifest: &ManifestDocument) -> StorageMigrationPlan {
+    let mut vms: Vec<String> = manifest.vms().iter().map(|vm| vm.name.clone()).collect();
+    vms.sort();
+    let checkpoint_id = storage_migration_checkpoint_id(&vms);
+    let rollback_command =
+        format!("nixling host migrate-storage --rollback --from-checkpoint {checkpoint_id}");
+    StorageMigrationPlan {
+        command: "host migrate-storage",
+        mode: "dry-run",
+        checkpoint_id,
+        rollback_command,
+        vm_count: vms.len(),
+        vms,
+        preflight_requirements: vec![
+            "all nixling VMs stopped",
+            "nixlingd.service stopped",
+            "nixling-priv-broker.service stopped",
+            "operator accepts planned downtime for the one-time storage layout cutover",
+            "net VMs stopped; guest routing, TAP connectivity, and dependent bridge traffic will be interrupted",
+        ],
+        preserve: vec![
+            "per-VM swtpm NVRAM and swtpm identity markers",
+            "framework SSH keys and guest sshd host keys",
+            "VM disk images and declared persistent volumes",
+            "store-view generation metadata and gcroots",
+            "daemon diagnostic reports, audit logs, host-runtime metadata, and non-authority adoption history",
+            "declared host bridges, TAP naming intent, nftables/NM/networkd ownership metadata, and network-preflight evidence",
+        ],
+        cutover_only_cleanup: vec![
+            "/run/nixling-gpu",
+            "/run/nixling-video",
+            "/run/nixling-wlproxy",
+            "/var/lib/nixling/guest-control-<vm>",
+            "boot-scoped runtime socket files only after all nixling services are stopped",
+            "runtime network helper sockets and stale TAP pid/metadata files after all nixling services are stopped",
+            "stale migration markers from retired storage waves",
+        ],
+        fail_closed_hazards: vec![
+            "symlink or path traversal inside any moved path",
+            "foreign ownership markers on a nixling-managed path",
+            "recursive operations traversing hardlink farms or mutating shared /nix/store inodes",
+            "missing swtpm marker for a previously provisioned TPM VM",
+            "any candidate outside the generated storage root set",
+            "any open nixling daemon, broker, runner, net VM, or workload VM file descriptor",
+            "any attempt to unlink lock files during cutover rather than leaving /run locks for reboot/tmpfs cleanup",
+        ],
+        apply_status: "not-implemented-in-this-build",
+    }
+}
+
+fn cmd_host_migrate_storage(
+    context: &Context,
+    args: &HostMigrateStorageArgs,
+) -> Result<i32, CliFailure> {
+    if args.rollback {
+        let checkpoint = args.from_checkpoint.as_deref().unwrap_or("<missing>");
+        return emit_host_error(
+            &host_error_envelope(
+                "Storage rollback is not implemented in this build",
+                "storage-migration-rollback-not-implemented",
+                78,
+                "Rollback request for a storage cutover checkpoint.",
+                &format!("rollback requested from checkpoint {checkpoint}"),
+                "Keep the host stopped and use the checkpoint metadata to file an issue; do not repair with recursive chmod/chown/setfacl.",
+                "docs/reference/cli-contract.md#host-migrate-storage",
+            ),
+            args.json,
+        );
+    }
+
+    let flags = require_explicit_mutation_flag(
+        "host migrate-storage",
+        args.dry_run,
+        args.apply,
+        args.json,
+    )?;
+    if flags.apply {
+        return emit_host_error(
+            &host_error_envelope(
+                "Storage cutover apply is not implemented in this build",
+                "storage-migration-apply-not-implemented",
+                78,
+                "Broker-backed storage cutover mover availability.",
+                "apply requested, but only dry-run checkpoint planning is available",
+                "Run `nixling host migrate-storage --dry-run` and wait for the broker-backed apply implementation before moving persistent state.",
+                "docs/reference/cli-contract.md#host-migrate-storage",
+            ),
+            args.json,
+        );
+    }
+
+    let manifest = context.load_manifest()?;
+    let plan = build_storage_migration_plan(&manifest);
+    if args.json {
+        let mut rendered = serde_json::to_string_pretty(&plan).map_err(|err| {
+            CliFailure::new(
+                1,
+                format!("failed to serialize storage migration plan: {err}"),
+            )
+        })?;
+        rendered.push('\n');
+        print_stdout(&rendered);
+    } else {
+        print_stdout(&format!(
+            "host migrate-storage --dry-run: checkpoint={} vm_count={}\n",
+            plan.checkpoint_id, plan.vm_count
+        ));
+        print_stdout(&format!("rollback command: {}\n", plan.rollback_command));
+        print_stdout("preflight requirements:\n");
+        for requirement in &plan.preflight_requirements {
+            print_stdout(&format!("  - {requirement}\n"));
+        }
+        print_stdout("persistent data preserved:\n");
+        for item in &plan.preserve {
+            print_stdout(&format!("  - {item}\n"));
+        }
+        print_stdout("cutover-only cleanup candidates:\n");
+        for item in &plan.cutover_only_cleanup {
+            print_stdout(&format!("  - {item}\n"));
+        }
+    }
+    Ok(0)
 }
 
 fn cmd_host_validate(_context: &Context, args: &HostValidateArgs) -> Result<i32, CliFailure> {
@@ -9019,11 +9201,13 @@ mod host_install_dispatch_tests {
 
     use super::{
         AddressFamily, ApiReadySimple, ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk,
-        IpcUsbProbeEntryKind, IpcUsbipProbeEntry, IpcUsbipProbeStatus, MAX_FRAME_BYTES, MediaRef,
-        MsgFlags, NativeCli, SockFlag, SockType, UnixAddr, UsbAttachArgs, UsbDetachArgs,
-        UsbEnrollArgs, VmExecArgs, VmStartArgs, broker_error_envelope, cmd_host_install,
-        cmd_vm_exec, cmd_vm_start, daemon_supported_features, encode_type_tagged_message,
-        nix_err_to_io, parse_vm_exec_action, public_wire, render_usb_probe_human, send, socket,
+        IpcUsbProbeEntryKind, IpcUsbipProbeEntry, IpcUsbipProbeStatus, MAX_FRAME_BYTES,
+        ManifestDocument, ManifestVm, MediaRef, MsgFlags, NativeCli, SockFlag, SockType, UnixAddr,
+        UsbAttachArgs, UsbDetachArgs, UsbEnrollArgs, VmExecArgs, VmStartArgs,
+        broker_error_envelope, build_storage_migration_plan, cmd_host_install, cmd_vm_exec,
+        cmd_vm_start, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
+        parse_vm_exec_action, public_wire, render_usb_probe_human, send, socket,
+        storage_migration_checkpoint_id,
     };
     use nixling_ipc::Version;
 
@@ -12499,6 +12683,90 @@ mod host_install_dispatch_tests {
             let err = result.expect_err("unreadable bundle path must error");
             assert!(err.message.contains("failed to inspect"));
         }
+    }
+
+    fn manifest_with_vms(names: &[&str]) -> ManifestDocument {
+        ManifestDocument {
+            _manifest: None,
+            _observability: None,
+            entries: names
+                .iter()
+                .map(|name| {
+                    (
+                        (*name).to_owned(),
+                        ManifestVm {
+                            name: (*name).to_owned(),
+                            env: Some("work".to_owned()),
+                            graphics: false,
+                            tpm: false,
+                            audio: false,
+                            usbip_yubikey: false,
+                            static_ip: None,
+                            usbipd_host_ip: None,
+                            is_net_vm: false,
+                            state_dir: format!("/var/lib/nixling/vms/{name}"),
+                            bridge: "br-work-lan".to_owned(),
+                            ssh_user: Some("alice".to_owned()),
+                            runtime: None,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn storage_migration_plan_includes_checkpoint_and_rollback_command() {
+        let manifest = manifest_with_vms(&["work-vm", "corp-vm"]);
+        let plan = build_storage_migration_plan(&manifest);
+
+        assert_eq!(plan.command, "host migrate-storage");
+        assert_eq!(plan.mode, "dry-run");
+        assert_eq!(plan.vm_count, 2);
+        assert_eq!(plan.vms, vec!["corp-vm".to_owned(), "work-vm".to_owned()]);
+        assert!(plan.checkpoint_id.starts_with("storage-cutover-"));
+        assert!(
+            plan.rollback_command
+                .contains("nixling host migrate-storage --rollback --from-checkpoint")
+        );
+        assert!(plan.rollback_command.contains(&plan.checkpoint_id));
+        assert!(
+            plan.preserve
+                .iter()
+                .any(|item| item.contains("swtpm NVRAM"))
+        );
+        assert!(plan.cutover_only_cleanup.contains(&"/run/nixling-gpu"));
+        assert!(
+            plan.fail_closed_hazards
+                .iter()
+                .any(|item| item.contains("symlink"))
+        );
+    }
+
+    #[test]
+    fn storage_migration_checkpoint_id_is_order_insensitive() {
+        let a = vec!["work-vm".to_owned(), "corp-vm".to_owned()];
+        let b = vec!["corp-vm".to_owned(), "work-vm".to_owned()];
+        assert_eq!(
+            storage_migration_checkpoint_id(&a),
+            storage_migration_checkpoint_id(&b)
+        );
+    }
+
+    #[test]
+    fn storage_migration_from_checkpoint_requires_rollback() {
+        assert!(
+            NativeCli::try_parse_from([
+                "nixling",
+                "host",
+                "migrate-storage",
+                "--from-checkpoint",
+                "storage-cutover-test",
+                "--json",
+            ])
+            .is_err(),
+            "--from-checkpoint must not be silently ignored without --rollback",
+        );
     }
 
     #[test]

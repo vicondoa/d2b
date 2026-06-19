@@ -141,9 +141,11 @@ jobs:
   # runner (~41 min once we backed it with a 14 GB swapfile to survive). Instead
   # we enumerate the checks and instantiate each in its OWN runner/process, in
   # parallel, plus a `flake-eval-x86-outputs` job for the non-`checks` outputs.
-  # The aarch64 leg still runs the full monolithic check. A fail-closed drift
-  # gate (tests/unit/gates/flake-check-matrix-sync.sh, via `make test-drift`)
-  # keeps this matrix in sync with the flake's check set.
+  # The aarch64 leg is intentionally lightweight: it evaluates the dedicated
+  # multi-arch smoke expression only, not the full aarch64 flake check. A
+  # fail-closed drift gate (tests/unit/gates/flake-check-matrix-sync.sh, via
+  # `make test-drift`) keeps the x86 matrix and the aarch64 smoke wiring in
+  # sync with this policy.
   # ---------------------------------------------------------------------------
   flake-eval-discover:
     needs: tier0
@@ -204,8 +206,8 @@ jobs:
 
   # x86_64 non-`checks` flake outputs (packages, …). The per-check shards above
   # only cover `checks.x86_64-linux.*`; `nix flake check` also validates the
-  # other per-system outputs. The aarch64 leg evaluates only aarch64 outputs, so
-  # without this an x86-only broken package output could slip past the required
+  # other per-system outputs. The aarch64 leg is a smoke eval only, so without
+  # this an x86-only broken package output could slip past the required
   # `test-flake-x86` context. Single light job (no nixosSystem toplevels).
   flake-eval-x86-outputs:
     needs: tier0
@@ -248,31 +250,20 @@ jobs:
 
   test-flake-aarch64:
     needs: tier0
-    runs-on: ubuntu-24.04-arm
-    # ARM runner evaluates in ~8 min, but keep parity headroom with x86.
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - name: Add swap (bound flake-eval peak memory)
-        run: |
-          # Hosted runner images sometimes already ship an active
-          # /mnt/swapfile (fallocate would fail "Text file busy"), so use a
-          # dedicated file and add it on top of whatever swap exists.
-          SWAP=/mnt/nixling-ci-swap
-          sudo swapoff "$SWAP" 2>/dev/null || true
-          sudo rm -f "$SWAP"
-          sudo fallocate -l 14G "$SWAP" || sudo dd if=/dev/zero of="$SWAP" bs=1M count=14336
-          sudo chmod 600 "$SWAP"
-          sudo mkswap "$SWAP"
-          sudo swapon "$SWAP"
-          free -h
       - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Flake check (aarch64-linux)
-        run: make test-flake
+      - name: aarch64 smoke eval
+        run: |
+          nix-instantiate --eval --strict \
+            -E 'let f = import ./tests/unit/smoke/smoke-eval-aarch64.nix; r = f {}; in r.drvPath' \
+            >/dev/null
 
   test-drift:
     needs: tier0

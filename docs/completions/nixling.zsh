@@ -299,6 +299,18 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(migrate-storage)
+_arguments "${_arguments_options[@]}" : \
+'--from-checkpoint=[Checkpoint ID to roll back]:ID:_default' \
+'(--apply --rollback)--dry-run[Plan the storage cutover without mutating host state]' \
+'(--dry-run --rollback)--apply[Apply the storage cutover. Currently fails closed until broker support lands]' \
+'(--dry-run --apply)--rollback[Roll back from a named storage cutover checkpoint]' \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (install)
 _arguments "${_arguments_options[@]}" : \
 '(--apply --enable --start --no-start)--dry-run[Report the planned install steps without mutating]' \
@@ -362,6 +374,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (doctor)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(migrate-storage)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1066,6 +1082,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(migrate-storage)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (install)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1692,6 +1712,7 @@ _nixling__subcmd__help__subcmd__host_commands() {
 'prepare:Reconcile host-side state (bridges, nftables, sysctls). --apply mutates' \
 'destroy:Tear down host-side state owned by nixling. --apply mutates' \
 'doctor:Read-only deep diagnostics for the daemon + broker state' \
+'migrate-storage:Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands' \
 'install:Install nixlingd + broker units onto the host. --apply mutates' \
 'reconcile:Recover host network state after the daemon engaged operator-only mode' \
 'validate:Run the host-side validator suite and write evidence records' \
@@ -1717,6 +1738,11 @@ _nixling__subcmd__help__subcmd__host__subcmd__doctor_commands() {
 _nixling__subcmd__help__subcmd__host__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'nixling help host install commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__host__subcmd__migrate-storage_commands] )) ||
+_nixling__subcmd__help__subcmd__host__subcmd__migrate-storage_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help host migrate-storage commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__help__subcmd__host__subcmd__prepare_commands] )) ||
 _nixling__subcmd__help__subcmd__host__subcmd__prepare_commands() {
@@ -1898,6 +1924,7 @@ _nixling__subcmd__host_commands() {
 'prepare:Reconcile host-side state (bridges, nftables, sysctls). --apply mutates' \
 'destroy:Tear down host-side state owned by nixling. --apply mutates' \
 'doctor:Read-only deep diagnostics for the daemon + broker state' \
+'migrate-storage:Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands' \
 'install:Install nixlingd + broker units onto the host. --apply mutates' \
 'reconcile:Recover host network state after the daemon engaged operator-only mode' \
 'validate:Run the host-side validator suite and write evidence records' \
@@ -1927,6 +1954,7 @@ _nixling__subcmd__host__subcmd__help_commands() {
 'prepare:Reconcile host-side state (bridges, nftables, sysctls). --apply mutates' \
 'destroy:Tear down host-side state owned by nixling. --apply mutates' \
 'doctor:Read-only deep diagnostics for the daemon + broker state' \
+'migrate-storage:Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands' \
 'install:Install nixlingd + broker units onto the host. --apply mutates' \
 'reconcile:Recover host network state after the daemon engaged operator-only mode' \
 'validate:Run the host-side validator suite and write evidence records' \
@@ -1959,6 +1987,11 @@ _nixling__subcmd__host__subcmd__help__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'nixling host help install commands' commands "$@"
 }
+(( $+functions[_nixling__subcmd__host__subcmd__help__subcmd__migrate-storage_commands] )) ||
+_nixling__subcmd__host__subcmd__help__subcmd__migrate-storage_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling host help migrate-storage commands' commands "$@"
+}
 (( $+functions[_nixling__subcmd__host__subcmd__help__subcmd__prepare_commands] )) ||
 _nixling__subcmd__host__subcmd__help__subcmd__prepare_commands() {
     local commands; commands=()
@@ -1978,6 +2011,11 @@ _nixling__subcmd__host__subcmd__help__subcmd__validate_commands() {
 _nixling__subcmd__host__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'nixling host install commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__host__subcmd__migrate-storage_commands] )) ||
+_nixling__subcmd__host__subcmd__migrate-storage_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling host migrate-storage commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__host__subcmd__prepare_commands] )) ||
 _nixling__subcmd__host__subcmd__prepare_commands() {

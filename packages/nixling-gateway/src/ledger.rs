@@ -38,9 +38,9 @@ impl SessionState {
         use SessionState::*;
         matches!(
             (self, next),
-            (Minting, AgentSpawning)
-                | (AgentSpawning, ListenerArming)
-                | (ListenerArming, AwaitingHandshake)
+            (Minting, ListenerArming)
+                | (ListenerArming, AgentSpawning)
+                | (AgentSpawning, AwaitingHandshake)
                 | (AwaitingHandshake, Running)
                 | (Running, Degraded)
                 | (Degraded, ListenerArming)
@@ -382,9 +382,9 @@ mod tests {
     fn transition_matrix_is_fail_closed() {
         use SessionState::*;
         let legal = [
-            (Minting, AgentSpawning),
-            (AgentSpawning, ListenerArming),
-            (ListenerArming, AwaitingHandshake),
+            (Minting, ListenerArming),
+            (ListenerArming, AgentSpawning),
+            (AgentSpawning, AwaitingHandshake),
             (AwaitingHandshake, Running),
             (Running, Degraded),
             (Degraded, ListenerArming),
@@ -475,8 +475,8 @@ mod tests {
         l.open(key("work", "demo"), "alice", "op-1", 1, id("s1"))
             .unwrap();
         for s in [
-            SessionState::AgentSpawning,
             SessionState::ListenerArming,
+            SessionState::AgentSpawning,
             SessionState::AwaitingHandshake,
             SessionState::Running,
         ] {
@@ -500,12 +500,13 @@ mod tests {
         l.open(key("work", "demo"), "alice", "op-1", 1, id("s1"))
             .unwrap();
         for s in [
-            SessionState::AgentSpawning,
             SessionState::ListenerArming,
+            SessionState::AgentSpawning,
             SessionState::AwaitingHandshake,
             SessionState::Running,
             SessionState::Degraded,
             SessionState::ListenerArming,
+            SessionState::AgentSpawning,
             SessionState::AwaitingHandshake,
             SessionState::Running,
         ] {
@@ -519,7 +520,7 @@ mod tests {
         let mut l = SessionLedger::new(5, LedgerLimits::default());
         l.open(key("work", "demo"), "alice", "op-1", 1, id("s1"))
             .unwrap();
-        l.transition(&id("s1"), SessionState::AgentSpawning)
+        l.transition(&id("s1"), SessionState::ListenerArming)
             .unwrap();
         let reconciled = l.reconcile_restart();
         assert_eq!(l.generation(), 6);

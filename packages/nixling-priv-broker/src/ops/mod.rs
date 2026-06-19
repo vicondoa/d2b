@@ -24,6 +24,7 @@ pub mod hosts;
 pub mod nm;
 pub mod route;
 pub mod state_dir;
+pub mod storage_contract;
 // Per-VM swtpm state-dir first-run hardening (issue #64).
 pub mod swtpm_dir;
 pub mod sysctl;

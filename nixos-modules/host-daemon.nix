@@ -3,6 +3,7 @@
 let
   cfg = config.nixling;
   nl = import ./lib.nix { inherit lib; };
+  prebuilt = import ./prebuilt-packages.nix { inherit pkgs lib; };
 
   # filter out `target/` dev caches from the source
   # so the Nix copy stays small (workspace target alone is ~17 GB).
@@ -12,7 +13,7 @@ let
     outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
   };
 
-  nixlingdPackage = pkgs.rustPlatform.buildRustPackage {
+  nixlingdSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixlingd";
     version = "0.0.0-bootstrap";
     src = packagesSrc;
@@ -38,12 +39,13 @@ EOF
       runHook postInstall
     '';
   };
+  nixlingdPackage = if prebuilt ? nixlingd then prebuilt.nixlingd else nixlingdSourcePackage;
 
   # the user-facing CLI is now the Rust nixling crate
   # (packages/nixling). The pre-v1.0 bash CLI was RETIRED in;
   # ships the daemon-native Rust CLI as the only
   # `nixling` binary on the host.
-  nixlingCliPackage = pkgs.rustPlatform.buildRustPackage {
+  nixlingCliSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling";
     version = "0.0.0-bootstrap";
     src = packagesSrc;
@@ -65,12 +67,13 @@ EOF
       runHook postInstall
     '';
   };
+  nixlingCliPackage = if prebuilt ? nixling then prebuilt.nixling else nixlingCliSourcePackage;
 
   # Small fd-safe activation helper that the host activation snippets
   # call instead of `[ -L ] / [ -f ] / find -type f` shell
   # check-then-act patterns. Lives in nixling-host because it
   # only depends on libc + nix; no IPC; no async runtime.
-  nixlingActivationHelperPackage = pkgs.rustPlatform.buildRustPackage {
+  nixlingActivationHelperSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling-activation-helper";
     version = "0.0.0-bootstrap";
     src = packagesSrc;
@@ -92,6 +95,7 @@ EOF
       runHook postInstall
     '';
   };
+  nixlingActivationHelperPackage = if prebuilt ? "nixling-activation-helper" then prebuilt."nixling-activation-helper" else nixlingActivationHelperSourcePackage;
 
   nixlingCliShellArtifactsPackage = pkgs.runCommand "nixling-cli-shell-artifacts" { } ''
     install -Dm644 ${../docs/manpages/nixling.1} "$out/share/man/man1/nixling.1"
@@ -113,6 +117,7 @@ EOF
     adminUsers = cfg.site.adminUsers;
     serverVersion = "0.4.0";
     acceptedClientVersionRange = ">=0.4.0, <0.5.0";
+    gatewayConfigPath = "/etc/nixling/gateway.json";
     artifacts = {
       publicManifestPath = "/run/current-system/sw/share/nixling/vms.json";
       bundlePath = "/etc/nixling/bundle.json";
@@ -121,6 +126,45 @@ EOF
       closuresDir = "/etc/nixling/closures";
     };
   };
+  enabledGateways = lib.mapAttrsToList
+    (name: gw: { inherit name gw; })
+    (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
+  hostGatewayConfigJson =
+    if builtins.length enabledGateways == 1
+    then
+      let
+        gateway = builtins.head enabledGateways;
+        gw = gateway.gw;
+      in
+      builtins.toJSON {
+        gateway = gateway.name;
+        realm = gw.realm;
+        stateDir = gw.stateDir;
+        credentialPath = gw.credentialPath;
+        relay = {
+          inherit (gw.relay) namespace entity;
+        };
+        aca = {
+          inherit (gw.aca)
+            endpoint
+            subscription
+            resourceGroup
+            sandboxGroup
+            region
+            diskImageId
+            image
+            diskName
+            managedIdentityResourceId
+            cpu
+            memory
+            autoSuspendIntervalSecs
+            ;
+        };
+        display = {
+          inherit (gw.display) vsockPort waypipeCompression waypipeSocket;
+        };
+      }
+    else null;
 in
 {
   options.nixling.host.usbip.allowlist = lib.mkOption {
@@ -187,11 +231,20 @@ in
 
     environment.systemPackages = [ nixlingdPackage nixlingCliPackage nixlingCliShellArtifactsPackage nixlingActivationHelperPackage ];
 
-    environment.etc."nixling/daemon-config.json" = {
-      text = daemonConfigJson;
-      mode = "0640";
-      user = "root";
-      group = "nixlingd";
+    environment.etc = {
+      "nixling/daemon-config.json" = {
+        text = daemonConfigJson;
+        mode = "0640";
+        user = "root";
+        group = "nixlingd";
+      };
+    } // lib.optionalAttrs (hostGatewayConfigJson != null) {
+      "nixling/gateway.json" = {
+        text = hostGatewayConfigJson;
+        mode = "0640";
+        user = "root";
+        group = "nixlingd";
+      };
     };
 
     systemd.tmpfiles.rules = [

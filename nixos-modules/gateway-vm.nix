@@ -33,6 +33,7 @@ let
     '';
   };
   nixlingdPackage = buildRustBin "nixlingd" "nixlingd";
+  nixlingPackage = buildRustBin "nixling" "nixling";
   gatewayRelayPackage = buildRustBin "nixling-gateway-runtime" "nixling-gateway-relay";
 
   gatewayVm = name: gw: {
@@ -68,6 +69,7 @@ let
           adminUsers = [ "gateway" ];
           serverVersion = "0.4.0";
           acceptedClientVersionRange = ">=0.4.0, <0.5.0";
+          gatewayConfigPath = "/etc/nixling/gateway.json";
           artifacts = {
             publicManifestPath = "/etc/nixling/manifest.json";
             bundlePath = "/etc/nixling/bundle.json";
@@ -104,8 +106,42 @@ let
             inherit (gw.display) vsockPort waypipeCompression;
           };
         };
+        environment.etc."nixling/manifest.json".text = builtins.toJSON {
+          _manifest = {
+            manifestVersion = cfg._manifestVersion;
+          };
+          ${gw.vmName} = {
+            name = gw.vmName;
+            graphics = false;
+            tpm = false;
+            usbipYubikey = false;
+            audio = false;
+            tap = "${gw.env}-l${toString gw.index}";
+            bridge = "br-${gw.env}-lan";
+            env = gw.env;
+            isNetVm = false;
+            netVm = "sys-${gw.env}-net";
+            usbipdHostIp = null;
+            stateDir = "${cfg.site.stateDir}/vms/${gw.vmName}";
+            apiSocket = "${cfg.site.stateDir}/vms/${gw.vmName}/${gw.vmName}.sock";
+            gpuSocket = "${cfg.site.stateDir}/vms/${gw.vmName}/${gw.vmName}-gpu.sock";
+            tpmSocket = "/run/nixling/vms/${gw.vmName}/tpm.sock";
+            audioStateFile = "${cfg.site.stateDir}/vms/${gw.vmName}/state/audio-state.json";
+            audioService = "nixling-${gw.vmName}-snd.service";
+            observability = {
+              enabled = false;
+              vsockCid = 0;
+              vsockHostSocket = "";
+              agentSocket = "/run/nixling/otlp.sock";
+            };
+            staticIp = null;
+            sshUser = "gateway";
+          };
+        };
+        environment.variables.NIXLING_MANIFEST_PATH = "/etc/nixling/manifest.json";
         environment.systemPackages = with pkgs; [
           curl
+          nixlingPackage
           nixlingdPackage
           gatewayRelayPackage
         ];

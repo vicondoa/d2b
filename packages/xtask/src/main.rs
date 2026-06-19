@@ -17,7 +17,8 @@ use nixling::{
 use nixling_core::{
     bundle::Bundle, closures::ClosureMetadata, error::Error, host::HostJson,
     manifest_v04::ManifestV04, minijail_profile::MinijailProfile, privileges::PrivilegesJson,
-    processes::ProcessesJson,
+    processes::ProcessesJson, storage::StorageJson, storage_lifecycle::StorageLifecycleReport,
+    sync::SyncJson,
 };
 use nixling_ipc::{WireProtocolSchema, guest_wire::GuestControlSchema};
 use schemars::schema::RootSchema;
@@ -217,10 +218,16 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         .join(SCHEMA_VERSION);
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 9] = [
+    let schemas: [(&str, RootSchema); 12] = [
         ("bundle.json", schemars::schema_for!(Bundle)),
         ("host.json", schemars::schema_for!(HostJson)),
         ("processes.json", schemars::schema_for!(ProcessesJson)),
+        ("storage.json", schemars::schema_for!(StorageJson)),
+        ("sync.json", schemars::schema_for!(SyncJson)),
+        (
+            "storage-lifecycle-report.json",
+            schemars::schema_for!(StorageLifecycleReport),
+        ),
         ("privileges.json", schemars::schema_for!(PrivilegesJson)),
         ("closures.json", schemars::schema_for!(ClosureMetadata)),
         (
@@ -345,6 +352,21 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
         .manual("nixling CLI")
         .render(&mut man_buffer)?;
     fs::write(&man_path, man_buffer)?;
+    let mut host_command = nixling::cli_command()
+        .find_subcommand_mut("host")
+        .expect("host subcommand exists")
+        .clone();
+    host_command.build();
+    let host_man_path = man_dir.join("nixling-host.1");
+    let mut host_man_buffer = Vec::new();
+    Man::new(host_command)
+        .title("nixling-host")
+        .section("1")
+        .date("1970-01-01")
+        .source("nixling".to_owned())
+        .manual("nixling CLI")
+        .render(&mut host_man_buffer)?;
+    fs::write(&host_man_path, host_man_buffer)?;
 
     let bash_path = comp_dir.join("nixling.bash");
     let mut bash_command = nixling::cli_command();
@@ -366,7 +388,13 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
     let fish_buffer = patch_vm_exec_logs_fish_completion(String::from_utf8(fish_buffer)?)?;
     fs::write(&fish_path, fish_buffer)?;
 
-    Ok(vec![man_path, bash_path, zsh_path, fish_path])
+    Ok(vec![
+        man_path,
+        host_man_path,
+        bash_path,
+        zsh_path,
+        fish_path,
+    ])
 }
 
 fn patch_vm_exec_logs_bash_completion(
