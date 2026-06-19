@@ -263,7 +263,14 @@ impl GatewayOrchestrator {
         app: &AppCommand,
     ) -> Result<OpenSession, GatewayError> {
         let id = &ctx.session_id;
-        // Minting -> AgentSpawning
+        // Minting -> ListenerArming. The relay listener must be registered
+        // before the sandbox sender dials; Azure Relay resets sender
+        // rendezvous attempts when no listener control channel is armed.
+        self.ledger()?
+            .transition(id, SessionState::ListenerArming)?;
+        let listener = self.deps.listener.arm(ctx, binding, secret).await?;
+
+        // ListenerArming -> AgentSpawning.
         self.ledger()?.transition(id, SessionState::AgentSpawning)?;
         let spawn = AgentSpawnRequest {
             ctx: ctx.clone(),
@@ -271,17 +278,22 @@ impl GatewayOrchestrator {
             secret: secret.clone(),
             app: app.clone(),
         };
-        let agent = self.deps.workload.spawn_agent(&spawn).await?;
+        let agent = match self.deps.workload.spawn_agent(&spawn).await {
+            Ok(agent) => agent,
+            Err(err) => {
+                let _ = self.deps.listener.close(&listener).await;
+                return Err(err);
+            }
+        };
 
-        // AgentSpawning -> ListenerArming
-        self.ledger()?
-            .transition(id, SessionState::ListenerArming)?;
-        let listener = self.deps.listener.arm(ctx, binding, secret).await?;
-
-        // ListenerArming -> AwaitingHandshake
+        // AgentSpawning -> AwaitingHandshake
         self.ledger()?
             .transition(id, SessionState::AwaitingHandshake)?;
-        self.deps.listener.await_handshake(&listener).await?;
+        if let Err(err) = self.deps.listener.await_handshake(&listener).await {
+            let _ = self.deps.workload.cleanup(&agent).await;
+            let _ = self.deps.listener.close(&listener).await;
+            return Err(err);
+        }
 
         // AwaitingHandshake -> Running
         self.ledger()?.transition(id, SessionState::Running)?;
@@ -631,8 +643,10 @@ mod tests {
         let (tk, cs, app) = seed();
         let err = orch.open(tk, cs, app, 42).await.unwrap_err();
         assert_eq!(err, GatewayError::ProviderAllocationFailed);
-        // Listener never armed; session ended Failed (compensated).
-        assert_eq!(l.arms.load(Ordering::SeqCst), 0);
+        // Listener is armed before the sender is spawned, then closed during
+        // compensation when spawn fails.
+        assert_eq!(l.arms.load(Ordering::SeqCst), 1);
+        assert_eq!(l.closes.load(Ordering::SeqCst), 1);
         let id = DisplaySessionId::new("s0");
         assert_eq!(orch.state(&id), Some(SessionState::Failed));
     }

@@ -13,9 +13,9 @@
 //!   2. exports the binding fields as `NL_SESSION_*`;
 //!   3. fetches the sandbox Managed-Identity token for `relay.azure.net`
 //!      (no SAS handed to the container) into `NIXLING_RELAY_ENTRA_TOKEN`;
-//!   4. starts a persistent `waypipe server` exposing `WAYLAND_DISPLAY` and the
-//!      gated `nixling-gateway-relay sender` (which writes the handshake
-//!      prologue), then launches the requested app against that display.
+//!   4. starts the gated `nixling-gateway-relay sender` (which writes the
+//!      handshake prologue), then launches the requested app as the child of
+//!      `waypipe server`.
 //!
 //! The command-shaping is a pure function ([`build_agent_command`]) so it is
 //! unit-tested without any Azure round-trip; the I/O is a single delegated
@@ -76,7 +76,7 @@ pub fn default_entra_token_snippet() -> String {
     // helper would normally parse it, but to keep the agent self-contained we
     // rely on the image's baked `nl-msi-token` helper (provisioned in
     // image.nix) which prints the bare access_token for a resource.
-    "NIXLING_RELAY_ENTRA_TOKEN=\"$(nl-msi-token https://relay.azure.net)\"".to_owned()
+    "NIXLING_RELAY_ENTRA_TOKEN=\"$(nl-msi-token https://relay.azure.net/)\"".to_owned()
 }
 
 /// The production [`GatewayWorkload`]: drives the in-sandbox agent over ACA
@@ -148,8 +148,21 @@ impl AcaGatewayWorkload {
                         tracing::warn!(error = %err, "aca gateway workload sandbox lookup failed");
                         GatewayError::ProviderAllocationFailed
                     })?
-                    .map(|sandbox| sandbox.id)
-                    .ok_or(GatewayError::ProviderAllocationFailed)
+                    .map(|sandbox| {
+                        tracing::info!(
+                            sandbox_id = %sandbox.id,
+                            state = ?sandbox.state,
+                            "aca gateway workload sandbox selected"
+                        );
+                        sandbox.id
+                    })
+                    .ok_or_else(|| {
+                        tracing::warn!(
+                            workload = %workload.as_str(),
+                            "aca gateway workload sandbox not found"
+                        );
+                        GatewayError::ProviderAllocationFailed
+                    })
             }
         }
     }
@@ -242,24 +255,14 @@ pub fn build_agent_command(
         s.push_str(&format!("NIXLING_RELAY_CA_FILE={}\n", sh_quote(ca)));
         relay_exports.push("NIXLING_RELAY_CA_FILE");
     }
-    // Persistent waypipe server (multiplexes N clients on one display).
-    s.push_str(&format!(
-        "( {wp} --no-gpu -c {comp} -s \"$W/wp.sock\" --display {disp} server -- sleep infinity >\"$W/wp.log\" 2>&1 & echo $! >> \"$W/pids\" )\n",
-        wp = sh_quote(&bins.waypipe),
-        comp = bins.compression,
-        disp = bins.display,
-    ));
-    // Gated relay sender: writes the handshake prologue, then bridges wp.sock.
+    // Gated relay sender: binds wp.sock, writes the handshake prologue to the
+    // relay, then bridges the Waypipe server connection.
     s.push_str(&format!(
         "( export {relay_exports}; {relay_bin} sender >\"$W/relay.log\" 2>&1 & echo $! >> \"$W/pids\" )\n",
         relay_exports = relay_exports.join(" "),
         relay_bin = sh_quote(&bins.gateway_relay),
     ));
-    // Wait (bounded) for the display socket, then launch the app against it.
-    s.push_str(&format!(
-        "for _ in $(seq 1 50); do [ -S \"$W/{disp}\" ] && break; sleep 0.1; done\n",
-        disp = bins.display,
-    ));
+    s.push_str("for _ in $(seq 1 50); do [ -S \"$W/wp.sock\" ] && break; sleep 0.1; done\n");
     let app_argv: String = req
         .app
         .argv()
@@ -267,9 +270,13 @@ pub fn build_agent_command(
         .map(|a| sh_quote(a))
         .collect::<Vec<_>>()
         .join(" ");
+    // Launch the app as Waypipe's child. This is the proven ACA path: Waypipe
+    // owns the compositor socket lifecycle for the app instead of racing a
+    // separately-started client against a persistent server.
     s.push_str(&format!(
-        "( WAYLAND_DISPLAY={disp} {argv} >\"$W/app.log\" 2>&1 & echo $! >> \"$W/pids\" )\n",
-        disp = bins.display,
+        "( {wp} --no-gpu -c {comp} -s \"$W/wp.sock\" server -- {argv} >\"$W/app.log\" 2>&1 & echo $! >> \"$W/pids\" )\n",
+        wp = sh_quote(&bins.waypipe),
+        comp = bins.compression,
         argv = app_argv,
     ));
     s.push_str("echo \"NL_AGENT_WORKDIR=$W\"\n");
@@ -325,8 +332,21 @@ impl GatewayWorkload for AcaGatewayWorkload {
                 tracing::warn!(error = %err, "aca gateway workload agent exec failed");
                 GatewayError::ProviderAllocationFailed
             })?;
-        let workdir =
-            parse_workdir(&result.stdout).ok_or(GatewayError::ProviderAllocationFailed)?;
+        tracing::info!(
+            exit_code = result.exit_code,
+            stdout_len = result.stdout.len(),
+            stderr_len = result.stderr.len(),
+            "aca gateway workload agent exec completed"
+        );
+        let workdir = parse_workdir(&result.stdout).ok_or_else(|| {
+            tracing::warn!(
+                exit_code = result.exit_code,
+                stdout_len = result.stdout.len(),
+                stderr_len = result.stderr.len(),
+                "aca gateway workload agent did not report a workdir"
+            );
+            GatewayError::ProviderAllocationFailed
+        })?;
         if result.exit_code != 0 {
             let _ = self
                 .provider
@@ -408,11 +428,10 @@ mod tests {
         assert!(cmd.contains("NL_SESSION_OP='op-9'"));
         assert!(cmd.contains("NL_SESSION_WORKLOAD='demo'"));
         assert!(cmd.contains("NL_SESSION_NOT_AFTER='1000000'"));
-        // The gated sender + persistent waypipe server + the app are launched.
+        // The gated sender + waypipe-owned app launch are emitted.
         assert!(cmd.contains("export NL_SESSION_SECRET_B64"));
         assert!(cmd.contains("'nixling-gateway-relay' sender"));
-        assert!(cmd.contains("--display wayland-nl server -- sleep infinity"));
-        assert!(cmd.contains("WAYLAND_DISPLAY=wayland-nl 'foot'"));
+        assert!(cmd.contains("server -- 'foot'"));
         // Relay coords.
         assert!(cmd.contains("NIXLING_RELAY_ENTITY='hc-nixling-display'"));
         assert!(cmd.contains("NIXLING_RELAY_TARGET=\"unix-listen:$W/wp.sock\""));
@@ -442,7 +461,7 @@ mod tests {
         );
         let app_line = cmd
             .lines()
-            .find(|l| l.contains("WAYLAND_DISPLAY=wayland-nl 'foot'"))
+            .find(|l| l.contains("server -- 'foot'"))
             .unwrap();
         assert!(!app_line.contains("NL_SESSION_SECRET_B64"));
         assert!(!app_line.contains("NIXLING_RELAY_ENTRA_TOKEN"));

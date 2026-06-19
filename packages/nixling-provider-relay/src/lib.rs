@@ -32,7 +32,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// The Entra resource (audience) a managed identity requests a token for to
 /// authenticate to Azure Relay. Confirmed against the Azure Relay docs.
-pub const RELAY_TOKEN_RESOURCE: &str = "https://relay.azure.net";
+pub const RELAY_TOKEN_RESOURCE: &str = "https://relay.azure.net/";
 
 /// The role an endpoint plays on the hybrid connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -432,8 +432,10 @@ where
                     Some(Ok(Message::Text(_))) | Some(Ok(Message::Pong(_)))
                     | Some(Ok(Message::Frame(_))) => {}
                     Some(Ok(Message::Close(_))) | None => return Ok(()),
-                    Some(Err(_)) => {
-                        return Err(RelayConnectError::Handshake("ws stream error".into()));
+                    Some(Err(err)) => {
+                        return Err(RelayConnectError::Handshake(format!(
+                            "ws stream error: {err}"
+                        )));
                     }
                 }
             }
@@ -617,6 +619,27 @@ async fn read_prologue(ws: &mut RelayStream) -> Result<(Vec<u8>, Vec<u8>), Relay
     }
 }
 
+async fn read_first_payload(ws: &mut RelayStream) -> Result<Vec<u8>, RelayConnectError> {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    loop {
+        match ws.next().await {
+            Some(Ok(Message::Binary(data))) if !data.is_empty() => return Ok(data),
+            Some(Ok(Message::Binary(_)))
+            | Some(Ok(Message::Ping(_)))
+            | Some(Ok(Message::Pong(_)))
+            | Some(Ok(Message::Text(_)))
+            | Some(Ok(Message::Frame(_))) => {}
+            Some(Ok(Message::Close(_))) | None => {
+                return Err(RelayConnectError::Handshake("payload eof".into()));
+            }
+            Some(Err(err)) => {
+                return Err(RelayConnectError::Handshake(format!("payload read: {err}")));
+            }
+        }
+    }
+}
+
 /// Like [`run_listener`], but each accepted rendezvous must present a prologue
 /// frame that `verify` admits **before any byte is bridged** to `local`. A
 /// rejected or missing prologue closes the rendezvous with no bytes forwarded.
@@ -681,24 +704,25 @@ async fn accept_one_verified(
         // Fail closed: never connect the local socket, never forward a byte.
         return Err(RelayConnectError::Handshake("prologue rejected".into()));
     }
+    let first_payload = if leftover.is_empty() {
+        read_first_payload(&mut ws).await?
+    } else {
+        leftover
+    };
     let io = connect_local(local)
         .await
         .map_err(|_| RelayConnectError::Handshake("local connect".into()))?;
     match io {
         LocalIo::Tcp(mut s) => {
-            if !leftover.is_empty() {
-                s.write_all(&leftover)
-                    .await
-                    .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
-            }
+            s.write_all(&first_payload)
+                .await
+                .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
             pump(ws, s).await
         }
         LocalIo::Unix(mut s) => {
-            if !leftover.is_empty() {
-                s.write_all(&leftover)
-                    .await
-                    .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
-            }
+            s.write_all(&first_payload)
+                .await
+                .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
             pump(ws, s).await
         }
     }

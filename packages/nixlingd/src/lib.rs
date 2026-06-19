@@ -2624,6 +2624,10 @@ fn close_gateway_sessions_for_target(state: &ServerState, target: &str) -> Resul
 }
 
 fn gateway_error_to_typed(error: GatewayError) -> TypedError {
+    tracing::warn!(
+        gateway_error = error.slug(),
+        "gateway display request failed"
+    );
     TypedError::GatewayDisplayUnavailable {
         detail: error.slug().to_owned(),
     }
@@ -2704,6 +2708,11 @@ impl DisplayListener for ConfiguredDisplayListener {
     ) -> Result<ListenerHandle, GatewayError> {
         let listener = Arc::new(display_listener_from_config(&self.config)?);
         let handle = listener.arm(ctx, binding, secret).await?;
+        // Azure Relay listener registration is asynchronous after the control
+        // channel is spawned. Give the listener a short head start before the
+        // sandbox sender dials; otherwise the service can reset the sender
+        // rendezvous instead of returning the retryable 404.
+        tokio::time::sleep(Duration::from_secs(2)).await;
         self.listeners
             .lock()
             .map_err(|_| GatewayError::ProviderAllocationFailed)?
@@ -2934,6 +2943,7 @@ fn aca_provider_from_gateway_config(
     defaults.cpu = aca.cpu.clone().unwrap_or_else(|| "1000m".to_owned());
     defaults.memory = aca.memory.clone().unwrap_or_else(|| "2048Mi".to_owned());
     defaults.auto_suspend_interval_secs = aca.auto_suspend_interval_secs.unwrap_or(600);
+    defaults.managed_identity_resource_id = aca.managed_identity_resource_id.clone();
     defaults
         .labels
         .insert("nixling-realm".to_owned(), config.realm.clone());
