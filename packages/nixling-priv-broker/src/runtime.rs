@@ -1077,14 +1077,6 @@ fn dispatch_request(
             operation: "PrepareStateDir",
             target_wave: "W3",
         }),
-        BrokerRequest::ReconcileStorageScope { .. } => Err(BrokerError::Unimplemented {
-            operation: "ReconcileStorageScope",
-            target_wave: "storage-contract",
-        }),
-        BrokerRequest::ValidateLockSpec { .. } => Err(BrokerError::Unimplemented {
-            operation: "ValidateLockSpec",
-            target_wave: "storage-contract",
-        }),
         BrokerRequest::PrepareStoreView { .. } => Err(BrokerError::Unimplemented {
             operation: "PrepareStoreView",
             target_wave: "W7",
