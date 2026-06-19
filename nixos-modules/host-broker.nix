@@ -16,6 +16,7 @@
 
 let
   cfg = config.nixling;
+  prebuilt = import ./prebuilt-packages.nix { inherit pkgs lib; };
 
   # filter out `target/` dev caches from the source
   # so the Nix copy stays small (broker target alone is ~6 GB).
@@ -28,7 +29,7 @@ let
       in !(builtins.elem "target" parts || lib.hasPrefix ".cargo/registry/" rel || lib.hasInfix "/.cargo/registry/" rel);
   };
 
-  brokerPackage = pkgs.rustPlatform.buildRustPackage {
+  brokerSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling-priv-broker";
     version =
       (builtins.fromTOML (builtins.readFile ../packages/nixling-priv-broker/Cargo.toml))
@@ -50,6 +51,7 @@ EOF
     '';
     meta.description = "nixling privileged broker (uid 0 host-mutation surface)";
   };
+  brokerPackage = if prebuilt ? "nixling-priv-broker" then prebuilt."nixling-priv-broker" else brokerSourcePackage;
 
   bundleManifestPath =
     cfg.site.bundle.currentManifest or "/etc/nixling/bundle.json";

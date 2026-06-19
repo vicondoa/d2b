@@ -2,6 +2,7 @@
 
 let
   cfg = config.nixling;
+  prebuilt = import ./prebuilt-packages.nix { inherit pkgs lib; };
 
   # filter out `target/` dev caches from the source
   # so the Nix copy stays small (workspace target alone is ~17 GB).
@@ -18,7 +19,7 @@ let
     outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
   };
 
-  nixlingdPackage = pkgs.rustPlatform.buildRustPackage {
+  nixlingdSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixlingd";
     version = "0.0.0-bootstrap";
     src = packagesSrc;
@@ -44,12 +45,13 @@ EOF
       runHook postInstall
     '';
   };
+  nixlingdPackage = if prebuilt ? nixlingd then prebuilt.nixlingd else nixlingdSourcePackage;
 
   # the user-facing CLI is now the Rust nixling crate
   # (packages/nixling). The pre-v1.0 bash CLI was RETIRED in;
   # ships the daemon-native Rust CLI as the only
   # `nixling` binary on the host.
-  nixlingCliPackage = pkgs.rustPlatform.buildRustPackage {
+  nixlingCliSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling";
     version = "0.0.0-bootstrap";
     src = packagesSrc;
@@ -71,12 +73,13 @@ EOF
       runHook postInstall
     '';
   };
+  nixlingCliPackage = if prebuilt ? nixling then prebuilt.nixling else nixlingCliSourcePackage;
 
   # Small fd-safe activation helper that the host activation snippets
   # call instead of `[ -L ] / [ -f ] / find -type f` shell
   # check-then-act patterns. Lives in nixling-host because it
   # only depends on libc + nix; no IPC; no async runtime.
-  nixlingActivationHelperPackage = pkgs.rustPlatform.buildRustPackage {
+  nixlingActivationHelperSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling-activation-helper";
     version = "0.0.0-bootstrap";
     src = packagesSrc;
@@ -98,6 +101,7 @@ EOF
       runHook postInstall
     '';
   };
+  nixlingActivationHelperPackage = if prebuilt ? "nixling-activation-helper" then prebuilt."nixling-activation-helper" else nixlingActivationHelperSourcePackage;
 
   nixlingCliShellArtifactsPackage = pkgs.runCommand "nixling-cli-shell-artifacts" { } ''
     install -Dm644 ${../docs/manpages/nixling.1} "$out/share/man/man1/nixling.1"

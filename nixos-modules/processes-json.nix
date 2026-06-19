@@ -4,6 +4,7 @@ let
   clean = builtins.unsafeDiscardStringContext;
 
   cfg = config.nixling;
+  prebuilt = import ./prebuilt-packages.nix { inherit pkgs lib; };
   # nixling-owned access helpers (see lib.nix).
   nl = import ./lib.nix { inherit lib pkgs; };
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
@@ -45,7 +46,7 @@ let
         parts = lib.splitString "/" rel;
       in !(builtins.elem "target" parts || lib.hasPrefix ".cargo/registry/" rel || lib.hasInfix "/.cargo/registry/" rel);
   };
-  nixlingWaylandFilterPackage = pkgs.rustPlatform.buildRustPackage {
+  nixlingWaylandFilterSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling-wayland-filter";
     version = "0.0.0";
     src = packagesSrc;
@@ -70,6 +71,7 @@ EOF
       runHook postInstall
     '';
   };
+  nixlingWaylandFilterPackage = if prebuilt ? "nixling-wayland-filter" then prebuilt."nixling-wayland-filter" else nixlingWaylandFilterSourcePackage;
   nixlingWaylandFilterBinary = "${nixlingWaylandFilterPackage}/bin/nixling-wayland-filter";
 
   envPortMap = lib.listToAttrs (

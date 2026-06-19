@@ -34,6 +34,7 @@
 let
   cfg = config.nixling;
   nl = import ./lib.nix { inherit lib pkgs; };
+  prebuilt = import ./prebuilt-packages.nix { inherit pkgs lib; };
 
   # Build the nixling-activation-helper binary (defined in
   # packages/nixling-host/src/bin/nixling-activation-helper.rs)
@@ -55,7 +56,7 @@ let
     lockFile = ../packages/Cargo.lock;
     outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
   };
-  activationHelperPackage = pkgs.rustPlatform.buildRustPackage {
+  activationHelperSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling-activation-helper";
     version = "0.0.0-bootstrap";
     src = packagesSrc;
@@ -77,6 +78,7 @@ EOF
       runHook postInstall
     '';
   };
+  activationHelperPackage = if prebuilt ? "nixling-activation-helper" then prebuilt."nixling-activation-helper" else activationHelperSourcePackage;
   activationHelper = "${activationHelperPackage}/bin/nixling-activation-helper";
   groupMigrationHelperPackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling-host-activation-helper";
