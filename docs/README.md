@@ -52,6 +52,8 @@ The contracts. Stable interfaces a consumer can depend on.
   destructive-operation guardrails.
 - [`reference/key-lifecycle.md`](./reference/key-lifecycle.md) —
   framework-managed SSH identity, trust-state, and audit behavior.
+- [`reference/qemu-media.md`](./reference/qemu-media.md) —
+  qemu-media runtime, media-source, CLI, and security contract.
 - [`reference/security-runbook.md`](./reference/security-runbook.md) —
   operator incident-response, USBIP emergency containment, and
   compromise-recovery steps.
@@ -106,6 +108,8 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
   scaffold paths.
 - [`how-to/hardware-smoke-walkthrough.md`](./how-to/hardware-smoke-walkthrough.md) —
   operator procedure for the manual hardware/platform smokes.
+- [`how-to/qemu-media.md`](./how-to/qemu-media.md) —
+  configure, enroll, start, hotplug, and validate a qemu-media VM.
 - [`how-to/migrating-from-microvm.md`](./how-to/migrating-from-microvm.md) —
   port an existing `microvm.nix` deployment onto `nixling`: option
   mapping, step-by-step procedure, troubleshooting.

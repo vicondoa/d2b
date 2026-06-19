@@ -423,3 +423,115 @@ fn virtiofsd_ro_store_rendered_adr_0021_invariants() {
         "fixture has no virtiofsd ro-store share — every VM serves a read-only store (regression)"
     );
 }
+
+// ===========================================================================
+// qemu-media fd-backed runner profile
+// ===========================================================================
+
+#[test]
+fn qemu_media_profile_source_is_fd_backed_and_device_closed() {
+    assert!(
+        repo_path_exists(MINIJAIL_PROFILES_NIX),
+        "missing {MINIJAIL_PROFILES_NIX}"
+    );
+    let src = read_repo_file(MINIJAIL_PROFILES_NIX);
+    let block = extract_block(
+        &src,
+        r#"role\s*=\s*"qemu-media-runner";"#,
+        r"controllers\s*=\s*serviceControllers;",
+    )
+    .expect("could not locate qemu-media profile block in minijail-profiles.nix");
+
+    assert!(
+        any_line_matches(&block, r"capabilities\s*=\s*\[\s*\]"),
+        "qemu-media profile must declare an empty host capability set"
+    );
+    for cap in [
+        "CAP_SYS_ADMIN",
+        "CAP_SYS_RAWIO",
+        "CAP_DAC_OVERRIDE",
+        "CAP_NET_ADMIN",
+    ] {
+        assert!(
+            !block.contains(cap),
+            "qemu-media profile must not mention forbidden capability {cap}"
+        );
+    }
+    assert!(
+        any_line_matches(&block, r#"seccompPolicyRef\s*=\s*"w1-qemu-media";"#),
+        "qemu-media profile must declare the mandatory w1-qemu-media seccomp policy"
+    );
+    assert!(
+        any_line_matches(
+            &block,
+            r"namespaces\s*=\s*defaultNamespaces\s*//\s*\{\s*pid\s*=\s*true;\s*\};"
+        ),
+        "qemu-media profile must request a private pid namespace so /dev masking installs a private procfs"
+    );
+    assert!(
+        any_line_matches(&block, r#"readOnlyPaths\s*=\s*\[\s*"/"\s*\];"#),
+        "qemu-media profile must make the root mount read-only"
+    );
+    assert!(
+        any_line_matches(&block, r#"deviceBinds\s*=\s*\[\s*"/dev/kvm"\s*\]"#),
+        "qemu-media fd-backed mode must expose only /dev/kvm by path"
+    );
+    assert!(
+        any_line_matches(&block, r"bindMounts\s*=\s*\[\s*\]"),
+        "qemu-media fd-backed mode must not bind broad media/display paths"
+    );
+    for forbidden in ["/dev/bus/usb", "/dev/net/tun", "/dev/vhost-net"] {
+        assert!(
+            !block.contains(forbidden),
+            "qemu-media profile must not bind forbidden device path {forbidden}"
+        );
+    }
+    assert!(
+        block.contains(r#""/run/nixling/vms/${name}""#) && block.contains("(stateDirOf name)"),
+        "qemu-media writable paths must stay scoped to per-VM runtime/state directories"
+    );
+}
+
+#[test]
+fn qemu_media_activation_acl_source_splits_kvm_from_vhost_net() {
+    let src = read_repo_file("nixos-modules/host-activation.nix");
+    assert!(
+        src.contains(
+            r#"select(.role == "cloud-hypervisor-runner" or .role == "gpu" or .role == "qemu-media-runner")"#
+        ),
+        "qemu-media runner UID must be classified as KVM-consuming for focused /dev/kvm ACLs"
+    );
+    assert!(
+        src.contains(r#"select(.role == "cloud-hypervisor-runner" or .role == "gpu")"#),
+        "vhost-net ACL classifier must remain separate from KVM consumers"
+    );
+    assert!(
+        src.contains("stale_qemu_media_uid"),
+        "activation must revoke stale qemu-media display/KVM ACLs"
+    );
+    assert!(
+        src.contains("setfacl -x \"u:$stale_qemu_media_uid\" /dev/vhost-net"),
+        "qemu-media fd-backed mode must actively revoke stale /dev/vhost-net ACLs"
+    );
+}
+
+#[test]
+fn broker_spawn_sets_no_new_privs_before_seccomp() {
+    let src = read_repo_file("packages/nixling-priv-broker/src/sys.rs");
+    let no_new_privs = src
+        .find("libc::PR_SET_NO_NEW_PRIVS")
+        .expect("broker spawn child must call PR_SET_NO_NEW_PRIVS");
+    let seccomp = src
+        .find("apply_seccomp(program)")
+        .expect("broker spawn child must install seccomp");
+
+    assert!(
+        no_new_privs < seccomp,
+        "broker spawn must set no-new-privileges before installing seccomp"
+    );
+    assert!(
+        src.contains("libc::_exit(CHILD_EXIT_PRCTL_NO_NEW_PRIVS)")
+            && src.contains("libc::_exit(CHILD_EXIT_SECCOMP)"),
+        "broker spawn must fail closed when no-new-privs or seccomp installation fails"
+    );
+}

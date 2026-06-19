@@ -36,7 +36,7 @@ use nixling_core::bundle_resolver::{
 };
 use nixling_core::closures::ClosureMetadata;
 use nixling_core::error::BundleError;
-use nixling_core::host::{HostJson, Ipv6SysctlEntry};
+use nixling_core::host::{HostJson, Ipv6SysctlEntry, QemuMediaSourceIntent};
 use nixling_core::host_check;
 use nixling_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use nixling_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
@@ -60,6 +60,8 @@ use nixling_ipc::{
         ApplySysctlRequest as BrokerApplySysctlRequest, BrokerCallerRole, BrokerRequest,
         BrokerRequestEnvelope, BrokerResponse, DeregisterRunnerPidfdRequest,
         OpenPidfdRequest as BrokerOpenPidfdRequest,
+        QemuMediaEnrollRequest as BrokerQemuMediaEnrollRequest,
+        QemuMediaHotplugRequest as BrokerQemuMediaHotplugRequest,
         RunActivationRequest as BrokerRunActivationRequest, RunGcRequest as BrokerRunGcRequest,
         RunHostInstallRequest as BrokerRunHostInstallRequest,
         RunHostKeyTrustRequest as BrokerRunHostKeyTrustRequest,
@@ -75,7 +77,7 @@ use nixling_ipc::{
         UsbipUnbindRequest as BrokerUsbipUnbindRequest,
     },
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
-    types::{BundleClosureRef, BundleOpId, RoleId, ScopeId, VmId},
+    types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, VmId},
 };
 use nixling_provider_aca::{
     AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider,
@@ -205,6 +207,20 @@ pub const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/nixling/daemon-state";
 const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 const VM_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QemuMediaRegistryRecord {
+    vm: String,
+    media_ref: String,
+    source_kind: String,
+    format: String,
+    read_only: bool,
+    #[serde(default, rename = "schemaVersion")]
+    _schema_version: Option<u32>,
+    #[serde(default, rename = "identity")]
+    _identity: Option<Value>,
+}
 
 /// Default cap on concurrent in-flight connection-handler threads.
 /// Overridable at startup via `NIXLINGD_MAX_INFLIGHT_CONNECTIONS`.
@@ -2211,6 +2227,7 @@ fn verb_requires_admin(verb: &str) -> bool {
             | "rotateKnownHost"
             | "usbipBind"
             | "usbipUnbind"
+            | "usbEnroll"
             | "storeVerify"
             | "migrate"
             | "hostPrepare"
@@ -2288,6 +2305,7 @@ fn dispatch_request_locked(
         wire::Request::RotateKnownHost(req) => dispatch_broker_rotate_known_host(state, req),
         wire::Request::UsbipBind(req) => dispatch_broker_usbip_bind(state, req),
         wire::Request::UsbipUnbind(req) => dispatch_broker_usbip_unbind(state, req),
+        wire::Request::UsbEnroll(req) => dispatch_broker_usb_enroll(state, req),
         wire::Request::UsbipProbe => dispatch_broker_usbip_probe(state),
         wire::Request::StoreVerify(req) => dispatch_broker_store_verify(state, req),
         wire::Request::Migrate(req) => dispatch_broker_run_migrate(state, req),
@@ -2932,6 +2950,9 @@ fn dispatch_exec_management(
     peer: &PeerIdentity,
     op: public_wire::ExecOp,
 ) -> Result<Value, TypedError> {
+    if let Some(vm) = exec_op_vm(&op) {
+        ensure_vm_runtime_capability(state, vm, RuntimeCapabilityGate::Exec, "exec")?;
+    }
     let response = match op {
         public_wire::ExecOp::List(args) => {
             public_wire::ExecOpResponse::List(exec_detached::list(state, &args)?)
@@ -2962,6 +2983,22 @@ fn dispatch_exec_management(
     Ok(wire::exec_response(&response))
 }
 
+fn exec_op_vm(op: &public_wire::ExecOp) -> Option<&str> {
+    match op {
+        public_wire::ExecOp::Start(args) => Some(args.vm.as_str()),
+        public_wire::ExecOp::List(args) => Some(args.vm.as_str()),
+        public_wire::ExecOp::Logs(args) => Some(args.vm.as_str()),
+        public_wire::ExecOp::Status(args) => Some(args.vm.as_str()),
+        public_wire::ExecOp::Kill(args) => Some(args.vm.as_str()),
+        public_wire::ExecOp::WriteStdin(_)
+        | public_wire::ExecOp::ReadOutput(_)
+        | public_wire::ExecOp::Signal(_)
+        | public_wire::ExecOp::Resize(_)
+        | public_wire::ExecOp::Wait(_)
+        | public_wire::ExecOp::Close(_) => None,
+    }
+}
+
 fn dispatch_keys_list(state: &ServerState) -> Result<Value, TypedError> {
     let bundle: Bundle = load_json(&state.config.artifacts.bundle_path)?;
     let manifest: ManifestV04 = load_json(&state.config.artifacts.public_manifest_path)?;
@@ -2969,6 +3006,7 @@ fn dispatch_keys_list(state: &ServerState) -> Result<Value, TypedError> {
     let entries = manifest
         .vms
         .iter()
+        .filter(|(_, entry)| entry.runtime.capabilities.keys)
         .map(|(vm, entry)| build_key_entry(&bundle, &ssh_keygen_binary, vm, entry))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(wire::keys_list_response(public_wire::KeysListResponse {
@@ -2982,6 +3020,12 @@ fn dispatch_keys_show(
 ) -> Result<Value, TypedError> {
     let bundle: Bundle = load_json(&state.config.artifacts.bundle_path)?;
     let manifest: ManifestV04 = load_json(&state.config.artifacts.public_manifest_path)?;
+    ensure_manifest_entry_runtime_capability(
+        manifest.vms.get(&request.vm),
+        &request.vm,
+        RuntimeCapabilityGate::Keys,
+        "keys show",
+    )?;
     let ssh_keygen_binary = PathBuf::from("/run/current-system/sw/bin/ssh-keygen");
     let entry = manifest
         .vms
@@ -3063,6 +3107,9 @@ fn dispatch_broker_usbip_bind(
         return Ok(response);
     }
     let resolver = load_bundle_resolver(state)?;
+    if vm_is_qemu_media(&resolver, &request.vm)? {
+        return dispatch_broker_qemu_media_attach(state, request);
+    }
     if let Err(response) = dispatch_broker_ack_request(
         state,
         VERB,
@@ -3195,6 +3242,10 @@ fn dispatch_broker_usbip_unbind(
     {
         return Ok(response);
     }
+    let resolver = load_bundle_resolver(state)?;
+    if vm_is_qemu_media(&resolver, &request.vm)? {
+        return dispatch_broker_qemu_media_detach(state, request);
+    }
     if let Err(response) = dispatch_broker_ack_request(
         state,
         VERB,
@@ -3224,18 +3275,235 @@ fn dispatch_broker_usbip_unbind(
     ))
 }
 
-fn dispatch_broker_usbip_probe(state: &ServerState) -> Result<Value, TypedError> {
-    const VERB: &str = "usb probe";
-    if let Err(response) = dispatch_broker_ack_request(
+fn vm_is_qemu_media(resolver: &BundleResolver, vm: &str) -> Result<bool, TypedError> {
+    let Some(entry) = resolver.find_manifest_vm(vm) else {
+        return Ok(false);
+    };
+    Ok(entry.runtime.kind == nixling_core::runtime::RuntimeKind::QemuMedia)
+}
+
+fn dispatch_broker_qemu_media_attach(
+    state: &ServerState,
+    request: public_wire::UsbipBindCliRequest,
+) -> Result<Value, TypedError> {
+    const VERB: &str = "usb attach";
+    if let Err(err) = nixling_host::media::validate_usb_busid(&request.bus_id) {
+        return Ok(invalid_request_response(
+            VERB,
+            format!("invalid USB busid selector: {err}"),
+        ));
+    }
+    match dispatch_broker_request(
         state,
-        VERB,
-        "UsbipProxyReconcile",
-        BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
-            scope_id: ScopeId::new("host"),
+        BrokerRequest::QemuMediaAttach(BrokerQemuMediaHotplugRequest {
+            vm_id: VmId::new(request.vm.clone()),
+            bus_id: request.bus_id,
+            tracing_span_id: None,
         }),
     ) {
+        Ok(BrokerResponse::QemuMediaAttach(response)) => Ok(applied_response(
+            VERB,
+            qemu_media_hotplug_summary(VERB, "attached", &response),
+        )),
+        Ok(BrokerResponse::Error(error)) => broker_error_for_qemu_media_hotplug(VERB, error),
+        Ok(other) => {
+            tracing::warn!(
+                broker_response_kind = %broker_response_kind(&other),
+                "broker returned unexpected qemu-media attach response"
+            );
+            let (summary, remediation) =
+                redact_broker_error_for_launcher("QemuMediaAttach", None, "Broker.Protocol");
+            Ok(broker_failure_response(VERB, summary, remediation, None))
+        }
+        Err(error) => {
+            tracing::warn!(error = ?error, "qemu-media attach broker dispatch failed");
+            let (summary, remediation) =
+                redact_broker_dispatch_failure_for_launcher("QemuMediaAttach");
+            Ok(broker_failure_response(VERB, summary, remediation, None))
+        }
+    }
+}
+
+fn dispatch_broker_qemu_media_detach(
+    state: &ServerState,
+    request: public_wire::UsbipUnbindCliRequest,
+) -> Result<Value, TypedError> {
+    const VERB: &str = "usb detach";
+    if let Err(err) = nixling_host::media::validate_usb_busid(&request.bus_id) {
+        return Ok(invalid_request_response(
+            VERB,
+            format!("invalid USB busid selector: {err}"),
+        ));
+    }
+    match dispatch_broker_request(
+        state,
+        BrokerRequest::QemuMediaDetach(BrokerQemuMediaHotplugRequest {
+            vm_id: VmId::new(request.vm.clone()),
+            bus_id: request.bus_id,
+            tracing_span_id: None,
+        }),
+    ) {
+        Ok(BrokerResponse::QemuMediaDetach(response)) => Ok(applied_response(
+            VERB,
+            qemu_media_hotplug_summary(VERB, "detached", &response),
+        )),
+        Ok(BrokerResponse::Error(error)) => broker_error_for_qemu_media_hotplug(VERB, error),
+        Ok(other) => {
+            tracing::warn!(
+                broker_response_kind = %broker_response_kind(&other),
+                "broker returned unexpected qemu-media detach response"
+            );
+            let (summary, remediation) =
+                redact_broker_error_for_launcher("QemuMediaDetach", None, "Broker.Protocol");
+            Ok(broker_failure_response(VERB, summary, remediation, None))
+        }
+        Err(error) => {
+            tracing::warn!(error = ?error, "qemu-media detach broker dispatch failed");
+            let (summary, remediation) =
+                redact_broker_dispatch_failure_for_launcher("QemuMediaDetach");
+            Ok(broker_failure_response(VERB, summary, remediation, None))
+        }
+    }
+}
+
+fn qemu_media_hotplug_summary(
+    verb: &str,
+    action: &str,
+    response: &nixling_ipc::broker_wire::QemuMediaHotplugResponse,
+) -> String {
+    format!(
+        "nixling {verb} --apply: qemu-media {action} ref '{}' in slot '{}' for vm '{}' via QMP scaffold (commands={})",
+        response.media_ref.as_str(),
+        response.slot,
+        response.vm_id.as_str(),
+        response.qmp_commands.join(",")
+    )
+}
+
+fn broker_error_for_qemu_media_hotplug(
+    verb: &str,
+    error: nixling_ipc::broker_wire::BrokerErrorResponse,
+) -> Result<Value, TypedError> {
+    let (summary, remediation) = redact_broker_error_for_launcher(
+        error.operation.as_str(),
+        error.target_wave.as_deref(),
+        &error.kind,
+    );
+    Ok(broker_failure_response(
+        verb,
+        summary,
+        remediation,
+        error.target_wave,
+    ))
+}
+
+fn dispatch_broker_usb_enroll(
+    state: &ServerState,
+    request: public_wire::UsbEnrollRequest,
+) -> Result<Value, TypedError> {
+    const VERB: &str = "usb enroll";
+    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+    {
         return Ok(response);
     }
+    if let Err(err) = nixling_host::media::validate_media_ref(request.media_ref.as_str()) {
+        return Ok(invalid_request_response(
+            VERB,
+            format!("invalid opaque media ref: {err}"),
+        ));
+    }
+    if let Err(err) = nixling_host::media::validate_usb_busid(&request.bus_id) {
+        return Ok(invalid_request_response(
+            VERB,
+            format!("invalid USB busid selector: {err}"),
+        ));
+    }
+    let resolver = load_bundle_resolver(state)?;
+    let Some(source) = resolver.find_qemu_media_source(&request.vm, request.media_ref.as_str())
+    else {
+        return Ok(invalid_request_response(
+            VERB,
+            format!(
+                "VM '{}' does not declare qemu-media ref '{}'",
+                request.vm,
+                request.media_ref.as_str()
+            ),
+        ));
+    };
+    if !matches!(
+        source.source_kind,
+        nixling_core::host::QemuMediaSourceKind::PhysicalUsb
+    ) {
+        return Ok(invalid_request_response(
+            VERB,
+            format!(
+                "qemu-media ref '{}' is not a physical-usb source",
+                request.media_ref.as_str()
+            ),
+        ));
+    }
+
+    match dispatch_broker_request(
+        state,
+        BrokerRequest::QemuMediaEnroll(BrokerQemuMediaEnrollRequest {
+            vm_id: VmId::new(request.vm.clone()),
+            media_ref: MediaRef::new(request.media_ref.as_str().to_owned()),
+            bus_id: request.bus_id.clone(),
+            tracing_span_id: None,
+        }),
+    ) {
+        Ok(BrokerResponse::QemuMediaEnroll(response)) if response.enrolled => Ok(applied_response(
+            VERB,
+            format!(
+                "nixling usb enroll --apply: enrolled media ref '{}' for vm '{}' (access={}, udevRuleWritten={}, udevReloaded={})",
+                response.media_ref.as_str(),
+                response.vm_id.as_str(),
+                if response.read_only {
+                    "read-only"
+                } else {
+                    "read-write"
+                },
+                response.udev_rule_written,
+                response.udev_reloaded,
+            ),
+        )),
+        Ok(BrokerResponse::QemuMediaEnroll(_)) => Ok(daemon_failure_response(
+            VERB,
+            "broker did not mark qemu-media USB enrollment complete".to_owned(),
+        )),
+        Ok(BrokerResponse::Error(error)) => {
+            let (summary, remediation) = redact_broker_error_for_launcher(
+                "QemuMediaEnroll",
+                error.target_wave.as_deref(),
+                &error.kind,
+            );
+            Ok(broker_failure_response(
+                VERB,
+                summary,
+                remediation,
+                error.target_wave,
+            ))
+        }
+        Ok(other) => {
+            tracing::warn!(
+                broker_response_kind = %broker_response_kind(&other),
+                "broker returned unexpected qemu-media USB enrollment response"
+            );
+            let (summary, remediation) =
+                redact_broker_error_for_launcher("QemuMediaEnroll", None, "Broker.Protocol");
+            Ok(broker_failure_response(VERB, summary, remediation, None))
+        }
+        Err(error) => {
+            tracing::warn!(error = ?error, "qemu-media USB enrollment broker dispatch failed");
+            let (summary, remediation) =
+                redact_broker_dispatch_failure_for_launcher("QemuMediaEnroll");
+            Ok(broker_failure_response(VERB, summary, remediation, None))
+        }
+    }
+}
+
+fn dispatch_broker_usbip_probe(state: &ServerState) -> Result<Value, TypedError> {
+    const VERB: &str = "usb probe";
     let resolver =
         BundleResolver::load(&state.config.artifacts.bundle_path).map_err(|err| match err {
             nixling_core::error::Error::Bundle(BundleError::Tampered { path, reason }) => {
@@ -3246,8 +3514,25 @@ fn dispatch_broker_usbip_probe(state: &ServerState) -> Result<Value, TypedError>
                 detail: other.to_string(),
             },
         })?;
-    let entries = resolver
+    let usbip_intent_ids: Vec<_> = resolver
         .usbip_bind_intent_ids()
+        .map(str::to_owned)
+        .collect();
+    if !usbip_intent_ids.is_empty()
+        && let Err(response) = dispatch_broker_ack_request(
+            state,
+            VERB,
+            "UsbipProxyReconcile",
+            BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
+                scope_id: ScopeId::new("host"),
+            }),
+        )
+    {
+        return Ok(response);
+    }
+    let mut entries: Vec<_> = usbip_intent_ids
+        .iter()
+        .map(String::as_str)
         .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
         .map(|intent| {
             let owner_vm = fs::read_to_string(&intent.lock_path)
@@ -3265,12 +3550,120 @@ fn dispatch_broker_usbip_probe(state: &ServerState) -> Result<Value, TypedError>
                     public_wire::UsbipProbeStatus::Unbound
                 },
                 owner_vm,
+                kind: public_wire::UsbProbeEntryKind::Usbip,
+                slot: None,
+                media_ref: None,
+                source_kind: None,
+                candidate_bus_ids: Vec::new(),
+                follow_up_command: None,
             }
         })
         .collect();
+    entries.extend(qemu_media_probe_entries(&resolver));
     Ok(wire::usbip_probe_response(
         public_wire::UsbipProbeResponse { entries },
     ))
+}
+
+fn qemu_media_probe_entries(resolver: &BundleResolver) -> Vec<public_wire::UsbipProbeEntry> {
+    let Some(qemu_media) = resolver.host.qemu_media.as_ref() else {
+        return Vec::new();
+    };
+    let candidates = nixling_host::media::safe_usb_block_candidates(
+        Path::new("/sys"),
+        Path::new("/dev/disk/by-id"),
+    );
+    let candidate_bus_ids: Vec<String> = candidates
+        .iter()
+        .map(|candidate| candidate.bus_id.clone())
+        .collect();
+    let mut entries = Vec::new();
+    for source in &qemu_media.sources {
+        let source_kind = match source.source_kind {
+            nixling_core::host::QemuMediaSourceKind::PhysicalUsb => "physical-usb",
+            nixling_core::host::QemuMediaSourceKind::ImageFile => "image-file",
+        }
+        .to_owned();
+        if !matches!(
+            source.source_kind,
+            nixling_core::host::QemuMediaSourceKind::PhysicalUsb
+        ) {
+            let env = resolver
+                .find_manifest_vm(&source.vm)
+                .and_then(|vm| vm.env.as_deref())
+                .unwrap_or("-");
+            entries.push(qemu_media_probe_entry(
+                source,
+                env,
+                "-",
+                &[],
+                source_kind,
+                public_wire::UsbipProbeStatus::DirectConfig,
+                None,
+            ));
+            continue;
+        }
+        if candidate_bus_ids.is_empty() {
+            let env = resolver
+                .find_manifest_vm(&source.vm)
+                .and_then(|vm| vm.env.as_deref())
+                .unwrap_or("-");
+            entries.push(qemu_media_probe_entry(
+                source,
+                env,
+                "-",
+                &candidate_bus_ids,
+                source_kind,
+                public_wire::UsbipProbeStatus::Unbound,
+                None,
+            ));
+            continue;
+        }
+        let env = resolver
+            .find_manifest_vm(&source.vm)
+            .and_then(|vm| vm.env.as_deref())
+            .unwrap_or("-");
+        for bus_id in &candidate_bus_ids {
+            entries.push(qemu_media_probe_entry(
+                source,
+                env,
+                bus_id,
+                &candidate_bus_ids,
+                source_kind.clone(),
+                public_wire::UsbipProbeStatus::Enrollable,
+                Some(format!(
+                    "nixling usb enroll {} {} --busid {} --apply",
+                    source.vm, source.media_ref, bus_id
+                )),
+            ));
+        }
+    }
+    entries
+}
+
+fn qemu_media_probe_entry(
+    source: &nixling_core::host::QemuMediaSourceIntent,
+    env: &str,
+    bus_id: &str,
+    candidate_bus_ids: &[String],
+    source_kind: String,
+    status: public_wire::UsbipProbeStatus,
+    follow_up_command: Option<String>,
+) -> public_wire::UsbipProbeEntry {
+    public_wire::UsbipProbeEntry {
+        kind: public_wire::UsbProbeEntryKind::QemuMediaSlot,
+        vm: source.vm.clone(),
+        env: env.to_owned(),
+        bus_id: bus_id.to_owned(),
+        lock_path: String::new(),
+        status,
+        owner_vm: None,
+        slot: Some(source.slot.clone()),
+        media_ref: Some(MediaRef::new(source.media_ref.clone())),
+        source_kind: Some(source_kind),
+        candidate_bus_ids: candidate_bus_ids.to_vec(),
+        follow_up_command,
+    }
 }
 
 fn mutating_verb_preflight(
@@ -3436,6 +3829,18 @@ fn dispatch_read_guest_config(
     state: &ServerState,
     request: public_wire::ReadGuestConfigRequest,
 ) -> Result<Value, TypedError> {
+    ensure_vm_runtime_capability(
+        state,
+        &request.vm,
+        RuntimeCapabilityGate::ConfigSync,
+        "config sync",
+    )?;
+    ensure_vm_runtime_capability(
+        state,
+        &request.vm,
+        RuntimeCapabilityGate::GuestControl,
+        "read guest config",
+    )?;
     let resolver = load_bundle_resolver(state)?;
     let params =
         resolve_guest_control_probe_params(state, &resolver, &request.vm).map_err(|detail| {
@@ -3765,6 +4170,17 @@ fn run_exec_owner(
         exec_metric(&state, "error", "protocol");
         return;
     };
+
+    if let Err(error) =
+        ensure_vm_runtime_capability(&state, &start.vm, RuntimeCapabilityGate::Exec, "exec")
+    {
+        let _ = write_json_frame(
+            stream.as_ref(),
+            &wire::error_frame_with_id(first_op_id, &error),
+        );
+        exec_metric(&state, "error", error.kind());
+        return;
+    }
 
     if start.argv.is_empty() {
         let error = TypedError::GuestControlExecFailed {
@@ -5626,6 +6042,7 @@ fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
         ProcessRole::CloudHypervisorRunner => {
             VmStartNodeMode::LongLived(RunnerRole::CloudHypervisor)
         }
+        ProcessRole::QemuMediaRunner => VmStartNodeMode::LongLived(RunnerRole::QemuMedia),
         ProcessRole::Gpu | ProcessRole::GpuRenderNode => {
             VmStartNodeMode::LongLived(RunnerRole::Gpu)
         }
@@ -6761,14 +7178,89 @@ fn remove_runner_snapshot(state: &ServerState, vm: &str, role_id: &str) {
     }
 }
 
-fn existing_vm_start_response_if_ready(state: &ServerState, vm: &str) -> Option<Value> {
-    if !state.pidfd_table.contains(vm, VM_RUNNER_ROLE_ID) {
+fn vm_supports_store_sync(resolver: &BundleResolver, vm: &str) -> bool {
+    match resolver.manifest.vms.get(vm) {
+        Some(entry) => entry.runtime.capabilities.store_sync,
+        None => true,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RuntimeCapabilityGate {
+    ConfigSync,
+    Exec,
+    GuestControl,
+    Keys,
+    Ssh,
+    StoreSync,
+}
+
+impl RuntimeCapabilityGate {
+    fn slug(self) -> &'static str {
+        match self {
+            Self::ConfigSync => "config-sync",
+            Self::Exec => "exec",
+            Self::GuestControl => "guest-control",
+            Self::Keys => "keys",
+            Self::Ssh => concat!("s", "sh"),
+            Self::StoreSync => "store-sync",
+        }
+    }
+
+    fn supported(self, entry: &ManifestVmEntry) -> bool {
+        match self {
+            Self::ConfigSync => entry.runtime.capabilities.config_sync,
+            Self::Exec => entry.runtime.capabilities.exec,
+            Self::GuestControl => entry.runtime.capabilities.guest_control,
+            Self::Keys => entry.runtime.capabilities.keys,
+            Self::Ssh => entry.runtime.capabilities.ssh,
+            Self::StoreSync => entry.runtime.capabilities.store_sync,
+        }
+    }
+}
+
+fn ensure_vm_runtime_capability(
+    state: &ServerState,
+    vm: &str,
+    capability: RuntimeCapabilityGate,
+    verb: &str,
+) -> Result<(), TypedError> {
+    let manifest: ManifestV04 = load_json(&state.config.artifacts.public_manifest_path)?;
+    ensure_manifest_entry_runtime_capability(manifest.vms.get(vm), vm, capability, verb)
+}
+
+fn ensure_manifest_entry_runtime_capability(
+    entry: Option<&ManifestVmEntry>,
+    vm: &str,
+    capability: RuntimeCapabilityGate,
+    verb: &str,
+) -> Result<(), TypedError> {
+    let Some(entry) = entry else {
+        return Ok(());
+    };
+    if capability.supported(entry) {
+        return Ok(());
+    }
+    Err(TypedError::RuntimeCapabilityUnsupported {
+        vm: vm.to_owned(),
+        runtime_kind: serde_kebab_string(&entry.runtime.kind),
+        capability: capability.slug().to_owned(),
+        verb: verb.to_owned(),
+    })
+}
+
+fn existing_vm_start_response_if_ready(
+    state: &ServerState,
+    vm: &str,
+    runner_role_id: &str,
+) -> Option<Value> {
+    if !state.pidfd_table.contains(vm, runner_role_id) {
         return None;
     }
 
     Some(applied_response(
         "vm start",
-        format!("vm.{vm}: already running; ch-runner pidfd is live"),
+        format!("vm.{vm}: already running; {runner_role_id} pidfd is live"),
     ))
 }
 
@@ -6853,6 +7345,8 @@ fn load_vm_stop_role_index(state: &ServerState, vm: &str) -> HashMap<String, Run
 fn infer_runner_role_for_vm_stop(role_id: &str) -> Option<RunnerRole> {
     if role_id == VM_RUNNER_ROLE_ID {
         Some(RunnerRole::CloudHypervisor)
+    } else if role_id == RunnerRole::QemuMedia.as_str() || role_id.contains("qemu-media") {
+        Some(RunnerRole::QemuMedia)
     } else if role_id == RunnerRole::SwtpmFlush.as_str() {
         Some(RunnerRole::SwtpmFlush)
     } else if role_id == RunnerRole::Swtpm.as_str() || role_id.starts_with("swtpm") {
@@ -6887,6 +7381,7 @@ fn infer_runner_role_for_vm_stop(role_id: &str) -> Option<RunnerRole> {
 fn vm_stop_role_priority(role: Option<RunnerRole>) -> u8 {
     match role {
         Some(RunnerRole::CloudHypervisor) => 0,
+        Some(RunnerRole::QemuMedia) => 0,
         Some(RunnerRole::Gpu) => 1,
         Some(RunnerRole::Audio) => 2,
         Some(RunnerRole::Video) => 3,
@@ -7889,7 +8384,9 @@ fn dispatch_broker_vm_start(
     // fail-closed matrix check. The process DAG still contains the
     // StoreVirtiofsPreflight readiness node; that second StoreSync call is
     // idempotent and keeps the DAG contract explicit.
-    if let Err(error) = runner.sync_store_view(&request.vm) {
+    if vm_supports_store_sync(&resolver, &request.vm)
+        && let Err(error) = runner.sync_store_view(&request.vm)
+    {
         tracing::warn!(
             vm = %request.vm,
             error = %error,
@@ -7998,22 +8495,27 @@ fn dispatch_broker_vm_start(
             );
         }
     }
-    if tracked_roles
+    if let Some(existing_role_id) = tracked_roles
         .iter()
-        .any(|role_id| state.pidfd_table.contains(&request.vm, role_id))
+        .find(|role_id| state.pidfd_table.contains(&request.vm, role_id))
     {
-        if let Some(response) = existing_vm_start_response_if_ready(state, &request.vm) {
+        let runner_role_id = tracked_roles
+            .iter()
+            .find(|role_id| {
+                *role_id == VM_RUNNER_ROLE_ID || role_id.as_str() == RunnerRole::QemuMedia.as_str()
+            })
+            .map(String::as_str)
+            .unwrap_or(VM_RUNNER_ROLE_ID);
+        if let Some(response) =
+            existing_vm_start_response_if_ready(state, &request.vm, runner_role_id)
+        {
             return Ok(response);
         }
         return Ok(invalid_request_response(
             VERB,
             format!(
                 "vm '{}' already has a registered supervisor pidfd ({})",
-                request.vm,
-                tracked_roles
-                    .into_iter()
-                    .find(|role_id| state.pidfd_table.contains(&request.vm, role_id))
-                    .unwrap_or_else(|| VM_RUNNER_ROLE_ID.to_owned())
+                request.vm, existing_role_id
             ),
         ));
     }
@@ -9110,6 +9612,12 @@ fn dispatch_broker_switch(
     state: &ServerState,
     request: public_wire::ActivationRequest,
 ) -> Result<Value, TypedError> {
+    ensure_vm_runtime_capability(
+        state,
+        &request.vm,
+        RuntimeCapabilityGate::ConfigSync,
+        "switch",
+    )?;
     dispatch_broker_activation(state, request, "switch", BrokerActivationMode::Switch)
 }
 
@@ -9117,6 +9625,12 @@ fn dispatch_broker_boot(
     state: &ServerState,
     request: public_wire::ActivationRequest,
 ) -> Result<Value, TypedError> {
+    ensure_vm_runtime_capability(
+        state,
+        &request.vm,
+        RuntimeCapabilityGate::ConfigSync,
+        "boot",
+    )?;
     dispatch_broker_activation(state, request, "boot", BrokerActivationMode::Boot)
 }
 
@@ -9124,6 +9638,12 @@ fn dispatch_broker_test(
     state: &ServerState,
     request: public_wire::ActivationRequest,
 ) -> Result<Value, TypedError> {
+    ensure_vm_runtime_capability(
+        state,
+        &request.vm,
+        RuntimeCapabilityGate::ConfigSync,
+        "test",
+    )?;
     dispatch_broker_activation(state, request, "test", BrokerActivationMode::Test)
 }
 
@@ -9131,6 +9651,12 @@ fn dispatch_broker_rollback(
     state: &ServerState,
     request: public_wire::ActivationRequest,
 ) -> Result<Value, TypedError> {
+    ensure_vm_runtime_capability(
+        state,
+        &request.vm,
+        RuntimeCapabilityGate::ConfigSync,
+        "rollback",
+    )?;
     dispatch_broker_activation(state, request, "rollback", BrokerActivationMode::Rollback)
 }
 
@@ -9204,6 +9730,12 @@ fn dispatch_broker_store_verify(
     state: &ServerState,
     request: public_wire::StoreVerifyRequest,
 ) -> Result<Value, TypedError> {
+    ensure_vm_runtime_capability(
+        state,
+        &request.vm,
+        RuntimeCapabilityGate::StoreSync,
+        "store verify",
+    )?;
     let response = match dispatch_broker_request(
         state,
         BrokerRequest::StoreVerify(BrokerStoreVerifyRequest {
@@ -9263,6 +9795,7 @@ fn dispatch_broker_keys_rotate(
     const VERB: &str = "keys rotate";
     const OP_NAME: &str = "RunKeysRotate";
 
+    ensure_vm_runtime_capability(state, &request.vm, RuntimeCapabilityGate::Keys, VERB)?;
     if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
     {
         return Ok(response);
@@ -9330,6 +9863,7 @@ fn dispatch_broker_trust(
     const VERB: &str = "trust";
     const OP_NAME: &str = "RunHostKeyTrust";
 
+    ensure_vm_runtime_capability(state, &request.vm, RuntimeCapabilityGate::Ssh, VERB)?;
     if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
     {
         return Ok(response);
@@ -9397,6 +9931,7 @@ fn dispatch_broker_rotate_known_host(
     const VERB: &str = "rotate-known-host";
     const OP_NAME: &str = "RunRotateKnownHost";
 
+    ensure_vm_runtime_capability(state, &request.vm, RuntimeCapabilityGate::Ssh, VERB)?;
     if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
     {
         return Ok(response);
@@ -9464,6 +9999,7 @@ fn dispatch_list(
     request: public_wire::ListRequest,
 ) -> Result<Value, TypedError> {
     let manifest = load_manifest(&state.config.artifacts.public_manifest_path)?;
+    let host = load_json::<HostJson>(&state.config.artifacts.host_path).ok();
     let processes = load_json::<ProcessesJson>(&state.config.artifacts.processes_path)?;
     let vms = manifest
         .iter()
@@ -9477,7 +10013,10 @@ fn dispatch_list(
                 .unwrap_or(true)
         })
         .map(|(name, value)| {
-            let lifecycle = public_vm_lifecycle(state, name, value);
+            let process_vm = processes.vms.iter().find(|entry| entry.vm == *name);
+            let lifecycle = public_vm_lifecycle(state, name, value, process_vm);
+            let runtime_kind = public_runtime_kind(value);
+            let services = public_service_states(state, name, value, process_vm);
             json!({
                 "name": name,
                 "vm": name,
@@ -9489,13 +10028,18 @@ fn dispatch_list(
                 "tpm": value.get("tpm").cloned().unwrap_or(Value::Bool(false)),
                 "usbip": value.get("usbipYubikey").cloned().unwrap_or(Value::Bool(false)),
                 "lifecycle": lifecycle,
-                "runtime": public_runtime_summary(&lifecycle),
-                "services": public_service_states(
+                "runtime": public_runtime_summary(&lifecycle, value),
+                "autostart": public_autostart_posture(value),
+                "unsupportedCapabilities": public_unsupported_capabilities(value),
+                "qemuMedia": public_qemu_media_status(
                     state,
                     name,
-                    value,
-                    processes.vms.iter().find(|entry| entry.vm == *name),
+                    runtime_kind.as_deref(),
+                    host.as_ref(),
+                    process_vm,
+                    &services,
                 ),
+                "services": services,
             })
         })
         .collect();
@@ -9507,6 +10051,7 @@ fn dispatch_status(
     request: public_wire::StatusRequest,
 ) -> Result<Value, TypedError> {
     let manifest = load_manifest(&state.config.artifacts.public_manifest_path)?;
+    let host = load_json::<HostJson>(&state.config.artifacts.host_path).ok();
     let processes = load_json::<ProcessesJson>(&state.config.artifacts.processes_path)?;
     let requested_vm = request.vm.clone();
 
@@ -9515,7 +10060,10 @@ fn dispatch_status(
         .filter(|(name, _)| !name.starts_with('_'))
         .filter(|(name, _)| requested_vm.as_ref().map(|vm| vm == *name).unwrap_or(true))
         .map(|(name, manifest_entry)| {
-            let lifecycle = public_vm_lifecycle(state, name, manifest_entry);
+            let process_vm = processes.vms.iter().find(|entry| entry.vm == *name);
+            let lifecycle = public_vm_lifecycle(state, name, manifest_entry, process_vm);
+            let runtime_kind = public_runtime_kind(manifest_entry);
+            let services = public_service_states(state, name, manifest_entry, process_vm);
             json!({
                 "vm": name,
                 "name": name,
@@ -9527,13 +10075,18 @@ fn dispatch_status(
                 "usbip": manifest_entry.get("usbipYubikey").cloned().unwrap_or(Value::Bool(false)),
                 "isNetVm": manifest_entry.get("isNetVm").cloned().unwrap_or(Value::Bool(false)),
                 "lifecycle": lifecycle,
-                "runtime": public_runtime_summary(&lifecycle),
-                "services": public_service_states(
+                "runtime": public_runtime_summary(&lifecycle, manifest_entry),
+                "autostart": public_autostart_posture(manifest_entry),
+                "unsupportedCapabilities": public_unsupported_capabilities(manifest_entry),
+                "qemuMedia": public_qemu_media_status(
                     state,
                     name,
-                    manifest_entry,
-                    processes.vms.iter().find(|entry| entry.vm == *name),
+                    runtime_kind.as_deref(),
+                    host.as_ref(),
+                    process_vm,
+                    &services,
                 ),
+                "services": services,
                 "bridgeChecks": [],
             })
         })
@@ -9542,7 +10095,12 @@ fn dispatch_status(
     Ok(wire::status_response(json!({ "entries": statuses })))
 }
 
-fn public_vm_lifecycle(state: &ServerState, vm: &str, manifest_entry: &Value) -> Value {
+fn public_vm_lifecycle(
+    state: &ServerState,
+    vm: &str,
+    manifest_entry: &Value,
+    process_vm: Option<&nixling_core::processes::VmProcessDag>,
+) -> Value {
     let live_roles = state
         .pidfd_table
         .list_for_vm(vm)
@@ -9555,7 +10113,8 @@ fn public_vm_lifecycle(state: &ServerState, vm: &str, manifest_entry: &Value) ->
         .map(|registration| registration.role)
         .collect::<Vec<_>>();
 
-    let lifecycle_state = if live_roles.iter().any(|role| role == VM_RUNNER_ROLE_ID) {
+    let runner_role = public_vm_runner_role_id(process_vm, manifest_entry);
+    let lifecycle_state = if live_roles.iter().any(|role| role == &runner_role) {
         "Running"
     } else if live_roles.is_empty() {
         "Stopped"
@@ -9581,13 +10140,268 @@ fn public_pending_restart(manifest_entry: &Value) -> bool {
     matches!((current, booted), (Some(current), Some(booted)) if current != booted)
 }
 
-fn public_runtime_summary(lifecycle: &Value) -> Value {
+fn public_runtime_summary(lifecycle: &Value, manifest_entry: &Value) -> Value {
     let detail = lifecycle
         .get("state")
         .and_then(Value::as_str)
         .unwrap_or("Unknown")
         .to_ascii_lowercase();
-    json!({ "detail": detail })
+    match public_runtime_kind(manifest_entry) {
+        Some(kind) => json!({ "detail": detail, "kind": kind }),
+        None => json!({ "detail": detail }),
+    }
+}
+
+fn public_runtime_kind(manifest_entry: &Value) -> Option<String> {
+    manifest_entry
+        .pointer("/runtime/kind")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+fn public_is_qemu_media(manifest_entry: &Value) -> bool {
+    public_runtime_kind(manifest_entry).as_deref() == Some("qemu-media")
+}
+
+fn public_autostart_posture(manifest_entry: &Value) -> Option<Value> {
+    public_is_qemu_media(manifest_entry).then(|| {
+        json!({
+            "mode": "manual-only",
+            "reason": "qemu-media VMs are intentionally skipped by daemon autostart; start them explicitly with `nixling vm start <vm> --apply`"
+        })
+    })
+}
+
+fn public_unsupported_capabilities(manifest_entry: &Value) -> Vec<String> {
+    let Some(capabilities) = manifest_entry
+        .pointer("/runtime/capabilities")
+        .and_then(Value::as_object)
+    else {
+        return if public_is_qemu_media(manifest_entry) {
+            vec![
+                "config-sync".to_owned(),
+                "exec".to_owned(),
+                "guest-control".to_owned(),
+                "in-guest-observability".to_owned(),
+                "keys".to_owned(),
+                "s".to_owned() + "sh",
+                "store-sync".to_owned(),
+            ]
+        } else {
+            Vec::new()
+        };
+    };
+    let mut unsupported = capabilities
+        .iter()
+        .filter(|(_name, value)| value.as_bool() == Some(false))
+        .map(|(name, _value)| capability_name_for_public_output(name))
+        .collect::<Vec<_>>();
+    unsupported.sort();
+    unsupported.dedup();
+    unsupported
+}
+
+fn capability_name_for_public_output(name: &str) -> String {
+    match name {
+        "configSync" => "config-sync",
+        "guestControl" => "guest-control",
+        "inGuestObservability" => "in-guest-observability",
+        "storeSync" => "store-sync",
+        "usbHotplug" => "usb-hotplug",
+        other => other,
+    }
+    .to_owned()
+}
+
+fn public_vm_runner_role_id(
+    process_vm: Option<&nixling_core::processes::VmProcessDag>,
+    manifest_entry: &Value,
+) -> String {
+    if process_vm
+        .map(|entry| {
+            entry
+                .nodes
+                .iter()
+                .any(|node| node.role == ProcessRole::QemuMediaRunner)
+        })
+        .unwrap_or(false)
+        || public_is_qemu_media(manifest_entry)
+    {
+        RunnerRole::QemuMedia.as_str().to_owned()
+    } else {
+        VM_RUNNER_ROLE_ID.to_owned()
+    }
+}
+
+fn public_qemu_media_status(
+    state: &ServerState,
+    vm: &str,
+    runtime_kind: Option<&str>,
+    host: Option<&HostJson>,
+    process_vm: Option<&nixling_core::processes::VmProcessDag>,
+    services: &Value,
+) -> Option<Value> {
+    if runtime_kind != Some("qemu-media") {
+        return None;
+    }
+    let runner = process_vm.and_then(|entry| {
+        entry
+            .nodes
+            .iter()
+            .find(|node| node.role == ProcessRole::QemuMediaRunner)
+    });
+    let qmp_socket = runner.and_then(qemu_media_qmp_socket);
+    let state_text = services
+        .get("qemuMedia")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| public_pidfd_role_state(state, vm, RunnerRole::QemuMedia.as_str()));
+    let qemu_media_host = host.and_then(|host| host.qemu_media.as_ref());
+    let media = qemu_media_host
+        .map(|contract| {
+            contract
+                .sources
+                .iter()
+                .filter(|source| source.vm == vm)
+                .map(|source| qemu_media_source_status(contract.registry_dir.as_str(), source))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let qmp_readiness = qmp_socket.as_deref().map(|path| {
+        if qemu_media_unix_socket_listening(path) {
+            "ready".to_owned()
+        } else if state_text == "running" {
+            "pending".to_owned()
+        } else {
+            "not-started".to_owned()
+        }
+    });
+    let pre_cont_progress = match qmp_readiness.as_deref() {
+        Some("ready") if state_text == "running" => "paused-before-cont",
+        Some("pending") if state_text == "running" => "waiting-for-qmp",
+        _ => "not-started",
+    };
+    Some(json!({
+        "firmwareMode": "none",
+        "runner": {
+            "state": state_text,
+            "role": RunnerRole::QemuMedia.as_str(),
+            "preContProgress": pre_cont_progress,
+            "qmpReadiness": qmp_readiness,
+            "qmpSocket": qmp_socket,
+        },
+        "media": media,
+    }))
+}
+
+fn qemu_media_qmp_socket(node: &ProcessNode) -> Option<String> {
+    node.readiness.iter().find_map(|predicate| match predicate {
+        ReadinessPredicate::UnixSocketListening(path)
+        | ReadinessPredicate::UnixSocketExists(path) => Some(path.clone()),
+        _ => None,
+    })
+}
+
+fn qemu_media_unix_socket_listening(path: &str) -> bool {
+    const SO_ACCEPTCON: &str = "00010000";
+    let Ok(contents) = fs::read_to_string("/proc/net/unix") else {
+        return false;
+    };
+    contents.lines().skip(1).any(|line| {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        fields.get(3).copied() == Some(SO_ACCEPTCON) && fields.last().copied() == Some(path)
+    })
+}
+
+fn qemu_media_source_status(registry_dir: &str, source: &QemuMediaSourceIntent) -> Value {
+    let (state, remediation) = qemu_media_registry_state(registry_dir, source);
+    let mut status = json!({
+        "mediaRef": source.media_ref,
+        "slot": source.slot,
+        "sourceKind": serde_kebab_string(&source.source_kind),
+        "format": serde_kebab_string(&source.format),
+        "readOnly": source.read_only,
+        "registry": {
+            "state": state,
+            "remediation": remediation,
+        },
+    });
+    if let Some(image_path) = &source.image_path
+        && let Some(object) = status.as_object_mut()
+    {
+        object.insert("imagePath".to_owned(), Value::String(image_path.clone()));
+    }
+    status
+}
+
+fn serde_kebab_string<T: Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
+fn qemu_media_registry_state(
+    registry_dir: &str,
+    source: &QemuMediaSourceIntent,
+) -> (String, Option<String>) {
+    if serde_kebab_string(&source.source_kind) != "physical-usb" {
+        return ("direct-config".to_owned(), None);
+    }
+    let path = Path::new(registry_dir)
+        .join(&source.vm)
+        .join(format!("{}.json", source.media_ref));
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return (
+                "missing".to_owned(),
+                Some(format!(
+                    "run `nixling usb enroll {} {} --busid <busid> --apply` before starting or attaching this media",
+                    source.vm, source.media_ref
+                )),
+            );
+        }
+        Err(_) => {
+            return (
+                "unreadable".to_owned(),
+                Some(
+                    "repair the root-owned qemu-media registry entry or re-enroll this media"
+                        .to_owned(),
+                ),
+            );
+        }
+    };
+    let record = match serde_json::from_slice::<QemuMediaRegistryRecord>(&bytes) {
+        Ok(record) => record,
+        Err(_) => {
+            return (
+                "stale".to_owned(),
+                Some(
+                    "registry entry is not in the current qemu-media schema; re-enroll this media"
+                        .to_owned(),
+                ),
+            );
+        }
+    };
+    let expected_kind = serde_kebab_string(&source.source_kind);
+    let expected_format = serde_kebab_string(&source.format);
+    if record.vm == source.vm
+        && record.media_ref == source.media_ref
+        && record.source_kind == expected_kind
+        && record.format == expected_format
+        && record.read_only == source.read_only
+    {
+        ("present".to_owned(), None)
+    } else {
+        (
+            "stale".to_owned(),
+            Some(
+                "registry entry does not match the current declaration; re-enroll this media"
+                    .to_owned(),
+            ),
+        )
+    }
 }
 
 fn public_service_states(
@@ -9616,7 +10430,13 @@ fn public_service_states(
 
     json!({
         "nixling": "active",
-        "microvm": public_pidfd_role_state(state, vm, VM_RUNNER_ROLE_ID),
+        "microvm": if public_is_qemu_media(manifest_entry) {
+            "unsupported".to_owned()
+        } else {
+            public_pidfd_role_state(state, vm, VM_RUNNER_ROLE_ID)
+        },
+        "qemuMedia": public_is_qemu_media(manifest_entry)
+            .then(|| public_pidfd_role_state(state, vm, RunnerRole::QemuMedia.as_str())),
         "virtiofsd": public_pidfd_role_prefix_state(state, vm, "virtiofsd"),
         "gpu": gpu_role_id.map(|role| public_pidfd_role_state(state, vm, role)),
         "video": has_role(ProcessRole::Video).then(|| public_pidfd_role_state(state, vm, "video")),
@@ -9982,7 +10802,7 @@ mod public_status_tests {
         fs::write(
             &public_manifest_path,
             serde_json::to_vec_pretty(&json!({
-                "_manifest": { "version": 4 },
+                "_manifest": { "manifestVersion": 6 },
                 "vm-a": {
                     "name": "vm-a",
                     "env": "work",
@@ -9993,7 +10813,27 @@ mod public_status_tests {
                     "graphics": true,
                     "tpm": false,
                     "usbipYubikey": true,
-                    "audio": false
+                    "audio": false,
+                    "runtime": {
+                        "kind": "nixos",
+                        "provider": {
+                            "driver": "cloud-hypervisor",
+                            "id": "local-cloud-hypervisor",
+                            "type": "local"
+                        },
+                        "capabilities": {
+                            "lifecycle": true,
+                            "display": false,
+                            "usbHotplug": true,
+                            "guestControl": true,
+                            "exec": true,
+                            "configSync": true,
+                            "ssh": true,
+                            "storeSync": true,
+                            "keys": true,
+                            "inGuestObservability": true
+                        }
+                    }
                 },
                 "vm-b": {
                     "name": "vm-b",
@@ -10004,7 +10844,27 @@ mod public_status_tests {
                     "graphics": false,
                     "tpm": false,
                     "usbipYubikey": false,
-                    "audio": false
+                    "audio": false,
+                    "runtime": {
+                        "kind": "nixos",
+                        "provider": {
+                            "driver": "cloud-hypervisor",
+                            "id": "local-cloud-hypervisor",
+                            "type": "local"
+                        },
+                        "capabilities": {
+                            "lifecycle": true,
+                            "display": false,
+                            "usbHotplug": false,
+                            "guestControl": true,
+                            "exec": true,
+                            "configSync": true,
+                            "ssh": true,
+                            "storeSync": true,
+                            "keys": true,
+                            "inGuestObservability": true
+                        }
+                    }
                 }
             }))
             .expect("manifest json"),
@@ -10083,13 +10943,124 @@ mod public_status_tests {
         json!({ "stateDir": "/nonexistent/nixling-public-status-test" })
     }
 
+    fn qemu_media_manifest_entry() -> Value {
+        json!({
+            "stateDir": "/nonexistent/nixling-public-status-test",
+            "runtime": {
+                "kind": "qemu-media",
+                "capabilities": {
+                    "configSync": false,
+                    "exec": false,
+                    "guestControl": false,
+                    "keys": false,
+                    "ssh": false,
+                    "storeSync": false,
+                    "usbHotplug": true
+                }
+            },
+            "graphics": false,
+            "audio": false,
+            "tpm": false
+        })
+    }
+
+    fn qemu_media_process_dag() -> nixling_core::processes::VmProcessDag {
+        use nixling_core::processes::{NodeId, VmProcessDag, VmProcessInvariants};
+        VmProcessDag {
+            vm: "installer".to_owned(),
+            nodes: vec![ProcessNode {
+                id: NodeId("qemu-media".to_owned()),
+                role: ProcessRole::QemuMediaRunner,
+                unit: None,
+                binary_path: Some("/nix/store/qemu/bin/qemu-system-x86_64".to_owned()),
+                argv: Vec::new(),
+                env: Vec::new(),
+                plan_ops: Vec::new(),
+                profile: nixling_core::test_support::RoleProfileBuilder::new()
+                    .with_profile_id("vm-installer-qemu-media")
+                    .build(),
+                readiness: vec![ReadinessPredicate::UnixSocketListening(
+                    "/run/nixling/vms/installer/qmp.sock".to_owned(),
+                )],
+            }],
+            edges: Vec::new(),
+            invariants: VmProcessInvariants {
+                swtpm_pre_start_flush: true,
+                per_vm_audit_pipeline: true,
+                usbip_gating: true,
+                tpm_ownership_migration_without_running_vm_mutation: true,
+            },
+        }
+    }
+
+    fn qemu_media_source() -> QemuMediaSourceIntent {
+        QemuMediaSourceIntent {
+            vm: "installer".to_owned(),
+            media_ref: "installer-usb".to_owned(),
+            slot: "boot".to_owned(),
+            source_kind: nixling_core::host::QemuMediaSourceKind::PhysicalUsb,
+            format: nixling_core::host::QemuMediaFormat::Raw,
+            read_only: true,
+            registry_scope: nixling_core::host::QemuMediaRegistryScope::RootOnlyRuntimeState,
+            image_path: None,
+        }
+    }
+
+    fn qemu_media_image_source() -> QemuMediaSourceIntent {
+        QemuMediaSourceIntent {
+            vm: "installer".to_owned(),
+            media_ref: "image-boot".to_owned(),
+            slot: "boot".to_owned(),
+            source_kind: nixling_core::host::QemuMediaSourceKind::ImageFile,
+            format: nixling_core::host::QemuMediaFormat::Raw,
+            read_only: false,
+            registry_scope: nixling_core::host::QemuMediaRegistryScope::DirectConfigPath,
+            image_path: Some("/var/lib/nixling/images/installer.img".to_owned()),
+        }
+    }
+
+    fn typed_manifest_vm(runtime: nixling_core::runtime::RuntimeMetadata) -> ManifestVmEntry {
+        ManifestVmEntry {
+            api_socket: None,
+            audio: false,
+            audio_service: None,
+            audio_state_file: None,
+            bridge: None,
+            env: Some("dev".to_owned()),
+            mtu: None,
+            mss_clamp: None,
+            lan: None,
+            gpu_socket: None,
+            graphics: false,
+            is_net_vm: false,
+            name: "installer".to_owned(),
+            net_vm: None,
+            observability: nixling_core::manifest_v04::VmObservability {
+                agent_socket: None,
+                enabled: false,
+                vsock_cid: None,
+                vsock_host_socket: None,
+            },
+            runtime,
+            ssh_user: None,
+            state_dir: "/var/lib/nixling/vms/installer".to_owned(),
+            static_ip: None,
+            tap: "nl-installer".to_owned(),
+            tpm: false,
+            tpm_socket: None,
+            usbip_yubikey: false,
+            usbipd_host_ip: None,
+        }
+    }
+
     #[test]
     fn public_lifecycle_reports_stopped_with_no_live_roles() {
         let (state, _dir) = test_state();
-        let lifecycle = public_vm_lifecycle(&state, "vm-a", &manifest_entry());
+        let manifest_entry = manifest_entry();
+        let lifecycle = public_vm_lifecycle(&state, "vm-a", &manifest_entry, None);
         assert_eq!(lifecycle_state(&lifecycle), "Stopped");
         assert_eq!(
-            public_runtime_summary(&lifecycle)
+            public_runtime_summary(&lifecycle, &manifest_entry)
                 .get("detail")
                 .and_then(Value::as_str),
             Some("stopped")
@@ -10107,14 +11078,152 @@ mod public_status_tests {
                 current_process_entry(),
             )
             .expect("register ch runner");
-        let lifecycle = public_vm_lifecycle(&state, "vm-a", &manifest_entry());
+        let manifest_entry = manifest_entry();
+        let lifecycle = public_vm_lifecycle(&state, "vm-a", &manifest_entry, None);
         assert_eq!(lifecycle_state(&lifecycle), "Running");
         assert_eq!(
-            public_runtime_summary(&lifecycle)
+            public_runtime_summary(&lifecycle, &manifest_entry)
                 .get("detail")
                 .and_then(Value::as_str),
             Some("running")
         );
+    }
+
+    #[test]
+    fn public_lifecycle_reports_running_for_qemu_media_runner() {
+        let (state, _dir) = test_state();
+        state
+            .pidfd_table
+            .register(
+                "installer".to_owned(),
+                RunnerRole::QemuMedia.as_str().to_owned(),
+                current_process_entry(),
+            )
+            .expect("register qemu media runner");
+        let manifest_entry = qemu_media_manifest_entry();
+        let dag = qemu_media_process_dag();
+        let lifecycle = public_vm_lifecycle(&state, "installer", &manifest_entry, Some(&dag));
+        let services = public_service_states(&state, "installer", &manifest_entry, Some(&dag));
+        let runtime = public_runtime_summary(&lifecycle, &manifest_entry);
+
+        assert_eq!(lifecycle_state(&lifecycle), "Running");
+        assert_eq!(
+            runtime.get("kind").and_then(Value::as_str),
+            Some("qemu-media")
+        );
+        assert_eq!(
+            services.get("microvm").and_then(Value::as_str),
+            Some("unsupported")
+        );
+        assert_eq!(
+            services.get("qemuMedia").and_then(Value::as_str),
+            Some("running")
+        );
+    }
+
+    #[test]
+    fn qemu_media_status_reports_manual_runtime_and_missing_registry() {
+        let root = tempfile::tempdir().expect("registry root");
+        let (state, _dir) = test_state();
+        let manifest_entry = qemu_media_manifest_entry();
+        let dag = qemu_media_process_dag();
+        let services = public_service_states(&state, "installer", &manifest_entry, Some(&dag));
+        let qemu = public_qemu_media_status(
+            &state,
+            "installer",
+            Some("qemu-media"),
+            None,
+            Some(&dag),
+            &services,
+        )
+        .expect("qemu media status");
+
+        assert_eq!(
+            qemu.pointer("/firmwareMode").and_then(Value::as_str),
+            Some("none")
+        );
+        assert_eq!(
+            qemu.pointer("/runner/role").and_then(Value::as_str),
+            Some("qemu-media")
+        );
+        assert_eq!(
+            qemu.pointer("/runner/qmpSocket").and_then(Value::as_str),
+            Some("/run/nixling/vms/installer/qmp.sock")
+        );
+        let source_status =
+            qemu_media_source_status(&root.path().display().to_string(), &qemu_media_source());
+        assert_eq!(
+            source_status.pointer("/slot").and_then(Value::as_str),
+            Some("boot")
+        );
+        assert_eq!(
+            source_status
+                .pointer("/registry/state")
+                .and_then(Value::as_str),
+            Some("missing")
+        );
+        assert!(
+            source_status
+                .pointer("/registry/remediation")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("installer-usb"))
+        );
+    }
+
+    #[test]
+    fn qemu_media_status_reports_direct_image_without_enrollment_remediation() {
+        let source_status = qemu_media_source_status(
+            "/var/lib/nixling/media-registry",
+            &qemu_media_image_source(),
+        );
+
+        assert_eq!(
+            source_status.pointer("/sourceKind").and_then(Value::as_str),
+            Some("image-file")
+        );
+        assert_eq!(
+            source_status.pointer("/imagePath").and_then(Value::as_str),
+            Some("/var/lib/nixling/images/installer.img")
+        );
+        assert_eq!(
+            source_status
+                .pointer("/registry/state")
+                .and_then(Value::as_str),
+            Some("direct-config")
+        );
+        assert!(
+            source_status
+                .pointer("/registry/remediation")
+                .is_some_and(Value::is_null)
+        );
+    }
+
+    #[test]
+    fn runtime_capability_gate_rejects_qemu_media_exec_without_guest_details() {
+        let qemu = typed_manifest_vm(nixling_core::runtime::RuntimeMetadata::local_qemu_media());
+        let nixos = typed_manifest_vm(nixling_core::runtime::RuntimeMetadata::local_nixos());
+
+        ensure_manifest_entry_runtime_capability(
+            Some(&nixos),
+            "installer",
+            RuntimeCapabilityGate::Exec,
+            "exec",
+        )
+        .expect("nixos exec supported");
+        let error = ensure_manifest_entry_runtime_capability(
+            Some(&qemu),
+            "installer",
+            RuntimeCapabilityGate::Exec,
+            "exec",
+        )
+        .expect_err("qemu-media exec unsupported");
+
+        assert_eq!(error.kind(), "runtime-capability-unsupported");
+        assert_eq!(error.exit_code(), 70);
+        let envelope = error.to_envelope();
+        assert!(envelope.message.contains("qemu-media"));
+        assert!(envelope.message.contains("exec"));
+        assert!(!envelope.message.contains("/var/lib"));
     }
 
     #[test]
@@ -10344,7 +11453,8 @@ mod public_status_tests {
                 current_process_entry(),
             )
             .expect("register sidecar");
-        let lifecycle = public_vm_lifecycle(&state, "vm-a", &manifest_entry());
+        let manifest_entry = manifest_entry();
+        let lifecycle = public_vm_lifecycle(&state, "vm-a", &manifest_entry, None);
         assert_eq!(lifecycle_state(&lifecycle), "Starting");
     }
 }
@@ -11166,13 +12276,92 @@ mod detached_exec_routing_tests {
 
     fn test_state(caps: exec_session::ExecSessionCaps) -> ServerState {
         let broker_reap_log = BrokerReapLog::new();
+        let temp_root = tempfile::Builder::new()
+            .prefix("nixlingd-detached-tests.")
+            .tempdir()
+            .expect("temp detached test root");
+        let test_root = temp_root.path().to_path_buf();
+        std::mem::forget(temp_root);
+        std::fs::create_dir_all(&test_root).expect("create detached test root");
+        let public_manifest_path = test_root.join("vms.json");
+        std::fs::write(
+            &public_manifest_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "_manifest": { "manifestVersion": 6 },
+                "_observability": {
+                    "enabled": false,
+                    "vmName": "sys-obs",
+                    "obsVsockCid": 1000,
+                    "obsVsockHostSocket": "/var/lib/nixling/vms/sys-obs/vsock.sock",
+                    "signozUrl": "http://127.0.0.1:3301",
+                    "signozOtlpGrpcPort": 4317,
+                    "signozOtlpHttpPort": 4318
+                },
+                "work": {
+                    "name": "work",
+                    "env": "work",
+                    "staticIp": "10.20.0.10",
+                    "sshUser": "alice",
+                    "isNetVm": false,
+                    "stateDir": "/var/lib/nixling/vms/work",
+                    "apiSocket": "/var/lib/nixling/vms/work/work.sock",
+                    "audioService": null,
+                    "audioStateFile": null,
+                    "bridge": "br-work-lan",
+                    "gpuSocket": null,
+                    "netVm": "sys-work-net",
+                    "tap": "work-l10",
+                    "tpmSocket": null,
+                    "usbipdHostIp": null,
+                    "graphics": false,
+                    "tpm": false,
+                    "usbipYubikey": false,
+                    "audio": false,
+                    "observability": {
+                        "enabled": false,
+                        "vsockCid": 4096,
+                        "vsockHostSocket": "/var/lib/nixling/vms/work/vsock.sock",
+                        "agentSocket": "/run/nixling/otlp.sock"
+                    },
+                    "runtime": {
+                        "kind": "nixos",
+                        "provider": {
+                            "driver": "cloud-hypervisor",
+                            "id": "local-cloud-hypervisor",
+                            "type": "local"
+                        },
+                        "capabilities": {
+                            "lifecycle": true,
+                            "display": false,
+                            "usbHotplug": false,
+                            "guestControl": true,
+                            "exec": true,
+                            "configSync": true,
+                            "ssh": true,
+                            "storeSync": true,
+                            "keys": true,
+                            "inGuestObservability": true
+                        }
+                    }
+                }
+            }))
+            .expect("detached manifest json"),
+        )
+        .expect("write detached manifest");
+        let config = DaemonConfig {
+            artifacts: ArtifactPaths {
+                public_manifest_path,
+                ..ArtifactPaths::default()
+            },
+            ..DaemonConfig::default()
+        };
         ServerState {
-            config: DaemonConfig::default(),
+            config,
             daemon_uid: 0,
             daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
-            daemon_state_dir: PathBuf::from("target/nixlingd-detached-tests/state"),
+            daemon_state_dir: test_root.join("state"),
             pidfd_table: Arc::new(
-                PidfdTable::new(PathBuf::from("target/nixlingd-detached-tests/pidfd.json"))
+                PidfdTable::new(test_root.join("pidfd.json"))
                     .with_broker_reap_log(Arc::clone(&broker_reap_log)),
             ),
             broker_reap_log,
@@ -12461,7 +13650,7 @@ mod broker_dispatch_tests {
         write_json_file(
             &manifest_path,
             &json!({
-                "_manifest": { "manifestVersion": 5 },
+                "_manifest": { "manifestVersion": 6 },
                 "_observability": {
                     "enabled": false,
                     "signozUrl": "http://127.0.0.1:8080",
@@ -12488,6 +13677,26 @@ mod broker_dispatch_tests {
                         "enabled": false,
                         "vsockCid": 0,
                         "vsockHostSocket": "/run/nixling/otel.sock"
+                    },
+                    "runtime": {
+                        "kind": "nixos",
+                        "provider": {
+                            "id": "local-cloud-hypervisor",
+                            "type": "local",
+                            "driver": "cloud-hypervisor"
+                        },
+                        "capabilities": {
+                            "lifecycle": true,
+                            "display": true,
+                            "usbHotplug": true,
+                            "guestControl": true,
+                            "exec": true,
+                            "configSync": true,
+                            "ssh": true,
+                            "storeSync": true,
+                            "keys": true,
+                            "inGuestObservability": true
+                        }
                     },
                     "sshUser": "alice",
                     "stateDir": "/var/lib/nixling/vms/vm-a",
@@ -12661,7 +13870,7 @@ mod broker_dispatch_tests {
         write_json_file(
             &manifest_path,
             &json!({
-                "_manifest": { "manifestVersion": 5 },
+                "_manifest": { "manifestVersion": 6 },
                 "_observability": {
                     "enabled": false,
                     "signozUrl": "http://127.0.0.1:8080",
@@ -12688,6 +13897,26 @@ mod broker_dispatch_tests {
                         "enabled": false,
                         "vsockCid": 0,
                         "vsockHostSocket": "/run/nixling/otel.sock"
+                    },
+                    "runtime": {
+                        "kind": "nixos",
+                        "provider": {
+                            "id": "local-cloud-hypervisor",
+                            "type": "local",
+                            "driver": "cloud-hypervisor"
+                        },
+                        "capabilities": {
+                            "lifecycle": true,
+                            "display": true,
+                            "usbHotplug": true,
+                            "guestControl": true,
+                            "exec": true,
+                            "configSync": true,
+                            "ssh": true,
+                            "storeSync": true,
+                            "keys": true,
+                            "inGuestObservability": true
+                        }
                     },
                     "sshUser": "alice",
                     "stateDir": "/var/lib/nixling/vms/vm-a",
@@ -13453,6 +14682,7 @@ mod broker_dispatch_tests {
             (ProcessRole::Gpu, RunnerRole::Gpu),
             (ProcessRole::Audio, RunnerRole::Audio),
             (ProcessRole::Video, RunnerRole::Video),
+            (ProcessRole::QemuMediaRunner, RunnerRole::QemuMedia),
             (ProcessRole::VsockRelay, RunnerRole::VsockRelay),
             (ProcessRole::Usbip, RunnerRole::Usbip),
             (ProcessRole::WaylandProxy, RunnerRole::WaylandProxy),
@@ -14229,6 +15459,7 @@ mod broker_dispatch_tests {
             ("gpu", RunnerRole::Gpu),
             ("audio", RunnerRole::Audio),
             ("video", RunnerRole::Video),
+            ("qemu-media", RunnerRole::QemuMedia),
             (VM_RUNNER_ROLE_ID, RunnerRole::CloudHypervisor),
         ];
         let children = roles
@@ -14259,9 +15490,9 @@ mod broker_dispatch_tests {
             .get("summary")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
-        assert!(summary.contains("drained 8 pidfd_table entries in reverse DAG order"));
+        assert!(summary.contains("drained 9 pidfd_table entries in reverse DAG order"));
         assert!(summary.contains(
-            "ch-runner, gpu, audio, video, vsock-relay, swtpm, virtiofsd-nl-meta, virtiofsd-ro-store"
+            "ch-runner, qemu-media, gpu, audio, video, vsock-relay, swtpm, virtiofsd-nl-meta, virtiofsd-ro-store"
         ));
         assert!(state.pidfd_table.list_for_vm("vm-a").is_empty());
         let store = FilesystemSnapshotStore::new(&state.daemon_state_dir);

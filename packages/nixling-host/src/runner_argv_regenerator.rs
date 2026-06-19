@@ -44,6 +44,7 @@ use crate::audio_argv::{AudioArgvInput, generate_audio_argv};
 use crate::ch_argv::{ChArgvInput, generate_ch_argv};
 use crate::gpu_argv::{GpuArgvInput, generate_gpu_argv};
 use crate::otel_host_bridge_argv::{OtelHostBridgeArgvInputs, generate_otel_host_bridge_argv};
+use crate::qemu_media_argv::{QemuMediaArgvInput, generate_qemu_media_argv};
 use crate::swtpm_argv::{SwtpmArgvInput, generate_swtpm_argv};
 use crate::usbip_argv::{UsbipArgvInput, UsbipSubcommand, generate_usbip_argv};
 use crate::video_argv::{VideoArgvInput, generate_video_argv};
@@ -85,6 +86,9 @@ pub struct RunnerArgvExtra {
     /// Pre-built [`VirtiofsdArgvInput`] when the role is
     /// [`ProcessRole::Virtiofsd`].
     pub virtiofsd_input: Option<VirtiofsdArgvInput>,
+    /// Pre-built [`QemuMediaArgvInput`] when the role is
+    /// [`ProcessRole::QemuMediaRunner`].
+    pub qemu_media_input: Option<QemuMediaArgvInput>,
     /// Pre-built [`SwtpmArgvInput`] when the role is
     /// [`ProcessRole::Swtpm`].
     pub swtpm_input: Option<SwtpmArgvInput>,
@@ -140,6 +144,13 @@ pub fn regenerate_argv(
         ProcessRole::Virtiofsd => {
             let input = require(&extra.virtiofsd_input, &intent.role, "virtiofsd_input")?;
             let mut argv = generate_virtiofsd_argv(input)
+                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
+            replace_arg0(&mut argv, intent);
+            Ok(argv)
+        }
+        ProcessRole::QemuMediaRunner => {
+            let input = require(&extra.qemu_media_input, &intent.role, "qemu_media_input")?;
+            let mut argv = generate_qemu_media_argv(input)
                 .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
             replace_arg0(&mut argv, intent);
             Ok(argv)

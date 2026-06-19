@@ -35,7 +35,7 @@ source-specific receivers.
 
 Each opted-in workload VM runs a guest OpenTelemetry collector that
 forwards OTLP (metrics, traces, logs) over the guest→host vsock relay.
-The guest collector also tails the VM's systemd journal through the
+The guest collector also follows the VM's systemd journal through the
 contrib `journald` receiver (`scrapeJournal`, default on) so guest
 service logs land in SigNoz tagged with the VM's `vm.name` / `vm.env`
 resource attributes. The journal `PRIORITY` field is mapped to a
@@ -189,7 +189,7 @@ The privileged broker emits a StoreSync-only telemetry export at:
 ${nixling.site.stateDir}/observability/store-sync/store-sync-<utc-date>.jsonl
 ```
 
-The host OTel collector tails `store-sync-*.jsonl` with a `filelog`
+The host OTel collector follows `store-sync-*.jsonl` with a `filelog`
 receiver and forwards those records through the same host→`sys-obs`
 OTLP bridge as host metrics. This export is a positive allow-list
 projection, not the broker audit log. Host-confidential fields

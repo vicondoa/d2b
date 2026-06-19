@@ -204,6 +204,7 @@ fn behavioral_negative_undeclared_ioctl_delivers_sigsys() {
 fn all_known_policy_refs_compile_to_some() {
     let known_refs = [
         "w1-cloud-hypervisor-runner",
+        "w1-qemu-media",
         "w1-virtiofsd",
         "w1-host-reconcile",
         "w1-store-virtiofs-preflight",

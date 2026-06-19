@@ -14,7 +14,7 @@
 //! `<export-dir>/store-sync-<utc-date>.jsonl` (default
 //! `/var/lib/nixling/observability/store-sync/`). The host Nix/Alloy
 //! wiring grants the `alloy` identity focused read/traverse on THAT
-//! directory only and tails the daily-rotated glob.
+//! directory only and follows the daily-rotated glob.
 //!
 //! Redaction is structural, not advisory: the exported surface is a
 //! dedicated [`StoreSyncObservabilityRecord`] struct that simply does

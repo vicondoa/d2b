@@ -321,7 +321,7 @@ mod tests {
     fn manifest_with(vms: &[(&str, Option<&str>, bool, Option<&str>)]) -> ManifestV04 {
         use serde_json::{Value, json};
         let mut root = serde_json::Map::new();
-        root.insert("_manifest".to_owned(), json!({ "manifestVersion": 5 }));
+        root.insert("_manifest".to_owned(), json!({ "manifestVersion": 6 }));
         root.insert(
             "_observability".to_owned(),
             json!({
@@ -380,6 +380,29 @@ mod tests {
                     "enabled": false,
                     "vsockCid": 100,
                     "vsockHostSocket": format!("/var/lib/nixling/vms/{name}/vsock.sock"),
+                }),
+            );
+            vm.insert(
+                "runtime".into(),
+                json!({
+                    "kind": "nixos",
+                    "provider": {
+                        "id": "local-cloud-hypervisor",
+                        "type": "local",
+                        "driver": "cloud-hypervisor"
+                    },
+                    "capabilities": {
+                        "lifecycle": true,
+                        "display": true,
+                        "usbHotplug": true,
+                        "guestControl": true,
+                        "exec": true,
+                        "configSync": true,
+                        "ssh": true,
+                        "storeSync": true,
+                        "keys": true,
+                        "inGuestObservability": true
+                    }
                 }),
             );
             vm.insert("sshUser".into(), Value::String("alice".into()));

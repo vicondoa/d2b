@@ -2010,6 +2010,10 @@ pub mod pidfd_sys {
             || policy.hide_device_nodes_by_default
     }
 
+    pub(crate) fn device_mask_required(policy: &MountPolicy, namespaces: &NamespaceSet) -> bool {
+        policy.hide_device_nodes_by_default && namespaces.pid
+    }
+
     fn prepare_mount_actions(policy: &MountPolicy) -> io::Result<Vec<PreparedMountAction>> {
         use std::collections::BTreeMap;
 
@@ -2656,9 +2660,7 @@ pub mod pidfd_sys {
         let capability_numbers = parse_capabilities(&isolation.capabilities)?;
         let mount_required =
             isolation.namespaces.mount || mount_policy_requires_namespace(&isolation.mount_policy);
-        let mask_dev = isolation.mount_policy.hide_device_nodes_by_default
-            && !isolation.mount_policy.device_binds.is_empty()
-            && isolation.namespaces.pid;
+        let mask_dev = device_mask_required(&isolation.mount_policy, &isolation.namespaces);
         let mount_actions = if mount_required {
             prepare_mount_actions(&isolation.mount_policy)?
         } else {
@@ -3120,7 +3122,50 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
 
+    use nixling_core::minijail_profile::{MountPolicy, NamespaceSet};
     use tempfile::tempdir;
+
+    fn test_namespaces(pid: bool) -> NamespaceSet {
+        NamespaceSet {
+            mount: true,
+            pid,
+            net: false,
+            ipc: true,
+            uts: false,
+            user: false,
+        }
+    }
+
+    fn hidden_dev_policy(device_binds: Vec<String>) -> MountPolicy {
+        MountPolicy {
+            read_only_paths: vec!["/".to_owned()],
+            writable_paths: vec![],
+            nix_store_read_only: true,
+            hide_device_nodes_by_default: true,
+            device_binds,
+            bind_mounts: vec![],
+        }
+    }
+
+    #[test]
+    fn device_mask_required_even_with_empty_device_binds() {
+        let policy = hidden_dev_policy(vec![]);
+
+        assert!(
+            super::pidfd_sys::device_mask_required(&policy, &test_namespaces(true)),
+            "hideDeviceNodesByDefault with a private pid namespace must mask /dev even when deviceBinds is empty"
+        );
+    }
+
+    #[test]
+    fn device_mask_requires_private_pid_namespace() {
+        let policy = hidden_dev_policy(vec!["/dev/kvm".to_owned()]);
+
+        assert!(
+            !super::pidfd_sys::device_mask_required(&policy, &test_namespaces(false)),
+            "device masking installs a private /proc and therefore requires the role to request a pid namespace"
+        );
+    }
 
     #[test]
     fn path_safe_atomic_replace_round_trips() {
@@ -3221,7 +3266,6 @@ mod tests {
     // requires root and is tested by integration tests in live_handlers.rs).
 
     use super::pidfd_sys::{RunnerIsolationSpec, UserNamespaceSpec, clone3_spawn_runner};
-    use nixling_core::minijail_profile::{MountPolicy, NamespaceSet};
     use std::ffi::CString;
 
     fn empty_mount_policy() -> MountPolicy {

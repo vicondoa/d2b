@@ -1,3 +1,4 @@
+use crate::types::MediaRef;
 use crate::{FeatureFlag, Version, guest_wire::ExecState};
 use nixling_core::{error::Error, host::IfName};
 use schemars::JsonSchema;
@@ -57,6 +58,8 @@ pub enum PublicRequest {
     UsbipBind(UsbipBindCliRequest),
     #[serde(rename = "usb detach")]
     UsbipUnbind(UsbipUnbindCliRequest),
+    #[serde(rename = "usb enroll")]
+    UsbEnroll(UsbEnrollRequest),
     #[serde(rename = "usb probe")]
     UsbipProbe,
     #[serde(rename = "store verify")]
@@ -361,6 +364,18 @@ pub struct UsbipBindCliRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipUnbindCliRequest {
     pub vm: String,
+    pub bus_id: String,
+    #[serde(default, flatten)]
+    pub flags: MutationFlags,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbEnrollRequest {
+    pub vm: String,
+    pub media_ref: MediaRef,
+    /// Transient sysfs USB busid used only for privileged enrollment. Success
+    /// responses intentionally do not echo it.
     pub bus_id: String,
     #[serde(default, flatten)]
     pub flags: MutationFlags,
@@ -1225,11 +1240,28 @@ pub struct KeysShowResponse {
 pub enum UsbipProbeStatus {
     Bound,
     Unbound,
+    Enrollable,
+    Enrolled,
+    DirectConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum UsbProbeEntryKind {
+    #[default]
+    Usbip,
+    QemuMediaSlot,
+}
+
+fn is_default_usb_probe_entry_kind(kind: &UsbProbeEntryKind) -> bool {
+    matches!(kind, UsbProbeEntryKind::Usbip)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipProbeEntry {
+    #[serde(default, skip_serializing_if = "is_default_usb_probe_entry_kind")]
+    pub kind: UsbProbeEntryKind,
     pub vm: String,
     pub env: String,
     pub bus_id: String,
@@ -1237,6 +1269,16 @@ pub struct UsbipProbeEntry {
     pub status: UsbipProbeStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_vm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_ref: Option<MediaRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_bus_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_up_command: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1291,11 +1333,17 @@ pub struct ListEntry {
     pub is_net_vm: bool,
     pub lifecycle: VmLifecycle,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autostart: Option<VmAutostartPosture>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qemu_media: Option<QemuMediaStatus>,
     pub runtime: RuntimeSummary,
     pub services: PublicVmServices,
     pub ssh_user: Option<String>,
     pub static_ip: Option<String>,
     pub tpm: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_capabilities: Vec<String>,
     pub usbip: bool,
     pub vm: String,
 }
@@ -1309,11 +1357,17 @@ pub struct VmStatus {
     pub is_net_vm: bool,
     pub lifecycle: VmLifecycle,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autostart: Option<VmAutostartPosture>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qemu_media: Option<QemuMediaStatus>,
     pub runtime: RuntimeSummary,
     pub services: PublicVmServices,
     pub ssh_user: Option<String>,
     pub static_ip: Option<String>,
     pub tpm: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_capabilities: Vec<String>,
     pub usbip: bool,
     pub vm: String,
 }
@@ -1324,6 +1378,8 @@ pub struct PublicVmServices {
     pub gpu: Option<String>,
     pub microvm: String,
     pub nixling: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qemu_media: Option<String>,
     pub snd: Option<String>,
     pub swtpm: Option<String>,
     pub video: Option<String>,
@@ -1361,6 +1417,56 @@ pub enum VmLifecycleState {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeSummary {
     pub detail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmAutostartPosture {
+    pub mode: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaStatus {
+    pub firmware_mode: String,
+    pub media: Vec<QemuMediaSourceStatus>,
+    pub runner: QemuMediaRunnerStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaRunnerStatus {
+    pub pre_cont_progress: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qmp_readiness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qmp_socket: Option<String>,
+    pub role: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaSourceStatus {
+    pub format: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_path: Option<String>,
+    pub media_ref: String,
+    pub read_only: bool,
+    pub registry: QemuMediaRegistryStatus,
+    pub slot: String,
+    pub source_kind: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaRegistryStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<String>,
+    pub state: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

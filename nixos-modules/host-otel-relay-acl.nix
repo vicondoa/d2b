@@ -3,6 +3,7 @@
 
 let
   cfg = config.nixling;
+  nl = import ./lib.nix { inherit lib; };
   obsCfg = cfg.observability;
   vmStateDir = name: "${cfg.store.stateDir}/${name}";
   apiSocketPath = name: "${vmStateDir name}/${name}.sock";
@@ -19,7 +20,7 @@ let
     lib.attrNames
       (lib.filterAttrs (_: vm: vm.enable && vm.observability.enable) cfg.vms);
 
-  enabledVmNames = lib.attrNames (lib.filterAttrs (_: vm: vm.enable) cfg.vms);
+  enabledVmNames = lib.attrNames (nl.normalNixosVms cfg.vms);
 
   obsVmEnabled =
     obsCfg.enable

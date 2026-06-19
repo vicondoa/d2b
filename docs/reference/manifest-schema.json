@@ -14,8 +14,8 @@
       "properties": {
         "manifestVersion": {
           "type": "integer",
-          "const": 5,
-          "description": "Schema version. This document is the v5 schema; the field is locked to `const: 5`. v5 combines two independent contract changes that each landed as a `4`: the base Cloud Hypervisor vsock semantics for per-VM `observability.vsockCid`/`vsockHostSocket`, and the native SigNoz `_observability` shape. CLI/daemon/broker consumers built against version N MUST refuse to operate on a manifest with version > N. See docs/reference/manifest-schema.md for the full compatibility policy. Pre-v5 manifests (versions 0, 1, 2, 3, 4) are historical and are no longer valid under this schema."
+          "const": 6,
+          "description": "Schema version. This document is the v6 schema; the field is locked to `const: 6`. v6 adds per-VM runtime/provider metadata and provider capability summaries, and makes provider-specific socket/vsock fields nullable so external providers do not fabricate Cloud Hypervisor, guest-control, SSH, store-sync, key, or in-guest-observability artifacts."
         }
       }
     },
@@ -83,19 +83,18 @@
           "description": "True iff nixling.vms.<name>.observability.enable is set."
         },
         "vsockCid": {
-          "type": "integer",
+          "type": ["integer", "null"],
           "minimum": 0,
           "maximum": 4294967295,
-          "description": "Deterministic base Cloud Hypervisor vsock CID. Env-backed VMs use 100 + envIndex * 1000 + slot, where envIndex is the alphabetical position of the env name, slot 1 is reserved for the env net VM, and workload VMs use their nixling.vms.<vm>.index as the slot. Legacy env-less VMs emit a deterministic fallback placeholder while observability is disabled."
+          "description": "Deterministic base Cloud Hypervisor vsock CID for nixos/Cloud Hypervisor VMs. Null for providers without nixling guest-control or in-guest observability."
         },
         "vsockHostSocket": {
-          "type": "string",
-          "description": "Host-side Unix socket backing this VM's Cloud Hypervisor vsock device. Currently /var/lib/nixling/vms/<vm>/vsock.sock."
+          "type": ["string", "null"],
+          "description": "Host-side Unix socket backing this VM's Cloud Hypervisor vsock device. Null for providers without nixling guest-control or in-guest observability."
         },
         "agentSocket": {
-          "type": "string",
-          "const": "/run/nixling/otlp.sock",
-          "description": "In-guest Unix socket reserved for the workload observability agent."
+          "type": ["string", "null"],
+          "description": "In-guest Unix socket reserved for the workload observability agent. Null for providers without in-guest observability."
         }
       }
     },
@@ -115,11 +114,72 @@
         }
       }
     },
+    "runtimeProvider": {
+      "type": "object",
+      "description": "Local runtime provider identity.",
+      "required": ["id", "type", "driver"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "enum": ["local-cloud-hypervisor", "local-qemu-media"],
+          "description": "Stable runtime provider identifier."
+        },
+        "type": {
+          "type": "string",
+          "const": "local",
+          "description": "Provider locality class."
+        },
+        "driver": {
+          "type": "string",
+          "enum": ["cloud-hypervisor", "qemu"],
+          "description": "Provider driver family."
+        }
+      }
+    },
+    "runtimeCapabilities": {
+      "type": "object",
+      "description": "Runtime/provider support matrix. These booleans describe support, not whether a per-VM option currently enables a feature.",
+      "required": ["lifecycle", "display", "usbHotplug", "guestControl", "exec", "configSync", "ssh", "storeSync", "keys", "inGuestObservability"],
+      "additionalProperties": false,
+      "properties": {
+        "lifecycle": { "type": "boolean" },
+        "display": { "type": "boolean" },
+        "usbHotplug": { "type": "boolean" },
+        "guestControl": { "type": "boolean" },
+        "exec": { "type": "boolean" },
+        "configSync": { "type": "boolean" },
+        "ssh": { "type": "boolean" },
+        "storeSync": { "type": "boolean" },
+        "keys": { "type": "boolean" },
+        "inGuestObservability": { "type": "boolean" }
+      }
+    },
+    "runtimeMetadata": {
+      "type": "object",
+      "description": "Runtime/provider metadata and capability summary for one VM.",
+      "required": ["kind", "provider", "capabilities"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["nixos", "qemu-media"],
+          "description": "VM runtime family."
+        },
+        "provider": {
+          "$ref": "#/$defs/runtimeProvider"
+        },
+        "capabilities": {
+          "$ref": "#/$defs/runtimeCapabilities"
+        }
+      }
+    },
     "vmEntry": {
       "type": "object",
       "description": "Per-VM metadata, indexed under the VM's name in the top-level object.",
       "required": [
         "name",
+        "runtime",
         "graphics",
         "tpm",
         "usbipYubikey",
@@ -146,6 +206,9 @@
           "type": "string",
           "pattern": "^[a-z][a-z0-9-]*$",
           "description": "VM name. Matches the enclosing top-level key. Pattern enforced by nixos-modules/assertions.nix's vmNameOk."
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtimeMetadata"
         },
         "graphics": {
           "type": "boolean",
@@ -207,24 +270,24 @@
           "description": "Per-VM state dir. Currently /var/lib/nixling/vms/<name>."
         },
         "apiSocket": {
-          "type": "string",
-          "description": "microvm.nix runner API socket path (<stateDir>/<name>.sock)."
+          "type": ["string", "null"],
+          "description": "Cloud Hypervisor runner API socket path (<stateDir>/<name>.sock). Null for providers without a Cloud Hypervisor API socket."
         },
         "gpuSocket": {
-          "type": "string",
-          "description": "crosvm-gpu sidecar control socket (<stateDir>/<name>-gpu.sock). Only meaningful when graphics=true."
+          "type": ["string", "null"],
+          "description": "crosvm-gpu sidecar control socket (<stateDir>/<name>-gpu.sock). Null for providers without a nixling GPU sidecar socket."
         },
         "tpmSocket": {
-          "type": "string",
-          "description": "swtpm vTPM socket path (/run/nixling/vms/<name>/tpm.sock). Only meaningful when tpm=true."
+          "type": ["string", "null"],
+          "description": "swtpm vTPM socket path (/run/nixling/vms/<name>/tpm.sock). Null for providers without nixling-managed TPM state."
         },
         "audioStateFile": {
-          "type": "string",
-          "description": "Live audio-grant state file (<stateDir>/state/audio-state.json). { mic: on|off, speaker: on|off }."
+          "type": ["string", "null"],
+          "description": "Live audio-grant state file (<stateDir>/state/audio-state.json). Null for providers without the nixling audio sidecar."
         },
         "audioService": {
-          "type": "string",
-          "description": "Host-side audio sidecar systemd unit name (nixling-<name>-snd.service)."
+          "type": ["string", "null"],
+          "description": "Host-side audio sidecar systemd unit name (nixling-<name>-snd.service). Null for providers without the nixling audio sidecar."
         },
         "observability": {
           "$ref": "#/$defs/vmObservability"

@@ -18,4 +18,10 @@ control plane accepts.
 
 - `hello`/`helloOk` are intentionally split so version-range negotiation is
   explicit and testable.
+- qemu-media media fds are broker-internal: the daemon names only VM/slot/ref
+  identifiers, while physical USB opens resolve the root-only enrollment
+  registry and image-file opens resolve trusted bundle paths inside broker
+  spawn/QMP handling.
+- `UsbipProbeStatus` may report `direct-config` for qemu-media image-file
+  slots; those rows intentionally have no enrollment follow-up command.
 - Any wire-breaking change belongs in a new schema version and matching docs.

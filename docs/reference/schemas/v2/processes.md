@@ -16,7 +16,8 @@ which minijail profiles constrain them.
 Each VM row carries the runner/process inventory needed by dry-run and future
 apply paths:
 
-- declared processes/roles (CH, virtiofsd shares, swtpm, sidecars)
+- declared processes/roles (Cloud Hypervisor or QEMU media runners, virtiofsd
+  shares, swtpm, sidecars)
 - dependency edges / topological ordering
 - shutdown ordering metadata
 - profile references into `minijail-profile.json`

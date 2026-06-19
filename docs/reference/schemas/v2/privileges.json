@@ -172,6 +172,9 @@
             "PrepareStateDir",
             "PrepareStoreView",
             "PrepareSwtpmDir",
+            "QemuMediaAttach",
+            "QemuMediaDetach",
+            "QemuMediaEnroll",
             "ReadSecretById",
             "ResumeBroker",
             "RotateSecretById",
@@ -245,6 +248,7 @@
             "usb",
             "usb attach",
             "usb detach",
+            "usb enroll",
             "usb probe"
           ]
         },

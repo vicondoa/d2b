@@ -152,7 +152,7 @@ in
     scrapeJournal = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "Whether the guest OTel collector tails this VM's systemd journal (journald receiver) and forwards it to SigNoz as logs.";
+      description = "Whether the guest OTel collector follows this VM's systemd journal (journald receiver) and forwards it to SigNoz as logs.";
     };
 
     scrapeNodeMetrics = lib.mkOption {

@@ -255,7 +255,7 @@ Notes:
   host-confidential audit record remains the source of truth.
 
 The host Nix/Alloy wiring
-(`nixos-modules/components/observability/host.nix`) tails only the
+(`nixos-modules/components/observability/host.nix`) follows only the
 `store-sync-*.jsonl` glob (via `local.file_match` + `loki.source.file`,
 following rotation and new files) and grants the `alloy` identity
 focused read/traverse ACLs to the export directory **only** — never to

@@ -40,7 +40,8 @@
 
 let
   cfg = config.nixling;
-  enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
+  nl = import ./lib.nix { inherit lib; };
+  normalNixosVms = nl.normalNixosVms cfg.vms;
 
   # Path strings used both here AND in store.nix's share declaration
   # AND in guest-sshd-host-keys.nix. Encoded as a `let` here so the
@@ -90,7 +91,7 @@ let
   '';
 
   generateKeysBody = lib.concatStringsSep "\n"
-    (lib.mapAttrsToList perVmGenScript enabledVms);
+    (lib.mapAttrsToList perVmGenScript normalNixosVms);
 in
 {
   # Pre-create the global per-VM state root so the activation script

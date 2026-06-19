@@ -34,7 +34,7 @@ use std::os::fd::{AsRawFd, OwnedFd};
 // probe returns early on every host (without this, the probe reads the
 // host's real manifest and the baseline check-name set drifts). Copied
 // verbatim from the bash gate's `manifest_path` heredoc.
-const MANIFEST_JSON: &str = r#"{"_manifest":{"manifestVersion":5},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318}}"#;
+const MANIFEST_JSON: &str = r#"{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318}}"#;
 
 const PIDFD_TABLE_JSON: &str = r#"{
   "entries": [

@@ -77,6 +77,117 @@
       },
       "additionalProperties": false
     },
+    "QemuMediaRegistryStatus": {
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "remediation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaRunnerStatus": {
+      "type": "object",
+      "required": [
+        "preContProgress",
+        "role",
+        "state"
+      ],
+      "properties": {
+        "preContProgress": {
+          "type": "string"
+        },
+        "qmpReadiness": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "qmpSocket": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaSourceStatus": {
+      "type": "object",
+      "required": [
+        "format",
+        "mediaRef",
+        "readOnly",
+        "registry",
+        "slot",
+        "sourceKind"
+      ],
+      "properties": {
+        "format": {
+          "type": "string"
+        },
+        "imagePath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mediaRef": {
+          "type": "string"
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "registry": {
+          "$ref": "#/definitions/QemuMediaRegistryStatus"
+        },
+        "slot": {
+          "type": "string"
+        },
+        "sourceKind": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaStatus": {
+      "type": "object",
+      "required": [
+        "firmwareMode",
+        "media",
+        "runner"
+      ],
+      "properties": {
+        "firmwareMode": {
+          "type": "string"
+        },
+        "media": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/QemuMediaSourceStatus"
+          }
+        },
+        "runner": {
+          "$ref": "#/definitions/QemuMediaRunnerStatus"
+        }
+      },
+      "additionalProperties": false
+    },
     "RunnerParityOutputV2": {
       "type": "object",
       "required": [
@@ -160,6 +271,12 @@
         "nixling": {
           "type": "string"
         },
+        "qemuMedia": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "snd": {
           "type": [
             "string",
@@ -206,6 +323,16 @@
             }
           ]
         },
+        "autostart": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/VmAutostartPosture"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "booted": {
           "type": [
             "string",
@@ -246,6 +373,16 @@
         "pendingRestart": {
           "type": "boolean"
         },
+        "qemuMedia": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/QemuMediaStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "readiness": {
           "type": "array",
           "items": {
@@ -265,8 +402,36 @@
         "runtime": {
           "type": "string"
         },
+        "runtimeKind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "services": {
           "$ref": "#/definitions/StatusServicesOutputV2"
+        },
+        "unsupportedCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmAutostartPosture": {
+      "type": "object",
+      "required": [
+        "mode",
+        "reason"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
         }
       },
       "additionalProperties": false

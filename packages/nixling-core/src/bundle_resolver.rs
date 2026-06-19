@@ -68,8 +68,8 @@ use crate::bundle::Bundle;
 use crate::closures::ClosureMetadata;
 use crate::error::Error;
 use crate::host::{
-    ChNetHandoffMode, HostJson, IfName, ModuleRequirement, NetEnv, TapRole, UsbipBusidLock,
-    VendorProductPair,
+    ChNetHandoffMode, HostJson, IfName, ModuleRequirement, NetEnv, QemuMediaSourceIntent, TapRole,
+    UsbipBusidLock, VendorProductPair,
 };
 use crate::host_w3::{ModuleRequirementW3, TapRoleW3};
 use crate::manifest_v04::{ManifestV04, VmEntry};
@@ -1046,6 +1046,25 @@ impl BundleResolver {
         self.rotate_known_host_intents.get(id)
     }
 
+    /// Resolve a QEMU media source by VM + opaque ref.
+    ///
+    /// Raw physical identity is deliberately absent from the bundle; callers
+    /// use the returned policy row to decide whether enrollment/open must be
+    /// read-only or writable, then the broker reads the root-only runtime
+    /// registry for the actual device identity.
+    pub fn find_qemu_media_source(
+        &self,
+        vm: &str,
+        media_ref: &str,
+    ) -> Option<&QemuMediaSourceIntent> {
+        self.host
+            .qemu_media
+            .as_ref()?
+            .sources
+            .iter()
+            .find(|source| source.vm == vm && source.media_ref == media_ref)
+    }
+
     pub fn find_manifest_vm(&self, vm_id: &str) -> Option<&VmEntry> {
         self.manifest.vms.get(vm_id)
     }
@@ -1610,6 +1629,7 @@ fn role_device_classes(
         ],
         ProcessRole::Audio => &["pipewire-socket"],
         ProcessRole::Usbip => &["usbip-host"],
+        ProcessRole::QemuMediaRunner => &["kvm"],
         ProcessRole::SwtpmPreStartFlush => &["tpm"],
         _ => &[],
     }
@@ -2147,6 +2167,7 @@ fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
         ProcessRole::GpuRenderNode => Some("gpu-render-node"),
         ProcessRole::Audio => Some("audio"),
         ProcessRole::CloudHypervisorRunner => Some("cloud-hypervisor"),
+        ProcessRole::QemuMediaRunner => Some("qemu-media"),
         ProcessRole::VsockRelay => Some("vsock-relay"),
         ProcessRole::OtelHostBridge => Some("otel-host-bridge"),
         ProcessRole::Usbip => Some("usbip"),
@@ -2176,6 +2197,10 @@ fn legacy_runner_spec(
         ProcessRole::GpuRenderNode => ("crosvm", format!("nixling-{}-gpu-render-node", dag.vm)),
         ProcessRole::Audio => ("vhost-device-sound", format!("nixling-{}-snd", dag.vm)),
         ProcessRole::CloudHypervisorRunner => ("cloud-hypervisor", format!("microvm@{}", dag.vm)),
+        // QEMU media runners must carry the closed scaffold argv from
+        // processes.json. There is no Cloud Hypervisor-compatible legacy
+        // fallback for this runtime kind.
+        ProcessRole::QemuMediaRunner => return None,
         ProcessRole::VsockRelay => ("socat", format!("nixling-otel-relay@{}", dag.vm)),
         // OtelHostBridge must always carry the closed argv from
         // processes.json; it has no legacy singleton fallback.
@@ -2655,6 +2680,7 @@ mod tests {
         DagEdge, NodeId, ProcessNode, ProcessRole, ProcessesJson, RoleProfile, VmProcessDag,
         VmProcessInvariants,
     };
+    use crate::runtime::RuntimeMetadata;
     use serde::Serialize;
     use std::collections::BTreeMap;
     use std::fs;
@@ -2814,8 +2840,11 @@ mod tests {
             },
             kernel_modules: Vec::new(),
             fd_ownership: Vec::new(),
+            runtime_providers: Vec::new(),
+            vm_runtimes: Vec::new(),
             cloud_hypervisor_capabilities: Vec::new(),
             if_name_mappings: Vec::<IfNameMapping>::new(),
+            qemu_media: None,
             ch: Some(HostChConfig {
                 net_handoff_mode: ChNetHandoffMode::TapFd,
             }),
@@ -2915,10 +2944,10 @@ mod tests {
             vms: BTreeMap::from([(
                 "personal-dev".to_owned(),
                 VmEntry {
-                    api_socket: "/run/nixling/vms/personal-dev/api.sock".to_owned(),
+                    api_socket: Some("/run/nixling/vms/personal-dev/api.sock".to_owned()),
                     audio: false,
-                    audio_service: String::new(),
-                    audio_state_file: String::new(),
+                    audio_service: Some(String::new()),
+                    audio_state_file: Some(String::new()),
                     bridge: Some("br-personal".to_owned()),
                     env: Some("personal".to_owned()),
                     mtu: Some(1500),
@@ -2927,24 +2956,26 @@ mod tests {
                         allow_east_west: false,
                         effective_east_west: false,
                     }),
-                    gpu_socket: String::new(),
+                    gpu_socket: Some(String::new()),
                     graphics: false,
                     is_net_vm: false,
                     name: "personal-dev".to_owned(),
                     net_vm: Some("sys-personal-net".to_owned()),
                     observability: VmObservability {
-                        agent_socket: "/run/nixling/vms/personal-dev/agent.sock".to_owned(),
+                        agent_socket: Some("/run/nixling/vms/personal-dev/agent.sock".to_owned()),
                         enabled: false,
-                        vsock_cid: 17,
-                        vsock_host_socket: "/run/nixling/vms/personal-dev/agent-host.sock"
-                            .to_owned(),
+                        vsock_cid: Some(17),
+                        vsock_host_socket: Some(
+                            "/run/nixling/vms/personal-dev/agent-host.sock".to_owned(),
+                        ),
                     },
+                    runtime: RuntimeMetadata::local_nixos(),
                     ssh_user: Some("alice".to_owned()),
                     state_dir: state_dir.to_owned(),
                     static_ip: Some("192.0.2.20".to_owned()),
                     tap: "tap-personal-dev".to_owned(),
                     tpm: false,
-                    tpm_socket: String::new(),
+                    tpm_socket: Some(String::new()),
                     usbip_yubikey: false,
                     usbipd_host_ip: Some("192.0.2.1".to_owned()),
                 },
@@ -3381,6 +3412,19 @@ mod tests {
             super::ChNetHandoffMode::PersistentTap,
         );
         assert_eq!(claim, &["fuse"]);
+    }
+
+    #[test]
+    fn role_device_classes_qemu_media_declares_kvm_only() {
+        let claim = super::role_device_classes(
+            &ProcessRole::QemuMediaRunner,
+            super::ChNetHandoffMode::PersistentTap,
+        );
+        assert_eq!(claim, &["kvm"]);
+        assert!(
+            !claim.contains(&"vhost-net") && !claim.contains(&"net-tun"),
+            "qemu-media fd-backed mode must not claim path-backed vhost-net or tun devices"
+        );
     }
 
     #[test]

@@ -6,7 +6,8 @@ let
   cfg = config.nixling;
   # nixling-owned access helpers (see lib.nix).
   nl = import ./lib.nix { inherit lib pkgs; };
-  enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
+  normalNixosVms = nl.normalNixosVms cfg.vms;
+  qemuMediaVms = nl.qemuMediaVms cfg.vms;
   observedVmNames = lib.attrNames (lib.filterAttrs
     (name: vm: vm.enable && name != cfg.observability.vmName && vm.observability.enable)
     cfg.vms);
@@ -211,6 +212,56 @@ EOF
     '';
 
   cloudHypervisorBinaryPath = microvm: "${microvm.cloud-hypervisor.package}/bin/cloud-hypervisor";
+  qemuMediaQmpSocket = name: "/run/nixling/vms/${name}/qmp.sock";
+  qemuMediaBinaryPath =
+    if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
+      "${pkgs.qemu_kvm}/bin/qemu-system-x86_64"
+    else if pkgs.stdenv.hostPlatform.system == "aarch64-linux" then
+      "${pkgs.qemu_kvm}/bin/qemu-system-aarch64"
+    else
+      throw "Unsupported system ${pkgs.stdenv.hostPlatform.system} for qemu-media argv emission";
+
+  qemuMediaMac = name:
+    let vm = cfg.vms.${name};
+    in nl.mkMac vm.env "lan" vm.index;
+  qemuMediaArgv = name: [
+    "nixling-qemu-media@${name}"
+    "-nodefaults"
+    "-no-user-config"
+    "-S"
+    "-machine"
+    "q35,accel=kvm,usb=off"
+    "-device"
+    "qemu-xhci,id=xhci,p2=15,p3=15"
+    "-device"
+    "virtio-vga"
+    "-display"
+    "gtk,gl=off,show-cursor=on"
+    "-device"
+    "usb-kbd,bus=xhci.0,port=1"
+    "-device"
+    "usb-tablet,bus=xhci.0,port=2"
+    "-netdev"
+    "tap,id=nl0,fd=10,vhost=off"
+    "-device"
+    "virtio-net-pci,netdev=nl0,mac=${qemuMediaMac name}"
+    "-qmp"
+    "unix:${qemuMediaQmpSocket name},server=on,wait=off"
+    "-monitor"
+    "none"
+    "-serial"
+    "none"
+    "-parallel"
+    "none"
+    "-name"
+    "nixling-${name}-qemu-media"
+  ];
+  qemuMediaEnv =
+    lib.optionals (cfg.site.waylandUser != null) [
+      "GDK_BACKEND=wayland"
+      "WAYLAND_DISPLAY=${waylandDisplay}"
+      "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
+    ];
 
   cloudHypervisorArgv = name: vm: manifest:
     let
@@ -1021,6 +1072,35 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       };
     };
 
+  qemuMediaDag = name: _vm:
+    {
+      vm = name;
+      nodes = [
+        (node name {
+          id = "host-reconcile";
+          role = "host-reconcile";
+          readiness = [ (componentReady "host state, runtime directories, and bridges are reconciled") ];
+        })
+        (node name {
+          id = "qemu-media";
+          role = "qemu-media-runner";
+          binaryPath = qemuMediaBinaryPath;
+          argv = qemuMediaArgv name;
+          env = qemuMediaEnv;
+          readiness = [ (unixSocketListening (qemuMediaQmpSocket name)) ];
+        })
+      ];
+      edges = [
+        (edge "host-reconcile" "qemu-media" "QEMU media starts only after host reconciliation prepares runtime directories and network state.")
+      ];
+      invariants = {
+        perVmAuditPipeline = true;
+        swtpmPreStartFlush = true;
+        tpmOwnershipMigrationWithoutRunningVmMutation = true;
+        usbipGating = true;
+      };
+    };
+
   usbipdDag = envName: m:
     let
       vmId = "sys-${envName}-usbipd";
@@ -1051,7 +1131,10 @@ use devices::virtio::vhost_user_backend::run_video_device;'
 
   data = {
     schemaVersion = "v2";
-    vms = (lib.mapAttrsToList vmDag enabledVms) ++ (lib.mapAttrsToList usbipdDag usbipMeta);
+    vms =
+      (lib.mapAttrsToList vmDag normalNixosVms)
+      ++ (lib.mapAttrsToList qemuMediaDag qemuMediaVms)
+      ++ (lib.mapAttrsToList usbipdDag usbipMeta);
   };
 
   jsonText = builtins.toJSON data;
@@ -1081,7 +1164,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
           or override media endpoints via microvm.cloud-hypervisor.extraArgs.
         '';
       }
-    ]) enabledVms);
+    ]) normalNixosVms);
 in
 {
   options.nixling._bundle.processesJson = lib.mkOption {

@@ -233,6 +233,28 @@ pub enum OperationFields {
     UsbipBindFirewallRule {
         bundle_usbip_firewall_intent_ref: String,
     },
+    QemuMediaEnroll {
+        vm_id: String,
+        media_ref: String,
+        read_only: bool,
+        by_id_count: u32,
+        udev_rule_written: bool,
+        udev_reloaded: bool,
+    },
+    QemuMediaAttach {
+        vm_id: String,
+        media_ref: String,
+        slot: String,
+        read_only: bool,
+        qmp_commands: Vec<String>,
+    },
+    QemuMediaDetach {
+        vm_id: String,
+        media_ref: String,
+        slot: String,
+        read_only: bool,
+        qmp_commands: Vec<String>,
+    },
     GuestControlSign {
         vm_id: String,
         role: String,
@@ -486,6 +508,14 @@ impl OperationFields {
             "UsbipProxyReconcile" => parse_fields!(value => UsbipProxyReconcile {}),
             "UsbipBindFirewallRule" => parse_fields!(value => UsbipBindFirewallRule {
                 bundle_usbip_firewall_intent_ref: String,
+            }),
+            "QemuMediaEnroll" => parse_fields!(value => QemuMediaEnroll {
+                vm_id: String,
+                media_ref: String,
+                read_only: bool,
+                by_id_count: u32,
+                udev_rule_written: bool,
+                udev_reloaded: bool,
             }),
             "GuestControlSign" => parse_fields!(value => GuestControlSign {
                 vm_id: String,

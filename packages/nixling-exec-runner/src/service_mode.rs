@@ -301,7 +301,7 @@ pub fn supervise(
         }
     };
 
-    // Best-effort: give the drains a bounded grace to flush their tails and mark
+    // Best-effort: give the drains a bounded grace to flush their follows and mark
     // EOF. In the normal case the child's exit closed the only write-ends and
     // they finish immediately. If a leaked descendant inherited a write-end the
     // drains may block forever — we stop waiting and publish the terminal status

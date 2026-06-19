@@ -221,7 +221,7 @@ fn w1_matrix_contains_public_and_broker_rows() {
 fn manifest_baseline_round_trips_compact() {
     // Embed via include_str! so the fuzz harness does not read outside
     // the cargo sandbox.
-    const BASELINE: &str = include_str!("../../../../../tests/golden/vms.json-signoz-v5");
+    const BASELINE: &str = include_str!("../../../../../tests/golden/vms.json-signoz-v6");
     let manifest = ManifestV04::from_slice(BASELINE.as_bytes()).expect("baseline parses");
     let rendered = manifest.to_compact_json().expect("baseline serializes");
     assert_eq!(rendered, BASELINE);
@@ -229,7 +229,7 @@ fn manifest_baseline_round_trips_compact() {
 
 fn manifest_unknown_reserved_keys_fail_closed() {
     let error = ManifestV04::from_slice(
-        br#"{"_manifest":{"manifestVersion":5},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"_future":{}}"#,
+        br#"{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"_future":{}}"#,
     )
     .expect_err("reserved keys are closed in v0.4.0 parser");
     assert_eq!(error.kind().as_str(), "manifest-parse-error");
@@ -238,7 +238,7 @@ fn manifest_unknown_reserved_keys_fail_closed() {
 
 fn manifest_mismatched_vm_name_is_rejected() {
     let error = ManifestV04::from_slice(
-        br#"{"_manifest":{"manifestVersion":5},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"corp-vm":{"apiSocket":"/var/lib/nixling/vms/corp-vm/corp-vm.sock","audio":false,"audioService":"nixling-corp-vm-snd.service","audioStateFile":"/var/lib/nixling/vms/corp-vm/state/audio-state.json","bridge":"br-work-lan","env":"work","gpuSocket":"/var/lib/nixling/vms/corp-vm/corp-vm-gpu.sock","graphics":false,"isNetVm":false,"name":"wrong-name","netVm":"sys-work-net","observability":{"agentSocket":"/run/nixling/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/var/lib/nixling/vms/corp-vm/vsock.sock"},"sshUser":"alice","stateDir":"/var/lib/nixling/vms/corp-vm","staticIp":"10.20.0.10","tap":"work-l10","tpm":false,"tpmSocket":"/run/swtpm/corp-vm/sock","usbipYubikey":false,"usbipdHostIp":"192.0.2.1"}}"#,
+        br#"{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"corp-vm":{"apiSocket":"/var/lib/nixling/vms/corp-vm/corp-vm.sock","audio":false,"audioService":"nixling-corp-vm-snd.service","audioStateFile":"/var/lib/nixling/vms/corp-vm/state/audio-state.json","bridge":"br-work-lan","env":"work","gpuSocket":"/var/lib/nixling/vms/corp-vm/corp-vm-gpu.sock","graphics":false,"isNetVm":false,"name":"wrong-name","netVm":"sys-work-net","observability":{"agentSocket":"/run/nixling/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/var/lib/nixling/vms/corp-vm/vsock.sock"},"runtime":{"kind":"nixos","provider":{"id":"local-cloud-hypervisor","type":"local","driver":"cloud-hypervisor"},"capabilities":{"lifecycle":true,"display":true,"usbHotplug":true,"guestControl":true,"exec":true,"configSync":true,"ssh":true,"storeSync":true,"keys":true,"inGuestObservability":true}},"sshUser":"alice","stateDir":"/var/lib/nixling/vms/corp-vm","staticIp":"10.20.0.10","tap":"work-l10","tpm":false,"tpmSocket":"/run/swtpm/corp-vm/sock","usbipYubikey":false,"usbipdHostIp":"192.0.2.1"}}"#,
     )
     .expect_err("name mismatch fails");
     assert_eq!(error.kind().as_str(), "manifest-parse-error");
@@ -405,6 +405,9 @@ fn build_synthetic_resolver() -> BundleResolver {
         },
         kernel_modules: Vec::new(),
         fd_ownership: Vec::new(),
+        runtime_providers: Vec::new(),
+        vm_runtimes: Vec::new(),
+        qemu_media: None,
         cloud_hypervisor_capabilities: Vec::new(),
         if_name_mappings: Vec::new(),
         ch: None,
@@ -496,7 +499,7 @@ fn build_synthetic_resolver() -> BundleResolver {
             },
         }],
     };
-    const SYNTHETIC_MANIFEST: &str = r#"{"_manifest":{"manifestVersion":5},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"work-vm":{"apiSocket":"/var/lib/nixling/vms/work-vm/work-vm.sock","audio":false,"audioService":"nixling-work-vm-snd.service","audioStateFile":"/var/lib/nixling/vms/work-vm/state/audio-state.json","bridge":"br-work-lan","env":"work","gpuSocket":"/var/lib/nixling/vms/work-vm/work-vm-gpu.sock","graphics":false,"isNetVm":false,"name":"work-vm","netVm":"sys-work-net","observability":{"agentSocket":"/run/nixling/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/var/lib/nixling/vms/work-vm/vsock.sock"},"sshUser":"alice","stateDir":"/var/lib/nixling/vms/work-vm","staticIp":"10.20.0.10","tap":"work-l10","tpm":false,"tpmSocket":"/run/swtpm/work-vm/sock","usbipYubikey":false,"usbipdHostIp":"192.0.2.1"},"sys-work-net":{"apiSocket":"/var/lib/nixling/vms/sys-work-net/sys-work-net.sock","audio":false,"audioService":"nixling-sys-work-net-snd.service","audioStateFile":"/var/lib/nixling/vms/sys-work-net/state/audio-state.json","bridge":"br-work-up","env":"work","gpuSocket":"/var/lib/nixling/vms/sys-work-net/sys-work-net-gpu.sock","graphics":false,"isNetVm":true,"name":"sys-work-net","netVm":null,"observability":{"agentSocket":"/run/nixling/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/var/lib/nixling/vms/sys-work-net/vsock.sock"},"sshUser":null,"stateDir":"/var/lib/nixling/vms/sys-work-net","staticIp":"192.0.2.2","tap":"work-u2","tpm":false,"tpmSocket":"/run/swtpm/sys-work-net/sock","usbipYubikey":false,"usbipdHostIp":null}}"#;
+    const SYNTHETIC_MANIFEST: &str = r#"{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"work-vm":{"apiSocket":"/var/lib/nixling/vms/work-vm/work-vm.sock","audio":false,"audioService":"nixling-work-vm-snd.service","audioStateFile":"/var/lib/nixling/vms/work-vm/state/audio-state.json","bridge":"br-work-lan","env":"work","gpuSocket":"/var/lib/nixling/vms/work-vm/work-vm-gpu.sock","graphics":false,"isNetVm":false,"name":"work-vm","netVm":"sys-work-net","observability":{"agentSocket":"/run/nixling/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/var/lib/nixling/vms/work-vm/vsock.sock"},"runtime":{"kind":"nixos","provider":{"id":"local-cloud-hypervisor","type":"local","driver":"cloud-hypervisor"},"capabilities":{"lifecycle":true,"display":true,"usbHotplug":true,"guestControl":true,"exec":true,"configSync":true,"ssh":true,"storeSync":true,"keys":true,"inGuestObservability":true}},"sshUser":"alice","stateDir":"/var/lib/nixling/vms/work-vm","staticIp":"10.20.0.10","tap":"work-l10","tpm":false,"tpmSocket":"/run/swtpm/work-vm/sock","usbipYubikey":false,"usbipdHostIp":"192.0.2.1"},"sys-work-net":{"apiSocket":"/var/lib/nixling/vms/sys-work-net/sys-work-net.sock","audio":false,"audioService":"nixling-sys-work-net-snd.service","audioStateFile":"/var/lib/nixling/vms/sys-work-net/state/audio-state.json","bridge":"br-work-up","env":"work","gpuSocket":"/var/lib/nixling/vms/sys-work-net/sys-work-net-gpu.sock","graphics":false,"isNetVm":true,"name":"sys-work-net","netVm":null,"observability":{"agentSocket":"/run/nixling/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/var/lib/nixling/vms/sys-work-net/vsock.sock"},"runtime":{"kind":"nixos","provider":{"id":"local-cloud-hypervisor","type":"local","driver":"cloud-hypervisor"},"capabilities":{"lifecycle":true,"display":true,"usbHotplug":true,"guestControl":true,"exec":true,"configSync":true,"ssh":true,"storeSync":true,"keys":true,"inGuestObservability":true}},"sshUser":null,"stateDir":"/var/lib/nixling/vms/sys-work-net","staticIp":"192.0.2.2","tap":"work-u2","tpm":false,"tpmSocket":"/run/swtpm/sys-work-net/sock","usbipYubikey":false,"usbipdHostIp":null}}"#;
     let manifest = ManifestV04::from_slice(SYNTHETIC_MANIFEST.as_bytes()).expect("manifest parses");
     let closures = vec![ClosureMetadata {
         schema_version: "v2".to_owned(),

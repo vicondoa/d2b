@@ -6,6 +6,93 @@
 # resolved values. Extracted from options.nix for reviewability.
 { lib, ... }:
 
+let
+  qemuMediaRefType = lib.types.strMatching "^[a-z][a-z0-9-]{0,62}$";
+
+  qemuMediaSourceType = lib.types.submodule {
+    freeformType = null;
+    options = {
+      ref = lib.mkOption {
+        type = lib.types.nullOr qemuMediaRefType;
+        default = null;
+        example = "installer-usb";
+        description = ''
+          Opaque media reference for `physical-usb` sources. Raw physical USB
+          identity (busid, by-id names, serials, devnums, and block-device
+          paths) is enrolled at runtime by the privileged broker and stored
+          outside the Nix store. `image-file` sources do not require enrollment
+          and may omit this field.
+        '';
+      };
+
+      path = lib.mkOption {
+        type = lib.types.nullOr (lib.types.strMatching "^/.*$");
+        default = null;
+        example = "/var/lib/nixling/images/installer.img";
+        description = ''
+          Absolute host path for a direct `image-file` source. The path is
+          operator-authored configuration and may appear in Nix-store-backed
+          bundle artifacts; the broker still validates the opened file at
+          runtime (regular raw file, safe owner/mode/parents, no symlink escape,
+          no mounted/loop-backed use, and non-blocking lease/lock checks).
+          `physical-usb` sources must leave this unset and use `ref` plus
+          `nixling usb enroll`.
+        '';
+      };
+
+      kind = lib.mkOption {
+        type = lib.types.enum [ "physical-usb" "image-file" ];
+        default = "physical-usb";
+        description = ''
+          Source class for the opaque media reference. `physical-usb` resolves
+          through root-only enrollment state. `image-file` is configured
+          directly with an absolute `path` and never uses the USB enrollment
+          registry.
+        '';
+      };
+
+      format = lib.mkOption {
+        type = lib.types.enum [ "raw" "qcow2" "iso" ];
+        default = "raw";
+        description = ''
+          Explicit QEMU block format hint for the runner. The unsafe QEMU
+          format-probing default is never used. Direct `image-file` sources are
+          constrained to `raw` by eval assertions and runtime broker validation.
+        '';
+      };
+
+      readOnly = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Whether the media source should be attached read-only when the QEMU
+          media runner lands. Defaults to true for removable/installer media.
+        '';
+      };
+    };
+  };
+
+  qemuMediaSlotType = lib.types.submodule ({ name, ... }: {
+    freeformType = null;
+    options = {
+      source = lib.mkOption {
+        type = lib.types.nullOr qemuMediaSourceType;
+        default = null;
+        description = ''
+          Optional media source currently inserted in removable slot `${name}`.
+          The source submodule is closed: declarative USB bus-id fields such as
+          `busid`, `busids`, `busId`, and `busIds` are rejected by the schema.
+        '';
+      };
+
+      readOnly = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Default read-only policy for media inserted into this slot.";
+      };
+    };
+  });
+in
 {
   options.nixling.vms = lib.mkOption {
     description = "MicroVMs to declare via the nixling framework.";
@@ -24,6 +111,81 @@
           type = lib.types.bool;
           default = true;
           description = "Whether this microVM is registered with microvm.nix.";
+        };
+        runtime.kind = lib.mkOption {
+          type = lib.types.enum [ "nixos" "qemu-media" ];
+          default = "nixos";
+          description = ''
+            Runtime family for this VM declaration. `nixos` (the default)
+            uses nixling's per-VM NixOS evaluator and Cloud Hypervisor DAG.
+            `qemu-media` is the foundational external-media VM kind; it is
+            manual-only for now, emits a paused fd-backed QEMU runner, and
+            deliberately skips the per-VM NixOS evaluator.
+          '';
+        };
+
+        qemuMedia = lib.mkOption {
+          type = lib.types.submodule {
+            freeformType = null;
+            options = {
+              source = lib.mkOption {
+                type = lib.types.nullOr qemuMediaSourceType;
+                default = null;
+                description = ''
+                  Optional primary media source for `runtime.kind =
+                  "qemu-media"`. This closed submodule rejects undeclared
+                  declarative USB bus-id fields instead of ignoring them.
+                '';
+              };
+
+              removableSlots = lib.mkOption {
+                type = lib.types.attrsOf qemuMediaSlotType;
+                default = { };
+                description = ''
+                  Named removable-media slots for the future QEMU media
+                  runtime. Each slot and each nested slot source is a closed
+                  submodule, so unsupported declarative USB bus-id fields are
+                  schema errors.
+                '';
+              };
+
+              window = lib.mkOption {
+                type = lib.types.submodule {
+                  freeformType = null;
+                  options = {
+                    niriBorderColor = lib.mkOption {
+                      type = lib.types.nullOr (lib.types.strMatching "^#[0-9a-fA-F]{6}$");
+                      default = null;
+                      example = "#800080";
+                      description = ''
+                        Active border color for this qemu-media VM's host QEMU
+                        window in the niri compositor, as a six-digit CSS hex
+                        color (`#rrggbb`). Used only when
+                        `nixling.site.niriVmBorders.enable = true`.
+
+                        Set to `null` (the default) to use the deterministic
+                        palette color derived from the VM name. When set, the
+                        value is placed verbatim into the generated KDL
+                        `active-color` field for the host QEMU window rule.
+                      '';
+                    };
+                  };
+                };
+                default = { };
+                description = ''
+                  Host-window presentation options for `runtime.kind =
+                  "qemu-media"` declarations.
+                '';
+              };
+            };
+          };
+          default = { };
+          description = ''
+            Initial external QEMU media runtime schema. The process contract
+            emits a safe paused QEMU baseline; media fd handoff and hotplug
+            handling use opaque runtime requests instead of declarative USB
+            identities.
+          '';
         };
         autostart = lib.mkOption {
           type = lib.types.bool;
@@ -465,7 +627,7 @@
           type = lib.types.bool;
           default = true;
           description = ''
-            Whether the guest OpenTelemetry collector tails this VM's
+            Whether the guest OpenTelemetry collector follows this VM's
             systemd journal (journald receiver) and forwards it to the
             SigNoz backend as logs. Default on for observed VMs; set to
             false to suppress guest log collection.

@@ -85,6 +85,19 @@ _arguments "${_arguments_options[@]}" : \
 ':busid:_default' \
 && ret=0
 ;;
+(enroll)
+_arguments "${_arguments_options[@]}" : \
+'--busid=[]:BUSID:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':vm:_default' \
+':media_ref:_default' \
+&& ret=0
+;;
 (probe)
 _arguments "${_arguments_options[@]}" : \
 '(--human)--json[]' \
@@ -110,6 +123,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (detach)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(enroll)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -969,6 +986,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(enroll)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (probe)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1803,6 +1824,7 @@ _nixling__subcmd__help__subcmd__usb_commands() {
     local commands; commands=(
 'attach:Bind a host USB busid to a VM via the native daemon path' \
 'detach:Unbind a host USB busid from a VM via the native daemon path' \
+'enroll:Enroll a physical USB disk for an opaque qemu-media ref' \
 'probe:List daemon-declared USBIP busid claims and lock owners' \
     )
     _describe -t commands 'nixling help usb commands' commands "$@"
@@ -1816,6 +1838,11 @@ _nixling__subcmd__help__subcmd__usb__subcmd__attach_commands() {
 _nixling__subcmd__help__subcmd__usb__subcmd__detach_commands() {
     local commands; commands=()
     _describe -t commands 'nixling help usb detach commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__usb__subcmd__enroll_commands] )) ||
+_nixling__subcmd__help__subcmd__usb__subcmd__enroll_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help usb enroll commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__help__subcmd__usb__subcmd__probe_commands] )) ||
 _nixling__subcmd__help__subcmd__usb__subcmd__probe_commands() {
@@ -2108,6 +2135,7 @@ _nixling__subcmd__usb_commands() {
     local commands; commands=(
 'attach:Bind a host USB busid to a VM via the native daemon path' \
 'detach:Unbind a host USB busid from a VM via the native daemon path' \
+'enroll:Enroll a physical USB disk for an opaque qemu-media ref' \
 'probe:List daemon-declared USBIP busid claims and lock owners' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -2123,11 +2151,17 @@ _nixling__subcmd__usb__subcmd__detach_commands() {
     local commands; commands=()
     _describe -t commands 'nixling usb detach commands' commands "$@"
 }
+(( $+functions[_nixling__subcmd__usb__subcmd__enroll_commands] )) ||
+_nixling__subcmd__usb__subcmd__enroll_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling usb enroll commands' commands "$@"
+}
 (( $+functions[_nixling__subcmd__usb__subcmd__help_commands] )) ||
 _nixling__subcmd__usb__subcmd__help_commands() {
     local commands; commands=(
 'attach:Bind a host USB busid to a VM via the native daemon path' \
 'detach:Unbind a host USB busid from a VM via the native daemon path' \
+'enroll:Enroll a physical USB disk for an opaque qemu-media ref' \
 'probe:List daemon-declared USBIP busid claims and lock owners' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -2142,6 +2176,11 @@ _nixling__subcmd__usb__subcmd__help__subcmd__attach_commands() {
 _nixling__subcmd__usb__subcmd__help__subcmd__detach_commands() {
     local commands; commands=()
     _describe -t commands 'nixling usb help detach commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__usb__subcmd__help__subcmd__enroll_commands] )) ||
+_nixling__subcmd__usb__subcmd__help__subcmd__enroll_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling usb help enroll commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__usb__subcmd__help__subcmd__help_commands] )) ||
 _nixling__subcmd__usb__subcmd__help__subcmd__help_commands() {

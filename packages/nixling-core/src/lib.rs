@@ -14,6 +14,7 @@ pub mod minijail_profile;
 pub mod privileges;
 pub mod privileges_w3;
 pub mod processes;
+pub mod runtime;
 pub mod static_invariants;
 
 // `test_support` is needed both by external crates (which opt in via the

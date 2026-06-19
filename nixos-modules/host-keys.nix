@@ -37,7 +37,8 @@
 
 let
   cfg = config.nixling;
-  enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
+  nl = import ./lib.nix { inherit lib; };
+  normalNixosVms = nl.normalNixosVms cfg.vms;
 
   # Resolve a `userAuthorizedKeys` entry (path | string) to its raw
   # text. Paths get read into the Nix store at eval time and surfaced
@@ -115,7 +116,7 @@ NIXLING_USER_KEYS_EOF
   '';
 
   generateKeysBody = lib.concatStringsSep "\n"
-    (lib.mapAttrsToList perVmGenScript enabledVms);
+    (lib.mapAttrsToList perVmGenScript normalNixosVms);
 in
 {
   # The keys directory itself + the lock file. Pre-created with

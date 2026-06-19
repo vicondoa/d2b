@@ -1,5 +1,5 @@
 # nixos-modules/niri-vm-borders.nix — opt-in niri window-rule include
-# generation for nixling graphics VMs.
+# generation for nixling graphics and qemu-media VMs.
 #
 # When `nixling.site.niriVmBorders.enable = true`, installs a KDL file
 # at the configured path (default `/etc/nixling/niri-vm-borders.kdl`)
@@ -8,6 +8,8 @@
 #   - one window-rule per enabled graphics VM, matching app-ids that
 #     carry the `nixling.<vm>.` prefix and applying a per-VM border
 #     color.
+#   - one window-rule per enabled qemu-media VM, matching the stable
+#     host QEMU window title and applying a per-VM border color.
 #
 # Operators source the file from their niri config with:
 #   include "/etc/nixling/niri-vm-borders.kdl"
@@ -47,6 +49,8 @@ let
     in
     builtins.elemAt colorPalette idx;
 
+  isQemuMediaVm = vm: (vm.runtime.kind or "nixos") == "qemu-media";
+
   # All enabled graphics VMs, sorted by name for a stable output order.
   graphicsVmNames = builtins.sort (a: b: a < b) (
     lib.attrNames (
@@ -56,10 +60,29 @@ let
     )
   );
 
-  # KDL window-rule block for one VM.
+  # All enabled qemu-media VMs, sorted by name for a stable output order.
+  qemuMediaVmNames = builtins.sort (a: b: a < b) (
+    lib.attrNames (
+      lib.filterAttrs
+        (name: vm: vm.enable && isQemuMediaVm vm)
+        vmsCfg
+    )
+  );
+
+  qemuMediaWindowTitle = name: "nixling-${name}-qemu-media";
+
+  makeBorderBlock = activeColor: ''
+        border {
+            on
+            active-color "${activeColor}"
+            inactive-color "#505050"
+        }
+  '';
+
+  # KDL window-rule block for one graphics VM.
   # VM names match `^[a-z][a-z0-9-]*$` so they contain no regex
   # metacharacters other than `-`, which needs no escaping in a regex.
-  makeVmRule = name:
+  makeGraphicsVmRule = name:
     let
       vm = vmsCfg.${name};
       activeColor =
@@ -71,16 +94,32 @@ let
       // Borders for VM: ${name}
       window-rule {
           match app-id=r#"^nixling\.${name}\."#
-          border {
-              on
-              active-color "${activeColor}"
-              inactive-color "#505050"
-          }
+    ${makeBorderBlock activeColor}
       }
     '';
 
-  # Concatenated window-rule blocks for all enabled graphics VMs.
-  vmRules = lib.concatMapStrings makeVmRule graphicsVmNames;
+  # KDL window-rule block for one qemu-media VM host QEMU window.
+  makeQemuMediaVmRule = name:
+    let
+      vm = vmsCfg.${name};
+      activeColor =
+        if vm.qemuMedia.window.niriBorderColor != null
+        then vm.qemuMedia.window.niriBorderColor
+        else defaultActiveColor name;
+      windowTitle = qemuMediaWindowTitle name;
+    in
+    ''
+      // Borders for qemu-media VM host window: ${name}
+      window-rule {
+          match title=r#"^${windowTitle}$"#
+    ${makeBorderBlock activeColor}
+      }
+    '';
+
+  # Concatenated window-rule blocks for all enabled graphics and qemu-media VMs.
+  vmRules =
+    (lib.concatMapStrings makeGraphicsVmRule graphicsVmNames)
+    + (lib.concatMapStrings makeQemuMediaVmRule qemuMediaVmNames);
 
   # The path key for environment.etc is relative to /etc/.
   etcKey = lib.removePrefix "/etc/" cfg.outputPath;
@@ -92,7 +131,7 @@ let
     //
     // Requires niri >= 0.1.9 (KDL include directive).
     //
-    // Re-generate after adding or removing graphics VMs by running
+    // Re-generate after adding or removing graphics or qemu-media VMs by running
     // nixos-rebuild switch (or nixos-rebuild build to preview).
 
     // Hide the host-side crosvm GPU sidecar scanout window.
@@ -116,17 +155,19 @@ in
   options.nixling.site.niriVmBorders = {
     enable = lib.mkEnableOption ''
       Generate a niri KDL window-rule include file for per-VM border
-      coloring and crosvm scanout-window hiding.
+      coloring, qemu-media host-window coloring, and crosvm
+      scanout-window hiding.
 
       When enabled, installs a KDL file at `outputPath` (default
       `/etc/nixling/niri-vm-borders.kdl`) containing one
-      `window-rule` per enabled graphics VM.  Window rules match
-      app-ids that carry the `nixling.<vm>.` prefix, which the
-      host-side Wayland filter proxy writes onto every surface from
-      that VM.  Each rule applies a configurable border color; the
-      default color is derived deterministically from the VM name so
-      every VM gets a stable, distinct color without operator
-      configuration.
+      `window-rule` per enabled graphics VM and qemu-media VM.
+      Graphics rules match app-ids that carry the `nixling.<vm>.`
+      prefix, which the host-side Wayland filter proxy writes onto
+      every surface from that VM.  qemu-media rules match the stable
+      host QEMU window title `nixling-<vm>-qemu-media`.  Each rule
+      applies a configurable border color; the default color is
+      derived deterministically from the VM name so every VM gets a
+      stable, distinct color without operator configuration.
 
       To activate the rules, add the following line to your niri
       `config.kdl`:

@@ -586,6 +586,18 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "usb enroll",
+    "subject": "VM/USB media ref",
+    "scope": "per-VM/per-media-ref",
+    "allowedGroups": [
+      "nixling-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "redacted-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "usb detach",
     "subject": "VM/USB busid",
     "scope": "per-VM/per-env/per-busid",
@@ -1177,6 +1189,42 @@ let
     ],
     "destructive": false,
     "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "QemuMediaEnroll",
+    "subject": "qemu-media registry",
+    "scope": "per-VM/per-media-ref",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "redacted-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "QemuMediaAttach",
+    "subject": "qemu-media hotplug",
+    "scope": "per-VM/per-media-ref",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "redacted-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "QemuMediaDetach",
+    "subject": "qemu-media hotplug",
+    "scope": "per-VM/per-media-ref",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
   },

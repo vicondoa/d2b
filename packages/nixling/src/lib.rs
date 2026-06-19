@@ -30,11 +30,16 @@ use nixling_ipc::{
         self, AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest,
         KeyEntry as IpcKeyEntry, KeysShowRequest as IpcKeysShowRequest,
         KeysShowResponse as IpcKeysShowResponse, ListEntry as IpcListEntry,
-        ListRequest as IpcListRequest, PublicVmServices, ReadGuestConfigRequest,
-        StatusRequest as IpcStatusRequest, UsbipProbeEntry as IpcUsbipProbeEntry,
-        UsbipProbeStatus as IpcUsbipProbeStatus, VmLifecycleState as IpcVmLifecycleState,
-        VmStatus as IpcVmStatus,
+        ListRequest as IpcListRequest, PublicVmServices,
+        QemuMediaRegistryStatus as IpcQemuMediaRegistryStatus,
+        QemuMediaRunnerStatus as IpcQemuMediaRunnerStatus,
+        QemuMediaSourceStatus as IpcQemuMediaSourceStatus, QemuMediaStatus as IpcQemuMediaStatus,
+        ReadGuestConfigRequest, StatusRequest as IpcStatusRequest,
+        UsbProbeEntryKind as IpcUsbProbeEntryKind, UsbipProbeEntry as IpcUsbipProbeEntry,
+        UsbipProbeStatus as IpcUsbipProbeStatus, VmAutostartPosture as IpcVmAutostartPosture,
+        VmLifecycleState as IpcVmLifecycleState, VmStatus as IpcVmStatus,
     },
+    types::{MediaRef, validate_usb_bus_id},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -86,6 +91,14 @@ pub struct ListItemOutputV2 {
     pub static_ip: Option<String>,
     pub status: String,
     pub is_net_vm: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autostart: Option<IpcVmAutostartPosture>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qemu_media: Option<IpcQemuMediaStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runner_parity_ok: Option<bool>,
 }
@@ -232,6 +245,14 @@ pub struct StatusVmOutputV2 {
     pub booted: Option<String>,
     pub pending_restart: bool,
     pub runtime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autostart: Option<IpcVmAutostartPosture>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qemu_media: Option<IpcQemuMediaStatus>,
     pub declared_roles: Vec<String>,
     pub readiness: Vec<String>,
     /// api-ready state from the last vm start in split mode.
@@ -262,6 +283,8 @@ pub struct StatusServicesOutputV2 {
     pub nixling: String,
     pub microvm: String,
     pub virtiofsd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qemu_media: Option<String>,
     pub gpu: Option<String>,
     pub video: Option<String>,
     pub snd: Option<String>,
@@ -331,6 +354,20 @@ impl StatusServicesOutputV3 {
             usbip_proxy_per_env: std::collections::BTreeMap::new(),
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QemuMediaRegistryRecord {
+    vm: String,
+    media_ref: String,
+    source_kind: String,
+    format: String,
+    read_only: bool,
+    #[serde(default, rename = "schemaVersion")]
+    _schema_version: Option<u32>,
+    #[serde(default, rename = "identity")]
+    _identity: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -594,6 +631,8 @@ enum UsbCommand {
     Attach(UsbAttachArgs),
     /// Unbind a host USB busid from a VM via the native daemon path.
     Detach(UsbDetachArgs),
+    /// Enroll a physical USB disk for an opaque qemu-media ref.
+    Enroll(UsbEnrollArgs),
     /// List daemon-declared USBIP busid claims and lock owners.
     Probe(UsbProbeArgs),
 }
@@ -615,6 +654,22 @@ struct UsbAttachArgs {
 #[derive(Debug, Args)]
 struct UsbDetachArgs {
     vm: String,
+    busid: String,
+    #[arg(long, conflicts_with = "apply")]
+    dry_run: bool,
+    #[arg(long, conflicts_with = "dry_run")]
+    apply: bool,
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
+#[derive(Debug, Args)]
+struct UsbEnrollArgs {
+    vm: String,
+    media_ref: String,
+    #[arg(long = "busid")]
     busid: String,
     #[arg(long, conflicts_with = "apply")]
     dry_run: bool,
@@ -1388,6 +1443,15 @@ struct ManifestVm {
     state_dir: String,
     bridge: String,
     ssh_user: Option<String>,
+    runtime: Option<ManifestRuntime>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestRuntime {
+    kind: String,
+    #[serde(default)]
+    capabilities: BTreeMap<String, bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1810,6 +1874,7 @@ fn dispatch(
         NativeCommand::Usb(args) => match &args.command {
             UsbCommand::Attach(args) => cmd_usb_attach(context, args),
             UsbCommand::Detach(args) => cmd_usb_detach(context, args),
+            UsbCommand::Enroll(args) => cmd_usb_enroll(context, args),
             UsbCommand::Probe(args) => cmd_usb_probe(context, args),
         },
         NativeCommand::Console(args) => cmd_console(context, args, original_args),
@@ -2970,6 +3035,7 @@ fn list_output_from_manifest(
                 let services = vm_service_states(context, vm, process_vm);
                 let pending_restart =
                     is_pending_restart(vm, &services, current.as_deref(), booted.as_deref());
+                let qemu_media = qemu_media_status(context, vm, bundle, process_vm, &services);
                 ListItemOutputV2 {
                     name: vm.name.clone(),
                     env: vm.env.clone(),
@@ -2979,6 +3045,10 @@ fn list_output_from_manifest(
                     static_ip: vm.static_ip.clone(),
                     status: list_status_label(vm, &services, pending_restart),
                     is_net_vm: vm.is_net_vm,
+                    runtime_kind: output_runtime_kind(vm),
+                    autostart: output_autostart_posture(vm),
+                    unsupported_capabilities: output_unsupported_capabilities(vm),
+                    qemu_media,
                     runner_parity_ok: bundle
                         .and_then(|bundle| bundle.closures.get(&vm.name))
                         .map(|closure| closure.runner_parity_ok),
@@ -3004,12 +3074,294 @@ fn list_output_from_public_entries(
                 static_ip: entry.static_ip.clone(),
                 status: public_lifecycle_list_status_label(&entry.lifecycle),
                 is_net_vm: entry.is_net_vm,
+                runtime_kind: entry.runtime.kind.clone(),
+                autostart: entry.autostart.clone(),
+                unsupported_capabilities: entry.unsupported_capabilities.clone(),
+                qemu_media: entry.qemu_media.clone(),
                 runner_parity_ok: bundle
                     .and_then(|bundle| bundle.closures.get(&entry.vm))
                     .map(|closure| closure.runner_parity_ok),
             })
             .collect(),
     )
+}
+
+fn manifest_runtime_kind(vm: &ManifestVm) -> &str {
+    vm.runtime
+        .as_ref()
+        .map(|runtime| runtime.kind.as_str())
+        .unwrap_or("nixos")
+}
+
+fn is_qemu_media_vm(vm: &ManifestVm) -> bool {
+    manifest_runtime_kind(vm) == "qemu-media"
+}
+
+fn output_runtime_kind(vm: &ManifestVm) -> Option<String> {
+    is_qemu_media_vm(vm).then(|| manifest_runtime_kind(vm).to_owned())
+}
+
+fn output_autostart_posture(vm: &ManifestVm) -> Option<IpcVmAutostartPosture> {
+    is_qemu_media_vm(vm).then(|| IpcVmAutostartPosture {
+        mode: "manual-only".to_owned(),
+        reason: "qemu-media VMs are intentionally skipped by daemon autostart; start them explicitly with `nixling vm start <vm> --apply`".to_owned(),
+    })
+}
+
+fn output_unsupported_capabilities(vm: &ManifestVm) -> Vec<String> {
+    let Some(runtime) = vm.runtime.as_ref() else {
+        return Vec::new();
+    };
+    let mut unsupported = runtime
+        .capabilities
+        .iter()
+        .filter(|(_capability, supported)| !**supported)
+        .map(|(capability, _supported)| capability_name_for_output(capability).to_owned())
+        .collect::<Vec<_>>();
+    if unsupported.is_empty() && runtime.kind == "qemu-media" && runtime.capabilities.is_empty() {
+        unsupported = vec![
+            "config-sync".to_owned(),
+            "exec".to_owned(),
+            "guest-control".to_owned(),
+            "in-guest-observability".to_owned(),
+            "keys".to_owned(),
+            "s".to_owned() + "sh",
+            "store-sync".to_owned(),
+        ];
+    }
+    unsupported.sort();
+    unsupported.dedup();
+    unsupported
+}
+
+fn capability_name_for_output(capability: &str) -> &str {
+    match capability {
+        "configSync" => "config-sync",
+        "guestControl" => "guest-control",
+        "inGuestObservability" => "in-guest-observability",
+        "storeSync" => "store-sync",
+        "usbHotplug" => "usb-hotplug",
+        other => other,
+    }
+}
+
+fn qemu_media_status(
+    context: &Context,
+    vm: &ManifestVm,
+    bundle: Option<&BundleContext>,
+    process_vm: Option<&nixling_core::processes::VmProcessDag>,
+    services: &StatusServicesOutputV2,
+) -> Option<IpcQemuMediaStatus> {
+    if !is_qemu_media_vm(vm) {
+        return None;
+    }
+    let runner_state = services
+        .qemu_media
+        .clone()
+        .unwrap_or_else(|| services.microvm.clone());
+    let qmp_socket = qemu_media_qmp_socket(process_vm)
+        .or_else(|| Some(format!("/run/nixling/vms/{}/qmp.sock", vm.name)));
+    let qmp_readiness = qmp_socket.as_deref().map(|path| {
+        if unix_socket_listening_for_status(path) {
+            "ready".to_owned()
+        } else if service_state_counts_as_running(&runner_state) {
+            "pending".to_owned()
+        } else {
+            "not-started".to_owned()
+        }
+    });
+    let pre_cont_progress = match qmp_readiness.as_deref() {
+        Some("ready") if service_state_counts_as_running(&runner_state) => "paused-before-cont",
+        Some("pending") if service_state_counts_as_running(&runner_state) => "waiting-for-qmp",
+        _ => "not-started",
+    }
+    .to_owned();
+    let media = qemu_media_sources_for_vm(bundle, &vm.name)
+        .into_iter()
+        .map(|source| qemu_media_source_status(context, bundle, source))
+        .collect();
+
+    Some(IpcQemuMediaStatus {
+        firmware_mode: "none".to_owned(),
+        runner: IpcQemuMediaRunnerStatus {
+            role: "qemu-media".to_owned(),
+            state: runner_state,
+            qmp_socket,
+            qmp_readiness,
+            pre_cont_progress,
+        },
+        media,
+    })
+}
+
+fn qemu_media_qmp_socket(
+    process_vm: Option<&nixling_core::processes::VmProcessDag>,
+) -> Option<String> {
+    process_vm?
+        .nodes
+        .iter()
+        .find(|node| node.role == nixling_core::processes::ProcessRole::QemuMediaRunner)?
+        .readiness
+        .iter()
+        .find_map(|readiness| match readiness {
+            nixling_core::processes::ReadinessPredicate::UnixSocketListening(path)
+            | nixling_core::processes::ReadinessPredicate::UnixSocketExists(path) => {
+                Some(path.clone())
+            }
+            _ => None,
+        })
+}
+
+fn qemu_media_sources_for_vm<'a>(
+    bundle: Option<&'a BundleContext>,
+    vm: &str,
+) -> Vec<&'a nixling_core::host::QemuMediaSourceIntent> {
+    bundle
+        .and_then(|bundle| bundle.host.as_ref())
+        .and_then(|host| host.qemu_media.as_ref())
+        .map(|media| {
+            media
+                .sources
+                .iter()
+                .filter(|source| source.vm == vm)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn qemu_media_source_status(
+    context: &Context,
+    bundle: Option<&BundleContext>,
+    source: &nixling_core::host::QemuMediaSourceIntent,
+) -> IpcQemuMediaSourceStatus {
+    IpcQemuMediaSourceStatus {
+        media_ref: source.media_ref.clone(),
+        image_path: source.image_path.clone(),
+        slot: source.slot.clone(),
+        source_kind: qemu_media_source_kind_name(source.source_kind).to_owned(),
+        format: qemu_media_format_name(source.format).to_owned(),
+        read_only: source.read_only,
+        registry: qemu_media_registry_status(context, bundle, source),
+    }
+}
+
+fn qemu_media_source_kind_name(kind: nixling_core::host::QemuMediaSourceKind) -> &'static str {
+    match kind {
+        nixling_core::host::QemuMediaSourceKind::PhysicalUsb => "physical-usb",
+        nixling_core::host::QemuMediaSourceKind::ImageFile => "image-file",
+    }
+}
+
+fn qemu_media_format_name(format: nixling_core::host::QemuMediaFormat) -> &'static str {
+    match format {
+        nixling_core::host::QemuMediaFormat::Raw => "raw",
+        nixling_core::host::QemuMediaFormat::Qcow2 => "qcow2",
+        nixling_core::host::QemuMediaFormat::Iso => "iso",
+    }
+}
+
+fn qemu_media_registry_status(
+    _context: &Context,
+    bundle: Option<&BundleContext>,
+    source: &nixling_core::host::QemuMediaSourceIntent,
+) -> IpcQemuMediaRegistryStatus {
+    if source.source_kind != nixling_core::host::QemuMediaSourceKind::PhysicalUsb {
+        return IpcQemuMediaRegistryStatus {
+            state: "direct-config".to_owned(),
+            remediation: None,
+        };
+    }
+    let Some(registry_dir) = bundle
+        .and_then(|bundle| bundle.host.as_ref())
+        .and_then(|host| host.qemu_media.as_ref())
+        .map(|media| PathBuf::from(&media.registry_dir))
+    else {
+        return IpcQemuMediaRegistryStatus {
+            state: "unavailable".to_owned(),
+            remediation: Some(
+                "load the private bundle host.json so qemu-media registry entries can be checked"
+                    .to_owned(),
+            ),
+        };
+    };
+    let path = registry_dir
+        .join(&source.vm)
+        .join(format!("{}.json", source.media_ref));
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return IpcQemuMediaRegistryStatus {
+                state: "missing".to_owned(),
+                remediation: Some(format!(
+                    "run `nixling usb probe`, then `nixling usb enroll {} {} --busid <busid> --apply`",
+                    source.vm, source.media_ref
+                )),
+            };
+        }
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            return IpcQemuMediaRegistryStatus {
+                state: "unreadable".to_owned(),
+                remediation: Some(
+                    "the qemu-media registry is root-only; use daemon status or re-run as an authorized operator after enrollment".to_owned(),
+                ),
+            };
+        }
+        Err(_) => {
+            return IpcQemuMediaRegistryStatus {
+                state: "unknown".to_owned(),
+                remediation: Some(
+                    "inspect the qemu-media registry and broker audit log, then retry status"
+                        .to_owned(),
+                ),
+            };
+        }
+    };
+    let Ok(record) = serde_json::from_slice::<QemuMediaRegistryRecord>(&bytes) else {
+        return IpcQemuMediaRegistryStatus {
+            state: "stale".to_owned(),
+            remediation: Some(format!(
+                "remove the malformed qemu-media registry entry and re-enroll `{}` for vm `{}`",
+                source.media_ref, source.vm
+            )),
+        };
+    };
+    let expected_kind = qemu_media_source_kind_name(source.source_kind);
+    let expected_format = qemu_media_format_name(source.format);
+    if record.vm != source.vm
+        || record.media_ref != source.media_ref
+        || record.source_kind != expected_kind
+        || record.format != expected_format
+        || record.read_only != source.read_only
+    {
+        return IpcQemuMediaRegistryStatus {
+            state: "stale".to_owned(),
+            remediation: Some(format!(
+                "re-enroll `{}` for vm `{}` so the root-only registry matches the active bundle policy",
+                source.media_ref, source.vm
+            )),
+        };
+    }
+    IpcQemuMediaRegistryStatus {
+        state: "present".to_owned(),
+        remediation: None,
+    }
+}
+
+fn unix_socket_listening_for_status(path: &str) -> bool {
+    const SO_ACCEPTCON: u64 = 0x0001_0000;
+    let Ok(contents) = fs::read_to_string("/proc/net/unix") else {
+        return false;
+    };
+    contents.lines().skip(1).any(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 8 {
+            return false;
+        }
+        let flags = u64::from_str_radix(fields[3], 16).unwrap_or(0);
+        let socket_type = fields[4];
+        let socket_path = fields[7];
+        socket_path == path && socket_type == "0001" && (flags & SO_ACCEPTCON) != 0
+    })
 }
 
 fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
@@ -3891,6 +4243,14 @@ fn cmd_gateway_vm_exec(
             app_argv: argv,
         }),
     )
+}
+
+fn vm_is_qemu_media_runtime(context: &Context, vm: &str) -> Result<bool, CliFailure> {
+    let manifest = context.load_manifest()?;
+    Ok(manifest
+        .get_vm(vm)
+        .and_then(|entry| entry.runtime.as_ref())
+        .is_some_and(|runtime| runtime.kind == "qemu-media"))
 }
 
 fn vm_dag_dry_run_summary(verb: &str, vm: &str) -> serde_json::Value {
@@ -5480,6 +5840,68 @@ fn cmd_usb_detach(context: &Context, args: &UsbDetachArgs) -> Result<i32, CliFai
     )
 }
 
+fn cmd_usb_enroll(context: &Context, args: &UsbEnrollArgs) -> Result<i32, CliFailure> {
+    let json_mode = usb_json_mode(args.json, args.human);
+    let flags = require_mutation_flag("usb enroll", args.dry_run, args.apply, json_mode)?;
+    require_known_vm(context, &args.vm, json_mode)?;
+    if let Err(err) = MediaRef::validate_value(&args.media_ref) {
+        return Err(CliFailure::new(
+            2,
+            format!("usb enroll: invalid media ref: {err}"),
+        ));
+    }
+    if let Err(err) = validate_usb_bus_id(&args.busid) {
+        return Err(CliFailure::new(
+            2,
+            format!("usb enroll: invalid busid selector: {err}"),
+        ));
+    }
+    if flags.apply {
+        return dispatch_mutating_verb(
+            context,
+            "usbEnroll",
+            serde_json::json!({
+                "vm": args.vm,
+                "mediaRef": args.media_ref,
+                "busId": args.busid,
+            }),
+            flags.dry_run,
+            flags.apply,
+            json_mode,
+        );
+    }
+    let summary = serde_json::json!({
+        "command": "usb enroll",
+        "mode": "dry-run",
+        "vm": args.vm,
+        "mediaRef": args.media_ref,
+        "busIdProvided": true,
+        "planned": [
+            "QemuMediaEnroll",
+            "ReadSysfs(devnum/vendor/product)",
+            "ReadDevDiskById",
+            "PreflightMountedSwapHolders",
+            "OpenInitialMediaFd",
+            "WriteRootOnlyMediaRegistry",
+            "WriteRuntimeUdevUdisksIgnoreRule",
+            "ReloadUdevRules"
+        ],
+        "notes": "Dry-run is redacted: the transient busid, by-id path, serial, and block path are not echoed."
+    });
+    if json_mode {
+        let mut rendered = serde_json::to_string_pretty(&summary)
+            .map_err(|e| CliFailure::new(1, format!("serialize: {e}")))?;
+        rendered.push('\n');
+        print_stdout(&rendered);
+    } else {
+        print_stdout(&format!(
+            "nixling usb enroll --dry-run: would enroll media ref '{}' for vm '{}' without echoing the transient busid or physical identity\n",
+            args.media_ref, args.vm
+        ));
+    }
+    Ok(0)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn usb_mutating_verb(
     context: &Context,
@@ -5495,7 +5917,27 @@ fn usb_mutating_verb(
     let json_mode = usb_json_mode(json, human);
     let flags = require_mutation_flag(verb, dry_run, apply, json_mode)?;
     require_known_vm(context, vm, json_mode)?;
+    let qemu_media = vm_is_qemu_media_runtime(context, vm)?;
+    if qemu_media && let Err(err) = validate_usb_bus_id(bus_id) {
+        return Err(CliFailure::new(
+            2,
+            format!("{verb}: invalid busid selector: {err}"),
+        ));
+    }
     if flags.apply {
+        if qemu_media {
+            return dispatch_mutating_verb(
+                context,
+                request_type,
+                serde_json::json!({
+                    "vm": vm,
+                    "busId": bus_id,
+                }),
+                flags.dry_run,
+                flags.apply,
+                json_mode,
+            );
+        }
         if verb == "usb attach" {
             let guest_plan = usb_guest_attach_plan(context, vm, bus_id, json_mode)?;
             let outcome = try_daemon_mutating_verb(
@@ -5535,6 +5977,45 @@ fn usb_mutating_verb(
             flags.apply,
             json_mode,
         );
+    }
+    if qemu_media {
+        let planned: Vec<&str> = if verb == "usb attach" {
+            vec![
+                "QemuMediaResolveRuntimeSelector",
+                "OpenEnrolledMediaByRegistryIdentity",
+                "QmpHotplugScaffold(blockdev-add,device_add)",
+            ]
+        } else {
+            vec![
+                "QemuMediaResolveRuntimeSelector",
+                "QmpHotplugScaffold(device_del,blockdev-del)",
+            ]
+        };
+        let summary = serde_json::json!({
+            "command": verb,
+            "mode": "dry-run",
+            "vm": vm,
+            "busIdProvided": true,
+            "runtime": "qemu-media",
+            "planned": planned,
+            "notes": "qemu-media USB hotplug does not use USBIP and does not echo the runtime busid in dry-run output."
+        });
+        if json_mode {
+            let mut rendered = serde_json::to_string_pretty(&summary)
+                .map_err(|e| CliFailure::new(1, format!("serialize: {e}")))?;
+            rendered.push('\n');
+            print_stdout(&rendered);
+        } else {
+            let action = if verb == "usb attach" {
+                "resolve the runtime USB selector through the root-only media registry and scaffold QMP attach"
+            } else {
+                "resolve the runtime USB selector through the root-only media registry and scaffold QMP detach"
+            };
+            print_stdout(&format!(
+                "nixling {verb} --dry-run: would {action} for qemu-media vm '{vm}' (runtime busid redacted)\n"
+            ));
+        }
+        return Ok(0);
     }
     let planned: Vec<&str> = if verb == "usb attach" {
         vec![
@@ -5873,27 +6354,70 @@ fn cmd_usb_probe(context: &Context, args: &UsbProbeArgs) -> Result<i32, CliFailu
 
 fn render_usb_probe_human(entries: &[IpcUsbipProbeEntry]) -> String {
     let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "{:<24} {:<12} {:<12} {:<8} OWNER",
-        "VM", "ENV", "BUSID", "STATUS"
-    );
-    for entry in entries {
-        let status = match entry.status {
-            IpcUsbipProbeStatus::Bound => "bound",
-            IpcUsbipProbeStatus::Unbound => "unbound",
-        };
+    let usbip_entries: Vec<_> = entries
+        .iter()
+        .filter(|entry| matches!(entry.kind, IpcUsbProbeEntryKind::Usbip))
+        .collect();
+    if !usbip_entries.is_empty() || entries.is_empty() {
         let _ = writeln!(
             out,
-            "{:<24} {:<12} {:<12} {:<8} {}",
-            entry.vm,
-            entry.env,
-            entry.bus_id,
-            status,
-            entry.owner_vm.as_deref().unwrap_or("-"),
+            "{:<24} {:<12} {:<12} {:<8} OWNER",
+            "VM", "ENV", "BUSID", "STATUS"
         );
+        for entry in usbip_entries {
+            let _ = writeln!(
+                out,
+                "{:<24} {:<12} {:<12} {:<8} {}",
+                entry.vm,
+                entry.env,
+                entry.bus_id,
+                usb_probe_status_label(entry.status),
+                entry.owner_vm.as_deref().unwrap_or("-"),
+            );
+        }
+    }
+    let qemu_entries: Vec<_> = entries
+        .iter()
+        .filter(|entry| matches!(entry.kind, IpcUsbProbeEntryKind::QemuMediaSlot))
+        .collect();
+    if !qemu_entries.is_empty() {
+        if !out.is_empty() && !out.ends_with("\n\n") {
+            out.push('\n');
+        }
+        let _ = writeln!(
+            out,
+            "{:<24} {:<14} {:<20} {:<14} {:<12} {:<12} FOLLOW-UP",
+            "QEMU-MEDIA-VM", "SLOT", "REF", "SOURCE", "BUSID", "STATUS"
+        );
+        for entry in qemu_entries {
+            let _ = writeln!(
+                out,
+                "{:<24} {:<14} {:<20} {:<14} {:<12} {:<12} {}",
+                entry.vm,
+                entry.slot.as_deref().unwrap_or("-"),
+                entry
+                    .media_ref
+                    .as_ref()
+                    .map(MediaRef::as_str)
+                    .unwrap_or("-"),
+                entry.source_kind.as_deref().unwrap_or("-"),
+                entry.bus_id,
+                usb_probe_status_label(entry.status),
+                entry.follow_up_command.as_deref().unwrap_or("-"),
+            );
+        }
     }
     out
+}
+
+fn usb_probe_status_label(status: IpcUsbipProbeStatus) -> &'static str {
+    match status {
+        IpcUsbipProbeStatus::Bound => "bound",
+        IpcUsbipProbeStatus::Unbound => "unbound",
+        IpcUsbipProbeStatus::Enrollable => "enrollable",
+        IpcUsbipProbeStatus::Enrolled => "enrolled",
+        IpcUsbipProbeStatus::DirectConfig => "direct-config",
+    }
 }
 
 // ---- managed-keys + trust verbs ----
@@ -6555,6 +7079,7 @@ fn build_vm_status_output(
     let booted = booted_symlink(context, vm);
     let pending_restart =
         is_pending_restart(vm, &service_states, current.as_deref(), booted.as_deref());
+    let qemu_media = qemu_media_status(context, vm, bundle, process_vm, &service_states);
     let declared_roles = process_vm
         .map(|entry| {
             entry
@@ -6589,6 +7114,10 @@ fn build_vm_status_output(
         booted,
         pending_restart,
         runtime: RUNTIME_UNKNOWN.to_owned(),
+        runtime_kind: output_runtime_kind(vm),
+        autostart: output_autostart_posture(vm),
+        unsupported_capabilities: output_unsupported_capabilities(vm),
+        qemu_media,
         declared_roles,
         readiness,
         api_ready: read_vm_api_ready(&context.daemon_state_dir, &vm.name),
@@ -6640,6 +7169,24 @@ fn build_vm_status_output_from_public(
         booted: booted_symlink(context, vm),
         pending_restart: public.lifecycle.pending_restart,
         runtime: public.runtime.detail.clone(),
+        runtime_kind: public
+            .runtime
+            .kind
+            .clone()
+            .or_else(|| output_runtime_kind(vm)),
+        autostart: public
+            .autostart
+            .clone()
+            .or_else(|| output_autostart_posture(vm)),
+        unsupported_capabilities: if public.unsupported_capabilities.is_empty() {
+            output_unsupported_capabilities(vm)
+        } else {
+            public.unsupported_capabilities.clone()
+        },
+        qemu_media: public.qemu_media.clone().or_else(|| {
+            let services = status_services_from_public(&public.services);
+            qemu_media_status(context, vm, bundle, process_vm, &services)
+        }),
         declared_roles,
         readiness,
         api_ready: read_vm_api_ready(&context.daemon_state_dir, &vm.name),
@@ -6653,6 +7200,7 @@ fn status_services_from_public(services: &PublicVmServices) -> StatusServicesOut
         nixling: services.nixling.clone(),
         microvm: services.microvm.clone(),
         virtiofsd: services.virtiofsd.clone(),
+        qemu_media: services.qemu_media.clone(),
         gpu: services.gpu.clone(),
         video: services.video.clone(),
         snd: services.snd.clone(),
@@ -6677,10 +7225,18 @@ fn vm_service_states(
     } else {
         None
     };
+    let runner_role_id = vm_runner_role_id(process_vm, vm);
+    let qemu_media_state =
+        is_qemu_media_vm(vm).then(|| pidfd_role_state(context, &vm.name, &runner_role_id));
     StatusServicesOutputV2 {
         nixling: systemctl_state(context, "nixlingd.service"),
-        microvm: pidfd_role_state(context, &vm.name, "ch-runner"),
+        microvm: if is_qemu_media_vm(vm) {
+            "unsupported".to_owned()
+        } else {
+            pidfd_role_state(context, &vm.name, &runner_role_id)
+        },
         virtiofsd: pidfd_role_prefix_state(context, &vm.name, "virtiofsd"),
+        qemu_media: qemu_media_state,
         gpu: gpu_role_id.map(|role| pidfd_role_state(context, &vm.name, role)),
         video: has_role(nixling_core::processes::ProcessRole::Video)
             .then(|| pidfd_role_state(context, &vm.name, "video")),
@@ -6688,6 +7244,26 @@ fn vm_service_states(
             .then(|| pidfd_role_state(context, &vm.name, "audio")),
         swtpm: (has_role(nixling_core::processes::ProcessRole::Swtpm) || vm.tpm)
             .then(|| pidfd_role_state(context, &vm.name, "swtpm")),
+    }
+}
+
+fn vm_runner_role_id(
+    process_vm: Option<&nixling_core::processes::VmProcessDag>,
+    vm: &ManifestVm,
+) -> String {
+    if process_vm
+        .map(|entry| {
+            entry
+                .nodes
+                .iter()
+                .any(|node| node.role == nixling_core::processes::ProcessRole::QemuMediaRunner)
+        })
+        .unwrap_or(false)
+        || is_qemu_media_vm(vm)
+    {
+        "qemu-media".to_owned()
+    } else {
+        "ch-runner".to_owned()
     }
 }
 
@@ -6762,6 +7338,12 @@ fn vm_counts_as_running(vm: &ManifestVm, services: &StatusServicesOutputV2) -> b
     if vm.is_net_vm {
         return true;
     }
+    if is_qemu_media_vm(vm) {
+        return services
+            .qemu_media
+            .as_deref()
+            .is_some_and(service_state_counts_as_running);
+    }
     [
         Some(services.nixling.as_str()),
         Some(services.microvm.as_str()),
@@ -6785,7 +7367,9 @@ fn list_status_label(
         "running".to_owned()
     } else if pending_restart {
         "pending-restart".to_owned()
-    } else if services.microvm == "unknown" {
+    } else if services.microvm == "unknown"
+        || (is_qemu_media_vm(vm) && services.qemu_media.as_deref() == Some("unknown"))
+    {
         "unknown".to_owned()
     } else if vm_counts_as_running(vm, services) {
         "running".to_owned()
@@ -6838,6 +7422,7 @@ fn process_role_name(role: &nixling_core::processes::ProcessRole) -> String {
         nixling_core::processes::ProcessRole::GpuRenderNode => "gpu-render-node",
         nixling_core::processes::ProcessRole::Audio => "audio",
         nixling_core::processes::ProcessRole::CloudHypervisorRunner => "cloud-hypervisor-runner",
+        nixling_core::processes::ProcessRole::QemuMediaRunner => "qemu-media-runner",
         nixling_core::processes::ProcessRole::VsockRelay => "vsock-relay",
         nixling_core::processes::ProcessRole::OtelHostBridge => "otel-host-bridge",
         nixling_core::processes::ProcessRole::GuestSshReadiness => "guest-ssh-readiness",
@@ -6884,6 +7469,15 @@ fn render_list_human(output: &ListOutputV2) -> String {
     for item in &output.0 {
         let status = if item.is_net_vm {
             format!("{} (net-vm)", item.status)
+        } else if item.runtime_kind.as_deref() == Some("qemu-media") {
+            let mut label = format!("{} (qemu-media, manual-only)", item.status);
+            if let Some(qemu) = &item.qemu_media {
+                label.push_str(&format!(
+                    ", qmp={}",
+                    qemu.runner.qmp_readiness.as_deref().unwrap_or("unknown")
+                ));
+            }
+            label
         } else {
             item.status.clone()
         };
@@ -6914,22 +7508,82 @@ fn render_status_vm_human(
         let _ = writeln!(text, "env: {env}");
     }
     let _ = writeln!(text, "runtime: {}", output.runtime);
+    if let Some(kind) = &output.runtime_kind {
+        let _ = writeln!(text, "runtime kind: {kind}");
+    }
+    if let Some(autostart) = &output.autostart {
+        let _ = writeln!(text, "autostart: {} ({})", autostart.mode, autostart.reason);
+    }
     let _ = writeln!(text, "nixling@{}: {}", output.name, output.services.nixling);
-    let _ = writeln!(
-        text,
-        "microvm@{} (backend): {}",
-        output.name, output.services.microvm
-    );
-    let _ = writeln!(text, "virtiofsd: {}", output.services.virtiofsd);
-    let _ = writeln!(
-        text,
-        "interactive: {}",
-        output
-            .services
-            .gpu
-            .clone()
-            .unwrap_or_else(|| "stopped".to_owned())
-    );
+    if let Some(qemu) = &output.qemu_media {
+        let _ = writeln!(
+            text,
+            "qemu-media runner: {}",
+            output
+                .services
+                .qemu_media
+                .clone()
+                .unwrap_or_else(|| qemu.runner.state.clone())
+        );
+        let _ = writeln!(text, "firmware mode: {}", qemu.firmware_mode);
+        if let Some(qmp_socket) = &qemu.runner.qmp_socket {
+            let _ = writeln!(text, "qmp socket: {qmp_socket}");
+        }
+        let _ = writeln!(
+            text,
+            "qmp readiness: {}",
+            qemu.runner.qmp_readiness.as_deref().unwrap_or("unknown")
+        );
+        let _ = writeln!(text, "pre-cont progress: {}", qemu.runner.pre_cont_progress);
+        if qemu.media.is_empty() {
+            let _ = writeln!(text, "media: no declared qemu-media sources");
+        } else {
+            text.push_str("media:\n");
+            for source in &qemu.media {
+                let _ = writeln!(
+                    text,
+                    "  - slot={} ref={} kind={} format={} readOnly={} registry={}{}",
+                    source.slot,
+                    source.media_ref,
+                    source.source_kind,
+                    source.format,
+                    source.read_only,
+                    source.registry.state,
+                    source
+                        .image_path
+                        .as_ref()
+                        .map(|path| format!(" path={path}"))
+                        .unwrap_or_default(),
+                );
+                if let Some(remediation) = &source.registry.remediation {
+                    let _ = writeln!(text, "    remediation: {remediation}");
+                }
+            }
+        }
+        if !output.unsupported_capabilities.is_empty() {
+            let _ = writeln!(
+                text,
+                "unsupported capabilities: {}",
+                output.unsupported_capabilities.join(", ")
+            );
+        }
+    } else {
+        let _ = writeln!(
+            text,
+            "microvm@{} (backend): {}",
+            output.name, output.services.microvm
+        );
+        let _ = writeln!(text, "virtiofsd: {}", output.services.virtiofsd);
+        let _ = writeln!(
+            text,
+            "interactive: {}",
+            output
+                .services
+                .gpu
+                .clone()
+                .unwrap_or_else(|| "stopped".to_owned())
+        );
+    }
     if let Some(video) = &output.services.video {
         let _ = writeln!(text, "video: {video}");
     }
@@ -8320,10 +8974,11 @@ mod host_install_dispatch_tests {
 
     use super::{
         AddressFamily, ApiReadySimple, ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk,
-        MAX_FRAME_BYTES, MsgFlags, NativeCli, SockFlag, SockType, UnixAddr, UsbAttachArgs,
-        VmExecArgs, VmStartArgs, broker_error_envelope, cmd_host_install, cmd_vm_exec,
-        cmd_vm_start, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
-        parse_vm_exec_action, public_wire, send, socket,
+        IpcUsbProbeEntryKind, IpcUsbipProbeEntry, IpcUsbipProbeStatus, MAX_FRAME_BYTES, MediaRef,
+        MsgFlags, NativeCli, SockFlag, SockType, UnixAddr, UsbAttachArgs, UsbDetachArgs,
+        UsbEnrollArgs, VmExecArgs, VmStartArgs, broker_error_envelope, cmd_host_install,
+        cmd_vm_exec, cmd_vm_start, daemon_supported_features, encode_type_tagged_message,
+        nix_err_to_io, parse_vm_exec_action, public_wire, render_usb_probe_human, send, socket,
     };
     use nixling_ipc::Version;
 
@@ -8619,6 +9274,33 @@ mod host_install_dispatch_tests {
         .expect("write usb attach manifest");
     }
 
+    fn write_qemu_media_manifest(path: &PathBuf, vm: &str) {
+        let manifest = json!({
+            (vm): {
+                "name": vm,
+                "env": "dev",
+                "graphics": false,
+                "tpm": false,
+                "audio": false,
+                "usbipYubikey": false,
+                "staticIp": "10.20.0.20",
+                "usbipdHostIp": null,
+                "isNetVm": false,
+                "stateDir": format!("/var/lib/nixling/vms/{vm}"),
+                "bridge": "nl-dev",
+                "sshUser": null,
+                "runtime": {
+                    "kind": "qemu-media"
+                }
+            }
+        });
+        std::fs::write(
+            path,
+            serde_json::to_vec(&manifest).expect("serialize qemu media manifest"),
+        )
+        .expect("write qemu media manifest");
+    }
+
     fn run_vm_start_with_mock_daemon(
         args: VmStartArgs,
         response: Value,
@@ -8709,6 +9391,20 @@ mod host_install_dispatch_tests {
     where
         F: FnOnce(&Context) -> Result<i32, super::CliFailure>,
     {
+        run_public_command_with_manifest(test_name, vm, response, write_test_manifest, command)
+    }
+
+    fn run_public_command_with_manifest<F, W>(
+        test_name: &str,
+        vm: &str,
+        response: Value,
+        write_manifest: W,
+        command: F,
+    ) -> (Result<i32, super::CliFailure>, Value, Vec<u8>)
+    where
+        F: FnOnce(&Context) -> Result<i32, super::CliFailure>,
+        W: FnOnce(&PathBuf, &str),
+    {
         let socket_path = test_socket_path(test_name, ".sock");
         let manifest_path = test_socket_path(test_name, ".manifest.json");
         if let Some(parent) = socket_path.parent() {
@@ -8716,7 +9412,7 @@ mod host_install_dispatch_tests {
         }
         let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_file(&manifest_path);
-        write_test_manifest(&manifest_path, vm);
+        write_manifest(&manifest_path, vm);
 
         let listener = socket(
             AddressFamily::Unix,
@@ -10547,6 +11243,166 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
+    fn qemu_media_usb_attach_routes_without_guest_usbip_import() {
+        let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
+        let vm = "media";
+        let args = UsbAttachArgs {
+            vm: vm.to_owned(),
+            busid: "1-2.3".to_owned(),
+            dry_run: false,
+            apply: true,
+            json: false,
+            human: false,
+        };
+        let (result, request, stdout) = run_public_command_with_manifest(
+            "qemu-media-usb-attach",
+            vm,
+            json!({
+                "type": "mutatingVerbResponse",
+                "verb": "usb attach",
+                "outcome": "applied",
+                "summary": "nixling usb attach --apply: qemu-media attached ref 'installer-usb' in slot 'cdrom' for vm 'media' via QMP scaffold (commands=blockdev-add,device_add)"
+            }),
+            write_qemu_media_manifest,
+            |context| super::cmd_usb_attach(context, &args),
+        );
+
+        assert_eq!(result.expect("qemu media attach"), 0);
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("usbipBind")
+        );
+        assert_eq!(request.get("vm").and_then(Value::as_str), Some(vm));
+        assert_eq!(request.get("busId").and_then(Value::as_str), Some("1-2.3"));
+        let rendered = String::from_utf8(stdout).expect("stdout utf8");
+        assert!(rendered.contains("qemu-media attached ref 'installer-usb'"));
+        assert!(!rendered.contains("1-2.3"));
+        assert!(!rendered.contains("usb-Vendor_SecretSerial"));
+        assert!(!rendered.contains("usbip attach"));
+    }
+
+    #[test]
+    fn qemu_media_usb_detach_routes_without_guest_usbip_import() {
+        let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
+        let vm = "media";
+        let args = UsbDetachArgs {
+            vm: vm.to_owned(),
+            busid: "1-2.3".to_owned(),
+            dry_run: false,
+            apply: true,
+            json: false,
+            human: false,
+        };
+        let (result, request, stdout) = run_public_command_with_manifest(
+            "qemu-media-usb-detach",
+            vm,
+            json!({
+                "type": "mutatingVerbResponse",
+                "verb": "usb detach",
+                "outcome": "applied",
+                "summary": "nixling usb detach --apply: qemu-media detached ref 'installer-usb' in slot 'cdrom' for vm 'media' via QMP scaffold (commands=device_del,blockdev-del)"
+            }),
+            write_qemu_media_manifest,
+            |context| super::cmd_usb_detach(context, &args),
+        );
+
+        assert_eq!(result.expect("qemu media detach"), 0);
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("usbipUnbind")
+        );
+        assert_eq!(request.get("vm").and_then(Value::as_str), Some(vm));
+        assert_eq!(request.get("busId").and_then(Value::as_str), Some("1-2.3"));
+        let rendered = String::from_utf8(stdout).expect("stdout utf8");
+        assert!(rendered.contains("qemu-media detached ref 'installer-usb'"));
+        assert!(!rendered.contains("1-2.3"));
+        assert!(!rendered.contains("usb-Vendor_SecretSerial"));
+        assert!(!rendered.contains("usbip detach"));
+    }
+
+    #[test]
+    fn qemu_media_usb_enroll_apply_output_redacts_busid() {
+        let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
+        let vm = "media";
+        let args = UsbEnrollArgs {
+            vm: vm.to_owned(),
+            media_ref: "installer-usb".to_owned(),
+            busid: "1-2.3".to_owned(),
+            dry_run: false,
+            apply: true,
+            json: false,
+            human: false,
+        };
+        let (result, request, stdout) = run_public_command_with_manifest(
+            "qemu-media-usb-enroll",
+            vm,
+            json!({
+                "type": "mutatingVerbResponse",
+                "verb": "usb enroll",
+                "outcome": "applied",
+                "summary": "nixling usb enroll --apply: enrolled media ref 'installer-usb' for vm 'media' (access=read-only, udevRuleWritten=true, udevReloaded=true)"
+            }),
+            write_qemu_media_manifest,
+            |context| super::cmd_usb_enroll(context, &args),
+        );
+
+        assert_eq!(result.expect("qemu usb enroll"), 0);
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("usbEnroll")
+        );
+        assert_eq!(request.get("busId").and_then(Value::as_str), Some("1-2.3"));
+        let rendered = String::from_utf8(stdout).expect("stdout utf8");
+        assert!(rendered.contains("installer-usb"));
+        assert!(!rendered.contains("1-2.3"));
+        assert!(!rendered.contains("usb-Vendor_SecretSerial"));
+    }
+
+    #[test]
+    fn usb_probe_human_renders_qemu_media_enroll_commands() {
+        let entries = vec![
+            IpcUsbipProbeEntry {
+                kind: IpcUsbProbeEntryKind::QemuMediaSlot,
+                vm: "media".to_owned(),
+                env: "work".to_owned(),
+                bus_id: "1-2.3".to_owned(),
+                lock_path: String::new(),
+                status: IpcUsbipProbeStatus::Enrollable,
+                owner_vm: None,
+                slot: Some("cdrom".to_owned()),
+                media_ref: Some(MediaRef::new("installer-usb")),
+                source_kind: Some("physical-usb".to_owned()),
+                candidate_bus_ids: vec!["1-2.3".to_owned()],
+                follow_up_command: Some(
+                    "nixling usb enroll media installer-usb --busid 1-2.3 --apply".to_owned(),
+                ),
+            },
+            IpcUsbipProbeEntry {
+                kind: IpcUsbProbeEntryKind::QemuMediaSlot,
+                vm: "media".to_owned(),
+                env: "work".to_owned(),
+                bus_id: "-".to_owned(),
+                lock_path: String::new(),
+                status: IpcUsbipProbeStatus::DirectConfig,
+                owner_vm: None,
+                slot: Some("boot".to_owned()),
+                media_ref: Some(MediaRef::new("image-boot")),
+                source_kind: Some("image-file".to_owned()),
+                candidate_bus_ids: Vec::new(),
+                follow_up_command: None,
+            },
+        ];
+
+        let rendered = render_usb_probe_human(&entries);
+        assert!(rendered.contains("QEMU-MEDIA-VM"));
+        assert!(rendered.contains("media"));
+        assert!(rendered.contains("nixling usb enroll media installer-usb --busid 1-2.3 --apply"));
+        assert!(rendered.contains("direct-config"));
+        assert!(!rendered.contains("usb-Vendor_SecretSerial"));
+        assert!(!rendered.contains("/dev/disk/by-id"));
+    }
+
+    #[test]
     fn start_apply_no_wait_api_exits_zero_on_process_alive() {
         let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
         let args = VmStartArgs {
@@ -10726,6 +11582,7 @@ mod host_install_dispatch_tests {
                 nixling: "inactive".to_owned(),
                 microvm: "inactive".to_owned(),
                 virtiofsd: "inactive".to_owned(),
+                qemu_media: None,
                 gpu: Some("stopped".to_owned()),
                 video: None,
                 snd: None,
@@ -10735,6 +11592,10 @@ mod host_install_dispatch_tests {
             booted: None,
             pending_restart: false,
             runtime: super::RUNTIME_UNKNOWN.to_owned(),
+            runtime_kind: None,
+            autostart: None,
+            unsupported_capabilities: Vec::new(),
+            qemu_media: None,
             declared_roles: vec!["gpu".to_owned()],
             readiness: Vec::new(),
             api_ready: None,
@@ -10754,6 +11615,7 @@ mod host_install_dispatch_tests {
             state_dir: "/var/lib/nixling/vms/vm-a".to_owned(),
             bridge: "nl-dev".to_owned(),
             ssh_user: Some("alice".to_owned()),
+            runtime: None,
         };
         let rendered = super::render_status_vm_human(&output, &manifest_vm, Vec::new());
         assert!(rendered.contains("ssh: declared"));
@@ -10837,6 +11699,7 @@ mod host_install_dispatch_tests {
             state_dir: "/var/lib/nixling/vms/vm-a".to_owned(),
             bridge: "nl-dev".to_owned(),
             ssh_user: None,
+            runtime: None,
         };
         let dag = nixling_core::processes::VmProcessDag {
             vm: "vm-a".to_owned(),
@@ -10888,6 +11751,7 @@ mod host_install_dispatch_tests {
             nixling: "active".to_owned(),
             microvm: "running".to_owned(),
             virtiofsd: "running".to_owned(),
+            qemu_media: None,
             gpu: Some("running".to_owned()),
             video: Some("running".to_owned()),
             snd: None,
@@ -10902,13 +11766,17 @@ mod host_install_dispatch_tests {
                 state: nixling_ipc::public_wire::VmLifecycleState::Running,
             },
             name: "vm-a".to_owned(),
+            autostart: None,
+            qemu_media: None,
             runtime: nixling_ipc::public_wire::RuntimeSummary {
                 detail: "running".to_owned(),
+                kind: None,
             },
             services,
             ssh_user: Some("alice".to_owned()),
             static_ip: Some("10.20.0.10".to_owned()),
             tpm: false,
+            unsupported_capabilities: Vec::new(),
             usbip: true,
             vm: "vm-a".to_owned(),
         };
@@ -10946,6 +11814,10 @@ mod host_install_dispatch_tests {
             static_ip: Some("192.168.100.2".to_owned()),
             status: "stopped".to_owned(),
             is_net_vm: true,
+            runtime_kind: None,
+            autostart: None,
+            unsupported_capabilities: Vec::new(),
+            qemu_media: None,
             runner_parity_ok: None,
         }]);
 
@@ -10984,6 +11856,7 @@ mod host_install_dispatch_tests {
             state_dir: root.join("vm-a").display().to_string(),
             bridge: "nl-dev".to_owned(),
             ssh_user: Some("alice".to_owned()),
+            runtime: None,
         };
         let public = nixling_ipc::public_wire::VmStatus {
             bridge_checks: Vec::new(),
@@ -10995,13 +11868,17 @@ mod host_install_dispatch_tests {
                 state: nixling_ipc::public_wire::VmLifecycleState::Running,
             },
             name: "vm-a".to_owned(),
+            autostart: None,
+            qemu_media: None,
             runtime: nixling_ipc::public_wire::RuntimeSummary {
                 detail: "running".to_owned(),
+                kind: None,
             },
             services: nixling_ipc::public_wire::PublicVmServices {
                 nixling: "active".to_owned(),
                 microvm: "running".to_owned(),
                 virtiofsd: "running".to_owned(),
+                qemu_media: None,
                 gpu: Some("running".to_owned()),
                 video: Some("running".to_owned()),
                 snd: None,
@@ -11010,6 +11887,7 @@ mod host_install_dispatch_tests {
             ssh_user: Some("alice".to_owned()),
             static_ip: Some("10.20.0.10".to_owned()),
             tpm: false,
+            unsupported_capabilities: Vec::new(),
             usbip: true,
             vm: "vm-a".to_owned(),
         };
@@ -11088,6 +11966,147 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
+    fn cmd_status_json_includes_qemu_media_runtime_fields() {
+        let response = json!({
+            "type": "statusResponse",
+            "status": {
+                "entries": [{
+                    "vm": "installer",
+                    "name": "installer",
+                    "env": "dev",
+                    "graphics": false,
+                    "tpm": false,
+                    "usbip": false,
+                    "isNetVm": false,
+                    "sshUser": null,
+                    "staticIp": "10.20.0.20",
+                    "lifecycle": { "state": "Running", "pendingRestart": false },
+                    "runtime": { "detail": "running", "kind": "qemu-media" },
+                    "autostart": {
+                        "mode": "manual-only",
+                        "reason": "qemu-media VMs are intentionally skipped by daemon autostart"
+                    },
+                    "unsupportedCapabilities": ["exec", "guest-control", "ssh", "store-sync"],
+                    "qemuMedia": {
+                        "firmwareMode": "none",
+                        "runner": {
+                            "role": "qemu-media",
+                            "state": "running",
+                            "qmpSocket": "/run/nixling/vms/installer/qmp.sock",
+                            "qmpReadiness": "ready",
+                            "preContProgress": "paused-before-cont"
+                        },
+                        "media": [
+                            {
+                                "mediaRef": "installer-usb",
+                                "slot": "boot",
+                                "sourceKind": "physical-usb",
+                                "format": "raw",
+                                "readOnly": true,
+                                "registry": {
+                                    "state": "missing",
+                                    "remediation": "run nixling usb enroll"
+                                }
+                            },
+                            {
+                                "mediaRef": "image-boot",
+                                "imagePath": "/var/lib/nixling/images/installer.img",
+                                "slot": "boot",
+                                "sourceKind": "image-file",
+                                "format": "raw",
+                                "readOnly": false,
+                                "registry": {
+                                    "state": "direct-config",
+                                    "remediation": null
+                                }
+                            }
+                        ]
+                    },
+                    "services": {
+                        "nixling": "active",
+                        "microvm": "unsupported",
+                        "qemuMedia": "running",
+                        "virtiofsd": "stopped",
+                        "gpu": null,
+                        "video": null,
+                        "snd": null,
+                        "swtpm": null
+                    },
+                    "bridgeChecks": []
+                }]
+            }
+        });
+        let args = super::StatusArgs {
+            json: true,
+            human: false,
+            check_bridges: false,
+            vm_flag: None,
+            vm: Some("installer".to_owned()),
+        };
+
+        let (result, request, stdout) = run_public_command_with_manifest(
+            "qms",
+            "installer",
+            response,
+            write_qemu_media_manifest,
+            |context| super::cmd_status(context, &args),
+        );
+
+        assert_eq!(result.expect("cmd status result"), 0);
+        assert_eq!(request.get("type").and_then(Value::as_str), Some("status"));
+        let output: Value = serde_json::from_slice(&stdout).expect("status json output");
+        assert_eq!(
+            output.get("runtimeKind").and_then(Value::as_str),
+            Some("qemu-media")
+        );
+        assert_eq!(
+            output.pointer("/autostart/mode").and_then(Value::as_str),
+            Some("manual-only")
+        );
+        assert_eq!(
+            output
+                .pointer("/services/qemuMedia")
+                .and_then(Value::as_str),
+            Some("running")
+        );
+        assert_eq!(
+            output
+                .pointer("/qemuMedia/runner/qmpReadiness")
+                .and_then(Value::as_str),
+            Some("ready")
+        );
+        assert_eq!(
+            output
+                .pointer("/qemuMedia/media/0/registry/state")
+                .and_then(Value::as_str),
+            Some("missing")
+        );
+        assert_eq!(
+            output
+                .pointer("/qemuMedia/media/1/imagePath")
+                .and_then(Value::as_str),
+            Some("/var/lib/nixling/images/installer.img")
+        );
+        assert_eq!(
+            output
+                .pointer("/qemuMedia/media/1/registry/state")
+                .and_then(Value::as_str),
+            Some("direct-config")
+        );
+        assert!(
+            output
+                .pointer("/qemuMedia/media/1/registry/remediation")
+                .is_none()
+        );
+        assert!(
+            output
+                .pointer("/unsupportedCapabilities")
+                .and_then(Value::as_array)
+                .is_some_and(|items| items.iter().any(|item| item == "exec"))
+        );
+    }
+
+    #[test]
     fn cmd_list_json_uses_daemon_public_list_entries() {
         let response = json!({
             "type": "listResponse",
@@ -11142,6 +12161,103 @@ mod host_install_dispatch_tests {
         assert_eq!(
             output.pointer("/0/usbip").and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn cmd_list_json_includes_qemu_media_runtime_fields() {
+        let response = json!({
+            "type": "listResponse",
+            "vms": [{
+                "vm": "installer",
+                "name": "installer",
+                "env": "dev",
+                "graphics": false,
+                "tpm": false,
+                "usbip": false,
+                "isNetVm": false,
+                "sshUser": null,
+                "staticIp": "10.20.0.20",
+                "lifecycle": { "state": "Running", "pendingRestart": false },
+                "runtime": { "detail": "running", "kind": "qemu-media" },
+                "autostart": {
+                    "mode": "manual-only",
+                    "reason": "qemu-media VMs are intentionally skipped by daemon autostart"
+                },
+                "unsupportedCapabilities": ["exec", "guest-control", "ssh", "store-sync"],
+                "qemuMedia": {
+                    "firmwareMode": "none",
+                    "runner": {
+                        "role": "qemu-media",
+                        "state": "running",
+                        "qmpSocket": "/run/nixling/vms/installer/qmp.sock",
+                        "qmpReadiness": "ready",
+                        "preContProgress": "paused-before-cont"
+                    },
+                    "media": [{
+                        "mediaRef": "image-boot",
+                        "imagePath": "/var/lib/nixling/images/installer.img",
+                        "slot": "boot",
+                        "sourceKind": "image-file",
+                        "format": "raw",
+                        "readOnly": false,
+                        "registry": {
+                            "state": "direct-config",
+                            "remediation": null
+                        }
+                    }]
+                },
+                "services": {
+                    "nixling": "active",
+                    "microvm": "unsupported",
+                    "qemuMedia": "running",
+                    "virtiofsd": "stopped",
+                    "gpu": null,
+                    "video": null,
+                    "snd": null,
+                    "swtpm": null
+                }
+            }]
+        });
+        let args = super::ListArgs {
+            json: true,
+            human: false,
+        };
+
+        let (result, request, stdout) = run_public_command_with_manifest(
+            "cmd-list-qemu-media-public",
+            "installer",
+            response,
+            write_qemu_media_manifest,
+            |context| super::cmd_list(context, &args),
+        );
+
+        assert_eq!(result.expect("cmd list result"), 0);
+        assert_eq!(request.get("type").and_then(Value::as_str), Some("list"));
+        let output: Value = serde_json::from_slice(&stdout).expect("list json output");
+        assert_eq!(
+            output.pointer("/0/runtimeKind").and_then(Value::as_str),
+            Some("qemu-media")
+        );
+        assert_eq!(
+            output.pointer("/0/status").and_then(Value::as_str),
+            Some("running")
+        );
+        assert_eq!(
+            output
+                .pointer("/0/qemuMedia/runner/preContProgress")
+                .and_then(Value::as_str),
+            Some("paused-before-cont")
+        );
+        assert_eq!(
+            output.pointer("/0/autostart/mode").and_then(Value::as_str),
+            Some("manual-only")
+        );
+        assert_eq!(
+            output
+                .pointer("/0/qemuMedia/media/0/registry/state")
+                .and_then(Value::as_str),
+            Some("direct-config")
         );
     }
 

@@ -996,13 +996,17 @@ mod tests {
                 state,
             },
             name: vm.to_owned(),
+            autostart: None,
+            qemu_media: None,
             runtime: RuntimeSummary {
                 detail: runtime_detail.to_owned(),
+                kind: None,
             },
             services: PublicVmServices {
                 gpu: graphics.then(|| format!("nixling-{vm}-gpu.service")),
                 microvm: format!("microvm@{vm}.service"),
                 nixling: format!("nixling@{vm}.service"),
+                qemu_media: None,
                 snd: None,
                 swtpm: None,
                 video: None,
@@ -1011,6 +1015,7 @@ mod tests {
             ssh_user: Some("alice".to_owned()),
             static_ip: Some("10.20.0.10".to_owned()),
             tpm: false,
+            unsupported_capabilities: Vec::new(),
             usbip,
             vm: vm.to_owned(),
         }

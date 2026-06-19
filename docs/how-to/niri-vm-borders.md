@@ -1,13 +1,15 @@
 # Set up niri window borders for nixling VMs
 
 This guide covers enabling nixling's opt-in niri KDL window-rule
-generator so each graphics VM gets a distinct border color and the
-crosvm GPU sidecar's scanout window is hidden on the host compositor.
+generator so each graphics VM and qemu-media host window gets a
+distinct border color and the crosvm GPU sidecar's scanout window is
+hidden on the host compositor.
 
 ## Prerequisites
 
 - niri ≥ 0.1.9 (for `include` directive support)
-- At least one VM with `nixling.vms.<vm>.graphics.enable = true`
+- At least one VM with `nixling.vms.<vm>.graphics.enable = true` or
+  `nixling.vms.<vm>.runtime.kind = "qemu-media"`
 - `nixling.vms.<vm>.graphics.crossDomainTrusted = true` on VMs that
   use the Wayland filter proxy (required for app-id rewriting)
 
@@ -38,7 +40,7 @@ for the change to take effect.
 
 ## What the generated file contains
 
-The generated KDL contains two kinds of rules:
+The generated KDL contains three kinds of rules:
 
 ### Crosvm scanout-window hide rule
 
@@ -80,12 +82,35 @@ The active border color is derived deterministically from the VM name
 when no override is set, so the same VM always gets the same color
 across rebuilds.
 
+### qemu-media host-window rules
+
+Each enabled qemu-media VM gets a `window-rule` block that matches the
+stable host QEMU window title `nixling-<vm>-qemu-media`. This is a host
+window rule, not a guest Wayland app-id rule:
+
+```kdl
+window-rule {
+    match title=r#"^nixling-media-qemu-media$"#
+    border {
+        on
+        active-color "#800080"
+        inactive-color "#505050"
+    }
+}
+```
+
 ## Customizing border colors
 
 To choose a specific active border color for a VM, set:
 
 ```nix
 nixling.vms.work.graphics.niriBorderColor = "#ff8c00";
+```
+
+For a qemu-media host window, set:
+
+```nix
+nixling.vms.media.qemuMedia.window.niriBorderColor = "#800080";
 ```
 
 The value must be a six-digit hex color (e.g. `#rrggbb`).

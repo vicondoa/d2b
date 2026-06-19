@@ -4,7 +4,8 @@ let
   cfg = config.nixling;
   # nixling-owned access helpers (see lib.nix).
   nl = import ./lib.nix { inherit lib pkgs; };
-  enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
+  normalNixosVms = nl.normalNixosVms cfg.vms;
+  qemuMediaVms = nl.qemuMediaVms cfg.vms;
   usbipEnvNames = lib.sort lib.lessThan (lib.unique (lib.concatMap
     (vm: lib.optional (cfg.site.yubikey.enable && vm.enable && vm.usbip.yubikey && vm.env != null) vm.env)
     (lib.attrValues cfg.vms)));
@@ -685,7 +686,42 @@ let
       };
     };
 
-  profileTable = lib.foldl' lib.recursiveUpdate { } (lib.mapAttrsToList vmProfiles enabledVms);
+  profileTable = lib.foldl' lib.recursiveUpdate { } (lib.mapAttrsToList vmProfiles normalNixosVms);
+
+  qemuMediaProfiles = name: _vm: {
+    "${profileIdFor name "host-reconcile"}" = mkProfile {
+      profileId = profileIdFor name "host-reconcile";
+      role = "host-reconcile";
+      principal = "nixlingd";
+      seccompPolicyRef = "w1-host-reconcile";
+      writablePaths = [
+        (mkWritablePath (stateDirOf name) "Prepare the qemu-media state directory before process startup.")
+        (mkWritablePath "/run/nixling" "Prepare daemon-owned runtime sockets and transient state.")
+      ];
+      cgroupSubtree = "nixling.slice/${name}/host-reconcile";
+    };
+
+    "${profileIdFor name "qemu-media"}" = mkProfile {
+      profileId = profileIdFor name "qemu-media";
+      role = "qemu-media-runner";
+      principal = "nixling-${name}-qemu-media";
+      capabilities = [ ];
+      namespaces = defaultNamespaces // { pid = true; };
+      seccompPolicyRef = "w1-qemu-media";
+      readOnlyPaths = [ "/" ];
+      writablePaths = [
+        (mkWritablePath "/run/nixling/vms/${name}" "Create the QMP scaffold socket without exposing media paths.")
+        (mkWritablePath (stateDirOf name) "Write only qemu-media runner state under this VM's state directory.")
+      ];
+      deviceBinds = [ "/dev/kvm" ];
+      bindMounts = [ ];
+      cgroupSubtree = "nixling.slice/${name}/qemu-media";
+      controllers = serviceControllers;
+    };
+  };
+
+  qemuMediaProfileTable =
+    lib.foldl' lib.recursiveUpdate { } (lib.mapAttrsToList qemuMediaProfiles qemuMediaVms);
 
   usbipdProfilesForEnv = envName:
     let
@@ -749,7 +785,7 @@ let
 
   hostProfiles = otelHostBridgeProfile;
 
-  fullProfileTable = profileTable // usbipdProfiles // hostProfiles;
+  fullProfileTable = profileTable // qemuMediaProfileTable // usbipdProfiles // hostProfiles;
 
   renderedProfiles = lib.mapAttrs
     (profileId: data:

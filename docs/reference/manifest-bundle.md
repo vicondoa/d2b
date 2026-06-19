@@ -14,7 +14,7 @@ world-readable system profile.
 | --- | --- | --- | --- |
 | `vms.json` | public compatibility surface | world-readable, existing installation path | VM list and public capability metadata; see `docs/reference/manifest-schema.md` for the current `manifestVersion`. |
 | `bundle.json` | private bundle index | root:`nixlingd` `0640` | Bundle version, artifact paths, hashes, and compatibility policy. |
-| `host.json` | private host intent | root:`nixlingd` `0640` | Host requirements, network intent, kernel/device/fd requirements, and support tier. |
+| `host.json` | private host intent | root:`nixlingd` `0640` | Host requirements, network intent, runtime/provider catalog, kernel/device/fd requirements, and support tier. |
 | `processes.json` | private supervisor intent | root:`nixlingd` `0640` | Per-VM process DAG, readiness predicates, cgroup placement, and minijail profile IDs. |
 | `privileges.json` | private authorization policy | root:`nixlingd` `0640` | Public API/CLI authorization matrix and private broker operation matrix. |
 | `closures/<vm>.json` | private closure metadata | root:`nixlingd` `0640` | Per-VM toplevel, closure paths, declared-runner parity data, and generation metadata. |
@@ -68,7 +68,8 @@ The public boundary is intentionally narrow:
   metadata.
 - Private artifacts may contain command argv, broker-only paths,
   cgroup/device/fd requirements, sandbox profile internals, closure
-  paths, and authorization policy.
+  paths, qemu-media direct image-file paths authored in Nix config, and
+  authorization policy.
 - Secret material is never embedded in either boundary. Secret and key
   references use opaque key IDs only; path-bearing private-key fields are
   rejected by static gates.
