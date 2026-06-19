@@ -524,8 +524,6 @@ fn build_synthetic_resolver() -> BundleResolver {
         "fnv1a64:synthetic-bundle".to_owned(),
         host,
         processes,
-        None,
-        None,
         manifest,
         closures,
     )

@@ -114,6 +114,15 @@ pub struct BundleResolver {
     rotate_known_host_intents: BTreeMap<String, ResolvedRotateKnownHostIntent>,
 }
 
+struct ParsedBundleArtifacts {
+    host: HostJson,
+    processes: ProcessesJson,
+    storage: Option<StorageJson>,
+    sync: Option<SyncJson>,
+    manifest: ManifestV04,
+    closures: Vec<ClosureMetadata>,
+}
+
 /// Resolved nft script ready for `live_apply_nftables`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedNftIntent {
@@ -869,8 +878,6 @@ impl BundleResolver {
             bundle_hash,
             host,
             processes,
-            None,
-            None,
             manifest,
             Vec::new(),
         )
@@ -883,11 +890,36 @@ impl BundleResolver {
         bundle_hash: String,
         host: HostJson,
         processes: ProcessesJson,
-        storage: Option<StorageJson>,
-        sync: Option<SyncJson>,
         manifest: ManifestV04,
         closures: Vec<ClosureMetadata>,
     ) -> Self {
+        Self::from_parsed_artifacts(
+            bundle,
+            bundle_hash,
+            ParsedBundleArtifacts {
+                host,
+                processes,
+                storage: None,
+                sync: None,
+                manifest,
+                closures,
+            },
+        )
+    }
+
+    fn from_parsed_artifacts(
+        bundle: Bundle,
+        bundle_hash: String,
+        artifacts: ParsedBundleArtifacts,
+    ) -> Self {
+        let ParsedBundleArtifacts {
+            host,
+            processes,
+            storage,
+            sync,
+            manifest,
+            closures,
+        } = artifacts;
         let nft_intents = build_nft_intents(&host);
         let route_intents = build_route_intents(&host);
         let sysctl_intents = build_sysctl_intents(&host);
@@ -947,15 +979,17 @@ impl BundleResolver {
                 .expect("bundle serialization for audit hashing must succeed")
                 .as_slice(),
         );
-        Self::from_artifacts_with_closures(
+        Self::from_parsed_artifacts(
             bundle,
             bundle_hash,
-            host,
-            processes,
-            storage,
-            sync,
-            manifest,
-            Vec::new(),
+            ParsedBundleArtifacts {
+                host,
+                processes,
+                storage,
+                sync,
+                manifest,
+                closures: Vec::new(),
+            },
         )
     }
 
@@ -994,15 +1028,17 @@ impl BundleResolver {
         // which is root-owned 0444; skip the private-artifact policy for it.
         let manifest = ManifestV04::from_path(manifest_path)?;
         let closures = load_closure_metadata_verified(&bundle, bundle_root, policy)?;
-        Ok(Self::from_artifacts_with_closures(
+        Ok(Self::from_parsed_artifacts(
             bundle,
             bundle_hash,
-            host,
-            processes,
-            storage,
-            sync,
-            manifest,
-            closures,
+            ParsedBundleArtifacts {
+                host,
+                processes,
+                storage,
+                sync,
+                manifest,
+                closures,
+            },
         ))
     }
 
