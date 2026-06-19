@@ -612,6 +612,14 @@ let
           '';
         }
         {
+          assertion = !(builtins.hasAttr "boot" vm.qemuMedia.removableSlots);
+          message = ''
+            nixling.vms.${name}: qemu-media removable slot name `boot` is
+            reserved for `qemuMedia.source`. Use a different
+            `qemuMedia.removableSlots.<name>` such as `backup`.
+          '';
+        }
+        {
           assertion = duplicateMediaRefs == [ ];
           message = ''
             nixling.vms.${name}: qemu-media refs must be unique per VM;

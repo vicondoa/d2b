@@ -7117,7 +7117,11 @@ fn build_vm_status_output(
             entry
                 .nodes
                 .iter()
-                .flat_map(|node| node.readiness.iter().map(readiness_name))
+                .flat_map(|node| {
+                    node.readiness
+                        .iter()
+                        .map(move |readiness| readiness_name_for_node(node, readiness))
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -7172,7 +7176,11 @@ fn build_vm_status_output_from_public(
             entry
                 .nodes
                 .iter()
-                .flat_map(|node| node.readiness.iter().map(readiness_name))
+                .flat_map(|node| {
+                    node.readiness
+                        .iter()
+                        .map(move |readiness| readiness_name_for_node(node, readiness))
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -7483,6 +7491,22 @@ fn readiness_name(readiness: &nixling_core::processes::ReadinessPredicate) -> St
             "guest-control-health".to_owned()
         }
     }
+}
+
+fn readiness_name_for_node(
+    node: &nixling_core::processes::ProcessNode,
+    readiness: &nixling_core::processes::ReadinessPredicate,
+) -> String {
+    if node.role == nixling_core::processes::ProcessRole::QemuMediaRunner {
+        match readiness {
+            nixling_core::processes::ReadinessPredicate::UnixSocketListening(_)
+            | nixling_core::processes::ReadinessPredicate::UnixSocketExists(_) => {
+                return "qmp-listening".to_owned();
+            }
+            _ => {}
+        }
+    }
+    readiness_name(readiness)
 }
 
 fn render_list_human(output: &ListOutputV2) -> String {

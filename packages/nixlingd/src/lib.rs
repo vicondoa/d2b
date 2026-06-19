@@ -86,6 +86,7 @@ use nixling_provider_aca::{
 use nixling_provider_relay::{LocalTarget, RelayEndpoint};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use socket2::{Domain, SockAddr, Socket, Type};
 use supervisor::pidfd_table::{
     BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, PidfdTableError, WaitTermination,
@@ -208,20 +209,6 @@ pub const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/nixling/daemon-state";
 const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 const VM_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct QemuMediaRegistryRecord {
-    vm: String,
-    media_ref: String,
-    source_kind: String,
-    format: String,
-    read_only: bool,
-    #[serde(default, rename = "schemaVersion")]
-    _schema_version: Option<u32>,
-    #[serde(default, rename = "identity")]
-    _identity: Option<Value>,
-}
 
 /// Default cap on concurrent in-flight connection-handler threads.
 /// Overridable at startup via `NIXLINGD_MAX_INFLIGHT_CONNECTIONS`.
@@ -3580,7 +3567,7 @@ fn qemu_media_probe_entries(resolver: &BundleResolver) -> Vec<public_wire::Usbip
         .iter()
         .map(|candidate| candidate.bus_id.clone())
         .collect();
-    let registry_records = qemu_media_probe_registry_records(&qemu_media.registry_dir);
+    let registry_records = qemu_media_probe_registry_records();
     let mut entries = Vec::new();
     for source in &qemu_media.sources {
         let source_kind = match source.source_kind {
@@ -3643,6 +3630,12 @@ fn qemu_media_probe_entries(resolver: &BundleResolver) -> Vec<public_wire::Usbip
             let enrolled = matching_records
                 .iter()
                 .any(|record| qemu_media_probe_candidate_matches_record(candidate, record));
+            let enrolled_elsewhere = !enrolled
+                && registry_records.iter().any(|record| {
+                    record.vm == source.vm
+                        && record.media_ref != source.media_ref
+                        && qemu_media_probe_candidate_matches_record(candidate, record)
+                });
             any_enrolled_candidate |= enrolled;
             let bus_id = candidate.bus_id.as_str();
             entries.push(qemu_media_probe_entry(
@@ -3653,6 +3646,8 @@ fn qemu_media_probe_entries(resolver: &BundleResolver) -> Vec<public_wire::Usbip
                 source_kind.clone(),
                 if enrolled {
                     public_wire::UsbipProbeStatus::Enrolled
+                } else if enrolled_elsewhere {
+                    public_wire::UsbipProbeStatus::Stale
                 } else {
                     public_wire::UsbipProbeStatus::Enrollable
                 },
@@ -3661,6 +3656,8 @@ fn qemu_media_probe_entries(resolver: &BundleResolver) -> Vec<public_wire::Usbip
                         "nixling usb attach {} {} --apply",
                         source.vm, bus_id
                     ))
+                } else if enrolled_elsewhere {
+                    None
                 } else {
                     Some(format!(
                         "nixling usb enroll {} {} --busid {} --apply",
@@ -3684,57 +3681,51 @@ fn qemu_media_probe_entries(resolver: &BundleResolver) -> Vec<public_wire::Usbip
     entries
 }
 
+const QEMU_MEDIA_REDACTED_INDEX_PATH: &str = "/run/nixling/qemu-media-registry-index.json";
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct QemuMediaProbeRegistryRecord {
     vm: String,
     media_ref: String,
-    identity: QemuMediaProbeRegistryIdentity,
+    source_kind: String,
+    format: String,
+    read_only: bool,
+    identity_hash: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct QemuMediaProbeRegistryIdentity {
-    by_id_names: Vec<String>,
+struct QemuMediaProbeRegistryIndex {
+    records: Vec<QemuMediaProbeRegistryRecord>,
 }
 
-fn qemu_media_probe_registry_records(registry_dir: &str) -> Vec<QemuMediaProbeRegistryRecord> {
-    let mut records = Vec::new();
-    let Ok(vm_dirs) = fs::read_dir(registry_dir) else {
-        return records;
+fn qemu_media_probe_registry_records() -> Vec<QemuMediaProbeRegistryRecord> {
+    let Ok(bytes) = fs::read(QEMU_MEDIA_REDACTED_INDEX_PATH) else {
+        return Vec::new();
     };
-    for vm_dir in vm_dirs.flatten() {
-        let Ok(file_type) = vm_dir.file_type() else {
-            continue;
-        };
-        if !file_type.is_dir() {
-            continue;
-        }
-        let Ok(files) = fs::read_dir(vm_dir.path()) else {
-            continue;
-        };
-        for file in files.flatten() {
-            if file.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            let Ok(bytes) = fs::read(file.path()) else {
-                continue;
-            };
-            if let Ok(record) = serde_json::from_slice(&bytes) {
-                records.push(record);
-            }
-        }
-    }
-    records
+    serde_json::from_slice::<QemuMediaProbeRegistryIndex>(&bytes)
+        .map(|index| index.records)
+        .unwrap_or_default()
 }
 
 fn qemu_media_probe_candidate_matches_record(
     candidate: &nixling_host::media::SafeUsbCandidate,
     record: &QemuMediaProbeRegistryRecord,
 ) -> bool {
-    let expected: BTreeSet<_> = record.identity.by_id_names.iter().collect();
-    let actual: BTreeSet<_> = candidate.by_id_names.iter().collect();
-    !expected.is_empty() && expected == actual
+    qemu_media_identity_hash(&candidate.by_id_names) == record.identity_hash
+}
+
+fn qemu_media_identity_hash(by_id_names: &[String]) -> String {
+    let mut names = by_id_names.to_vec();
+    names.sort();
+    names.dedup();
+    let mut hasher = Sha256::new();
+    for name in names {
+        hasher.update(name.as_bytes());
+        hasher.update([0]);
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 fn qemu_media_probe_entry(
@@ -10506,47 +10497,24 @@ fn serde_kebab_string<T: Serialize>(value: &T) -> String {
 }
 
 fn qemu_media_registry_state(
-    registry_dir: &str,
+    _registry_dir: &str,
     source: &QemuMediaSourceIntent,
 ) -> (String, Option<String>) {
     if serde_kebab_string(&source.source_kind) != "physical-usb" {
         return ("direct-config".to_owned(), None);
     }
-    let path = Path::new(registry_dir)
-        .join(&source.vm)
-        .join(format!("{}.json", source.media_ref));
-    let bytes = match fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return (
-                "missing".to_owned(),
-                Some(format!(
-                    "run `nixling usb enroll {} {} --busid <busid> --apply` before starting or attaching this media",
-                    source.vm, source.media_ref
-                )),
-            );
-        }
-        Err(_) => {
-            return (
-                "unreadable".to_owned(),
-                Some(
-                    "repair the root-owned qemu-media registry entry or re-enroll this media"
-                        .to_owned(),
-                ),
-            );
-        }
-    };
-    let record = match serde_json::from_slice::<QemuMediaRegistryRecord>(&bytes) {
-        Ok(record) => record,
-        Err(_) => {
-            return (
-                "stale".to_owned(),
-                Some(
-                    "registry entry is not in the current qemu-media schema; re-enroll this media"
-                        .to_owned(),
-                ),
-            );
-        }
+    let records = qemu_media_probe_registry_records();
+    let Some(record) = records
+        .iter()
+        .find(|record| record.vm == source.vm && record.media_ref == source.media_ref)
+    else {
+        return (
+            "missing".to_owned(),
+            Some(format!(
+                "run `nixling usb enroll {} {} --busid <busid> --apply` before starting or attaching this media",
+                source.vm, source.media_ref
+            )),
+        );
     };
     let expected_kind = serde_kebab_string(&source.source_kind);
     let expected_format = serde_kebab_string(&source.format);

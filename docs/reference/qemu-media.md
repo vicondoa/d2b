@@ -87,7 +87,7 @@ artifacts and is not echoed by successful enroll/attach/detach output.
 | `nixling vm start <vm> --apply` | Spawns the QEMU runner, waits for QMP readiness, runs `QemuMediaBoot`, and continues QEMU after boot media is attached. |
 | `nixling vm stop <vm> --apply` | Stops the daemon-supervised qemu-media runner through the same pidfd/broker path as other runners. |
 | `nixling list` / `nixling vm list` | Marks qemu-media rows as `manual-only` and includes QMP readiness when available. JSON may include `runtimeKind`, `autostart`, `unsupportedCapabilities`, and `qemuMedia`. |
-| `nixling status <vm>` | Shows qemu-media runner state, QMP socket/readiness, source refs, source kind, format, registry state, and direct image paths. |
+| `nixling status <vm>` | Shows qemu-media runner state, QMP readiness, source refs, source kind, format, read-only policy, and registry state. |
 | `nixling usb enroll <vm> <ref> --busid <busid> --apply` | Physical USB only. Writes the root-only registry record and udev ignore rule through the broker. |
 | `nixling usb attach <vm> <busid> --apply` | Resolves the current USB identity against enrolled refs, preflights that the block device is unused, opens the fd in the broker, sends it to QEMU over QMP, and returns only after QMP accepts the fd/block/device commands. |
 | `nixling usb detach <vm> <busid> --apply` | Resolves the enrolled source and removes the QMP device/block/fd nodes. |

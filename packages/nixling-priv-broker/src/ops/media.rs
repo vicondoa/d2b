@@ -26,6 +26,7 @@ use nixling_ipc::broker_wire::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug)]
 pub enum MediaOpError {
@@ -107,6 +108,26 @@ struct RegistryIdentity {
     block_device: String,
 }
 
+const REDACTED_INDEX_PATH: &str = "/run/nixling/qemu-media-registry-index.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RedactedRegistryIndex {
+    schema_version: u32,
+    records: Vec<RedactedRegistryRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RedactedRegistryRecord {
+    vm: String,
+    media_ref: String,
+    source_kind: String,
+    format: String,
+    read_only: bool,
+    identity_hash: String,
+}
+
 impl MediaRegistryRecord {
     fn from_identity(source: &QemuMediaSourceIntent, identity: UsbPhysicalIdentity) -> Self {
         Self {
@@ -124,6 +145,17 @@ impl MediaRegistryRecord {
                 by_id_names: identity.by_id_names,
                 block_device: identity.block_device,
             },
+        }
+    }
+
+    fn redacted(&self) -> RedactedRegistryRecord {
+        RedactedRegistryRecord {
+            vm: self.vm.clone(),
+            media_ref: self.media_ref.clone(),
+            source_kind: self.source_kind.clone(),
+            format: self.format.clone(),
+            read_only: self.read_only,
+            identity_hash: qemu_media_identity_hash(&self.identity.by_id_names),
         }
     }
 }
@@ -153,9 +185,21 @@ pub fn enroll(
     drop(fd);
 
     let by_id_count = u32::try_from(identity.by_id_names.len()).unwrap_or(u32::MAX);
+    let identity_hash = qemu_media_identity_hash(&identity.by_id_names);
+    let existing_records = read_all_registry_records(resolver).unwrap_or_default();
+    if existing_records.iter().any(|record| {
+        record.vm == source.vm
+            && record.media_ref != source.media_ref
+            && qemu_media_identity_hash(&record.identity.by_id_names) == identity_hash
+    }) {
+        return Err(MediaOpError::IdentityMismatch(
+            "already-enrolled-different-ref".to_owned(),
+        ));
+    }
     let record = MediaRegistryRecord::from_identity(source, identity);
     write_registry_record(resolver, &record)?;
     let records = read_all_registry_records(resolver).unwrap_or_else(|_| vec![record.clone()]);
+    write_redacted_registry_index(&records)?;
     let udev_rule_written = write_runtime_udev_rules(resolver, &records)?;
     let udev_reloaded = reload_udev_rules();
 
@@ -366,7 +410,8 @@ fn qmp_attach(
     let fdset_id = qemu_media_fdset_id(client.vm(), &scaffold.media_ref);
     let file_node_id = qemu_media_file_node_id(&scaffold.media_ref);
     let mut cleanup = QmpAttachCleanup::new(scaffold, fdset_id, file_node_id.clone());
-    if let Err(error) = client.execute(
+    cleanup.fdset_added = true;
+    match client.execute(
         "add-fd",
         json!({
             "fdset-id": fdset_id,
@@ -374,9 +419,14 @@ fn qmp_attach(
         }),
         Some(fd),
     ) {
-        return Err(error);
+        Ok(value) => {
+            cleanup.fd = value.get("fd").and_then(Value::as_u64);
+        }
+        Err(error) => {
+            cleanup.rollback(client);
+            return Err(error);
+        }
     }
-    cleanup.fdset_added = true;
     if let Err(error) = client.execute(
         "blockdev-add",
         json!({
@@ -387,6 +437,9 @@ fn qmp_attach(
         }),
         None,
     ) {
+        if qmp_error_may_have_applied(&error) {
+            cleanup.file_added = true;
+        }
         cleanup.rollback(client);
         return Err(error);
     }
@@ -401,6 +454,9 @@ fn qmp_attach(
         }),
         None,
     ) {
+        if qmp_error_may_have_applied(&error) {
+            cleanup.raw_added = true;
+        }
         cleanup.rollback(client);
         return Err(error);
     }
@@ -417,6 +473,9 @@ fn qmp_attach(
         args.insert("bootindex".to_owned(), json!(1));
     }
     if let Err(error) = client.execute("device_add", device_args, None) {
+        if qmp_error_may_have_applied(&error) {
+            cleanup.device_added = true;
+        }
         cleanup.rollback(client);
         return Err(error);
     }
@@ -429,12 +488,26 @@ fn qmp_attach(
     ])
 }
 
+fn qmp_error_may_have_applied(error: &MediaOpError) -> bool {
+    matches!(
+        error,
+        MediaOpError::Qmp(reason)
+            if reason.starts_with("read:")
+                || reason.starts_with("write:")
+                || reason.starts_with("flush:")
+                || reason.starts_with("send-fd:")
+                || reason == "eof"
+    )
+}
+
 #[derive(Debug, Clone)]
 struct QmpAttachCleanup {
     device_id: String,
     blockdev_id: String,
     file_node_id: String,
+    media_ref: String,
     fdset_id: u64,
+    fd: Option<u64>,
     device_added: bool,
     raw_added: bool,
     file_added: bool,
@@ -447,7 +520,9 @@ impl QmpAttachCleanup {
             device_id: scaffold.device_id.clone(),
             blockdev_id: scaffold.blockdev_id.clone(),
             file_node_id,
+            media_ref: scaffold.media_ref.clone(),
             fdset_id,
+            fd: None,
             device_added: false,
             raw_added: false,
             file_added: false,
@@ -478,7 +553,16 @@ impl QmpAttachCleanup {
             );
         }
         if self.fdset_added {
-            let _ = client.execute("remove-fd", json!({ "fdset-id": self.fdset_id }), None);
+            let fd = self
+                .fd
+                .or_else(|| client.query_fdset_fd(self.fdset_id, &self.media_ref).ok().flatten());
+            if let Some(fd) = fd {
+                let _ = client.execute(
+                    "remove-fd",
+                    json!({ "fdset-id": self.fdset_id, "fd": fd }),
+                    None,
+                );
+            }
         }
     }
 }
@@ -510,7 +594,13 @@ fn qmp_detach(
     if let Err(error) = client.execute("blockdev-del", json!({ "node-name": file_node_id.as_str() }), None) {
         first_error.get_or_insert(error);
     }
-    if let Err(error) = client.execute("remove-fd", json!({ "fdset-id": fdset_id }), None) {
+    let fd = client.query_fdset_fd(fdset_id, &scaffold.media_ref).ok().flatten();
+    let remove_fd_args = if let Some(fd) = fd {
+        json!({ "fdset-id": fdset_id, "fd": fd })
+    } else {
+        json!({ "fdset-id": fdset_id })
+    };
+    if let Err(error) = client.execute("remove-fd", remove_fd_args, None) {
         first_error.get_or_insert(error);
     }
     if let Some(error) = first_error {
@@ -527,6 +617,7 @@ fn qmp_detach(
 
 struct QmpClient {
     vm: String,
+    next_id: u64,
     writer: UnixStream,
     reader: BufReader<UnixStream>,
 }
@@ -554,6 +645,7 @@ impl QmpClient {
             .map_err(|err| MediaOpError::Qmp(format!("timeout:{err}")))?;
         let mut client = Self {
             vm,
+            next_id: 1,
             writer,
             reader: BufReader::new(reader_stream),
         };
@@ -575,9 +667,12 @@ impl QmpClient {
         arguments: Value,
         fd: Option<i32>,
     ) -> Result<Value, MediaOpError> {
+        let id = format!("nixling-{}", self.next_id);
+        self.next_id = self.next_id.saturating_add(1);
         let request = json!({
             "execute": command,
             "arguments": arguments,
+            "id": id,
         });
         let mut payload = serde_json::to_vec(&request)
             .map_err(|err| MediaOpError::Qmp(format!("encode:{command}:{err}")))?;
@@ -598,6 +693,9 @@ impl QmpClient {
             if message.get("event").is_some() {
                 continue;
             }
+            if message.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+                continue;
+            }
             if let Some(error) = message.get("error") {
                 let class = error
                     .get("class")
@@ -609,6 +707,32 @@ impl QmpClient {
                 return Ok(ret.clone());
             }
         }
+    }
+
+    fn query_fdset_fd(
+        &mut self,
+        fdset_id: u64,
+        media_ref: &str,
+    ) -> Result<Option<u64>, MediaOpError> {
+        let expected_opaque = format!("nixling:{media_ref}");
+        let value = self.execute("query-fdsets", json!({}), None)?;
+        let Some(fdsets) = value.as_array() else {
+            return Ok(None);
+        };
+        for fdset in fdsets {
+            if fdset.get("fdset-id").and_then(Value::as_u64) != Some(fdset_id) {
+                continue;
+            }
+            let Some(fds) = fdset.get("fds").and_then(Value::as_array) else {
+                continue;
+            };
+            for fd in fds {
+                if fd.get("opaque").and_then(Value::as_str) == Some(expected_opaque.as_str()) {
+                    return Ok(fd.get("fd").and_then(Value::as_u64));
+                }
+            }
+        }
+        Ok(None)
     }
 
     fn wait_for_device_deleted(&mut self, device_id: &str) -> Result<(), MediaOpError> {
@@ -1064,35 +1188,22 @@ fn validate_image_parent_dirs(path: &Path) -> Result<(), MediaOpError> {
         let metadata = std::fs::symlink_metadata(&current)
             .map_err(|err| MediaOpError::ImagePathUnsafe(err.to_string()))?;
         if metadata.file_type().is_symlink() {
-            return Err(MediaOpError::ImagePathUnsafe(format!(
-                "symlink-parent:{}",
-                current.display()
-            )));
+            return Err(MediaOpError::ImagePathUnsafe("symlink-parent".to_owned()));
         }
         if !metadata.file_type().is_dir() {
-            return Err(MediaOpError::ImagePathUnsafe(format!(
-                "non-directory-parent:{}",
-                current.display()
-            )));
+            return Err(MediaOpError::ImagePathUnsafe("non-directory-parent".to_owned()));
         }
         if metadata.uid() != 0 {
-            return Err(MediaOpError::ImagePathUnsafe(format!(
-                "parent-not-root-owned:{}",
-                current.display()
-            )));
+            return Err(MediaOpError::ImagePathUnsafe("parent-not-root-owned".to_owned()));
         }
         let mode = metadata.permissions().mode();
         if mode & 0o002 != 0 {
-            return Err(MediaOpError::ImagePathUnsafe(format!(
-                "parent-world-writable:{}",
-                current.display()
-            )));
+            return Err(MediaOpError::ImagePathUnsafe("parent-world-writable".to_owned()));
         }
         if mode & 0o020 != 0 && mode & 0o1000 == 0 {
-            return Err(MediaOpError::ImagePathUnsafe(format!(
-                "parent-group-writable-without-sticky:{}",
-                current.display()
-            )));
+            return Err(MediaOpError::ImagePathUnsafe(
+                "parent-group-writable-without-sticky".to_owned(),
+            ));
         }
     }
     Ok(())
@@ -1172,10 +1283,7 @@ fn image_has_loop_backing(sysfs_root: &Path, image_path: &Path) -> Result<bool, 
             Ok(_) => {}
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => {
-                return Err(MediaOpError::Sysfs(format!(
-                    "loop-backing-file:{}:{err}",
-                    backing_path.display()
-                )));
+                return Err(MediaOpError::Sysfs(format!("loop-backing-file:{err}")));
             }
         }
     }
@@ -1233,6 +1341,41 @@ fn write_registry_record_at_root(
         0o600,
     )
     .map_err(|err| MediaOpError::Registry(err.to_string()))
+}
+
+fn write_redacted_registry_index(records: &[MediaRegistryRecord]) -> Result<(), MediaOpError> {
+    let path = Path::new(REDACTED_INDEX_PATH);
+    let Some(parent) = path.parent() else {
+        return Err(MediaOpError::Registry("redacted-index-no-parent".to_owned()));
+    };
+    std::fs::create_dir_all(parent).map_err(|err| MediaOpError::Registry(err.to_string()))?;
+    let parent_fd = crate::sys::path_safe::open_dir_path_safe(parent)
+        .map_err(|err| MediaOpError::Registry(err.to_string()))?;
+    let index = RedactedRegistryIndex {
+        schema_version: 1,
+        records: records.iter().map(MediaRegistryRecord::redacted).collect(),
+    };
+    let mut bytes = serde_json::to_vec_pretty(&index)
+        .map_err(|err| MediaOpError::Registry(err.to_string()))?;
+    bytes.push(b'\n');
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| MediaOpError::Registry("redacted-index-name-invalid".to_owned()))?;
+    crate::sys::path_safe::atomic_replace_fd(&parent_fd, name, &bytes, 0o644)
+        .map_err(|err| MediaOpError::Registry(err.to_string()))
+}
+
+fn qemu_media_identity_hash(by_id_names: &[String]) -> String {
+    let mut names = by_id_names.to_vec();
+    names.sort();
+    names.dedup();
+    let mut hasher = Sha256::new();
+    for name in names {
+        hasher.update(name.as_bytes());
+        hasher.update([0]);
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 fn read_registry_record(
@@ -1395,8 +1538,9 @@ mod tests {
             assert_eq!(fds.len(), 1);
             let add_fd = String::from_utf8(payload).expect("add-fd utf8");
             assert!(add_fd.contains(r#""execute":"add-fd""#));
+            let add_fd_id = qmp_id_from_line(&add_fd);
             writer
-                .write_all(br#"{"return":{"fdset-id":1000,"fd":0}}"#)
+                .write_all(format!(r#"{{"return":{{"fdset-id":1000,"fd":0}},"id":"{add_fd_id}"}}"#).as_bytes())
                 .expect("add-fd return");
             writer.write_all(b"\n").expect("add-fd newline");
 
@@ -1442,9 +1586,11 @@ mod tests {
                 .write_all(br#"{"event":"DEVICE_DELETED","data":{"device":"nl-usb-installer-usb"}}"#)
                 .expect("device deleted event");
             writer.write_all(b"\n").expect("event newline");
-            for expected in ["blockdev-del", "blockdev-del", "remove-fd"] {
+            for expected in ["blockdev-del", "blockdev-del"] {
                 expect_qmp_command(&mut writer, &mut reader, expected);
             }
+            expect_qmp_query_fdsets(&mut writer, &mut reader);
+            expect_qmp_command(&mut writer, &mut reader, "remove-fd");
         });
 
         let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
@@ -1481,8 +1627,12 @@ mod tests {
             let (_payload, fds) = crate::fd_passing::recv_fds(stream.as_raw_fd())
                 .expect("boot add-fd must carry SCM_RIGHTS");
             assert_eq!(fds.len(), 1);
+            let add_fd_id = String::from_utf8(_payload)
+                .ok()
+                .map(|line| qmp_id_from_line(&line))
+                .expect("add-fd id");
             writer
-                .write_all(br#"{"return":{"fdset-id":1000,"fd":0}}"#)
+                .write_all(format!(r#"{{"return":{{"fdset-id":1000,"fd":0}},"id":"{add_fd_id}"}}"#).as_bytes())
                 .expect("add-fd return");
             writer.write_all(b"\n").expect("add-fd newline");
             for expected in ["blockdev-add", "blockdev-add", "device_add", "cont"] {
@@ -1512,8 +1662,9 @@ mod tests {
         let mut line = String::new();
         reader.read_line(&mut line).expect("read capabilities");
         assert!(line.contains("qmp_capabilities"));
+        let id = qmp_id_from_line(&line);
         writer
-            .write_all(br#"{"return":{}}"#)
+            .write_all(format!(r#"{{"return":{{}},"id":"{id}"}}"#).as_bytes())
             .expect("capabilities return");
         writer.write_all(b"\n").expect("capabilities newline");
     }
@@ -1526,8 +1677,36 @@ mod tests {
         let mut line = String::new();
         reader.read_line(&mut line).expect("read qmp command");
         assert!(line.contains(expected), "missing {expected} in {line}");
-        writer.write_all(br#"{"return":{}}"#).expect("command return");
+        let id = qmp_id_from_line(&line);
+        writer
+            .write_all(format!(r#"{{"return":{{}},"id":"{id}"}}"#).as_bytes())
+            .expect("command return");
         writer.write_all(b"\n").expect("command newline");
+    }
+
+    fn expect_qmp_query_fdsets(writer: &mut UnixStream, reader: &mut BufReader<UnixStream>) {
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read query-fdsets");
+        assert!(line.contains("query-fdsets"), "missing query-fdsets in {line}");
+        let id = qmp_id_from_line(&line);
+        writer
+            .write_all(
+                format!(
+                    r#"{{"return":[{{"fdset-id":1000,"fds":[{{"fd":0,"opaque":"nixling:installer-usb"}}]}}],"id":"{id}"}}"#
+                )
+                .as_bytes(),
+            )
+            .expect("query-fdsets return");
+        writer.write_all(b"\n").expect("query-fdsets newline");
+    }
+
+    fn qmp_id_from_line(line: &str) -> String {
+        serde_json::from_str::<Value>(line)
+            .expect("qmp json")
+            .get("id")
+            .and_then(Value::as_str)
+            .expect("qmp id")
+            .to_owned()
     }
 
     #[test]

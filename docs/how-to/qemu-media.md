@@ -78,8 +78,8 @@ nixling status dark-live
 ```
 
 The dry-run should show `host-reconcile → qemu-media`. After start,
-status should show the qemu-media runner, QMP socket/readiness, source
-refs, and any direct image path. The niri border
+status should show the qemu-media runner, QMP readiness, source refs,
+source kind/format/read-only policy, and registry state. The niri border
 rule matches the host QEMU window title
 `nixling-dark-live-qemu-media`.
 

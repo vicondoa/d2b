@@ -831,6 +831,18 @@ mod tests {
         }
     );
     roundtrip_test!(
+        qemu_media_enroll_round_trip,
+        "QemuMediaEnroll",
+        OperationFields::QemuMediaEnroll {
+            vm_id: "media".to_owned(),
+            media_ref: "installer-usb".to_owned(),
+            read_only: true,
+            by_id_count: 1,
+            udev_rule_written: true,
+            udev_reloaded: true,
+        }
+    );
+    roundtrip_test!(
         qemu_media_boot_round_trip,
         "QemuMediaBoot",
         OperationFields::QemuMediaBoot {

@@ -240,7 +240,9 @@ pub enum MediaAccessMode {
 /// Initial open flags required before a block device can be handed to QEMU.
 pub fn initial_open_flags(access: MediaAccessMode) -> i32 {
     match access {
-        MediaAccessMode::ReadOnly => libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        MediaAccessMode::ReadOnly => {
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_EXCL
+        }
         MediaAccessMode::ReadWrite => {
             libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_EXCL
         }
@@ -536,7 +538,7 @@ mod tests {
         let ro = initial_open_flags(MediaAccessMode::ReadOnly);
         assert_ne!(ro & libc::O_RDONLY, libc::O_RDWR);
         assert_ne!(ro & libc::O_NOFOLLOW, 0);
-        assert_eq!(ro & libc::O_EXCL, 0);
+        assert_ne!(ro & libc::O_EXCL, 0);
         assert!(qemu_read_only_required(MediaAccessMode::ReadOnly));
 
         let rw = initial_open_flags(MediaAccessMode::ReadWrite);
