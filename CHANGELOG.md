@@ -17,6 +17,10 @@ deprecations ship one minor release before removal.
   binary tarballs for `nixlingd`, `nixling`, `nixling-priv-broker`,
   `nixling-wayland-filter`, and `nixling-activation-helper`, alongside
   `SHA256SUMS`, on the matching GitHub Release.
+- CI: after publishing a GitHub Release, the release workflow now
+  computes Nix SRI hashes for each tarball, writes `nix/prebuilt.json`,
+  and auto-commits the manifest back to `main` so consuming flakes can
+  fetch the published host binaries by hash without manual updates.
 
 ### Changed
 
