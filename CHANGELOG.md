@@ -44,6 +44,13 @@ deprecations ship one minor release before removal.
   region/image coordinates, and the provider creates/reuses disk images
   and sandboxes by nixling workload labels instead of shelling out to the
   preview `aca` CLI.
+- ADR 0032 ACA display: gateway config can now carry the non-secret ACA
+  managed-identity client id used by local validation probes, while the
+  live P0 display sender receives a gateway-minted short-lived Relay Send
+  bearer instead of the long-lived Relay rule key.
+- NixOS: added `nixling.site.usePrebuiltHostTools` so development hosts
+  can validate source-built `nixling`, `nixlingd`, and activation helper
+  binaries before matching release prebuilts exist.
 - CI: merging `main` after cutting a new dated changelog section now
   auto-tags the release and publishes pre-built `x86_64-linux` host
   binary tarballs for `nixlingd`, `nixling`, `nixling-priv-broker`,
@@ -79,6 +86,13 @@ deprecations ship one minor release before removal.
 - `qemu-media` VMs now emit a typed QMP-only QEMU runner process node
   instead of being absent from `processes.json`; they still do not emit
   Cloud Hypervisor, store/virtiofs, or guest-control runner data.
+
+### Fixed
+
+- ADR 0032 ACA display: the daemon-owned verified Relay listener now
+  survives the synchronous `gatewayDisplay` request runtime, so Waypipe
+  sessions remain connected after `nixling vm exec <aca target>` returns
+  and the forwarded Wayland app can stay visible on the host compositor.
 
 ## [1.3.1] - 2026-06-18
 

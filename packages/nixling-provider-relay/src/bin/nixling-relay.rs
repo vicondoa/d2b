@@ -5,11 +5,13 @@
 //!   nixling-relay sender   --target unix-listen:/run/nixling/wp.sock
 //!   nixling-relay listener --target unix:/run/user/1000/wpc.sock
 //!
-//! Auth (per the three-plane model): a Microsoft Entra bearer token from
-//! NIXLING_RELAY_ENTRA_TOKEN (the sandbox managed identity, plane 2 — no SAS
-//! in the workload), else a SAS rule via NIXLING_RELAY_KEY_NAME +
-//! NIXLING_RELAY_KEY. Inside an ACA sandbox, NIXLING_RELAY_CA_FILE points at
-//! the egress-proxy CA (/etc/ssl/certs/adc-egress-proxy-ca.crt).
+//! Auth (per the three-plane model): a pre-minted short-lived Send bearer from
+//! NIXLING_RELAY_SAS_TOKEN, a Microsoft Entra bearer token from
+//! NIXLING_RELAY_ENTRA_TOKEN, or finally a SAS rule via NIXLING_RELAY_KEY_NAME
+//! + NIXLING_RELAY_KEY for tools/tests.
+//!
+//! Inside an ACA sandbox, NIXLING_RELAY_CA_FILE points at the egress-proxy CA
+//! (/etc/ssl/certs/adc-egress-proxy-ca.crt).
 use nixling_provider_relay::{
     LocalTarget, RelayCredential, RelayEndpoint, run_listener, run_sender,
 };
@@ -35,7 +37,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         entity: env("NIXLING_RELAY_ENTITY")?,
     };
     let target = LocalTarget::parse(&target_spec);
-    let credential = if let Ok(token) = std::env::var("NIXLING_RELAY_ENTRA_TOKEN") {
+    let credential = if let Ok(token) = std::env::var("NIXLING_RELAY_SAS_TOKEN")
+        && !token.trim().is_empty()
+    {
+        RelayCredential::SasToken(token)
+    } else if let Ok(token) = std::env::var("NIXLING_RELAY_ENTRA_TOKEN")
+        && !token.trim().is_empty()
+    {
         RelayCredential::EntraBearer(token)
     } else {
         RelayCredential::Sas {

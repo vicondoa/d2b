@@ -173,6 +173,17 @@ in
             '';
           };
 
+          managedIdentityClientId = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "00000000-0000-0000-0000-000000000000";
+            description = ''
+              Optional user-assigned managed identity client id passed to the
+              in-sandbox MSI endpoint. ACA sandboxes can require this client id
+              even when the identity endpoint is injected.
+            '';
+          };
+
           cpu = lib.mkOption {
             type = lib.types.str;
             default = "1000m";

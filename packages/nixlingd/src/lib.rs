@@ -48,7 +48,7 @@ use nixling_gateway::{
 };
 use nixling_gateway_runtime::{
     AcaGatewayWorkload, AgentBinaries, CredentialFilePolicy, GatewayCredential, RelayCoords,
-    RelayDisplayListener, production_deps, system_now_fn,
+    RelayDisplayListener, production_deps, relay_sas_token_snippet, system_now_fn,
 };
 use nixling_host::ssh_keygen;
 use nixling_ipc::{
@@ -382,6 +382,8 @@ struct GatewayAcaFileConfig {
     disk_name: Option<String>,
     #[serde(default)]
     managed_identity_resource_id: Option<String>,
+    #[serde(default)]
+    managed_identity_client_id: Option<String>,
     #[serde(default)]
     cpu: Option<String>,
     #[serde(default)]
@@ -2691,7 +2693,8 @@ impl GatewayWorkload for ConfiguredGatewayWorkload {
             provider,
             relay_coords_from_config(&self.config)?,
         )
-        .with_binaries(agent_bins_from_config(&self.config));
+        .with_binaries(agent_bins_from_config(&self.config))
+        .with_relay_auth_snippet(relay_auth_snippet_from_config(&self.config)?);
         workload.spawn_agent(req).await
     }
 
@@ -2762,6 +2765,7 @@ fn relay_coords_from_config(config: &GatewayFileConfig) -> Result<RelayCoords, G
         namespace: required_gateway_field(&config.relay.namespace)?,
         entity: required_gateway_field(&config.relay.entity)?,
         ca_file: Some("/etc/ssl/certs/adc-egress-proxy-ca.crt".to_owned()),
+        managed_identity_client_id: config.aca.managed_identity_client_id.clone(),
     })
 }
 
@@ -2783,6 +2787,22 @@ fn agent_bins_from_config(config: &GatewayFileConfig) -> AgentBinaries {
         bins.compression = compression.clone();
     }
     bins
+}
+
+fn relay_auth_snippet_from_config(config: &GatewayFileConfig) -> Result<String, GatewayError> {
+    let credential_path = config
+        .credential_path
+        .as_ref()
+        .ok_or(GatewayError::ProviderAllocationFailed)?;
+    let credential = GatewayCredential::load(credential_path, &CredentialFilePolicy::default())
+        .map_err(|_| GatewayError::ProviderAllocationFailed)?;
+    let token = credential
+        .mint_send_token(
+            &relay_endpoint_from_config(config)?,
+            nixling_provider_relay::DEFAULT_SAS_TTL_SECS,
+        )
+        .map_err(|_| GatewayError::ProviderAllocationFailed)?;
+    Ok(relay_sas_token_snippet(token.expose()))
 }
 
 fn display_listener_from_config(

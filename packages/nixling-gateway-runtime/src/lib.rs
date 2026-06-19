@@ -25,7 +25,7 @@ pub mod production;
 pub mod waypipe_display;
 pub use aca_workload::{
     AcaGatewayWorkload, AgentBinaries, RelayCoords, build_agent_command, build_cleanup_command,
-    default_entra_token_snippet,
+    default_entra_token_snippet, relay_sas_token_snippet,
 };
 pub use audit_jsonl::{DEFAULT_GATEWAY_AUDIT_RETENTION_DAYS, JsonlGatewayAudit};
 pub use credential::{

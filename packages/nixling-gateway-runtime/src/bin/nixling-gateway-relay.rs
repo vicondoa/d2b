@@ -24,7 +24,9 @@
 //!   NL_SESSION_NOT_AFTER    unix-seconds expiry (u64)
 //!
 //!   NIXLING_RELAY_NAMESPACE / NIXLING_RELAY_ENTITY / NIXLING_RELAY_TARGET
-//!   NIXLING_RELAY_ENTRA_TOKEN  (or NIXLING_RELAY_KEY_NAME + NIXLING_RELAY_KEY)
+//!   NIXLING_RELAY_SAS_TOKEN    short-lived Send bearer, preferred for P0
+//!   NIXLING_RELAY_ENTRA_TOKEN  Entra bearer, or key envs for tools/tests
+//!   NIXLING_RELAY_KEY_NAME / NIXLING_RELAY_KEY
 //!   NIXLING_RELAY_CA_FILE      (optional, sandbox egress-proxy CA)
 
 use std::sync::Arc;
@@ -73,7 +75,13 @@ fn endpoint() -> Result<RelayEndpoint, Err> {
 }
 
 fn credential() -> Result<RelayCredential, Err> {
-    if let Ok(token) = std::env::var("NIXLING_RELAY_ENTRA_TOKEN") {
+    if let Ok(token) = std::env::var("NIXLING_RELAY_SAS_TOKEN")
+        && !token.trim().is_empty()
+    {
+        Ok(RelayCredential::SasToken(token))
+    } else if let Ok(token) = std::env::var("NIXLING_RELAY_ENTRA_TOKEN")
+        && !token.trim().is_empty()
+    {
         Ok(RelayCredential::EntraBearer(token))
     } else {
         Ok(RelayCredential::Sas {

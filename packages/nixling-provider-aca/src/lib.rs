@@ -676,15 +676,19 @@ impl AcaWorkloadProvider {
     }
 
     /// Find the sandbox backing a workload alias via the deterministic
-    /// `nixling-workload=<alias>` ACA label.
+    /// `nixling-workload=<alias>` ACA label plus configured realm/default labels
+    /// when lifecycle defaults are present.
     pub async fn find_workload_sandbox(
         &self,
         workload: &WorkloadId,
     ) -> ProviderResult<Option<AcaSandbox>> {
-        let labels = labels_selector(&BTreeMap::from([(
-            "nixling-workload".to_owned(),
-            workload.as_str().to_owned(),
-        )]));
+        let mut selector = self
+            .sandbox_defaults
+            .as_ref()
+            .map(|defaults| defaults.labels.clone())
+            .unwrap_or_default();
+        selector.insert("nixling-workload".to_owned(), workload.as_str().to_owned());
+        let labels = labels_selector(&selector);
         let sandboxes = self.list_sandboxes(Some(&labels)).await?;
         Ok(sandboxes.into_iter().next())
     }
@@ -1566,7 +1570,7 @@ mod tests {
         assert_eq!(calls[0].0, HttpMethod::Get);
         assert!(
             calls[0].1.contains(
-                "/sandboxes?api-version=2026-02-01-preview&labels=nixling-workload%3Ddemo"
+                "/sandboxes?api-version=2026-02-01-preview&labels=nixling-realm%3Dwork%2Cnixling-workload%3Ddemo"
             )
         );
         assert_eq!(calls[1].0, HttpMethod::Get);
@@ -1642,7 +1646,7 @@ mod tests {
         assert_eq!(calls[0].0, HttpMethod::Get);
         assert!(
             calls[0].1.contains(
-                "/sandboxes?api-version=2026-02-01-preview&labels=nixling-workload%3Ddemo"
+                "/sandboxes?api-version=2026-02-01-preview&labels=nixling-realm%3Dwork%2Cnixling-workload%3Ddemo"
             )
         );
         assert_eq!(calls[1].0, HttpMethod::Post);

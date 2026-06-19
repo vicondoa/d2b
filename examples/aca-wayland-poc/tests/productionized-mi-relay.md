@@ -1,14 +1,16 @@
-# Live reproduction — productionized, MI-authed ACA + Wayland forwarding
+# Historical live reproduction — MI-auth ACA + Wayland forwarding probe
 
 **Layer 2, manual** (provisions real Azure + needs a live Wayland
 compositor). This is the reproducible record behind the productionized
-acceptance bar: a Wayland-native `foot` inside an **Azure Container Apps
-sandbox** rendered on the operator's compositor, with every display byte on
-an **Azure Relay** hybrid connection, authenticated **only** by the sandbox
-**Managed Identity** — no SAS key in the workload.
+acceptance bar for the earlier MI-auth relay probe: a Wayland-native `foot`
+inside an **Azure Container Apps sandbox** rendered on the operator's
+compositor, with every display byte on an **Azure Relay** hybrid connection.
+The current P0 gateway path uses a gateway-minted short-lived Send bearer
+because ACA Entra Relay substreams later proved unreliable for Waypipe; the
+long-lived SAS rule key still never enters the workload.
 
 Unlike `live-demo-checklist.md` (the original SAS-bridged POC), this path
-uses the productionized `nixling-relay` endpoint binary
+used the productionized `nixling-relay` endpoint binary
 (`packages/nixling-provider-relay`) on both ends and the sandbox's MI Entra
 token (plane 2). Do **not** commit raw screenshots/logs.
 
@@ -30,16 +32,16 @@ does too. Don't reintroduce a sender-side id.
 - Bicep already deployed (see `live-demo-checklist.md` §1): ACR, the relay
   namespace + `hc-nixling-display`, the sandbox group, and the
   user-assigned MI with the **Azure Relay Sender** role (declared in
-  `azure/modules/sandbox.bicep`).
+  `azure/modules/sandbox.bicep`) for the historical MI probe.
 
 ## 1. Build + push the image with the productionized sender
 ```bash
 cd examples/aca-wayland-poc/container
 ./build-and-push.sh "$REGISTRY" nixling-wayland:mi   # builds nixling-relay from the workspace
 ```
-`image.nix` builds `nixling-relay` from `../../../packages` and the agent
-(`bridge/nixling-sandbox-agent.sh`) which fetches the MI token from
-`$IDENTITY_ENDPOINT` and runs `nixling-relay sender` (no SAS).
+`image.nix` built `nixling-relay` from `../../../packages` and the historical
+agent (`bridge/nixling-sandbox-agent.sh`) fetched the MI token from
+`$IDENTITY_ENDPOINT` and ran `nixling-relay sender`.
 
 ## 2. Fresh disk + sandbox from the just-pushed image
 A disk snapshots the image at create time, so create a NEW disk after the

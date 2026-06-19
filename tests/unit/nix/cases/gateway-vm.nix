@@ -28,6 +28,7 @@ let
         image = "registry.example.azurecr.io/nixling-wayland:mi";
         diskName = "nixling-wayland-mi";
         managedIdentityResourceId = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/nixling";
+        managedIdentityClientId = "11111111-1111-1111-1111-111111111111";
       };
       display.waypipeSocket = "/run/user/1000/wpc.sock";
     };
@@ -61,6 +62,11 @@ let
     })
   ]).config;
   multiGatewayMessages = map (a: a.message) (lib.filter (a: !a.assertion) multiGatewayCfg.assertions);
+  sourceToolsCfg = (mkEval [
+    (lib.recursiveUpdate base {
+      nixling.site.usePrebuiltHostTools = false;
+    })
+  ]).config;
 in
 {
   "gateway-vm/auto-declared-name" = {
@@ -112,6 +118,7 @@ in
         region = gatewayJson.aca.region;
         image = gatewayJson.aca.image;
         diskName = gatewayJson.aca.diskName;
+        managedIdentityClientId = gatewayJson.aca.managedIdentityClientId;
         cpu = gatewayJson.aca.cpu;
         memory = gatewayJson.aca.memory;
         autoSuspendIntervalSecs = gatewayJson.aca.autoSuspendIntervalSecs;
@@ -131,6 +138,7 @@ in
         region = "centralus";
         image = "registry.example.azurecr.io/nixling-wayland:mi";
         diskName = "nixling-wayland-mi";
+        managedIdentityClientId = "11111111-1111-1111-1111-111111111111";
         cpu = "1000m";
         memory = "2048Mi";
         autoSuspendIntervalSecs = 600;
@@ -168,6 +176,12 @@ in
     expr = lib.any
       (m: lib.hasInfix "at most one enabled gateway" m)
       multiGatewayMessages;
+    expected = true;
+  };
+
+  "gateway-vm/source-host-tools-opt-out-selects-source-daemon" = {
+    expr = lib.hasInfix "nixlingd-0.0.0-bootstrap"
+      (toString sourceToolsCfg.systemd.services.nixlingd.serviceConfig.ExecStart);
     expected = true;
   };
 }

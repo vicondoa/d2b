@@ -47,14 +47,15 @@ pub fn notifying_verifier(
 }
 
 struct ListenerState {
-    task: tokio::task::JoinHandle<()>,
+    cancel: tokio::sync::watch::Sender<bool>,
+    _thread: std::thread::JoinHandle<()>,
     handshook: Arc<Notify>,
     armed: Arc<AtomicBool>,
 }
 
 impl Drop for ListenerState {
     fn drop(&mut self) {
-        self.task.abort();
+        let _ = self.cancel.send(true);
     }
 }
 
@@ -118,36 +119,74 @@ impl DisplayListener for RelayDisplayListener {
         let target = self.target.clone();
         let ttl = self.ttl_secs;
         let ca = self.ca_pem.clone();
-        let task = tokio::spawn(async move {
-            // The relay periodically closes the listener control channel;
-            // re-arm until the session is closed (the task is aborted).
-            loop {
-                if let Err(err) = nixling_provider_relay::run_listener_verified(
-                    &endpoint,
-                    &credential,
-                    &target,
-                    ttl,
-                    ca.as_deref(),
-                    verify.clone(),
-                )
-                .await
-                {
-                    tracing::warn!(error = %err, "gateway relay listener ended before handshake");
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            }
-        });
-
         let id = format!(
             "relay-listener:{}:{}",
             ctx.session_id.as_str(),
             self.counter.fetch_add(1, Ordering::SeqCst)
         );
+        let thread_name = id.clone();
+        let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+        let task_cancel = cancel_tx.clone();
+        let thread = std::thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || {
+                let rt = match tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .enable_all()
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(err) => {
+                        tracing::warn!(error = %err, "gateway relay listener runtime build failed");
+                        return;
+                    }
+                };
+                rt.block_on(async move {
+                    // The relay periodically closes the listener control
+                    // channel; re-arm until the session is closed. This runs
+                    // on its own runtime thread so the listener survives the
+                    // daemon's synchronous gatewayDisplay request runtime.
+                    loop {
+                        tokio::select! {
+                            changed = cancel_rx.changed() => {
+                                if changed.is_err() || *cancel_rx.borrow() {
+                                    break;
+                                }
+                            }
+                            result = nixling_provider_relay::run_listener_verified(
+                                &endpoint,
+                                &credential,
+                                &target,
+                                ttl,
+                                ca.as_deref(),
+                                verify.clone(),
+                            ) => {
+                                if *cancel_rx.borrow() {
+                                    break;
+                                }
+                                if let Err(err) = result {
+                                    tracing::warn!(error = %err, "gateway relay listener ended before close");
+                                }
+                            }
+                        }
+                        tokio::select! {
+                            changed = cancel_rx.changed() => {
+                                if changed.is_err() || *cancel_rx.borrow() {
+                                    break;
+                                }
+                            }
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                        }
+                    }
+                });
+            })
+            .map_err(|_| GatewayError::Internal)?;
         let mut guard = self.state.lock().map_err(|_| GatewayError::Internal)?;
         guard.insert(
             id.clone(),
             ListenerState {
-                task,
+                cancel: task_cancel,
+                _thread: thread,
                 handshook,
                 armed,
             },
@@ -181,7 +220,7 @@ impl DisplayListener for RelayDisplayListener {
             guard.remove(&handle.0)
         };
         if let Some(st) = st {
-            st.task.abort();
+            let _ = st.cancel.send(true);
         }
         Ok(())
     }
@@ -254,11 +293,13 @@ mod tests {
             None,
             Arc::new(|| 900),
         );
-        let dummy_task = tokio::spawn(async {});
+        let (cancel, _rx) = tokio::sync::watch::channel(false);
+        let thread = std::thread::spawn(|| {});
         listener.state.lock().unwrap().insert(
             "h1".into(),
             ListenerState {
-                task: dummy_task,
+                cancel,
+                _thread: thread,
                 handshook,
                 armed,
             },
