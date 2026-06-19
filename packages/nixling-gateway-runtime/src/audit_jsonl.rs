@@ -72,12 +72,12 @@ impl JsonlGatewayAudit {
 
 impl GatewayAudit for JsonlGatewayAudit {
     fn record(&self, event: GatewayAuditEvent) -> Result<(), GatewayError> {
+        fs::create_dir_all(&self.dir).map_err(|_| GatewayError::AuditUnavailable)?;
+        self.prune_old()
+            .map_err(|_| GatewayError::AuditUnavailable)?;
         let mut state = self
             .state
             .lock()
-            .map_err(|_| GatewayError::AuditUnavailable)?;
-        fs::create_dir_all(&self.dir).map_err(|_| GatewayError::AuditUnavailable)?;
-        self.prune_old()
             .map_err(|_| GatewayError::AuditUnavailable)?;
         let day = (self.clock_day)();
         let path = self.file_for_day(day);

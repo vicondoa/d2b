@@ -25,6 +25,7 @@ use nix::sys::socket::{
     getsockopt, recv, recvmsg, send, socket, sockopt::PeerCredentials,
 };
 use nix::unistd::{self, Gid, Group, Uid, User};
+use nixling_constellation_core::TargetName;
 use nixling_core::bundle::Bundle;
 use nixling_core::bundle_resolver::{
     BundleResolver, intent_id_activation, intent_id_gc_host, intent_id_hosts_host,
@@ -38,6 +39,12 @@ use nixling_core::host::{HostJson, Ipv6SysctlEntry};
 use nixling_core::host_check;
 use nixling_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use nixling_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
+use nixling_gateway::{
+    AgentHandle, AgentSpawnRequest, AppCommand, Clock, ContextSeed, DisplayListener,
+    DisplaySessionContext, GatewayDeps, GatewayError, GatewayOrchestrator, GatewayWorkload,
+    IdSource, LedgerLimits, ListenerHandle, NoopGatewayAudit, OpenSession, SECRET_LEN,
+    SessionBinding, SessionSecret, TargetKey,
+};
 use nixling_host::ssh_keygen;
 use nixling_ipc::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
@@ -65,13 +72,6 @@ use nixling_ipc::{
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
     types::{BundleClosureRef, BundleOpId, RoleId, ScopeId, VmId},
 };
-use nixling_gateway::{
-    AgentHandle, AgentSpawnRequest, AppCommand, Clock, ContextSeed, DisplayListener,
-    DisplaySessionContext, GatewayDeps, GatewayError, GatewayOrchestrator, GatewayWorkload,
-    IdSource, LedgerLimits, ListenerHandle, NoopGatewayAudit, OpenSession, SECRET_LEN,
-    SessionBinding, SessionSecret, TargetKey,
-};
-use nixling_constellation_core::TargetName;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use socket2::{Domain, SockAddr, Socket, Type};
@@ -190,6 +190,7 @@ pub const DEFAULT_ACCEPTED_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 pub const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/nixling/daemon-state";
 const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 const VM_STOP_TIMEOUT: Duration = Duration::from_secs(30);
+const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -352,6 +353,7 @@ struct GatewayDisplayInner {
 struct GatewayDisplaySession {
     target: String,
     open: OpenSession,
+    opened_at: Instant,
 }
 
 fn new_gateway_display_runtime() -> Arc<GatewayDisplayRuntime> {
@@ -2005,27 +2007,24 @@ fn dispatch_gateway_display(
         }
         public_wire::GatewayDisplayOp::Open(args) => {
             let target_text = args.target.clone();
-            let target = TargetName::parse(&args.target).map_err(|err| {
-                TypedError::WireInvalidFrame {
+            let target =
+                TargetName::parse(&args.target).map_err(|err| TypedError::WireInvalidFrame {
                     detail: format!("gatewayDisplay target parse failed: {err}"),
-                }
-            })?;
-            let operation_id =
-                nixling_constellation_core::OperationId::parse(args.operation_id).map_err(
-                    |err| TypedError::WireInvalidFrame {
-                        detail: format!("gatewayDisplay operation_id invalid: {err}"),
-                    },
-                )?;
-            let principal =
-                nixling_constellation_core::PrincipalId::parse(args.principal).map_err(|err| {
-                    TypedError::WireInvalidFrame {
-                        detail: format!("gatewayDisplay principal invalid: {err}"),
-                    }
                 })?;
-            let app = AppCommand::new(args.app_argv).ok_or_else(|| TypedError::WireInvalidFrame {
-                detail: "gatewayDisplay app_argv must be non-empty and contain no empty arguments"
-                    .to_owned(),
-            })?;
+            let operation_id = nixling_constellation_core::OperationId::parse(args.operation_id)
+                .map_err(|err| TypedError::WireInvalidFrame {
+                    detail: format!("gatewayDisplay operation_id invalid: {err}"),
+                })?;
+            let principal = nixling_constellation_core::PrincipalId::parse(args.principal)
+                .map_err(|err| TypedError::WireInvalidFrame {
+                    detail: format!("gatewayDisplay principal invalid: {err}"),
+                })?;
+            let app =
+                AppCommand::new(args.app_argv).ok_or_else(|| TypedError::WireInvalidFrame {
+                    detail:
+                        "gatewayDisplay app_argv must be non-empty and contain no empty arguments"
+                            .to_owned(),
+                })?;
             let target_key = TargetKey {
                 realm: target.realm.target_form(),
                 workload: target.workload.as_str().to_owned(),
@@ -2037,20 +2036,23 @@ fn dispatch_gateway_display(
                 node: target.node,
                 workload: target.workload,
             };
-            let mut inner = state
-                .gateway_display
-                .inner
-                .lock()
-                .map_err(|_| TypedError::InternalIo {
-                    context: "lock gateway display runtime".to_owned(),
-                    detail: "mutex poisoned".to_owned(),
-                })?;
-            let open = block_on_future(
-                inner
-                    .orchestrator
-                    .open(target_key, seed, app, args.request_hash),
-            )
-                .map_err(gateway_error_to_typed)?;
+            let mut inner =
+                state
+                    .gateway_display
+                    .inner
+                    .lock()
+                    .map_err(|_| TypedError::InternalIo {
+                        context: "lock gateway display runtime".to_owned(),
+                        detail: "mutex poisoned".to_owned(),
+                    })?;
+            gateway_display_gc_locked(&mut inner)?;
+            let open = block_on_future(inner.orchestrator.open(
+                target_key,
+                seed,
+                app,
+                args.request_hash,
+            ))
+            .map_err(gateway_error_to_typed)?;
             let session_id = open.session_id.to_string();
             match inner.sessions.entry(session_id.clone()) {
                 Entry::Occupied(_) => {}
@@ -2058,6 +2060,7 @@ fn dispatch_gateway_display(
                     slot.insert(GatewayDisplaySession {
                         target: target_text,
                         open,
+                        opened_at: Instant::now(),
                     });
                 }
             }
@@ -2067,14 +2070,16 @@ fn dispatch_gateway_display(
             })
         }
         public_wire::GatewayDisplayOp::Close(args) => {
-            let mut inner = state
-                .gateway_display
-                .inner
-                .lock()
-                .map_err(|_| TypedError::InternalIo {
-                    context: "lock gateway display runtime".to_owned(),
-                    detail: "mutex poisoned".to_owned(),
-                })?;
+            let mut inner =
+                state
+                    .gateway_display
+                    .inner
+                    .lock()
+                    .map_err(|_| TypedError::InternalIo {
+                        context: "lock gateway display runtime".to_owned(),
+                        detail: "mutex poisoned".to_owned(),
+                    })?;
+            gateway_display_gc_locked(&mut inner)?;
             let closed = if let Some(session) = inner.sessions.remove(&args.session_id) {
                 block_on_future(inner.orchestrator.close(&session.open))
                     .map_err(gateway_error_to_typed)?;
@@ -2087,14 +2092,16 @@ fn dispatch_gateway_display(
             })
         }
         public_wire::GatewayDisplayOp::List(args) => {
-            let inner = state
-                .gateway_display
-                .inner
-                .lock()
-                .map_err(|_| TypedError::InternalIo {
-                    context: "lock gateway display runtime".to_owned(),
-                    detail: "mutex poisoned".to_owned(),
-                })?;
+            let mut inner =
+                state
+                    .gateway_display
+                    .inner
+                    .lock()
+                    .map_err(|_| TypedError::InternalIo {
+                        context: "lock gateway display runtime".to_owned(),
+                        detail: "mutex poisoned".to_owned(),
+                    })?;
+            gateway_display_gc_locked(&mut inner)?;
             let sessions = inner
                 .sessions
                 .values()
@@ -2140,6 +2147,23 @@ fn gateway_error_to_typed(error: GatewayError) -> TypedError {
     }
 }
 
+fn gateway_display_gc_locked(inner: &mut GatewayDisplayInner) -> Result<(), TypedError> {
+    let now = Instant::now();
+    let expired: Vec<String> = inner
+        .sessions
+        .iter()
+        .filter(|(_, session)| now.duration_since(session.opened_at) >= GATEWAY_DISPLAY_SESSION_TTL)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in expired {
+        if let Some(session) = inner.sessions.remove(&id) {
+            block_on_future(inner.orchestrator.close(&session.open))
+                .map_err(gateway_error_to_typed)?;
+        }
+    }
+    Ok(())
+}
+
 fn daemon_gateway_deps() -> GatewayDeps {
     GatewayDeps {
         workload: Box::new(DaemonGatewayWorkload),
@@ -2173,7 +2197,10 @@ impl DisplayListener for DaemonDisplayListener {
         _binding: &SessionBinding,
         _secret: &SessionSecret,
     ) -> Result<ListenerHandle, GatewayError> {
-        Ok(ListenerHandle(format!("daemon-listener-{}", ctx.session_id)))
+        Ok(ListenerHandle(format!(
+            "daemon-listener-{}",
+            ctx.session_id
+        )))
     }
 
     async fn await_handshake(&self, _handle: &ListenerHandle) -> Result<(), GatewayError> {
@@ -8903,6 +8930,63 @@ mod public_status_tests {
         let session = inner.sessions.get(&session_id).expect("session retained");
         assert!(!session.open.agent.0.is_empty());
         assert!(!session.open.listener.0.is_empty());
+    }
+
+    #[test]
+    fn gateway_display_list_gc_expires_stale_sessions() {
+        let (state, _dir) = test_state();
+        let value = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
+                public_wire::GatewayDisplayOpenArgs {
+                    target: "nl://demo.gw.work.nixling".to_owned(),
+                    operation_id: "gw-exec-gc".to_owned(),
+                    principal: "uid-1000".to_owned(),
+                    app_argv: vec!["foot".to_owned()],
+                    request_hash: 43,
+                },
+            )),
+        )
+        .expect("open session");
+        let session_id = value
+            .get("result")
+            .and_then(|r| r.get("sessionId"))
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_owned();
+        {
+            let mut inner = state.gateway_display.inner.lock().unwrap();
+            inner
+                .sessions
+                .get_mut(&session_id)
+                .expect("session exists")
+                .opened_at = Instant::now() - GATEWAY_DISPLAY_SESSION_TTL - Duration::from_secs(1);
+        }
+        let list = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+                public_wire::GatewayDisplayListArgs { target: None },
+            )),
+        )
+        .expect("list after gc");
+        assert_eq!(
+            list.get("result")
+                .and_then(|r| r.get("sessions"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+        assert!(
+            state
+                .gateway_display
+                .inner
+                .lock()
+                .unwrap()
+                .sessions
+                .is_empty()
+        );
     }
 
     #[test]

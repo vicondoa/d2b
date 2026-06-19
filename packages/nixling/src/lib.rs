@@ -3786,6 +3786,27 @@ fn gateway_principal() -> String {
     format!("uid-{}", Uid::current().as_raw())
 }
 
+fn gateway_target_from_manifest(
+    context: &Context,
+    raw: &str,
+) -> Result<Option<String>, CliFailure> {
+    let Some(candidate) = target_routing::gateway_candidate(raw) else {
+        return Ok(None);
+    };
+    let target = nixling_constellation_core::TargetName::parse(raw)
+        .map_err(|err| CliFailure::new(2, format!("invalid gateway target: {err}")))?;
+    let gateway_vm = format!(
+        "sys-{}-gateway",
+        target.realm.target_form().replace('.', "-")
+    );
+    let manifest = context.load_manifest()?;
+    if manifest.get_vm(&gateway_vm).is_some() {
+        Ok(Some(candidate))
+    } else {
+        Ok(None)
+    }
+}
+
 fn gateway_request_hash(target: &str, argv: &[String]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -3914,7 +3935,7 @@ fn cmd_vm_lifecycle_verb(
     let flags = require_explicit_mutation_flag(&format!("vm {verb}"), dry_run, apply, json)?;
     if verb == "start"
         && flags.apply
-        && let Some(target) = target_routing::gateway_candidate(vm)
+        && let Some(target) = gateway_target_from_manifest(context, vm)?
     {
         return cmd_gateway_vm_start(context, target);
     }
@@ -4421,7 +4442,7 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
         });
     }
 
-    if let Some(target) = target_routing::gateway_candidate(&args.vm) {
+    if let Some(target) = gateway_target_from_manifest(context, &args.vm)? {
         if args.detach || args.interactive || args.tty || !args.env.is_empty() || args.cwd.is_some()
         {
             return exec_usage_terminate(
@@ -8336,6 +8357,42 @@ mod host_install_dispatch_tests {
         super::guard_local_target("vm-a", false).expect("bare VM names stay local");
         super::guard_local_target("demo.aca.work", false)
             .expect("unqualified dotted names stay with legacy local validation");
+    }
+
+    #[test]
+    fn gateway_candidate_requires_manifest_declared_realm_gateway() {
+        let manifest_path = test_socket_path("gateway-candidate", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("manifest parent");
+        }
+        write_test_manifest(&manifest_path, "sys-work-gateway");
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("bundle.json"),
+            public_socket: manifest_path.with_extension("sock"),
+            broker_socket: manifest_path.with_extension("broker.sock"),
+            state_root: None,
+            host_runtime_path: manifest_path.with_extension("host-runtime.json"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: manifest_path.with_extension("daemon-state"),
+            metrics_url: "http://127.0.0.1:9101/metrics".to_owned(),
+        };
+        assert_eq!(
+            super::gateway_target_from_manifest(&context, "demo.gw.work.nixling")
+                .unwrap()
+                .as_deref(),
+            Some("nl://demo.gw.work.nixling")
+        );
+        assert_eq!(
+            super::gateway_target_from_manifest(&context, "demo.gw.unknown.nixling").unwrap(),
+            None
+        );
+        assert_eq!(
+            super::gateway_target_from_manifest(&context, "vm-a").unwrap(),
+            None
+        );
+        let _ = std::fs::remove_file(&manifest_path);
     }
 
     #[test]
