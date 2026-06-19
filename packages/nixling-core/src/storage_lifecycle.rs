@@ -130,3 +130,104 @@ pub fn classify_sync_validation_reason(detail: &str) -> SyncContractValidationRe
         SyncContractValidationReason::Unclassified
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn issue_variant_fields_serialize_with_schema_casing() {
+        let legacy =
+            serde_json::to_value(StorageLifecycleIssue::LegacyBundleContractsUnavailable {
+                bundle_version: 5,
+            })
+            .expect("serialize legacy issue");
+        assert_eq!(
+            legacy,
+            json!({
+                "kind": "legacy-bundle-contracts-unavailable",
+                "bundleVersion": 5
+            })
+        );
+
+        let missing_restart = serde_json::to_value(StorageLifecycleIssue::MissingRestartPolicy {
+            vm: "corp-vm".to_owned(),
+            role_id: "cloud-hypervisor".to_owned(),
+        })
+        .expect("serialize missing restart issue");
+        assert_eq!(
+            missing_restart,
+            json!({
+                "kind": "missing-restart-policy",
+                "vm": "corp-vm",
+                "roleId": "cloud-hypervisor"
+            })
+        );
+
+        let adoptable_missing_cgroup =
+            serde_json::to_value(StorageLifecycleIssue::AdoptableMissingCgroupLeaf {
+                vm: "corp-vm".to_owned(),
+                role_id: "cloud-hypervisor".to_owned(),
+            })
+            .expect("serialize adoptable missing cgroup issue");
+        assert_eq!(
+            adoptable_missing_cgroup,
+            json!({
+                "kind": "adoptable-missing-cgroup-leaf",
+                "vm": "corp-vm",
+                "roleId": "cloud-hypervisor"
+            })
+        );
+    }
+
+    #[test]
+    fn report_accepts_future_top_level_fields() {
+        let report = serde_json::from_value::<StorageLifecycleReport>(json!({
+            "schemaVersion": "v2",
+            "storageContractPresent": true,
+            "syncContractPresent": true,
+            "pathCount": 1,
+            "restartPolicyCount": 1,
+            "lockCount": 1,
+            "issues": [],
+            "futureField": "ignored"
+        }))
+        .expect("top-level report is forward-compatible");
+
+        assert!(!report.is_degraded());
+    }
+
+    #[test]
+    fn issue_kinds_are_deduped_and_stable() {
+        let report = StorageLifecycleReport {
+            schema_version: "v2".to_owned(),
+            storage_contract_present: false,
+            sync_contract_present: false,
+            path_count: 0,
+            restart_policy_count: 0,
+            lock_count: 0,
+            issues: vec![
+                StorageLifecycleIssue::MissingRestartPolicy {
+                    vm: "corp-vm".to_owned(),
+                    role_id: "cloud-hypervisor".to_owned(),
+                },
+                StorageLifecycleIssue::AdoptableMissingCgroupLeaf {
+                    vm: "another-vm".to_owned(),
+                    role_id: "vhost-device-sound".to_owned(),
+                },
+                StorageLifecycleIssue::LegacyBundleContractsUnavailable { bundle_version: 5 },
+                StorageLifecycleIssue::MissingRestartPolicy {
+                    vm: "different-vm".to_owned(),
+                    role_id: "swtpm".to_owned(),
+                },
+            ],
+        };
+
+        assert_eq!(
+            report.issue_kinds_csv(),
+            "adoptable-missing-cgroup-leaf,legacy-bundle-contracts-unavailable,missing-restart-policy"
+        );
+    }
+}
