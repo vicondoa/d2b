@@ -52,6 +52,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- CI: the PR aarch64 flake leg now runs only the lightweight
+  `smoke-eval-aarch64.nix` check instead of the full native aarch64
+  flake sweep.
 - `bundleVersion` 5 → 6: adds the private storage lifecycle and
   synchronization artifacts to the trusted bundle.
 - CI: pull requests now fail closed when Rust/Nix/Cargo changes do not
