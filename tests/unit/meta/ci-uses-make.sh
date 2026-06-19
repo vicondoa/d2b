@@ -14,6 +14,9 @@ WORKFLOW_DIR="$ROOT/.github/workflows"
 allowlisted_workflows=(
   .github/workflows/eval-with-entra-id.yml
   .github/workflows/pr-eval-shell-tests.yml
+  # Release publishing is a deployment workflow, not a reusable test gate; it
+  # intentionally runs explicit tag/build/release steps instead of a make target.
+  .github/workflows/release-host-binaries.yml
 )
 
 is_allowlisted() {

@@ -41,6 +41,18 @@ jobs:
       - name: Lint gate (preflight + parse + shellcheck)
         run: make test-lint
 
+  test-changelog:
+    if: github.event_name == 'pull_request'
+    needs: tier0
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      - name: Changelog policy gate
+        run: bash scripts/changelog-check.sh
+
   test-rust:
     needs: tier0
     runs-on: ubuntu-latest
@@ -55,6 +67,10 @@ jobs:
       # are non-deterministic and bloat the cache without benefit for CI
       # (each PR run starts from a different commit).
       CARGO_INCREMENTAL: "0"
+      # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
+      # rust-cache's post-step `cargo metadata` doesn't fail looking for
+      # an sccache binary that isn't installed.
+      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:

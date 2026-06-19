@@ -32,7 +32,7 @@ full picture and threat model.
 ├── README.md                       <- consumer-facing entry point
 ├── AGENTS.md                       <- this file
 ├── SECURITY.md                     <- disclosure policy + threat-model summary
-├── CHANGELOG.md                    <- Keep a Changelog, grouped under `## Unreleased`
+├── CHANGELOG.md                    <- Keep a Changelog, grouped under `## [Unreleased]`
 ├── LICENSE                         <- Apache-2.0
 ├── flake.nix                       <- public surface: nixosModules / templates / checks
 ├── flake.lock
@@ -126,6 +126,32 @@ documented in [`tests/README.md`](./tests/README.md). Most
 contributors do **not** need to run them — Layer 1 is the PR gate.
 
 ## Development workflow
+
+## Changelog & Releases
+
+Every PR that changes code **must** update `CHANGELOG.md`. The CI gate
+enforces this.
+
+### Format
+
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Add entries under
+`## [Unreleased]`. When ready to release, rename the section to
+`## [X.Y.Z] - YYYY-MM-DD`.
+
+### Auto-release
+
+Merging to `main` with a new version header in `CHANGELOG.md` triggers:
+1. Auto-creation of git tag `vX.Y.Z`
+2. Build of all host binaries (`nixlingd`, `nixling`, `nixling-priv-broker`,
+   `nixling-wayland-filter`, `nixling-activation-helper`)
+3. GitHub Release with changelog notes + binary tarballs + `SHA256SUMS`
+
+Consumers can fetch pre-built binaries from the release instead of
+building from source.
+
+### Versioning
+
+Follow semver. The version in `CHANGELOG.md` is the single source of truth.
 
 ### Worktrees for parallel agents
 
