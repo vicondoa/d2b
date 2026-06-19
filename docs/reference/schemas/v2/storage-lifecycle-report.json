@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StorageLifecycleReport",
+  "description": "Host-local daemon startup report for storage/restart/sync contract posture.",
+  "type": "object",
+  "required": [
+    "issues",
+    "lockCount",
+    "pathCount",
+    "restartPolicyCount",
+    "schemaVersion",
+    "storageContractPresent",
+    "syncContractPresent"
+  ],
+  "properties": {
+    "issues": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/StorageLifecycleIssue"
+      }
+    },
+    "lockCount": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0.0
+    },
+    "pathCount": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0.0
+    },
+    "restartPolicyCount": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0.0
+    },
+    "schemaVersion": {
+      "type": "string"
+    },
+    "storageContractPresent": {
+      "type": "boolean"
+    },
+    "syncContractPresent": {
+      "type": "boolean"
+    }
+  },
+  "definitions": {
+    "StorageContractValidationReason": {
+      "type": "string",
+      "enum": [
+        "duplicate-storage-path-id",
+        "duplicate-restart-policy",
+        "duplicate-degraded-reason",
+        "unclassified"
+      ]
+    },
+    "StorageLifecycleIssue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "missing-storage-contract"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "missing-sync-contract"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "bundleVersion",
+            "kind"
+          ],
+          "properties": {
+            "bundleVersion": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "legacy-bundle-contracts-unavailable"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "bundle-resolver-unavailable"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "storage-contract-invalid"
+              ]
+            },
+            "reason": {
+              "$ref": "#/definitions/StorageContractValidationReason"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "sync-contract-invalid"
+              ]
+            },
+            "reason": {
+              "$ref": "#/definitions/SyncContractValidationReason"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "roleId",
+            "vm"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "missing-restart-policy"
+              ]
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "vm": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "roleId",
+            "vm"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "adoptable-missing-cgroup-leaf"
+              ]
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "vm": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "SyncContractValidationReason": {
+      "type": "string",
+      "enum": [
+        "duplicate-lock-id",
+        "ofd-lock-missing-cloexec",
+        "fd-passing-missing-lease-transfer-record",
+        "duplicate-acquire-order",
+        "unclassified"
+      ]
+    }
+  }
+}
