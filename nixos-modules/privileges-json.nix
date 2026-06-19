@@ -1217,6 +1217,18 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "QemuMediaRefreshRegistry",
+    "subject": "qemu-media redacted registry",
+    "scope": "host",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": false,
+    "secretAccess": "redacted-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "QemuMediaBoot",
     "subject": "qemu-media boot media",
     "scope": "per-VM/per-media-ref",

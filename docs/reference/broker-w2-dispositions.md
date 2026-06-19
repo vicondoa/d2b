@@ -44,6 +44,7 @@ side-effect audit operation that never reaches the wire dispatcher).
 | QemuMediaBoot | promoted-live | Resolves the declared boot source, passes the media fd to QEMU over QMP, attaches the boot USB storage device, and continues the paused runner. | live in production broker |
 | QemuMediaDetach | promoted-live | Resolves an enrolled qemu-media slot, removes the QMP device/block/fd nodes, and returns only redacted command labels. | live in production broker |
 | QemuMediaEnroll | promoted-live | Enrolls a physical USB device into root-only qemu-media registry state and reconciles runtime automount-inhibition rules. | live in production broker |
+| QemuMediaRefreshRegistry | promoted-live | Rebuilds redacted daemon-readable qemu-media registry state and runtime automount-inhibition rules from the root-only persistent registry. | live in production broker |
 | ReadSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret read paths are not implemented. | future work |
 | ResumeBroker | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; broker admin resume controls are not implemented. | future work |
 | RotateSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret rotation is not implemented. | future work |

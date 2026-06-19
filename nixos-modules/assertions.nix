@@ -10,7 +10,7 @@
 # network.nix where the env iteration happens. This file owns the
 # per-VM-name and per-env-name format / reserved-prefix checks that
 # don't depend on network.nix's iteration of cfg.envs.
-{ config, lib, options, ... }:
+{ config, lib, options, pkgs, ... }:
 
 let
   cfg = config.nixling;
@@ -600,6 +600,14 @@ let
             nixling.vms.${name}: runtime.kind = "qemu-media" requires
             `env` in this foundational implementation so networking can be
             derived without evaluating a guest NixOS configuration.
+          '';
+        }
+        {
+          assertion = pkgs.stdenv.hostPlatform.system == "x86_64-linux";
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" is currently
+            supported only on x86_64-linux because its QEMU argv uses the
+            q35/virtio-vga device model.
           '';
         }
         {

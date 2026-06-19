@@ -241,6 +241,12 @@ pub enum OperationFields {
         udev_rule_written: bool,
         udev_reloaded: bool,
     },
+    QemuMediaRefreshRegistry {
+        record_count: u32,
+        redacted_index_written: bool,
+        udev_rule_written: bool,
+        udev_reloaded: bool,
+    },
     QemuMediaAttach {
         vm_id: String,
         media_ref: String,
@@ -521,6 +527,12 @@ impl OperationFields {
                 media_ref: String,
                 read_only: bool,
                 by_id_count: u32,
+                udev_rule_written: bool,
+                udev_reloaded: bool,
+            }),
+            "QemuMediaRefreshRegistry" => parse_fields!(value => QemuMediaRefreshRegistry {
+                record_count: u32,
+                redacted_index_written: bool,
                 udev_rule_written: bool,
                 udev_reloaded: bool,
             }),
@@ -838,6 +850,16 @@ mod tests {
             media_ref: "installer-usb".to_owned(),
             read_only: true,
             by_id_count: 1,
+            udev_rule_written: true,
+            udev_reloaded: true,
+        }
+    );
+    roundtrip_test!(
+        qemu_media_refresh_registry_round_trip,
+        "QemuMediaRefreshRegistry",
+        OperationFields::QemuMediaRefreshRegistry {
+            record_count: 2,
+            redacted_index_written: true,
             udev_rule_written: true,
             udev_reloaded: true,
         }

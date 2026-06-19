@@ -176,6 +176,7 @@
             "QemuMediaBoot",
             "QemuMediaDetach",
             "QemuMediaEnroll",
+            "QemuMediaRefreshRegistry",
             "ReadSecretById",
             "ResumeBroker",
             "RotateSecretById",

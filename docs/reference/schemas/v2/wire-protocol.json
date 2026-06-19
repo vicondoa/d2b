@@ -884,6 +884,25 @@
           }
         },
         {
+          "description": "Refresh redacted qemu-media runtime state from the root-only persistent registry. The daemon calls this before public status/probe rendering so `/run` loss after reboot does not make enrollments disappear.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaRefreshRegistry"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaRefreshRegistryRequest"
+            }
+          }
+        },
+        {
           "description": "Resolve and attach the declared boot source, then continue the paused qemu-media runner. The broker resolves physical USB registry state or direct image-file policy from the trusted bundle; the daemon supplies only the VM id.",
           "type": "object",
           "required": [
@@ -1858,6 +1877,24 @@
             },
             "payload": {
               "$ref": "#/definitions/QemuMediaEnrollResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaRefreshRegistry"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaRefreshRegistryResponse"
             }
           }
         },
@@ -6339,6 +6376,45 @@
         "fd-removed",
         "vm-continued"
       ]
+    },
+    "QemuMediaRefreshRegistryRequest": {
+      "type": "object",
+      "properties": {
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaRefreshRegistryResponse": {
+      "type": "object",
+      "required": [
+        "recordCount",
+        "redactedIndexWritten",
+        "udevReloaded",
+        "udevRuleWritten"
+      ],
+      "properties": {
+        "recordCount": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "redactedIndexWritten": {
+          "type": "boolean"
+        },
+        "udevReloaded": {
+          "type": "boolean"
+        },
+        "udevRuleWritten": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
     },
     "QemuMediaRegistryStatus": {
       "type": "object",

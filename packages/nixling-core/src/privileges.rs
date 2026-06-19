@@ -1140,6 +1140,16 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
+        "QemuMediaRefreshRegistry",
+        "qemu-media redacted registry",
+        "host",
+        &["nixlingd"],
+        false,
+        SecretAccess::RedactedOnly,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
         "QemuMediaBoot",
         "qemu-media boot media",
         "per-VM/per-media-ref",

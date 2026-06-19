@@ -49,6 +49,10 @@ pub enum BrokerRequest {
     /// broker resolves declared policy from the trusted bundle, reads physical
     /// identity as root, and writes root-only registry/rules outside the store.
     QemuMediaEnroll(QemuMediaEnrollRequest),
+    /// Refresh redacted qemu-media runtime state from the root-only persistent
+    /// registry. The daemon calls this before public status/probe rendering so
+    /// `/run` loss after reboot does not make enrollments disappear.
+    QemuMediaRefreshRegistry(QemuMediaRefreshRegistryRequest),
     /// Resolve and attach the declared boot source, then continue the paused
     /// qemu-media runner. The broker resolves physical USB registry state or
     /// direct image-file policy from the trusted bundle; the daemon supplies
@@ -191,6 +195,7 @@ impl BrokerRequest {
             Self::OpenFuse(_) => "OpenFuse",
             Self::OpenKvm(_) => "OpenKvm",
             Self::QemuMediaEnroll(_) => "QemuMediaEnroll",
+            Self::QemuMediaRefreshRegistry(_) => "QemuMediaRefreshRegistry",
             Self::QemuMediaBoot(_) => "QemuMediaBoot",
             Self::QemuMediaAttach(_) => "QemuMediaAttach",
             Self::QemuMediaDetach(_) => "QemuMediaDetach",
@@ -437,6 +442,7 @@ pub enum BrokerResponse {
     Hello(HelloResponse),
     GuestControlSign(GuestControlSignResponse),
     QemuMediaEnroll(QemuMediaEnrollResponse),
+    QemuMediaRefreshRegistry(QemuMediaRefreshRegistryResponse),
     QemuMediaBoot(QemuMediaHotplugResponse),
     QemuMediaAttach(QemuMediaHotplugResponse),
     QemuMediaDetach(QemuMediaHotplugResponse),
@@ -800,6 +806,22 @@ pub struct QemuMediaEnrollResponse {
     pub media_ref: MediaRef,
     pub read_only: bool,
     pub enrolled: bool,
+    pub udev_rule_written: bool,
+    pub udev_reloaded: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaRefreshRegistryRequest {
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaRefreshRegistryResponse {
+    pub record_count: u32,
+    pub redacted_index_written: bool,
     pub udev_rule_written: bool,
     pub udev_reloaded: bool,
 }

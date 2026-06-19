@@ -942,6 +942,12 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
         }));
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
+    if let BrokerRequest::QemuMediaRefreshRegistry(req) = request {
+        return Ok(serde_json::json!({
+            "tracingSpanIdPresent": req.tracing_span_id.is_some(),
+        }));
+    }
+    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaBoot(req) = request {
         return Ok(serde_json::json!({
             "vmId": req.vm_id.as_str(),
@@ -2186,6 +2192,32 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             Ok(DispatchResult::no_fds(BrokerResponse::QemuMediaEnroll(
                 outcome.response,
             )))
+        }
+        RealBrokerRequest::QemuMediaRefreshRegistry(req) => {
+            let resolver = require_resolver(resolver)?;
+            let outcome = crate::ops::media::refresh_registry(resolver)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "QemuMediaRefreshRegistry",
+                "qemu-media",
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                "host",
+                "qemu-media",
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::QemuMediaRefreshRegistry {
+                    record_count: outcome.response.record_count,
+                    redacted_index_written: outcome.response.redacted_index_written,
+                    udev_rule_written: outcome.response.udev_rule_written,
+                    udev_reloaded: outcome.response.udev_reloaded,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::QemuMediaRefreshRegistry(outcome.response),
+            ))
         }
         RealBrokerRequest::QemuMediaBoot(req) => {
             let resolver = require_resolver(resolver)?;

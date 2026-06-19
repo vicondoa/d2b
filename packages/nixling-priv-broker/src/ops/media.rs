@@ -22,7 +22,7 @@ use nixling_host::media::{
 use nixling_ipc::broker_wire::{
     QemuMediaBootRequest, QemuMediaEnrollRequest, QemuMediaEnrollResponse,
     QemuMediaHotplugEvent, QemuMediaHotplugRequest, QemuMediaHotplugResponse,
-    QemuMediaHotplugStatus,
+    QemuMediaHotplugStatus, QemuMediaRefreshRegistryResponse,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -169,6 +169,10 @@ pub struct HotplugOutcome {
     pub response: QemuMediaHotplugResponse,
 }
 
+pub struct RefreshOutcome {
+    pub response: QemuMediaRefreshRegistryResponse,
+}
+
 pub fn enroll(
     resolver: &BundleResolver,
     req: &QemuMediaEnrollRequest,
@@ -213,6 +217,21 @@ pub fn enroll(
             udev_reloaded,
         },
         by_id_count,
+    })
+}
+
+pub fn refresh_registry(resolver: &BundleResolver) -> Result<RefreshOutcome, MediaOpError> {
+    let records = read_all_registry_records(resolver)?;
+    let redacted_index_written = write_redacted_registry_index(&records).map(|_| true)?;
+    let udev_rule_written = write_runtime_udev_rules(resolver, &records)?;
+    let udev_reloaded = reload_udev_rules();
+    Ok(RefreshOutcome {
+        response: QemuMediaRefreshRegistryResponse {
+            record_count: u32::try_from(records.len()).unwrap_or(u32::MAX),
+            redacted_index_written,
+            udev_rule_written,
+            udev_reloaded,
+        },
     })
 }
 
@@ -388,15 +407,6 @@ fn qmp_socket_path(vm: &str) -> PathBuf {
     PathBuf::from("/run/nixling/vms").join(vm).join("qmp.sock")
 }
 
-fn qemu_media_fdset_id(vm: &str, media_ref: &str) -> u64 {
-    let mut hash = 0xcbf29ce484222325_u64;
-    for byte in vm.bytes().chain([b':']).chain(media_ref.bytes()) {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    1_000 + (hash % 1_000_000)
-}
-
 fn qemu_media_file_node_id(media_ref: &str) -> String {
     format!("nl-file-{media_ref}")
 }
@@ -407,20 +417,23 @@ fn qmp_attach(
     fd: i32,
     read_only: bool,
 ) -> Result<Vec<String>, MediaOpError> {
-    let fdset_id = qemu_media_fdset_id(client.vm(), &scaffold.media_ref);
     let file_node_id = qemu_media_file_node_id(&scaffold.media_ref);
-    let mut cleanup = QmpAttachCleanup::new(scaffold, fdset_id, file_node_id.clone());
+    let mut cleanup = QmpAttachCleanup::new(scaffold, file_node_id.clone());
     cleanup.fdset_added = true;
     match client.execute(
         "add-fd",
         json!({
-            "fdset-id": fdset_id,
             "opaque": format!("nixling:{}", scaffold.media_ref),
         }),
         Some(fd),
     ) {
         Ok(value) => {
+            cleanup.fdset_id = value.get("fdset-id").and_then(Value::as_u64);
             cleanup.fd = value.get("fd").and_then(Value::as_u64);
+            if cleanup.fdset_id.is_none() || cleanup.fd.is_none() {
+                cleanup.rollback(client);
+                return Err(MediaOpError::Qmp("add-fd-missing-return-fields".to_owned()));
+            }
         }
         Err(error) => {
             cleanup.rollback(client);
@@ -431,7 +444,7 @@ fn qmp_attach(
         "blockdev-add",
         json!({
             "driver": "file",
-            "filename": format!("/dev/fdset/{fdset_id}"),
+            "filename": format!("/dev/fdset/{}", cleanup.fdset_id.expect("validated fdset id")),
             "node-name": file_node_id.as_str(),
             "read-only": read_only,
         }),
@@ -506,7 +519,7 @@ struct QmpAttachCleanup {
     blockdev_id: String,
     file_node_id: String,
     media_ref: String,
-    fdset_id: u64,
+    fdset_id: Option<u64>,
     fd: Option<u64>,
     device_added: bool,
     raw_added: bool,
@@ -515,13 +528,13 @@ struct QmpAttachCleanup {
 }
 
 impl QmpAttachCleanup {
-    fn new(scaffold: &QemuMediaHotplugScaffold, fdset_id: u64, file_node_id: String) -> Self {
+    fn new(scaffold: &QemuMediaHotplugScaffold, file_node_id: String) -> Self {
         Self {
             device_id: scaffold.device_id.clone(),
             blockdev_id: scaffold.blockdev_id.clone(),
             file_node_id,
             media_ref: scaffold.media_ref.clone(),
-            fdset_id,
+            fdset_id: None,
             fd: None,
             device_added: false,
             raw_added: false,
@@ -553,13 +566,14 @@ impl QmpAttachCleanup {
             );
         }
         if self.fdset_added {
-            let fd = self
-                .fd
-                .or_else(|| client.query_fdset_fd(self.fdset_id, &self.media_ref).ok().flatten());
-            if let Some(fd) = fd {
+            if let Some((fdset_id, fd)) = self
+                .fdset_id
+                .zip(self.fd)
+                .or_else(|| client.query_fdset_entry(&self.media_ref).ok().flatten())
+            {
                 let _ = client.execute(
                     "remove-fd",
-                    json!({ "fdset-id": self.fdset_id, "fd": fd }),
+                    json!({ "fdset-id": fdset_id, "fd": fd }),
                     None,
                 );
             }
@@ -571,7 +585,6 @@ fn qmp_detach(
     client: &mut QmpClient,
     scaffold: &QemuMediaHotplugScaffold,
 ) -> Result<Vec<String>, MediaOpError> {
-    let fdset_id = qemu_media_fdset_id(client.vm(), &scaffold.media_ref);
     let file_node_id = qemu_media_file_node_id(&scaffold.media_ref);
     let mut first_error = None;
     match client.execute("device_del", json!({ "id": scaffold.device_id.as_str() }), None) {
@@ -594,14 +607,17 @@ fn qmp_detach(
     if let Err(error) = client.execute("blockdev-del", json!({ "node-name": file_node_id.as_str() }), None) {
         first_error.get_or_insert(error);
     }
-    let fd = client.query_fdset_fd(fdset_id, &scaffold.media_ref).ok().flatten();
-    let remove_fd_args = if let Some(fd) = fd {
+    let fdset_entry = client.query_fdset_entry(&scaffold.media_ref).ok().flatten();
+    let remove_fd_args = if let Some((fdset_id, fd)) = fdset_entry {
         json!({ "fdset-id": fdset_id, "fd": fd })
     } else {
-        json!({ "fdset-id": fdset_id })
+        first_error.get_or_insert(MediaOpError::Qmp("fdset-fd-not-found".to_owned()));
+        json!({})
     };
-    if let Err(error) = client.execute("remove-fd", remove_fd_args, None) {
-        first_error.get_or_insert(error);
+    if fdset_entry.is_some()
+        && let Err(error) = client.execute("remove-fd", remove_fd_args, None)
+    {
+            first_error.get_or_insert(error);
     }
     if let Some(error) = first_error {
         return Err(error);
@@ -709,26 +725,22 @@ impl QmpClient {
         }
     }
 
-    fn query_fdset_fd(
-        &mut self,
-        fdset_id: u64,
-        media_ref: &str,
-    ) -> Result<Option<u64>, MediaOpError> {
+    fn query_fdset_entry(&mut self, media_ref: &str) -> Result<Option<(u64, u64)>, MediaOpError> {
         let expected_opaque = format!("nixling:{media_ref}");
         let value = self.execute("query-fdsets", json!({}), None)?;
         let Some(fdsets) = value.as_array() else {
             return Ok(None);
         };
         for fdset in fdsets {
-            if fdset.get("fdset-id").and_then(Value::as_u64) != Some(fdset_id) {
+            let Some(fdset_id) = fdset.get("fdset-id").and_then(Value::as_u64) else {
                 continue;
-            }
+            };
             let Some(fds) = fdset.get("fds").and_then(Value::as_array) else {
                 continue;
             };
             for fd in fds {
                 if fd.get("opaque").and_then(Value::as_str) == Some(expected_opaque.as_str()) {
-                    return Ok(fd.get("fd").and_then(Value::as_u64));
+                    return Ok(fd.get("fd").and_then(Value::as_u64).map(|fd| (fdset_id, fd)));
                 }
             }
         }

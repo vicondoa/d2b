@@ -63,6 +63,7 @@ use nixling_ipc::{
         QemuMediaBootRequest as BrokerQemuMediaBootRequest,
         QemuMediaEnrollRequest as BrokerQemuMediaEnrollRequest,
         QemuMediaHotplugRequest as BrokerQemuMediaHotplugRequest,
+        QemuMediaRefreshRegistryRequest as BrokerQemuMediaRefreshRegistryRequest,
         RunActivationRequest as BrokerRunActivationRequest, RunGcRequest as BrokerRunGcRequest,
         RunHostInstallRequest as BrokerRunHostInstallRequest,
         RunHostKeyTrustRequest as BrokerRunHostKeyTrustRequest,
@@ -3270,6 +3271,34 @@ fn vm_is_qemu_media(resolver: &BundleResolver, vm: &str) -> Result<bool, TypedEr
     Ok(entry.runtime.kind == nixling_core::runtime::RuntimeKind::QemuMedia)
 }
 
+fn refresh_qemu_media_registry_index_if_needed(
+    state: &ServerState,
+    resolver: &BundleResolver,
+) -> Result<(), TypedError> {
+    if resolver.host.qemu_media.is_none() {
+        return Ok(());
+    }
+    match dispatch_broker_request(
+        state,
+        BrokerRequest::QemuMediaRefreshRegistry(BrokerQemuMediaRefreshRegistryRequest {
+            tracing_span_id: None,
+        }),
+    )? {
+        BrokerResponse::QemuMediaRefreshRegistry(_) => Ok(()),
+        BrokerResponse::Error(error) => Err(TypedError::InternalIo {
+            context: "refresh qemu-media registry index".to_owned(),
+            detail: format!("{}:{}", error.operation, error.kind),
+        }),
+        other => Err(TypedError::InternalIo {
+            context: "refresh qemu-media registry index".to_owned(),
+            detail: format!(
+                "unexpected broker response {}",
+                broker_response_kind(&other)
+            ),
+        }),
+    }
+}
+
 fn dispatch_broker_qemu_media_attach(
     state: &ServerState,
     request: public_wire::UsbipBindCliRequest,
@@ -3502,6 +3531,7 @@ fn dispatch_broker_usbip_probe(state: &ServerState) -> Result<Value, TypedError>
                 detail: other.to_string(),
             },
         })?;
+    refresh_qemu_media_registry_index_if_needed(state, &resolver)?;
     let usbip_intent_ids: Vec<_> = resolver
         .usbip_bind_intent_ids()
         .map(str::to_owned)
@@ -3558,13 +3588,13 @@ fn qemu_media_probe_entries(resolver: &BundleResolver) -> Vec<public_wire::Usbip
         return Vec::new();
     };
     const MAX_QEMU_MEDIA_PROBE_CANDIDATES: usize = 16;
-    let mut candidates = nixling_host::media::safe_usb_block_candidates(
+    let candidates = nixling_host::media::safe_usb_block_candidates(
         Path::new("/sys"),
         Path::new("/dev/disk/by-id"),
     );
-    candidates.truncate(MAX_QEMU_MEDIA_PROBE_CANDIDATES);
     let candidate_bus_ids: Vec<String> = candidates
         .iter()
+        .take(MAX_QEMU_MEDIA_PROBE_CANDIDATES)
         .map(|candidate| candidate.bus_id.clone())
         .collect();
     let registry_records = qemu_media_probe_registry_records();
@@ -3625,8 +3655,31 @@ fn qemu_media_probe_entries(resolver: &BundleResolver) -> Vec<public_wire::Usbip
             .iter()
             .filter(|record| record.vm == source.vm && record.media_ref == source.media_ref)
             .collect();
+        let duplicate_identity = matching_records.iter().any(|record| {
+            registry_records.iter().any(|other| {
+                other.vm == source.vm
+                    && other.media_ref != source.media_ref
+                    && other.identity_hash == record.identity_hash
+            })
+        });
         let mut any_enrolled_candidate = false;
-        for candidate in &candidates {
+        let mut candidate_refs = candidates.iter().collect::<Vec<_>>();
+        candidate_refs.sort_by_key(|candidate| {
+            let enrolled = matching_records
+                .iter()
+                .any(|record| qemu_media_probe_candidate_matches_record(candidate, record));
+            let enrolled_elsewhere = !enrolled
+                && registry_records.iter().any(|record| {
+                    record.vm == source.vm
+                        && record.media_ref != source.media_ref
+                        && qemu_media_probe_candidate_matches_record(candidate, record)
+                });
+            (!enrolled, !enrolled_elsewhere, candidate.bus_id.clone())
+        });
+        for candidate in candidate_refs
+            .into_iter()
+            .take(MAX_QEMU_MEDIA_PROBE_CANDIDATES)
+        {
             let enrolled = matching_records
                 .iter()
                 .any(|record| qemu_media_probe_candidate_matches_record(candidate, record));
@@ -3644,14 +3697,18 @@ fn qemu_media_probe_entries(resolver: &BundleResolver) -> Vec<public_wire::Usbip
                 bus_id,
                 std::slice::from_ref(&candidate.bus_id),
                 source_kind.clone(),
-                if enrolled {
+                if duplicate_identity && (enrolled || enrolled_elsewhere) {
+                    public_wire::UsbipProbeStatus::Stale
+                } else if enrolled {
                     public_wire::UsbipProbeStatus::Enrolled
                 } else if enrolled_elsewhere {
                     public_wire::UsbipProbeStatus::Stale
                 } else {
                     public_wire::UsbipProbeStatus::Enrollable
                 },
-                if enrolled {
+                if duplicate_identity && (enrolled || enrolled_elsewhere) {
+                    None
+                } else if enrolled {
                     Some(format!(
                         "nixling usb attach {} {} --apply",
                         source.vm, bus_id
@@ -3666,7 +3723,7 @@ fn qemu_media_probe_entries(resolver: &BundleResolver) -> Vec<public_wire::Usbip
                 },
             ));
         }
-        if !matching_records.is_empty() && !any_enrolled_candidate {
+        if !matching_records.is_empty() && (duplicate_identity || !any_enrolled_candidate) {
             entries.push(qemu_media_probe_entry(
                 source,
                 env,
@@ -10162,6 +10219,14 @@ fn dispatch_list(
     let manifest = load_manifest(&state.config.artifacts.public_manifest_path)?;
     let host = load_json::<HostJson>(&state.config.artifacts.host_path).ok();
     let processes = load_json::<ProcessesJson>(&state.config.artifacts.processes_path)?;
+    if host
+        .as_ref()
+        .and_then(|host| host.qemu_media.as_ref())
+        .is_some()
+    {
+        let resolver = load_bundle_resolver(state)?;
+        refresh_qemu_media_registry_index_if_needed(state, &resolver)?;
+    }
     let vms = manifest
         .iter()
         .filter(|(name, _)| !name.starts_with('_'))
@@ -10214,6 +10279,14 @@ fn dispatch_status(
     let manifest = load_manifest(&state.config.artifacts.public_manifest_path)?;
     let host = load_json::<HostJson>(&state.config.artifacts.host_path).ok();
     let processes = load_json::<ProcessesJson>(&state.config.artifacts.processes_path)?;
+    if host
+        .as_ref()
+        .and_then(|host| host.qemu_media.as_ref())
+        .is_some()
+    {
+        let resolver = load_bundle_resolver(state)?;
+        refresh_qemu_media_registry_index_if_needed(state, &resolver)?;
+    }
     let requested_vm = request.vm.clone();
 
     let statuses = manifest
