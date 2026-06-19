@@ -3643,6 +3643,321 @@
       },
       "additionalProperties": false
     },
+    "GatewayDisplayCloseArgs": {
+      "type": "object",
+      "required": [
+        "sessionId"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GatewayDisplayCloseResult": {
+      "type": "object",
+      "required": [
+        "closed"
+      ],
+      "properties": {
+        "closed": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GatewayDisplayListArgs": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "GatewayDisplayListResult": {
+      "type": "object",
+      "required": [
+        "sessions"
+      ],
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/GatewayDisplaySessionSummary"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "GatewayDisplayOp": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/GatewayDisplayStartArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "start"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/GatewayDisplayOpenArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "open"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/GatewayDisplayCloseArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "close"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/GatewayDisplayListArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "list"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "GatewayDisplayOpResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "start"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/GatewayDisplayStartResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "open"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/GatewayDisplayOpenResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "close"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/GatewayDisplayCloseResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "list"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/GatewayDisplayListResult"
+            }
+          }
+        }
+      ]
+    },
+    "GatewayDisplayOpenArgs": {
+      "type": "object",
+      "required": [
+        "appArgv",
+        "operationId",
+        "principal",
+        "requestHash",
+        "target"
+      ],
+      "properties": {
+        "appArgv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "principal": {
+          "type": "string"
+        },
+        "requestHash": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GatewayDisplayOpenResult": {
+      "type": "object",
+      "required": [
+        "sessionId",
+        "state"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GatewayDisplaySessionSummary": {
+      "type": "object",
+      "required": [
+        "sessionId",
+        "state",
+        "target"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GatewayDisplayStartArgs": {
+      "type": "object",
+      "required": [
+        "operationId",
+        "principal",
+        "requestHash",
+        "target"
+      ],
+      "properties": {
+        "operationId": {
+          "type": "string"
+        },
+        "principal": {
+          "type": "string"
+        },
+        "requestHash": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GatewayDisplayStartResult": {
+      "type": "object",
+      "required": [
+        "state",
+        "target"
+      ],
+      "properties": {
+        "state": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "GcRequest": {
       "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
       "type": "object",
@@ -5240,6 +5555,25 @@
               "$ref": "#/definitions/ExecOp"
             }
           }
+        },
+        {
+          "description": "Gateway-mode display-session operation. Host-mode daemons reject this with a typed gateway-unavailable error; gateway-mode nixlingd handles it through the ADR 0032 orchestrator.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "gateway display"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/GatewayDisplayOp"
+            }
+          }
         }
       ]
     },
@@ -5476,6 +5810,24 @@
             },
             "payload": {
               "$ref": "#/definitions/ExecOpResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "gateway display"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/GatewayDisplayOpResponse"
             }
           }
         },

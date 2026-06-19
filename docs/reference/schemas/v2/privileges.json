@@ -171,6 +171,7 @@
             "PrepareRuntimeDir",
             "PrepareStateDir",
             "PrepareStoreView",
+            "PrepareSwtpmDir",
             "ReadSecretById",
             "ResumeBroker",
             "RotateSecretById",
