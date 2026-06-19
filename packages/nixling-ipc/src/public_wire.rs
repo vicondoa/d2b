@@ -95,6 +95,11 @@ pub enum PublicRequest {
     /// it never crosses SSH.
     #[serde(rename = "exec")]
     Exec(ExecOp),
+    /// Gateway-mode display-session operation. Host-mode daemons reject this
+    /// with a typed gateway-unavailable error; gateway-mode nixlingd handles it
+    /// through the ADR 0032 orchestrator.
+    #[serde(rename = "gateway display")]
+    GatewayDisplay(GatewayDisplayOp),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -126,8 +131,94 @@ pub enum PublicResponse {
     ReadGuestConfig(ReadGuestConfigResponse),
     #[serde(rename = "exec")]
     Exec(ExecOpResponse),
+    #[serde(rename = "gateway display")]
+    GatewayDisplay(GatewayDisplayOpResponse),
     #[serde(rename = "error")]
     Error(Error),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", content = "args", rename_all = "kebab-case")]
+pub enum GatewayDisplayOp {
+    Start(GatewayDisplayStartArgs),
+    Open(GatewayDisplayOpenArgs),
+    Close(GatewayDisplayCloseArgs),
+    List(GatewayDisplayListArgs),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayDisplayStartArgs {
+    pub target: String,
+    pub operation_id: String,
+    pub principal: String,
+    pub request_hash: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayDisplayOpenArgs {
+    pub target: String,
+    pub operation_id: String,
+    pub principal: String,
+    pub app_argv: Vec<String>,
+    pub request_hash: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayDisplayCloseArgs {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayDisplayListArgs {
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", content = "result", rename_all = "kebab-case")]
+pub enum GatewayDisplayOpResponse {
+    Start(GatewayDisplayStartResult),
+    Open(GatewayDisplayOpenResult),
+    Close(GatewayDisplayCloseResult),
+    List(GatewayDisplayListResult),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayDisplayStartResult {
+    pub target: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayDisplayOpenResult {
+    pub session_id: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayDisplayCloseResult {
+    pub closed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayDisplayListResult {
+    pub sessions: Vec<GatewayDisplaySessionSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayDisplaySessionSummary {
+    pub session_id: String,
+    pub target: String,
+    pub state: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

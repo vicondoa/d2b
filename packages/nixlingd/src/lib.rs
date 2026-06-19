@@ -1838,6 +1838,7 @@ fn verb_requires_admin(verb: &str) -> bool {
             | "hostReconcile"
             | "readGuestConfig"
             | "exec"
+            | "gatewayDisplay"
     )
 }
 
@@ -1899,7 +1900,18 @@ fn dispatch_request(
         // spawned worker off the serial accept loop). Detached management ops
         // are ordinary one-shot requests.
         wire::Request::Exec(op) => dispatch_exec_management(state, peer, op),
+        wire::Request::GatewayDisplay(op) => dispatch_gateway_display(state, peer, op),
     }
+}
+
+fn dispatch_gateway_display(
+    _state: &ServerState,
+    _peer: &PeerIdentity,
+    _op: public_wire::GatewayDisplayOp,
+) -> Result<Value, TypedError> {
+    Err(TypedError::GatewayDisplayUnavailable {
+        detail: "gateway display requests must be handled by a realm gateway-mode nixlingd; this daemon is not serving a gateway display orchestrator".to_owned(),
+    })
 }
 
 fn dispatch_exec_management(

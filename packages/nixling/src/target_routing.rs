@@ -100,6 +100,17 @@ pub fn route(raw: &str, table: &RealmEntrypointTable) -> Result<Route, RouteErro
     }
 }
 
+/// Return the canonical gateway target for a fully-qualified non-local target.
+/// Bare/local names return `None` and stay on the local fast path.
+pub fn gateway_candidate(raw: &str) -> Option<String> {
+    let target = TargetName::parse(raw).ok()?;
+    if target.node_is_this() && target.realm == RealmPath::local() {
+        None
+    } else {
+        Some(target.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +181,16 @@ mod tests {
             Route::Local {
                 vm: "demo".to_owned()
             }
+        );
+    }
+
+    #[test]
+    fn gateway_candidate_detects_fully_qualified_non_local() {
+        assert_eq!(gateway_candidate("vm-a"), None);
+        assert_eq!(gateway_candidate("demo.aca.work"), None);
+        assert_eq!(
+            gateway_candidate("demo.gw.work.nixling").as_deref(),
+            Some("nl://demo.gw.work.nixling")
         );
     }
 }
