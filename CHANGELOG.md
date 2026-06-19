@@ -44,6 +44,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Nix packaging now keeps legitimate source files whose names contain
+  `target` (for example `nixling-constellation-core/src/target.rs`) while
+  still filtering Cargo `target/` build directories out of package sources.
 - USBIP lock acquire is now idempotent for the same VM: when a VM is
   restarted (`nixling down` + `nixling up`), the broker no longer
   refuses to re-bind a busid that the same VM already owns. Previously,
