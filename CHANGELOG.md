@@ -20,6 +20,9 @@ deprecations ship one minor release before removal.
   `ValidateLockSpec` operations so storage and synchronization contracts
   can be inspected and, for static directory specs, reconciled without
   daemon-supplied raw paths.
+- Daemon: startup now performs a read-only storage/restart/sync contract
+  check and persists `storage-lifecycle-report.json` for degraded-state
+  adoption work and future doctor/status UX.
 - Documentation: ADR 0034 and the storage lifecycle explanation now
   define the planned generated contracts for managed paths, process
   restart/adoption, synchronization, lock ownership, degraded-state
