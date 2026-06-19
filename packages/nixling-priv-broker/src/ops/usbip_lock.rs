@@ -11,9 +11,13 @@
 //! Lock semantics:
 //!
 //! - Acquire: `O_CREAT | O_EXCL | O_WRONLY`, file body is the owning
-//!   VM name + newline. Returns `LockAlreadyHeld` if another VM
+//!   VM name + newline. Returns `LockAlreadyHeld` if a *different* VM
 //!   already owns the busid; the daemon must surface a typed refusal
 //!   to the operator (USBIP single-owner is a v0.4.0 invariant).
+//!   **Idempotent for the same VM**: if the lock already exists and
+//!   the recorded owner matches the requesting VM, the acquire
+//!   succeeds without modification. This covers VM restarts where
+//!   `nixling down` does not release USBIP locks.
 //! - Release: read the file, verify the recorded owner matches the
 //!   expected vm name (defence-in-depth against a stale unbind),
 //!   then unlink. Missing file is treated as success (idempotent
@@ -228,6 +232,12 @@ pub fn acquire_lock(
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             let existing =
                 read_owner(&full_lock_path).unwrap_or_else(|_| "<unreadable>".to_owned());
+            // Idempotent: if the same VM already owns the lock (e.g.
+            // after a VM restart without an explicit detach), treat the
+            // acquire as a success rather than refusing.
+            if existing.trim() == owner_vm {
+                return Ok(());
+            }
             Err(UsbipLockError::LockAlreadyHeld {
                 path: full_lock_path,
                 existing_owner: existing,
@@ -475,6 +485,18 @@ mod tests {
         let gid = nix::unistd::Gid::current().as_raw();
         let err = acquire_lock(&link.join("5-5"), "vm-z", uid, gid).unwrap_err();
         assert!(matches!(err, UsbipLockError::Io { .. }));
+    }
+
+    #[test]
+    fn acquire_idempotent_when_same_vm_owns_lock() {
+        let tmp = temp_lock_dir();
+        let lock = tmp.path().join("6-1");
+        let uid = nix::unistd::Uid::current().as_raw();
+        let gid = nix::unistd::Gid::current().as_raw();
+        acquire_lock(&lock, "work-aad", uid, gid).unwrap();
+        // Re-acquire by the same VM succeeds (e.g. after VM restart).
+        acquire_lock(&lock, "work-aad", uid, gid).unwrap();
+        assert_eq!(peek_owner(&lock).unwrap(), "work-aad");
     }
 
     #[test]
