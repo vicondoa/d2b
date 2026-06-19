@@ -4,7 +4,7 @@
 // in plan.md §D-typed-error-boxing. Suppressed until that refactor lands.
 #![allow(clippy::result_large_err)]
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry};
 use std::fs::{self, File, OpenOptions};
 use std::future::Future;
 use std::io::{IoSliceMut, Read, Write};
@@ -1775,6 +1775,33 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
                 }
             }
         }
+        // Gateway display operations can perform provider/relay orchestration.
+        // Hand them off the serial accept loop just like exec owner sessions.
+        if let wire::Request::GatewayDisplay(op) = &request {
+            if !matches!(peer.role, PeerRole::Admin) {
+                let error = TypedError::AuthzNotAdmin {
+                    verb: "gatewayDisplay".to_owned(),
+                };
+                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+                continue;
+            }
+            let owner_state = state.clone();
+            let owner_peer = peer.clone();
+            let op = op.clone();
+            match std::thread::Builder::new()
+                .name("nixling-gateway-display".to_owned())
+                .spawn(move || {
+                    run_gateway_display_owner(stream, owner_state, owner_peer, op);
+                }) {
+                Ok(_) => return Ok(()),
+                Err(err) => {
+                    return Err(TypedError::InternalIo {
+                        context: "spawn gateway display handler".to_owned(),
+                        detail: err.to_string(),
+                    });
+                }
+            }
+        }
         let response = match dispatch_request(state, &peer, request) {
             Ok(value) => value,
             Err(error) => serde_json::to_value(wire::error_frame(&error)).map_err(|err| {
@@ -1786,6 +1813,20 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
         };
         write_json_frame(&stream, &response)?;
     }
+}
+
+fn run_gateway_display_owner(
+    stream: Socket,
+    state: ServerState,
+    peer: PeerIdentity,
+    op: public_wire::GatewayDisplayOp,
+) {
+    let response = match dispatch_request(&state, &peer, wire::Request::GatewayDisplay(op)) {
+        Ok(value) => value,
+        Err(error) => serde_json::to_value(wire::error_frame(&error))
+            .unwrap_or_else(|_| json!({ "type": "error" })),
+    };
+    let _ = write_json_frame(&stream, &response);
 }
 
 fn authorize_peer(stream: &Socket, state: &ServerState) -> Result<PeerIdentity, TypedError> {
@@ -2011,13 +2052,15 @@ fn dispatch_gateway_display(
             )
                 .map_err(gateway_error_to_typed)?;
             let session_id = open.session_id.to_string();
-            inner.sessions.insert(
-                session_id.clone(),
-                GatewayDisplaySession {
-                    target: target_text,
-                    open,
-                },
-            );
+            match inner.sessions.entry(session_id.clone()) {
+                Entry::Occupied(_) => {}
+                Entry::Vacant(slot) => {
+                    slot.insert(GatewayDisplaySession {
+                        target: target_text,
+                        open,
+                    });
+                }
+            }
             public_wire::GatewayDisplayOpResponse::Open(public_wire::GatewayDisplayOpenResult {
                 session_id,
                 state: "running".to_owned(),
@@ -8825,6 +8868,41 @@ mod public_status_tests {
                 .map(Vec::len),
             Some(0)
         );
+    }
+
+    #[test]
+    fn gateway_display_replay_preserves_real_session_handles() {
+        let (state, _dir) = test_state();
+        let request = || {
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
+                public_wire::GatewayDisplayOpenArgs {
+                    target: "nl://demo.gw.work.nixling".to_owned(),
+                    operation_id: "gw-exec-replay".to_owned(),
+                    principal: "uid-1000".to_owned(),
+                    app_argv: vec!["foot".to_owned()],
+                    request_hash: 42,
+                },
+            ))
+        };
+        let first = dispatch_request(&state, &admin_peer(), request()).expect("first open");
+        let session_id = first
+            .get("result")
+            .and_then(|r| r.get("sessionId"))
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_owned();
+        let second = dispatch_request(&state, &admin_peer(), request()).expect("replay open");
+        assert_eq!(
+            second
+                .get("result")
+                .and_then(|r| r.get("sessionId"))
+                .and_then(Value::as_str),
+            Some(session_id.as_str())
+        );
+        let inner = state.gateway_display.inner.lock().unwrap();
+        let session = inner.sessions.get(&session_id).expect("session retained");
+        assert!(!session.open.agent.0.is_empty());
+        assert!(!session.open.listener.0.is_empty());
     }
 
     #[test]
