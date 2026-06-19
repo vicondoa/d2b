@@ -109,6 +109,7 @@ gateway-vm/admits-framework-sys-prefix
 gateway-vm/auto-declared-env-index
 gateway-vm/auto-declared-name
 gateway-vm/emits-waypipe-runner-nodes
+gateway-vm/guest-services-installed
 gateway-vm/rejects-secret-shaped-credential-path
 gateway-vm/waypipe-profiles-are-jailed-and-device-empty
 guest-config-containment/clean-no-failure
