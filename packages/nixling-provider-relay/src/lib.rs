@@ -619,27 +619,6 @@ async fn read_prologue(ws: &mut RelayStream) -> Result<(Vec<u8>, Vec<u8>), Relay
     }
 }
 
-async fn read_first_payload(ws: &mut RelayStream) -> Result<Vec<u8>, RelayConnectError> {
-    use futures_util::StreamExt;
-    use tokio_tungstenite::tungstenite::Message;
-    loop {
-        match ws.next().await {
-            Some(Ok(Message::Binary(data))) if !data.is_empty() => return Ok(data),
-            Some(Ok(Message::Binary(_)))
-            | Some(Ok(Message::Ping(_)))
-            | Some(Ok(Message::Pong(_)))
-            | Some(Ok(Message::Text(_)))
-            | Some(Ok(Message::Frame(_))) => {}
-            Some(Ok(Message::Close(_))) | None => {
-                return Err(RelayConnectError::Handshake("payload eof".into()));
-            }
-            Some(Err(err)) => {
-                return Err(RelayConnectError::Handshake(format!("payload read: {err}")));
-            }
-        }
-    }
-}
-
 /// Like [`run_listener`], but each accepted rendezvous must present a prologue
 /// frame that `verify` admits **before any byte is bridged** to `local`. A
 /// rejected or missing prologue closes the rendezvous with no bytes forwarded.
@@ -704,25 +683,24 @@ async fn accept_one_verified(
         // Fail closed: never connect the local socket, never forward a byte.
         return Err(RelayConnectError::Handshake("prologue rejected".into()));
     }
-    let first_payload = if leftover.is_empty() {
-        read_first_payload(&mut ws).await?
-    } else {
-        leftover
-    };
     let io = connect_local(local)
         .await
         .map_err(|_| RelayConnectError::Handshake("local connect".into()))?;
     match io {
         LocalIo::Tcp(mut s) => {
-            s.write_all(&first_payload)
-                .await
-                .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
+            if !leftover.is_empty() {
+                s.write_all(&leftover)
+                    .await
+                    .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
+            }
             pump(ws, s).await
         }
         LocalIo::Unix(mut s) => {
-            s.write_all(&first_payload)
-                .await
-                .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
+            if !leftover.is_empty() {
+                s.write_all(&leftover)
+                    .await
+                    .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
+            }
             pump(ws, s).await
         }
     }
@@ -744,13 +722,13 @@ pub async fn run_sender_with_prologue(
     use tokio_tungstenite::tungstenite::Message;
     let frame = Message::Binary(prologue.to_vec());
     if let LocalTarget::UnixListen(path) = local {
-        let _ = std::fs::remove_file(path);
-        let listener = tokio::net::UnixListener::bind(path)
-            .map_err(|_| RelayConnectError::Handshake("bind unix-listen".into()))?;
         let mut ws = connect_sender_retrying(endpoint, credential, ttl_secs, ca_pem).await?;
         ws.send(frame)
             .await
             .map_err(|_| RelayConnectError::Handshake("prologue send".into()))?;
+        let _ = std::fs::remove_file(path);
+        let listener = tokio::net::UnixListener::bind(path)
+            .map_err(|_| RelayConnectError::Handshake("bind unix-listen".into()))?;
         let (stream, _) = listener
             .accept()
             .await

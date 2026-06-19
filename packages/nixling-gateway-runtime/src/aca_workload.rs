@@ -258,11 +258,14 @@ pub fn build_agent_command(
     // Gated relay sender: binds wp.sock, writes the handshake prologue to the
     // relay, then bridges the Waypipe server connection.
     s.push_str(&format!(
-        "( export {relay_exports}; {relay_bin} sender >\"$W/relay.log\" 2>&1 & echo $! >> \"$W/pids\" )\n",
+        "( export {relay_exports}; nohup {relay_bin} sender >\"$W/relay.log\" 2>&1 < /dev/null & echo $! >> \"$W/pids\" )\n",
         relay_exports = relay_exports.join(" "),
         relay_bin = sh_quote(&bins.gateway_relay),
     ));
-    s.push_str("for _ in $(seq 1 50); do [ -S \"$W/wp.sock\" ] && break; sleep 0.1; done\n");
+    s.push_str("for _ in $(seq 1 300); do [ -S \"$W/wp.sock\" ] && break; sleep 0.1; done\n");
+    s.push_str(
+        "[ -S \"$W/wp.sock\" ] || { echo \"relay sender did not become ready\"; exit 1; }\n",
+    );
     let app_argv: String = req
         .app
         .argv()
@@ -274,11 +277,12 @@ pub fn build_agent_command(
     // owns the compositor socket lifecycle for the app instead of racing a
     // separately-started client against a persistent server.
     s.push_str(&format!(
-        "( {wp} --no-gpu -c {comp} -s \"$W/wp.sock\" server -- {argv} >\"$W/app.log\" 2>&1 & echo $! >> \"$W/pids\" )\n",
+        "( nohup {wp} --no-gpu -c {comp} -s \"$W/wp.sock\" server -- {argv} >\"$W/app.log\" 2>&1 < /dev/null & echo $! >> \"$W/pids\" )\n",
         wp = sh_quote(&bins.waypipe),
         comp = bins.compression,
         argv = app_argv,
     ));
+    s.push_str("sleep 3\n");
     s.push_str("echo \"NL_AGENT_WORKDIR=$W\"\n");
     s
 }
@@ -430,8 +434,10 @@ mod tests {
         assert!(cmd.contains("NL_SESSION_NOT_AFTER='1000000'"));
         // The gated sender + waypipe-owned app launch are emitted.
         assert!(cmd.contains("export NL_SESSION_SECRET_B64"));
-        assert!(cmd.contains("'nixling-gateway-relay' sender"));
-        assert!(cmd.contains("server -- 'foot'"));
+        assert!(cmd.contains("nohup 'nixling-gateway-relay' sender"));
+        assert!(
+            cmd.contains("nohup 'waypipe' --no-gpu -c zstd -s \"$W/wp.sock\" server -- 'foot'")
+        );
         // Relay coords.
         assert!(cmd.contains("NIXLING_RELAY_ENTITY='hc-nixling-display'"));
         assert!(cmd.contains("NIXLING_RELAY_TARGET=\"unix-listen:$W/wp.sock\""));
