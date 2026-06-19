@@ -23,6 +23,9 @@ deprecations ship one minor release before removal.
 - Daemon: startup now performs a read-only storage/restart/sync contract
   check and persists `storage-lifecycle-report.json` for degraded-state
   adoption work and future doctor/status UX.
+- Tests: added storage lifecycle report schema and serialization
+  regression coverage so doctor/status consumers see the same camelCase
+  contract that the daemon writes.
 - Documentation: ADR 0034 and the storage lifecycle explanation now
   define the planned generated contracts for managed paths, process
   restart/adoption, synchronization, lock ownership, degraded-state
