@@ -72,6 +72,7 @@ impl core::fmt::Debug for SessionSecret {
 /// gateway re-derive the MAC and enforce field equality against the
 /// authorizing `GatewayDisplayOpen`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionBinding {
     /// The realm of the authorizing operation (most-specific-first form).
     pub realm: String,
@@ -243,6 +244,7 @@ pub fn encode_handshake_frame(hs: &Handshake) -> Vec<u8> {
 /// (a bound so a hostile sender cannot force unbounded buffering).
 pub const MAX_HANDSHAKE_FRAME: usize = 8 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Handshake {
     /// The binding the agent claims.
     pub binding: SessionBinding,

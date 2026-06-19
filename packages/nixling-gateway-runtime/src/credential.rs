@@ -206,6 +206,18 @@ mod tests {
     }
 
     #[test]
+    fn rejects_nix_store_credential_path() {
+        assert_eq!(
+            GatewayCredential::load(
+                "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-secret.json",
+                &CredentialFilePolicy::default()
+            )
+            .unwrap_err(),
+            CredentialError::NixStorePath
+        );
+    }
+
+    #[test]
     fn rejects_owner_mismatch_when_policy_requires_uid() {
         let dir = tempfile::tempdir().unwrap();
         let path = fixture(dir.path());

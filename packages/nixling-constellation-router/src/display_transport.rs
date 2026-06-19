@@ -9,6 +9,7 @@
 //! authorization.
 
 use nixling_constellation_core::{ConstellationError, ErrorKind, StreamId};
+use subtle::ConstantTimeEq;
 
 /// Reserved AF_VSOCK port for the dedicated display stream.
 pub const DISPLAY_VSOCK_PORT: u32 = 14_319;
@@ -98,7 +99,7 @@ pub fn verify_display_preface(
     if cid != expected_binding.gateway_cid
         || generation != expected_binding.generation
         || stream != expected_binding.stream.as_str().as_bytes()
-        || !ct_eq(token, expected_token.expose())
+        || !bool::from(token.ct_eq(expected_token.expose()))
     {
         return Err(malformed());
     }
@@ -134,17 +135,6 @@ fn read_u64(frame: &[u8], cursor: &mut usize) -> Result<u64, ConstellationError>
         .try_into()
         .expect("slice length is fixed");
     Ok(u64::from_be_bytes(bytes))
-}
-
-fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
 }
 
 fn malformed() -> ConstellationError {

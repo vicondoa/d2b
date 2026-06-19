@@ -34,6 +34,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use azure_core::credentials::TokenCredential;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use nixling_constellation_core::WorkloadSummary;
 use nixling_constellation_core::{
@@ -447,12 +448,31 @@ impl WorkloadProvider for AcaWorkloadProvider {
                 format!("aca exec exited with status {}", result.exit_code),
             ));
         }
-        // The synchronous data-plane exec has no durable execution id; mint a
-        // deterministic per-call id so callers can correlate audit records.
-        ExecutionId::parse(format!("aca-exec-{}", result.execution_time_ms)).map_err(|_| {
+        // The synchronous data-plane exec has no durable execution id. Derive a
+        // stable opaque id from the authorized request shape rather than the
+        // response timing so retries of the same request correlate and two
+        // equal-duration calls cannot collide.
+        ExecutionId::parse(format!("aca-exec-{}", exec_request_digest(&req))).map_err(|_| {
             ProviderError::new(ErrorKind::MalformedFrame, "failed to mint aca execution id")
         })
     }
+}
+
+fn exec_request_digest(req: &ExecStartRequest) -> String {
+    let mut h = Sha256::new();
+    h.update(req.workload.as_str().as_bytes());
+    h.update([u8::from(req.tty)]);
+    h.update(req.command.as_bytes());
+    hex(&h.finalize())
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
+        s.push(char::from_digit((b & 0x0f) as u32, 16).unwrap());
+    }
+    s
 }
 
 #[cfg(test)]
@@ -638,6 +658,37 @@ mod tests {
         };
         let err = p.exec(req).await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::ProviderAllocationFailed);
+    }
+
+    #[tokio::test]
+    async fn workload_exec_id_is_derived_from_request_not_elapsed_time() {
+        let (p1, _) = provider(
+            200,
+            r#"{"exitCode":0,"stdout":"","stderr":"","executionTimeMs":1}"#,
+        );
+        let req = ExecStartRequest {
+            workload: WorkloadId::parse("sbx-1").unwrap(),
+            tty: false,
+            command: nixling_constellation_core::OpaquePayload::new(b"echo hi".to_vec()).unwrap(),
+        };
+        let id1 = p1.exec(req.clone()).await.unwrap();
+
+        let (p2, _) = provider(
+            200,
+            r#"{"exitCode":0,"stdout":"","stderr":"","executionTimeMs":999}"#,
+        );
+        let id2 = p2.exec(req.clone()).await.unwrap();
+        assert_eq!(id1, id2);
+
+        let (p3, _) = provider(
+            200,
+            r#"{"exitCode":0,"stdout":"","stderr":"","executionTimeMs":1}"#,
+        );
+        let mut changed = req;
+        changed.command =
+            nixling_constellation_core::OpaquePayload::new(b"echo bye".to_vec()).unwrap();
+        let id3 = p3.exec(changed).await.unwrap();
+        assert_ne!(id1, id3);
     }
 
     #[test]

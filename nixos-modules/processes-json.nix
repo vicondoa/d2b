@@ -766,41 +766,6 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     ];
   };
 
-  gatewayVmNames =
-    lib.mapAttrsToList (_: gw: gw.vmName)
-      (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
-  isGatewayVm = name: lib.elem name gatewayVmNames;
-  gatewayDisplayRuntimeDir = name: "/run/nixling-gateway-display/${name}";
-  gatewayWaypipeClientRunner = name: {
-    binaryPath = "${pkgs.waypipe}/bin/waypipe";
-    argv = [
-      "waypipe"
-      "--no-gpu"
-      "-c"
-      "zstd"
-      "-s"
-      "${gatewayDisplayRuntimeDir name}/host-waypipe.sock"
-      "client"
-    ];
-  };
-  gatewayWaypipeServerRunner = name: {
-    binaryPath = "${pkgs.waypipe}/bin/waypipe";
-    argv = [
-      "waypipe"
-      "--no-gpu"
-      "-c"
-      "zstd"
-      "-s"
-      "${gatewayDisplayRuntimeDir name}/agent-waypipe.sock"
-      "--display"
-      "wayland-nl"
-      "server"
-      "--"
-      "sleep"
-      "infinity"
-    ];
-  };
-
   node = name: { id, role, readiness, unit ? null, binaryPath ? null, argv ? [ ], env ? [ ], planOps ? [ ] }:
     let
       # `vm.supervisor` was removed per ADR 0015; every
@@ -1013,17 +978,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         id = "guest-control-health";
         role = "guest-control-health";
         readiness = [ (guestControlHealthReady name) ];
-      })
-      ++ lib.optional (isGatewayVm name) (node name ({
-        id = "gateway-waypipe-client";
-        role = "gateway-waypipe-client";
-        readiness = [ (unixSocketExists "${gatewayDisplayRuntimeDir name}/host-waypipe.sock") ];
-      } // gatewayWaypipeClientRunner name))
-      ++ lib.optional (isGatewayVm name) (node name ({
-        id = "gateway-waypipe-server";
-        role = "gateway-waypipe-server";
-        readiness = [ (unixSocketExists "${gatewayDisplayRuntimeDir name}/agent-waypipe.sock") ];
-      } // gatewayWaypipeServerRunner name));
+      });
       edges = [
         (edge "host-reconcile" "store-virtiofs-preflight" "Host reconciliation must complete before store and virtiofs preflight runs.")
       ]
@@ -1057,11 +1012,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       )
       ++ edgesFromNodes preVmmNodeIds "cloud-hypervisor" "Cloud Hypervisor starts only after every prerequisite sidecar is ready."
       ++ lib.optional guestControlEnabled
-        (edge "cloud-hypervisor" "guest-control-health" "Authenticated guest-control Health readiness is probed only after Cloud Hypervisor is running.")
-      ++ lib.optionals (isGatewayVm name) [
-        (edge "host-reconcile" "gateway-waypipe-client" "Gateway Waypipe client starts only after runtime directories are reconciled.")
-        (edge "host-reconcile" "gateway-waypipe-server" "Gateway Waypipe server starts only after runtime directories are reconciled.")
-      ];
+        (edge "cloud-hypervisor" "guest-control-health" "Authenticated guest-control Health readiness is probed only after Cloud Hypervisor is running.");
       invariants = {
         perVmAuditPipeline = true;
         swtpmPreStartFlush = true;

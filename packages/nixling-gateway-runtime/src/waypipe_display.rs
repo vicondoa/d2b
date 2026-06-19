@@ -200,7 +200,7 @@ impl DisplayProvider for WaypipeDisplayProvider {
 mod tests {
     use super::*;
     use nixling_constellation_core::{
-        OperationId, PrincipalId, RealmPath, StreamAuthz, StreamId, WorkloadId,
+        Capability, OperationId, PrincipalId, RealmPath, StreamAuthz, StreamId, WorkloadId,
     };
 
     #[test]
@@ -252,5 +252,25 @@ mod tests {
         };
         let handle = provider.open_display_session(req).await.unwrap();
         assert_eq!(handle.id.0, "waypipe-display-1");
+    }
+
+    #[tokio::test]
+    async fn display_provider_rejects_inconsistent_stream_authz() {
+        let provider = WaypipeDisplayProvider::default();
+        let req = DisplaySessionRequest {
+            workload: WorkloadId::parse("demo").unwrap(),
+            operation_id: OperationId::parse("op-1").unwrap(),
+            display_stream: StreamId::parse("display-1").unwrap(),
+            authz: StreamAuthz {
+                principal: PrincipalId::parse("alice").unwrap(),
+                realm: RealmPath::local(),
+                capability: Capability::Exec,
+            },
+        };
+        let err = provider.open_display_session(req).await.unwrap_err();
+        assert_eq!(
+            err.kind(),
+            nixling_constellation_core::ErrorKind::Unauthorized
+        );
     }
 }

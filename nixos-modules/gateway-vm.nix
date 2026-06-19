@@ -124,6 +124,7 @@ let
           wantedBy = [ "multi-user.target" ];
           after = [ "nixlingd.service" ];
           serviceConfig = {
+            ExecStartPre = "${pkgs.coreutils}/bin/rm -f /run/nixling-gateway-display/${gw.vmName}/host-waypipe.sock";
             ExecStart = "${pkgs.waypipe}/bin/waypipe --no-gpu -c ${gw.display.waypipeCompression} -s /run/nixling-gateway-display/${gw.vmName}/host-waypipe.sock client";
             Restart = "on-failure";
             User = "gateway";
@@ -135,6 +136,7 @@ let
           wantedBy = [ "multi-user.target" ];
           after = [ "nixlingd.service" ];
           serviceConfig = {
+            ExecStartPre = "${pkgs.coreutils}/bin/rm -f /run/nixling-gateway-display/${gw.vmName}/agent-waypipe.sock";
             ExecStart = "${pkgs.waypipe}/bin/waypipe --no-gpu -c ${gw.display.waypipeCompression} -s /run/nixling-gateway-display/${gw.vmName}/agent-waypipe.sock --display wayland-nl server -- sleep infinity";
             Restart = "on-failure";
             User = "gateway";

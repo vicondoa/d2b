@@ -52,6 +52,12 @@ struct ListenerState {
     armed: Arc<AtomicBool>,
 }
 
+impl Drop for ListenerState {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 /// The production host-side display listener.
 pub struct RelayDisplayListener {
     endpoint: RelayEndpoint,

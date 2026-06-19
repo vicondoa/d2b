@@ -29,6 +29,7 @@ hmac = "0.12"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.10"
+subtle = "2"
 
 [dev-dependencies]
 nixling-constellation-transport = { path = "../nixling-constellation-transport", version = "0.0.0-bootstrap" }

@@ -20,6 +20,7 @@ use nixling_constellation_provider::provider::ProtocolCodec;
 use nixling_constellation_provider::types::{ByteStream, TransportSession};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{MAX_FRAME_BYTES, PROTOCOL_VERSION};
@@ -45,6 +46,7 @@ impl core::fmt::Debug for SecureSessionKey {
 
 /// Authenticated identity expected at the peer-session boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SecurePeerIdentity {
     /// Peer realm.
     pub realm: RealmPath,
@@ -68,6 +70,7 @@ impl NonceReplayGuard {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Hello {
     version: u32,
     codec_id: ProtocolToken,
@@ -286,7 +289,7 @@ fn verify_hello(
         ));
     }
     let expected = mac_hello(label, key, hello, peer_nonce)?;
-    if !ct_eq(&expected, &hello.mac) {
+    if !bool::from(expected.ct_eq(&hello.mac)) {
         return Err(ProviderError::new(
             ErrorKind::AuthenticationFailed,
             "secure-session hello MAC mismatch",
@@ -304,15 +307,20 @@ fn mac_hello(
     let mut mac = <HmacSha256 as Mac>::new_from_slice(&key.0).map_err(|_| {
         ProviderError::new(ErrorKind::AuthenticationFailed, "bad secure-session key")
     })?;
-    mac.update(label.as_bytes());
-    mac.update(&hello.version.to_be_bytes());
-    mac.update(hello.codec_id.as_str().as_bytes());
-    mac.update(hello.identity.realm.target_form().as_bytes());
-    mac.update(hello.identity.principal.as_str().as_bytes());
-    mac.update(hello.identity.node.as_str().as_bytes());
-    mac.update(&hello.nonce);
-    mac.update(peer_nonce);
+    mac_update_field(&mut mac, label.as_bytes());
+    mac_update_field(&mut mac, &hello.version.to_be_bytes());
+    mac_update_field(&mut mac, hello.codec_id.as_str().as_bytes());
+    mac_update_field(&mut mac, hello.identity.realm.target_form().as_bytes());
+    mac_update_field(&mut mac, hello.identity.principal.as_str().as_bytes());
+    mac_update_field(&mut mac, hello.identity.node.as_str().as_bytes());
+    mac_update_field(&mut mac, &hello.nonce);
+    mac_update_field(&mut mac, peer_nonce);
     Ok(mac.finalize().into_bytes().into())
+}
+
+fn mac_update_field(mac: &mut HmacSha256, field: &[u8]) {
+    mac.update(&(field.len() as u64).to_be_bytes());
+    mac.update(field);
 }
 
 fn derive_key(key: &SecureSessionKey, label: &[u8], c: &[u8; 32], s: &[u8; 32]) -> [u8; 32] {
@@ -377,14 +385,6 @@ async fn read_plain(stream: &mut dyn ByteStream) -> ProviderResult<Vec<u8>> {
 
 fn json_err(err: serde_json::Error) -> ProviderError {
     ProviderError::new(ErrorKind::MalformedFrame, err.to_string())
-}
-
-fn ct_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
 }
 
 #[cfg(test)]
@@ -499,6 +499,63 @@ mod tests {
         let mut guard = NonceReplayGuard::default();
         assert!(guard.claim([1u8; 32]));
         assert!(!guard.claim([1u8; 32]));
+    }
+
+    #[test]
+    fn invalid_mac_version_or_codec_rejects() {
+        let key = SecureSessionKey::from_bytes([7u8; 32]);
+        let client_id = id("client");
+        let codec = ProtobufCodec::new();
+        let mut h = hello(
+            "client",
+            &key,
+            codec.codec_id(),
+            client_id.clone(),
+            [1u8; 32],
+            &[],
+        )
+        .unwrap();
+
+        h.mac[0] ^= 0xff;
+        assert_eq!(
+            verify_hello("client", &key, codec.codec_id(), &h, &client_id, &[])
+                .unwrap_err()
+                .kind(),
+            ErrorKind::AuthenticationFailed
+        );
+
+        let mut h = hello(
+            "client",
+            &key,
+            codec.codec_id(),
+            client_id.clone(),
+            [1u8; 32],
+            &[],
+        )
+        .unwrap();
+        h.version += 1;
+        assert_eq!(
+            verify_hello("client", &key, codec.codec_id(), &h, &client_id, &[])
+                .unwrap_err()
+                .kind(),
+            ErrorKind::AuthenticationFailed
+        );
+
+        let h = hello(
+            "client",
+            &key,
+            codec.codec_id(),
+            client_id.clone(),
+            [1u8; 32],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            verify_hello("client", &key, "other-codec", &h, &client_id, &[])
+                .unwrap_err()
+                .kind(),
+            ErrorKind::AuthenticationFailed
+        );
     }
 
     #[test]

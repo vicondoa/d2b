@@ -1431,7 +1431,7 @@ struct SocketProbe {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct HelloOkFrame {
     #[serde(rename = "type")]
     _type_name: String,
@@ -1440,7 +1440,7 @@ struct HelloOkFrame {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct HelloRejectedFrame {
     #[serde(rename = "type")]
     _type_name: String,
@@ -1450,7 +1450,7 @@ struct HelloRejectedFrame {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ErrorFrame {
     #[serde(rename = "type")]
     _type_name: String,

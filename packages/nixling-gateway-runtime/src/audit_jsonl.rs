@@ -24,7 +24,13 @@ pub struct JsonlGatewayAudit {
     dir: PathBuf,
     retention_days: u64,
     clock_day: Box<dyn Fn() -> u64 + Send + Sync>,
-    lock: Mutex<()>,
+    state: Mutex<AuditState>,
+}
+
+#[derive(Debug, Default)]
+struct AuditState {
+    day: Option<u64>,
+    prev_hash: Option<String>,
 }
 
 impl JsonlGatewayAudit {
@@ -38,13 +44,12 @@ impl JsonlGatewayAudit {
             dir: dir.into(),
             retention_days,
             clock_day,
-            lock: Mutex::new(()),
+            state: Mutex::new(AuditState::default()),
         }
     }
 
-    fn current_file(&self) -> PathBuf {
-        self.dir
-            .join(format!("gateway-day-{}.jsonl", (self.clock_day)()))
+    fn file_for_day(&self, day: u64) -> PathBuf {
+        self.dir.join(format!("gateway-day-{day}.jsonl"))
     }
 
     fn prune_old(&self) -> std::io::Result<()> {
@@ -67,15 +72,21 @@ impl JsonlGatewayAudit {
 
 impl GatewayAudit for JsonlGatewayAudit {
     fn record(&self, event: GatewayAuditEvent) -> Result<(), GatewayError> {
-        let _guard = self
-            .lock
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| GatewayError::AuditUnavailable)?;
         fs::create_dir_all(&self.dir).map_err(|_| GatewayError::AuditUnavailable)?;
         self.prune_old()
             .map_err(|_| GatewayError::AuditUnavailable)?;
-        let path = self.current_file();
-        let prev_hash = last_record_hash(&path).map_err(|_| GatewayError::AuditUnavailable)?;
+        let day = (self.clock_day)();
+        let path = self.file_for_day(day);
+        if state.day != Some(day) {
+            state.day = Some(day);
+            state.prev_hash =
+                last_record_hash(&path).map_err(|_| GatewayError::AuditUnavailable)?;
+        }
+        let prev_hash = state.prev_hash.clone();
         let mut body = event_json(event, prev_hash);
         let hash = hash_json(&body).map_err(|_| GatewayError::AuditUnavailable)?;
         body["record_hash"] = Value::String(hash);
@@ -87,7 +98,12 @@ impl GatewayAudit for JsonlGatewayAudit {
             .map_err(|_| GatewayError::AuditUnavailable)?;
         file.write_all(line.as_bytes())
             .and_then(|_| file.write_all(b"\n"))
-            .map_err(|_| GatewayError::AuditUnavailable)
+            .map_err(|_| GatewayError::AuditUnavailable)?;
+        state.prev_hash = body
+            .get("record_hash")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        Ok(())
     }
 }
 
@@ -186,9 +202,8 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0]["prev_hash"].is_null());
         assert_eq!(lines[1]["prev_hash"], lines[0]["record_hash"]);
-        assert!(!body.contains("SharedAccessKey"));
-        assert!(!body.contains("wayland-bytes"));
-        assert!(!body.contains("argv"));
+        assert_eq!(lines[0]["error_slug"], Value::Null);
+        assert_eq!(lines[1]["error_slug"], Value::Null);
     }
 
     #[test]

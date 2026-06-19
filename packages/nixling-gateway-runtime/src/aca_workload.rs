@@ -75,9 +75,7 @@ pub fn default_entra_token_snippet() -> String {
     // helper would normally parse it, but to keep the agent self-contained we
     // rely on the image's baked `nl-msi-token` helper (provisioned in
     // image.nix) which prints the bare access_token for a resource.
-    "NIXLING_RELAY_ENTRA_TOKEN=\"$(nl-msi-token https://relay.azure.net)\"; \
-export NIXLING_RELAY_ENTRA_TOKEN"
-        .to_owned()
+    "NIXLING_RELAY_ENTRA_TOKEN=\"$(nl-msi-token https://relay.azure.net)\"".to_owned()
 }
 
 /// The production [`GatewayWorkload`]: drives the in-sandbox agent over ACA
@@ -135,10 +133,6 @@ fn sh_quote(s: &str) -> String {
     out
 }
 
-fn export_kv(name: &str, value: &str) -> String {
-    format!("export {name}={}", sh_quote(value))
-}
-
 /// Build the `executeShellCommand` body for an [`AgentSpawnRequest`]. Pure: the
 /// session secret is base64-encoded into the (TLS, MI-authed) exec body and
 /// shredded from the in-sandbox filesystem after it is read into env. The
@@ -163,9 +157,7 @@ pub fn build_agent_command(
         "printf '%s' {} > \"$W/s\"\n",
         sh_quote(&secret_b64)
     ));
-    s.push_str(
-        "NL_SESSION_SECRET_B64=\"$(cat \"$W/s\")\"; rm -f \"$W/s\"; export NL_SESSION_SECRET_B64\n",
-    );
+    s.push_str("NL_SESSION_SECRET_B64=\"$(cat \"$W/s\")\"; rm -f \"$W/s\"\n");
     // Binding fields (non-secret identifiers).
     for (k, v) in [
         ("NL_SESSION_REALM", b.realm.as_str()),
@@ -177,21 +169,39 @@ pub fn build_agent_command(
         ("NL_SESSION_WORKLOAD", b.workload.as_str()),
         ("NL_SESSION_NOT_AFTER", &b.not_after.to_string()),
     ] {
-        s.push_str(&export_kv(k, v));
-        s.push('\n');
+        s.push_str(&format!("{k}={}\n", sh_quote(v)));
     }
     // Container -> Azure auth (Managed Identity, no SAS).
     s.push_str(entra_token_snippet);
     s.push('\n');
     // Relay coordinates for the gated sender.
-    s.push_str(&export_kv("NIXLING_RELAY_NAMESPACE", &relay.namespace));
-    s.push('\n');
-    s.push_str(&export_kv("NIXLING_RELAY_ENTITY", &relay.entity));
-    s.push('\n');
-    s.push_str("export NIXLING_RELAY_TARGET=\"unix-listen:$W/wp.sock\"\n");
+    s.push_str(&format!(
+        "NIXLING_RELAY_NAMESPACE={}\n",
+        sh_quote(&relay.namespace)
+    ));
+    s.push_str(&format!(
+        "NIXLING_RELAY_ENTITY={}\n",
+        sh_quote(&relay.entity)
+    ));
+    s.push_str("NIXLING_RELAY_TARGET=\"unix-listen:$W/wp.sock\"\n");
+    let mut relay_exports = vec![
+        "NL_SESSION_SECRET_B64",
+        "NL_SESSION_REALM",
+        "NL_SESSION_GENERATION",
+        "NL_SESSION_ID",
+        "NL_SESSION_EPOCH",
+        "NL_SESSION_OP",
+        "NL_SESSION_PRINCIPAL",
+        "NL_SESSION_WORKLOAD",
+        "NL_SESSION_NOT_AFTER",
+        "NIXLING_RELAY_ENTRA_TOKEN",
+        "NIXLING_RELAY_NAMESPACE",
+        "NIXLING_RELAY_ENTITY",
+        "NIXLING_RELAY_TARGET",
+    ];
     if let Some(ca) = &relay.ca_file {
-        s.push_str(&export_kv("NIXLING_RELAY_CA_FILE", ca));
-        s.push('\n');
+        s.push_str(&format!("NIXLING_RELAY_CA_FILE={}\n", sh_quote(ca)));
+        relay_exports.push("NIXLING_RELAY_CA_FILE");
     }
     // Persistent waypipe server (multiplexes N clients on one display).
     s.push_str(&format!(
@@ -202,7 +212,8 @@ pub fn build_agent_command(
     ));
     // Gated relay sender: writes the handshake prologue, then bridges wp.sock.
     s.push_str(&format!(
-        "( {relay_bin} sender >\"$W/relay.log\" 2>&1 & echo $! >> \"$W/pids\" )\n",
+        "( export {relay_exports}; {relay_bin} sender >\"$W/relay.log\" 2>&1 & echo $! >> \"$W/pids\" )\n",
+        relay_exports = relay_exports.join(" "),
         relay_bin = sh_quote(&bins.gateway_relay),
     ));
     // Wait (bounded) for the display socket, then launch the app against it.
@@ -316,21 +327,23 @@ mod tests {
             &req(vec!["foot"]),
             &coords(),
             &AgentBinaries::default(),
-            "export NIXLING_RELAY_ENTRA_TOKEN=tok",
+            "NIXLING_RELAY_ENTRA_TOKEN=tok",
         );
-        // Binding fields are exported.
-        assert!(cmd.contains("export NL_SESSION_REALM='work'"));
-        assert!(cmd.contains("export NL_SESSION_GENERATION='7'"));
-        assert!(cmd.contains("export NL_SESSION_ID='sess-42'"));
-        assert!(cmd.contains("export NL_SESSION_OP='op-9'"));
-        assert!(cmd.contains("export NL_SESSION_WORKLOAD='demo'"));
-        assert!(cmd.contains("export NL_SESSION_NOT_AFTER='1000000'"));
+        // Binding fields are shell variables; only the relay subshell exports
+        // them, so the app does not inherit control-plane metadata/secrets.
+        assert!(cmd.contains("NL_SESSION_REALM='work'"));
+        assert!(cmd.contains("NL_SESSION_GENERATION='7'"));
+        assert!(cmd.contains("NL_SESSION_ID='sess-42'"));
+        assert!(cmd.contains("NL_SESSION_OP='op-9'"));
+        assert!(cmd.contains("NL_SESSION_WORKLOAD='demo'"));
+        assert!(cmd.contains("NL_SESSION_NOT_AFTER='1000000'"));
         // The gated sender + persistent waypipe server + the app are launched.
+        assert!(cmd.contains("export NL_SESSION_SECRET_B64"));
         assert!(cmd.contains("'nixling-gateway-relay' sender"));
         assert!(cmd.contains("--display wayland-nl server -- sleep infinity"));
         assert!(cmd.contains("WAYLAND_DISPLAY=wayland-nl 'foot'"));
         // Relay coords.
-        assert!(cmd.contains("export NIXLING_RELAY_ENTITY='hc-nixling-display'"));
+        assert!(cmd.contains("NIXLING_RELAY_ENTITY='hc-nixling-display'"));
         assert!(cmd.contains("NIXLING_RELAY_TARGET=\"unix-listen:$W/wp.sock\""));
         // Workdir handle is the last line.
         assert!(cmd.trim_end().ends_with("echo \"NL_AGENT_WORKDIR=$W\""));
@@ -346,6 +359,23 @@ mod tests {
         // It is never placed directly on an `export NL_SESSION_SECRET_B64=<b64>`.
         assert!(!cmd.contains(&format!("export NL_SESSION_SECRET_B64={b64}")));
         assert!(!cmd.contains(&format!("NL_SESSION_SECRET_B64='{b64}'")));
+    }
+
+    #[test]
+    fn app_launch_does_not_inherit_relay_or_session_secrets() {
+        let cmd = build_agent_command(
+            &req(vec!["foot"]),
+            &coords(),
+            &AgentBinaries::default(),
+            "NIXLING_RELAY_ENTRA_TOKEN=tok",
+        );
+        let app_line = cmd
+            .lines()
+            .find(|l| l.contains("WAYLAND_DISPLAY=wayland-nl 'foot'"))
+            .unwrap();
+        assert!(!app_line.contains("NL_SESSION_SECRET_B64"));
+        assert!(!app_line.contains("NIXLING_RELAY_ENTRA_TOKEN"));
+        assert!(!app_line.contains("NIXLING_RELAY_KEY"));
     }
 
     #[test]

@@ -114,7 +114,8 @@ pub fn gateway_candidate(raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nixling_constellation_core::{RealmId, TargetName};
+    use nixling_constellation_core::{EntrypointMode, RealmId, TargetName};
+    use nixling_constellation_router::RealmEntrypoint;
 
     fn realm(labels: &[&str]) -> RealmPath {
         RealmPath::new(labels.iter().map(|l| RealmId::parse(*l).unwrap()).collect()).unwrap()
@@ -192,5 +193,22 @@ mod tests {
             gateway_candidate("demo.gw.work.nixling").as_deref(),
             Some("nl://demo.gw.work.nixling")
         );
+    }
+
+    #[test]
+    fn malformed_gateway_backed_entry_without_gateway_fails_closed() {
+        let mut table = RealmEntrypointTable::new();
+        table.insert(
+            realm(&["work"]),
+            RealmEntrypoint {
+                mode: EntrypointMode::GatewayBacked,
+                gateway: None,
+            },
+        );
+        let err = route("demo.gw.work.nixling", &table).unwrap_err();
+        match err {
+            RouteError::MissingGateway { realm, .. } => assert_eq!(realm, "work"),
+            other => panic!("expected MissingGateway, got {other:?}"),
+        }
     }
 }
