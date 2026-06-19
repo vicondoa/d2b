@@ -49,11 +49,13 @@ let
         ./vm-options.nix
         ./vm-guest-base.nix
         ./guest-control.nix
-        # inherit the host's nixpkgs.config so per-VM evals
-        # honor the consumer's allowUnfree / allowUnfreePredicate /
-        # permittedInsecurePackages settings without re-stating them
-        # in each per-VM module.
-        { nixpkgs.config = config.nixpkgs.config; }
+        # Inherit host nixpkgs policy so per-VM evals honor the consumer's
+        # allowUnfree / overlays / security fixes without re-stating them in
+        # each per-VM module.
+        {
+          nixpkgs.config = config.nixpkgs.config;
+          nixpkgs.overlays = config.nixpkgs.overlays;
+        }
         { _module.args.name = name; }
       ] ++ composedModules;
       specialArgs =

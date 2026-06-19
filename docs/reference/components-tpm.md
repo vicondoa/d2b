@@ -64,15 +64,24 @@ all guest-side wiring is unconditional within the module.
     CHANGELOG.)
 - **State directory** `/var/lib/nixling/vms/<vm>/swtpm/`, mode 0700
   owned by `nixling-<vm>-swtpm`. Contents are swtpm NVRAM + state
-  blobs — not human-readable, not portable across VMs.
-- **Parent-dir traversal ACL** (v0.1.4+). The VM's state dir at
-  `/var/lib/nixling/vms/<vm>/` is `microvm:kvm 2770`; the
-  `nixling-<vm>-swtpm` user is in neither set. The framework's
-  `nixlingVmStatePerms` activation script
-  ([`host-activation.nix`](../../nixos-modules/host-activation.nix))
-  adds `setfacl -m u:nixling-<vm>-swtpm:--x` (gated on
-  `tpm.enable`) so swtpm can traverse the parent to reach its
-  `StateDirectory=` subdir. Without this ACL, swtpm starts but
+  blobs — not human-readable, not portable across VMs. In the
+  daemon/broker model the privileged broker **provisions this
+  directory on first VM start** (fd-safe create, owner
+  `nixling-<vm>-swtpm`, mode 0700, inherited ACLs cleared); an
+  existing directory with the correct owner is reconciled in place
+  (never wiped). If a previously-provisioned directory is missing or
+  replaced, the broker **fails the start closed**
+  (`previously-provisioned-swtpm-state-missing`) rather than
+  re-creating an empty TPM — see
+  [components-tpm recovery](#) and the v1.2→v1.3 migration guide.
+- **Parent-dir posture.** The VM's state root at
+  `/var/lib/nixling/vms/<vm>/` is `nixlingd:users 3770` — `setgid`
+  so role users inherit the group, and **sticky (`+t`)** so a
+  per-VM role UID (which holds rwx via POSIX ACL) cannot rename or
+  unlink the principal-owned `swtpm/` directory it does not own. The
+  `nixling-<vm>-swtpm` principal additionally gets a `--x` traverse
+  ACL on the parent (gated on `tpm.enable`) so swtpm can reach its
+  state directory. Without the traverse grant swtpm starts but
   EACCES'es on `tpm2-00.permall` → libtpms enters failure mode →
   guest boots with a fresh TPM → Entra/Intune treats the device
   as tampered. **No manual `chown` or `setfacl` required for new

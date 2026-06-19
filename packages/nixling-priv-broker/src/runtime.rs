@@ -252,6 +252,17 @@ enum BrokerError {
     GuestControlSignRefused {
         reason: &'static str,
     },
+    /// swtpm-dir first-run hardening (issue #64) refused to proceed.
+    /// Carries the path-free [`OperationFields::PrepareSwtpmDir`] audit
+    /// so the SpawnRunner dispatch arm emits exactly one terminal
+    /// `PrepareSwtpmDir` record (its [`BrokerError::audit`] is a no-op,
+    /// mirroring `StoreSyncFailed`). The wire envelope surfaces only the
+    /// closed-set, path-free `reason` slug.
+    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    SwtpmDirHardening {
+        audit: crate::ops::audit_op::SwtpmDirAudit,
+        reason: &'static str,
+    },
 }
 
 pub fn parse_command<I>(args: I) -> Result<BrokerMode, RunError>
@@ -1783,7 +1794,52 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 umask: intent.umask,
             };
             let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
-            let outcome = backend.spawn_runner(runner_id.as_str(), &plan_input)?;
+            let outcome = match backend.spawn_runner(runner_id.as_str(), &plan_input) {
+                Ok(outcome) => outcome,
+                // swtpm-dir hardening fail-closed: emit the terminal
+                // path-free PrepareSwtpmDir record here (exactly once),
+                // then surface the closed-set reason on the wire. The
+                // SpawnRunner success record is NOT written because the
+                // runner was never spawned.
+                Err(BrokerError::SwtpmDirHardening { audit, reason }) => {
+                    write_decision_op_record!(
+                        audit_log,
+                        bundle_metadata,
+                        "PrepareSwtpmDir",
+                        req.bundle_runner_intent_ref.as_str(),
+                        caller_uid,
+                        caller_gid,
+                        &caller_role,
+                        req.vm_id.as_str(),
+                        req.role_id.as_str(),
+                        tracing_span_id_str(req.tracing_span_id.as_ref()),
+                        "denied-refused",
+                        Some(reason),
+                        OperationFields::PrepareSwtpmDir(audit.clone()),
+                    )?;
+                    return Err(BrokerError::SwtpmDirHardening { audit, reason });
+                }
+                Err(other) => return Err(other),
+            };
+            // On the success path, emit the terminal PrepareSwtpmDir
+            // record (for the w1-swtpm role only) BEFORE the SpawnRunner
+            // record so an operator sees the hardening disposition that
+            // gated the spawn.
+            if let Some(swtpm_audit) = &outcome.swtpm_dir_audit {
+                write_success_op_record!(
+                    audit_log,
+                    bundle_metadata,
+                    "PrepareSwtpmDir",
+                    req.bundle_runner_intent_ref.as_str(),
+                    caller_uid,
+                    caller_gid,
+                    &caller_role,
+                    req.vm_id.as_str(),
+                    req.role_id.as_str(),
+                    tracing_span_id_str(req.tracing_span_id.as_ref()),
+                    OperationFields::PrepareSwtpmDir(swtpm_audit.clone()),
+                )?;
+            }
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3526,6 +3582,31 @@ fn register_runner_pidfd(runner_id: &str, pidfd: &OwnedFd) -> Result<(), BrokerE
     Ok(())
 }
 
+/// Refuse to start a SECOND live runner for an already-registered
+/// `runner_id` (`<vm>:<role>`). Checked BEFORE the child is spawned so a
+/// duplicate is never created: rejecting AFTER the spawn would leak an
+/// orphan child (a non-blocking targeted reap is a no-op for a live
+/// process), and reaping that orphan would also pollute the existing
+/// same-`runner_id` registry entry + push a spurious `ChildReaped` for the
+/// live runner. A `runner_id` has at most one live registration — the
+/// daemon serializes per-VM lifecycle (per-VM start flock + DAG) and a live
+/// entry is cleared on exit (SIGCHLD reaper) or on down/stop — so a
+/// legitimate re-spawn never collides here; a collision is a
+/// concurrent/duplicate spawn and must fail closed. See issue #64
+/// work-review (W1fu1/fu2).
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn reserve_runner_id_for_spawn(runner_id: &str) -> Result<(), BrokerError> {
+    let registry = runner_pidfd_registry()
+        .lock()
+        .map_err(|_| BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned()))?;
+    if registry.contains_key(runner_id) {
+        return Err(BrokerError::Protocol(format!(
+            "runner {runner_id} already has an active registration; refusing duplicate spawn"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn signal_registered_runner(
     runner_id: &str,
@@ -3901,6 +3982,11 @@ impl DispatchBackend for LiveDispatchBackend {
         runner_id: &str,
         plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
+        // Reserve the runner_id BEFORE spawning the child: refuse a
+        // duplicate active registration up front so we never create an
+        // orphan child (see `reserve_runner_id_for_spawn`).
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        reserve_runner_id_for_spawn(runner_id)?;
         let outcome = crate::live_handlers::live_spawn_runner(plan_input).map_err(|err| {
             // Log the actual LiveHandlerError detail before wrapping it
             // in the opaque BrokerError::LiveHandler envelope so
@@ -3910,9 +3996,34 @@ impl DispatchBackend for LiveDispatchBackend {
                 error = %err,
                 "live_spawn_runner failed"
             );
-            BrokerError::LiveHandler(err.to_string())
+            // swtpm-dir hardening fail-closed carries a structured,
+            // path-free audit that the dispatch arm must emit as a
+            // terminal PrepareSwtpmDir record; preserve it instead of
+            // collapsing to the opaque LiveHandler envelope.
+            match err {
+                crate::live_handlers::LiveHandlerError::SwtpmDirHardening { audit, reason } => {
+                    BrokerError::SwtpmDirHardening { audit, reason }
+                }
+                other => BrokerError::LiveHandler(other.to_string()),
+            }
         })?;
-        register_runner_pidfd(runner_id, &outcome.pidfd)?;
+        register_runner_pidfd(runner_id, &outcome.pidfd).inspect_err(|_err| {
+            // Registration failed: the broker is about to drop this
+            // just-spawned child's pidfd. Reap it now (targeted,
+            // non-blocking) so a child that has already exited cannot
+            // leak as a zombie. Best-effort; the registry entry is
+            // already absent on the failure path.
+            #[cfg(not(feature = "layer1-bootstrap"))]
+            targeted_reap_runner(runner_id, outcome.pidfd.as_fd());
+        })?;
+        // Close the registration-window race: if the child exited
+        // between clone3 and the registry insertion above, its SIGCHLD
+        // may have already been coalesced/consumed by a reap pass that
+        // ran before the entry existed. A targeted, generation-exact
+        // (pidfd-keyed) non-blocking reap here guarantees the child is
+        // reaped regardless of SIGCHLD timing.
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        targeted_reap_runner(runner_id, outcome.pidfd.as_fd());
         Ok(outcome)
     }
 
@@ -5888,6 +5999,12 @@ impl BrokerError {
             // terminal record per attempt). Writing the generic error entry
             // here would emit a duplicate, so this is a deliberate no-op.
             Self::StoreSyncFailed { .. } => {}
+            // The SpawnRunner dispatch arm already wrote the terminal
+            // path-free `PrepareSwtpmDir` record for the fail-closed
+            // hardening step; writing the generic error entry here would
+            // duplicate it, so this is a deliberate no-op (mirrors
+            // `StoreSyncFailed`).
+            Self::SwtpmDirHardening { .. } => {}
             _ => {}
         }
         Ok(())
@@ -6068,6 +6185,15 @@ impl BrokerError {
                 &format!("StoreSync failed ({error_stage}): {message}"),
                 "Inspect the signed StoreSync audit record (operation_fields.error_stage) for the failing phase; retry after resolving the underlying condition.",
             ),
+            Self::SwtpmDirHardening { reason, .. } => error_response(
+                "Broker.SwtpmDirHardening",
+                "PrepareSwtpmDir",
+                None,
+                // PATH-FREE: only the closed-set reason slug reaches the
+                // wire envelope.
+                &format!("swtpm-dir hardening refused: {reason}"),
+                "Inspect the signed PrepareSwtpmDir audit record (operation_fields.fail_reason) for the refusal cause; do NOT delete or recreate the per-VM swtpm state dir — that destroys the TPM2 NVRAM and forces IdP re-enrollment.",
+            ),
         }
     }
 }
@@ -6187,6 +6313,10 @@ fn error_response(
 /// the duration of the broker process (bind it to a local in `run_server`).
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn start_sigchld_reaper(audit_log: Arc<AuditLog>) -> tokio::runtime::Runtime {
+    // Publish the audit handle so the targeted post-spawn reap can
+    // write the same forensic ChildReaped record the SIGCHLD loop does.
+    let _ = broker_audit_log_handle().set(Arc::clone(&audit_log));
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .thread_name("nixling-broker-reaper")
@@ -6315,6 +6445,117 @@ fn reaped_at_ms_now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+/// Process-global handle to the broker's audit log, set when the
+/// SIGCHLD reaper starts. Lets the targeted post-spawn reap
+/// ([`targeted_reap_runner`]) write the same forensic `ChildReaped`
+/// audit record the SIGCHLD loop writes, without threading an
+/// `AuditLog` reference through the `DispatchBackend::spawn_runner`
+/// trait boundary.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn broker_audit_log_handle() -> &'static OnceLock<Arc<AuditLog>> {
+    static HANDLE: OnceLock<Arc<AuditLog>> = OnceLock::new();
+    &HANDLE
+}
+
+/// Targeted, non-blocking reap of a SINGLE broker-spawned child,
+/// keyed by its pidfd. Closes two zombie-leak windows around pidfd
+/// registration that the SIGCHLD loop alone cannot guarantee to cover:
+///
+/// 1. the child exits in the window between `clone3` and the registry
+///    insertion (its SIGCHLD may have already been coalesced/consumed
+///    by a reap pass that ran before the entry existed); and
+/// 2. registration itself fails and the broker is about to drop the
+///    pidfd — without an explicit reap the child would zombie.
+///
+/// `waitid(P_PIDFD, WEXITED|WNOHANG)` is inherently generation-exact:
+/// a pidfd can never refer to a reused PID, so this is the
+/// strongest possible start-time/generation key (no separate
+/// start_time_ticks comparison is required). On a real exit the child
+/// is reaped, removed from the registry, a `ChildReaped` notification
+/// is pushed for the daemon's rollback to confirm, and a forensic
+/// audit record is appended. `ECHILD` means the SIGCHLD loop already
+/// reaped it (also a clean terminal state); `StillAlive` leaves the
+/// child for the SIGCHLD loop.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn targeted_reap_runner(runner_id: &str, pidfd: std::os::fd::BorrowedFd<'_>) {
+    use nix::errno::Errno;
+    use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
+    use nixling_ipc::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+
+    let wait_flags = WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG;
+    match waitid(Id::PIDFd(pidfd), wait_flags) {
+        Ok(WaitStatus::Exited(pid, code)) => {
+            let notif = ChildReapedNotification {
+                runner_id: runner_id.to_owned(),
+                pid: pid.as_raw(),
+                exit_status: ChildExitStatus {
+                    kind: ChildExitKind::Exited,
+                    code: Some(code),
+                    signal: None,
+                },
+                reaped_at_ms: reaped_at_ms_now(),
+            };
+            deliver_targeted_reap(runner_id, notif);
+        }
+        Ok(WaitStatus::Signaled(pid, sig, _)) => {
+            let sig_num = sig as libc::c_int;
+            let notif = ChildReapedNotification {
+                runner_id: runner_id.to_owned(),
+                pid: pid.as_raw(),
+                exit_status: ChildExitStatus {
+                    kind: if sig_num == libc::SIGKILL {
+                        ChildExitKind::Killed
+                    } else {
+                        ChildExitKind::Signaled
+                    },
+                    code: None,
+                    signal: Some(sig_num),
+                },
+                reaped_at_ms: reaped_at_ms_now(),
+            };
+            deliver_targeted_reap(runner_id, notif);
+        }
+        Ok(WaitStatus::StillAlive) | Ok(_) => {
+            // Still running: the SIGCHLD loop will reap it on exit.
+        }
+        Err(Errno::ECHILD) => {
+            // Already reaped by the SIGCHLD loop; drop any stale entry.
+            if let Ok(mut reg) = runner_pidfd_registry().lock() {
+                reg.remove(runner_id);
+            }
+        }
+        Err(err) => {
+            tracing::warn!(runner_id = %runner_id, error = %err, "targeted_reap_runner: waitid failed");
+        }
+    }
+}
+
+/// Remove the registry entry, push the `ChildReaped` notification, and
+/// write the forensic audit record when the process-global audit
+/// handle is available. Mirrors [`remove_and_notify`] but resolves the
+/// audit log from the global handle instead of a passed reference.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn deliver_targeted_reap(
+    runner_id: &str,
+    notif: nixling_ipc::broker_wire::ChildReapedNotification,
+) {
+    match broker_audit_log_handle().get() {
+        Some(audit_log) => remove_and_notify(runner_id, notif, audit_log.as_ref()),
+        None => {
+            // No audit handle (e.g. a unit test that didn't start the
+            // reaper): still reap + notify so the child can't zombie.
+            if let Ok(mut reg) = runner_pidfd_registry().lock() {
+                reg.remove(runner_id);
+            }
+            push_child_reap_notification(notif);
+            tracing::info!(
+                runner_id = %runner_id,
+                "broker: child reaped via targeted post-spawn reap (no audit handle)"
+            );
+        }
+    }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -7178,6 +7419,7 @@ mod tests {
                 pid: 4242,
                 start_time_ticks: 123456,
                 used_fork_fallback: false,
+                swtpm_dir_audit: None,
             })
         }
 
@@ -9396,6 +9638,174 @@ mod tests {
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
+        }
+
+        #[test]
+        fn targeted_reap_reaps_already_exited_child() {
+            // No SIGCHLD reaper is started: the targeted post-spawn
+            // reap alone must reap a child that has already exited,
+            // closing the registration-window zombie leak.
+            let _guard = ReapTestGuard::new();
+
+            let child = Command::new("true").spawn().expect("spawn true child");
+            let pid = child.id() as i32;
+            let runner_id = format!("test-vm:targeted-exited-{pid}");
+            let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
+            let registry_dup = pidfd.try_clone().expect("dup pidfd for registry");
+            runner_pidfd_registry()
+                .lock()
+                .expect("registry lock")
+                .insert(runner_id.clone(), registry_dup);
+            std::mem::forget(child);
+
+            // The child exits ~immediately; loop the targeted reap until
+            // it observes the exit (deterministic, no background loop).
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut reaped = None;
+            while Instant::now() < deadline {
+                targeted_reap_runner(&runner_id, pidfd.as_fd());
+                if let Some(n) = child_reap_buffer()
+                    .lock()
+                    .expect("child_reap_buffer lock")
+                    .iter()
+                    .find(|n| n.runner_id == runner_id)
+                    .cloned()
+                {
+                    reaped = Some(n);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+
+            let notif = reaped.expect("targeted reap should reap the exited child");
+            assert_eq!(notif.exit_status.kind, ChildExitKind::Exited);
+            assert_eq!(notif.exit_status.code, Some(0));
+            // Registry entry must be gone so the SIGCHLD loop won't
+            // double-reap a since-reused PID.
+            assert!(
+                !runner_pidfd_registry()
+                    .lock()
+                    .expect("registry lock")
+                    .contains_key(&runner_id),
+                "registry entry must be removed after targeted reap"
+            );
+        }
+
+        #[test]
+        fn targeted_reap_leaves_running_child_for_sigchld_loop() {
+            // A still-running child must NOT be reaped by the targeted
+            // pass: it stays registered for the SIGCHLD loop.
+            let _guard = ReapTestGuard::new();
+
+            let child = Command::new("sleep")
+                .arg("600")
+                .spawn()
+                .expect("spawn sleep child");
+            let pid = child.id() as i32;
+            let runner_id = format!("test-vm:targeted-alive-{pid}");
+            let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
+            let registry_dup = pidfd.try_clone().expect("dup pidfd for registry");
+            runner_pidfd_registry()
+                .lock()
+                .expect("registry lock")
+                .insert(runner_id.clone(), registry_dup);
+
+            targeted_reap_runner(&runner_id, pidfd.as_fd());
+
+            assert!(
+                child_reap_buffer()
+                    .lock()
+                    .expect("child_reap_buffer lock")
+                    .iter()
+                    .all(|n| n.runner_id != runner_id),
+                "running child must not be reaped by targeted pass"
+            );
+            assert!(
+                runner_pidfd_registry()
+                    .lock()
+                    .expect("registry lock")
+                    .contains_key(&runner_id),
+                "running child must remain registered"
+            );
+
+            // Clean up the still-running child.
+            kill(Pid::from_raw(pid), Signal::SIGKILL).expect("kill SIGKILL");
+            let _ = nix::sys::wait::waitpid(Pid::from_raw(pid), None);
+            std::mem::forget(child);
+        }
+
+        #[test]
+        fn targeted_reap_reports_signaled_child() {
+            let _guard = ReapTestGuard::new();
+
+            let child = Command::new("sleep")
+                .arg("600")
+                .spawn()
+                .expect("spawn sleep child");
+            let pid = child.id() as i32;
+            let runner_id = format!("test-vm:targeted-signaled-{pid}");
+            let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
+            let registry_dup = pidfd.try_clone().expect("dup pidfd for registry");
+            runner_pidfd_registry()
+                .lock()
+                .expect("registry lock")
+                .insert(runner_id.clone(), registry_dup);
+            std::mem::forget(child);
+
+            kill(Pid::from_raw(pid), Signal::SIGKILL).expect("kill SIGKILL");
+
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut reaped = None;
+            while Instant::now() < deadline {
+                targeted_reap_runner(&runner_id, pidfd.as_fd());
+                if let Some(n) = child_reap_buffer()
+                    .lock()
+                    .expect("child_reap_buffer lock")
+                    .iter()
+                    .find(|n| n.runner_id == runner_id)
+                    .cloned()
+                {
+                    reaped = Some(n);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+
+            let notif = reaped.expect("targeted reap should observe the signaled child");
+            assert_eq!(notif.exit_status.kind, ChildExitKind::Killed);
+            assert_eq!(notif.exit_status.signal, Some(libc::SIGKILL));
+        }
+
+        #[test]
+        fn targeted_reap_echild_clears_stale_registry_entry() {
+            // If the SIGCHLD loop already reaped the child, a later
+            // targeted reap sees ECHILD and must drop the stale entry
+            // rather than leaving a dangling pidfd.
+            let _guard = ReapTestGuard::new();
+
+            let child = Command::new("true").spawn().expect("spawn true child");
+            let pid = child.id() as i32;
+            let runner_id = format!("test-vm:targeted-echild-{pid}");
+            let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
+            let registry_dup = pidfd.try_clone().expect("dup pidfd for registry");
+            runner_pidfd_registry()
+                .lock()
+                .expect("registry lock")
+                .insert(runner_id.clone(), registry_dup);
+
+            // Reap the child out-of-band so the pidfd waitid yields ECHILD.
+            let _ = nix::sys::wait::waitpid(Pid::from_raw(pid), None);
+            std::mem::forget(child);
+
+            targeted_reap_runner(&runner_id, pidfd.as_fd());
+
+            assert!(
+                !runner_pidfd_registry()
+                    .lock()
+                    .expect("registry lock")
+                    .contains_key(&runner_id),
+                "ECHILD must clear the stale registry entry"
+            );
         }
 
         #[test]

@@ -63,7 +63,12 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         path: ".",
         owner_template: "nixlingd",
         group_template: "users",
-        mode: 0o2770,
+        // 3770: setgid (group inheritance) + sticky (+t). Sticky prevents a
+        // non-owner per-VM role UID (which holds rwx via POSIX ACL on this
+        // shared-writable root) from rename(2)/unlink(2)-ing entries it does
+        // not own — notably the principal-owned `swtpm` NVRAM dir. See
+        // issue #64 (tpm.enable first-run hardening).
+        mode: 0o3770,
         kind: EntryKind::Dir,
         required: true,
         recursive: false,
@@ -500,7 +505,7 @@ mod tests {
     fn provisioned_state_dir_with_unresolvable_principals_is_clean() {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path();
-        fs::set_permissions(base, fs::Permissions::from_mode(0o2770)).unwrap();
+        fs::set_permissions(base, fs::Permissions::from_mode(0o3770)).unwrap();
         // Don't materialize subdirs — those will surface as
         // StatFailed and be skipped.
         match preflight("vm1", base) {

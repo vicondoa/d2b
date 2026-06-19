@@ -265,7 +265,14 @@ catch-all unchanged.
 under `/var/lib/nixling/vms/<vm>/swtpm/` and is owned by
 `nixling-<vm>-swtpm:nixling-<vm>-swtpm` mode 0700. No other VM's
 swtpm process, no other VM's GPU sidecar, and no `kvm`-group
-process can read it. The control socket is mode 0600 with an
+process can read it. The broker provisions this directory on first
+start (no manual step); the per-VM state root is `3770`
+(setgid + **sticky**) so a non-owner per-VM role UID cannot
+rename or replace the principal-owned `swtpm` directory, and an
+identity-bound, root-owned marker (outside the role-writable tree)
+makes a *missing-after-provisioned* state directory fail the VM
+start closed (`previously-provisioned-swtpm-state-missing`) rather
+than silently re-creating an empty TPM. The control socket is mode 0600 with an
 ACL granting `nixling-<vm>-gpu` rw at `ExecStartPost` time
 ([`nixos-modules/host-sidecars.nix:79-83`](../../nixos-modules/host-sidecars.nix)).
 

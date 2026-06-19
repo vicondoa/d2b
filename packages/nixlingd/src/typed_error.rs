@@ -404,6 +404,11 @@ pub enum TypedError {
     GuestControlExecFailed {
         kind: GuestControlExecErrorKind,
     },
+    /// The daemon refused a new connection because the bounded in-flight
+    /// connection-handler pool is saturated. Returned immediately
+    /// (non-blocking) from the accept path so a burst of clients cannot
+    /// stall the accept loop. Transient: the caller should retry shortly.
+    DaemonBusy,
 }
 
 /// Classify the detail string for a lock-parent validation failure into
@@ -461,6 +466,7 @@ impl TypedError {
             Self::UsbipStepFailed { .. } => "usbip-step-failed",
             Self::GuestControlReadFailed { kind } => kind.wire_kind(),
             Self::GuestControlExecFailed { kind } => kind.wire_kind(),
+            Self::DaemonBusy => "daemon-busy",
         }
     }
 
@@ -504,6 +510,10 @@ impl TypedError {
             // distinct `kind` slug carries the sub-class.
             Self::GuestControlReadFailed { .. } => 70,
             Self::GuestControlExecFailed { kind } => kind.exit_code(),
+            // Shares the EX_TEMPFAIL-class exit code with the other
+            // transient back-pressure refusals (session-capacity,
+            // rate-limited): a retry may succeed.
+            Self::DaemonBusy => 75,
         }
     }
 
@@ -596,6 +606,7 @@ impl TypedError {
             }
             Self::GuestControlReadFailed { kind } => kind.human_message().to_owned(),
             Self::GuestControlExecFailed { kind } => kind.human_message().to_owned(),
+            Self::DaemonBusy => "the daemon is at its in-flight connection limit".to_owned(),
         }
     }
 
@@ -681,6 +692,9 @@ impl TypedError {
             }
             Self::GuestControlReadFailed { kind } => kind.remediation().to_owned(),
             Self::GuestControlExecFailed { kind } => kind.remediation().to_owned(),
+            Self::DaemonBusy => {
+                "the daemon is briefly at capacity; retry the command shortly".to_owned()
+            }
         }
     }
 
@@ -803,7 +817,8 @@ impl TypedError {
             | Self::NetRoutePreflightDegraded { .. }
             | Self::UsbipStepFailed { .. }
             | Self::GuestControlReadFailed { .. }
-            | Self::GuestControlExecFailed { .. } => "internalError",
+            | Self::GuestControlExecFailed { .. }
+            | Self::DaemonBusy => "internalError",
         }
     }
 }
