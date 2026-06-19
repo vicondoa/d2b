@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Bundle: the private manifest bundle now emits `storage.json` and
+  `sync.json` contracts for managed paths, process restart/adoption
+  policies, degraded-state taxonomy, and lock/lease synchronization
+  policy.
 - Documentation: ADR 0034 and the storage lifecycle explanation now
   define the planned generated contracts for managed paths, process
   restart/adoption, synchronization, lock ownership, degraded-state
@@ -35,6 +39,8 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- `bundleVersion` 5 → 6: adds the private storage lifecycle and
+  synchronization artifacts to the trusted bundle.
 - CI: pull requests now fail closed when Rust/Nix/Cargo changes do not
   update `CHANGELOG.md`, or when the changelog is missing
   `## [Unreleased]`, uses duplicate/out-of-order version headers, or

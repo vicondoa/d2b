@@ -1,0 +1,316 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SyncJson",
+  "type": "object",
+  "required": [
+    "locks",
+    "schemaVersion"
+  ],
+  "properties": {
+    "locks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/LockSpec"
+      }
+    },
+    "schemaVersion": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ActorKind": {
+      "type": "string",
+      "enum": [
+        "nix-module",
+        "daemon",
+        "broker",
+        "role",
+        "guest",
+        "operator",
+        "external"
+      ]
+    },
+    "ActorRef": {
+      "type": "object",
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/ActorKind"
+        },
+        "value": {
+          "$ref": "#/definitions/ContractId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ContractId": {
+      "description": "Bounded storage/synchronization contract identifier.",
+      "type": "string",
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "DegradeScope": {
+      "type": "string",
+      "enum": [
+        "role",
+        "vm",
+        "host",
+        "realm"
+      ]
+    },
+    "DegradedReason": {
+      "type": "string",
+      "enum": [
+        "storage-drift",
+        "storage-repair-failed",
+        "adoption-pending",
+        "adoption-quarantined",
+        "restart-required",
+        "lock-owner-ambiguous",
+        "lock-acquire-timeout",
+        "external-dependency-unhealthy",
+        "migration-required",
+        "migration-failed",
+        "violation-audit-throttled",
+        "role-component-degraded"
+      ]
+    },
+    "FdPassingMechanism": {
+      "type": "string",
+      "enum": [
+        "none",
+        "scm-rights",
+        "explicit-fd-mapping"
+      ]
+    },
+    "FdPassingPolicy": {
+      "type": "object",
+      "required": [
+        "leaseTransferRecordRequired",
+        "mechanism"
+      ],
+      "properties": {
+        "leaseTransferRecordRequired": {
+          "type": "boolean"
+        },
+        "mechanism": {
+          "$ref": "#/definitions/FdPassingMechanism"
+        }
+      },
+      "additionalProperties": false
+    },
+    "InheritancePolicy": {
+      "type": "string",
+      "enum": [
+        "close-on-exec",
+        "explicit-fd-mapping-only",
+        "scm-rights-only",
+        "not-applicable"
+      ]
+    },
+    "LockAcquireOrder": {
+      "type": "object",
+      "required": [
+        "anchoredRoot",
+        "lockId",
+        "normalizedPath",
+        "scopeClass"
+      ],
+      "properties": {
+        "anchoredRoot": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "lockId": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "normalizedPath": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "scopeClass": {
+          "$ref": "#/definitions/LockScopeClass"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LockAdoptionPolicy": {
+      "type": "string",
+      "enum": [
+        "reacquire-after-proof",
+        "transfer-with-lease-record",
+        "quarantine-on-ambiguity",
+        "not-adoptable"
+      ]
+    },
+    "LockKind": {
+      "type": "string",
+      "enum": [
+        "ofd",
+        "file-record",
+        "in-process",
+        "kernel-object"
+      ]
+    },
+    "LockScopeClass": {
+      "type": "string",
+      "enum": [
+        "global",
+        "host",
+        "vm",
+        "role",
+        "external"
+      ]
+    },
+    "LockSpec": {
+      "type": "object",
+      "required": [
+        "acquireOrder",
+        "adoptionPolicy",
+        "cloexecRequired",
+        "degradeScope",
+        "fdPassingPolicy",
+        "id",
+        "inheritancePolicy",
+        "kind",
+        "ownerProcess",
+        "releaseAuthority",
+        "scope",
+        "stalePolicy",
+        "timeoutPolicy"
+      ],
+      "properties": {
+        "acquireOrder": {
+          "$ref": "#/definitions/LockAcquireOrder"
+        },
+        "adoptionPolicy": {
+          "$ref": "#/definitions/LockAdoptionPolicy"
+        },
+        "allowedHolders": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ActorRef"
+          }
+        },
+        "cloexecRequired": {
+          "type": "boolean"
+        },
+        "degradeScope": {
+          "$ref": "#/definitions/DegradeScope"
+        },
+        "fdPassingPolicy": {
+          "$ref": "#/definitions/FdPassingPolicy"
+        },
+        "id": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "inheritancePolicy": {
+          "$ref": "#/definitions/InheritancePolicy"
+        },
+        "kind": {
+          "$ref": "#/definitions/LockKind"
+        },
+        "ownerProcess": {
+          "$ref": "#/definitions/ActorRef"
+        },
+        "pathTemplate": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PathTemplate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "releaseAuthority": {
+          "$ref": "#/definitions/ActorRef"
+        },
+        "resourceId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "stalePolicy": {
+          "$ref": "#/definitions/LockStalePolicy"
+        },
+        "timeoutPolicy": {
+          "$ref": "#/definitions/LockTimeoutPolicy"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LockStaleKind": {
+      "type": "string",
+      "enum": [
+        "pidfd-proof-required",
+        "cgroup-empty-proof-required",
+        "file-record-owner-match",
+        "cutover-only",
+        "manual-recovery"
+      ]
+    },
+    "LockStalePolicy": {
+      "type": "object",
+      "required": [
+        "degradedReason",
+        "kind"
+      ],
+      "properties": {
+        "degradedReason": {
+          "$ref": "#/definitions/DegradedReason"
+        },
+        "kind": {
+          "$ref": "#/definitions/LockStaleKind"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LockTimeoutKind": {
+      "type": "string",
+      "enum": [
+        "fail-fast",
+        "bounded-wait",
+        "no-wait"
+      ]
+    },
+    "LockTimeoutPolicy": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/LockTimeoutKind"
+        },
+        "timeoutMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "PathTemplate": {
+      "description": "Absolute path template with typed variables expanded by the broker.",
+      "type": "string",
+      "maxLength": 1024,
+      "minLength": 1,
+      "pattern": "^/[^\\u0000]*$"
+    }
+  }
+}

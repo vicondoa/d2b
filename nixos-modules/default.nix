@@ -54,6 +54,8 @@
     ./guest-control-host.nix
     ./host-json.nix
     ./processes-json.nix
+    ./storage-json.nix
+    ./sync-json.nix
     ./privileges-json.nix
     ./closures-json.nix
     ./minijail-profiles.nix

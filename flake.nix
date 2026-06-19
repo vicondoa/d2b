@@ -331,6 +331,8 @@
           cp ${bundle.privilegesJson.path} $out/privileges.json
           cp ${bundle.hostJson.path} $out/host.json
           cp ${bundle.processesJson.path} $out/processes.json
+          cp ${bundle.storageJson.path} $out/storage.json
+          cp ${bundle.syncJson.path} $out/sync.json
           cp ${bundle.bundle.path} $out/bundle.json
           cp ${manifestPkg}/share/nixling/vms.json $out/manifest.json
           ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
@@ -405,6 +407,8 @@
           cp ${bundle.privilegesJson.path} $out/privileges.json
           cp ${bundle.hostJson.path} $out/host.json
           cp ${bundle.processesJson.path} $out/processes.json
+          cp ${bundle.storageJson.path} $out/storage.json
+          cp ${bundle.syncJson.path} $out/sync.json
           cp ${bundle.bundle.path} $out/bundle.json
           cp ${manifestPkg}/share/nixling/vms.json $out/manifest.json
           ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList

@@ -75,6 +75,8 @@ use crate::host_w3::{ModuleRequirementW3, TapRoleW3};
 use crate::manifest_v04::{ManifestV04, VmEntry};
 use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
 use crate::processes::{ProcessNode, ProcessRole, ProcessesJson, RoleProfile, VmProcessDag};
+use crate::storage::StorageJson;
+use crate::sync::SyncJson;
 use sha2::Digest as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read as _;
@@ -88,6 +90,8 @@ pub struct BundleResolver {
     pub bundle: Bundle,
     pub host: HostJson,
     pub processes: ProcessesJson,
+    pub storage: Option<StorageJson>,
+    pub sync: Option<SyncJson>,
     pub manifest: ManifestV04,
     audit_bundle_version: String,
     audit_bundle_hash: String,
@@ -865,6 +869,8 @@ impl BundleResolver {
             bundle_hash,
             host,
             processes,
+            None,
+            None,
             manifest,
             Vec::new(),
         )
@@ -877,6 +883,8 @@ impl BundleResolver {
         bundle_hash: String,
         host: HostJson,
         processes: ProcessesJson,
+        storage: Option<StorageJson>,
+        sync: Option<SyncJson>,
         manifest: ManifestV04,
         closures: Vec<ClosureMetadata>,
     ) -> Self {
@@ -903,6 +911,8 @@ impl BundleResolver {
             bundle,
             host,
             processes,
+            storage,
+            sync,
             manifest,
             nft_intents,
             route_intents,
@@ -922,6 +932,31 @@ impl BundleResolver {
             host_key_trust_intents,
             rotate_known_host_intents,
         }
+    }
+
+    pub fn from_artifacts_with_optional_contracts(
+        bundle: Bundle,
+        host: HostJson,
+        processes: ProcessesJson,
+        storage: Option<StorageJson>,
+        sync: Option<SyncJson>,
+        manifest: ManifestV04,
+    ) -> Self {
+        let bundle_hash = stable_digest_bytes(
+            serde_json::to_vec(&bundle)
+                .expect("bundle serialization for audit hashing must succeed")
+                .as_slice(),
+        );
+        Self::from_artifacts_with_closures(
+            bundle,
+            bundle_hash,
+            host,
+            processes,
+            storage,
+            sync,
+            manifest,
+            Vec::new(),
+        )
     }
 
     fn load_with_paths(
@@ -953,6 +988,8 @@ impl BundleResolver {
         let processes: ProcessesJson = serde_json::from_slice(&processes_bytes).map_err(|e| {
             Error::manifest_parse_error("processes.json", manifest_parse_reason(&e.to_string()))
         })?;
+        let storage = load_optional_storage_artifact(&bundle, bundle_root, policy)?;
+        let sync = load_optional_sync_artifact(&bundle, bundle_root, policy)?;
         // The public manifest (vms.json) lives under /run/current-system/…
         // which is root-owned 0444; skip the private-artifact policy for it.
         let manifest = ManifestV04::from_path(manifest_path)?;
@@ -962,6 +999,8 @@ impl BundleResolver {
             bundle_hash,
             host,
             processes,
+            storage,
+            sync,
             manifest,
             closures,
         ))
@@ -2587,6 +2626,50 @@ fn load_closure_metadata_verified(
     Ok(closures)
 }
 
+fn load_optional_storage_artifact(
+    bundle: &Bundle,
+    bundle_root: &Path,
+    policy: &BundleVerifyPolicy,
+) -> Result<Option<StorageJson>, Error> {
+    let Some(storage_ref) = bundle.storage_path.as_deref() else {
+        return Ok(None);
+    };
+    let storage_path = resolve_bundle_ref(bundle_root, storage_ref);
+    let bytes = secure_open_and_read(&storage_path, policy)?;
+    verify_artifact_hash(
+        &storage_path,
+        &bytes,
+        bundle.artifact_hashes.as_ref(),
+        storage_ref,
+    )?;
+    let storage: StorageJson = serde_json::from_slice(&bytes).map_err(|e| {
+        Error::manifest_parse_error("storage.json", manifest_parse_reason(&e.to_string()))
+    })?;
+    Ok(Some(storage))
+}
+
+fn load_optional_sync_artifact(
+    bundle: &Bundle,
+    bundle_root: &Path,
+    policy: &BundleVerifyPolicy,
+) -> Result<Option<SyncJson>, Error> {
+    let Some(sync_ref) = bundle.sync_path.as_deref() else {
+        return Ok(None);
+    };
+    let sync_path = resolve_bundle_ref(bundle_root, sync_ref);
+    let bytes = secure_open_and_read(&sync_path, policy)?;
+    verify_artifact_hash(
+        &sync_path,
+        &bytes,
+        bundle.artifact_hashes.as_ref(),
+        sync_ref,
+    )?;
+    let sync: SyncJson = serde_json::from_slice(&bytes).map_err(|e| {
+        Error::manifest_parse_error("sync.json", manifest_parse_reason(&e.to_string()))
+    })?;
+    Ok(Some(sync))
+}
+
 // ---------------------------------------------------------------
 // Stable digest helper.
 // ---------------------------------------------------------------
@@ -2690,6 +2773,8 @@ mod tests {
                 host_path: "host.json".to_owned(),
                 processes_path: "processes.json".to_owned(),
                 privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                sync_path: None,
                 closures: Vec::new(),
                 minijail_profiles: Vec::new(),
                 managed_keys: Default::default(),
@@ -2975,6 +3060,8 @@ mod tests {
             host_path: "host.json".to_owned(),
             processes_path: "processes.json".to_owned(),
             privileges_path: "privileges.json".to_owned(),
+            storage_path: None,
+            sync_path: None,
             closures: vec![BundleClosureRef {
                 vm: "personal-dev".to_owned(),
                 path: "closures/personal-dev.json".to_owned(),
