@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Documentation: ADR 0034 and the storage lifecycle explanation now
+  define the planned generated contracts for managed paths, process
+  restart/adoption, synchronization, lock ownership, degraded-state
+  reporting, and the one-time storage cutover.
 - CI: merging `main` after cutting a new dated changelog section now
   auto-tags the release and publishes pre-built `x86_64-linux` host
   binary tarballs for `nixlingd`, `nixling`, `nixling-priv-broker`,
