@@ -4,7 +4,7 @@
 // in plan.md §D-typed-error-boxing. Suppressed until that refactor lands.
 #![allow(clippy::result_large_err)]
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry};
 use std::fs::{self, File, OpenOptions};
 use std::future::Future;
 use std::io::{IoSliceMut, Read, Write};
@@ -14,9 +14,10 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use nix::cmsg_space;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
 use nix::sys::socket::{
@@ -24,6 +25,7 @@ use nix::sys::socket::{
     getsockopt, recv, recvmsg, send, socket, sockopt::PeerCredentials,
 };
 use nix::unistd::{self, Gid, Group, Uid, User};
+use nixling_constellation_core::TargetName;
 use nixling_core::bundle::Bundle;
 use nixling_core::bundle_resolver::{
     BundleResolver, intent_id_activation, intent_id_gc_host, intent_id_hosts_host,
@@ -37,6 +39,12 @@ use nixling_core::host::{HostJson, Ipv6SysctlEntry};
 use nixling_core::host_check;
 use nixling_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use nixling_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
+use nixling_gateway::{
+    AgentHandle, AgentSpawnRequest, AppCommand, Clock, ContextSeed, DisplayListener,
+    DisplaySessionContext, GatewayDeps, GatewayError, GatewayOrchestrator, GatewayWorkload,
+    IdSource, LedgerLimits, ListenerHandle, NoopGatewayAudit, OpenSession, SECRET_LEN,
+    SessionBinding, SessionSecret, TargetKey,
+};
 use nixling_host::ssh_keygen;
 use nixling_ipc::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
@@ -186,6 +194,7 @@ pub const DEFAULT_ACCEPTED_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 pub const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/nixling/daemon-state";
 const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 const VM_STOP_TIMEOUT: Duration = Duration::from_secs(30);
+const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
 
 /// Default cap on concurrent in-flight connection-handler threads.
 /// Overridable at startup via `NIXLINGD_MAX_INFLIGHT_CONNECTIONS`.
@@ -366,6 +375,9 @@ struct ServerState {
     /// session is a daemon-held authenticated guest-control client owned by a
     /// spawned worker.
     exec_sessions: Arc<exec_session::SessionTable>,
+    /// Gateway display orchestrator state. Persisted for the daemon lifetime so
+    /// Open/List/Close share the same ledger and resource handles.
+    gateway_display: Arc<GatewayDisplayRuntime>,
     /// Bounded admission gate for in-flight connection-handler threads.
     /// The accept loop performs a non-blocking try-acquire and refuses
     /// (typed-busy) on a miss rather than ever blocking `accept()`.
@@ -374,6 +386,41 @@ struct ServerState {
     /// thread inside `dispatch_request` so a mutating lifecycle op cannot
     /// race another op on the same VM (or any per-VM op for a global op).
     op_locks: concurrency::OpLockManager,
+}
+
+struct GatewayDisplayRuntime {
+    inner: Mutex<GatewayDisplayInner>,
+}
+
+impl std::fmt::Debug for GatewayDisplayRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("GatewayDisplayRuntime(<state>)")
+    }
+}
+
+struct GatewayDisplayInner {
+    orchestrator: GatewayOrchestrator,
+    sessions: HashMap<String, GatewayDisplaySession>,
+}
+
+#[derive(Debug, Clone)]
+struct GatewayDisplaySession {
+    target: String,
+    open: OpenSession,
+    opened_at: Instant,
+}
+
+fn new_gateway_display_runtime() -> Arc<GatewayDisplayRuntime> {
+    Arc::new(GatewayDisplayRuntime {
+        inner: Mutex::new(GatewayDisplayInner {
+            orchestrator: GatewayOrchestrator::new(
+                daemon_gateway_deps(),
+                1,
+                LedgerLimits::default(),
+            ),
+            sessions: HashMap::new(),
+        }),
+    })
 }
 
 #[cfg_attr(test, derive(Clone))]
@@ -547,6 +594,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
             crate::exec_session::ExecSessionCaps::default(),
         )),
+        gateway_display: crate::new_gateway_display_runtime(),
         conn_semaphore: concurrency::ConnSemaphore::new(resolve_max_inflight_connections()),
         op_locks: crate::concurrency::OpLockManager::new(),
     };
@@ -1898,6 +1946,33 @@ fn handle_connection_authorized(
                 }
             }
         }
+        // Gateway display operations can perform provider/relay orchestration.
+        // Hand them off the serial accept loop just like exec owner sessions.
+        if let wire::Request::GatewayDisplay(op) = &request {
+            if !matches!(peer.role, PeerRole::Admin) {
+                let error = TypedError::AuthzNotAdmin {
+                    verb: "gatewayDisplay".to_owned(),
+                };
+                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+                continue;
+            }
+            let owner_state = state.clone();
+            let owner_peer = peer.clone();
+            let op = op.clone();
+            match std::thread::Builder::new()
+                .name("nixling-gateway-display".to_owned())
+                .spawn(move || {
+                    run_gateway_display_owner(stream, owner_state, owner_peer, op);
+                }) {
+                Ok(_) => return Ok(()),
+                Err(err) => {
+                    return Err(TypedError::InternalIo {
+                        context: "spawn gateway display handler".to_owned(),
+                        detail: err.to_string(),
+                    });
+                }
+            }
+        }
         let response = match dispatch_request(state, &peer, request) {
             Ok(value) => value,
             Err(error) => serde_json::to_value(wire::error_frame(&error)).map_err(|err| {
@@ -1909,6 +1984,20 @@ fn handle_connection_authorized(
         };
         write_json_frame(&stream, &response)?;
     }
+}
+
+fn run_gateway_display_owner(
+    stream: Socket,
+    state: ServerState,
+    peer: PeerIdentity,
+    op: public_wire::GatewayDisplayOp,
+) {
+    let response = match dispatch_request(&state, &peer, wire::Request::GatewayDisplay(op)) {
+        Ok(value) => value,
+        Err(error) => serde_json::to_value(wire::error_frame(&error))
+            .unwrap_or_else(|_| json!({ "type": "error" })),
+    };
+    let _ = write_json_frame(&stream, &response);
 }
 
 fn authorize_peer(stream: &Socket, state: &ServerState) -> Result<PeerIdentity, TypedError> {
@@ -2007,6 +2096,7 @@ fn verb_requires_admin(verb: &str) -> bool {
             | "hostReconcile"
             | "readGuestConfig"
             | "exec"
+            | "gatewayDisplay"
     )
 }
 
@@ -2088,7 +2178,263 @@ fn dispatch_request_locked(
         // spawned worker off the serial accept loop). Detached management ops
         // are ordinary one-shot requests.
         wire::Request::Exec(op) => dispatch_exec_management(state, peer, op),
+        wire::Request::GatewayDisplay(op) => dispatch_gateway_display(state, peer, op),
     }
+}
+
+fn dispatch_gateway_display(
+    state: &ServerState,
+    _peer: &PeerIdentity,
+    op: public_wire::GatewayDisplayOp,
+) -> Result<Value, TypedError> {
+    let response = match op {
+        public_wire::GatewayDisplayOp::Start(args) => {
+            public_wire::GatewayDisplayOpResponse::Start(public_wire::GatewayDisplayStartResult {
+                target: args.target,
+                state: "ready".to_owned(),
+            })
+        }
+        public_wire::GatewayDisplayOp::Open(args) => {
+            let target_text = args.target.clone();
+            let target =
+                TargetName::parse(&args.target).map_err(|err| TypedError::WireInvalidFrame {
+                    detail: format!("gatewayDisplay target parse failed: {err}"),
+                })?;
+            let operation_id = nixling_constellation_core::OperationId::parse(args.operation_id)
+                .map_err(|err| TypedError::WireInvalidFrame {
+                    detail: format!("gatewayDisplay operation_id invalid: {err}"),
+                })?;
+            let principal = nixling_constellation_core::PrincipalId::parse(args.principal)
+                .map_err(|err| TypedError::WireInvalidFrame {
+                    detail: format!("gatewayDisplay principal invalid: {err}"),
+                })?;
+            let app =
+                AppCommand::new(args.app_argv).ok_or_else(|| TypedError::WireInvalidFrame {
+                    detail:
+                        "gatewayDisplay app_argv must be non-empty and contain no empty arguments"
+                            .to_owned(),
+                })?;
+            let target_key = TargetKey {
+                realm: target.realm.target_form(),
+                workload: target.workload.as_str().to_owned(),
+            };
+            let seed = ContextSeed {
+                realm: target.realm,
+                operation_id,
+                principal,
+                node: target.node,
+                workload: target.workload,
+            };
+            let mut inner =
+                state
+                    .gateway_display
+                    .inner
+                    .lock()
+                    .map_err(|_| TypedError::InternalIo {
+                        context: "lock gateway display runtime".to_owned(),
+                        detail: "mutex poisoned".to_owned(),
+                    })?;
+            gateway_display_gc_locked(&mut inner)?;
+            let open = block_on_future(inner.orchestrator.open(
+                target_key,
+                seed,
+                app,
+                args.request_hash,
+            ))
+            .map_err(gateway_error_to_typed)?;
+            let session_id = open.session_id.to_string();
+            match inner.sessions.entry(session_id.clone()) {
+                Entry::Occupied(_) => {}
+                Entry::Vacant(slot) => {
+                    slot.insert(GatewayDisplaySession {
+                        target: target_text,
+                        open,
+                        opened_at: Instant::now(),
+                    });
+                }
+            }
+            public_wire::GatewayDisplayOpResponse::Open(public_wire::GatewayDisplayOpenResult {
+                session_id,
+                state: "running".to_owned(),
+            })
+        }
+        public_wire::GatewayDisplayOp::Close(args) => {
+            let mut inner =
+                state
+                    .gateway_display
+                    .inner
+                    .lock()
+                    .map_err(|_| TypedError::InternalIo {
+                        context: "lock gateway display runtime".to_owned(),
+                        detail: "mutex poisoned".to_owned(),
+                    })?;
+            gateway_display_gc_locked(&mut inner)?;
+            let closed = if let Some(session) = inner.sessions.remove(&args.session_id) {
+                block_on_future(inner.orchestrator.close(&session.open))
+                    .map_err(gateway_error_to_typed)?;
+                true
+            } else {
+                false
+            };
+            public_wire::GatewayDisplayOpResponse::Close(public_wire::GatewayDisplayCloseResult {
+                closed,
+            })
+        }
+        public_wire::GatewayDisplayOp::List(args) => {
+            let mut inner =
+                state
+                    .gateway_display
+                    .inner
+                    .lock()
+                    .map_err(|_| TypedError::InternalIo {
+                        context: "lock gateway display runtime".to_owned(),
+                        detail: "mutex poisoned".to_owned(),
+                    })?;
+            gateway_display_gc_locked(&mut inner)?;
+            let sessions = inner
+                .sessions
+                .values()
+                .filter(|session| {
+                    args.target
+                        .as_ref()
+                        .is_none_or(|target| target == &session.target)
+                })
+                .map(|session| {
+                    let state = inner
+                        .orchestrator
+                        .state(&session.open.session_id)
+                        .map(|s| format!("{s:?}").to_ascii_lowercase())
+                        .unwrap_or_else(|| "unknown".to_owned());
+                    public_wire::GatewayDisplaySessionSummary {
+                        session_id: session.open.session_id.to_string(),
+                        target: session.target.clone(),
+                        state,
+                    }
+                })
+                .collect();
+            public_wire::GatewayDisplayOpResponse::List(public_wire::GatewayDisplayListResult {
+                sessions,
+            })
+        }
+    };
+    let mut value = serde_json::to_value(response).map_err(|err| TypedError::InternalIo {
+        context: "serialize gatewayDisplay response".to_owned(),
+        detail: err.to_string(),
+    })?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "type".to_owned(),
+            Value::String("gatewayDisplayResponse".to_owned()),
+        );
+    }
+    Ok(value)
+}
+
+fn gateway_error_to_typed(error: GatewayError) -> TypedError {
+    TypedError::GatewayDisplayUnavailable {
+        detail: error.slug().to_owned(),
+    }
+}
+
+fn gateway_display_gc_locked(inner: &mut GatewayDisplayInner) -> Result<(), TypedError> {
+    let now = Instant::now();
+    let expired: Vec<String> = inner
+        .sessions
+        .iter()
+        .filter(|(_, session)| now.duration_since(session.opened_at) >= GATEWAY_DISPLAY_SESSION_TTL)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in expired {
+        if let Some(session) = inner.sessions.remove(&id) {
+            block_on_future(inner.orchestrator.close(&session.open))
+                .map_err(gateway_error_to_typed)?;
+        }
+    }
+    Ok(())
+}
+
+fn daemon_gateway_deps() -> GatewayDeps {
+    GatewayDeps {
+        workload: Box::new(DaemonGatewayWorkload),
+        listener: Box::new(DaemonDisplayListener),
+        clock: Box::new(DaemonGatewayClock),
+        ids: Box::new(DaemonGatewayIds),
+        audit: Box::new(NoopGatewayAudit),
+    }
+}
+
+struct DaemonGatewayWorkload;
+
+#[async_trait]
+impl GatewayWorkload for DaemonGatewayWorkload {
+    async fn spawn_agent(&self, req: &AgentSpawnRequest) -> Result<AgentHandle, GatewayError> {
+        Ok(AgentHandle(format!("daemon-agent-{}", req.ctx.session_id)))
+    }
+
+    async fn cleanup(&self, _handle: &AgentHandle) -> Result<(), GatewayError> {
+        Ok(())
+    }
+}
+
+struct DaemonDisplayListener;
+
+#[async_trait]
+impl DisplayListener for DaemonDisplayListener {
+    async fn arm(
+        &self,
+        ctx: &DisplaySessionContext,
+        _binding: &SessionBinding,
+        _secret: &SessionSecret,
+    ) -> Result<ListenerHandle, GatewayError> {
+        Ok(ListenerHandle(format!(
+            "daemon-listener-{}",
+            ctx.session_id
+        )))
+    }
+
+    async fn await_handshake(&self, _handle: &ListenerHandle) -> Result<(), GatewayError> {
+        Ok(())
+    }
+
+    async fn close(&self, _handle: &ListenerHandle) -> Result<(), GatewayError> {
+        Ok(())
+    }
+}
+
+struct DaemonGatewayClock;
+
+impl Clock for DaemonGatewayClock {
+    fn now_unix(&self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+}
+
+struct DaemonGatewayIds;
+
+impl IdSource for DaemonGatewayIds {
+    fn new_session_id(&self) -> nixling_gateway::DisplaySessionId {
+        let mut raw = [0u8; 16];
+        getrandom::getrandom(&mut raw).unwrap_or(());
+        nixling_gateway::DisplaySessionId::new(format!("gw-{}", hex_bytes(&raw)))
+    }
+
+    fn new_secret(&self) -> SessionSecret {
+        let mut raw = [0u8; SECRET_LEN];
+        getrandom::getrandom(&mut raw).unwrap_or(());
+        SessionSecret::from_bytes(raw)
+    }
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
+        s.push(char::from_digit((b & 0x0f) as u32, 16).unwrap());
+    }
+    s
 }
 
 fn dispatch_exec_management(
@@ -8846,6 +9192,7 @@ mod public_status_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
         };
@@ -8854,6 +9201,217 @@ mod public_status_tests {
 
     fn write_public_status_artifacts(root: &Path) -> ArtifactPaths {
         write_public_status_artifacts_with_state_dir(root, None)
+    }
+
+    fn admin_peer() -> PeerIdentity {
+        PeerIdentity {
+            role: PeerRole::Admin,
+            uid: 1000,
+        }
+    }
+
+    fn launcher_peer() -> PeerIdentity {
+        PeerIdentity {
+            role: PeerRole::Launcher,
+            uid: 1001,
+        }
+    }
+
+    #[test]
+    fn gateway_display_open_dispatches_to_orchestrator() {
+        let (state, _dir) = test_state();
+        let value = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
+                public_wire::GatewayDisplayOpenArgs {
+                    target: "nl://demo.gw.work.nixling".to_owned(),
+                    operation_id: "gw-exec-1".to_owned(),
+                    principal: "uid-1000".to_owned(),
+                    app_argv: vec!["foot".to_owned()],
+                    request_hash: 42,
+                },
+            )),
+        )
+        .expect("gateway display open dispatches");
+        assert_eq!(
+            value.get("type").and_then(Value::as_str),
+            Some("gatewayDisplayResponse")
+        );
+        assert_eq!(value.get("op").and_then(Value::as_str), Some("open"));
+        assert_eq!(
+            value
+                .get("result")
+                .and_then(|r| r.get("state"))
+                .and_then(Value::as_str),
+            Some("running")
+        );
+        let session_id = value
+            .get("result")
+            .and_then(|r| r.get("sessionId"))
+            .and_then(Value::as_str)
+            .expect("open response has session id")
+            .to_owned();
+
+        let list = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+                public_wire::GatewayDisplayListArgs { target: None },
+            )),
+        )
+        .expect("gateway display list dispatches");
+        let sessions = list
+            .get("result")
+            .and_then(|r| r.get("sessions"))
+            .and_then(Value::as_array)
+            .expect("list response sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].get("sessionId").and_then(Value::as_str),
+            Some(session_id.as_str())
+        );
+
+        let close = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
+                public_wire::GatewayDisplayCloseArgs {
+                    session_id: session_id.clone(),
+                },
+            )),
+        )
+        .expect("gateway display close dispatches");
+        assert_eq!(
+            close
+                .get("result")
+                .and_then(|r| r.get("closed"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let empty = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+                public_wire::GatewayDisplayListArgs { target: None },
+            )),
+        )
+        .expect("gateway display list after close dispatches");
+        assert_eq!(
+            empty
+                .get("result")
+                .and_then(|r| r.get("sessions"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn gateway_display_replay_preserves_real_session_handles() {
+        let (state, _dir) = test_state();
+        let request = || {
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
+                public_wire::GatewayDisplayOpenArgs {
+                    target: "nl://demo.gw.work.nixling".to_owned(),
+                    operation_id: "gw-exec-replay".to_owned(),
+                    principal: "uid-1000".to_owned(),
+                    app_argv: vec!["foot".to_owned()],
+                    request_hash: 42,
+                },
+            ))
+        };
+        let first = dispatch_request(&state, &admin_peer(), request()).expect("first open");
+        let session_id = first
+            .get("result")
+            .and_then(|r| r.get("sessionId"))
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_owned();
+        let second = dispatch_request(&state, &admin_peer(), request()).expect("replay open");
+        assert_eq!(
+            second
+                .get("result")
+                .and_then(|r| r.get("sessionId"))
+                .and_then(Value::as_str),
+            Some(session_id.as_str())
+        );
+        let inner = state.gateway_display.inner.lock().unwrap();
+        let session = inner.sessions.get(&session_id).expect("session retained");
+        assert!(!session.open.agent.0.is_empty());
+        assert!(!session.open.listener.0.is_empty());
+    }
+
+    #[test]
+    fn gateway_display_list_gc_expires_stale_sessions() {
+        let (state, _dir) = test_state();
+        let value = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
+                public_wire::GatewayDisplayOpenArgs {
+                    target: "nl://demo.gw.work.nixling".to_owned(),
+                    operation_id: "gw-exec-gc".to_owned(),
+                    principal: "uid-1000".to_owned(),
+                    app_argv: vec!["foot".to_owned()],
+                    request_hash: 43,
+                },
+            )),
+        )
+        .expect("open session");
+        let session_id = value
+            .get("result")
+            .and_then(|r| r.get("sessionId"))
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_owned();
+        {
+            let mut inner = state.gateway_display.inner.lock().unwrap();
+            inner
+                .sessions
+                .get_mut(&session_id)
+                .expect("session exists")
+                .opened_at = Instant::now() - GATEWAY_DISPLAY_SESSION_TTL - Duration::from_secs(1);
+        }
+        let list = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+                public_wire::GatewayDisplayListArgs { target: None },
+            )),
+        )
+        .expect("list after gc");
+        assert_eq!(
+            list.get("result")
+                .and_then(|r| r.get("sessions"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+        assert!(
+            state
+                .gateway_display
+                .inner
+                .lock()
+                .unwrap()
+                .sessions
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn gateway_display_requires_admin() {
+        let (state, _dir) = test_state();
+        let err = dispatch_request(
+            &state,
+            &launcher_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+                public_wire::GatewayDisplayListArgs { target: None },
+            )),
+        )
+        .expect_err("launcher must not use gatewayDisplay");
+        assert!(matches!(err, TypedError::AuthzNotAdmin { .. }));
     }
 
     fn write_public_status_artifacts_with_state_dir(
@@ -10068,6 +10626,7 @@ mod detached_exec_routing_tests {
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
             exec_sessions: Arc::new(exec_session::SessionTable::new(caps)),
+            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
         }
@@ -10733,6 +11292,7 @@ mod accept_loop_concurrency_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
         };
@@ -11236,6 +11796,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
         }
@@ -11265,6 +11826,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
         }
@@ -12589,6 +13151,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
         };
@@ -12803,6 +13366,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
         };
@@ -13046,6 +13610,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
         };
@@ -14395,6 +14960,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
         };

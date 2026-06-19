@@ -401,7 +401,6 @@ dependencies = [
  "clap",
  "futures-util",
  "hmac",
- "rand",
  "rustls",
  "rustls-pemfile",
  "serde",

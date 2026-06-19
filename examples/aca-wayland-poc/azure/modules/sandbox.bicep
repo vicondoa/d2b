@@ -30,6 +30,9 @@ param tags object
 @description('Principal id of the identity that manages sandboxes via the data plane (from the registry module).')
 param managedIdentityPrincipalId string
 
+@description('Resource id of the user-assigned managed identity to attach to the sandbox group, so workloads inside the sandbox can fetch Entra tokens (plane 2: container -> Azure) from the injected IDENTITY_ENDPOINT. From the registry module.')
+param managedIdentityResourceId string
+
 @description('Optional object id of an operator (user/group) to also grant the SandboxGroup Data Owner role, so a human can drive sandboxes in the portal/CLI. Leave empty to skip.')
 param operatorPrincipalId string = ''
 
@@ -52,11 +55,22 @@ var hybridConnectionName = toLower('${prefixes.hybridConnection}-${workload}-dis
 // through the ADC data plane.
 var sandboxDataOwnerRoleId = 'c24cf47c-5077-412d-a19c-45202126392c'
 
-@description('Sandbox group: the top-level management boundary for ephemeral, isolated sandboxes. Sandboxes themselves are created via the data plane.')
+// "Azure Relay Sender" built-in role: lets the sandbox's managed identity
+// send on the hybrid connection using an Entra token (plane 2), so the
+// container never receives a Relay SAS key/token.
+var relaySenderRoleId = '26baccc8-eea7-41f1-98f4-1762cc7f685d'
+
+@description('Sandbox group: the top-level management boundary for ephemeral, isolated sandboxes. Sandboxes themselves are created via the data plane. The user-assigned identity is attached here so workloads inside sandboxes can fetch Entra tokens for plane-2 (container -> Azure) access via the injected IDENTITY_ENDPOINT.')
 resource sandboxGroup 'Microsoft.App/sandboxGroups@2026-02-01-preview' = {
   name: sandboxGroupName
   location: resourceGroup().location
   tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${managedIdentityResourceId}': {}
+    }
+  }
 }
 
 @description('Grant the shared identity data-plane ownership of the sandbox group so the realm gateway can create/suspend/exec/expose sandboxes.')
@@ -100,6 +114,17 @@ resource hybridConnection 'Microsoft.Relay/namespaces/hybridConnections@2024-01-
   }
 }
 
+@description('Grant the sandbox group identity the Azure Relay Sender role on the namespace, so a workload inside a sandbox can authenticate to the hybrid connection with an Entra token from its managed identity (plane 2) instead of a Relay SAS token. This is the productionized container -> Relay path; no SAS key ever enters the sandbox.')
+resource relaySender 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(relayNamespace.id, managedIdentityPrincipalId, relaySenderRoleId)
+  scope: relayNamespace
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', relaySenderRoleId)
+    principalId: managedIdentityPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 @description('SAS policy granting Listen on the hybrid connection (held by the realm gateway listener). Keys are fetched out-of-band during gateway enrollment; they are never emitted as deployment outputs.')
 resource listenRule 'Microsoft.Relay/namespaces/hybridConnections/authorizationRules@2024-01-01' = {
   parent: hybridConnection
@@ -111,7 +136,7 @@ resource listenRule 'Microsoft.Relay/namespaces/hybridConnections/authorizationR
   }
 }
 
-@description('SAS policy granting Send on the hybrid connection. The gateway mints short-lived per-sandbox Send tokens from this policy; the policy key itself never enters a sandbox.')
+@description('SAS policy granting Send on the hybrid connection. SUPERSEDED by the Azure Relay Sender role on the sandbox identity (plane 2): the productionized container authenticates to Relay with an Entra token from its managed identity, so no SAS key/token enters the sandbox. Retained for the transitional gateway-minted-token path and for non-MI senders.')
 resource sendRule 'Microsoft.Relay/namespaces/hybridConnections/authorizationRules@2024-01-01' = {
   parent: hybridConnection
   name: 'gateway-send'

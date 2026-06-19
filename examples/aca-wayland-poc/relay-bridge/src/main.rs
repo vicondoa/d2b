@@ -139,14 +139,6 @@ fn sas_token(namespace: &str, entity: &str, key_name: &str, key: &str, ttl: u64)
     ))
 }
 
-fn rand_id() -> String {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    (0..16)
-        .map(|_| format!("{:02x}", rng.r#gen::<u8>()))
-        .collect()
-}
-
 /// A local byte target: a connected unix or tcp stream, type-erased.
 enum Local {
     Tcp(TcpStream),
@@ -250,10 +242,9 @@ async fn run_send(cli: &Cli, target: &str, connector: &Connector) -> Result<()> 
         cli.token_ttl,
     )?;
     let url = format!(
-        "wss://{}/$hc/{}?sb-hc-action=connect&sb-hc-id={}&sb-hc-token={}",
+        "wss://{}/$hc/{}?sb-hc-action=connect&sb-hc-token={}",
         cli.namespace,
         urlencoding::encode(&cli.entity),
-        rand_id(),
         urlencoding::encode(&token),
     );
     eprintln!(

@@ -2307,6 +2307,7 @@ authentication, and compliance.
 
 | Field | Detail |
 | --- | --- |
+| Status | **Completed.** The provider/code-organization foundation has landed: constellation core/provider/router/transport/codec crates, target parsing, realm-entrypoint resolution, provider DTOs/capability descriptors, stream/mux/session primitives, and dependency-direction gates. |
 | Goal | Reorganize the codebase so v2 can add runtimes, workload providers, host substrates, relays, transports, and protocol codecs without rewrites. |
 | Design decisions | Existing concrete paths become adapters behind traits. Public CLI semantics and constellation operation DTOs stay provider-neutral. Provider capability descriptors are data, not comments. The semantic `ConstellationFrame` type lives in codec-neutral core; protocol codecs are swappable below that API. Protobuf is the first codec, not the only possible codec. |
 | Tasks | Create pure/provider crates or modules (`nixling-constellation-core`, `nixling-constellation-provider`, `nixling-daemon-access`, `nixling-constellation-codec-protobuf`, provider conformance fixtures) without changing runtime behavior; extract current Cloud Hypervisor+crosvm sidecar generation into `RuntimeProvider`/`LocalMicroVmProvider` adapter boundaries; define codec-neutral `ConstellationFrame`, `DaemonAccessTransport`, `DaemonAccessApi`, `WorkloadProvider`, `DisplayProvider`, `HostSubstrateProvider`, `InfrastructureProvider`, `RelayProvider`, `TransportProvider`, `ProtocolCodec`, `CredentialProvider`, and `ObservabilitySinkProvider` traits; define capability descriptors and typed provider errors; add no-op/mock providers for conformance tests; document P0 implementation targets: current Cloud Hypervisor+crosvm stack, current local `wl-cross-domain` Wayland path, Azure Relay Hybrid Connections for daemon access and realm transport, Azure Container Apps dynamic/custom-container sessions, Waypipe-style display forwarding for ACA/custom sandboxes, Ubuntu/generic Linux host substrate. |
@@ -2319,13 +2320,67 @@ authentication, and compliance.
 
 | Field | Detail |
 | --- | --- |
-| Goal | Make the first remote/provider implementation prove the hard vertical: allocate an ACA custom-container sandbox, run a Wayland-native app in it, and display that app locally through the constellation display provider. |
-| Design decisions | This wave implements a deliberately thin vertical slice instead of waiting for every generalized realm/provider feature. ACA dynamic/custom-container sessions are `WorkloadProvider` implementations; Waypipe-style forwarding is a `DisplayProvider`; Azure Relay or another relay-compatible transport carries named `control`, `stdio/logs`, and `display` streams. The host CLI may still use `nixling vm start/exec <target>` even though the target is a provider-managed sandbox, because `vm` is the operator's workload verb. |
-| Tasks | Build the minimum provider stack needed for one target such as `demo.aca.work.nixling`: ACA session allocation/start/stop, exec/log/file subset, minimal constellation peer handshake, minimal stream mux for stdio/logs/display, Azure Relay transport or equivalent relay-compatible transport, Waypipe-style local/remote display endpoints, and local host CLI routing through the work gateway. Add a compatibility matrix comparing local wl-cross-domain capabilities to Waypipe-style display capabilities. |
+| Status | **Completed for the P0 foundation and reviewed live POC.** The branch ships the ACA/Relay/Waypipe reference path, gateway display orchestrator/runtime seams, target routing, gateway VM declaration surface, credential/audit hardening, and a reviewed live MI-authenticated ACA Wayland demo. Remaining post-merge work is integration hygiene, not a new P0 design item. |
+| Goal | Make the first remote/provider implementation prove the hard vertical: create/reach an ACA custom-container sandbox, run a Wayland-native app in it, and display that app locally through the constellation display provider. |
+| Design decisions | This wave implements a deliberately thin vertical slice instead of waiting for every generalized realm/provider feature. ACA dynamic/custom-container sessions are `WorkloadProvider` implementations; Waypipe-style forwarding is a `DisplayProvider`; Azure Relay or another relay-compatible transport carries named `control`, `stdio/logs`, and `display` streams. The host CLI still uses `nixling vm start/exec <target>` even though the target is a provider-managed sandbox, because `vm` is the operator's workload verb. Gateway-backed targets are routed by explicit realm entrypoints and fail closed when the realm gateway is not declared. |
+| Tasks | Build the minimum provider stack needed for one target such as `demo.aca.work.nixling`: ACA data-plane exec support, minimal constellation peer handshake, minimal stream mux for stdio/logs/display, Azure Relay transport or equivalent relay-compatible transport, Waypipe-style local/remote display endpoints, gateway-local audit/credential handling, local host CLI routing through the work gateway, and a compatibility matrix comparing local wl-cross-domain capabilities to Waypipe-style display capabilities. |
 | Dependencies | Pre-wave gate and Wave 0 provider/code organization. This wave may implement minimal versions of protocol, stream, transport, capability, provider, and display abstractions before the later waves generalize and harden them. |
-| Validation | `nixling vm start demo.aca.work.nixling` allocates/starts an ACA custom-container session; `nixling vm exec demo.aca.work.nixling -- <cmd>` works; logs are retrievable; a Wayland-native smoke app launched in the ACA sandbox is visible locally through the Waypipe-style display provider over an authorized `display` stream; stream authz/backpressure/redaction are exercised; local wl-cross-domain remains independent; host holds no realm relay/provider credentials and no flat network route is created; both design and implementation panel gates pass unanimously. |
-| Exit criteria | A reviewed P0 demo proves end-to-end ACA sandbox lifecycle + exec/logs + full Wayland app forwarding through the constellation stack; validation evidence is attached; expanded panel signoff is unanimous. Full realm rollout may not proceed until this vertical is green or explicitly descoped by a new ADR/panel decision. |
+| Validation | `nixling vm start demo.aca.work.nixling` routes to the `gatewayDisplay` start surface; `nixling vm exec demo.aca.work.nixling -- <cmd>` routes to `gatewayDisplay` open and the persistent `GatewayOrchestrator`; a Wayland-native smoke app launched in the ACA sandbox was proven visible locally through the Waypipe-style display provider over Azure Relay; stream authz/backpressure/redaction are exercised by unit gates; local wl-cross-domain remains independent; host holds no realm relay/provider credentials; CodeQL/drift/Rust/Nix unit gates and the end-of-wave implementation panel are green. |
+| Exit criteria | A reviewed P0 demo proves ACA sandbox exec + full Wayland app forwarding through the reference provider stack; validation evidence is attached; expanded panel signoff is unanimous; local fast path remains green; host realm-credential canaries remain negative. Full realm rollout may not proceed until this vertical is green or explicitly descoped by a new ADR/panel decision. |
 | Non-goals | Full realm policy, nested realms, whole-constellation observability, full desktop remoting, GPU acceleration in ACA, generic TCP tunneling, or bypassing capability checks for display. |
+
+**P0 placement note (gateway/guestd/systemd services).** The **P0 exit state
+preserves the host-no-realm-relay-credentials invariant** (Authentication and
+trust boundaries, item 2; the Wave P0 validation row): the host opens no realm
+relay session and stores no realm relay/provider credentials. Relay
+termination, the per-session display credential, and the realm-scoped gateway
+authority therefore live **inside the realm gateway guest VM**, not on the
+host. P0 ships the gateway VM declaration surface and a gateway-scoped
+`nixlingd`/`gatewayDisplay` control-plane surface. The host remains a
+credential-free facade. A display bridge is **not** a static service on the
+gateway guest: the compositor-facing Waypipe client is dynamic host/operator
+session state (it must be near the user's `WAYLAND_DISPLAY`), and the Waypipe
+server for provider-managed sandboxes runs inside the ACA/container agent that
+launches the app.
+
+A **pre-P0 development spike** may co-locate the relay listener/sender and the
+gateway logic as host-side processes to prove the ACA + Wayland + relay
+vertical end-to-end before the gateway guest exists. That spike **knowingly
+violates the host-no-relay-credentials invariant** (the host transiently holds
+the gateway relay credential) and is therefore **explicitly not a valid P0
+exit state**: P0 may not close until relay termination and realm credentials
+have moved into the gateway guest. The spike is a scoped, time-boxed
+exception, called out here so it is never mistaken for the shipped boundary.
+
+Inside the ACA sandbox there is **no systemd and no guestd**: ACA
+dynamic/custom-container sessions run a container init (PID 1 is the
+container entrypoint, `/sys/fs/cgroup` is read-only), so the in-sandbox
+Waypipe server + relay sender are supervised by the sandbox agent under that
+init, and `nixling vm exec <…>.aca.<realm>` runs commands through the **ACA
+provider exec/log subset** (Wave 15), never through a guestd inside the
+sandbox. Reaching a `guestd` over the relay is **not** a P0 capability and is
+not the ADR's model for provider-managed sandboxes (see Wave 10 and Wave 15).
+
+`nixling vm exec` **never implicitly starts** a stopped workload or a
+not-yet-started display bridge: if the workload is not running or its display
+channel is unavailable, exec fails with a typed, actionable diagnostic
+(`vm not running; run nixling vm start <target>` / `display unavailable`),
+never a silent implicit start or an opaque GUI failure.
+
+**P0 implementation learnings carried forward.**
+
+- `gatewayDisplay` is a daemon API surface, not a CLI-only special case. It must
+  be admin-gated, routed off the serial accept loop, and backed by a
+  daemon-lifetime `GatewayOrchestrator`/ledger so `Open`, `List`, `Close`, and
+  idempotent replays share the same handles.
+- Gateway sessions need bounded lifetime even when a foreground CLI process
+  exits before sending `Close`; P0 uses daemon-side TTL garbage collection and
+  later waves should replace this with richer reconcile/lease ownership.
+- Generated schemas must be regenerated by the current `xtask`; stale local
+  development binaries can mask drift that a clean CI runner catches.
+- Relay reachability never equals authorization. Azure Relay SAS/MI, AF_VSOCK
+  reachability, and Waypipe socket existence are all below the peer/session and
+  display-token authorization layers.
 
 ### Wave 1 — Realm entrypoint and gateway workload profile
 
@@ -2447,6 +2502,20 @@ authentication, and compliance.
 | Exit criteria | Gateway guest connects outbound through Azure Relay and supports authenticated exec/log operations to a test node; host stores no realm relay credentials and opens no realm relay sessions. |
 | Non-goals | No Azure-specific orchestration model, no provider provisioning, no display forwarding, no host-side realm relay client. |
 
+**Home for the gateway-guest `guestd` + relay services.** This wave is where the
+realm gateway **guest VM** — a real nixling microVM with full systemd — runs
+`nixling-guestd` and the Azure Relay `TransportProvider` as gateway services.
+It does **not** host a static compositor-facing Waypipe service. The operator
+host reaches the gateway guest's `nixlingd`/`guestd` over **local**
+guest-control (vsock/ttRPC, the `GatewayExecutor` path), and the gateway guest
+then drives the relay outward to providers/peers. Guest-control is **never**
+exposed raw over the relay (it stays local-to-host/guest per the Context
+section); the relay carries constellation peer/provider operations and
+named `control`/`stdio`/`logs`/`display` streams above the E2E session
+security, not a guestd RPC socket. Provider-managed sandboxes (e.g. ACA) are
+**not** given a guestd by this wave — they remain provider-adapter targets
+(Wave 15).
+
 ### Wave 11 — Self-hosted relay, QUIC, and explicit SSH transport adapters
 
 | Field | Detail |
@@ -2507,6 +2576,20 @@ authentication, and compliance.
 | Exit criteria | Provider-managed sandbox can register and perform only its advertised subset, with ACA dynamic/custom-container sessions represented as the first concrete provider. |
 | Non-goals | No full-host emulation, no hidden device/display parity shim, no provider-agnostic security claims beyond delegated provider boundary. |
 
+**No guestd / no systemd inside provider-managed sandboxes.** A provider node
+(e.g. an ACA dynamic/custom-container session) advertises `nixling-guestd`,
+vsock, the broker, and systemd-as-init as **absences**, not parity gaps to be
+shimmed. `nixling vm exec`/log/file against such a node map to the provider's
+own exec/log/file API surface, surfaced as constellation `stdio`/`logs`
+streams — there is no guestd in the sandbox and no guest-control RPC over the
+relay. This is also a hard platform fact for ACA: the sandbox runs a container
+init (PID 1 is the entrypoint, `/sys/fs/cgroup` is read-only), so systemd
+cannot run as PID 1 and in-sandbox helpers (the Waypipe server, the relay
+sender) are agent-supervised under that init. Workloads that genuinely need a
+full host with guestd/systemd belong behind a realm **gateway guest VM**
+(Waves 1/10) or a remote full-host node (Wave 14), not inside a
+provider-managed sandbox.
+
 ### Wave 16 — Runtime/hypervisor provider abstraction
 
 | Field | Detail |
@@ -2530,6 +2613,31 @@ authentication, and compliance.
 | Validation | Local wl-cross-domain Wayland/audio/USB tests remain independent of constellation; capability denial tests for each I/O surface; stream backpressure tests for display/audio; ACA custom-container Wayland app forwarded through Waypipe-style provider over an authorized display stream; audit coverage. |
 | Exit criteria | Every display/I/O surface is explicit, capability-scoped, bounded, and auditable; the P0 provider demo can display a Wayland app from an ACA sandbox without a flat network tunnel. |
 | Non-goals | Full desktop remoting, implicit device access, GPU acceleration in ACA, or "all I/O everywhere" assumptions. |
+
+**Display bridges are managed lifecycle state, not static gateway services.**
+The Waypipe-style display provider's endpoints are supervised by the lifecycle
+owner for the workload/display session, never by an ad-hoc background process
+and never as always-on gateway-guest system services. The compositor-facing
+Waypipe client belongs on the operator host/user session where it can access
+`WAYLAND_DISPLAY`; the provider-side Waypipe server belongs inside the
+workload/container that will present the app. Inside a provider-managed sandbox
+with no systemd (e.g. ACA, see Wave 15) the in-sandbox Waypipe server is
+supervised by the sandbox agent under the container init. The display bridge is
+brought up at workload start so that `vm exec` only launches applications into
+an already-running Wayland setup.
+
+**Display-bridge desired-state owner + reconciliation.** Wave 17 names a
+**single desired-state owner** — the workload's lifecycle controller in
+`nixlingd` — for the whole display bridge across its segments (the operator
+dynamic host/operator Waypipe client and the in-sandbox agent-supervised
+helpers). That owner runs one reconcile loop that
+converges actual to desired across daemon restart, operator user-manager /
+compositor restart, gateway-guest restart, provider-sandbox restart, and crash
+recovery, including stale-unit / stale-socket cleanup and a generation marker
+so a survivor from a prior owner generation cannot re-attach (mirroring the
+gateway session-credential generation check). Each segment exposes a
+queryable health/state so the owner can mark the bridge degraded and drive
+re-establishment rather than leaving orphaned services or half-open streams.
 
 ### Wave 18 — Realm rollout and work gateway policy
 

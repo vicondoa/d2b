@@ -19,3 +19,19 @@ workspace = true
 [dependencies]
 nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
 nixling-constellation-provider = { path = "../nixling-constellation-provider", version = "0.0.0-bootstrap" }
+# The peer-session boundary reads/writes length-delimited frames over a
+# transport ByteStream (AsyncRead + AsyncWrite). Only the io traits are
+# needed here; no runtime/network features (the dep-direction gate still
+# forbids a codec/transport-impl dependency).
+tokio = { version = "1", default-features = false, features = ["io-util"] }
+chacha20poly1305 = "0.10"
+hmac = "0.12"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+subtle = "2"
+
+[dev-dependencies]
+nixling-constellation-transport = { path = "../nixling-constellation-transport", version = "0.0.0-bootstrap" }
+nixling-constellation-codec-protobuf = { path = "../nixling-constellation-codec-protobuf", version = "0.0.0-bootstrap" }
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt", "sync"] }

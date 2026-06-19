@@ -27,12 +27,13 @@ use nixling_ipc::{
         StoreVerifyStatus as IpcStoreVerifyStatus,
     },
     public_wire::{
-        AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest, KeyEntry as IpcKeyEntry,
-        KeysShowRequest as IpcKeysShowRequest, KeysShowResponse as IpcKeysShowResponse,
-        ListEntry as IpcListEntry, ListRequest as IpcListRequest, PublicVmServices,
-        ReadGuestConfigRequest, StatusRequest as IpcStatusRequest,
-        UsbipProbeEntry as IpcUsbipProbeEntry, UsbipProbeStatus as IpcUsbipProbeStatus,
-        VmLifecycleState as IpcVmLifecycleState, VmStatus as IpcVmStatus,
+        self, AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest,
+        KeyEntry as IpcKeyEntry, KeysShowRequest as IpcKeysShowRequest,
+        KeysShowResponse as IpcKeysShowResponse, ListEntry as IpcListEntry,
+        ListRequest as IpcListRequest, PublicVmServices, ReadGuestConfigRequest,
+        StatusRequest as IpcStatusRequest, UsbipProbeEntry as IpcUsbipProbeEntry,
+        UsbipProbeStatus as IpcUsbipProbeStatus, VmLifecycleState as IpcVmLifecycleState,
+        VmStatus as IpcVmStatus,
     },
 };
 use schemars::JsonSchema;
@@ -42,6 +43,7 @@ use serde_json::Value;
 mod doctor;
 mod exec_client;
 mod host_validate;
+mod target_routing;
 
 use exec_client::ExecOwnerTransport as _;
 
@@ -1429,7 +1431,7 @@ struct SocketProbe {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct HelloOkFrame {
     #[serde(rename = "type")]
     _type_name: String,
@@ -1438,7 +1440,7 @@ struct HelloOkFrame {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct HelloRejectedFrame {
     #[serde(rename = "type")]
     _type_name: String,
@@ -1448,7 +1450,7 @@ struct HelloRejectedFrame {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ErrorFrame {
     #[serde(rename = "type")]
     _type_name: String,
@@ -3719,6 +3721,161 @@ fn require_known_vm(context: &Context, vm: &str, json: bool) -> Result<(), CliFa
     Err(CliFailure::new(exit_code, format!("unknown vm: {vm}")))
 }
 
+/// Route a `vm <verb> <target>` argument (ADR 0032, P0). A local VM name routes
+/// to the existing host-daemon fast path (returns `Ok`); a realm/gateway target
+/// surfaces a typed, json-aware diagnostic and a non-zero exit — the host daemon
+/// holds no realm configuration and cannot dispatch into a realm. The realm's
+/// gateway-mode `nixlingd` owns gateway-backed targets.
+fn guard_local_target(raw: &str, json: bool) -> Result<(), CliFailure> {
+    let table = nixling_constellation_router::RealmEntrypointTable::with_local_default();
+    match target_routing::route(raw, &table) {
+        Ok(target_routing::Route::Local { .. }) => Ok(()),
+        Ok(target_routing::Route::Gateway { gateway, target }) => {
+            let exit_code = emit_host_error(
+                &host_error_envelope(
+                    &format!(
+                        "target '{target}' is gateway-backed (gateway '{gateway}'); the host \
+                         daemon cannot dispatch into a realm"
+                    ),
+                    "usage",
+                    2,
+                    "Whether the target addresses a local VM the host daemon can dispatch.",
+                    "gateway-backed realm target",
+                    "Run the verb against the realm gateway's nixlingd; the host daemon holds no \
+                     realm configuration.",
+                    "docs/reference/error-codes.md#usage",
+                ),
+                json,
+            )?;
+            Err(CliFailure::new(
+                exit_code,
+                format!("gateway-backed target: {target}"),
+            ))
+        }
+        Err(err) => {
+            let exit_code = emit_host_error(
+                &host_error_envelope(
+                    &err.to_string(),
+                    "usage",
+                    2,
+                    "Whether the target addresses a local VM the host daemon can dispatch.",
+                    "realm target with no local entrypoint",
+                    "Use a local VM name, or run the verb against the realm gateway's nixlingd.",
+                    "docs/reference/error-codes.md#usage",
+                ),
+                json,
+            )?;
+            Err(CliFailure::new(
+                exit_code,
+                format!("target not dispatchable on the host daemon: {raw}"),
+            ))
+        }
+    }
+}
+
+fn gateway_operation_id(prefix: &str, target: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    prefix.hash(&mut h);
+    target.hash(&mut h);
+    std::process::id().hash(&mut h);
+    format!("{prefix}-{:016x}", h.finish())
+}
+
+fn gateway_principal() -> String {
+    format!("uid-{}", Uid::current().as_raw())
+}
+
+fn gateway_target_from_manifest(
+    context: &Context,
+    raw: &str,
+) -> Result<Option<String>, CliFailure> {
+    let Some(candidate) = target_routing::gateway_candidate(raw) else {
+        return Ok(None);
+    };
+    let target = nixling_constellation_core::TargetName::parse(raw)
+        .map_err(|err| CliFailure::new(2, format!("invalid gateway target: {err}")))?;
+    let gateway_vm = format!(
+        "sys-{}-gateway",
+        target.realm.target_form().replace('.', "-")
+    );
+    let manifest = context.load_manifest()?;
+    if manifest.get_vm(&gateway_vm).is_some() {
+        Ok(Some(candidate))
+    } else {
+        Ok(None)
+    }
+}
+
+fn gateway_request_hash(target: &str, argv: &[String]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    target.hash(&mut h);
+    argv.hash(&mut h);
+    h.finish()
+}
+
+fn gateway_display_frame(op: &public_wire::GatewayDisplayOp) -> Result<Vec<u8>, CliFailure> {
+    let mut value = serde_json::to_value(op)
+        .map_err(|err| CliFailure::new(1, format!("failed to encode gatewayDisplay: {err}")))?;
+    let obj = value
+        .as_object_mut()
+        .ok_or_else(|| CliFailure::new(1, "failed to encode gatewayDisplay request"))?;
+    obj.insert(
+        "type".to_owned(),
+        Value::String("gatewayDisplay".to_owned()),
+    );
+    serde_json::to_vec(&value)
+        .map_err(|err| CliFailure::new(1, format!("failed to serialize gatewayDisplay: {err}")))
+}
+
+fn dispatch_gateway_display(
+    context: &Context,
+    op: public_wire::GatewayDisplayOp,
+) -> Result<i32, CliFailure> {
+    let frame = gateway_display_frame(&op)?;
+    match try_public_socket_request(context, &frame, "gatewayDisplay")? {
+        PublicSocketOutcome::Reply(_) => Ok(0),
+        PublicSocketOutcome::Unavailable => Err(CliFailure::new(
+            70,
+            "gatewayDisplay requires nixlingd's public socket; start the realm gateway daemon and retry",
+        )),
+        PublicSocketOutcome::Unsupported => Err(CliFailure::new(
+            78,
+            "gatewayDisplay is not supported by the running daemon; restart/upgrade the realm gateway daemon",
+        )),
+    }
+}
+
+fn cmd_gateway_vm_start(context: &Context, target: String) -> Result<i32, CliFailure> {
+    dispatch_gateway_display(
+        context,
+        public_wire::GatewayDisplayOp::Start(public_wire::GatewayDisplayStartArgs {
+            operation_id: gateway_operation_id("gw-start", &target),
+            principal: gateway_principal(),
+            request_hash: gateway_request_hash(&target, &[]),
+            target,
+        }),
+    )
+}
+
+fn cmd_gateway_vm_exec(
+    context: &Context,
+    target: String,
+    argv: Vec<String>,
+) -> Result<i32, CliFailure> {
+    dispatch_gateway_display(
+        context,
+        public_wire::GatewayDisplayOp::Open(public_wire::GatewayDisplayOpenArgs {
+            operation_id: gateway_operation_id("gw-exec", &target),
+            principal: gateway_principal(),
+            request_hash: gateway_request_hash(&target, &argv),
+            target,
+            app_argv: argv,
+        }),
+    )
+}
+
 fn vm_dag_dry_run_summary(verb: &str, vm: &str) -> serde_json::Value {
     // The DAG the supervisor would drive. Mirrors the structure emitted
     // by the processes::VmProcessDag exporter — for the headless alpha
@@ -3776,6 +3933,13 @@ fn cmd_vm_lifecycle_verb(
     json: bool,
 ) -> Result<i32, CliFailure> {
     let flags = require_explicit_mutation_flag(&format!("vm {verb}"), dry_run, apply, json)?;
+    if verb == "start"
+        && flags.apply
+        && let Some(target) = gateway_target_from_manifest(context, vm)?
+    {
+        return cmd_gateway_vm_start(context, target);
+    }
+    guard_local_target(vm, json)?;
     require_known_vm(context, vm, json)?;
     if (verb == "start" || verb == "restart") && !json {
         warn_pending_staged_config(vm);
@@ -4214,6 +4378,7 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
         Err(message) => return exec_usage_terminate(args, message),
     };
     if let Some(management) = action.management.as_ref() {
+        guard_local_target(&args.vm, action.json)?;
         return cmd_vm_exec_management(context, args, management);
     }
     if args.detach && (args.tty || args.interactive) {
@@ -4276,6 +4441,19 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
             value: value.to_owned(),
         });
     }
+
+    if let Some(target) = gateway_target_from_manifest(context, &args.vm)? {
+        if args.detach || args.interactive || args.tty || !args.env.is_empty() || args.cwd.is_some()
+        {
+            return exec_usage_terminate(
+                args,
+                "vm exec: gateway-backed targets currently support non-interactive foreground commands without -d/-i/-t, --env, or --cwd",
+            );
+        }
+        return cmd_gateway_vm_exec(context, target, args.command.clone());
+    }
+
+    guard_local_target(&args.vm, action.json)?;
 
     if tty && !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
         return exec_usage_terminate(
@@ -8124,7 +8302,7 @@ mod host_install_dispatch_tests {
         MAX_FRAME_BYTES, MsgFlags, NativeCli, SockFlag, SockType, UnixAddr, UsbAttachArgs,
         VmExecArgs, VmStartArgs, broker_error_envelope, cmd_host_install, cmd_vm_exec,
         cmd_vm_start, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
-        parse_vm_exec_action, send, socket,
+        parse_vm_exec_action, public_wire, send, socket,
     };
     use nixling_ipc::Version;
 
@@ -8161,6 +8339,104 @@ mod host_install_dispatch_tests {
                 },
                 notice: None,
             })
+        );
+    }
+
+    #[test]
+    fn gateway_target_guard_fails_before_manifest_or_socket_access() {
+        let err = super::guard_local_target("demo.gw.work.nixling", false)
+            .expect_err("realm target must fail closed on host daemon");
+        assert_eq!(err.exit_code, 2);
+        assert!(err.message.contains("target not dispatchable"));
+        assert!(!err.message.contains("failed to read"));
+        assert!(!err.message.contains("public.sock"));
+    }
+
+    #[test]
+    fn local_fast_path_targets_pass_gateway_guard() {
+        super::guard_local_target("vm-a", false).expect("bare VM names stay local");
+        super::guard_local_target("demo.aca.work", false)
+            .expect("unqualified dotted names stay with legacy local validation");
+    }
+
+    #[test]
+    fn gateway_candidate_requires_manifest_declared_realm_gateway() {
+        let manifest_path = test_socket_path("gateway-candidate", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("manifest parent");
+        }
+        write_test_manifest(&manifest_path, "sys-work-gateway");
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("bundle.json"),
+            public_socket: manifest_path.with_extension("sock"),
+            broker_socket: manifest_path.with_extension("broker.sock"),
+            state_root: None,
+            host_runtime_path: manifest_path.with_extension("host-runtime.json"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: manifest_path.with_extension("daemon-state"),
+            metrics_url: "http://127.0.0.1:9101/metrics".to_owned(),
+        };
+        assert_eq!(
+            super::gateway_target_from_manifest(&context, "demo.gw.work.nixling")
+                .unwrap()
+                .as_deref(),
+            Some("nl://demo.gw.work.nixling")
+        );
+        assert_eq!(
+            super::gateway_target_from_manifest(&context, "demo.gw.unknown.nixling").unwrap(),
+            None
+        );
+        assert_eq!(
+            super::gateway_target_from_manifest(&context, "vm-a").unwrap(),
+            None
+        );
+        let _ = std::fs::remove_file(&manifest_path);
+    }
+
+    #[test]
+    fn gateway_display_frame_serializes_start_and_open_requests() {
+        let start = super::gateway_display_frame(&public_wire::GatewayDisplayOp::Start(
+            public_wire::GatewayDisplayStartArgs {
+                target: "nl://demo.gw.work.nixling".to_owned(),
+                operation_id: "gw-start-1".to_owned(),
+                principal: "uid-1000".to_owned(),
+                request_hash: 7,
+            },
+        ))
+        .unwrap();
+        let start_v: Value = serde_json::from_slice(&start).unwrap();
+        assert_eq!(
+            start_v.get("type").and_then(Value::as_str),
+            Some("gatewayDisplay")
+        );
+        assert_eq!(start_v.get("op").and_then(Value::as_str), Some("start"));
+
+        let open = super::gateway_display_frame(&public_wire::GatewayDisplayOp::Open(
+            public_wire::GatewayDisplayOpenArgs {
+                target: "nl://demo.gw.work.nixling".to_owned(),
+                operation_id: "gw-exec-1".to_owned(),
+                principal: "uid-1000".to_owned(),
+                app_argv: vec!["foot".to_owned()],
+                request_hash: 8,
+            },
+        ))
+        .unwrap();
+        let open_v: Value = serde_json::from_slice(&open).unwrap();
+        assert_eq!(
+            open_v.get("type").and_then(Value::as_str),
+            Some("gatewayDisplay")
+        );
+        assert_eq!(open_v.get("op").and_then(Value::as_str), Some("open"));
+        assert_eq!(
+            open_v
+                .get("args")
+                .and_then(|a| a.get("appArgv"))
+                .and_then(Value::as_array)
+                .and_then(|a| a.first())
+                .and_then(Value::as_str),
+            Some("foot")
         );
     }
 

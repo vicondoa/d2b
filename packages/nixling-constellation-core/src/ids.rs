@@ -183,6 +183,14 @@ id_newtype!(
     OPAQUE_PATTERN
 );
 id_newtype!(
+    /// An opaque resume cursor for a `Logs` stream. The peer echoes the
+    /// last cursor it durably consumed so a re-opened logs stream resumes
+    /// without gaps or replay. Opaque + bounded (never operator-typed).
+    StreamCursor,
+    is_opaque_token,
+    OPAQUE_PATTERN
+);
+id_newtype!(
     /// An authenticated principal (never a relay credential).
     PrincipalId,
     is_opaque_token,

@@ -21,10 +21,12 @@ pub mod error;
 pub mod execution;
 pub mod frame;
 pub mod ids;
+pub mod mux;
 pub mod node;
 pub mod payload;
 pub mod realm;
 pub mod stream;
+pub mod target;
 pub mod token;
 pub mod trace_context;
 pub mod workload;
@@ -35,16 +37,18 @@ pub use error::{ConstellationError, ErrorKind};
 pub use execution::{ExecState, ExecutionSummary};
 pub use frame::{
     ConstellationFrame, Handshake, OperationKind, OperationRequest, OperationResponse, PeerContext,
-    StreamClose, StreamData, StreamOpen,
+    StreamClose, StreamData, StreamFlow, StreamOpen,
 };
 pub use ids::{
     ExecutionId, GatewayId, IdempotencyKey, NodeId, OperationId, PrincipalId, ProviderId, RealmId,
-    StreamId, WorkloadId,
+    StreamCursor, StreamId, WorkloadId,
 };
+pub use mux::{DEFAULT_MAX_OPEN_STREAMS, StreamMux};
 pub use node::{NodeKind, NodeSummary};
 pub use payload::OpaquePayload;
 pub use realm::{EntrypointMode, RealmPath};
-pub use stream::{StreamAuthz, StreamDescriptor, StreamKind};
+pub use stream::{StreamAuthz, StreamChannel, StreamCloseReason, StreamDescriptor, StreamKind};
+pub use target::{TARGET_SUFFIX, THIS_NODE_ALIAS, TargetName, TargetParseError};
 pub use token::ProtocolToken;
 pub use trace_context::TraceContext;
 pub use workload::{WorkloadSelector, WorkloadState, WorkloadSummary};

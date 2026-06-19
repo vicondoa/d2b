@@ -22,6 +22,7 @@
     ./options-envs.nix
     ./options-vms.nix
     ./options-daemon.nix
+    ./options-gateway.nix
   ];
 
   # Internal: populated by network.nix from the resolved

@@ -55,6 +55,7 @@ pub enum Request {
     HostReconcile(public_wire::HostReconcileRequest),
     ReadGuestConfig(public_wire::ReadGuestConfigRequest),
     Exec(public_wire::ExecOp),
+    GatewayDisplay(public_wire::GatewayDisplayOp),
 }
 
 impl Request {
@@ -89,6 +90,7 @@ impl Request {
             Self::HostReconcile(_) => "hostReconcile",
             Self::ReadGuestConfig(_) => "readGuestConfig",
             Self::Exec(_) => "exec",
+            Self::GatewayDisplay(_) => "gatewayDisplay",
         }
     }
 
@@ -130,7 +132,8 @@ impl Request {
             | Self::KeysShow(_)
             | Self::UsbipProbe
             | Self::ReadGuestConfig(_)
-            | Self::Exec(_) => OpLockClass::ReadOnly,
+            | Self::Exec(_)
+            | Self::GatewayDisplay(_) => OpLockClass::ReadOnly,
         }
     }
 }
@@ -335,6 +338,9 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
                 .map(Request::Exec)
                 .map_err(map_parse_error)
         }
+        "gatewayDisplay" => serde_json::from_value(Value::Object(object.clone()))
+            .map(Request::GatewayDisplay)
+            .map_err(map_parse_error),
         _ => Err(TypedError::WireUnsupportedRequest { request_type }),
     }
 }

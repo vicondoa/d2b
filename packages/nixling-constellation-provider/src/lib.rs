@@ -14,11 +14,16 @@
 
 pub mod capabilities;
 pub mod conformance;
+pub mod credential;
 pub mod error;
 pub mod mock;
 pub mod provider;
 pub mod types;
 
+pub use credential::{
+    AzureControlPlaneRef, CredentialPlane, ManagedIdentityRef, OpaqueAzureRef,
+    SessionCredentialBinding,
+};
 pub use error::ProviderError;
 pub use provider::{
     CredentialProvider, CredentialStatus, DaemonAccessApi, DaemonAccessTransport, DisplayProvider,

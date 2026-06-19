@@ -6,10 +6,12 @@
 use crate::audit::AuditEnvelope;
 use crate::capability::Capability;
 use crate::error::ConstellationError;
-use crate::ids::{IdempotencyKey, NodeId, OperationId, PrincipalId, StreamId, WorkloadId};
+use crate::ids::{
+    IdempotencyKey, NodeId, OperationId, PrincipalId, StreamCursor, StreamId, WorkloadId,
+};
 use crate::payload::OpaquePayload;
 use crate::realm::RealmPath;
-use crate::stream::{StreamAuthz, StreamDescriptor};
+use crate::stream::{StreamAuthz, StreamChannel, StreamCloseReason, StreamDescriptor};
 use crate::token::ProtocolToken;
 use crate::trace_context::TraceContext;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -322,21 +324,85 @@ impl<'de> Deserialize<'de> for StreamOpen {
 }
 
 /// A bounded chunk of stream data (opaque payload).
+///
+/// Beyond the opaque bytes, every chunk carries the typed flow-control
+/// state the mux needs before any Relay/Waypipe wiring exists: a monotonic
+/// per-stream `sequence` (gap/reorder detection), the logical `channel`
+/// (so a single `Stdio` stream can interleave stdout/stderr), and, for
+/// resumable `Logs` streams, the durable `cursor` the peer can replay from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StreamData {
     /// Stream the chunk belongs to.
     pub stream: StreamId,
+    /// Monotonic, per-stream sequence number (starts at 0). The receiver
+    /// rejects a gap or a regression (fail-closed) rather than silently
+    /// reordering.
+    pub sequence: u64,
+    /// Logical sub-channel within the stream. Defaults to
+    /// [`StreamChannel::Primary`]; `Stdio` streams use `Stdout`/`Stderr`.
+    #[serde(default)]
+    pub channel: StreamChannel,
+    /// For a `Logs` stream, the durable resume cursor this chunk advances
+    /// to. Absent for non-resumable streams.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cursor: Option<StreamCursor>,
     /// Opaque, bounded chunk bytes. Never logged/audited as content.
     pub data: OpaquePayload,
 }
 
-/// Close a named stream.
+/// A credit grant for a single stream (receiver → sender backpressure).
+///
+/// The mux is credit-based: a sender may only emit a [`StreamData`] chunk
+/// while it holds positive credit, and the receiver replenishes budget by
+/// sending `StreamFlow`. Credit is counted in **frames** (not bytes) for
+/// P0; a chunk is already bounded by the frame cap. A grant of `0` is a
+/// no-op and is rejected at decode so a peer cannot use it to mask a stall.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StreamFlow {
+    /// Stream the credit applies to.
+    pub stream: StreamId,
+    /// Additional frames the sender may now emit on `stream`.
+    pub credits: u32,
+}
+
+// Fail-closed decode: a zero credit grant is meaningless and is rejected at
+// the boundary so it cannot be used to feign progress.
+impl<'de> Deserialize<'de> for StreamFlow {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            stream: StreamId,
+            credits: u32,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        if raw.credits == 0 {
+            return Err(serde::de::Error::custom(
+                "stream-flow credit grant must be non-zero",
+            ));
+        }
+        Ok(StreamFlow {
+            stream: raw.stream,
+            credits: raw.credits,
+        })
+    }
+}
+
+/// Close a named stream, with the reason it ended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StreamClose {
     /// Stream being closed.
     pub stream: StreamId,
+    /// Why the stream closed (orderly completion vs cancel/timeout/error/
+    /// peer-gone). Distinguishes an expected end-of-stream from a fault
+    /// without inspecting payload bytes.
+    pub reason: StreamCloseReason,
 }
 
 /// The semantic frame exchanged over a constellation peer session. The
@@ -357,6 +423,8 @@ pub enum ConstellationFrame {
     StreamOpen(StreamOpen),
     /// A bounded chunk of stream data (opaque payload).
     StreamData(StreamData),
+    /// Grant additional send credit on a stream (backpressure).
+    StreamFlow(StreamFlow),
     /// Close a named stream.
     StreamClose(StreamClose),
     /// A typed error frame.
@@ -460,14 +528,58 @@ mod tests {
     #[test]
     fn stream_frames_reject_unknown_fields() {
         // Valid stream-data / stream-close frames decode.
-        let data = "{\"frame\":\"stream-data\",\"stream\":\"s1\",\"data\":[1,2,3]}";
+        let data = "{\"frame\":\"stream-data\",\"stream\":\"s1\",\"sequence\":0,\"data\":[1,2,3]}";
         assert!(serde_json::from_str::<ConstellationFrame>(data).is_ok());
-        let close = "{\"frame\":\"stream-close\",\"stream\":\"s1\"}";
+        let close = "{\"frame\":\"stream-close\",\"stream\":\"s1\",\"reason\":\"completed\"}";
         assert!(serde_json::from_str::<ConstellationFrame>(close).is_ok());
         // Extra peer-supplied fields are rejected (deny_unknown_fields).
-        let data_extra = "{\"frame\":\"stream-data\",\"stream\":\"s1\",\"data\":[1],\"evil\":true}";
+        let data_extra = "{\"frame\":\"stream-data\",\"stream\":\"s1\",\"sequence\":0,\"data\":[1],\"evil\":true}";
         assert!(serde_json::from_str::<ConstellationFrame>(data_extra).is_err());
-        let close_extra = "{\"frame\":\"stream-close\",\"stream\":\"s1\",\"evil\":true}";
+        let close_extra =
+            "{\"frame\":\"stream-close\",\"stream\":\"s1\",\"reason\":\"completed\",\"evil\":true}";
         assert!(serde_json::from_str::<ConstellationFrame>(close_extra).is_err());
+    }
+
+    #[test]
+    fn stream_data_channel_defaults_to_primary_and_cursor_is_optional() {
+        use crate::stream::StreamChannel;
+        // Omitting channel/cursor is allowed; channel defaults to Primary.
+        let minimal = "{\"stream\":\"s1\",\"sequence\":7,\"data\":[1]}";
+        let d: StreamData = serde_json::from_str(minimal).unwrap();
+        assert_eq!(d.sequence, 7);
+        assert_eq!(d.channel, StreamChannel::Primary);
+        assert!(d.cursor.is_none());
+        // A logs chunk on the stderr channel carrying a resume cursor.
+        let full = "{\"stream\":\"s1\",\"sequence\":8,\"channel\":\"stderr\",\
+                     \"cursor\":\"cur-abc\",\"data\":[2]}";
+        let d: StreamData = serde_json::from_str(full).unwrap();
+        assert_eq!(d.channel, StreamChannel::Stderr);
+        assert_eq!(d.cursor.as_ref().unwrap().as_str(), "cur-abc");
+    }
+
+    #[test]
+    fn stream_flow_rejects_zero_credit_and_round_trips() {
+        // A zero credit grant is rejected at decode (fail-closed).
+        let zero = "{\"frame\":\"stream-flow\",\"stream\":\"s1\",\"credits\":0}";
+        assert!(serde_json::from_str::<ConstellationFrame>(zero).is_err());
+        // A positive grant round-trips.
+        let grant = ConstellationFrame::StreamFlow(StreamFlow {
+            stream: StreamId::parse("s1").unwrap(),
+            credits: 16,
+        });
+        let json = serde_json::to_string(&grant).unwrap();
+        let back: ConstellationFrame = serde_json::from_str(&json).unwrap();
+        assert_eq!(grant, back);
+    }
+
+    #[test]
+    fn stream_close_requires_reason() {
+        use crate::stream::StreamCloseReason;
+        let ok = "{\"stream\":\"s1\",\"reason\":\"cancelled\"}";
+        let c: StreamClose = serde_json::from_str(ok).unwrap();
+        assert_eq!(c.reason, StreamCloseReason::Cancelled);
+        // Omitting the reason fails closed.
+        let no_reason = "{\"stream\":\"s1\"}";
+        assert!(serde_json::from_str::<StreamClose>(no_reason).is_err());
     }
 }

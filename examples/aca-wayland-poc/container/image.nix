@@ -27,28 +27,47 @@ let
   # the Azure Relay hybrid connection. Built from the same nixpkgs so it
   # links the image's glibc and runs inside the sandbox. The source is
   # filtered to exclude the cargo `target/` dir.
-  relayBridgeSrc = builtins.path {
-    name = "nixling-relay-bridge-src";
-    path = ../relay-bridge;
-    filter = path: _type: builtins.baseNameOf path != "target";
+  # The productionized relay endpoint binary (nixling-relay), built from the
+  # main workspace. Replaces the POC relay-bridge: the in-sandbox agent runs
+  # `nixling-relay sender` authenticated by the sandbox managed identity
+  # (Entra bearer, plane 2) — no SAS key enters the workload.
+  nixlingRelaySrc = builtins.path {
+    name = "nixling-packages-src";
+    path = ../../../packages;
+    filter =
+      path: _type:
+      let
+        base = builtins.baseNameOf path;
+      in
+      base != "target" && base != ".cargo";
   };
-  relayBridge = pkgs.rustPlatform.buildRustPackage {
-    pname = "nixling-relay-bridge";
-    version = "0.0.0-poc";
-    src = relayBridgeSrc;
-    cargoLock.lockFile = ../relay-bridge/Cargo.lock;
+  nixlingRelay = pkgs.rustPlatform.buildRustPackage {
+    pname = "nixling-relay";
+    version = "0.0.0-bootstrap";
+    src = nixlingRelaySrc;
+    cargoLock = {
+      lockFile = ../../../packages/Cargo.lock;
+      outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
+    };
+    cargoBuildFlags = [
+      "-p"
+      "nixling-provider-relay"
+      "--bin"
+      "nixling-relay"
+    ];
+    env.CARGO_BUILD_RUSTC_WRAPPER = "";
     doCheck = false;
   };
 
-  # The in-sandbox agent: tunnels `waypipe server` + the app out over the
-  # Azure Relay hybrid connection (see bridge/nixling-sandbox-agent.sh).
+  # The in-sandbox agent: fetches the MI Entra token, runs `nixling-relay
+  # sender`, then `waypipe server` + the app (see bridge/nixling-sandbox-agent.sh).
   agent = pkgs.writeShellApplication {
     name = "nixling-sandbox-agent";
     runtimeInputs = [
       pkgs.waypipe
       pkgs.foot
       pkgs.coreutils
-      relayBridge
+      nixlingRelay
     ];
     text = builtins.readFile ./bridge/nixling-sandbox-agent.sh;
   };
@@ -66,7 +85,7 @@ pkgs.dockerTools.buildLayeredImage {
     pkgs.fontconfig
     pkgs.cacert
     agent
-    relayBridge
+    nixlingRelay
     footConfig
     pkgs.dockerTools.fakeNss # minimal /etc/passwd + /etc/group + nobody
   ];

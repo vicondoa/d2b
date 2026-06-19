@@ -105,11 +105,74 @@ let
   # enabled, by observability-vm.nix) must NOT trip the `sys-`
   # reserved-prefix rule. Derive the allowed set from the auto-net VMs
   # plus the reserved observability stack VM name.
+  autoGatewayVmNames =
+    lib.mapAttrsToList
+      (_: gw: gw.vmName)
+      (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
+
   autoSysVmNames =
     (lib.mapAttrsToList
       (envName: env: env.netName or "sys-${envName}-net")
       cfg.envs)
-    ++ lib.optional obsCfg.enable obsCfg.vmName;
+    ++ lib.optional obsCfg.enable obsCfg.vmName
+    ++ autoGatewayVmNames;
+
+  secretShaped = s:
+    lib.hasInfix "SharedAccessKey" s
+    || lib.hasInfix "Endpoint=sb://" s
+    || lib.hasInfix "AccountKey=" s
+    || lib.hasInfix "PRIVATE KEY" s
+    || lib.hasInfix "BEGIN " s;
+
+  underStateDir = s:
+    lib.hasPrefix "${toString cfg.site.stateDir}/" s;
+
+  gatewayPathAssertions =
+    lib.flatten (lib.mapAttrsToList
+      (name: gw:
+        let
+          paths = {
+            stateDir = gw.stateDir;
+            credentialPath = gw.credentialPath;
+          };
+        in
+        lib.mapAttrsToList
+          (field: value: {
+            assertion =
+              underStateDir value
+              && !(lib.hasPrefix "/nix/store/" value)
+              && !(secretShaped value);
+            message = ''
+              nixling.gateways.${name}.${field} must be a runtime path under
+              nixling.site.stateDir and must not contain inline secret-shaped
+              material. Put plaintext credentials in the gateway guest's sealed
+              runtime state, not in the host Nix configuration.
+            '';
+          })
+          paths)
+      (lib.filterAttrs (_: gw: gw.enable) cfg.gateways));
+
+  gatewayCoordinateAssertions =
+    lib.flatten (lib.mapAttrsToList
+      (name: gw:
+        let
+          coordinates = lib.filter (v: v != null) [
+            gw.relay.namespace
+            gw.relay.entity
+            gw.aca.endpoint
+          ];
+        in
+        lib.imap0
+          (i: value: {
+            assertion = !(secretShaped value);
+            message = ''
+              nixling.gateways.${name} coordinate #${toString i} looks like
+              inline credential material. Gateway options may carry non-secret
+              endpoint names only.
+            '';
+          })
+          coordinates)
+      (lib.filterAttrs (_: gw: gw.enable) cfg.gateways));
 
   # Systemd-escape identity regex (lower-case alnum and `-`, must
   # start with a LETTER). `^[a-z][a-z0-9-]*$` deliberately excludes
@@ -658,6 +721,8 @@ in
     ++ perVmAuthorizedKeyAssertions
     ++ volumeSerialAssertions
     ++ guestConfigContainmentAssertions
+    ++ gatewayPathAssertions
+    ++ gatewayCoordinateAssertions
   );
 
   # The daemon-only end state is now the default. Do not warn on the

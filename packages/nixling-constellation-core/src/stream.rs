@@ -85,6 +85,50 @@ pub struct StreamDescriptor {
     pub kind: StreamKind,
 }
 
+/// The logical sub-channel a [`crate::frame::StreamData`] chunk belongs to.
+///
+/// Most stream kinds carry a single `Primary` channel. A `Stdio` stream in
+/// non-TTY mode multiplexes `Stdout` and `Stderr` over one stream so the
+/// two are ordered against each other yet still distinguishable — a peer
+/// MUST NOT have to open two streams (and two authz contexts) just to split
+/// stdout from stderr. The channel is a closed enum; an unknown channel is
+/// rejected at decode (fail-closed).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum StreamChannel {
+    /// The default single channel for a stream kind.
+    #[default]
+    Primary,
+    /// Standard output (non-TTY `Stdio` streams).
+    Stdout,
+    /// Standard error (non-TTY `Stdio` streams).
+    Stderr,
+}
+
+/// Why a stream was closed. Carried on [`crate::frame::StreamClose`] so the
+/// peer can distinguish an orderly end-of-stream from a cancellation,
+/// timeout, or error without inspecting payload bytes. Closed enum; an
+/// unknown reason is rejected at decode (fail-closed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum StreamCloseReason {
+    /// Orderly end-of-stream: all data was delivered.
+    Completed,
+    /// The stream was cancelled by a peer (e.g. `ExecCancel`).
+    Cancelled,
+    /// The stream exceeded its inactivity/operation deadline.
+    TimedOut,
+    /// The stream ended because of an error (details travel in a separate
+    /// typed-error frame, never in this reason).
+    Errored,
+    /// The remote end of the stream went away (process/relay/gateway gone).
+    PeerGone,
+}
+
 /// The authorization context evaluated before a stream is opened. The
 /// `capability` is always derived from the stream kind via
 /// [`StreamAuthz::for_kind`] so a caller cannot pair a stream kind with a
