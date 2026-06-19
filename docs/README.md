@@ -122,6 +122,9 @@ Understanding-oriented prose. The "why" behind the design choices.
   depth controls, known gaps, and a *Why not X* rationale FAQ.
   Read this before opening a security-sensitive issue or
   proposing a structural refactor.
+- [`explanation/storage-lifecycle.md`](./explanation/storage-lifecycle.md) —
+  why nixling treats host paths, restart adoption, locks, cleanup, and
+  degraded-state reporting as explicit control-plane contracts.
 - [`adr/README.md`](./adr/README.md) — architecture decision
   records for load-bearing design choices that complement the
   explanation narrative.

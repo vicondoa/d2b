@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Documentation: ADR 0034 and the storage lifecycle explanation now
+  define the planned generated contracts for managed paths, process
+  restart/adoption, synchronization, lock ownership, degraded-state
+  reporting, and the one-time storage cutover.
 - ADR 0032 gateway lifecycle: gateway-mode `nixling vm
   start/stop/restart <aca target>` now routes through lifecycle
   operations backed by the ACA preview REST data plane. Gateway config
