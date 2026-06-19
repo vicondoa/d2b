@@ -1184,11 +1184,16 @@ fn sandbox_create_body(
         .as_ref()
         .filter(|id| !id.trim().is_empty())
     {
+        let mut user_assigned = serde_json::Map::new();
+        user_assigned.insert(id.clone(), serde_json::json!({}));
         body.as_object_mut()
             .expect("sandbox create body is an object")
             .insert(
-                "managedIdentityResourceId".to_owned(),
-                serde_json::Value::String(id.clone()),
+                "identity".to_owned(),
+                serde_json::json!({
+                    "type": "UserAssigned",
+                    "userAssignedIdentities": user_assigned,
+                }),
             );
     }
     serde_json::to_string(&body).map_err(|_| {
@@ -1603,11 +1608,13 @@ mod tests {
             sandbox_body["lifecycle"]["autoSuspendPolicy"]["interval"],
             600
         );
+        assert_eq!(sandbox_body["identity"]["type"], "UserAssigned");
         assert!(
-            sandbox_body["managedIdentityResourceId"]
-                .as_str()
+            sandbox_body["identity"]["userAssignedIdentities"]
+                .as_object()
                 .unwrap()
-                .contains("/userAssignedIdentities/id")
+                .keys()
+                .any(|key| key.contains("/userAssignedIdentities/id"))
         );
         assert_eq!(sandbox_body["labels"]["nixling-workload"], "demo");
         assert_eq!(sandbox_body["labels"]["nixling-realm"], "work");
