@@ -1443,8 +1443,6 @@ pub struct QemuMediaRunnerStatus {
     pub pre_cont_progress: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qmp_readiness: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub qmp_socket: Option<String>,
     pub role: String,
     pub state: String,
 }
@@ -1453,8 +1451,6 @@ pub struct QemuMediaRunnerStatus {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QemuMediaSourceStatus {
     pub format: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image_path: Option<String>,
     pub media_ref: String,
     pub read_only: bool,
     pub registry: QemuMediaRegistryStatus,

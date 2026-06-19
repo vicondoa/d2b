@@ -3959,6 +3959,17 @@ fn prepare_runner_preopened_fds(
     )
     .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
 
+    let reconcile = crate::ops::exec_reconcile::SystemReconcileExecutor;
+    let _bridge_flags = dispatch_set_bridge_port_flags_inner(
+        &nixling_ipc::broker_wire::SetBridgePortFlagsRequest {
+            vm_id: req.vm_id.clone(),
+            role_id: nixling_ipc::types::RoleId::new("workload-lan"),
+            tracing_span_id: req.tracing_span_id.clone(),
+        },
+        resolver,
+        &reconcile,
+    )?;
+
     let tap_fd = outcome
         .fd
         .ok_or_else(|| BrokerError::LiveHandler("qemu-media tap fd missing".to_owned()))?;

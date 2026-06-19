@@ -244,12 +244,7 @@ fn open_declared_source<'a>(
     let fd = match source.source_kind {
         QemuMediaSourceKind::PhysicalUsb => {
             let record = read_registry_record(resolver, source.vm.as_str(), source.media_ref.as_str())?;
-            let identity = read_usb_identity(
-                Path::new("/sys"),
-                Path::new("/dev/disk/by-id"),
-                &record.identity.bus_id,
-            )?;
-            verify_identity_matches_record(&record, &identity)?;
+            let identity = read_current_identity_for_record(&record)?;
             preflight_identity_not_busy(Path::new("/sys"), &identity)?;
             open_block_device(&identity.block_device, access)?
         }
@@ -282,13 +277,21 @@ fn run_attach_transaction(
         QemuMediaHotplugStatus::DeviceAdded,
     ]);
     if continue_vm {
-        client.execute("cont", json!({}), None)?;
+        if let Err(error) = qmp_continue_vm(&mut client) {
+            let _ = qmp_detach(&mut client, &scaffold);
+            return Err(error);
+        }
         commands.push("cont".to_owned());
         statuses.push(QemuMediaHotplugStatus::VmContinued);
     }
     Ok(HotplugOutcome {
         response: hotplug_response(vm, source, scaffold, commands, statuses),
     })
+}
+
+fn qmp_continue_vm(client: &mut QmpClient) -> Result<(), MediaOpError> {
+    client.execute("cont", json!({}), None)?;
+    Ok(())
 }
 
 fn hotplug_response(
@@ -362,15 +365,19 @@ fn qmp_attach(
 ) -> Result<Vec<String>, MediaOpError> {
     let fdset_id = qemu_media_fdset_id(client.vm(), &scaffold.media_ref);
     let file_node_id = qemu_media_file_node_id(&scaffold.media_ref);
-    client.execute(
+    let mut cleanup = QmpAttachCleanup::new(scaffold, fdset_id, file_node_id.clone());
+    if let Err(error) = client.execute(
         "add-fd",
         json!({
             "fdset-id": fdset_id,
             "opaque": format!("nixling:{}", scaffold.media_ref),
         }),
         Some(fd),
-    )?;
-    client.execute(
+    ) {
+        return Err(error);
+    }
+    cleanup.fdset_added = true;
+    if let Err(error) = client.execute(
         "blockdev-add",
         json!({
             "driver": "file",
@@ -379,8 +386,12 @@ fn qmp_attach(
             "read-only": read_only,
         }),
         None,
-    )?;
-    client.execute(
+    ) {
+        cleanup.rollback(client);
+        return Err(error);
+    }
+    cleanup.file_added = true;
+    if let Err(error) = client.execute(
         "blockdev-add",
         json!({
             "driver": "raw",
@@ -389,7 +400,11 @@ fn qmp_attach(
             "read-only": read_only,
         }),
         None,
-    )?;
+    ) {
+        cleanup.rollback(client);
+        return Err(error);
+    }
+    cleanup.raw_added = true;
     let mut device_args = json!({
         "driver": "usb-storage",
         "drive": scaffold.blockdev_id.as_str(),
@@ -401,7 +416,11 @@ fn qmp_attach(
     {
         args.insert("bootindex".to_owned(), json!(1));
     }
-    client.execute("device_add", device_args, None)?;
+    if let Err(error) = client.execute("device_add", device_args, None) {
+        cleanup.rollback(client);
+        return Err(error);
+    }
+    cleanup.device_added = true;
     Ok(vec![
         "add-fd".to_owned(),
         "blockdev-add:file".to_owned(),
@@ -410,17 +429,93 @@ fn qmp_attach(
     ])
 }
 
+#[derive(Debug, Clone)]
+struct QmpAttachCleanup {
+    device_id: String,
+    blockdev_id: String,
+    file_node_id: String,
+    fdset_id: u64,
+    device_added: bool,
+    raw_added: bool,
+    file_added: bool,
+    fdset_added: bool,
+}
+
+impl QmpAttachCleanup {
+    fn new(scaffold: &QemuMediaHotplugScaffold, fdset_id: u64, file_node_id: String) -> Self {
+        Self {
+            device_id: scaffold.device_id.clone(),
+            blockdev_id: scaffold.blockdev_id.clone(),
+            file_node_id,
+            fdset_id,
+            device_added: false,
+            raw_added: false,
+            file_added: false,
+            fdset_added: false,
+        }
+    }
+
+    fn rollback(&self, client: &mut QmpClient) {
+        if self.device_added
+            && client
+                .execute("device_del", json!({ "id": self.device_id.as_str() }), None)
+                .is_ok()
+        {
+            let _ = client.wait_for_device_deleted(&self.device_id);
+        }
+        if self.raw_added {
+            let _ = client.execute(
+                "blockdev-del",
+                json!({ "node-name": self.blockdev_id.as_str() }),
+                None,
+            );
+        }
+        if self.file_added {
+            let _ = client.execute(
+                "blockdev-del",
+                json!({ "node-name": self.file_node_id.as_str() }),
+                None,
+            );
+        }
+        if self.fdset_added {
+            let _ = client.execute("remove-fd", json!({ "fdset-id": self.fdset_id }), None);
+        }
+    }
+}
+
 fn qmp_detach(
     client: &mut QmpClient,
     scaffold: &QemuMediaHotplugScaffold,
 ) -> Result<Vec<String>, MediaOpError> {
     let fdset_id = qemu_media_fdset_id(client.vm(), &scaffold.media_ref);
     let file_node_id = qemu_media_file_node_id(&scaffold.media_ref);
-    client.execute("device_del", json!({ "id": scaffold.device_id.as_str() }), None)?;
-    client.wait_for_device_deleted(&scaffold.device_id)?;
-    client.execute("blockdev-del", json!({ "node-name": scaffold.blockdev_id.as_str() }), None)?;
-    client.execute("blockdev-del", json!({ "node-name": file_node_id.as_str() }), None)?;
-    client.execute("remove-fd", json!({ "fdset-id": fdset_id }), None)?;
+    let mut first_error = None;
+    match client.execute("device_del", json!({ "id": scaffold.device_id.as_str() }), None) {
+        Ok(_) => {
+            if let Err(error) = client.wait_for_device_deleted(&scaffold.device_id) {
+                first_error.get_or_insert(error);
+            }
+        }
+        Err(error) => {
+            first_error.get_or_insert(error);
+        }
+    }
+    if let Err(error) = client.execute(
+        "blockdev-del",
+        json!({ "node-name": scaffold.blockdev_id.as_str() }),
+        None,
+    ) {
+        first_error.get_or_insert(error);
+    }
+    if let Err(error) = client.execute("blockdev-del", json!({ "node-name": file_node_id.as_str() }), None) {
+        first_error.get_or_insert(error);
+    }
+    if let Err(error) = client.execute("remove-fd", json!({ "fdset-id": fdset_id }), None) {
+        first_error.get_or_insert(error);
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
     Ok(vec![
         "device_del".to_owned(),
         "DEVICE_DELETED".to_owned(),
@@ -567,6 +662,47 @@ fn verify_identity_matches_record(
         return Err(MediaOpError::IdentityMismatch("by-id".to_owned()));
     }
     Ok(())
+}
+
+fn read_current_identity_for_record(
+    record: &MediaRegistryRecord,
+) -> Result<UsbPhysicalIdentity, MediaOpError> {
+    let candidates =
+        nixling_host::media::safe_usb_block_candidates(Path::new("/sys"), Path::new("/dev/disk/by-id"));
+    let matches: Vec<_> = candidates
+        .into_iter()
+        .filter(|candidate| {
+            let expected: BTreeSet<_> = record.identity.by_id_names.iter().collect();
+            let actual: BTreeSet<_> = candidate.by_id_names.iter().collect();
+            !expected.is_empty() && expected == actual
+        })
+        .collect();
+    match matches.as_slice() {
+        [] => Err(MediaOpError::IdentityMismatch(
+            "runtime-selector".to_owned(),
+        )),
+        [candidate] => {
+            let identity = read_usb_identity(
+                Path::new("/sys"),
+                Path::new("/dev/disk/by-id"),
+                &candidate.bus_id,
+            )?;
+            if record.identity.vendor_id != identity.vendor_id
+                || record.identity.product_id != identity.product_id
+            {
+                return Err(MediaOpError::IdentityMismatch("vendor-product".to_owned()));
+            }
+            let expected: BTreeSet<_> = record.identity.by_id_names.iter().collect();
+            let actual: BTreeSet<_> = identity.by_id_names.iter().collect();
+            if expected != actual {
+                return Err(MediaOpError::IdentityMismatch("by-id".to_owned()));
+            }
+            Ok(identity)
+        }
+        many => Err(MediaOpError::AmbiguousRuntimeSelector(
+            many.iter().map(|candidate| candidate.bus_id.clone()).collect(),
+        )),
+    }
 }
 
 fn runtime_identity_matches_record(
@@ -834,7 +970,7 @@ fn open_block_device(block_device: &str, access: MediaAccessMode) -> Result<Owne
 
     let path = PathBuf::from("/dev").join(block_device);
     let flags = match access {
-        MediaAccessMode::ReadOnly => OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        MediaAccessMode::ReadOnly => OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::EXCL,
         MediaAccessMode::ReadWrite => {
             OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::EXCL
         }
@@ -1242,60 +1378,156 @@ mod tests {
 
     #[test]
     fn qmp_attach_sends_fd_and_device_commands() {
-            let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
-            let socket = dir.path().join("qmp.sock");
-            let listener = UnixListener::bind(&socket).expect("bind qmp");
-            let server = std::thread::spawn(move || {
-                let (stream, _) = listener.accept().expect("accept qmp");
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(5)))
-                    .expect("server read timeout");
-                let mut writer = stream.try_clone().expect("clone qmp writer");
-                let mut reader = BufReader::new(stream.try_clone().expect("clone qmp reader"));
-                writer
-                    .write_all(br#"{"QMP":{"version":{"qemu":{"major":9,"minor":0,"micro":0}},"capabilities":[]}}"#)
-                    .expect("write greeting");
-                writer.write_all(b"\n").expect("write greeting newline");
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
+        let socket = dir.path().join("qmp.sock");
+        let listener = UnixListener::bind(&socket).expect("bind qmp");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept qmp");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("server read timeout");
+            let mut writer = stream.try_clone().expect("clone qmp writer");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone qmp reader"));
+            write_qmp_greeting_and_capabilities(&mut writer, &mut reader);
 
-                let mut line = String::new();
-                reader.read_line(&mut line).expect("read capabilities");
-                assert!(line.contains("qmp_capabilities"));
-                writer.write_all(br#"{"return":{}}"#).expect("capabilities return");
-                writer.write_all(b"\n").expect("capabilities newline");
+            let (payload, fds) = crate::fd_passing::recv_fds(stream.as_raw_fd())
+                .expect("add-fd must carry SCM_RIGHTS");
+            assert_eq!(fds.len(), 1);
+            let add_fd = String::from_utf8(payload).expect("add-fd utf8");
+            assert!(add_fd.contains(r#""execute":"add-fd""#));
+            writer
+                .write_all(br#"{"return":{"fdset-id":1000,"fd":0}}"#)
+                .expect("add-fd return");
+            writer.write_all(b"\n").expect("add-fd newline");
 
-                let (payload, fds) = crate::fd_passing::recv_fds(stream.as_raw_fd())
-                    .expect("add-fd must carry SCM_RIGHTS");
-                assert_eq!(fds.len(), 1);
-                let add_fd = String::from_utf8(payload).expect("add-fd utf8");
-                assert!(add_fd.contains(r#""execute":"add-fd""#));
-                writer.write_all(br#"{"return":{"fdset-id":1000,"fd":0}}"#).expect("add-fd return");
-                writer.write_all(b"\n").expect("add-fd newline");
+            for expected in ["blockdev-add", "blockdev-add", "device_add"] {
+                expect_qmp_command(&mut writer, &mut reader, expected);
+            }
+        });
 
-                for expected in ["blockdev-add", "blockdev-add", "device_add"] {
-                    line.clear();
-                    reader.read_line(&mut line).expect("read qmp command");
-                    assert!(line.contains(expected), "missing {expected} in {line}");
-                    writer.write_all(br#"{"return":{}}"#).expect("command return");
-                    writer.write_all(b"\n").expect("command newline");
-                }
-            });
+        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
+        let file = std::fs::File::open("/dev/null").expect("open harmless fd");
+        let scaffold = qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Attach)
+            .expect("scaffold");
+        let commands =
+            qmp_attach(&mut client, &scaffold, file.as_raw_fd(), true).expect("qmp attach");
+        assert_eq!(
+            commands,
+            [
+                "add-fd",
+                "blockdev-add:file",
+                "blockdev-add:raw",
+                "device_add"
+            ]
+        );
+        server.join().expect("fake qmp server joins");
+    }
 
-            let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
-            let file = std::fs::File::open("/dev/null").expect("open harmless fd");
-            let scaffold =
-                qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Attach).expect("scaffold");
-            let commands =
-                qmp_attach(&mut client, &scaffold, file.as_raw_fd(), true).expect("qmp attach");
-            assert_eq!(
-                commands,
-                [
-                    "add-fd",
-                    "blockdev-add:file",
-                    "blockdev-add:raw",
-                    "device_add"
-                ]
-            );
-            server.join().expect("fake qmp server joins");
+    #[test]
+    fn qmp_detach_removes_device_blocks_and_fdset() {
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
+        let socket = dir.path().join("qmp.sock");
+        let listener = UnixListener::bind(&socket).expect("bind qmp");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept qmp");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("server read timeout");
+            let mut writer = stream.try_clone().expect("clone qmp writer");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone qmp reader"));
+            write_qmp_greeting_and_capabilities(&mut writer, &mut reader);
+
+            expect_qmp_command(&mut writer, &mut reader, "device_del");
+            writer
+                .write_all(br#"{"event":"DEVICE_DELETED","data":{"device":"nl-usb-installer-usb"}}"#)
+                .expect("device deleted event");
+            writer.write_all(b"\n").expect("event newline");
+            for expected in ["blockdev-del", "blockdev-del", "remove-fd"] {
+                expect_qmp_command(&mut writer, &mut reader, expected);
+            }
+        });
+
+        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
+        let scaffold = qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Detach)
+            .expect("scaffold");
+        let commands = qmp_detach(&mut client, &scaffold).expect("qmp detach");
+        assert_eq!(
+            commands,
+            [
+                "device_del",
+                "DEVICE_DELETED",
+                "blockdev-del:raw",
+                "blockdev-del:file",
+                "remove-fd"
+            ]
+        );
+        server.join().expect("fake qmp server joins");
+    }
+
+    #[test]
+    fn qmp_boot_path_attaches_media_and_continues_vm() {
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
+        let socket = dir.path().join("qmp.sock");
+        let listener = UnixListener::bind(&socket).expect("bind qmp");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept qmp");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("server read timeout");
+            let mut writer = stream.try_clone().expect("clone qmp writer");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone qmp reader"));
+            write_qmp_greeting_and_capabilities(&mut writer, &mut reader);
+
+            let (_payload, fds) = crate::fd_passing::recv_fds(stream.as_raw_fd())
+                .expect("boot add-fd must carry SCM_RIGHTS");
+            assert_eq!(fds.len(), 1);
+            writer
+                .write_all(br#"{"return":{"fdset-id":1000,"fd":0}}"#)
+                .expect("add-fd return");
+            writer.write_all(b"\n").expect("add-fd newline");
+            for expected in ["blockdev-add", "blockdev-add", "device_add", "cont"] {
+                expect_qmp_command(&mut writer, &mut reader, expected);
+            }
+        });
+
+        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
+        let file = std::fs::File::open("/dev/null").expect("open harmless fd");
+        let scaffold = qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Attach)
+            .expect("scaffold");
+        let mut commands =
+            qmp_attach(&mut client, &scaffold, file.as_raw_fd(), true).expect("qmp attach");
+        qmp_continue_vm(&mut client).expect("qmp cont");
+        commands.push("cont".to_owned());
+        assert!(commands.contains(&"cont".to_owned()));
+        server.join().expect("fake qmp server joins");
+    }
+
+    fn write_qmp_greeting_and_capabilities(writer: &mut UnixStream, reader: &mut BufReader<UnixStream>) {
+        writer
+            .write_all(
+                br#"{"QMP":{"version":{"qemu":{"major":9,"minor":0,"micro":0}},"capabilities":[]}}"#,
+            )
+            .expect("write greeting");
+        writer.write_all(b"\n").expect("write greeting newline");
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read capabilities");
+        assert!(line.contains("qmp_capabilities"));
+        writer
+            .write_all(br#"{"return":{}}"#)
+            .expect("capabilities return");
+        writer.write_all(b"\n").expect("capabilities newline");
+    }
+
+    fn expect_qmp_command(
+        writer: &mut UnixStream,
+        reader: &mut BufReader<UnixStream>,
+        expected: &str,
+    ) {
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read qmp command");
+        assert!(line.contains(expected), "missing {expected} in {line}");
+        writer.write_all(br#"{"return":{}}"#).expect("command return");
+        writer.write_all(b"\n").expect("command newline");
     }
 
     #[test]

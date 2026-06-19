@@ -603,6 +603,15 @@ let
           '';
         }
         {
+          assertion = vm.qemuMedia.source != null;
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" requires
+            `qemuMedia.source` in this implementation. Declare either a
+            physical-usb opaque ref enrolled with `nixling usb enroll`, or
+            a direct image-file source configured in Nix.
+          '';
+        }
+        {
           assertion = duplicateMediaRefs == [ ];
           message = ''
             nixling.vms.${name}: qemu-media refs must be unique per VM;

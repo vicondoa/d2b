@@ -112,12 +112,6 @@
             "null"
           ]
         },
-        "qmpSocket": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "role": {
           "type": "string"
         },
@@ -140,12 +134,6 @@
       "properties": {
         "format": {
           "type": "string"
-        },
-        "imagePath": {
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "mediaRef": {
           "type": "string"

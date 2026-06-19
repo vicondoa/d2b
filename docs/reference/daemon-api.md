@@ -344,7 +344,7 @@ state-machine node.
 | `UsbProbeEntryKind` | enum | [`UsbProbeEntryKind`](../../packages/nixling-ipc/src/public_wire.rs#L1251) | `Usbip`; `QemuMediaSlot` |
 | `AuditFormat` | enum | [`AuditFormat`](../../packages/nixling-ipc/src/public_wire.rs#L1301) | `Human`; `Json` |
 | `AuthRole` | enum | [`AuthRole`](../../packages/nixling-ipc/src/public_wire.rs#L1309) | `None`; `Launcher`; `Admin` |
-| `HostFindingSeverity` | enum | [`HostFindingSeverity`](../../packages/nixling-ipc/src/public_wire.rs#L1492) | `Pass`; `Warn`; `Fail` |
+| `HostFindingSeverity` | enum | [`HostFindingSeverity`](../../packages/nixling-ipc/src/public_wire.rs#L1488) | `Pass`; `Warn`; `Fail` |
 | `PathClass` | enum | [`PathClass`](../../packages/nixling-ipc/src/types.rs#L171) | `Vm`; `Runtime` |
 <!-- END AUTO-GENERATED: enum-variants -->
 

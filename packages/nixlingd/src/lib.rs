@@ -3658,7 +3658,7 @@ fn qemu_media_probe_entries(resolver: &BundleResolver) -> Vec<public_wire::Usbip
                 },
                 if enrolled {
                     Some(format!(
-                        "nixling usb attach {} --busid {} --apply",
+                        "nixling usb attach {} {} --apply",
                         source.vm, bus_id
                     ))
                 } else {
@@ -8357,11 +8357,23 @@ fn execute_host_prep_dag(
                 continue;
             }
             HostPrepStepKind::SetBridgePortFlags => {
-                // Dispatch SetBridgePortFlags for role `ch`. The broker
+                // Dispatch SetBridgePortFlags for the workload LAN port. The broker
                 // returns a typed
                 // BridgePortFlagsResponse, not an Ack; the host-prep
                 // dispatcher accepts any non-Error response.
-                let role_id = host_prep_role_id_from_bundle_ref(&step.bundle_ref, "ch");
+                let role_id = load_bundle_resolver(state)
+                    .ok()
+                    .and_then(|resolver| {
+                        resolver.find_manifest_vm(vm).map(|manifest_vm| {
+                            if manifest_vm.is_net_vm {
+                                "net-vm-lan"
+                            } else {
+                                "workload-lan"
+                            }
+                        })
+                    })
+                    .unwrap_or("workload-lan");
+                let role_id = RoleId::new(role_id);
                 let req = BrokerRequest::SetBridgePortFlags(
                     nixling_ipc::broker_wire::SetBridgePortFlagsRequest {
                         vm_id: step.bundle_ref.vm_id.clone(),
@@ -10446,7 +10458,6 @@ fn public_qemu_media_status(
             "role": RunnerRole::QemuMedia.as_str(),
             "preContProgress": pre_cont_progress,
             "qmpReadiness": qmp_readiness,
-            "qmpSocket": qmp_socket,
         },
         "media": media,
     }))
@@ -10473,7 +10484,7 @@ fn qemu_media_unix_socket_listening(path: &str) -> bool {
 
 fn qemu_media_source_status(registry_dir: &str, source: &QemuMediaSourceIntent) -> Value {
     let (state, remediation) = qemu_media_registry_state(registry_dir, source);
-    let mut status = json!({
+    let status = json!({
         "mediaRef": source.media_ref,
         "slot": source.slot,
         "sourceKind": serde_kebab_string(&source.source_kind),
@@ -10484,11 +10495,6 @@ fn qemu_media_source_status(registry_dir: &str, source: &QemuMediaSourceIntent) 
             "remediation": remediation,
         },
     });
-    if let Some(image_path) = &source.image_path
-        && let Some(object) = status.as_object_mut()
-    {
-        object.insert("imagePath".to_owned(), Value::String(image_path.clone()));
-    }
     status
 }
 
@@ -11306,7 +11312,7 @@ mod public_status_tests {
         );
         assert_eq!(
             qemu.pointer("/runner/qmpSocket").and_then(Value::as_str),
-            Some("/run/nixling/vms/installer/qmp.sock")
+            None
         );
         let source_status =
             qemu_media_source_status(&root.path().display().to_string(), &qemu_media_source());
@@ -11341,7 +11347,7 @@ mod public_status_tests {
         );
         assert_eq!(
             source_status.pointer("/imagePath").and_then(Value::as_str),
-            Some("/var/lib/nixling/images/installer.img")
+            None
         );
         assert_eq!(
             source_status

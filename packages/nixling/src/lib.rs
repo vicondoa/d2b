@@ -3186,7 +3186,6 @@ fn qemu_media_status(
         runner: IpcQemuMediaRunnerStatus {
             role: "qemu-media".to_owned(),
             state: runner_state,
-            qmp_socket,
             qmp_readiness,
             pre_cont_progress,
         },
@@ -3236,7 +3235,6 @@ fn qemu_media_source_status(
 ) -> IpcQemuMediaSourceStatus {
     IpcQemuMediaSourceStatus {
         media_ref: source.media_ref.clone(),
-        image_path: source.image_path.clone(),
         slot: source.slot.clone(),
         source_kind: qemu_media_source_kind_name(source.source_kind).to_owned(),
         format: qemu_media_format_name(source.format).to_owned(),
@@ -7502,7 +7500,12 @@ fn render_list_human(output: &ListOutputV2) -> String {
                     qemu.runner.qmp_readiness.as_deref().unwrap_or("unknown")
                 ));
             }
-            label.push_str(", unsupported=exec,guest-control,config-sync,keys,store-sync");
+            if !item.unsupported_capabilities.is_empty() {
+                label.push_str(&format!(
+                    ", unsupported={}",
+                    item.unsupported_capabilities.join(",")
+                ));
+            }
             label
         } else {
             item.status.clone()
@@ -7552,9 +7555,6 @@ fn render_status_vm_human(
                 .unwrap_or_else(|| qemu.runner.state.clone())
         );
         let _ = writeln!(text, "firmware mode: {}", qemu.firmware_mode);
-        if let Some(qmp_socket) = &qemu.runner.qmp_socket {
-            let _ = writeln!(text, "qmp socket: {qmp_socket}");
-        }
         let _ = writeln!(
             text,
             "qmp readiness: {}",
@@ -7568,18 +7568,13 @@ fn render_status_vm_human(
             for source in &qemu.media {
                 let _ = writeln!(
                     text,
-                    "  - slot={} ref={} kind={} format={} readOnly={} registry={}{}",
+                    "  - slot={} ref={} kind={} format={} readOnly={} registry={}",
                     source.slot,
                     source.media_ref,
                     source.source_kind,
                     source.format,
                     source.read_only,
                     source.registry.state,
-                    source
-                        .image_path
-                        .as_ref()
-                        .map(|path| format!(" path={path}"))
-                        .unwrap_or_default(),
                 );
                 if let Some(remediation) = &source.registry.remediation {
                     let _ = writeln!(text, "    remediation: {remediation}");
@@ -11347,6 +11342,96 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
+    fn qemu_media_vm_lifecycle_dry_run_reports_qemu_dag() {
+        let vm = "media";
+        let manifest_path = test_socket_path("qemu-media-vm-dry-run", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test manifest dir");
+        }
+        write_qemu_media_manifest(&manifest_path, vm);
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("missing-bundle.json"),
+            public_socket: test_socket_path("qemu-media-vm-dry-run", ".sock"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            super::cmd_vm_lifecycle_verb(&context, "start", vm, true, false, false, true)
+        });
+        assert_eq!(result.expect("qemu-media start dry-run"), 0);
+        let rendered = String::from_utf8(stdout).expect("stdout utf8");
+        assert!(rendered.contains(r#""id": "qemu-media""#));
+        assert!(rendered.contains("QemuMediaBoot"));
+        assert!(!rendered.contains("virtiofsd-ro-store"));
+
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            super::cmd_vm_lifecycle_verb(&context, "stop", vm, true, false, false, false)
+        });
+        assert_eq!(result.expect("qemu-media stop dry-run"), 0);
+        let rendered = String::from_utf8(stdout).expect("stdout utf8");
+        assert!(rendered.contains("host-reconcile"));
+        assert!(rendered.contains("qemu-media"));
+    }
+
+    #[test]
+    fn qemu_media_usb_hotplug_dry_run_reports_qmp_actions() {
+        let vm = "media";
+        let manifest_path = test_socket_path("qemu-media-usb-dry-run", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test manifest dir");
+        }
+        write_qemu_media_manifest(&manifest_path, vm);
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("missing-bundle.json"),
+            public_socket: test_socket_path("qemu-media-usb-dry-run", ".sock"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let attach = UsbAttachArgs {
+            vm: vm.to_owned(),
+            busid: "1-2.3".to_owned(),
+            dry_run: true,
+            apply: false,
+            json: true,
+            human: false,
+        };
+        let (result, stdout) =
+            super::with_test_stdout_capture(|| super::cmd_usb_attach(&context, &attach));
+        assert_eq!(result.expect("qemu-media usb attach dry-run"), 0);
+        let rendered = String::from_utf8(stdout).expect("stdout utf8");
+        assert!(rendered.contains("QmpHotplug(add-fd,blockdev-add,device_add)"));
+        assert!(!rendered.contains("1-2.3"));
+
+        let detach = UsbDetachArgs {
+            vm: vm.to_owned(),
+            busid: "1-2.3".to_owned(),
+            dry_run: true,
+            apply: false,
+            json: false,
+            human: false,
+        };
+        let (result, stdout) =
+            super::with_test_stdout_capture(|| super::cmd_usb_detach(&context, &detach));
+        assert_eq!(result.expect("qemu-media usb detach dry-run"), 0);
+        let rendered = String::from_utf8(stdout).expect("stdout utf8");
+        assert!(rendered.contains("execute QMP detach"));
+        assert!(!rendered.contains("1-2.3"));
+    }
+
+    #[test]
     fn qemu_media_usb_enroll_apply_output_redacts_busid() {
         let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
         let vm = "media";
@@ -12018,7 +12103,6 @@ mod host_install_dispatch_tests {
                         "runner": {
                             "role": "qemu-media",
                             "state": "running",
-                            "qmpSocket": "/run/nixling/vms/installer/qmp.sock",
                             "qmpReadiness": "ready",
                             "preContProgress": "paused-before-cont"
                         },
@@ -12036,7 +12120,6 @@ mod host_install_dispatch_tests {
                             },
                             {
                                 "mediaRef": "image-boot",
-                                "imagePath": "/var/lib/nixling/images/installer.img",
                                 "slot": "boot",
                                 "sourceKind": "image-file",
                                 "format": "raw",
@@ -12107,12 +12190,7 @@ mod host_install_dispatch_tests {
                 .and_then(Value::as_str),
             Some("missing")
         );
-        assert_eq!(
-            output
-                .pointer("/qemuMedia/media/1/imagePath")
-                .and_then(Value::as_str),
-            Some("/var/lib/nixling/images/installer.img")
-        );
+        assert!(output.pointer("/qemuMedia/media/1/imagePath").is_none());
         assert_eq!(
             output
                 .pointer("/qemuMedia/media/1/registry/state")
@@ -12216,13 +12294,11 @@ mod host_install_dispatch_tests {
                     "runner": {
                         "role": "qemu-media",
                         "state": "running",
-                        "qmpSocket": "/run/nixling/vms/installer/qmp.sock",
                         "qmpReadiness": "ready",
                         "preContProgress": "paused-before-cont"
                     },
                     "media": [{
                         "mediaRef": "image-boot",
-                        "imagePath": "/var/lib/nixling/images/installer.img",
                         "slot": "boot",
                         "sourceKind": "image-file",
                         "format": "raw",

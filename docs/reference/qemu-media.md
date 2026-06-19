@@ -90,8 +90,8 @@ artifacts and is not echoed by successful enroll/attach/detach output.
 | `nixling status <vm>` | Shows qemu-media runner state, QMP socket/readiness, source refs, source kind, format, registry state, and direct image paths. |
 | `nixling usb enroll <vm> <ref> --busid <busid> --apply` | Physical USB only. Writes the root-only registry record and udev ignore rule through the broker. |
 | `nixling usb attach <vm> <busid> --apply` | Resolves the current USB identity against enrolled refs, preflights that the block device is unused, opens the fd in the broker, sends it to QEMU over QMP, and returns only after QMP accepts the fd/block/device commands. |
-| `nixling usb detach <vm> <busid> --apply` | Resolves the enrolled source and removes the QMP device/block/fd nodes idempotently. |
-| `nixling usb probe` | Shows qemu-media slots as `enrollable`, `enrolled`, `stale`, or `direct-config`; direct image-file rows have no enrollment command. |
+| `nixling usb detach <vm> <busid> --apply` | Resolves the enrolled source and removes the QMP device/block/fd nodes. |
+| `nixling usb probe` | Shows qemu-media slots as `unbound`, `enrollable`, `enrolled`, `stale`, or `direct-config`; direct image-file rows have no enrollment command. |
 
 Dry-run JSON for enroll and hotplug includes `busIdProvided: true`, but
 not the busid value. Successful broker audit records include VM/ref,
@@ -108,9 +108,9 @@ paths.
   `/dev/bus/usb`, and `/dev/kvm` as its focused device class.
 - Media fds stay broker-local until QMP fd passing. The daemon and CLI
   name only VM/ref/busid selectors.
-- Direct image-file paths are allowed in trusted bundle/status surfaces
-  because they are explicit operator configuration, but the broker
-  fail-closes on unsafe paths and non-raw formats.
+- Direct image-file paths are trusted bundle configuration. Public CLI status
+  reports source kind/format/read-only policy without echoing those paths; the
+  broker fail-closes on unsafe paths and non-raw formats.
 - Host window presentation for niri matches the stable title
   `nixling-<vm>-qemu-media`; set
   `nixling.vms.<vm>.qemuMedia.window.niriBorderColor` for a fixed color.
