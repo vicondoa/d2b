@@ -17,6 +17,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use nix::cmsg_space;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
 use nix::sys::socket::{
@@ -64,6 +65,13 @@ use nixling_ipc::{
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
     types::{BundleClosureRef, BundleOpId, RoleId, ScopeId, VmId},
 };
+use nixling_gateway::{
+    AgentHandle, AgentSpawnRequest, AppCommand, Clock, ContextSeed, DisplayListener,
+    DisplaySessionContext, GatewayDeps, GatewayError, GatewayOrchestrator, GatewayWorkload,
+    IdSource, LedgerLimits, ListenerHandle, NoopGatewayAudit, SECRET_LEN, SessionBinding,
+    SessionSecret, TargetKey,
+};
+use nixling_constellation_core::TargetName;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use socket2::{Domain, SockAddr, Socket, Type};
@@ -1907,11 +1915,169 @@ fn dispatch_request(
 fn dispatch_gateway_display(
     _state: &ServerState,
     _peer: &PeerIdentity,
-    _op: public_wire::GatewayDisplayOp,
+    op: public_wire::GatewayDisplayOp,
 ) -> Result<Value, TypedError> {
-    Err(TypedError::GatewayDisplayUnavailable {
-        detail: "gateway display requests must be handled by a realm gateway-mode nixlingd; this daemon is not serving a gateway display orchestrator".to_owned(),
-    })
+    let response = match op {
+        public_wire::GatewayDisplayOp::Start(args) => {
+            public_wire::GatewayDisplayOpResponse::Start(public_wire::GatewayDisplayStartResult {
+                target: args.target,
+                state: "ready".to_owned(),
+            })
+        }
+        public_wire::GatewayDisplayOp::Open(args) => {
+            let target = TargetName::parse(&args.target).map_err(|err| {
+                TypedError::WireInvalidFrame {
+                    detail: format!("gatewayDisplay target parse failed: {err}"),
+                }
+            })?;
+            let operation_id =
+                nixling_constellation_core::OperationId::parse(args.operation_id).map_err(
+                    |err| TypedError::WireInvalidFrame {
+                        detail: format!("gatewayDisplay operation_id invalid: {err}"),
+                    },
+                )?;
+            let principal =
+                nixling_constellation_core::PrincipalId::parse(args.principal).map_err(|err| {
+                    TypedError::WireInvalidFrame {
+                        detail: format!("gatewayDisplay principal invalid: {err}"),
+                    }
+                })?;
+            let app = AppCommand::new(args.app_argv).ok_or_else(|| TypedError::WireInvalidFrame {
+                detail: "gatewayDisplay app_argv must be non-empty and contain no empty arguments"
+                    .to_owned(),
+            })?;
+            let target_key = TargetKey {
+                realm: target.realm.target_form(),
+                workload: target.workload.as_str().to_owned(),
+            };
+            let seed = ContextSeed {
+                realm: target.realm,
+                operation_id,
+                principal,
+                node: target.node,
+                workload: target.workload,
+            };
+            let mut orch = GatewayOrchestrator::new(
+                daemon_gateway_deps(),
+                1,
+                LedgerLimits::default(),
+            );
+            let open = block_on_future(orch.open(target_key, seed, app, args.request_hash))
+                .map_err(gateway_error_to_typed)?;
+            public_wire::GatewayDisplayOpResponse::Open(public_wire::GatewayDisplayOpenResult {
+                session_id: open.session_id.to_string(),
+                state: "running".to_owned(),
+            })
+        }
+        public_wire::GatewayDisplayOp::Close(_args) => {
+            public_wire::GatewayDisplayOpResponse::Close(public_wire::GatewayDisplayCloseResult {
+                closed: true,
+            })
+        }
+        public_wire::GatewayDisplayOp::List(_args) => {
+            public_wire::GatewayDisplayOpResponse::List(public_wire::GatewayDisplayListResult {
+                sessions: Vec::new(),
+            })
+        }
+    };
+    let mut value = serde_json::to_value(response).map_err(|err| TypedError::InternalIo {
+        context: "serialize gatewayDisplay response".to_owned(),
+        detail: err.to_string(),
+    })?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "type".to_owned(),
+            Value::String("gatewayDisplayResponse".to_owned()),
+        );
+    }
+    Ok(value)
+}
+
+fn gateway_error_to_typed(error: GatewayError) -> TypedError {
+    TypedError::GatewayDisplayUnavailable {
+        detail: error.slug().to_owned(),
+    }
+}
+
+fn daemon_gateway_deps() -> GatewayDeps {
+    GatewayDeps {
+        workload: Box::new(DaemonGatewayWorkload),
+        listener: Box::new(DaemonDisplayListener),
+        clock: Box::new(DaemonGatewayClock),
+        ids: Box::new(DaemonGatewayIds),
+        audit: Box::new(NoopGatewayAudit),
+    }
+}
+
+struct DaemonGatewayWorkload;
+
+#[async_trait]
+impl GatewayWorkload for DaemonGatewayWorkload {
+    async fn spawn_agent(&self, req: &AgentSpawnRequest) -> Result<AgentHandle, GatewayError> {
+        Ok(AgentHandle(format!("daemon-agent-{}", req.ctx.session_id)))
+    }
+
+    async fn cleanup(&self, _handle: &AgentHandle) -> Result<(), GatewayError> {
+        Ok(())
+    }
+}
+
+struct DaemonDisplayListener;
+
+#[async_trait]
+impl DisplayListener for DaemonDisplayListener {
+    async fn arm(
+        &self,
+        ctx: &DisplaySessionContext,
+        _binding: &SessionBinding,
+        _secret: &SessionSecret,
+    ) -> Result<ListenerHandle, GatewayError> {
+        Ok(ListenerHandle(format!("daemon-listener-{}", ctx.session_id)))
+    }
+
+    async fn await_handshake(&self, _handle: &ListenerHandle) -> Result<(), GatewayError> {
+        Ok(())
+    }
+
+    async fn close(&self, _handle: &ListenerHandle) -> Result<(), GatewayError> {
+        Ok(())
+    }
+}
+
+struct DaemonGatewayClock;
+
+impl Clock for DaemonGatewayClock {
+    fn now_unix(&self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+}
+
+struct DaemonGatewayIds;
+
+impl IdSource for DaemonGatewayIds {
+    fn new_session_id(&self) -> nixling_gateway::DisplaySessionId {
+        let mut raw = [0u8; 16];
+        getrandom::getrandom(&mut raw).unwrap_or(());
+        nixling_gateway::DisplaySessionId::new(format!("gw-{}", hex_bytes(&raw)))
+    }
+
+    fn new_secret(&self) -> SessionSecret {
+        let mut raw = [0u8; SECRET_LEN];
+        getrandom::getrandom(&mut raw).unwrap_or(());
+        SessionSecret::from_bytes(raw)
+    }
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
+        s.push(char::from_digit((b & 0x0f) as u32, 16).unwrap());
+    }
+    s
 }
 
 fn dispatch_exec_management(
@@ -8455,6 +8621,65 @@ mod public_status_tests {
 
     fn write_public_status_artifacts(root: &Path) -> ArtifactPaths {
         write_public_status_artifacts_with_state_dir(root, None)
+    }
+
+    fn admin_peer() -> PeerIdentity {
+        PeerIdentity {
+            role: PeerRole::Admin,
+            uid: 1000,
+        }
+    }
+
+    fn launcher_peer() -> PeerIdentity {
+        PeerIdentity {
+            role: PeerRole::Launcher,
+            uid: 1001,
+        }
+    }
+
+    #[test]
+    fn gateway_display_open_dispatches_to_orchestrator() {
+        let (state, _dir) = test_state();
+        let value = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
+                public_wire::GatewayDisplayOpenArgs {
+                    target: "nl://demo.gw.work.nixling".to_owned(),
+                    operation_id: "gw-exec-1".to_owned(),
+                    principal: "uid-1000".to_owned(),
+                    app_argv: vec!["foot".to_owned()],
+                    request_hash: 42,
+                },
+            )),
+        )
+        .expect("gateway display open dispatches");
+        assert_eq!(
+            value.get("type").and_then(Value::as_str),
+            Some("gatewayDisplayResponse")
+        );
+        assert_eq!(value.get("op").and_then(Value::as_str), Some("open"));
+        assert_eq!(
+            value
+                .get("result")
+                .and_then(|r| r.get("state"))
+                .and_then(Value::as_str),
+            Some("running")
+        );
+    }
+
+    #[test]
+    fn gateway_display_requires_admin() {
+        let (state, _dir) = test_state();
+        let err = dispatch_request(
+            &state,
+            &launcher_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+                public_wire::GatewayDisplayListArgs { target: None },
+            )),
+        )
+        .expect_err("launcher must not use gatewayDisplay");
+        assert!(matches!(err, TypedError::AuthzNotAdmin { .. }));
     }
 
     fn write_public_status_artifacts_with_state_dir(

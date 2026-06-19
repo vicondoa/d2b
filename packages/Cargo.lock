@@ -1891,6 +1891,7 @@ dependencies = [
  "nixling-constellation-provider",
  "nixling-constellation-router",
  "nixling-core",
+ "nixling-gateway",
  "nixling-host",
  "nixling-ipc",
  "parking_lot",
