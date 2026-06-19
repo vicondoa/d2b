@@ -2,6 +2,8 @@ name: pr-l1-static-fast
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -42,21 +44,16 @@ jobs:
   test-rust:
     needs: tier0
     runs-on: ubuntu-latest
-    # Cold ~43 min; a warm sccache (restored below) typically cuts this sharply.
-    # 60 min keeps headroom for a fully cold run or a slow runner.
+    # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 60
     env:
-      # Re-enable sccache in CI (test-rust.sh disables it by default there) and
-      # back it with a LOCAL-DISK cache restored/saved by actions/cache. We do
-      # NOT use sccache's native GHA backend: that exports ACTIONS_RUNTIME_TOKEN
-      # into this job's shell env, where the untrusted crate code this gate
-      # compiles + runs (build scripts, proc-macros, `cargo test`) could read
-      # and exfiltrate it. actions/cache performs its I/O in its own action
-      # process and never exposes that token to `run:` steps. CARGO_INCREMENTAL=0
-      # because sccache cannot cache incremental compilation artifacts.
-      NL_CI_SCCACHE: "1"
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache
-      SCCACHE_CACHE_SIZE: "3G"
+      # Disable sccache in CI — we use Swatinem/rust-cache (target-dir
+      # caching) instead, which caches ALL compiled artifacts including
+      # proc-macros and bin/lib crates that sccache cannot cache (~60% of
+      # compilations are "non-cacheable" by sccache due to crate-type).
+      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts
+      # are non-deterministic and bloat the cache without benefit for CI
+      # (each PR run starts from a different commit).
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -71,37 +68,37 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Restore/save sccache compilation cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+      - name: Rust dependency cache (target dirs + cargo registry)
+        # Swatinem/rust-cache caches dependency artifacts in target dirs
+        # and the cargo registry. It performs all I/O in its own action
+        # process (JavaScript pre/post steps) via @actions/cache — no
+        # ACTIONS_RUNTIME_TOKEN or cache credentials are exposed to `run:`
+        # steps where untrusted crate code (build scripts, proc-macros,
+        # `cargo test`) executes.
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          path: ${{ github.workspace }}/.sccache
-          # Key on the lockfiles + pinned toolchain so a dependency or compiler
-          # bump rotates the cache; restore-keys lets the newest prior cache
-          # seed a new key (sccache then recompiles only the changed crates).
-          key: sccache-test-rust-${{ runner.os }}-${{ hashFiles('packages/Cargo.lock', 'packages/nixling-priv-broker/Cargo.lock', 'packages/rust-toolchain.toml') }}
-          restore-keys: |
-            sccache-test-rust-${{ runner.os }}-
+          # Cache both workspaces: main packages/ and sibling broker.
+          workspaces: |
+            packages -> target
+            packages/nixling-priv-broker -> target
+          # Also cache the broker's parallel feature-pass target dirs.
+          cache-directories: |
+            packages/nixling-priv-broker/target-layer1
+            packages/nixling-priv-broker/target-fakebackends
+          # Key on toolchain so a Rust version bump rotates the cache.
+          prefix-key: "v0-rust"
+          shared-key: "test-rust-${{ runner.os }}"
+          # Save cache on main merges AND PR runs so subsequent re-runs on
+          # the same PR branch also get cache hits.
+          save-if: "true"
       - name: Install ripgrep + acl
         # acl provides setfacl/getfacl. The broker's swtpm-dir hardening
         # resolves setfacl from the NixOS system path in production but falls
         # back to /usr/bin/setfacl; ubuntu-24.04 runners no longer ship acl
         # preinstalled, so the broker swtpm_dir ACL-add tests need it here.
         run: sudo apt-get update && sudo apt-get install -y ripgrep acl
-      - name: Provision sccache on PATH (pinned nixpkgs)
-        # Hosted runners ship rustup, so tests/test-rust.sh runs the gate with
-        # the system toolchain and never enters the nix shell that would supply
-        # sccache. Put the repo-pinned sccache on PATH (via $GITHUB_PATH, which
-        # propagates to later steps) so the NL_CI_SCCACHE opt-in actually wraps
-        # rustc instead of silently disabling itself when sccache is absent.
-        run: |
-          sccache_bin="$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#sccache)/bin"
-          echo "$sccache_bin" >> "$GITHUB_PATH"
-          "$sccache_bin/sccache" --version
       - name: Rust workspace gate
         run: make test-rust
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats || true
 
   test-proofs:
     needs: tier0
