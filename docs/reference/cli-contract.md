@@ -1857,6 +1857,103 @@ host destroy --dry-run: no nixling-owned resources to remove
 
 - In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 
+### `host migrate-storage`
+
+**Synopsis:** `nixling host migrate-storage [--dry-run | --apply | --rollback --from-checkpoint <id>] [--human | --json]`
+
+**Status**
+
+Plans the one-time breaking storage layout cutover. The current build is
+read-only for this verb: `--dry-run` emits a checkpoint ID, the exact
+rollback command, preflight requirements, preserved persistent data,
+cutover-only cleanup candidates, and fail-closed hazards. `--apply` and
+`--rollback` fail closed until the broker-backed mover ships.
+
+**Flags**
+
+| Flag | Type | Default | Semantics |
+| --- | --- | --- | --- |
+| `--dry-run` | boolean | required unless `--apply` or `--rollback` is set | Plan the storage cutover without moving or deleting host state. |
+| `--apply` | boolean | `false` | Apply the storage cutover. Currently returns a typed not-implemented envelope. |
+| `--rollback` | boolean | `false` | Roll back from a checkpoint. Currently returns a typed not-implemented envelope. |
+| `--from-checkpoint` | string | required with `--rollback` | Checkpoint ID from the dry-run plan. |
+| `--json` | boolean | `false` | Emit the dry-run plan or typed refusal envelope as JSON. |
+| `--human` | boolean | `false` | Emit the human dry-run plan. |
+
+**Arguments**
+
+| Argument | Semantics |
+| --- | --- |
+| _(none)_ | Storage cutover planning is global. |
+
+**Dry-run JSON shape**
+
+```json
+{
+  "command": "host migrate-storage",
+  "mode": "dry-run",
+  "checkpointId": "storage-cutover-…",
+  "rollbackCommand": "nixling host migrate-storage --rollback --from-checkpoint storage-cutover-…",
+  "vmCount": 2,
+  "vms": ["corp-vm", "work-vm"],
+  "preflightRequirements": [
+    "all nixling VMs stopped",
+    "nixlingd.service stopped",
+    "nixling-priv-broker.service stopped",
+    "net VMs stopped; guest routing, TAP connectivity, and dependent bridge traffic will be interrupted"
+  ],
+  "preserve": [
+    "per-VM swtpm NVRAM and swtpm identity markers",
+    "declared host bridges, TAP naming intent, nftables/NM/networkd ownership metadata, and network-preflight evidence"
+  ],
+  "cutoverOnlyCleanup": [
+    "/run/nixling-gpu",
+    "boot-scoped runtime socket files only after all nixling services are stopped"
+  ],
+  "failClosedHazards": [
+    "symlink or path traversal inside any moved path",
+    "recursive operations traversing hardlink farms or mutating shared /nix/store inodes",
+    "any attempt to unlink lock files during cutover rather than leaving /run locks for reboot/tmpfs cleanup"
+  ],
+  "applyStatus": "not-implemented-in-this-build"
+}
+```
+
+**Exit codes**
+
+| Code | Meaning | Typed error / reference |
+| --- | --- | --- |
+| `0` | Dry-run plan rendered. | — |
+| `2` | Unknown flag or invalid flag combination. | [`usage`](./error-codes.md#usage) |
+| `78` | `--apply` or `--rollback` requested before the broker-backed mover is available. | `storage-migration-apply-not-implemented`, `storage-migration-rollback-not-implemented` |
+
+**Human example**
+
+```text
+$ nixling host migrate-storage --dry-run
+host migrate-storage --dry-run: checkpoint=storage-cutover-… vm_count=2
+rollback command: nixling host migrate-storage --rollback --from-checkpoint storage-cutover-…
+preflight requirements:
+  - all nixling VMs stopped
+  - nixlingd.service stopped
+  - nixling-priv-broker.service stopped
+  - net VMs stopped; guest routing, TAP connectivity, and dependent bridge traffic will be interrupted
+```
+
+**Native**
+
+- `--dry-run` is a rust-native read-only planner.
+- `--apply` and `--rollback` fail closed with typed exit-78 envelopes until the
+  broker-backed mover lands. There is no bash fallback and no manual
+  chmod/chown/setfacl remediation.
+
+**Bash**
+
+- No bash implementation exists. The Rust CLI owns this surface.
+
+The dry-run text deliberately avoids manual `chmod`/`chown`/`setfacl`
+instructions. Operators should treat the checkpoint ID and rollback command as
+the handoff contract for the later broker-backed cutover implementation.
 
 ### `host reconcile-otel-acls` (reserved)
 
@@ -2579,6 +2676,7 @@ detached state lives in guestd's detached registry).
 | `host prepare` | `rust-native` | The Rust CLI owns dry-run output (wired live); `--apply` is **not yet wired** — it returns the typed `daemon-down` envelope (exit `1`) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will route through the daemon-backed `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` / `ApplyNmUnmanaged` sequence, with broker failures surfacing `broker-error` (exit `78`); a Tier-0 host is refused today (exit `78`). The historical bash fallback was retired in v1.0. |
 | `host destroy` | `rust-native` | The Rust CLI owns dry-run output (wired live); `--apply` is **not yet wired** — it returns the typed `daemon-down` envelope (exit `1`) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will route through the reverse-order daemon-backed host-reconcile sequence, with broker failures surfacing `broker-error` (exit `78`); a Tier-0 host is refused today (exit `78`). The historical bash fallback was retired in v1.0. |
 | `host doctor` | `rust-native` | Host doctor is a read-only daemon health probe; `--read-only` is mandatory and there is no bash fallback for mutation forms. |
+| `host migrate-storage` | `rust-native` | Storage cutover dry-run planning is native and read-only; `--apply` / `--rollback` fail closed until the broker-backed mover lands. |
 | `host install` | `rust-native` | Host install owns its dry-run preview in Rust and routes `--apply` through the daemon → broker `RunHostInstall` path without broker-error fallback to bash. |
 | `migrate` | `rust-native` | Dry-run analysis is native; `--apply` routes through `nixlingd` → broker `RunMigrate`. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `auth status` | `rust-native` | Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints. |

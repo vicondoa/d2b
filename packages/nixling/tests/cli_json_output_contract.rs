@@ -642,6 +642,104 @@ fn host_lifecycle_dry_run_outputs_match_goldens() {
 }
 
 #[test]
+fn host_migrate_storage_dry_run_json_reports_checkpoint_and_rollback() {
+    let Some(env) = FixtureEnv::new() else {
+        return;
+    };
+    let out = env.run(&["host", "migrate-storage", "--dry-run", "--json"], &[]);
+    assert_success(&out, "host migrate-storage --dry-run --json");
+    let value: Value = serde_json::from_slice(&out.stdout).expect("parse migrate-storage JSON");
+    assert_eq!(value["command"], "host migrate-storage");
+    assert_eq!(value["mode"], "dry-run");
+    let checkpoint = value["checkpointId"].as_str().expect("checkpointId string");
+    assert!(checkpoint.starts_with("storage-cutover-"));
+    assert!(
+        value["rollbackCommand"]
+            .as_str()
+            .expect("rollback command string")
+            .contains(checkpoint)
+    );
+    assert_eq!(value["applyStatus"], "not-implemented-in-this-build");
+    assert!(
+        value["preserve"]
+            .as_array()
+            .expect("preserve array")
+            .iter()
+            .any(|entry| entry.as_str().is_some_and(|s| s.contains("swtpm NVRAM")))
+    );
+    assert!(
+        value["preflightRequirements"]
+            .as_array()
+            .expect("preflight array")
+            .iter()
+            .any(|entry| entry
+                .as_str()
+                .is_some_and(|s| s.contains("net VMs stopped")))
+    );
+    assert!(
+        value["failClosedHazards"]
+            .as_array()
+            .expect("hazards array")
+            .iter()
+            .any(|entry| entry
+                .as_str()
+                .is_some_and(|s| s.contains("unlink lock files")))
+    );
+}
+
+#[test]
+fn host_migrate_storage_apply_fails_closed_without_mutation() {
+    let Some(env) = FixtureEnv::new() else {
+        return;
+    };
+    let out = env.run(&["host", "migrate-storage", "--apply", "--json"], &[]);
+    assert!(
+        !out.status.success(),
+        "apply should fail closed until broker support lands"
+    );
+    let value: Value = serde_json::from_slice(&out.stdout).expect("parse apply refusal JSON");
+    assert_eq!(value["code"], "storage-migration-apply-not-implemented");
+    assert_eq!(value["exitCode"], 78);
+    assert!(
+        value["remediation"]
+            .as_str()
+            .expect("remediation")
+            .contains("host migrate-storage --dry-run")
+    );
+}
+
+#[test]
+fn host_migrate_storage_rollback_fails_closed_without_mutation() {
+    let Some(env) = FixtureEnv::new() else {
+        return;
+    };
+    let out = env.run(
+        &[
+            "host",
+            "migrate-storage",
+            "--rollback",
+            "--from-checkpoint",
+            "storage-cutover-test",
+            "--json",
+        ],
+        &[],
+    );
+    assert!(
+        !out.status.success(),
+        "rollback should fail closed until broker support lands"
+    );
+    let value: Value = serde_json::from_slice(&out.stdout).expect("parse rollback refusal JSON");
+    assert_eq!(value["code"], "storage-migration-rollback-not-implemented");
+    assert_eq!(value["exitCode"], 78);
+    assert!(
+        value["observedState"]
+            .as_str()
+            .expect("observed state")
+            .contains("storage-cutover-test")
+    );
+}
+
+#[test]
 fn usb_dry_run_outputs_match_goldens() {
     let Some(env) = FixtureEnv::new() else {
         return;
