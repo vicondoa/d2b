@@ -23,14 +23,11 @@ let
     font-monospace-warn=no
   '';
 
-  # The relay bridge (sender side): tunnels the waypipe stream out over
-  # the Azure Relay hybrid connection. Built from the same nixpkgs so it
-  # links the image's glibc and runs inside the sandbox. The source is
-  # filtered to exclude the cargo `target/` dir.
-  # The productionized relay endpoint binary (nixling-relay), built from the
-  # main workspace. Replaces the POC relay-bridge: the in-sandbox agent runs
-  # `nixling-relay sender` authenticated by the sandbox managed identity
-  # (Entra bearer, plane 2) — no SAS key enters the workload.
+  # The handshake-gated relay endpoint binary, built from the main workspace.
+  # The gateway-generated in-sandbox command runs `nixling-gateway-relay
+  # sender` authenticated by the sandbox managed identity (Entra bearer,
+  # plane 2) and sends the nixling per-session display credential as the relay
+  # prologue before any Waypipe byte flows.
   nixlingRelaySrc = builtins.path {
     name = "nixling-packages-src";
     path = ../../../packages;
@@ -41,8 +38,8 @@ let
       in
       base != "target" && base != ".cargo";
   };
-  nixlingRelay = pkgs.rustPlatform.buildRustPackage {
-    pname = "nixling-relay";
+  nixlingGatewayRelay = pkgs.rustPlatform.buildRustPackage {
+    pname = "nixling-gateway-relay";
     version = "0.0.0-bootstrap";
     src = nixlingRelaySrc;
     cargoLock = {
@@ -51,23 +48,56 @@ let
     };
     cargoBuildFlags = [
       "-p"
-      "nixling-provider-relay"
+      "nixling-gateway-runtime"
       "--bin"
-      "nixling-relay"
+      "nixling-gateway-relay"
     ];
     env.CARGO_BUILD_RUSTC_WRAPPER = "";
     doCheck = false;
   };
 
-  # The in-sandbox agent: fetches the MI Entra token, runs `nixling-relay
-  # sender`, then `waypipe server` + the app (see bridge/nixling-sandbox-agent.sh).
+  msiTokenHelper = pkgs.writeShellApplication {
+    name = "nl-msi-token";
+    runtimeInputs = [
+      pkgs.bashInteractive
+      pkgs.coreutils
+    ];
+    text = ''
+      set -euo pipefail
+      resource="''${1:?usage: nl-msi-token <resource>}"
+      ep="''${IDENTITY_ENDPOINT:?IDENTITY_ENDPOINT not injected}"
+      rest="''${ep#http://}"
+      hostport="''${rest%%/*}"
+      path="/''${rest#*/}"
+      host="''${hostport%%:*}"
+      port="''${hostport##*:}"
+      [ "$host" = "$port" ] && port=80
+      resource_enc="''${resource//:/%3A}"
+      resource_enc="''${resource_enc//\\//%2F}"
+      q="?api-version=2019-08-01&resource=$resource_enc"
+      exec 3<>"/dev/tcp/$host/$port"
+      printf 'GET %s%s HTTP/1.1\r\nHost: %s\r\nX-IDENTITY-HEADER: %s\r\nMetadata: true\r\nConnection: close\r\n\r\n' \
+        "$path" "$q" "$host" "''${IDENTITY_HEADER:-}" >&3
+      out="$(cat <&3)"
+      exec 3>&-
+      out="''${out#*\"access_token\":\"}"
+      token="''${out%%\"*}"
+      [ -n "$token" ] && [ "$token" != "$out" ]
+      printf '%s\n' "$token"
+    '';
+  };
+
+  # The in-sandbox legacy entrypoint remains available for manual probes; the
+  # gateway-generated command uses `nixling-gateway-relay` and `nl-msi-token`
+  # directly.
   agent = pkgs.writeShellApplication {
     name = "nixling-sandbox-agent";
     runtimeInputs = [
       pkgs.waypipe
       pkgs.foot
       pkgs.coreutils
-      nixlingRelay
+      nixlingGatewayRelay
+      msiTokenHelper
     ];
     text = builtins.readFile ./bridge/nixling-sandbox-agent.sh;
   };
@@ -85,7 +115,8 @@ pkgs.dockerTools.buildLayeredImage {
     pkgs.fontconfig
     pkgs.cacert
     agent
-    nixlingRelay
+    nixlingGatewayRelay
+    msiTokenHelper
     footConfig
     pkgs.dockerTools.fakeNss # minimal /etc/passwd + /etc/group + nobody
   ];

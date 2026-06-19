@@ -2638,7 +2638,7 @@ fn relay_coords_from_config(config: &GatewayFileConfig) -> Result<RelayCoords, G
     Ok(RelayCoords {
         namespace: required_gateway_field(&config.relay.namespace)?,
         entity: required_gateway_field(&config.relay.entity)?,
-        ca_file: None,
+        ca_file: Some("/etc/ssl/certs/adc-egress-proxy-ca.crt".to_owned()),
     })
 }
 
