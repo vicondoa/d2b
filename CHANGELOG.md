@@ -26,6 +26,10 @@ deprecations ship one minor release before removal.
 - CLI: `nixling host doctor --read-only` now surfaces
   `storage-lifecycle-report.json` with bounded issue kinds and inline
   remediation for storage/restart/sync contract drift.
+- CLI: added `nixling host migrate-storage --dry-run`, which emits a
+  checkpoint ID, exact rollback command, preserved-data inventory,
+  cutover-only cleanup candidates, and fail-closed hazards for the
+  planned storage layout migration.
 - Tests: added storage lifecycle report schema and serialization
   regression coverage so doctor/status consumers see the same camelCase
   contract that the daemon writes.

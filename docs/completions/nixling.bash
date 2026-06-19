@@ -292,6 +292,9 @@ _nixling() {
             nixling__subcmd__help__subcmd__host,install)
                 cmd="nixling__subcmd__help__subcmd__host__subcmd__install"
                 ;;
+            nixling__subcmd__help__subcmd__host,migrate-storage)
+                cmd="nixling__subcmd__help__subcmd__host__subcmd__migrate__subcmd__storage"
+                ;;
             nixling__subcmd__help__subcmd__host,prepare)
                 cmd="nixling__subcmd__help__subcmd__host__subcmd__prepare"
                 ;;
@@ -355,6 +358,9 @@ _nixling() {
             nixling__subcmd__host,install)
                 cmd="nixling__subcmd__host__subcmd__install"
                 ;;
+            nixling__subcmd__host,migrate-storage)
+                cmd="nixling__subcmd__host__subcmd__migrate__subcmd__storage"
+                ;;
             nixling__subcmd__host,prepare)
                 cmd="nixling__subcmd__host__subcmd__prepare"
                 ;;
@@ -378,6 +384,9 @@ _nixling() {
                 ;;
             nixling__subcmd__host__subcmd__help,install)
                 cmd="nixling__subcmd__host__subcmd__help__subcmd__install"
+                ;;
+            nixling__subcmd__host__subcmd__help,migrate-storage)
+                cmd="nixling__subcmd__host__subcmd__help__subcmd__migrate__subcmd__storage"
                 ;;
             nixling__subcmd__host__subcmd__help,prepare)
                 cmd="nixling__subcmd__host__subcmd__help__subcmd__prepare"
@@ -1355,7 +1364,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__help__subcmd__host)
-            opts="check prepare destroy doctor install reconcile validate"
+            opts="check prepare destroy doctor migrate-storage install reconcile validate"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1411,6 +1420,20 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__help__subcmd__host__subcmd__install)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__help__subcmd__host__subcmd__migrate__subcmd__storage)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1845,7 +1868,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__host)
-            opts="-h --help check prepare destroy doctor install reconcile validate help"
+            opts="-h --help check prepare destroy doctor migrate-storage install reconcile validate help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1901,7 +1924,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__host__subcmd__help)
-            opts="check prepare destroy doctor install reconcile validate help"
+            opts="check prepare destroy doctor migrate-storage install reconcile validate help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1984,6 +2007,20 @@ _nixling() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        nixling__subcmd__host__subcmd__help__subcmd__migrate__subcmd__storage)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         nixling__subcmd__host__subcmd__help__subcmd__prepare)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
@@ -2033,6 +2070,24 @@ _nixling() {
                 return 0
             fi
             case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__host__subcmd__migrate__subcmd__storage)
+            opts="-h --dry-run --apply --rollback --from-checkpoint --json --human --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --from-checkpoint)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
