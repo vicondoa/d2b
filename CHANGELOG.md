@@ -16,6 +16,10 @@ deprecations ship one minor release before removal.
   `sync.json` contracts for managed paths, process restart/adoption
   policies, degraded-state taxonomy, and lock/lease synchronization
   policy.
+- Broker: added bundle-resolved `ReconcileStorageScope` and
+  `ValidateLockSpec` operations so storage and synchronization contracts
+  can be inspected and, for static directory specs, reconciled without
+  daemon-supplied raw paths.
 - Documentation: ADR 0034 and the storage lifecycle explanation now
   define the planned generated contracts for managed paths, process
   restart/adoption, synchronization, lock ownership, degraded-state
