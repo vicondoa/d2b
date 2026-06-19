@@ -4,6 +4,7 @@ pub mod base64_codec;
 pub mod bundle;
 pub mod bundle_resolver;
 pub mod closures;
+pub mod contract_id;
 pub mod error;
 pub mod host;
 pub mod host_check;
@@ -15,6 +16,8 @@ pub mod privileges;
 pub mod privileges_w3;
 pub mod processes;
 pub mod static_invariants;
+pub mod storage;
+pub mod sync;
 
 // `test_support` is needed both by external crates (which opt in via the
 // `test-support` feature) and by nixling-core's OWN tests. Gating on

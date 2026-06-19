@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Bundle {
-    /// Version of the bundle format; the current additive LiveNative
-    /// mutating-verb rev is bundleVersion 4 while artifact
+    /// Version of the bundle format; bundleVersion 6 adds the private
+    /// storage lifecycle and synchronization artifacts while artifact
     /// schemaVersion stays v2.
     pub bundle_version: u32,
     /// Schema version directory used to validate all artifacts in this bundle.
@@ -22,6 +22,12 @@ pub struct Bundle {
     pub processes_path: String,
     /// Private privileges.json artifact path.
     pub privileges_path: String,
+    /// Private storage lifecycle artifact path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_path: Option<String>,
+    /// Private synchronization/lock contract artifact path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_path: Option<String>,
     /// Per-VM closure artifact paths keyed by VM name.
     pub closures: Vec<BundleClosureRef>,
     /// Minijail profile metadata paths shipped with the bundle.
@@ -46,9 +52,10 @@ pub struct Bundle {
     /// bundle artifact loaded by the resolver.
     ///
     /// Keys match the path strings stored in the bundle path fields:
-    /// absolute paths for `host_path`, `processes_path`, `privileges_path`;
-    /// bundle-relative paths for `closures[*].path` and
-    /// `minijail_profiles[*].path`.  Values are `"sha256:<hex64>"` strings.
+    /// absolute paths for `host_path`, `processes_path`, `privileges_path`,
+    /// `storage_path`, and `sync_path`; bundle-relative paths for
+    /// `closures[*].path` and `minijail_profiles[*].path`. Values are
+    /// `"sha256:<hex64>"` strings.
     ///
     /// When `None`, per-artifact hash verification is skipped (backwards
     /// compatibility with bundles that pre-date this field).

@@ -266,6 +266,8 @@ mod tests {
             host_path: "host.json".to_owned(),
             processes_path: "processes.json".to_owned(),
             privileges_path: "privileges.json".to_owned(),
+            storage_path: None,
+            sync_path: None,
             closures: Vec::new(),
             minijail_profiles: Vec::new(),
             managed_keys: Default::default(),

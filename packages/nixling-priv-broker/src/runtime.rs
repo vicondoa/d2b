@@ -6906,6 +6906,8 @@ mod tests {
             host_path: "host.json".to_owned(),
             processes_path: "processes.json".to_owned(),
             privileges_path: "privileges.json".to_owned(),
+            storage_path: None,
+            sync_path: None,
             closures: vec![BundleClosureRef {
                 vm: "corp-vm".to_owned(),
                 path: "closures/corp-vm.json".to_owned(),

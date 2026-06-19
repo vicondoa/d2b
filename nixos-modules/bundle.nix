@@ -50,6 +50,14 @@ let
         key = "/etc/nixling/privileges.json";
         path = config.nixling._bundle.privilegesJson.path;
       }
+      {
+        key = "/etc/nixling/storage.json";
+        path = config.nixling._bundle.storageJson.path;
+      }
+      {
+        key = "/etc/nixling/sync.json";
+        path = config.nixling._bundle.syncJson.path;
+      }
     ]
     ++ map (ref: {
       key = ref.path;
@@ -68,12 +76,14 @@ let
   # presence of this field; the resolver nullifies it before comparing.
   dataWithoutHash = {
     artifactHashes = null;
-    bundleVersion = 5;
+    bundleVersion = 6;
     schemaVersion = "v2";
     publicManifestPath = "/run/current-system/sw/share/nixling/vms.json";
     hostPath = "/etc/nixling/host.json";
     processesPath = "/etc/nixling/processes.json";
     privilegesPath = "/etc/nixling/privileges.json";
+    storagePath = "/etc/nixling/storage.json";
+    syncPath = "/etc/nixling/sync.json";
     closures = closureRefs;
     minijailProfiles = profileRefs;
     managedKeys = {

@@ -1,0 +1,620 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StorageJson",
+  "type": "object",
+  "required": [
+    "paths",
+    "schemaVersion"
+  ],
+  "properties": {
+    "degradedStates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/DegradedStateSpec"
+      }
+    },
+    "paths": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/StoragePathSpec"
+      }
+    },
+    "remediations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/RemediationSpec"
+      }
+    },
+    "restartPolicies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ProcessRestartPolicy"
+      }
+    },
+    "roots": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/StorageRoot"
+      }
+    },
+    "schemaVersion": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AclGrant": {
+      "type": "object",
+      "required": [
+        "permissions",
+        "principal"
+      ],
+      "properties": {
+        "permissions": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "principal": {
+          "$ref": "#/definitions/PrincipalRef"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ActorKind": {
+      "type": "string",
+      "enum": [
+        "nix-module",
+        "daemon",
+        "broker",
+        "role",
+        "guest",
+        "operator",
+        "external"
+      ]
+    },
+    "ActorRef": {
+      "type": "object",
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/ActorKind"
+        },
+        "value": {
+          "$ref": "#/definitions/ContractId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AdoptionInputs": {
+      "type": "object",
+      "properties": {
+        "cgroupLeaf": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "identityChecks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/IdentityCheck"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "CleanupPolicy": {
+      "type": "string",
+      "enum": [
+        "never",
+        "boot",
+        "process-exit-with-proof",
+        "vm-stop-with-proof",
+        "cutover-only",
+        "external"
+      ]
+    },
+    "ContractId": {
+      "description": "Bounded storage/synchronization contract identifier.",
+      "type": "string",
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "ContractText": {
+      "description": "Bounded human-readable contract text.",
+      "type": "string",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000]*$"
+    },
+    "DegradeScope": {
+      "type": "string",
+      "enum": [
+        "role",
+        "vm",
+        "host",
+        "realm"
+      ]
+    },
+    "DegradedReason": {
+      "type": "string",
+      "enum": [
+        "storage-drift",
+        "storage-repair-failed",
+        "adoption-pending",
+        "adoption-quarantined",
+        "restart-required",
+        "lock-owner-ambiguous",
+        "lock-acquire-timeout",
+        "external-dependency-unhealthy",
+        "migration-required",
+        "migration-failed",
+        "violation-audit-throttled",
+        "role-component-degraded"
+      ]
+    },
+    "DegradedStateSpec": {
+      "type": "object",
+      "required": [
+        "reason",
+        "remediationId",
+        "scope",
+        "storageClass"
+      ],
+      "properties": {
+        "reason": {
+          "$ref": "#/definitions/DegradedReason"
+        },
+        "remediationId": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "scope": {
+          "$ref": "#/definitions/DegradeScope"
+        },
+        "storageClass": {
+          "$ref": "#/definitions/LedgerStorageClass"
+        }
+      },
+      "additionalProperties": false
+    },
+    "IdentityCheck": {
+      "type": "string",
+      "enum": [
+        "cgroup-membership",
+        "executable-path",
+        "profile-id",
+        "cmdline-shape",
+        "start-time-diagnostic",
+        "pidfd-open-after-candidate-read"
+      ]
+    },
+    "LeaseClass": {
+      "type": "string",
+      "enum": [
+        "none",
+        "process-pidfd",
+        "cgroup-leaf",
+        "file-record",
+        "external"
+      ]
+    },
+    "LedgerStorageClass": {
+      "type": "string",
+      "enum": [
+        "tamper-evident-segmented",
+        "append-only-bounded",
+        "plain-bounded-diagnostic"
+      ]
+    },
+    "PathTemplate": {
+      "description": "Absolute path template with typed variables expanded by the broker.",
+      "type": "string",
+      "maxLength": 1024,
+      "minLength": 1,
+      "pattern": "^/[^\\u0000]*$"
+    },
+    "PrincipalKind": {
+      "type": "string",
+      "enum": [
+        "user",
+        "group",
+        "uid",
+        "gid",
+        "role",
+        "none"
+      ]
+    },
+    "PrincipalRef": {
+      "type": "object",
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/PrincipalKind"
+        },
+        "value": {
+          "$ref": "#/definitions/ContractId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProcessRestartPolicy": {
+      "type": "object",
+      "required": [
+        "adoptionInputs",
+        "cleanupBeforeRestart",
+        "degradeOnFailure",
+        "degradeScope",
+        "readinessAfterAdopt",
+        "remediationId",
+        "restartClass",
+        "roleId",
+        "vm"
+      ],
+      "properties": {
+        "adoptionInputs": {
+          "$ref": "#/definitions/AdoptionInputs"
+        },
+        "cleanupBeforeRestart": {
+          "type": "boolean"
+        },
+        "degradeOnFailure": {
+          "$ref": "#/definitions/DegradedReason"
+        },
+        "degradeScope": {
+          "$ref": "#/definitions/DegradeScope"
+        },
+        "persistentStateRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ContractId"
+          }
+        },
+        "readinessAfterAdopt": {
+          "$ref": "#/definitions/ReadinessAfterAdopt"
+        },
+        "remediationId": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "restartClass": {
+          "$ref": "#/definitions/RestartClass"
+        },
+        "roleId": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "runtimeStateRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ContractId"
+          }
+        },
+        "vm": {
+          "$ref": "#/definitions/ContractId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReadinessAfterAdopt": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/ReadinessAfterAdoptKind"
+        },
+        "storageRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReadinessAfterAdoptKind": {
+      "type": "string",
+      "enum": [
+        "existing-predicate",
+        "unix-socket-listening",
+        "pidfd-alive",
+        "external-probe",
+        "none"
+      ]
+    },
+    "RemediationSpec": {
+      "type": "object",
+      "required": [
+        "command",
+        "description",
+        "id"
+      ],
+      "properties": {
+        "command": {
+          "$ref": "#/definitions/ContractText"
+        },
+        "description": {
+          "$ref": "#/definitions/ContractText"
+        },
+        "id": {
+          "$ref": "#/definitions/ContractId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RepairPolicy": {
+      "type": "string",
+      "enum": [
+        "none",
+        "nix-activation",
+        "broker-reconcile",
+        "broker-fail-closed",
+        "operator-only"
+      ]
+    },
+    "RestartClass": {
+      "type": "string",
+      "enum": [
+        "adoptable",
+        "recreatable",
+        "stateful-quarantine",
+        "non-resumable",
+        "external-observed"
+      ]
+    },
+    "SensitivityClass": {
+      "type": "string",
+      "enum": [
+        "public",
+        "private",
+        "secret-adjacent",
+        "audit",
+        "realm-scoped"
+      ]
+    },
+    "StorageAdoptionPolicy": {
+      "type": "string",
+      "enum": [
+        "adopt-with-live-owner-proof",
+        "recreate-from-persistent",
+        "quarantine-on-ambiguity",
+        "delete-if-owner-dead",
+        "not-adoptable"
+      ]
+    },
+    "StorageAuthority": {
+      "type": "string",
+      "enum": [
+        "nix-module",
+        "daemon",
+        "broker",
+        "guest",
+        "external"
+      ]
+    },
+    "StorageInvariant": {
+      "type": "string",
+      "enum": [
+        "no-symlink",
+        "no-magic-link",
+        "no-recursive-mutation",
+        "same-filesystem",
+        "hardlink-farm-no-recursion",
+        "broker-opaque-id-only",
+        "root-owned-parent",
+        "scope-authorization-required"
+      ]
+    },
+    "StorageLifecycle": {
+      "type": "string",
+      "enum": [
+        "config",
+        "persistent",
+        "boot-scoped-readoptable",
+        "boot-scoped-disposable",
+        "process-scoped",
+        "external-observe-only"
+      ]
+    },
+    "StoragePathKind": {
+      "type": "string",
+      "enum": [
+        "directory",
+        "regular-file",
+        "unix-socket",
+        "symlink",
+        "device-node",
+        "external-grant-only"
+      ]
+    },
+    "StoragePathSpec": {
+      "type": "object",
+      "required": [
+        "adoptionPolicy",
+        "cleanupPolicy",
+        "creator",
+        "group",
+        "id",
+        "kind",
+        "leaseClass",
+        "lifecycle",
+        "mode",
+        "noFollow",
+        "owner",
+        "pathTemplate",
+        "persistence",
+        "recursive",
+        "repairPolicy",
+        "restartPolicy",
+        "scope",
+        "sensitivity"
+      ],
+      "properties": {
+        "accessAcl": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AclGrant"
+          }
+        },
+        "adoptionPolicy": {
+          "$ref": "#/definitions/StorageAdoptionPolicy"
+        },
+        "cleanupPolicy": {
+          "$ref": "#/definitions/CleanupPolicy"
+        },
+        "creator": {
+          "$ref": "#/definitions/ActorRef"
+        },
+        "defaultAcl": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AclGrant"
+          }
+        },
+        "group": {
+          "$ref": "#/definitions/PrincipalRef"
+        },
+        "id": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "invariants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/StorageInvariant"
+          }
+        },
+        "kind": {
+          "$ref": "#/definitions/StoragePathKind"
+        },
+        "leaseClass": {
+          "$ref": "#/definitions/LeaseClass"
+        },
+        "lifecycle": {
+          "$ref": "#/definitions/StorageLifecycle"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "noFollow": {
+          "type": "boolean"
+        },
+        "owner": {
+          "$ref": "#/definitions/PrincipalRef"
+        },
+        "pathTemplate": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "persistence": {
+          "$ref": "#/definitions/StoragePersistence"
+        },
+        "readers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ActorRef"
+          }
+        },
+        "recursive": {
+          "type": "boolean"
+        },
+        "repairPolicy": {
+          "$ref": "#/definitions/RepairPolicy"
+        },
+        "restartPolicy": {
+          "$ref": "#/definitions/StorageRestartPolicy"
+        },
+        "scope": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "sensitivity": {
+          "$ref": "#/definitions/SensitivityClass"
+        },
+        "writers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ActorRef"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "StoragePersistence": {
+      "type": "string",
+      "enum": [
+        "persistent",
+        "boot-scoped",
+        "process-scoped",
+        "regenerable",
+        "external"
+      ]
+    },
+    "StorageRestartPolicy": {
+      "type": "string",
+      "enum": [
+        "preserve-across-daemon-restart",
+        "recreate-after-owner-death",
+        "cleanup-after-owner-death",
+        "manual-recovery",
+        "not-applicable"
+      ]
+    },
+    "StorageRoot": {
+      "type": "object",
+      "required": [
+        "authority",
+        "class",
+        "group",
+        "id",
+        "mode",
+        "owner",
+        "path"
+      ],
+      "properties": {
+        "authority": {
+          "$ref": "#/definitions/StorageAuthority"
+        },
+        "class": {
+          "$ref": "#/definitions/StorageRootClass"
+        },
+        "group": {
+          "$ref": "#/definitions/PrincipalRef"
+        },
+        "id": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/definitions/PrincipalRef"
+        },
+        "path": {
+          "$ref": "#/definitions/PathTemplate"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StorageRootClass": {
+      "type": "string",
+      "enum": [
+        "config",
+        "persistent",
+        "runtime",
+        "cache",
+        "external-observe-only"
+      ]
+    }
+  }
+}
