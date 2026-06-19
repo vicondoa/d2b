@@ -12,6 +12,7 @@
 //! display runner).
 
 use async_trait::async_trait;
+use std::sync::{Mutex, MutexGuard};
 
 use crate::audit::{GatewayAudit, GatewayAuditEvent, GatewayAuditKind, display_envelope};
 use crate::error::GatewayError;
@@ -128,7 +129,7 @@ pub struct GatewayDeps {
 /// drives `open`/`close` for display sessions.
 pub struct GatewayOrchestrator {
     deps: GatewayDeps,
-    ledger: SessionLedger,
+    ledger: Mutex<SessionLedger>,
     ttl_secs: u64,
 }
 
@@ -149,19 +150,25 @@ impl GatewayOrchestrator {
     pub fn new(deps: GatewayDeps, generation: u64, limits: LedgerLimits) -> Self {
         Self {
             deps,
-            ledger: SessionLedger::new(generation, limits),
+            ledger: Mutex::new(SessionLedger::new(generation, limits)),
             ttl_secs: DEFAULT_SESSION_TTL_SECS,
         }
     }
 
+    fn ledger(&self) -> Result<MutexGuard<'_, SessionLedger>, GatewayError> {
+        self.ledger.lock().map_err(|_| GatewayError::Internal)
+    }
+
     /// The owning gateway generation.
     pub fn generation(&self) -> u64 {
-        self.ledger.generation()
+        self.ledger()
+            .map(|ledger| ledger.generation())
+            .unwrap_or_default()
     }
 
     /// The current state of a session, if tracked.
     pub fn state(&self, id: &DisplaySessionId) -> Option<SessionState> {
-        self.ledger.state(id)
+        self.ledger().ok().and_then(|ledger| ledger.state(id))
     }
 
     /// Open a display session for `ctx_seed` (which carries the realm,
@@ -170,7 +177,7 @@ impl GatewayOrchestrator {
     /// typed [`GatewayError`]. An idempotent replay of the same operation
     /// returns the original session without re-spawning.
     pub async fn open(
-        &mut self,
+        &self,
         realm_target: TargetKey,
         ctx_seed: ContextSeed,
         app: AppCommand,
@@ -178,17 +185,21 @@ impl GatewayOrchestrator {
     ) -> Result<OpenSession, GatewayError> {
         let new_id = self.deps.ids.new_session_id();
         // 1. Ledger admission (idempotency / single-session cap / quotas).
-        let outcome = match self.ledger.open(
-            realm_target,
-            ctx_seed.principal.as_str(),
-            ctx_seed.operation_id.as_str(),
-            request_hash,
-            new_id,
-        ) {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                self.audit_open_denied(&ctx_seed, err.clone())?;
-                return Err(err);
+        let outcome = {
+            let mut ledger = self.ledger()?;
+            match ledger.open(
+                realm_target,
+                ctx_seed.principal.as_str(),
+                ctx_seed.operation_id.as_str(),
+                request_hash,
+                new_id,
+            ) {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    drop(ledger);
+                    self.audit_open_denied(&ctx_seed, err.clone())?;
+                    return Err(err);
+                }
             }
         };
         let session_id = match outcome {
@@ -208,7 +219,7 @@ impl GatewayOrchestrator {
         // 2. Mint the one-shot credential bound to the authorizing operation.
         let now = self.deps.clock.now_unix();
         let not_after = now.saturating_add(self.ttl_secs);
-        let generation = self.ledger.generation();
+        let generation = self.ledger()?.generation();
         let ctx = DisplaySessionContext {
             session_id: session_id.clone(),
             operation_id: ctx_seed.operation_id.clone(),
@@ -245,7 +256,7 @@ impl GatewayOrchestrator {
     }
 
     async fn drive_open(
-        &mut self,
+        &self,
         ctx: &DisplaySessionContext,
         binding: &SessionBinding,
         secret: &SessionSecret,
@@ -253,7 +264,7 @@ impl GatewayOrchestrator {
     ) -> Result<OpenSession, GatewayError> {
         let id = &ctx.session_id;
         // Minting -> AgentSpawning
-        self.ledger.transition(id, SessionState::AgentSpawning)?;
+        self.ledger()?.transition(id, SessionState::AgentSpawning)?;
         let spawn = AgentSpawnRequest {
             ctx: ctx.clone(),
             binding: binding.clone(),
@@ -263,16 +274,17 @@ impl GatewayOrchestrator {
         let agent = self.deps.workload.spawn_agent(&spawn).await?;
 
         // AgentSpawning -> ListenerArming
-        self.ledger.transition(id, SessionState::ListenerArming)?;
+        self.ledger()?
+            .transition(id, SessionState::ListenerArming)?;
         let listener = self.deps.listener.arm(ctx, binding, secret).await?;
 
         // ListenerArming -> AwaitingHandshake
-        self.ledger
+        self.ledger()?
             .transition(id, SessionState::AwaitingHandshake)?;
         self.deps.listener.await_handshake(&listener).await?;
 
         // AwaitingHandshake -> Running
-        self.ledger.transition(id, SessionState::Running)?;
+        self.ledger()?.transition(id, SessionState::Running)?;
         Ok(OpenSession {
             session_id: id.clone(),
             agent,
@@ -280,21 +292,30 @@ impl GatewayOrchestrator {
         })
     }
 
-    async fn fail_session(&mut self, id: &DisplaySessionId) -> Result<(), GatewayError> {
+    async fn fail_session(&self, id: &DisplaySessionId) -> Result<(), GatewayError> {
         // Best-effort: the handles may not exist yet; cleanup is idempotent.
-        let _ = self.ledger.transition(id, SessionState::Failed);
+        let _ = self
+            .ledger
+            .lock()
+            .map(|mut ledger| ledger.transition(id, SessionState::Failed));
         Ok(())
     }
 
     /// Close a live session: tear down the listener + agent, then mark Closed.
     /// Idempotent and cleanup-complete even on partial failure.
-    pub async fn close(&mut self, open: &OpenSession) -> Result<(), GatewayError> {
+    pub async fn close(&self, open: &OpenSession) -> Result<(), GatewayError> {
         let id = &open.session_id;
-        let _ = self.ledger.transition(id, SessionState::Stopping);
+        let _ = self
+            .ledger
+            .lock()
+            .map(|mut ledger| ledger.transition(id, SessionState::Stopping));
         // Tear down both sides regardless of individual errors.
         let l = self.deps.listener.close(&open.listener).await;
         let a = self.deps.workload.cleanup(&open.agent).await;
-        let _ = self.ledger.transition(id, SessionState::Closed);
+        let _ = self
+            .ledger
+            .lock()
+            .map(|mut ledger| ledger.transition(id, SessionState::Closed));
         l.and(a)
     }
 
@@ -555,8 +576,7 @@ mod tests {
     async fn happy_path_opens_to_running() {
         let w = Arc::new(MockWorkload::default());
         let l = Arc::new(MockListener::default());
-        let mut orch =
-            GatewayOrchestrator::new(deps(w.clone(), l.clone()), 1, LedgerLimits::default());
+        let orch = GatewayOrchestrator::new(deps(w.clone(), l.clone()), 1, LedgerLimits::default());
         let (tk, cs, app) = seed();
         let open = orch.open(tk, cs, app, 42).await.unwrap();
         assert_eq!(orch.state(&open.session_id), Some(SessionState::Running));
@@ -569,7 +589,7 @@ mod tests {
         let w = Arc::new(MockWorkload::default());
         let l = Arc::new(MockListener::default());
         let audit = Arc::new(RecordingAudit::default());
-        let mut orch = GatewayOrchestrator::new(
+        let orch = GatewayOrchestrator::new(
             deps_with_audit(w, l, Some(audit.clone())),
             1,
             LedgerLimits::default(),
@@ -607,8 +627,7 @@ mod tests {
             ..Default::default()
         });
         let l = Arc::new(MockListener::default());
-        let mut orch =
-            GatewayOrchestrator::new(deps(w.clone(), l.clone()), 1, LedgerLimits::default());
+        let orch = GatewayOrchestrator::new(deps(w.clone(), l.clone()), 1, LedgerLimits::default());
         let (tk, cs, app) = seed();
         let err = orch.open(tk, cs, app, 42).await.unwrap_err();
         assert_eq!(err, GatewayError::ProviderAllocationFailed);
@@ -625,8 +644,7 @@ mod tests {
             fail_handshake: true,
             ..Default::default()
         });
-        let mut orch =
-            GatewayOrchestrator::new(deps(w.clone(), l.clone()), 1, LedgerLimits::default());
+        let orch = GatewayOrchestrator::new(deps(w.clone(), l.clone()), 1, LedgerLimits::default());
         let (tk, cs, app) = seed();
         let err = orch.open(tk, cs, app, 42).await.unwrap_err();
         assert!(matches!(err, GatewayError::DisplayAuthFailed(_)));
@@ -639,8 +657,7 @@ mod tests {
     async fn close_tears_down_both_sides() {
         let w = Arc::new(MockWorkload::default());
         let l = Arc::new(MockListener::default());
-        let mut orch =
-            GatewayOrchestrator::new(deps(w.clone(), l.clone()), 1, LedgerLimits::default());
+        let orch = GatewayOrchestrator::new(deps(w.clone(), l.clone()), 1, LedgerLimits::default());
         let (tk, cs, app) = seed();
         let open = orch.open(tk, cs, app, 42).await.unwrap();
         orch.close(&open).await.unwrap();
@@ -653,8 +670,7 @@ mod tests {
     async fn idempotent_replay_returns_original_without_respawn() {
         let w = Arc::new(MockWorkload::default());
         let l = Arc::new(MockListener::default());
-        let mut orch =
-            GatewayOrchestrator::new(deps(w.clone(), l.clone()), 1, LedgerLimits::default());
+        let orch = GatewayOrchestrator::new(deps(w.clone(), l.clone()), 1, LedgerLimits::default());
         let (tk, cs, app) = seed();
         let first = orch
             .open(tk.clone(), cs.clone(), app.clone(), 42)
