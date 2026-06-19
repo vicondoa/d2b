@@ -24,7 +24,8 @@ rc=0
 for gate in \
   tests/unit/gates/drift-check.sh \
   tests/unit/gates/vms-json-parity.sh \
-  tests/unit/gates/flake-check-matrix-sync.sh; do
+  tests/unit/gates/flake-check-matrix-sync.sh \
+  tests/unit/gates/ci-rust-cache-sync.sh; do
   if [ -x "$ROOT/$gate" ]; then
     log "--> $gate"
     if bash "$ROOT/$gate"; then
