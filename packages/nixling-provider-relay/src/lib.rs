@@ -25,6 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use hmac::{Hmac, Mac};
+use rustls_pki_types::{CertificateDer, pem::PemObject};
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -306,10 +307,10 @@ fn tls_connector(ca_pem: Option<&[u8]>) -> Result<tokio_tungstenite::Connector, 
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     if let Some(pem) = ca_pem {
-        let mut reader = std::io::BufReader::new(pem);
-        for cert in rustls_pemfile::certs(&mut reader) {
-            let cert = cert.map_err(|_| RelayConnectError::BadRequest)?;
-            roots.add(cert).map_err(|_| RelayConnectError::BadRequest)?;
+        for cert in CertificateDer::pem_slice_iter(pem) {
+            roots
+                .add(cert.map_err(|_| RelayConnectError::BadRequest)?)
+                .map_err(|_| RelayConnectError::BadRequest)?;
         }
     }
     let config = rustls::ClientConfig::builder()
