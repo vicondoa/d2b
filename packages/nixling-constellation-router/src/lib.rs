@@ -412,7 +412,7 @@ impl<C: Clock> OperationRouter<C> {
                 _ => None,
             })
             .collect();
-        stale.sort_by(|a, b| b.age.cmp(&a.age));
+        stale.sort_by_key(|lease| std::cmp::Reverse(lease.age));
         stale
     }
 }

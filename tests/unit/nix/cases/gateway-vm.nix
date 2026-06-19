@@ -19,12 +19,24 @@ let
       index = 20;
       relay.namespace = "relns-example.servicebus.windows.net";
       relay.entity = "hc-nixling-display";
-      aca.endpoint = "https://example.azurecontainerapps.io";
+      aca = {
+        endpoint = "https://example.azurecontainerapps.io";
+        subscription = "00000000-0000-0000-0000-000000000000";
+        resourceGroup = "rg-nixling-centralus";
+        sandboxGroup = "casbx-nixling-demo";
+        region = "centralus";
+        image = "registry.example.azurecr.io/nixling-wayland:mi";
+        diskName = "nixling-wayland-mi";
+        managedIdentityResourceId = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/nixling";
+      };
+      display.waypipeSocket = "/run/user/1000/wpc.sock";
     };
   };
 
   goodCfg = (mkEval [ base ]).config;
   gatewayGuestCfg = goodCfg.nixling._computed."sys-work-gateway".config;
+  gatewayJson = builtins.fromJSON gatewayGuestCfg.environment.etc."nixling/gateway.json".text;
+  hostDaemonJson = builtins.fromJSON (builtins.readFile goodCfg.environment.etc."nixling/daemon-config.json".source);
   gatewayProc = lib.findFirst (vm: vm.vm == "sys-work-gateway") null
     goodCfg.nixling._bundle.processesJson.data.vms;
   badCfg = (mkEval [
@@ -33,6 +45,21 @@ let
     })
   ]).config;
   badMessages = map (a: a.message) (lib.filter (a: !a.assertion) badCfg.assertions);
+  multiGatewayCfg = (mkEval [
+    (lib.recursiveUpdate base {
+      nixling.envs.personal = {
+        lanSubnet = "10.45.0.0/24";
+        uplinkSubnet = "192.0.2.4/30";
+      };
+      nixling.gateways.personal = {
+        env = "personal";
+        index = 21;
+        relay.namespace = "relns-personal.servicebus.windows.net";
+        relay.entity = "hc-nixling-display";
+      };
+    })
+  ]).config;
+  multiGatewayMessages = map (a: a.message) (lib.filter (a: !a.assertion) multiGatewayCfg.assertions);
 in
 {
   "gateway-vm/auto-declared-name" = {
@@ -77,6 +104,18 @@ in
       hasNixlingd = builtins.hasAttr "nixlingd" gatewayGuestCfg.systemd.services;
       gatewayJson = builtins.hasAttr "nixling/gateway.json" gatewayGuestCfg.environment.etc;
       daemonJson = builtins.hasAttr "nixling/daemon-config.json" gatewayGuestCfg.environment.etc;
+      gatewayAca = {
+        subscription = gatewayJson.aca.subscription;
+        resourceGroup = gatewayJson.aca.resourceGroup;
+        sandboxGroup = gatewayJson.aca.sandboxGroup;
+        region = gatewayJson.aca.region;
+        image = gatewayJson.aca.image;
+        diskName = gatewayJson.aca.diskName;
+        cpu = gatewayJson.aca.cpu;
+        memory = gatewayJson.aca.memory;
+        autoSuspendIntervalSecs = gatewayJson.aca.autoSuspendIntervalSecs;
+      };
+      hasWaypipeSocket = gatewayJson.display ? waypipeSocket;
       hasWaypipeClient = builtins.hasAttr "nixling-gateway-waypipe-client" gatewayGuestCfg.systemd.services;
       hasWaypipeServer = builtins.hasAttr "nixling-gateway-waypipe-server" gatewayGuestCfg.systemd.services;
     };
@@ -84,8 +123,32 @@ in
       hasNixlingd = true;
       gatewayJson = true;
       daemonJson = true;
+      gatewayAca = {
+        subscription = "00000000-0000-0000-0000-000000000000";
+        resourceGroup = "rg-nixling-centralus";
+        sandboxGroup = "casbx-nixling-demo";
+        region = "centralus";
+        image = "registry.example.azurecr.io/nixling-wayland:mi";
+        diskName = "nixling-wayland-mi";
+        cpu = "1000m";
+        memory = "2048Mi";
+        autoSuspendIntervalSecs = 600;
+      };
+      hasWaypipeSocket = false;
       hasWaypipeClient = false;
       hasWaypipeServer = false;
     };
+  };
+
+  "gateway-vm/host-daemon-stays-credential-free-facade" = {
+    expr = hostDaemonJson ? gateway;
+    expected = false;
+  };
+
+  "gateway-vm/rejects-multiple-enabled-gateways" = {
+    expr = lib.any
+      (m: lib.hasInfix "at most one enabled gateway" m)
+      multiGatewayMessages;
+    expected = true;
   };
 }

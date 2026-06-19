@@ -27,15 +27,17 @@ if [ -z "${NIXLING_DRIFT_CHECK_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/nu
     --command bash "$0" "$@"
 fi
 
-xtask_bin=$(nl_cargo_bin_path workspace xtask)
-if [ ! -x "$xtask_bin" ]; then
-  (
-    cd "$ROOT/packages"
-    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
-      CARGO_TARGET_DIR="$(nl_cargo_target_dir workspace)" \
-      cargo build -q --manifest-path "$ROOT/packages/Cargo.toml" -p xtask --bin xtask
-  )
-fi
+workspace_target_dir="${CARGO_TARGET_DIR:-$(nl_cargo_target_dir workspace)}"
+xtask_bin="$workspace_target_dir/debug/xtask"
+(
+  cd "$ROOT/packages"
+  # Always ask Cargo to refresh xtask in the selected target dir. Cargo reuses
+  # cached artifacts when fresh, but this prevents an old repo-local
+  # packages/target/debug/xtask from masking generated schema/docs drift.
+  RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
+    CARGO_TARGET_DIR="$workspace_target_dir" \
+    cargo build -q --manifest-path "$ROOT/packages/Cargo.toml" -p xtask --bin xtask
+)
 
 run_xtask() {
   local subcommand="$1"

@@ -109,6 +109,7 @@ let
     lib.mapAttrsToList
       (_: gw: gw.vmName)
       (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
+  enabledGatewayNames = lib.attrNames (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
 
   autoSysVmNames =
     (lib.mapAttrsToList
@@ -160,6 +161,15 @@ let
             gw.relay.namespace
             gw.relay.entity
             gw.aca.endpoint
+            gw.aca.subscription
+            gw.aca.resourceGroup
+            gw.aca.sandboxGroup
+            gw.aca.region
+            gw.aca.diskImageId
+            gw.aca.image
+            gw.aca.diskName
+            gw.aca.managedIdentityResourceId
+            gw.display.waypipeSocket
           ];
         in
         lib.imap0
@@ -173,6 +183,17 @@ let
           })
           coordinates)
       (lib.filterAttrs (_: gw: gw.enable) cfg.gateways));
+
+  gatewayCountAssertions = [
+    {
+      assertion = lib.length enabledGatewayNames <= 1;
+      message = ''
+        nixling.gateways currently supports at most one enabled gateway in the
+        P0 REST lifecycle implementation. Multiple enabled gateways would be
+        ambiguous until host-to-gateway routing supports per-realm dispatch.
+      '';
+    }
+  ];
 
   # Systemd-escape identity regex (lower-case alnum and `-`, must
   # start with a LETTER). `^[a-z][a-z0-9-]*$` deliberately excludes
@@ -723,6 +744,7 @@ in
     ++ guestConfigContainmentAssertions
     ++ gatewayPathAssertions
     ++ gatewayCoordinateAssertions
+    ++ gatewayCountAssertions
   );
 
   # The daemon-only end state is now the default. Do not warn on the

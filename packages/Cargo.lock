@@ -1726,6 +1726,7 @@ name = "nixling-gateway-runtime"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "azure_core",
  "base64",
  "nixling-constellation-core",
  "nixling-constellation-provider",
@@ -1736,6 +1737,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1817,6 +1819,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1871,8 +1874,11 @@ dependencies = [
  "nixling-constellation-router",
  "nixling-core",
  "nixling-gateway",
+ "nixling-gateway-runtime",
  "nixling-host",
  "nixling-ipc",
+ "nixling-provider-aca",
+ "nixling-provider-relay",
  "parking_lot",
  "protobuf",
  "regex",

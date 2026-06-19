@@ -3723,6 +3723,24 @@
           ],
           "properties": {
             "args": {
+              "$ref": "#/definitions/GatewayDisplayStopArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "stop"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
               "$ref": "#/definitions/GatewayDisplayOpenArgs"
             },
             "op": {
@@ -3788,6 +3806,24 @@
             },
             "result": {
               "$ref": "#/definitions/GatewayDisplayStartResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "stop"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/GatewayDisplayStopResult"
             }
           }
         },
@@ -3943,6 +3979,48 @@
       "additionalProperties": false
     },
     "GatewayDisplayStartResult": {
+      "type": "object",
+      "required": [
+        "state",
+        "target"
+      ],
+      "properties": {
+        "state": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GatewayDisplayStopArgs": {
+      "type": "object",
+      "required": [
+        "operationId",
+        "principal",
+        "requestHash",
+        "target"
+      ],
+      "properties": {
+        "operationId": {
+          "type": "string"
+        },
+        "principal": {
+          "type": "string"
+        },
+        "requestHash": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GatewayDisplayStopResult": {
       "type": "object",
       "required": [
         "state",

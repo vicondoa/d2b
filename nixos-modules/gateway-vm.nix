@@ -89,7 +89,20 @@ let
             inherit (gw.relay) namespace entity;
           };
           aca = {
-            inherit (gw.aca) endpoint;
+            inherit (gw.aca)
+              endpoint
+              subscription
+              resourceGroup
+              sandboxGroup
+              region
+              diskImageId
+              image
+              diskName
+              managedIdentityResourceId
+              cpu
+              memory
+              autoSuspendIntervalSecs
+              ;
           };
           display = {
             inherit (gw.display) vsockPort waypipeCompression;

@@ -26,6 +26,9 @@ nixling-constellation-core = { path = "../nixling-constellation-core", version =
 nixling-constellation-provider = { path = "../nixling-constellation-provider", version = "0.0.0-bootstrap" }
 nixling-constellation-router = { path = "../nixling-constellation-router", version = "0.0.0-bootstrap" }
 nixling-gateway = { path = "../nixling-gateway", version = "0.0.0-bootstrap" }
+nixling-gateway-runtime = { path = "../nixling-gateway-runtime", version = "0.0.0-bootstrap" }
+nixling-provider-aca = { path = "../nixling-provider-aca", version = "0.0.0-bootstrap" }
+nixling-provider-relay = { path = "../nixling-provider-relay", version = "0.0.0-bootstrap" }
 protobuf = "3.7.2"
 semver = "1"
 serde.workspace = true
