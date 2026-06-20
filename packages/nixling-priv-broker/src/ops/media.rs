@@ -494,7 +494,8 @@ fn qmp_attach(
         "driver": "usb-storage",
         "drive": scaffold.blockdev_id.as_str(),
         "id": scaffold.device_id.as_str(),
-        "bus": "xhci.0",
+        "bus": "ehci.0",
+        "removable": true,
     });
     if scaffold.slot == "boot"
         && let Some(args) = device_args.as_object_mut()

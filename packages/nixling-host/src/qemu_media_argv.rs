@@ -21,6 +21,12 @@ pub struct QemuMediaArgvInput {
     /// Inherited TAP fd number. The broker opens the host TAP and passes it.
     #[serde(default = "default_tap_fd")]
     pub tap_fd: i32,
+    /// Guest RAM in MiB.
+    #[serde(default = "default_memory_mib")]
+    pub memory_mib: u32,
+    /// Guest vCPU count.
+    #[serde(default = "default_vcpu")]
+    pub vcpu: u32,
 }
 
 /// Errors the QEMU media argv generator can return.
@@ -32,6 +38,8 @@ pub enum QemuMediaArgvError {
     InvalidQmpSocketPath { path: String },
     InvalidMacAddress { value: String },
     InvalidTapFd { fd: i32 },
+    InvalidMemoryMiB { value: u32 },
+    InvalidVcpu { value: u32 },
 }
 
 /// Render the paused fd-backed qemu-media baseline argv.
@@ -59,6 +67,14 @@ pub fn generate_qemu_media_argv(
     if input.tap_fd < 3 {
         return Err(QemuMediaArgvError::InvalidTapFd { fd: input.tap_fd });
     }
+    if input.memory_mib == 0 {
+        return Err(QemuMediaArgvError::InvalidMemoryMiB {
+            value: input.memory_mib,
+        });
+    }
+    if input.vcpu == 0 {
+        return Err(QemuMediaArgvError::InvalidVcpu { value: input.vcpu });
+    }
 
     Ok(vec![
         input.qemu_binary_path.clone(),
@@ -67,16 +83,20 @@ pub fn generate_qemu_media_argv(
         "-S".to_owned(),
         "-machine".to_owned(),
         "q35,accel=kvm,usb=off".to_owned(),
+        "-m".to_owned(),
+        format!("{}M", input.memory_mib),
+        "-smp".to_owned(),
+        input.vcpu.to_string(),
         "-device".to_owned(),
-        "qemu-xhci,id=xhci,p2=15,p3=15".to_owned(),
+        "usb-ehci,id=ehci".to_owned(),
         "-device".to_owned(),
         "virtio-vga".to_owned(),
         "-display".to_owned(),
         "gtk,gl=off,show-cursor=on".to_owned(),
         "-device".to_owned(),
-        "usb-kbd,bus=xhci.0,port=1".to_owned(),
+        "usb-kbd,bus=ehci.0".to_owned(),
         "-device".to_owned(),
-        "usb-tablet,bus=xhci.0,port=2".to_owned(),
+        "usb-tablet,bus=ehci.0".to_owned(),
         "-netdev".to_owned(),
         format!("tap,id=nl0,fd={},vhost=off", input.tap_fd),
         "-device".to_owned(),
@@ -110,6 +130,14 @@ fn default_tap_fd() -> i32 {
     10
 }
 
+fn default_memory_mib() -> u32 {
+    4096
+}
+
+fn default_vcpu() -> u32 {
+    2
+}
+
 fn valid_mac_address(value: &str) -> bool {
     let parts: Vec<_> = value.split(':').collect();
     parts.len() == 6
@@ -129,6 +157,8 @@ mod tests {
             qmp_socket_path: "/run/nixling/vms/media/qmp.sock".to_owned(),
             mac_address: "02:76:53:AE:57:2A".to_owned(),
             tap_fd: 10,
+            memory_mib: 4096,
+            vcpu: 2,
         }
     }
 
@@ -140,9 +170,10 @@ mod tests {
         assert!(argv[0].ends_with("/qemu-system-x86_64"));
         assert!(joined.contains("-nodefaults -no-user-config -S"));
         assert!(joined.contains("-machine q35,accel=kvm,usb=off"));
-        assert!(joined.contains("-device qemu-xhci,id=xhci,p2=15,p3=15"));
-        assert!(joined.contains("-device usb-kbd,bus=xhci.0,port=1"));
-        assert!(joined.contains("-device usb-tablet,bus=xhci.0,port=2"));
+        assert!(joined.contains("-m 4096M -smp 2"));
+        assert!(joined.contains("-device usb-ehci,id=ehci"));
+        assert!(joined.contains("-device usb-kbd,bus=ehci.0"));
+        assert!(joined.contains("-device usb-tablet,bus=ehci.0"));
         assert!(joined.contains("-display gtk,gl=off,show-cursor=on"));
         assert!(joined.contains("-netdev tap,id=nl0,fd=10,vhost=off"));
         assert!(joined.contains("-device virtio-net-pci,netdev=nl0,mac=02:76:53:AE:57:2A"));

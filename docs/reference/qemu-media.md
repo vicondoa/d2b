@@ -32,6 +32,22 @@ nixling.vms.dark-live = {
 };
 ```
 
+### Resources
+
+`qemu-media` passes explicit RAM and vCPU sizing to QEMU. The defaults are
+4 GiB and 2 vCPUs, avoiding QEMU's small built-in memory default.
+
+```nix
+nixling.vms.dark-live.qemuMedia.resources = {
+  memoryMiB = 4096;
+  vcpu = 2;
+};
+```
+
+The runner presents boot media as a removable USB storage device on an
+EHCI controller, matching the USB-disk/removable shape recommended by
+Linux VM frontends for external live media.
+
 ### Direct image file
 
 Direct image files are configured in Nix. They do not use enrollment.

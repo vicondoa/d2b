@@ -149,6 +149,39 @@ in
                 '';
               };
 
+              resources = lib.mkOption {
+                type = lib.types.submodule {
+                  freeformType = null;
+                  options = {
+                    memoryMiB = lib.mkOption {
+                      type = lib.types.ints.positive;
+                      default = 4096;
+                      example = 4096;
+                      description = ''
+                        Guest RAM assigned to the qemu-media VM, in MiB.
+                        External live media often needs substantially more
+                        memory than QEMU's tiny default; this is passed as
+                        `-m <memoryMiB>M`.
+                      '';
+                    };
+
+                    vcpu = lib.mkOption {
+                      type = lib.types.ints.positive;
+                      default = 2;
+                      example = 2;
+                      description = ''
+                        Virtual CPU count assigned to the qemu-media VM,
+                        passed as `-smp <vcpu>`.
+                      '';
+                    };
+                  };
+                };
+                default = { };
+                description = ''
+                  QEMU resource sizing for `runtime.kind = "qemu-media"`.
+                '';
+              };
+
               window = lib.mkOption {
                 type = lib.types.submodule {
                   freeformType = null;
