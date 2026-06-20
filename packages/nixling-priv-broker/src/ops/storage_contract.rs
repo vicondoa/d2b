@@ -94,7 +94,9 @@ pub fn reconcile_storage_scope(
                     crate::sys::path_safe::DirCreateResult::Created => {
                         StorageReconcileStatus::Created
                     }
-                    crate::sys::path_safe::DirCreateResult::Reused => StorageReconcileStatus::Reused,
+                    crate::sys::path_safe::DirCreateResult::Reused => {
+                        StorageReconcileStatus::Reused
+                    }
                 };
                 Ok(ReconcileStorageScopeResponse {
                     storage_ref: storage_ref.clone(),

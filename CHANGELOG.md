@@ -99,7 +99,9 @@ deprecations ship one minor release before removal.
 - `qemu-media` VM start no longer runs NixOS-only state ownership and
   SSH host-key preflights, allowing externally booted media VMs to use
   the qemu-media runner-owned state directory prepared by host
-  reconciliation.
+  reconciliation. Physical USB boot media now attaches through QMP's
+  `host_device` block driver instead of the regular-file-only `file`
+  driver.
 
 ## [1.3.1] - 2026-06-18
 
