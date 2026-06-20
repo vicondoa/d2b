@@ -132,6 +132,9 @@ deprecations ship one minor release before removal.
   non-KSM memory backend by default, and `qemuMedia.security.lockMemory`
   can fail closed with QEMU `mem-lock` when the host cannot keep guest RAM
   out of swap.
+- `qemu-media` restart now cleans up leftover dependency sidecars when
+  the primary qemu-media runner has exited, so a stale Wayland proxy
+  pidfd from a failed boot no longer blocks the next start.
 - Documentation: sanitized ADR 0032's ACA/Relay live-proof record so the
   architectural validation summary remains without publishing live sandbox,
   disk-image, command-output, or compositor-window identifiers.
