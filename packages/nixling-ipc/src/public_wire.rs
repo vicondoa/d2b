@@ -1,6 +1,10 @@
 use crate::types::MediaRef;
 use crate::{FeatureFlag, Version, guest_wire::ExecState};
-use nixling_core::{error::Error, host::IfName};
+use nixling_core::{
+    error::Error,
+    host::IfName,
+    runtime::{RuntimeOperationCapabilities, RuntimeServiceSummary},
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -1420,6 +1424,13 @@ pub struct RuntimeSummary {
     pub detail: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "RuntimeOperationCapabilities::is_empty"
+    )]
+    pub operation_capabilities: RuntimeOperationCapabilities,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<RuntimeServiceSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1497,8 +1508,12 @@ fn default_true() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{PublicRequest, VmLifecycleState};
+    use super::{PublicRequest, RuntimeSummary, VmLifecycleState};
     use crate::{decode_frame, encode_frame};
+    use nixling_core::{
+        processes::ProcessRole,
+        runtime::{RuntimeOperationCapabilities, RuntimeServiceRole, RuntimeServiceSummary},
+    };
 
     #[test]
     fn vm_lifecycle_keeps_booted_variant() {
@@ -1520,6 +1535,55 @@ mod tests {
         let error = decode_frame::<PublicRequest>("PublicRequest", &frame)
             .expect_err("unknown field fails");
         assert!(error.message().contains("extra"));
+    }
+
+    #[test]
+    fn runtime_summary_omits_default_runtime_seam_fields() {
+        let summary = RuntimeSummary {
+            detail: "running".to_owned(),
+            kind: Some("nixos".to_owned()),
+            operation_capabilities: RuntimeOperationCapabilities::default(),
+            services: Vec::new(),
+        };
+
+        let value = serde_json::to_value(summary).expect("serializes");
+        assert_eq!(
+            value.get("detail").and_then(|v| v.as_str()),
+            Some("running")
+        );
+        assert!(value.get("operationCapabilities").is_none());
+        assert!(value.get("services").is_none());
+    }
+
+    #[test]
+    fn runtime_summary_serializes_positive_capabilities_and_services() {
+        let summary = RuntimeSummary {
+            detail: "qemu media runner active".to_owned(),
+            kind: Some("qemu-media".to_owned()),
+            operation_capabilities: RuntimeOperationCapabilities::local_qemu_media(),
+            services: vec![RuntimeServiceSummary::from_process_role(
+                "qemu-media",
+                ProcessRole::QemuMediaRunner,
+                false,
+            )],
+        };
+
+        let value = serde_json::to_value(summary).expect("serializes");
+        assert_eq!(
+            value.pointer("/operationCapabilities/media/qemuMedia"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            value.pointer("/services/0/role"),
+            Some(&serde_json::json!("hypervisor"))
+        );
+        assert_eq!(
+            value.pointer("/services/0/processRole"),
+            Some(&serde_json::json!("qemu-media-runner"))
+        );
+        let service: RuntimeServiceSummary =
+            serde_json::from_value(value["services"][0].clone()).expect("service deserializes");
+        assert_eq!(service.role, RuntimeServiceRole::Hypervisor);
     }
 
     // A stray `{:?}` on any exec DTO must never leak argv, env keys or
