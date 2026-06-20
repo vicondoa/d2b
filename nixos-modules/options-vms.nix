@@ -182,6 +182,48 @@ in
                 '';
               };
 
+              security = lib.mkOption {
+                type = lib.types.submodule {
+                  freeformType = null;
+                  options = {
+                    lockMemory = lib.mkOption {
+                      type = lib.types.bool;
+                      default = false;
+                      description = ''
+                        When enabled, QEMU locks guest RAM with
+                        `-overcommit mem-lock=on` and refuses to start if
+                        the host cannot keep that memory resident. This
+                        reduces the risk of guest RAM being written to host
+                        swap.
+                      '';
+                    };
+
+                    excludeMemoryFromCoreDump = lib.mkOption {
+                      type = lib.types.bool;
+                      default = true;
+                      description = ''
+                        Exclude qemu-media guest RAM from QEMU memory dumps
+                        and host core dumps via the memory backend's
+                        `dump=off` setting.
+                      '';
+                    };
+
+                    disableMemoryMerge = lib.mkOption {
+                      type = lib.types.bool;
+                      default = true;
+                      description = ''
+                        Disable Kernel Samepage Merging for qemu-media guest
+                        RAM via the memory backend's `merge=off` setting.
+                      '';
+                    };
+                  };
+                };
+                default = { };
+                description = ''
+                  Security controls for qemu-media guest memory handling.
+                '';
+              };
+
               window = lib.mkOption {
                 type = lib.types.submodule {
                   freeformType = null;

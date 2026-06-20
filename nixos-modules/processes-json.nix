@@ -225,17 +225,29 @@ EOF
     let
       vm = cfg.vms.${name};
       resources = vm.qemuMedia.resources;
+      security = vm.qemuMedia.security;
+      memoryBackendFlags = [
+        "memory-backend-ram"
+        "id=nlram"
+        "size=${toString resources.memoryMiB}M"
+        "dump=${if security.excludeMemoryFromCoreDump then "off" else "on"}"
+        "merge=${if security.disableMemoryMerge then "off" else "on"}"
+      ] ++ lib.optional security.lockMemory "prealloc=on";
     in [
       "nixling-qemu-media@${name}"
       "-nodefaults"
       "-no-user-config"
       "-S"
+      "-object"
+      (lib.concatStringsSep "," memoryBackendFlags)
       "-machine"
-      "q35,accel=kvm,usb=off"
-      "-m"
-      "${toString resources.memoryMiB}M"
+      "q35,accel=kvm,usb=off,memory-backend=nlram"
       "-smp"
       (toString resources.vcpu)
+    ] ++ lib.optionals security.lockMemory [
+      "-overcommit"
+      "mem-lock=on"
+    ] ++ [
       "-device"
       "usb-ehci,id=ehci"
       "-device"

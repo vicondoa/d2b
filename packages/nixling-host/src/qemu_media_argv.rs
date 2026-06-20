@@ -27,6 +27,15 @@ pub struct QemuMediaArgvInput {
     /// Guest vCPU count.
     #[serde(default = "default_vcpu")]
     pub vcpu: u32,
+    /// Lock guest RAM into host memory with QEMU overcommit mem-lock.
+    #[serde(default)]
+    pub lock_memory: bool,
+    /// Exclude guest RAM from host/QEMU core dumps.
+    #[serde(default = "default_true")]
+    pub exclude_memory_from_core_dump: bool,
+    /// Disable KSM merging for guest RAM.
+    #[serde(default = "default_true")]
+    pub disable_memory_merge: bool,
 }
 
 /// Errors the QEMU media argv generator can return.
@@ -76,17 +85,47 @@ pub fn generate_qemu_media_argv(
         return Err(QemuMediaArgvError::InvalidVcpu { value: input.vcpu });
     }
 
-    Ok(vec![
+    let mut memory_backend = vec![
+        "memory-backend-ram".to_owned(),
+        "id=nlram".to_owned(),
+        format!("size={}M", input.memory_mib),
+        format!(
+            "dump={}",
+            if input.exclude_memory_from_core_dump {
+                "off"
+            } else {
+                "on"
+            }
+        ),
+        format!(
+            "merge={}",
+            if input.disable_memory_merge {
+                "off"
+            } else {
+                "on"
+            }
+        ),
+    ];
+    if input.lock_memory {
+        memory_backend.push("prealloc=on".to_owned());
+    }
+
+    let mut argv = vec![
         input.qemu_binary_path.clone(),
         "-nodefaults".to_owned(),
         "-no-user-config".to_owned(),
         "-S".to_owned(),
+        "-object".to_owned(),
+        memory_backend.join(","),
         "-machine".to_owned(),
-        "q35,accel=kvm,usb=off".to_owned(),
-        "-m".to_owned(),
-        format!("{}M", input.memory_mib),
+        "q35,accel=kvm,usb=off,memory-backend=nlram".to_owned(),
         "-smp".to_owned(),
         input.vcpu.to_string(),
+    ];
+    if input.lock_memory {
+        argv.extend(["-overcommit".to_owned(), "mem-lock=on".to_owned()]);
+    }
+    argv.extend([
         "-device".to_owned(),
         "usb-ehci,id=ehci".to_owned(),
         "-device".to_owned(),
@@ -111,7 +150,8 @@ pub fn generate_qemu_media_argv(
         "none".to_owned(),
         "-name".to_owned(),
         format!("nixling-{}-qemu-media", input.vm_name),
-    ])
+    ]);
+    Ok(argv)
 }
 
 /// `arg0` for the qemu-media runner.
@@ -138,6 +178,10 @@ fn default_vcpu() -> u32 {
     2
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn valid_mac_address(value: &str) -> bool {
     let parts: Vec<_> = value.split(':').collect();
     parts.len() == 6
@@ -159,6 +203,9 @@ mod tests {
             tap_fd: 10,
             memory_mib: 4096,
             vcpu: 2,
+            lock_memory: false,
+            exclude_memory_from_core_dump: true,
+            disable_memory_merge: true,
         }
     }
 
@@ -169,8 +216,12 @@ mod tests {
 
         assert!(argv[0].ends_with("/qemu-system-x86_64"));
         assert!(joined.contains("-nodefaults -no-user-config -S"));
-        assert!(joined.contains("-machine q35,accel=kvm,usb=off"));
-        assert!(joined.contains("-m 4096M -smp 2"));
+        assert!(
+            joined.contains("-object memory-backend-ram,id=nlram,size=4096M,dump=off,merge=off")
+        );
+        assert!(joined.contains("-machine q35,accel=kvm,usb=off,memory-backend=nlram"));
+        assert!(joined.contains("-smp 2"));
+        assert!(!joined.contains("mem-lock=on"));
         assert!(joined.contains("-device usb-ehci,id=ehci"));
         assert!(joined.contains("-device usb-kbd,bus=ehci.0"));
         assert!(joined.contains("-device usb-tablet,bus=ehci.0"));
@@ -184,6 +235,20 @@ mod tests {
         assert!(!joined.contains("vhostfd="));
         assert!(!joined.contains("-drive"));
         assert!(!joined.contains("-blockdev"));
+    }
+
+    #[test]
+    fn lock_memory_adds_qemu_memlock_and_preallocation() {
+        let mut input = input();
+        input.lock_memory = true;
+        let argv = generate_qemu_media_argv(&input).unwrap();
+        let joined = argv.join(" ");
+
+        assert!(
+            joined
+                .contains("memory-backend-ram,id=nlram,size=4096M,dump=off,merge=off,prealloc=on")
+        );
+        assert!(joined.contains("-overcommit mem-lock=on"));
     }
 
     #[test]

@@ -4,6 +4,11 @@ This runbook uses the neutral VM name `dark-live` and does not depend on
 any specific live image. Use it for either a raw image file or a
 physical USB block device.
 
+Running sensitive external media inside QEMU is convenient, but it is not
+equivalent to bare-metal boot. The host OS, compositor, and QEMU process
+can observe the session, and host swap or crash dumps can retain guest
+memory unless you enable memory hardening and the host can satisfy it.
+
 ## 1. Declare the VM
 
 For a direct raw image file:
@@ -20,6 +25,10 @@ nixling.vms.dark-live = {
     resources = {
       memoryMiB = 4096;
       vcpu = 2;
+    };
+
+    security = {
+      lockMemory = true;
     };
 
     source = {
@@ -42,6 +51,8 @@ nixling.vms.dark-live.qemuMedia = {
     memoryMiB = 4096;
     vcpu = 2;
   };
+
+  security.lockMemory = true;
 
   source = {
     kind = "physical-usb";
