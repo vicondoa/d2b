@@ -125,9 +125,6 @@ in
         format = "raw";
         readOnly = true;
         registryScope = "root-only-runtime-state";
-        usbSelector = {
-          byIdName = "usb-Example_Dark_Live_0001-0:0";
-        };
       }
       {
         vm = "dark-live";
@@ -137,6 +134,9 @@ in
         format = "raw";
         readOnly = true;
         registryScope = "root-only-runtime-state";
+        usbSelector = {
+          byIdName = "usb-Example_Dark_Live_0001-0:0";
+        };
       }
     ];
   };
