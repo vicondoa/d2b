@@ -77,6 +77,10 @@ deprecations ship one minor release before removal.
   now also enable `nixling.vms.<vm>.guest.control.enable = true`. USBIP
   guest attach/detach is owned by guestd over authenticated
   guest-control; there is no SSH fallback.
+- Broker: `nixling-priv-broker.service` now defaults `RUST_LOG` to
+  `info` instead of `debug`, keeping high-volume broker diagnostics out
+  of normal journal/OTel log exports unless an operator opts into debug
+  logging.
 - CI: the PR aarch64 flake leg now runs only the lightweight
   `smoke-eval-aarch64.nix` check instead of the full native aarch64
   flake sweep.

@@ -61,7 +61,9 @@ let
     nixling.daemonExperimental.enable = true;
   };
 
-  svc = (mkEval [ base ]).config.systemd.services.nixling-priv-broker.serviceConfig;
+  brokerService = (mkEval [ base ]).config.systemd.services.nixling-priv-broker;
+  svc = brokerService.serviceConfig;
+  env = brokerService.environment;
   cbs = svc.CapabilityBoundingSet or null;
   ac = svc.AmbientCapabilities or null;
 in
@@ -81,5 +83,9 @@ in
   "broker-caps/ambient-empty-sentinel" = {
     expr = if builtins.isList ac then builtins.elem "" ac else ac == "";
     expected = true;
+  };
+  "broker-caps/default-rust-log-info" = {
+    expr = env.RUST_LOG or null;
+    expected = "info";
   };
 }

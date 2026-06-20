@@ -128,10 +128,13 @@ in
       # No wantedBy here.
       requires = [ "nixling-priv-broker.socket" ];
       after = [ "nixling-priv-broker.socket" "local-fs.target" ];
-      # Surface broker debug logs and point at the nft binary (NixOS
-      # has no /usr/sbin/nft default).
+      # Keep the broker at INFO by default so high-volume DEBUG payload
+      # diagnostics do not flood journal/OTel exports. Operators can
+      # temporarily force RUST_LOG=debug from host configuration when
+      # investigating a broker live-handler failure.
       environment = {
-        RUST_LOG = "debug";
+        RUST_LOG = lib.mkDefault "info";
+        # Point at host tools (NixOS has no /usr/sbin/nft default).
         NIXLING_BROKER_NFT_BINARY = "${pkgs.nftables}/bin/nft";
         # iproute2 binary lives in /bin not /sbin on NixOS.
         NIXLING_BROKER_IP_BINARY = "${pkgs.iproute2}/bin/ip";

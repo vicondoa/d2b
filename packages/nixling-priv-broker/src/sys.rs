@@ -2991,8 +2991,6 @@ pub mod pidfd_sys {
             {
                 libc::_exit(CHILD_EXIT_SECCOMP);
             }
-            let m = b"DEBUG: about to execve\n";
-            libc::write(2, m.as_ptr() as *const _, m.len());
             libc::execve(binary_ptr, argv_ptrs.as_ptr(), env_ptrs.as_ptr());
             let m2 = b"DEBUG: execve returned (failed)\n";
             libc::write(2, m2.as_ptr() as *const _, m2.len());
@@ -3352,6 +3350,7 @@ mod tests {
         let global_log = concat!("nixling-broker-child", ".log");
         let argv_marker = concat!("DEBUG ", "argv[");
         let env_marker = concat!("DEBUG ", "env[");
+        let spawn_marker = concat!("DEBUG: about", " to execve");
         assert!(
             !source.contains(global_log),
             "broker child path must not create a global argv/env debug log"
@@ -3359,6 +3358,10 @@ mod tests {
         assert!(
             !source.contains(argv_marker) && !source.contains(env_marker),
             "broker child path must not log full runner argv/env"
+        );
+        assert!(
+            !source.contains(spawn_marker),
+            "broker child path must not emit a debug line for every spawn"
         );
     }
 
