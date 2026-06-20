@@ -82,6 +82,36 @@
       "$ref": "#/definitions/AuditEnvelope"
     },
     {
+      "type": "string"
+    },
+    {
+      "$ref": "#/definitions/AuditStreamKind"
+    },
+    {
+      "$ref": "#/definitions/AuditChainLink"
+    },
+    {
+      "$ref": "#/definitions/AuditChainRecord"
+    },
+    {
+      "$ref": "#/definitions/AuditChainCheckFailure"
+    },
+    {
+      "$ref": "#/definitions/AuditChainCheckResult"
+    },
+    {
+      "$ref": "#/definitions/AuditRetentionFloorReason"
+    },
+    {
+      "$ref": "#/definitions/AuditRetentionFloorStatus"
+    },
+    {
+      "$ref": "#/definitions/AuditSinkHealthReason"
+    },
+    {
+      "$ref": "#/definitions/AuditSinkHealth"
+    },
+    {
       "$ref": "#/definitions/ConstellationError"
     },
     {
@@ -169,6 +199,115 @@
               "type": "null"
             }
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditChainCheckFailure": {
+      "description": "Closed audit-chain verification failure.",
+      "type": "string",
+      "enum": [
+        "previous-hash-mismatch",
+        "payload-hash-mismatch",
+        "record-hash-mismatch"
+      ]
+    },
+    "AuditChainCheckResult": {
+      "description": "Verification result for one audit-chain link.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "verified"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "failure",
+            "status"
+          ],
+          "properties": {
+            "failure": {
+              "$ref": "#/definitions/AuditChainCheckFailure"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "failed"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "AuditChainLink": {
+      "description": "One link in a tamper-evident audit stream.",
+      "type": "object",
+      "required": [
+        "payloadHash",
+        "previousHash",
+        "recordHash",
+        "sequence"
+      ],
+      "properties": {
+        "payloadHash": {
+          "description": "Hash of the canonical redacted audit payload.",
+          "type": "string"
+        },
+        "previousHash": {
+          "description": "Previous record hash, or the stream's genesis hash for sequence 0.",
+          "type": "string"
+        },
+        "recordHash": {
+          "description": "Hash of the canonical chain record.",
+          "type": "string"
+        },
+        "sequence": {
+          "description": "Monotonic stream sequence number.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditChainRecord": {
+      "description": "Redacted chain metadata for a gateway, remote-node, or daemon audit event.",
+      "type": "object",
+      "required": [
+        "link",
+        "node",
+        "operationId",
+        "realm",
+        "stream"
+      ],
+      "properties": {
+        "link": {
+          "$ref": "#/definitions/AuditChainLink"
+        },
+        "node": {
+          "$ref": "#/definitions/NodeId"
+        },
+        "operationId": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "realm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "stream": {
+          "$ref": "#/definitions/AuditStreamKind"
         }
       },
       "additionalProperties": false
@@ -278,6 +417,186 @@
         }
       },
       "additionalProperties": false
+    },
+    "AuditRetentionFloorReason": {
+      "description": "Bounded reason for audit retention-floor status.",
+      "type": "string",
+      "enum": [
+        "window-below-floor",
+        "evidence-missing",
+        "sink-unavailable"
+      ]
+    },
+    "AuditRetentionFloorStatus": {
+      "description": "Retention-floor status for an audit sink.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "met"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "reason",
+            "status"
+          ],
+          "properties": {
+            "reason": {
+              "$ref": "#/definitions/AuditRetentionFloorReason"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "belowFloor"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "reason",
+            "status"
+          ],
+          "properties": {
+            "reason": {
+              "$ref": "#/definitions/AuditRetentionFloorReason"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "unknown"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "AuditSinkHealth": {
+      "description": "Health state for a gateway/remote-node/daemon audit sink.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "retention_floor",
+            "status",
+            "stream"
+          ],
+          "properties": {
+            "retention_floor": {
+              "$ref": "#/definitions/AuditRetentionFloorStatus"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "ok"
+              ]
+            },
+            "stream": {
+              "$ref": "#/definitions/AuditStreamKind"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "reason",
+            "retention_floor",
+            "status",
+            "stream"
+          ],
+          "properties": {
+            "reason": {
+              "$ref": "#/definitions/AuditSinkHealthReason"
+            },
+            "retention_floor": {
+              "$ref": "#/definitions/AuditRetentionFloorStatus"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "degraded"
+              ]
+            },
+            "stream": {
+              "$ref": "#/definitions/AuditStreamKind"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "reason",
+            "retention_floor",
+            "status",
+            "stream"
+          ],
+          "properties": {
+            "reason": {
+              "$ref": "#/definitions/AuditSinkHealthReason"
+            },
+            "retention_floor": {
+              "$ref": "#/definitions/AuditRetentionFloorStatus"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "unavailable"
+              ]
+            },
+            "stream": {
+              "$ref": "#/definitions/AuditStreamKind"
+            }
+          }
+        }
+      ]
+    },
+    "AuditSinkHealthReason": {
+      "description": "Bounded reason for audit sink health.",
+      "type": "string",
+      "enum": [
+        "backpressure",
+        "chain-verification-failed",
+        "sink-missing",
+        "sink-unavailable",
+        "write-failed"
+      ]
+    },
+    "AuditStreamKind": {
+      "description": "Closed audit stream kinds that can carry tamper-evident hash chains.",
+      "oneOf": [
+        {
+          "description": "Gateway-guest audit stream.",
+          "type": "string",
+          "enum": [
+            "gateway"
+          ]
+        },
+        {
+          "description": "Remote full-node audit stream.",
+          "type": "string",
+          "enum": [
+            "remote-node"
+          ]
+        },
+        {
+          "description": "Local daemon audit stream.",
+          "type": "string",
+          "enum": [
+            "daemon"
+          ]
+        }
+      ]
     },
     "AuthorizationScope": {
       "description": "What an audited operation was authorized against. Workload operations require a [`Capability`]; node-control, enrollment, and read-only health operations are authorized by node enrollment / session identity, so they have their own scope rather than a synthetic capability.",

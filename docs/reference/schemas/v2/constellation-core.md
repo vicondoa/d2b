@@ -25,8 +25,10 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
   `ExecutionSummary`;
 - `Handshake`, `OperationKind`, `OperationRequest`,
   `OperationResponse`;
-- `AdmissionAuditRecord`, `AuditEnvelope`, `ConstellationError`,
-  `ConstellationFrame`.
+- `AdmissionAuditRecord`, `AuditEnvelope`, `AuditHash`,
+  `AuditChainLink`, `AuditChainRecord`, `AuditChainCheckResult`,
+  `AuditSinkHealth`, `AuditRetentionFloorStatus`;
+- `ConstellationError`, `ConstellationFrame`.
 
 ## Contract notes
 
@@ -38,6 +40,9 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
 - `AuditEnvelope` is post-auth and requires a principal.
   `AdmissionAuditRecord` is the pre-auth/session-admission denial shape and
   may omit the principal.
+- Audit-chain and audit-sink health roots are redacted metadata only:
+  they carry bounded hash/status fields, not paths, credentials, argv,
+  stdio, provider tokens, or raw error strings.
 - Audit and typed-error roots carry bounded metadata only; payload bytes,
   argv, stdio, store paths, and credentials are not schema fields.
 - Stream open/data/flow/close definitions are reachable through

@@ -20,6 +20,11 @@ use nixling_constellation_core::{
     NodeId, NodeSummary, OperationId, OperationKind, OperationRequest, OperationResponse,
     PrincipalId, ProviderId, RealmId, RealmPath, StreamCursor, StreamId, WorkloadId,
     WorkloadSelector, WorkloadSummary,
+    audit::{
+        AuditChainCheckFailure, AuditChainCheckResult, AuditChainLink, AuditChainRecord, AuditHash,
+        AuditRetentionFloorReason, AuditRetentionFloorStatus, AuditSinkHealth,
+        AuditSinkHealthReason, AuditStreamKind,
+    },
 };
 use nixling_core::{
     bundle::Bundle, closures::ClosureMetadata, error::Error, host::HostJson,
@@ -61,6 +66,16 @@ enum ConstellationCoreSchema {
     OperationResponse(OperationResponse),
     AdmissionAuditRecord(AdmissionAuditRecord),
     AuditEnvelope(AuditEnvelope),
+    AuditHash(AuditHash),
+    AuditStreamKind(AuditStreamKind),
+    AuditChainLink(AuditChainLink),
+    AuditChainRecord(AuditChainRecord),
+    AuditChainCheckFailure(AuditChainCheckFailure),
+    AuditChainCheckResult(AuditChainCheckResult),
+    AuditRetentionFloorReason(AuditRetentionFloorReason),
+    AuditRetentionFloorStatus(AuditRetentionFloorStatus),
+    AuditSinkHealthReason(AuditSinkHealthReason),
+    AuditSinkHealth(AuditSinkHealth),
     TypedError(ConstellationError),
     Frame(ConstellationFrame),
 }

@@ -75,6 +75,11 @@ deprecations ship one minor release before removal.
   `realm-entrypoints.json` table, allow separate gateway guests for
   separate realm/env segments, and add `nixling realm enter/run` plus
   manifest-backed realm target routing for gateway-backed VM verbs.
+- ADR 0032 auth/audit foundations now define redacted daemon-access
+  principal mapping records, tamper-evident audit-chain DTOs, daemon
+  audit hash chaining, explicit audit-sink health reports, and
+  host-boundary tests proving gateway relay/provider material stays out
+  of host daemon artifacts.
 
 ### Changed
 
@@ -108,6 +113,10 @@ deprecations ship one minor release before removal.
   require idempotency keys, and audit/error/trace payloads carry only
   redacted, bounded metadata. This is a contributor-facing contract; it
   does not change CLI, daemon, or host behavior.
+- Daemon audit JSONL records now carry `prev_hash` and `record_hash`
+  chain fields, with verifier and sink-health helpers that report
+  tampering, write unavailability, and retention-floor degradation
+  without exposing filesystem paths or credential-shaped detail.
 - `qemu-media` VMs now emit a typed QMP-only QEMU runner process node
   instead of being absent from `processes.json`; they still do not emit
   Cloud Hypervisor, store/virtiofs, or guest-control runner data.

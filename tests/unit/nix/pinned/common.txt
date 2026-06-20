@@ -152,11 +152,17 @@ gateway-vm/accepts-multiple-gateways-with-separate-realms-and-envs
 gateway-vm/admits-framework-sys-prefix
 gateway-vm/auto-declared-env-index
 gateway-vm/auto-declared-name
+gateway-vm/gateway-guest-json-retains-realm-provider-material
 gateway-vm/guest-daemon-runs-as-nixlingd-without-no-drop-flag
 gateway-vm/guest-services-installed-without-static-waypipe
+gateway-vm/host-bundle-process-artifacts-exclude-realm-provider-material
+gateway-vm/host-daemon-config-excludes-realm-provider-material
 gateway-vm/host-daemon-stays-credential-free-facade
 gateway-vm/host-guest-state-ownership-boundary
 gateway-vm/host-realm-entrypoint-table-defaults-local-and-gateway
+gateway-vm/host-realm-entrypoints-exclude-realm-provider-material
+gateway-vm/host-system-packages-exclude-realm-provider-material
+gateway-vm/local-fast-path-auth-socket-does-not-require-gateway-relay
 gateway-vm/realm-entrypoint-table-uses-custom-gateway-vm-name
 gateway-vm/rejects-credential-path-outside-gateway-state
 gateway-vm/rejects-duplicate-gateway-realm-entrypoints
