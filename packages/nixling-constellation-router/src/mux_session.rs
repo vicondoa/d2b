@@ -1,4 +1,4 @@
-//! Post-handshake stream-mux driver (ADR 0032, P0).
+//! Post-handshake stream-mux driver (ADR 0032).
 //!
 //! [`PeerSession`](crate::PeerSession) proves that the byte transport completed
 //! protocol/codec negotiation. [`MuxSession`] is the next boundary: every
@@ -8,8 +8,8 @@
 //! fail-closed runtime seam between semantic frames and transport I/O.
 
 use nixling_constellation_core::{
-    ConstellationError, ConstellationFrame, OpaquePayload, StreamChannel, StreamClose,
-    StreamCloseReason, StreamData, StreamId, StreamMux, StreamOpen, StreamResume,
+    CapabilitySet, ConstellationError, ConstellationFrame, OpaquePayload, StreamChannel,
+    StreamClose, StreamCloseReason, StreamData, StreamId, StreamMux, StreamOpen, StreamResume,
 };
 use nixling_constellation_provider::error::ProviderResult;
 use nixling_constellation_provider::provider::ProtocolCodec;
@@ -20,21 +20,29 @@ use crate::PeerSession;
 pub struct MuxSession<C: ProtocolCodec> {
     peer: PeerSession<C>,
     mux: StreamMux,
+    capabilities: CapabilitySet,
 }
 
 impl<C: ProtocolCodec> MuxSession<C> {
     /// Wrap a successfully-handshaken peer session with a fresh mux.
     pub fn new(peer: PeerSession<C>) -> Self {
+        let capabilities = peer.negotiated().capabilities.capabilities.clone();
         Self {
             peer,
             mux: StreamMux::new(),
+            capabilities,
         }
     }
 
     /// Wrap a peer with an explicit mux (used by tests and future restored
     /// sessions).
     pub fn with_mux(peer: PeerSession<C>, mux: StreamMux) -> Self {
-        Self { peer, mux }
+        let capabilities = peer.negotiated().capabilities.capabilities.clone();
+        Self {
+            peer,
+            mux,
+            capabilities,
+        }
     }
 
     /// Borrow the mux state for reconciliation/observability.
@@ -45,7 +53,7 @@ impl<C: ProtocolCodec> MuxSession<C> {
     /// Open a stream initiated by this endpoint: validate/register it locally,
     /// then send the `StreamOpen` frame to the peer.
     pub async fn open_stream(&mut self, open: StreamOpen) -> ProviderResult<()> {
-        self.mux.open(&open)?;
+        self.mux.open_with_capabilities(&open, &self.capabilities)?;
         self.peer.send(&ConstellationFrame::StreamOpen(open)).await
     }
 
@@ -122,7 +130,9 @@ impl<C: ProtocolCodec> MuxSession<C> {
 
     fn apply_inbound(&mut self, frame: &ConstellationFrame) -> Result<(), ConstellationError> {
         match frame {
-            ConstellationFrame::StreamOpen(open) => self.mux.open(open),
+            ConstellationFrame::StreamOpen(open) => {
+                self.mux.open_with_capabilities(open, &self.capabilities)
+            }
             ConstellationFrame::StreamData(data) => self.mux.accept_data(data),
             ConstellationFrame::StreamFlow(flow) => self.mux.receive_flow(flow),
             ConstellationFrame::StreamClose(close) => self.mux.close(close),
@@ -143,7 +153,8 @@ mod tests {
     use super::*;
     use nixling_constellation_codec_protobuf::ProtobufCodec;
     use nixling_constellation_core::{
-        PrincipalId, RealmPath, StreamAuthz, StreamDescriptor, StreamFlow, StreamKind,
+        Capability, CapabilitySet, PrincipalId, RealmPath, StreamAuthz, StreamDescriptor,
+        StreamFlow, StreamKind,
     };
     use nixling_constellation_provider::provider::TransportProvider;
     use nixling_constellation_provider::types::{
@@ -191,13 +202,21 @@ mod tests {
         }
     }
 
+    fn display_caps() -> CapabilitySet {
+        CapabilitySet::empty().with(Capability::WindowForwarding)
+    }
+
     #[tokio::test]
     async fn mux_session_gates_open_flow_data_close_round_trip() {
         let (client_s, server_s) = connected_pair().await;
         let server = tokio::spawn(async move {
-            let peer = PeerSession::accept(server_s, ProtobufCodec::new())
-                .await
-                .unwrap();
+            let peer = PeerSession::accept_with_capabilities(
+                server_s,
+                ProtobufCodec::new(),
+                display_caps(),
+            )
+            .await
+            .unwrap();
             let mut s = MuxSession::new(peer);
             assert!(matches!(
                 s.recv().await.unwrap(),
@@ -219,9 +238,10 @@ mod tests {
             );
         });
 
-        let peer = PeerSession::connect(client_s, ProtobufCodec::new())
-            .await
-            .unwrap();
+        let peer =
+            PeerSession::connect_with_capabilities(client_s, ProtobufCodec::new(), display_caps())
+                .await
+                .unwrap();
         let mut client = MuxSession::new(peer);
         client.open_stream(display_open()).await.unwrap();
         assert!(matches!(
@@ -248,9 +268,13 @@ mod tests {
     async fn inbound_data_before_credit_is_rejected() {
         let (client_s, server_s) = connected_pair().await;
         let server = tokio::spawn(async move {
-            let peer = PeerSession::accept(server_s, ProtobufCodec::new())
-                .await
-                .unwrap();
+            let peer = PeerSession::accept_with_capabilities(
+                server_s,
+                ProtobufCodec::new(),
+                display_caps(),
+            )
+            .await
+            .unwrap();
             let mut s = MuxSession::new(peer);
             assert!(matches!(
                 s.recv().await.unwrap(),
@@ -259,9 +283,10 @@ mod tests {
             s.recv().await.unwrap_err()
         });
 
-        let mut peer = PeerSession::connect(client_s, ProtobufCodec::new())
-            .await
-            .unwrap();
+        let mut peer =
+            PeerSession::connect_with_capabilities(client_s, ProtobufCodec::new(), display_caps())
+                .await
+                .unwrap();
         peer.send(&ConstellationFrame::StreamOpen(display_open()))
             .await
             .unwrap();

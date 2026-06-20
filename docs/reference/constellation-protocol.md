@@ -50,6 +50,12 @@ realm, principal, node, operation kind, and idempotency key. A lost-reply
 retry with the same request replays the recorded response, while a
 same-key different request or a post-retention reuse fails closed.
 
+Capabilities are negotiated as positive assertions; the accepted session
+uses the intersection both peers understand and support. A missing
+capability causes a typed `capability-denied` refusal before an operation
+or stream is executed. Negotiation records carry a bounded fingerprint so
+audit can cite the selected set without copying it into every event.
+
 ## Named streams
 
 Post-handshake stream frames are typed and mux-validated before callers see

@@ -90,6 +90,9 @@ deprecations ship one minor release before removal.
 - Remote execution groundwork now supports reliable reconnects, bounded
   retained-log reads, and safe repeated cancellation for future durable
   remote exec sessions.
+- Capability negotiation now rejects operations and streams when a
+  session lacks the required capability, with typed missing-capability
+  errors.
 
 ### Changed
 

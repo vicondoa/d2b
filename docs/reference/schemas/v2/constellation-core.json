@@ -45,11 +45,10 @@
       "$ref": "#/definitions/Capability"
     },
     {
-      "type": "array",
-      "items": {
-        "$ref": "#/definitions/Capability"
-      },
-      "uniqueItems": true
+      "$ref": "#/definitions/CapabilitySet"
+    },
+    {
+      "$ref": "#/definitions/CapabilityNegotiation"
     },
     {
       "$ref": "#/definitions/NodeSummary"
@@ -866,6 +865,44 @@
         }
       ]
     },
+    "CapabilityNegotiation": {
+      "description": "Versioned negotiated capability set. The fingerprint is deterministic and bounded so audit records can cite the negotiated set without expanding it into every event.",
+      "type": "object",
+      "required": [
+        "capabilities",
+        "fingerprint",
+        "schemaVersion"
+      ],
+      "properties": {
+        "capabilities": {
+          "description": "Positive capability assertions.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CapabilitySet"
+            }
+          ]
+        },
+        "fingerprint": {
+          "description": "Deterministic bounded fingerprint of `capabilities`.",
+          "type": "string",
+          "maxLength": 64
+        },
+        "schemaVersion": {
+          "description": "Capability negotiation schema version.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "CapabilitySet": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ProtocolToken"
+      },
+      "maxItems": 64,
+      "uniqueItems": true
+    },
     "ConstellationError": {
       "description": "A typed constellation error: a [`ErrorKind`], an optional structured missing capability (for `CapabilityDenied`), plus a bounded, operator-safe message. The message MUST NOT contain secrets, command output, store paths, argv, or stream payload, and is bounded at decode so it can never be an unbounded side channel.",
       "type": "object",
@@ -897,6 +934,14 @@
           "description": "Bounded operator-actionable message (no payload/secrets).",
           "type": "string",
           "maxLength": 256
+        },
+        "negotiated_capability_fingerprint": {
+          "description": "Fingerprint of the negotiated capability set used for the denial.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 64
         }
       },
       "additionalProperties": false
@@ -908,12 +953,21 @@
           "description": "Session handshake (version + codec negotiation).",
           "type": "object",
           "required": [
+            "capabilities",
             "codec_id",
             "frame",
             "protocol_version",
             "schema_fingerprint"
           ],
           "properties": {
+            "capabilities": {
+              "description": "Versioned positive capability assertions negotiated for this session.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CapabilityNegotiation"
+                }
+              ]
+            },
             "codec_id": {
               "description": "Codec id negotiated for this session (bounded token).",
               "allOf": [
@@ -1374,6 +1428,14 @@
               "description": "Bounded operator-actionable message (no payload/secrets).",
               "type": "string",
               "maxLength": 256
+            },
+            "negotiated_capability_fingerprint": {
+              "description": "Fingerprint of the negotiated capability set used for the denial.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 64
             }
           }
         },
@@ -1914,11 +1976,20 @@
       "description": "Negotiated wire/codec version and capability advertisement exchanged at the start of a peer session.",
       "type": "object",
       "required": [
+        "capabilities",
         "codec_id",
         "protocol_version",
         "schema_fingerprint"
       ],
       "properties": {
+        "capabilities": {
+          "description": "Versioned positive capability assertions negotiated for this session.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CapabilityNegotiation"
+            }
+          ]
+        },
         "codec_id": {
           "description": "Codec id negotiated for this session (bounded token).",
           "allOf": [
@@ -1998,6 +2069,7 @@
         "version-skew",
         "codec-mismatch",
         "schema-fingerprint-mismatch",
+        "capability-mismatch",
         "channel-binding-mismatch",
         "malformed-handshake"
       ]
@@ -2052,11 +2124,11 @@
       "properties": {
         "capabilities": {
           "description": "Advertised capabilities.",
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/Capability"
-          },
-          "uniqueItems": true
+          "allOf": [
+            {
+              "$ref": "#/definitions/CapabilitySet"
+            }
+          ]
         },
         "id": {
           "description": "Stable node id.",
@@ -2667,11 +2739,11 @@
       "properties": {
         "capabilities": {
           "description": "Capabilities this workload can present.",
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/Capability"
-          },
-          "uniqueItems": true
+          "allOf": [
+            {
+              "$ref": "#/definitions/CapabilitySet"
+            }
+          ]
         },
         "id": {
           "description": "Stable operator-facing alias/id.",

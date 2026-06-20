@@ -32,7 +32,7 @@ pub mod trace_context;
 pub mod workload;
 
 pub use audit::{AdmissionAuditRecord, AuditEnvelope, AuthorizationScope, AuthzDecision};
-pub use capability::{Capability, CapabilitySet};
+pub use capability::{Capability, CapabilityNegotiation, CapabilitySet};
 pub use error::{ConstellationError, ErrorKind};
 pub use execution::{
     ExecAttachMode, ExecAttachRequest, ExecCancelRequest, ExecLogsRequest, ExecStartRequest,
