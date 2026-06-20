@@ -129,6 +129,35 @@ EOF
   enabledGateways = lib.mapAttrsToList
     (name: gw: { inherit name gw; })
     (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
+  realmEntrypointPath = "/run/current-system/sw/share/nixling/realm-entrypoints.json";
+  realmEntrypointData =
+    let
+      localEntry = {
+        name = "local";
+        value = {
+          mode = "host-resident";
+          gateway = null;
+        };
+      };
+      gatewayEntries = map
+        (gateway: {
+          name = gateway.gw.realm;
+          value = {
+            mode = "gateway-backed";
+            gateway = "${gateway.gw.vmName}.nixling";
+          };
+        })
+        enabledGateways;
+    in
+    {
+      schemaVersion = 1;
+      entries = lib.listToAttrs ([ localEntry ] ++ gatewayEntries);
+    };
+  realmEntrypointsPkg = pkgs.writeTextFile {
+    name = "nixling-realm-entrypoints";
+    text = builtins.toJSON realmEntrypointData;
+    destination = "/share/nixling/realm-entrypoints.json";
+  };
   hostGatewayConfigJson =
     if builtins.length enabledGateways == 1
     then
@@ -236,7 +265,17 @@ in
       nixlingd = nixlingdPackage;
     };
 
-    environment.systemPackages = [ nixlingdPackage nixlingCliPackage nixlingCliShellArtifactsPackage nixlingActivationHelperPackage ];
+    environment.systemPackages = [
+      nixlingdPackage
+      nixlingCliPackage
+      nixlingCliShellArtifactsPackage
+      nixlingActivationHelperPackage
+      realmEntrypointsPkg
+    ];
+
+    nixling._computed.realmEntrypoints = realmEntrypointData // {
+      path = realmEntrypointPath;
+    };
 
     environment.etc = {
       "nixling/daemon-config.json" = {
