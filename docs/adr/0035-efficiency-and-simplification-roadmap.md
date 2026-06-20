@@ -40,6 +40,20 @@ artifact patterns, fewer subprocess gates, fewer roots of authority, and
 fewer places where an operator or contributor must remember historical
 context.
 
+This stage does **not** preserve backward compatibility for retired
+framework surfaces. Consumers that still need an old behavior can stay pinned
+to an older nixling revision. New efficiency work should delete obsolete
+compatibility layers outright. If current code still calls a compatibility
+wrapper, the cleanup wave updates those callers and removes the wrapper in
+the same patch series.
+
+That does not mean nixling loses the ability to handle future incompatible
+changes. Versioned contracts, migration commands, schema evolution, operator
+cutover tooling, and explicit release notes remain first-class mechanisms.
+The distinction is simple: delete stale compatibility logic for surfaces that
+are already retired; keep the architecture capable of introducing a new,
+intentional migration path when a future breaking change actually needs one.
+
 ## Decision
 
 Nixling will run an efficiency and simplification program as a set of
@@ -55,9 +69,15 @@ surface while preserving the load-bearing contracts from earlier ADRs:
   that path rather than introducing another abstraction hierarchy.
 - Tests remain fail-closed and follow the Layer-1-first test model; this ADR
   does not authorize new ad hoc shell gates.
+- Backward compatibility with retired CLI, systemd, option, test, or module
+  surfaces is not a constraint for these cleanup waves. The default action is
+  removal, not shimming.
+- Future incompatible changes still use explicit versioned contracts and
+  migration/cutover tooling. This ADR deletes stale shims; it does not remove
+  the framework's ability to ship deliberate migrations later.
 
 The waves below are ordered to reduce future work first. Wave 0 creates
-measurement and deletion rules; Waves 1-4 remove duplicated infrastructure;
+measurement and starts compatibility deletion; Waves 1-4 remove duplicated infrastructure;
 Waves 5-8 reshape Rust/Nix boundaries; Waves 9-11 tighten runtime and
 operator-facing efficiency; Wave 12 is the recurring ratchet that keeps the
 codebase from growing back.
@@ -85,12 +105,64 @@ broker mutates privileged runtime state, and `nixlingd` owns daemon ledgers.
 No wave may reintroduce broad recursive `chmod`, `chown`, `setfacl`, or
 raw-path repair logic to make a test pass.
 
-### Delete compatibility scaffolding on schedule
+### Delete obsolete compatibility scaffolding by default
 
 A placeholder, no-op option, legacy comment, bootstrap feature, or
-transition wrapper must have an owner and removal wave. If a compatibility
-surface cannot name a current consumer, it is treated as deletion work, not
-as harmless documentation.
+transition wrapper must name a current invariant that justifies its
+existence. If it cannot, it is deleted. A current caller is not enough to keep
+the wrapper; the cleanup wave updates the caller and removes the wrapper.
+Compatibility aliases and re-exports are not preserved for convenience and
+are not public promises.
+
+Keep migration machinery separate from compatibility shims. A migration tool
+has an explicit source version, target version, validation path, and removal
+or support policy. A compatibility shim silently keeps old behavior alive in
+the current code path. The cleanup waves delete the latter while preserving
+the former capability for future breakage.
+
+### Future compatibility bridge keys
+
+Any future incompatible change that genuinely needs a temporary bridge must
+carry a grep-friendly compatibility key. The key is part of the design
+contract, not an optional comment. It appears in the ADR that authorizes the
+bridge, in any code/docs implementing it, and in the validation or migration
+record that proves it can be removed.
+
+Key format:
+
+```text
+compat-ADR<NNNN>-added-<YYYYMMDD>-<surface>-<slug>
+```
+
+Required metadata beside the key:
+
+| Field | Meaning |
+| --- | --- |
+| `adr` | Four-digit ADR number that authorizes the incompatible change and bridge. |
+| `added` | Date the bridge first landed, in UTC `YYYYMMDD`. |
+| `surface` | Closed surface family such as `cli`, `wire`, `bundle`, `option`, `test`, `schema`, `daemon`, `broker`, or `provider`. |
+| `slug` | Short kebab-case identifier for the specific bridge. |
+| `from` / `to` | Source and target contract versions or behavior names. |
+| `owner` | Owning crate/module or docs/test surface. |
+| `removeWhen` | Concrete removal condition, preferably a version floor or migration proof. |
+| `validation` | Test, policy lint, migration record, or release gate that detects the bridge and proves its behavior. |
+
+Example:
+
+```text
+compat-ADR0042-added-20260815-wire-v6-handshake
+from=wire-v5
+to=wire-v6
+owner=packages/nixling-ipc
+removeWhen=minSupportedWireVersion >= 6
+validation=packages/nixling-contract-tests/tests/policy_compat.rs
+```
+
+Compatibility keys are reserved for deliberate future bridges, not for stale
+legacy code found during cleanup. Cleanup waves delete unkeyed compatibility
+logic. If an implementation wave believes unkeyed compatibility code still
+protects a current invariant, that wave either converts it into an explicit
+keyed bridge under the scheme above or deletes it while updating callers.
 
 ### Prefer typed builders over string assembly
 
@@ -107,9 +179,10 @@ change does not obscure CLI docs drift.
 
 ## Multi-wave plan
 
-### Wave 0 — Baseline, budgets, and deletion ledger
+### Wave 0 — Baseline, budgets, and compatibility deletion
 
-Goal: make efficiency measurable and make deletion safe.
+Goal: make efficiency measurable and begin removing obsolete compatibility
+logic immediately.
 
 Tasks:
 
@@ -121,33 +194,54 @@ Tasks:
    - Nix module count and repeated full-`cfg.vms` / full-`cfg.envs` scans;
    - generated-artifact family runtime;
    - Layer-1 local wall time and peak Nix store / Cargo target growth.
-2. Add a deletion ledger for transitional surfaces. Each row records the
-   surface, owner, current consumer, target removal wave, and replacement.
-   The ledger starts with bootstrap broker feature paths, no-op systemd
-   scaffolding, retired option placeholders, old comments that describe
-   deleted CLI/systemd modes, and shell wrappers superseded by Make targets.
-3. Categorize all code as one of:
+2. Build a compatibility-removal inventory from tracked code and remove the
+   low-risk entries in the same wave. The first pass targets bootstrap broker
+   feature paths, no-op systemd scaffolding, retired option placeholders,
+   old comments that describe deleted CLI/systemd modes, and shell wrappers
+   superseded by Make targets. "Backward compatibility" alone is not a valid
+   reason to keep code; if a current caller still exists, the wave updates the
+   caller and deletes the compatibility path.
+3. Identify migration/versioning machinery that must remain available for
+   future incompatible changes, such as manifest/bundle schema versioning,
+   migration commands, generated schemas, release notes, and cutover
+   validation. This machinery is kept because it enables explicit future
+   migrations, not because it preserves retired behavior today.
+4. Add a policy lint or inventory report for `compat-ADR` keys. It must list
+   each key, parse its ADR/date/surface/slug, and fail on malformed keys or
+   missing required metadata once keyed bridges exist.
+5. Categorize all code as one of:
    - contract;
    - pure model/policy;
    - adapter;
    - side-effect execution;
    - presentation;
    - test-only support.
-4. Define an "efficiency proof" requirement for later waves: each wave must
+6. Define an "efficiency proof" requirement for later waves: each wave must
    delete or consolidate a named surface, not merely move code.
 
 Validation:
 
-- policy lint or repository inventory proves every deletion-ledger row has
-  a valid status;
+- repository inventory lists any remaining compatibility code and the
+  current invariant, not future compatibility, that keeps it alive;
+- repository inventory separately lists future migration/versioning machinery
+  and confirms it is not mixed into normal hot paths as silent compatibility;
+- compatibility-key inventory is ready to detect future keyed bridges and
+  rejects malformed `compat-ADR...` markers;
 - baseline report is generated from tracked files only and does not become
   release documentation.
 
 Exit criteria:
 
 - every later wave has an owned list of surfaces to remove or consolidate;
-- no implementation wave can add a new compatibility stub without a ledger
-  row and removal criterion.
+- low-risk retired compatibility paths are deleted before the broader
+  refactors begin;
+- future schema/version/cutover machinery remains available as explicit
+  migration infrastructure;
+- future compatibility bridges have a standard key shape with ADR/date/surface
+  metadata for later cleanup;
+- no cleanup implementation wave can add a compatibility stub; it must update
+  the caller and delete the old path instead. Future breaking-change bridges
+  must use the keyed `compat-ADR...` scheme above.
 
 ### Wave 1 — Generated artifact family consolidation
 
@@ -220,7 +314,8 @@ Tasks:
    - provider/runtime capability summary.
 2. Replace local recomputation in host and network modules with reads from
    the index.
-3. Move legacy/fallback interface-name derivation into a single helper with
+3. Delete retired interface-name fallback paths that no current host can
+   consume; move any still-required derivation into a single helper with
    typed inputs.
 4. Keep index generation pure and read-only; it may not perform activation,
    tmpfiles, broker, or host mutation work.
@@ -435,11 +530,12 @@ duplicate work.
 
 Tasks:
 
-1. Make `make test-*` the single stable test vocabulary; keep legacy aliases
-   only when they are documented compatibility shims with removal criteria.
+1. Make `make test-*` the single stable test vocabulary; update any current
+   CI or maintainer invocation that still names a legacy alias, then delete
+   the alias in the same wave.
 2. Collapse duplicate shell linting: `test-lint` owns syntax, shellcheck,
-   and Nix parse; `static-fast-tier0.sh` becomes either a pure alias or is
-   retired through the migration ledger.
+   and Nix parse; `static-fast-tier0.sh` is retired after any remaining
+   callers move to `test-lint`.
 3. Move source-tree policy checks that need parsing or cross-file reasoning
    into Rust policy tests under `packages/nixling-contract-tests/tests`.
 4. Keep shell only for orchestration that genuinely needs ecosystem tools,
@@ -463,7 +559,9 @@ Primary targets:
 
 Validation:
 
-- migration ledger records any retired shell gate and successor test;
+- migration records are updated for any retired shell gate and successor
+  test when the test model requires it; do not replace a retired bash wrapper
+  with another per-test cargo wrapper;
 - pinned test inventory confirms no coverage silently disappears;
 - CI still runs every Layer-1 family, but with fewer repeated setup paths.
 
@@ -647,7 +745,9 @@ Tasks:
    - new crate justification;
    - new shell gate justification;
    - new generated artifact family registration;
-   - new compatibility surface removal criterion;
+   - prohibition on new compatibility surfaces;
+   - required `compat-ADR<NNNN>-added-<YYYYMMDD>-<surface>-<slug>` key for any
+     explicitly authorized future bridge;
    - new full-tree Nix scan justification;
    - new public DTO location.
 2. Add lightweight budgets to policy tests where they are stable enough to
@@ -671,7 +771,7 @@ Exit criteria:
 
 ## Highest-leverage deletion and consolidation targets
 
-These targets are good first entries for the Wave 0 deletion ledger:
+These targets are good first compatibility-removal and consolidation inputs:
 
 | Target | Desired outcome |
 | --- | --- |
@@ -681,7 +781,7 @@ These targets are good first entries for the Wave 0 deletion ledger:
 | `nixlingd`, `nixling`, and broker hub files | Focused modules with narrow APIs. |
 | One-off argv/readiness/audit assembly | Typed runner/process builder shared by Nix and Rust contracts. |
 | Activation/tmpfiles/broker ownership overlap | ADR 0034 storage/sync ownership rows with one repair owner. |
-| Duplicate shell lint entrypoints | One lint owner, compatibility aliases only with removal rows. |
+| Duplicate shell lint entrypoints | One lint owner; update callers and delete retired aliases. |
 | Monolithic drift gate reporting | Named generated-artifact families. |
 | Shell policy checks that parse source | Rust contract/policy tests. |
 | Provider dependencies on local-only path | Feature-gated/provider-isolated compile graph. |
@@ -702,6 +802,9 @@ These targets are good first entries for the Wave 0 deletion ledger:
   invariants is failure even when the diff is smaller.
 - Do not optimize CI by skipping families of validation. Efficiency comes
   from better factoring and narrower invalidation, not fail-open coverage.
+- Do not delete explicit migration/versioning infrastructure just because
+  stale compatibility shims are being removed. Future incompatible changes
+  still need deliberate migration paths.
 
 ## Consequences
 
@@ -723,8 +826,8 @@ Negative:
 
 - Several waves initially move code without changing behavior, which can
   create source-line churn in generated docs.
-- Contract extraction may require temporary compatibility re-exports while
-  downstream code moves.
+- Contract extraction must update downstream code synchronously, which can
+  make those patches larger than a compatibility re-export approach.
 - A normalized Nix index is itself a new abstraction; if it becomes a dumping
   ground, it will centralize complexity instead of reducing it.
 - Splitting drift families can make the gate graph more explicit but also
@@ -741,7 +844,8 @@ Each implementation wave must include:
 3. generated artifact regeneration when source locations or DTO homes move;
 4. a panel review before the next wave begins when the wave changes
    architecture or behavior;
-5. no new compatibility surface without a removal row.
+5. no new compatibility surface; update callers and delete old paths in the
+   same wave instead.
 
 Panel reviewers should treat this ADR as a ratchet: a wave that only adds a
 new abstraction without deleting duplication has not satisfied the roadmap,
