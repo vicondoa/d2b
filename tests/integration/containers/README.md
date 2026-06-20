@@ -6,9 +6,9 @@ script that sources `lib.sh`, builds its image
 (`containerImages.<system>.<name>`, auto-discovered from
 `tests/integration/containers/images/*.nix`), loads it into podman, runs it, and asserts.
 
-Run them with `make test-integration`. They run identically on a NixOS host
-and on a GitHub Actions `ubuntu-latest` runner (podman is preinstalled there;
-otherwise `lib.sh` bootstraps it via `nix shell nixpkgs#podman`).
+Run them with `make test-integration` on the development host before opening
+an agent-owned PR. The host must have podman available, or `lib.sh`
+bootstraps it via `nix shell nixpkgs#podman`.
 
 ## What this tier is for
 
@@ -18,8 +18,7 @@ case:
 
 - `ubuntu-host-check` — proves a statically-linked nixling binary
   (`nixling-guestd-static`) runs on a stock `ubuntu:24.04` userland, i.e. the
-  guest-side binary is portable to the distros nixling targets. This mirrors
-  the Ubuntu-based CI environment.
+  guest-side binary is portable to the distros nixling targets.
 
 ## What this tier is deliberately NOT for
 

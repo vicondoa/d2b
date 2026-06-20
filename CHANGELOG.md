@@ -146,6 +146,48 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- NixOS: all host-tool selectors, including the activation helper and
+  Wayland filter process descriptor, now honor
+  `nixling.site.usePrebuiltHostTools = false`. Cross-system flake eval
+  and host-integration fixtures use source-built mode so pre-release
+  daemon/config schema changes are validated together where release
+  prebuilts are unavailable or stale. The qemu-media nix-unit cases now
+  keep artifact coverage on aarch64 while treating qemu-media's
+  x86-only platform assertion as expected.
+- Tests: nixling CLI unit-test sockets now use short paths under the
+  system temporary directory and exec mock-daemon tests use real
+  manifests, avoiding host/worktree-dependent `ENAMETOOLONG` failures
+  and pre-connect mock-server hangs.
+- Tests: nixlingd public status tests now load temp bundle artifacts
+  through the current-user test verification policy with production-like
+  `0640` modes, preserving bundle tamper checks while keeping local
+  unit tests runnable as an unprivileged user.
+- Tests: the privileges-matrix policy test now ignores CLI grouping
+  forms such as `realm` instead of treating them as broker/public
+  operation ids, and the exec-runner natural-exit test waits for the
+  bounded drain thread to publish stream EOF.
+- Tests: the source-filter policy now treats `gateway-vm.nix` as a
+  consumer of centralized host-tool packages rather than a Rust package
+  source builder, while still rejecting ad-hoc source filters there.
+- Tests: updated the Cloud Hypervisor runner-shape contract snapshot to
+  include the guest-control `nl-gctl` virtiofs share emitted by the
+  current bundle.
+- Tests: refreshed the USB attach/detach dry-run goldens to describe the
+  guestd import/detach path instead of the retired SSH fallback.
+- Tests: the Rust gate now runs the broker default/layer1/fake-backends
+  feature passes serially by default so SIGCHLD reaper tests do not
+  contend over process-global signal state; `NL_PARALLEL_BROKER=1`
+  remains available for local timing experiments.
+- Tests: the stub-no-socket gate now checks for unexpected runtime
+  entries instead of live `/run/nixling` directory mtime changes, so
+  unrelated daemon activity on a shared host does not fail the gate.
+- CI: flake-check shards now retry through `nix-instantiate` when the
+  hosted-runner `nix eval` process segfaults while instantiating a
+  single check derivation.
+- CI: the `eval-with-observability` flake check now validates the
+  observability example's assertions, manifest toggle, stack VM, and
+  workload opt-in without forcing the full system toplevel derivation,
+  avoiding a hosted-runner Nix evaluator crash.
 - ADR 0032 ACA display: the daemon-owned verified Relay listener now
   survives the synchronous `gatewayDisplay` request runtime, so Waypipe
   sessions remain connected after `nixling vm exec <aca target>` returns

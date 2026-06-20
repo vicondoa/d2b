@@ -75,55 +75,53 @@ from `nixos-modules/default.nix`. Don't fatten existing files.
 
 ## Build & validate
 
-Four tiers cover the static gate. Pick the one that matches your
-intent.
+Use the top-level `Makefile` targets. The shell scripts under `tests/`
+are implementation details unless a target or `tests/AGENTS.md` tells
+you to run one directly.
 
 ```bash
-# 1. Flake-level eval, both systems we support.
-nix flake check --no-build --all-systems
+# Sub-60s syntax + shellcheck loop for docs/shell-only edits.
+make check-tier0
 
-# 2. Tier-0 fast static gate. Shell syntax + shellcheck on the
-#    repo's bash entrypoints in under a minute. Run it before a
-#    broader review loop and after doc/shell-only rebases.
-bash tests/static-fast-tier0.sh
+# Layer-1 local development umbrella: lint, Rust, proofs, flake,
+# drift, and policy gates. CI runs these sub-targets in parallel.
+make test-unit
 
-# 3. Fast PR-loop gate. Catches parse / shellcheck / flake
-#    check / rust workspace / bundle invariants / host-prepare
-#    canaries / cross-cutting drift in ~13 min cold (~2 min warm),
-#    ~520 G peak /nix/store. Run before every commit and after every
-#    rebase. Does NOT exercise the eval gates, mid-tier consumer-config
-#    evals, manifest contract, broker daemons, per-example
-#    flake-check, or audio component — those land in tier (4) below.
-bash tests/static-fast.sh
+# Focused Layer-1 shards when iterating on one surface.
+make test-lint
+make test-rust
+make test-proofs
+make test-flake
+make test-drift
+make test-policy
 
-# 4. Full panel/wave-exit gate (the canonical Layer 1 set). Adds
-#    smoke-eval, assertions-eval, observability-eval, mid-tier evals,
-#    manifest contract, control-plane gates, per-example flake-check,
-#    cli-contract-coverage, cli-json-drift. ~30-90 min cold,
-#    peak disk capped at ~400 G via per-phase nix store gc.
-#    Set NL_GATE_DISK_BUDGET_GIB=300 to fail-closed at the phase
-#    boundary if free disk drops below the budget.
-bash tests/static.sh
+# Full Layer-1 gate; currently wraps tests/static.sh.
+make check
 
-# 5. Optional focused checks (called transitively by static.sh, also
-#    useful standalone while iterating):
-bash tests/assertions-eval.sh        # consolidated batch eval +
-                                     # fallback for the 3 throw cases
-                                     # (~13 min cold)
-nix-instantiate --eval --strict \
-  -E 'let f = import ./tests/unit/smoke/smoke-eval-tpm.nix; r = f {}; in r.drvPath' \
-  >/dev/null
-bash tests/net-vm-network-eval.sh    # net VM networkd config invariants
-bash tests/usbip-gating-eval.sh      # host-side USBIP gating + env scoping
-bash tests/cli-json.sh               # daemon CLI JSON envelope contract
-bash tests/legacy-unit-denylist-eval.sh  # fail-closed gate (ADR 0015)
-bash tests/agents-md-rewrite-eval.sh # AGENTS.md docs invariant
+# Local Layer 1 + container integration. Still run the explicit
+# host/manual pre-PR targets below before opening an agent-owned PR.
+make test
 ```
 
-Layer-2 integration tests (`tests/integration/live/nixling-store.sh`) require a live
-host with `nixlingd` + `nixling-priv-broker` active; they're
-documented in [`tests/README.md`](./tests/README.md). Most
-contributors do **not** need to run them — Layer 1 is the PR gate.
+Before opening an agent-owned PR, run the host/manual integration
+targets on the development host; do not rely on the PR pipeline for
+them:
+
+```bash
+make test-integration       # Layer 2 container tests; needs podman
+make test-host-integration  # runNixOSTest VM checks; NixOS + KVM host
+```
+
+`make test-host-integration` is x86_64-linux only and may fall back to
+slow TCG if `/dev/kvm` is absent. Hardware and live-host tests remain
+explicit manual tiers (`make test-hardware` or `NL_LIVE=1 bash
+tests/integration/live/<name>.sh`) and require a host with the matching
+devices or deployed nixling state.
+
+For where tests live, when to add or retire each kind of test, and
+which pins/ledgers to update, read [`tests/AGENTS.md`](./tests/AGENTS.md).
+[`tests/README.md`](./tests/README.md) is the human quick-start for the
+same test model.
 
 ## Development workflow
 
@@ -531,34 +529,25 @@ In that implementation, the roster is selected per plan via
 
 ## Test layout
 
-| File                                  | Role                                                                                         |
-| ------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `tests/static-fast-tier0.sh`          | **Tier-0 sub-60s fast gate.** Bash syntax + `shellcheck` on repo entrypoints and helpers; no Nix eval/build work. |
-| `tests/static-fast.sh`                | **Fast PR-loop gate.** Parse / `shellcheck` / `flake check` / rust workspace / bundle invariants / host-prepare canaries / cross-cutting drift without the full panel-exit set. |
-| `tests/static.sh`                     | **Top-level Layer-1 gate.** Parse, `flake check`, smoke evals, assertion/observability/USBIP/autostart/restart-policy eval gates, manifest contract, per-example flake checks. Runs from repo root; override with `ROOT=<path>`. |
-| `tests/unit/smoke/smoke-eval.nix`                | Workload smoke: minimal consumer-style nixosSystem, builder's native system.                 |
-| `tests/unit/smoke/smoke-eval-graphics.nix`       | Same shape, with `graphics.enable = true`. x86_64-only.                                      |
-| `tests/unit/smoke/smoke-eval-tpm.nix`            | TPM host-surface regression gate: swtpm parent-dir ACLs, swtpm flush helper, runner socket ACLs, and ownership-migration invariants. |
-| `tests/unit/smoke/smoke-eval-aarch64.nix`        | Headless smoke cross-evaluated on aarch64-linux (multi-arch eval-graph regression gate).     |
-| `tests/assertions-eval.sh`            | Negative assertion cases (CIDR overlap, naming invariants, platform gate, missing `waylandUser`, reserved-path invariants, boot-cleaned `tmpDir`, etc.). Each bad case must fail eval with the expected message. |
-| `tests/usbip-gating-eval.sh`          | Host-side USBIP gating: absent until both host + enabled-VM opt-ins are set, and scoped to opted-in envs only. |
-| `tests/niri-vm-borders-eval.sh`       | Opt-in niri KDL border generation: disabled by default, correct window-rule per graphics VM when enabled, per-VM color override, default color stability, and custom `outputPath`. |
-| `tests/net-vm-network-eval.sh`        | Net VM networkd + nftables invariants — most importantly the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp`, plus per-env MTU/MSS, cross-env drops, and east-west toggles. |
-| `tests/volume-mounts-eval.sh`         | Declared `microvm.volumes` invariant: Cloud Hypervisor disk serials and guest `fileSystems` mounts stay aligned, and duplicate/reserved/overlong serials fail eval. |
-| `tests/video-sidecar-hardening-eval.sh` | Eval-time hardening gate for the broker `SpawnRunner` video runner descriptor (`AF_UNIX` only, syscall filter, empty capability sets). |
-| `tests/minijail-validator-wayland-proxy.sh` | Wayland filter proxy minijail profile gate: mandatory seccomp, empty capabilities, empty device binds, dedicated runtime dir (`/run/nixling-wlproxy/<vm>`), no PipeWire/Pulse socket access; compositor access is granted to the `wlproxy` role by ACL, not by a profile bind mount. |
-| `tests/host-integration/daemon-smoke.nix`        | **runNixOSTest (`make test-host-integration`).** Hermetic VM check of the daemon-only end-state (ADR 0015): broker socket-activated, `nixlingd` binds `/run/nixling/public.sock`, the three required service/socket units present (the `nixling.slice` cgroup slice is allowed), no retired per-VM template / host-singleton / `microvms.target`. |
-| `tests/host-integration/state-dir-acl.nix`       | **runNixOSTest (`make test-host-integration`).** Hermetic VM check of the `g:nixling:--x` traversal ACL on `/var/lib/nixling`: launcher-group member can stat/read a per-VM key, an outsider is denied stat/list, the launcher cannot list (traverse-only). Replaces the retired Layer-2 `state-dir-acl-runtime.sh` + its self-hosted `nixling-sudo` workflow. |
-| `tests/host-integration/bridge-isolation.nix`    | **runNixOSTest (`make test-host-integration`).** Hermetic VM check of Linux bridge isolation: the net-VM port stays reachable while workload ports stay isolated even after peer-style MAC spoofing. Replaces the retired `bridge-isolation-runtime.sh`. |
-| `tests/host-integration/privilege-oracle.nix`    | **runNixOSTest (`make test-host-integration`).** Hermetic VM check of the live `nixling-priv-broker` posture: bounded `CapBnd`, empty `CapAmb`, seccomp filter active, `nixling.slice` cgroup placement — derived from the rendered systemd unit. Replaces the retired self-hosted `l1c-privilege-oracle.sh`. |
-| `tests/legacy-unit-denylist-eval.sh`  | Fail-closed gate: no example's `nixos-rebuild dry-build` output emits a retired per-VM systemd template or host-singleton framework service (ADR 0015). |
-| `tests/adr-0015-presence-eval.sh`     | Asserts the daemon-only ADR exists, carries the canonical header, and is cross-referenced from `AGENTS.md`. |
-| `tests/agents-md-rewrite-eval.sh`     | Asserts `AGENTS.md` does not describe the legacy bash CLI or retired per-VM systemd templates as live framework surfaces. |
-| `tests/integration/live/nixling-store.sh`              | Layer 2, optional. Per-VM `/nix/store` hardlink farm + `nixling vm switch` lifecycle. Requires a live host. |
-| `tests/lib.sh`                        | Shared shell helpers (logging, skip-detection, root-path derivation).                        |
+The test tree has a binding local operating manual:
+[`tests/AGENTS.md`](./tests/AGENTS.md). Read it before adding,
+moving, or retiring test coverage. It defines the closed Layer-1 set,
+the Layer-2 exceptions, the exact file locations, and the pin/ledger
+updates required for each change.
 
-The full layered overview, including Layer-2 integration tests, is in
-[`tests/README.md`](./tests/README.md).
+At a glance:
+
+| Location | Role |
+| --- | --- |
+| `tests/test-*.sh`, `tests/static.sh`, `tests/runner.sh` | Make-target drivers and orchestrators; do not add a new top-level shell gate unless `tests/AGENTS.md` explicitly permits it. |
+| `tests/unit/nix/cases/` | Auto-discovered nix-unit eval cases. After adding/removing one, run `make nix-unit-pin`. |
+| `tests/unit/nix/eval-cases/`, `tests/unit/smoke/` | Flake-check and smoke-eval definitions. After adding/removing a flake check, run `make flake-matrix-pin`. |
+| `packages/<crate>/src/**`, `packages/<crate>/tests/*.rs` | Rust unit and binary integration tests. Prefer these over shell gates when behaviour is hermetic. |
+| `packages/nixling-contract-tests/tests/` | Rendered-artifact contract tests and policy lints. |
+| `tests/unit/gates/`, `tests/unit/meta/` | Drift and meta gates; closed set. Regenerate affected artifacts with the matching `xtask gen-*` command instead of adding another gate. |
+| `tests/integration/containers/` | Container integration tests run by `make test-integration`; host/manual pre-PR tier. |
+| `tests/host-integration/*.nix` | runNixOSTest VM checks run by `make test-host-integration`; local NixOS/KVM pre-PR tier, not the PR pipeline. |
+| `tests/integration/live/`, `tests/host-integration/hardware/` | Live-host and hardware tests. Manual only; require deployed state or real devices. |
 
 ## CI / `flake.checks`
 
@@ -656,11 +645,16 @@ the public option/schema surface and are not bookkeeping; leave them.
 
 `main` is protected: changes land via pull requests, not direct
 pushes. Develop on a feature branch (or worktree), validate locally
-against the gates above, open a PR, let CI / panel review run, then
-squash-merge. The detailed wave-tag commit convention in
+against the gates above, open a PR, let CI run, then squash-merge. The
+detailed wave-tag commit convention in
 [Commit conventions](#commit-conventions) applies to in-development
 commits on those feature branches; `main` itself is maintained as a
 by-release history.
+
+PR bodies record the change, validation evidence, and substantive
+review outcomes only. Do **not** tag or list the AI agent, assistant, or
+model used to author or review a change, and do not add PR-template
+fields that request panel, agent, or model metadata.
 
 ## Commit conventions
 
@@ -745,6 +739,11 @@ by-release history.
   (W2fu4 H10) for the full retrospective.
 
 - **Signing.** Sign-offs / GPG signing are not used.
+- **AI/tool attribution.** Do not tag or list the AI agent, assistant,
+  or model used in commit subjects, commit bodies, PR descriptions,
+  changelog entries, or shipped docs. Do not add `Co-authored-by`
+  trailers for AI tools unless the human explicitly requests one for
+  that change.
 - **Atomicity.** One logical change per commit. Mechanical
   reformat or rename passes go in their own commit so the
   human-reviewable diff stays small.

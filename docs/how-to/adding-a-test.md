@@ -3,9 +3,12 @@
 nixling tests are invoked through **`make` targets** (one per test type). The
 single rule:
 
-> **`make check` is the done-gate.** A change is not finished until `make check`
-> passes. CI runs the same targets. New tests must be classified in
-> `tests/migration-ledger.toml` (`make check-inventory` fails closed otherwise).
+> **`make check` is the Layer-1 done-gate.** A change is not finished until
+> `make check` passes. Agent-owned PRs also run `make test-integration` and
+> `make test-host-integration` on the host before PR creation; those manual
+> integration targets are not replaced by the PR pipeline. New tests must be
+> classified in `tests/migration-ledger.toml` (`make check-inventory` fails
+> closed otherwise).
 
 ## Decision tree — which kind of test?
 
@@ -21,7 +24,8 @@ target and where the test lives.
 | That a **misconfig is rejected** at eval | **E** | `test-nix-unit` | `nix-unit` (Bucket-A value over `config.assertions`; Bucket-B `expectedError`) |
 | That a config **builds** / a schema is strict | **F** | `test-flake` | `flake.checks` (realized via `nix build`) |
 | A **source/doc cross-reference** or structural-policy invariant | **H** | `test-policy` | the policy scanner / a focused gate |
-| Real-kernel runtime behaviour with **no physical device** (broker sockets, cgroups, pidfd, store, network, audit, ACL, swtpm) | **G-ci** | `test-integration` | `runNixOSTest` VM (runs in CI on a KVM job + local NixOS) |
+| Foreign-userland portability for static binaries | **G-container** | `test-integration` | `tests/integration/containers/*.sh` under rootless podman; local host/manual pre-PR, not the PR pipeline |
+| Real-kernel runtime behaviour with **no physical device** (broker sockets, cgroups, pidfd, store, network, audit, ACL, swtpm) | **G-host** | `test-host-integration` | `tests/host-integration/*.nix` runNixOSTest VM checks; local NixOS/KVM host/manual pre-PR, not the PR pipeline |
 | Real **device passthrough** (GPU/YubiKey/hardware-TPM) or a **full microVM boot** | **G-hw** | `test-hardware` | a NixOS host **with the devices** — **not runnable in CI** |
 
 Default when unsure: if it can be expressed as an assertion over a rendered
@@ -47,7 +51,9 @@ migration-scoped. You only must: (1) put the test behind a `make` target, and
 
 The PR template checklist is mandatory:
 
-- `make check` passes (CI also runs `make check-ci`).
+- `make check` passes.
+- `make test-integration` passes on the host before PR creation.
+- `make test-host-integration` passes on the host before PR creation.
 - If you touched GPU/YubiKey/hardware-TPM or a full microVM boot, run
   `make test-hardware` on a NixOS host **with the devices** and paste results
   (CI cannot — hosted runners have KVM but no devices).
@@ -57,4 +63,4 @@ The PR template checklist is mandatory:
   updated in lockstep.
 
 See [`AGENTS.md` → "Build & validate"](../../AGENTS.md) for the full target
-table and the three CI tiers.
+table and [`tests/AGENTS.md`](../../tests/AGENTS.md) for the placement rules.

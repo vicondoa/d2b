@@ -7,7 +7,7 @@
 # and pure-eval gates cannot exercise.
 #
 # This file is NOT a flake check: the VM tests live under the `vmChecks` flake
-# output (selected explicitly by `make test-integration`), so the Layer-1
+# output (selected explicitly by `make test-host-integration`), so the Layer-1
 # `nix flake check --no-build --all-systems` never realizes a VM.
 { self, lib }:
 
@@ -21,6 +21,7 @@ let
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
+      usePrebuiltHostTools = false;
     };
     nixling.envs.work = {
       lanSubnet = "10.20.0.0/24";

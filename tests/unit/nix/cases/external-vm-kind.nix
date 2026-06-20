@@ -5,10 +5,11 @@
 # qemu-media incompatibility assertions, the structural skip that keeps
 # external media VMs out of the per-VM NixOS evaluator / store emitters, and
 # the QMP-ready qemu-media runner contract.
-{ mkEval, lib, flakeRoot, ... }:
+{ mkEval, lib, flakeRoot, system, ... }:
 
 let
   cleanGuest = flakeRoot + "/tests/unit/nix/eval-cases/guest-fixtures/clean-guest.nix";
+  qemuMediaPlatformAssertionsGreen = system == "x86_64-linux";
 
   mkHost = { vmAttrs ? { }, includeIndex ? true }:
     { lib, ... }: {
@@ -756,8 +757,8 @@ in
     expected = {
       unset = false;
       explicitFalse = false;
-      unsetAssertionsGreen = true;
-      falseAssertionsGreen = true;
+      unsetAssertionsGreen = qemuMediaPlatformAssertionsGreen;
+      falseAssertionsGreen = qemuMediaPlatformAssertionsGreen;
     };
   };
 }

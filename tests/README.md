@@ -33,11 +33,11 @@ tests/
 │   ├── meta/                                                    meta gates (guard the test infra; closed set)
 │   └── gates/                                                   drift + perf gates (closed set)
 ├── integration/                   ── Layer 2 ──
-│   ├── containers/                                              type 9: podman (make test-integration)
+│   ├── containers/                                              type 9: podman (make test-integration; host/manual pre-PR)
 │   ├── distro-matrix/                                           distro pins + fixtures
 │   └── live/                                                    type 11: NL_LIVE live-host (manual)
 └── host-integration/
-    ├── *.nix                                                    type 10: runNixOSTest (make test-host-integration)
+    ├── *.nix                                                    type 10: runNixOSTest (make test-host-integration; host/manual pre-PR)
     └── hardware/                                                type 12: real-device tests (manual)
 ```
 
@@ -49,7 +49,7 @@ Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
 | Command | Runs | Where |
 |---------|------|-------|
 | `make test-unit` | **L1 umbrella**: lint + rust + proofs + flake + drift + policy | local + CI (parallel jobs) |
-| `make test` | `test-unit` + `test-integration` | local |
+| `make test` | `test-unit` + `test-integration` | local host; still run `make test-host-integration` before opening an agent-owned PR |
 | `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
 | `make test-rust` | comprehensive Rust gate (fmt, clippy, cargo test, contract, broker ×3, deny/audit) | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
@@ -58,8 +58,8 @@ Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
 | `make test-nix-unit` | nix-unit corpus (already covered by test-flake; focused convenience target) | local |
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
 | `make test-policy` | meta gates (ci-coverage, ci-uses-make, adr-index, etc.) | local + CI |
-| `make test-integration` | type-9 podman container tests | **ubuntu CI + local** (podman) |
-| `make test-host-integration` | type-10 runNixOSTest VM checks | **local NixOS host w/ KVM** (manual; TCG fallback) |
+| `make test-integration` | type-9 podman container tests | **local host/manual pre-PR** (podman; not the PR pipeline) |
+| `make test-host-integration` | type-10 runNixOSTest VM checks | **local NixOS host w/ KVM**, manual pre-PR (not the PR pipeline; TCG fallback) |
 | `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
 | `make check` | full Layer-1 gate (`tests/static.sh`) | local + CI |
@@ -73,7 +73,7 @@ a `nixlingd` restart. The USBIP script requires
 `NL_USBIP_VM=<vm>` and `NL_USBIP_BUSID=<busid>` and uses only `nixling usb`
 verbs for USB state changes.
 
-CI runs the individual sub-targets (`test-lint`, `test-rust`, etc.) in parallel.
+CI runs the individual Layer-1 sub-targets (`test-lint`, `test-rust`, etc.) in parallel.
 The x86 `test-flake` leg is sharded one job per flake check (the matrix is
 enumerated at CI time by `make test-flake-list`; the `test-flake-x86` job is a
 stable aggregator over the shards + the non-`checks` outputs job). The aarch64
@@ -81,7 +81,9 @@ leg runs only the lightweight `smoke-eval-aarch64.nix` expression. A fail-closed
 drift gate keeps the matrix and smoke wiring in sync with the flake (`make
 flake-matrix-pin` to update its pin).
 Locally, `make test-unit` runs the sub-targets serially and `make test-flake`
-runs the full native check.
+runs the full native check. Agent-owned PRs also run `make test-integration`
+and `make test-host-integration` on the host before the PR is opened; those
+manual integration tiers are not replaced by PR pipeline jobs.
 
 Useful knobs:
 - `NL_NO_SCCACHE=1` — disable sccache in the rust gate.
