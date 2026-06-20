@@ -16,11 +16,13 @@ materializes a broker-spawned per-env `usbipd` backend listening on TCP
 source addresses to host loopback, so it's the operational equivalent
 of a loopback bind but enforced via netfilter rather than by the
 socket). A broker-spawned `socat` proxy binds exactly the env's
-uplink-bridge IP at TCP 3240; the guest loads `vhci_hcd` and ships the
-`usbip` CLI so it can `usbip attach` against that proxy. The hot-plug
-ceremony — bind on host, attach in VM, detach + unbind on Ctrl-C — is
-orchestrated by the host-side `nixling usb attach|detach|probe` CLI
-surface dispatched through the daemon → broker `SpawnRunner` path.
+uplink-bridge IP at TCP 3240; the guest loads `vhci_hcd`, ships the
+`usbip` CLI, and advertises guestd's `UsbipImport` capability so
+`nixlingd` can import/detach through authenticated guest-control. The
+hot-plug ceremony is daemon-owned: host bind/unbind and firewall/proxy
+reconcile go through the privileged broker, while guest attach/detach goes
+through guestd. The CLI sends one intent to `nixlingd`; it never SSHes into
+the guest for USBIP.
 
 The component itself only declares the **guest-side** wiring. All
 host-side machinery (usbipd backend + proxy broker-spawned runners,
@@ -57,10 +59,9 @@ Per opted-in env (declared in [`network.nix`](../../nixos-modules/network.nix); 
 > documented below is enforced as the runner contract.
 >
 > `ModprobeIfAllowed{module: "usbip-host"}` runs before the first
-> `UsbipBackend` runner for each env. Per-attach `usbip bind` /
-> `unbind` / `attach` / `detach` steps run as broker-spawned
-> one-shot runners with per-env busid locking, pidfd handoff, and
-> audit coverage.
+> `UsbipBackend` runner for each env. Per-attach host `usbip bind` /
+> `unbind` steps are broker ops with per-env busid locking and audit
+> coverage; guest `usbip attach` / `detach` is an authenticated guestd RPC.
 
 - **`nixling.slice/sys-<env>/usbipd-backend` runner** — runs
   `usbipd -4 --tcp-port <backendPort>`. usbipd has no `--host` flag
@@ -121,15 +122,14 @@ Per host (in [`host.nix`](../../nixos-modules/host.nix)):
 
 CLI (`nixling usb attach|detach|probe` in the Rust CLI).
 
-- Scans `/sys/bus/usb/devices/*/idVendor` for `1050`.
-- Acquires an exclusive flock on `/run/nixling/usbipd.lock` (mode
-  `0660 root:nixling`, created by tmpfiles).
-- Stops other envs' usbipd backend/proxy runners so the device is
-  bound in exactly one env at a time (broker `SignalRunner` against
-  the per-env DAG leaves under `nixling.slice/sys-<env>/usbipd-*`).
-- `usbip bind -b <busid>` on the host, `usbip attach -r <hostIp> -b
-  <busid>` inside the VM via SSH, holds the foreground until Ctrl-C,
-  then detaches + unbinds.
+- Sends one apply/dry-run intent to `nixlingd`.
+- `attach --apply`: guestd first detaches any stale matching import, the
+  broker binds/locks the host busid and reconciles firewall/proxy state, then
+  guestd imports the device inside the VM.
+- `detach --apply`: guestd detaches matching guest imports, then the broker
+  unbinds the host busid and reconciles the proxy. If guest cleanup is
+  unavailable, the host unbind still runs and the daemon reports the guest
+  cleanup failure as degraded state.
 
 ## Guest-side resources created
 
@@ -139,16 +139,16 @@ The entire `components/usbip.nix` is two lines of payload:
 {
   boot.kernelModules = [ "vhci_hcd" ];
   environment.systemPackages = [ pkgs.linuxPackages.usbip ];
+  nixling.guestControl.usbipPath = ".../bin/usbip";
 }
 ```
 
 - `vhci_hcd` lets `usbip attach` materialise the redirected device
   as `/dev/hidraw<N>` (or a raw USB node) inside the guest kernel.
-- The `usbip` CLI is needed in-guest so the host-side `nixling usb
-  attach|detach` Rust CLI can SSH in and issue `usbip attach` / `usbip
-  detach`. Host-side `usbip bind/unbind`, firewall, and proxy
-  reconciliation still dispatch through the daemon → broker path; the
-  guest import uses the framework-managed SSH key and known-hosts file.
+- The `usbip` CLI is needed in-guest so guestd can issue `usbip port`,
+  `usbip detach`, and `usbip attach` after authenticating the host over
+  guest-control. Host-side `usbip bind/unbind`, firewall, and proxy
+  reconciliation dispatch through the daemon → broker path.
 
 ## Runtime invariants
 
@@ -164,7 +164,7 @@ The entire `components/usbip.nix` is two lines of payload:
   the nftables `ACCEPT source ∈ <env.uplinkSubnet>` carve-out (per
   ADR 0013 + this doc's "Firewall carve-outs" section above) keys
   on the env's own uplink subnet.
-- The guest's `usbip attach` connects to its own env's
+- Guestd's `usbip attach` connects to its own env's
   `usbipdHostIp` (the host-side end of that env's uplink bridge),
   not the host's WAN address.
 
@@ -195,11 +195,8 @@ The entire `components/usbip.nix` is two lines of payload:
   .enable = false` and the udev rules are absent. Plug the key in,
   or flip the site flag.
 - **`nixling usb attach <vm> <busid> --apply` failing with "VM at <ip> is not reachable".**
-  The target VM has not been started — run `nixling vm start <vm>` first.
-  Also requires the VM to have `staticIp`, `ssh.user`, and
-  `ssh.keyPath` resolvable. That stable address is for operator
-  convenience, not anti-spoofing; see the
-  [design threat-model note](../explanation/design.md).
+  The target VM has not been started or guest-control is not healthy — run
+  `nixling vm start <vm>` first and check `nixling vm status <vm>`.
 - **`usbip attach` succeeds but the YubiKey doesn't appear in
   `lsusb` inside the VM.** `vhci_hcd` failed to load — check
   `dmesg` in the guest. Verify the component is enabled

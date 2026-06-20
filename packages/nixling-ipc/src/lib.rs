@@ -13,6 +13,7 @@ pub mod guest_proto {
 pub mod guest_wire;
 pub mod public_wire;
 pub mod types;
+pub mod usbip;
 
 pub use nixling_core::error::{Error, SemverRange, Version};
 pub use nixling_core::privileges_w3::W3BrokerOperation;

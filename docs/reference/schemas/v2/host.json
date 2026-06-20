@@ -96,6 +96,24 @@
         }
       ]
     },
+    "qemuMedia": {
+      "description": "Optional host-side QEMU/media source registry emitted by newer host configurations. Current core/broker paths do not consume this field, but the CLI must parse host.json forward-compatibly when the host already emits it.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/QemuMediaConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "runtimeProviders": {
+      "description": "Optional runtime-provider catalogue emitted by newer host configurations.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/RuntimeProvider"
+      }
+    },
     "schemaVersion": {
       "description": "Schema version used by this artifact.",
       "type": "string"
@@ -107,6 +125,13 @@
           "$ref": "#/definitions/SitePolicy"
         }
       ]
+    },
+    "vmRuntimes": {
+      "description": "Optional per-VM runtime-provider assignment emitted by newer host configurations.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/VmRuntime"
+      }
     }
   },
   "additionalProperties": false,
@@ -722,6 +747,157 @@
       },
       "additionalProperties": false
     },
+    "QemuMediaConfig": {
+      "type": "object",
+      "required": [
+        "registryDir",
+        "reloadBehavior",
+        "runtimeRulesPath",
+        "sources"
+      ],
+      "properties": {
+        "registryDir": {
+          "type": "string"
+        },
+        "reloadBehavior": {
+          "type": "string"
+        },
+        "runtimeRulesPath": {
+          "type": "string"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/QemuMediaSource"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaSource": {
+      "type": "object",
+      "required": [
+        "format",
+        "mediaRef",
+        "readOnly",
+        "registryScope",
+        "slot",
+        "sourceKind",
+        "vm"
+      ],
+      "properties": {
+        "format": {
+          "type": "string"
+        },
+        "mediaRef": {
+          "type": "string"
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "registryScope": {
+          "type": "string"
+        },
+        "slot": {
+          "type": "string"
+        },
+        "sourceKind": {
+          "type": "string"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeProvider": {
+      "type": "object",
+      "required": [
+        "capabilities",
+        "kind",
+        "provider"
+      ],
+      "properties": {
+        "capabilities": {
+          "$ref": "#/definitions/RuntimeProviderCapabilities"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/definitions/RuntimeProviderIdentity"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeProviderCapabilities": {
+      "type": "object",
+      "required": [
+        "configSync",
+        "display",
+        "exec",
+        "guestControl",
+        "inGuestObservability",
+        "keys",
+        "lifecycle",
+        "ssh",
+        "storeSync",
+        "usbHotplug"
+      ],
+      "properties": {
+        "configSync": {
+          "type": "boolean"
+        },
+        "display": {
+          "type": "boolean"
+        },
+        "exec": {
+          "type": "boolean"
+        },
+        "guestControl": {
+          "type": "boolean"
+        },
+        "inGuestObservability": {
+          "type": "boolean"
+        },
+        "keys": {
+          "type": "boolean"
+        },
+        "lifecycle": {
+          "type": "boolean"
+        },
+        "ssh": {
+          "type": "boolean"
+        },
+        "storeSync": {
+          "type": "boolean"
+        },
+        "usbHotplug": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeProviderIdentity": {
+      "type": "object",
+      "required": [
+        "driver",
+        "id",
+        "type"
+      ],
+      "properties": {
+        "driver": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "SitePolicy": {
       "description": "Host-wide policy bits used when deriving per-env settings.",
       "type": "object",
@@ -821,6 +997,56 @@
           "type": "integer",
           "format": "uint16",
           "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmRuntime": {
+      "type": "object",
+      "required": [
+        "runtime",
+        "stateDir",
+        "vm"
+      ],
+      "properties": {
+        "bridge": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "netVm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runtime": {
+          "$ref": "#/definitions/RuntimeProvider"
+        },
+        "stateDir": {
+          "type": "string"
+        },
+        "staticIp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tap": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": "string"
         }
       },
       "additionalProperties": false

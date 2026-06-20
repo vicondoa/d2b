@@ -391,6 +391,8 @@ fn guest_control_proto_declares_service_methods_and_descriptor_sentinels() {
         "TtyWinResize",
         "ExecSignal",
         "ExecCancel",
+        "ReadGuestFile",
+        "UsbipImport",
     ] {
         assert!(
             any_line_matches(&proto, &format!(r"^\s*rpc\s+{method}\s*\(")),
@@ -415,6 +417,8 @@ fn guest_control_proto_declares_service_methods_and_descriptor_sentinels() {
         "retry_after_ms",
         "host_auth_tag",
         "guest_auth_tag",
+        "bus_id",
+        "detached_ports",
     ] {
         assert!(
             all_field_names.contains(field),
@@ -457,6 +461,10 @@ fn guest_control_proto_declares_service_methods_and_descriptor_sentinels() {
         "GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_QUOTA_EXCEEDED",
         "GUEST_CONTROL_ERROR_KIND_CWD_INVALID",
         "GUEST_CONTROL_ERROR_KIND_CWD_DENIED",
+        "GUEST_CAPABILITY_USBIP_IMPORT",
+        "GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED",
+        "USBIP_IMPORT_ACTION_ATTACH",
+        "USBIP_IMPORT_ACTION_DETACH",
     ] {
         assert!(
             all_enum_values.contains(value),
@@ -518,6 +526,24 @@ fn guest_control_proto_field_numbers_and_reserved_slots_are_stable() {
         "capabilities",
         "CapabilitiesResponse",
         4,
+        false,
+    );
+    assert_field(
+        &shape,
+        "UsbipImportRequest",
+        "action",
+        "UsbipImportAction",
+        2,
+        false,
+    );
+    assert_field(&shape, "UsbipImportRequest", "host", "string", 3, false);
+    assert_field(&shape, "UsbipImportRequest", "bus_id", "string", 4, false);
+    assert_field(
+        &shape,
+        "UsbipImportResponse",
+        "detached_ports",
+        "uint32",
+        3,
         false,
     );
 

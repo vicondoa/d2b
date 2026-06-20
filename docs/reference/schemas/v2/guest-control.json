@@ -36,6 +36,8 @@
     "schemaVersion",
     "transport",
     "ttyWinResize",
+    "usbipImport",
+    "usbipImportResult",
     "writeStdin",
     "writeStdinResult"
   ],
@@ -140,6 +142,12 @@
     },
     "ttyWinResize": {
       "$ref": "#/definitions/TtyWinResizeRequest"
+    },
+    "usbipImport": {
+      "$ref": "#/definitions/UsbipImportRequest"
+    },
+    "usbipImportResult": {
+      "$ref": "#/definitions/UsbipImportResponse"
     },
     "writeStdin": {
       "$ref": "#/definitions/WriteStdinRequest"
@@ -1017,7 +1025,8 @@
         "exec-logs",
         "tty-resize",
         "signals",
-        "read-guest-file"
+        "read-guest-file",
+        "usbip-import"
       ]
     },
     "GuestConnectAckLine": {
@@ -1104,7 +1113,10 @@
         "file-too-large",
         "path-unsafe",
         "read-denied",
-        "invalid-program"
+        "invalid-program",
+        "usbip-unavailable",
+        "usbip-command-failed",
+        "usbip-invalid-bus-id"
       ]
     },
     "GuestCwd": {
@@ -1391,7 +1403,8 @@
         "exec",
         "log-storage",
         "token",
-        "vsock"
+        "vsock",
+        "usbip"
       ]
     },
     "GuestTransportKind": {
@@ -1451,6 +1464,16 @@
         }
       },
       "additionalProperties": false
+    },
+    "GuestUsbipBusId": {
+      "type": "string",
+      "maxLength": 31,
+      "minLength": 1
+    },
+    "GuestUsbipHost": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1
     },
     "GuestUser": {
       "type": "string",
@@ -1987,6 +2010,71 @@
           "format": "uint32",
           "maximum": 65535.0,
           "minimum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipImportAction": {
+      "type": "string",
+      "enum": [
+        "attach",
+        "detach"
+      ]
+    },
+    "UsbipImportRequest": {
+      "description": "Guest-side USBIP lifecycle operation. `host` and `bus_id` are host-declared values resolved by nixlingd from the trusted manifest; guestd validates both before invoking `usbip`.",
+      "type": "object",
+      "required": [
+        "action",
+        "busId",
+        "host",
+        "metadata"
+      ],
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/UsbipImportAction"
+        },
+        "busId": {
+          "$ref": "#/definitions/GuestUsbipBusId"
+        },
+        "host": {
+          "$ref": "#/definitions/GuestUsbipHost"
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipImportResponse": {
+      "type": "object",
+      "required": [
+        "action",
+        "busId",
+        "detachedPorts"
+      ],
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/UsbipImportAction"
+        },
+        "busId": {
+          "$ref": "#/definitions/GuestUsbipBusId"
+        },
+        "detachedPorts": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 32.0,
+          "minimum": 0.0
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false

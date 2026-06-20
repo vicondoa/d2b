@@ -51,6 +51,18 @@ in
   }) cfg.vms
   ++ lib.mapAttrsToList (name: vm: {
     assertion =
+      !vm.enable
+      || !vm.usbip.yubikey
+      || vm.guest.control.enable;
+    message = ''
+      nixling.vms.${name}.usbip.yubikey requires
+      nixling.vms.${name}.guest.control.enable because guest-side USBIP
+      attach/detach is owned by guestd over the authenticated guest-control
+      plane. There is no SSH fallback.
+    '';
+  }) cfg.vms
+  ++ lib.mapAttrsToList (name: vm: {
+    assertion =
       !vm.guest.exec.enable
       || vm.ssh.user != null;
     message = ''

@@ -329,6 +329,13 @@
           ]
         },
         {
+          "description": "QEMU media VM runner emitted by local runtime-provider configurations.",
+          "type": "string",
+          "enum": [
+            "qemu-media-runner"
+          ]
+        },
+        {
           "description": "vsock relay sidecar.",
           "type": "string",
           "enum": [

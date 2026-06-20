@@ -34,8 +34,10 @@ use nixling_ipc::guest_auth::AUTH_NONCE_LEN;
 
 use crate::guest_control_health::{
     AttemptBudget, GuestControlHealthError, GuestControlHealthEvidence, GuestControlSigner,
-    GuestFileReadError, TtrpcGuestControlClient, connected_stream_to_ttrpc_socket,
+    GuestFileReadError, GuestUsbipAction, GuestUsbipImportCall, GuestUsbipImportError,
+    GuestUsbipImportResult, TtrpcGuestControlClient, connected_stream_to_ttrpc_socket,
     guest_control_health_ready, probe_guest_control_health, read_guest_config_authenticated,
+    usbip_import_authenticated,
 };
 use crate::guest_control_vsock::{GuestControlTransportProbeResult, connect_guest_control_vsock};
 use crate::typed_error::TypedError;
@@ -153,6 +155,15 @@ pub trait GuestControlProbe: Send + Sync {
         params: &ProbeParams,
         attempt_timeout: Duration,
     ) -> Result<Vec<u8>, GuestFileReadError>;
+
+    fn usbip_import(
+        &self,
+        params: &ProbeParams,
+        attempt_timeout: Duration,
+        action: GuestUsbipAction,
+        host: &str,
+        bus_id: &str,
+    ) -> Result<GuestUsbipImportResult, GuestUsbipImportError>;
 }
 
 /// Production probe: connects the vsock socket, builds the ttRPC client,
@@ -183,6 +194,26 @@ impl GuestControlProbe for RealGuestControlProbe {
         attempt_timeout: Duration,
     ) -> Result<Vec<u8>, GuestFileReadError> {
         run_config_read_once(params, &self.broker_socket_path, attempt_timeout)
+    }
+
+    fn usbip_import(
+        &self,
+        params: &ProbeParams,
+        attempt_timeout: Duration,
+        action: GuestUsbipAction,
+        host: &str,
+        bus_id: &str,
+    ) -> Result<GuestUsbipImportResult, GuestUsbipImportError> {
+        run_usbip_import_once(
+            params,
+            &self.broker_socket_path,
+            attempt_timeout,
+            GuestUsbipImportCall {
+                action,
+                host,
+                bus_id,
+            },
+        )
     }
 }
 
@@ -301,6 +332,32 @@ pub fn run_config_read_once(
     })
 }
 
+pub fn run_usbip_import_once(
+    params: &ProbeParams,
+    broker_socket_path: &Path,
+    attempt_timeout: Duration,
+    call: GuestUsbipImportCall<'_>,
+) -> Result<GuestUsbipImportResult, GuestUsbipImportError> {
+    let budget = AttemptBudget::from_now(attempt_timeout, GUEST_CONTROL_ATTEMPT_CAP);
+    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let nonce =
+        host_nonce().map_err(|_| GuestUsbipImportError::Probe(GuestControlHealthError::Signer))?;
+    let runtime = build_probe_runtime().map_err(GuestUsbipImportError::Probe)?;
+    runtime.block_on(async {
+        let client =
+            connect_and_build_client(params, budget).map_err(GuestUsbipImportError::Probe)?;
+        usbip_import_authenticated(
+            &params.vm_id,
+            Some(VMADDR_CID_HOST),
+            nonce,
+            &client,
+            &signer,
+            call,
+        )
+        .await
+    })
+}
+
 /// Whether a config-read failure is a transient connect-level failure
 /// worth retrying within the config-sync deadline. A missing/refused CH
 /// vsock socket during startup/restart (TransportIo), a ttRPC transport
@@ -314,6 +371,15 @@ fn config_read_error_is_transient(error: &GuestFileReadError) -> bool {
         GuestFileReadError::Probe(GuestControlHealthError::TransportIo)
             | GuestFileReadError::Probe(GuestControlHealthError::Ttrpc)
             | GuestFileReadError::Probe(GuestControlHealthError::Timeout)
+    )
+}
+
+fn usbip_import_error_is_transient(error: &GuestUsbipImportError) -> bool {
+    matches!(
+        error,
+        GuestUsbipImportError::Probe(GuestControlHealthError::TransportIo)
+            | GuestUsbipImportError::Probe(GuestControlHealthError::Ttrpc)
+            | GuestUsbipImportError::Probe(GuestControlHealthError::Timeout)
     )
 }
 
@@ -387,6 +453,45 @@ pub fn run_config_read_on_dedicated_thread(
     })
     .join()
     .map_err(|_| GuestFileReadError::Probe(GuestControlHealthError::TransportIo))?
+}
+
+pub fn run_usbip_import_on_dedicated_thread(
+    params: ProbeParams,
+    broker_socket_path: PathBuf,
+    action: GuestUsbipAction,
+    host: String,
+    bus_id: String,
+    deadline: Duration,
+) -> Result<GuestUsbipImportResult, GuestUsbipImportError> {
+    std::thread::spawn(move || {
+        let probe = RealGuestControlProbe::new(broker_socket_path);
+        let clock = RealProbeClock::new();
+        loop {
+            let remaining = deadline.saturating_sub(clock.elapsed());
+            if remaining.is_zero() {
+                return Err(GuestUsbipImportError::Probe(
+                    GuestControlHealthError::Timeout,
+                ));
+            }
+            let attempt_timeout = GUEST_CONTROL_ATTEMPT_CAP
+                .min(remaining)
+                .max(Duration::from_millis(1));
+            match probe.usbip_import(&params, attempt_timeout, action, &host, &bus_id) {
+                Ok(result) => return Ok(result),
+                Err(err) => {
+                    if !usbip_import_error_is_transient(&err) {
+                        return Err(err);
+                    }
+                    if clock.elapsed().saturating_add(GUEST_CONTROL_RETRY_BACKOFF) >= deadline {
+                        return Err(err);
+                    }
+                    clock.sleep(GUEST_CONTROL_RETRY_BACKOFF);
+                }
+            }
+        }
+    })
+    .join()
+    .map_err(|_| GuestUsbipImportError::Probe(GuestControlHealthError::TransportIo))?
 }
 
 /// Injectable clock for deterministic retry-loop tests. The real
@@ -894,6 +999,17 @@ mod tests {
         ) -> Result<Vec<u8>, GuestFileReadError> {
             unreachable!("readiness loop never reads config")
         }
+
+        fn usbip_import(
+            &self,
+            _params: &ProbeParams,
+            _attempt_timeout: Duration,
+            _action: GuestUsbipAction,
+            _host: &str,
+            _bus_id: &str,
+        ) -> Result<GuestUsbipImportResult, GuestUsbipImportError> {
+            unreachable!("readiness loop never imports USBIP")
+        }
     }
 
     #[test]
@@ -1077,6 +1193,17 @@ mod tests {
                 ));
             }
             outcomes.remove(0)
+        }
+
+        fn usbip_import(
+            &self,
+            _params: &ProbeParams,
+            _attempt_timeout: Duration,
+            _action: GuestUsbipAction,
+            _host: &str,
+            _bus_id: &str,
+        ) -> Result<GuestUsbipImportResult, GuestUsbipImportError> {
+            unreachable!("config-read loop never imports USBIP")
         }
     }
 
@@ -1388,6 +1515,14 @@ mod tests {
         ) -> Result<nixling_ipc::guest_proto::ReadGuestFileResponse, GuestControlHealthError>
         {
             Ok(nixling_ipc::guest_proto::ReadGuestFileResponse::new())
+        }
+
+        async fn usbip_import(
+            &self,
+            _request: nixling_ipc::guest_proto::UsbipImportRequest,
+        ) -> Result<nixling_ipc::guest_proto::UsbipImportResponse, GuestControlHealthError>
+        {
+            Ok(nixling_ipc::guest_proto::UsbipImportResponse::new())
         }
     }
 

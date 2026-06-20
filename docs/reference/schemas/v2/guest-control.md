@@ -47,6 +47,12 @@ contains the guestd-local service bindings.
   diagnostics that the host recomputes from the received bytes, and an
   optional closed-enum `GuestControlError`. It is only reachable over the
   authenticated channel after `Authenticate` succeeds.
+- `usbipImport` / `usbipImportResult` - the authenticated guest-side USBIP
+  import lifecycle RPC that grounds `nixling usb attach|detach`. Requests carry
+  a closed action (`attach`/`detach`), a daemon-resolved USBIP backend host, and
+  a validated sysfs bus id; guestd runs `usbip port`/`detach`/`attach` inside
+  the VM and returns only bounded status fields plus an optional closed-enum
+  `GuestControlError`.
 - `exec*`, `writeStdin`, `readOutput`, `closeStdin`, `ttyWinResize`, and
   signal/cancel messages - Docker-like exec lifecycle and chunked stdio.
   `controlAck` is the shared response for resize, signal, and cancel control

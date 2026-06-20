@@ -7295,6 +7295,360 @@ impl ::protobuf::reflect::ProtobufValue for ReadGuestFileResponse {
     type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
 }
 
+// @@protoc_insertion_point(message:nixling.guest.v1.UsbipImportRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct UsbipImportRequest {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.UsbipImportRequest.metadata)
+    pub metadata: ::protobuf::MessageField<RequestMetadata>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.UsbipImportRequest.action)
+    pub action: ::protobuf::EnumOrUnknown<UsbipImportAction>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.UsbipImportRequest.host)
+    pub host: ::std::string::String,
+    // @@protoc_insertion_point(field:nixling.guest.v1.UsbipImportRequest.bus_id)
+    pub bus_id: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.UsbipImportRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a UsbipImportRequest {
+    fn default() -> &'a UsbipImportRequest {
+        <UsbipImportRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl UsbipImportRequest {
+    pub fn new() -> UsbipImportRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, RequestMetadata>(
+            "metadata",
+            |m: &UsbipImportRequest| { &m.metadata },
+            |m: &mut UsbipImportRequest| { &mut m.metadata },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "action",
+            |m: &UsbipImportRequest| { &m.action },
+            |m: &mut UsbipImportRequest| { &mut m.action },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "host",
+            |m: &UsbipImportRequest| { &m.host },
+            |m: &mut UsbipImportRequest| { &mut m.host },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "bus_id",
+            |m: &UsbipImportRequest| { &m.bus_id },
+            |m: &mut UsbipImportRequest| { &mut m.bus_id },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<UsbipImportRequest>(
+            "UsbipImportRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for UsbipImportRequest {
+    const NAME: &'static str = "UsbipImportRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                16 => {
+                    self.action = is.read_enum_or_unknown()?;
+                },
+                26 => {
+                    self.host = is.read_string()?;
+                },
+                34 => {
+                    self.bus_id = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if self.action != ::protobuf::EnumOrUnknown::new(UsbipImportAction::USBIP_IMPORT_ACTION_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.action.value());
+        }
+        if !self.host.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.host);
+        }
+        if !self.bus_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(4, &self.bus_id);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if self.action != ::protobuf::EnumOrUnknown::new(UsbipImportAction::USBIP_IMPORT_ACTION_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.action))?;
+        }
+        if !self.host.is_empty() {
+            os.write_string(3, &self.host)?;
+        }
+        if !self.bus_id.is_empty() {
+            os.write_string(4, &self.bus_id)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> UsbipImportRequest {
+        UsbipImportRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.action = ::protobuf::EnumOrUnknown::new(UsbipImportAction::USBIP_IMPORT_ACTION_UNSPECIFIED);
+        self.host.clear();
+        self.bus_id.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static UsbipImportRequest {
+        static instance: UsbipImportRequest = UsbipImportRequest {
+            metadata: ::protobuf::MessageField::none(),
+            action: ::protobuf::EnumOrUnknown::from_i32(0),
+            host: ::std::string::String::new(),
+            bus_id: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for UsbipImportRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("UsbipImportRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for UsbipImportRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for UsbipImportRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.UsbipImportResponse)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct UsbipImportResponse {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.UsbipImportResponse.action)
+    pub action: ::protobuf::EnumOrUnknown<UsbipImportAction>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.UsbipImportResponse.bus_id)
+    pub bus_id: ::std::string::String,
+    // @@protoc_insertion_point(field:nixling.guest.v1.UsbipImportResponse.detached_ports)
+    pub detached_ports: u32,
+    // @@protoc_insertion_point(field:nixling.guest.v1.UsbipImportResponse.error)
+    pub error: ::protobuf::MessageField<GuestControlError>,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.UsbipImportResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a UsbipImportResponse {
+    fn default() -> &'a UsbipImportResponse {
+        <UsbipImportResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl UsbipImportResponse {
+    pub fn new() -> UsbipImportResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "action",
+            |m: &UsbipImportResponse| { &m.action },
+            |m: &mut UsbipImportResponse| { &mut m.action },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "bus_id",
+            |m: &UsbipImportResponse| { &m.bus_id },
+            |m: &mut UsbipImportResponse| { &mut m.bus_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "detached_ports",
+            |m: &UsbipImportResponse| { &m.detached_ports },
+            |m: &mut UsbipImportResponse| { &mut m.detached_ports },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestControlError>(
+            "error",
+            |m: &UsbipImportResponse| { &m.error },
+            |m: &mut UsbipImportResponse| { &mut m.error },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<UsbipImportResponse>(
+            "UsbipImportResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for UsbipImportResponse {
+    const NAME: &'static str = "UsbipImportResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.action = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.bus_id = is.read_string()?;
+                },
+                24 => {
+                    self.detached_ports = is.read_uint32()?;
+                },
+                34 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.action != ::protobuf::EnumOrUnknown::new(UsbipImportAction::USBIP_IMPORT_ACTION_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.action.value());
+        }
+        if !self.bus_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.bus_id);
+        }
+        if self.detached_ports != 0 {
+            my_size += ::protobuf::rt::uint32_size(3, self.detached_ports);
+        }
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.action != ::protobuf::EnumOrUnknown::new(UsbipImportAction::USBIP_IMPORT_ACTION_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.action))?;
+        }
+        if !self.bus_id.is_empty() {
+            os.write_string(2, &self.bus_id)?;
+        }
+        if self.detached_ports != 0 {
+            os.write_uint32(3, self.detached_ports)?;
+        }
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> UsbipImportResponse {
+        UsbipImportResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.action = ::protobuf::EnumOrUnknown::new(UsbipImportAction::USBIP_IMPORT_ACTION_UNSPECIFIED);
+        self.bus_id.clear();
+        self.detached_ports = 0;
+        self.error.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static UsbipImportResponse {
+        static instance: UsbipImportResponse = UsbipImportResponse {
+            action: ::protobuf::EnumOrUnknown::from_i32(0),
+            bus_id: ::std::string::String::new(),
+            detached_ports: 0,
+            error: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for UsbipImportResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("UsbipImportResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for UsbipImportResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for UsbipImportResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
 // @@protoc_insertion_point(message:nixling.guest.v1.TerminalStatus)
 #[derive(PartialEq,Clone,Default,Debug)]
 pub struct TerminalStatus {
@@ -7794,6 +8148,8 @@ pub enum GuestCapability {
     GUEST_CAPABILITY_SIGNALS = 8,
     // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestCapability.GUEST_CAPABILITY_READ_GUEST_FILE)
     GUEST_CAPABILITY_READ_GUEST_FILE = 9,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestCapability.GUEST_CAPABILITY_USBIP_IMPORT)
+    GUEST_CAPABILITY_USBIP_IMPORT = 10,
 }
 
 impl ::protobuf::Enum for GuestCapability {
@@ -7815,6 +8171,7 @@ impl ::protobuf::Enum for GuestCapability {
             7 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_TTY_RESIZE),
             8 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SIGNALS),
             9 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_READ_GUEST_FILE),
+            10 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_USBIP_IMPORT),
             _ => ::std::option::Option::None
         }
     }
@@ -7831,6 +8188,7 @@ impl ::protobuf::Enum for GuestCapability {
             "GUEST_CAPABILITY_TTY_RESIZE" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_TTY_RESIZE),
             "GUEST_CAPABILITY_SIGNALS" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SIGNALS),
             "GUEST_CAPABILITY_READ_GUEST_FILE" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_READ_GUEST_FILE),
+            "GUEST_CAPABILITY_USBIP_IMPORT" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_USBIP_IMPORT),
             _ => ::std::option::Option::None
         }
     }
@@ -7846,6 +8204,7 @@ impl ::protobuf::Enum for GuestCapability {
         GuestCapability::GUEST_CAPABILITY_TTY_RESIZE,
         GuestCapability::GUEST_CAPABILITY_SIGNALS,
         GuestCapability::GUEST_CAPABILITY_READ_GUEST_FILE,
+        GuestCapability::GUEST_CAPABILITY_USBIP_IMPORT,
     ];
 }
 
@@ -7890,6 +8249,8 @@ pub enum GuestSubsystem {
     GUEST_SUBSYSTEM_TOKEN = 5,
     // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestSubsystem.GUEST_SUBSYSTEM_VSOCK)
     GUEST_SUBSYSTEM_VSOCK = 6,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestSubsystem.GUEST_SUBSYSTEM_USBIP)
+    GUEST_SUBSYSTEM_USBIP = 7,
 }
 
 impl ::protobuf::Enum for GuestSubsystem {
@@ -7908,6 +8269,7 @@ impl ::protobuf::Enum for GuestSubsystem {
             4 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_LOG_STORAGE),
             5 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_TOKEN),
             6 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_VSOCK),
+            7 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_USBIP),
             _ => ::std::option::Option::None
         }
     }
@@ -7921,6 +8283,7 @@ impl ::protobuf::Enum for GuestSubsystem {
             "GUEST_SUBSYSTEM_LOG_STORAGE" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_LOG_STORAGE),
             "GUEST_SUBSYSTEM_TOKEN" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_TOKEN),
             "GUEST_SUBSYSTEM_VSOCK" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_VSOCK),
+            "GUEST_SUBSYSTEM_USBIP" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_USBIP),
             _ => ::std::option::Option::None
         }
     }
@@ -7933,6 +8296,7 @@ impl ::protobuf::Enum for GuestSubsystem {
         GuestSubsystem::GUEST_SUBSYSTEM_LOG_STORAGE,
         GuestSubsystem::GUEST_SUBSYSTEM_TOKEN,
         GuestSubsystem::GUEST_SUBSYSTEM_VSOCK,
+        GuestSubsystem::GUEST_SUBSYSTEM_USBIP,
     ];
 }
 
@@ -8019,6 +8383,73 @@ impl ::std::default::Default for GuestFileId {
 impl GuestFileId {
     fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
         ::protobuf::reflect::GeneratedEnumDescriptorData::new::<GuestFileId>("GuestFileId")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:nixling.guest.v1.UsbipImportAction)
+pub enum UsbipImportAction {
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.UsbipImportAction.USBIP_IMPORT_ACTION_UNSPECIFIED)
+    USBIP_IMPORT_ACTION_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.UsbipImportAction.USBIP_IMPORT_ACTION_ATTACH)
+    USBIP_IMPORT_ACTION_ATTACH = 1,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.UsbipImportAction.USBIP_IMPORT_ACTION_DETACH)
+    USBIP_IMPORT_ACTION_DETACH = 2,
+}
+
+impl ::protobuf::Enum for UsbipImportAction {
+    const NAME: &'static str = "UsbipImportAction";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<UsbipImportAction> {
+        match value {
+            0 => ::std::option::Option::Some(UsbipImportAction::USBIP_IMPORT_ACTION_UNSPECIFIED),
+            1 => ::std::option::Option::Some(UsbipImportAction::USBIP_IMPORT_ACTION_ATTACH),
+            2 => ::std::option::Option::Some(UsbipImportAction::USBIP_IMPORT_ACTION_DETACH),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<UsbipImportAction> {
+        match str {
+            "USBIP_IMPORT_ACTION_UNSPECIFIED" => ::std::option::Option::Some(UsbipImportAction::USBIP_IMPORT_ACTION_UNSPECIFIED),
+            "USBIP_IMPORT_ACTION_ATTACH" => ::std::option::Option::Some(UsbipImportAction::USBIP_IMPORT_ACTION_ATTACH),
+            "USBIP_IMPORT_ACTION_DETACH" => ::std::option::Option::Some(UsbipImportAction::USBIP_IMPORT_ACTION_DETACH),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [UsbipImportAction] = &[
+        UsbipImportAction::USBIP_IMPORT_ACTION_UNSPECIFIED,
+        UsbipImportAction::USBIP_IMPORT_ACTION_ATTACH,
+        UsbipImportAction::USBIP_IMPORT_ACTION_DETACH,
+    ];
+}
+
+impl ::protobuf::EnumFull for UsbipImportAction {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("UsbipImportAction").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for UsbipImportAction {
+    fn default() -> Self {
+        UsbipImportAction::USBIP_IMPORT_ACTION_UNSPECIFIED
+    }
+}
+
+impl UsbipImportAction {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<UsbipImportAction>("UsbipImportAction")
     }
 }
 
@@ -8981,6 +9412,12 @@ pub enum GuestControlErrorKind {
     GUEST_CONTROL_ERROR_KIND_READ_DENIED = 41,
     // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM)
     GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM = 42,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE)
+    GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE = 43,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED)
+    GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED = 44,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID)
+    GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID = 45,
 }
 
 impl ::protobuf::Enum for GuestControlErrorKind {
@@ -9035,6 +9472,9 @@ impl ::protobuf::Enum for GuestControlErrorKind {
             40 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE),
             41 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_READ_DENIED),
             42 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM),
+            43 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE),
+            44 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED),
+            45 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID),
             _ => ::std::option::Option::None
         }
     }
@@ -9084,6 +9524,9 @@ impl ::protobuf::Enum for GuestControlErrorKind {
             "GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE),
             "GUEST_CONTROL_ERROR_KIND_READ_DENIED" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_READ_DENIED),
             "GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM),
+            "GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE),
+            "GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED),
+            "GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID),
             _ => ::std::option::Option::None
         }
     }
@@ -9132,6 +9575,9 @@ impl ::protobuf::Enum for GuestControlErrorKind {
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE,
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_READ_DENIED,
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID,
     ];
 }
 
@@ -9369,115 +9815,129 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \nsize_bytes\x18\x02\x20\x01(\x04R\tsizeBytes\x12\x18\n\x07content\x18\
     \x03\x20\x01(\x0cR\x07content\x12\x16\n\x06sha256\x18\x04\x20\x01(\tR\
     \x06sha256\x129\n\x05error\x18\x05\x20\x01(\x0b2#.nixling.guest.v1.Guest\
-    ControlErrorR\x05error\"\xb8\x01\n\x0eTerminalStatus\x12\x1d\n\texit_cod\
-    e\x18\x01\x20\x01(\x05H\0R\x08exitCode\x12\x18\n\x06signal\x18\x02\x20\
-    \x01(\rH\0R\x06signal\x12!\n\x0bstatus_code\x18\x03\x20\x01(\x05H\0R\nst\
-    atusCode\x12?\n\x05error\x18\x04\x20\x01(\x0e2'.nixling.guest.v1.GuestCo\
-    ntrolErrorKindH\0R\x05errorB\t\n\x07outcome\"\xd5\x01\n\x11GuestControlE\
-    rror\x12;\n\x04kind\x18\x01\x20\x01(\x0e2'.nixling.guest.v1.GuestControl\
-    ErrorKindR\x04kind\x12E\n\x0bremediation\x18\x02\x20\x01(\x0e2#.nixling.\
-    guest.v1.HealthRemediationR\x0bremediation\x12)\n\x0eretry_after_ms\x18\
-    \x03\x20\x01(\x04H\0R\x0cretryAfterMs\x88\x01\x01B\x11\n\x0f_retry_after\
-    _ms*\xdf\x02\n\x0fGuestCapability\x12\x20\n\x1cGUEST_CAPABILITY_UNSPECIF\
-    IED\x10\0\x12\x1b\n\x17GUEST_CAPABILITY_HEALTH\x10\x01\x12!\n\x1dGUEST_C\
-    APABILITY_CAPABILITIES\x10\x02\x12\"\n\x1eGUEST_CAPABILITY_EXEC_ATTACHED\
-    \x10\x03\x12\"\n\x1eGUEST_CAPABILITY_EXEC_DETACHED\x10\x04\x12\x1d\n\x19\
-    GUEST_CAPABILITY_EXEC_TTY\x10\x05\x12\x1e\n\x1aGUEST_CAPABILITY_EXEC_LOG\
-    S\x10\x06\x12\x1f\n\x1bGUEST_CAPABILITY_TTY_RESIZE\x10\x07\x12\x1c\n\x18\
-    GUEST_CAPABILITY_SIGNALS\x10\x08\x12$\n\x20GUEST_CAPABILITY_READ_GUEST_F\
-    ILE\x10\t*\xd9\x01\n\x0eGuestSubsystem\x12\x1f\n\x1bGUEST_SUBSYSTEM_UNSP\
-    ECIFIED\x10\0\x12\x1a\n\x16GUEST_SUBSYSTEM_GUESTD\x10\x01\x12\x19\n\x15G\
-    UEST_SUBSYSTEM_USERD\x10\x02\x12\x18\n\x14GUEST_SUBSYSTEM_EXEC\x10\x03\
-    \x12\x1f\n\x1bGUEST_SUBSYSTEM_LOG_STORAGE\x10\x04\x12\x19\n\x15GUEST_SUB\
-    SYSTEM_TOKEN\x10\x05\x12\x19\n\x15GUEST_SUBSYSTEM_VSOCK\x10\x06*L\n\x0bG\
-    uestFileId\x12\x1d\n\x19GUEST_FILE_ID_UNSPECIFIED\x10\0\x12\x1e\n\x1aGUE\
-    ST_FILE_ID_GUEST_CONFIG\x10\x01*s\n\x0cHealthOrigin\x12\x1d\n\x19HEALTH_\
-    ORIGIN_UNSPECIFIED\x10\0\x12\x20\n\x1cHEALTH_ORIGIN_GUEST_REPORTED\x10\
-    \x01\x12\"\n\x1eHEALTH_ORIGIN_HOST_SYNTHESIZED\x10\x02*\xb9\x02\n\x0bHea\
-    lthState\x12\x1c\n\x18HEALTH_STATE_UNSPECIFIED\x10\0\x12\x18\n\x14HEALTH\
-    _STATE_HEALTHY\x10\x01\x12\x19\n\x15HEALTH_STATE_DEGRADED\x10\x02\x12+\n\
-    'HEALTH_STATE_UNAVAILABLE_OLD_GENERATION\x10\x03\x12\x20\n\x1cHEALTH_STA\
-    TE_LISTENER_ABSENT\x10\x04\x12&\n\"HEALTH_STATE_TRANSPORT_UNREACHABLE\
-    \x10\x05\x12\x1c\n\x18HEALTH_STATE_AUTH_FAILED\x10\x06\x12\"\n\x1eHEALTH\
-    _STATE_PROTOCOL_MISMATCH\x10\x07\x12\x1e\n\x1aHEALTH_STATE_STALE_SESSION\
-    \x10\x08*\xa4\x05\n\x0cHealthReason\x12\x1d\n\x19HEALTH_REASON_UNSPECIFI\
-    ED\x10\0\x12\x16\n\x12HEALTH_REASON_NONE\x10\x01\x12\x20\n\x1cHEALTH_REA\
-    SON_OLD_GENERATION\x10\x02\x12!\n\x1dHEALTH_REASON_LISTENER_ABSENT\x10\
-    \x03\x12!\n\x1dHEALTH_REASON_CONNECT_REFUSED\x10\x04\x12!\n\x1dHEALTH_RE\
-    ASON_CONNECT_TIMEOUT\x10\x05\x12\x20\n\x1cHEALTH_REASON_EOF_BEFORE_ACK\
-    \x10\x06\x12\x1f\n\x1bHEALTH_REASON_MALFORMED_ACK\x10\x07\x12\x1e\n\x1aH\
-    EALTH_REASON_ACK_TOO_LONG\x10\x08\x12\x1e\n\x1aHEALTH_REASON_TRANSPORT_I\
-    O\x10\t\x12%\n!HEALTH_REASON_AUTH_TOKEN_REJECTED\x10\n\x12.\n*HEALTH_REA\
-    SON_PROTOCOL_VERSION_UNSUPPORTED\x10\x0b\x12-\n)HEALTH_REASON_SESSION_GE\
-    NERATION_MISMATCH\x10\x0c\x12,\n(HEALTH_REASON_EXEC_SUBSYSTEM_UNAVAILABL\
-    E\x10\r\x12)\n%HEALTH_REASON_LOG_STORAGE_UNAVAILABLE\x10\x0e\x12\x20\n\
-    \x1cHEALTH_REASON_QUOTA_EXCEEDED\x10\x0f\x12\x1e\n\x1aHEALTH_REASON_RATE\
-    _LIMITED\x10\x10\x12.\n*HEALTH_REASON_INTERNAL_HEALTH_CHECK_FAILED\x10\
-    \x11*\xe0\x02\n\x11HealthRemediation\x12\"\n\x1eHEALTH_REMEDIATION_UNSPE\
-    CIFIED\x10\0\x12\x1b\n\x17HEALTH_REMEDIATION_NONE\x10\x01\x12\x1c\n\x18H\
-    EALTH_REMEDIATION_RETRY\x10\x02\x12!\n\x1dHEALTH_REMEDIATION_RESTART_VM\
-    \x10\x03\x12$\n\x20HEALTH_REMEDIATION_UPGRADE_GUEST\x10\x04\x12'\n#HEALT\
-    H_REMEDIATION_CHECK_AUTH_TOKEN\x10\x05\x12+\n'HEALTH_REMEDIATION_CHECK_G\
-    UESTD_SERVICE\x10\x06\x12\"\n\x1eHEALTH_REMEDIATION_REDUCE_LOAD\x10\x07\
-    \x12)\n%HEALTH_REMEDIATION_INSPECT_GUEST_LOGS\x10\x08*a\n\x0cOutputStrea\
-    m\x12\x1d\n\x19OUTPUT_STREAM_UNSPECIFIED\x10\0\x12\x18\n\x14OUTPUT_STREA\
-    M_STDOUT\x10\x01\x12\x18\n\x14OUTPUT_STREAM_STDERR\x10\x02*\x96\x01\n\
-    \x10WriteDisposition\x12!\n\x1dWRITE_DISPOSITION_UNSPECIFIED\x10\0\x12\
-    \x1e\n\x1aWRITE_DISPOSITION_ACCEPTED\x10\x01\x12\x1f\n\x1bWRITE_DISPOSIT\
-    ION_DUPLICATE\x10\x02\x12\x1e\n\x1aWRITE_DISPOSITION_REJECTED\x10\x03*\
-    \x9b\x02\n\tExecState\x12\x1a\n\x16EXEC_STATE_UNSPECIFIED\x10\0\x12\x16\
-    \n\x12EXEC_STATE_CREATED\x10\x01\x12\x16\n\x12EXEC_STATE_RUNNING\x10\x02\
-    \x12\x15\n\x11EXEC_STATE_EXITED\x10\x03\x12\x17\n\x13EXEC_STATE_SIGNALED\
-    \x10\x04\x12\x18\n\x14EXEC_STATE_CANCELLED\x10\x05\x12&\n\"EXEC_STATE_SL\
-    OW_CONSUMER_CANCELLED\x10\x06\x12\x1d\n\x19EXEC_STATE_PROTOCOL_ERROR\x10\
-    \x07\x12\x1a\n\x16EXEC_STATE_LOST_GUESTD\x10\x08\x12\x15\n\x11EXEC_STATE\
-    _REAPED\x10\t*\xbd\x01\n\nStdinState\x12\x1b\n\x17STDIN_STATE_UNSPECIFIE\
-    D\x10\0\x12\x14\n\x10STDIN_STATE_OPEN\x10\x01\x12\x17\n\x13STDIN_STATE_C\
-    LOSING\x10\x02\x12\x16\n\x12STDIN_STATE_CLOSED\x10\x03\x12!\n\x1dSTDIN_S\
-    TATE_CLOSED_BY_PROCESS\x10\x04\x12(\n$STDIN_STATE_REJECTED_NOT_INTERACTI\
-    VE\x10\x05*y\n\x0cSignalTarget\x12\x1d\n\x19SIGNAL_TARGET_UNSPECIFIED\
-    \x10\0\x12*\n&SIGNAL_TARGET_FOREGROUND_PROCESS_GROUP\x10\x01\x12\x1e\n\
-    \x1aSIGNAL_TARGET_PROCESS_TREE\x10\x02*\xd4\x01\n\x10ExecCancelReason\
-    \x12\"\n\x1eEXEC_CANCEL_REASON_UNSPECIFIED\x10\0\x12(\n$EXEC_CANCEL_REAS\
-    ON_CLIENT_DISCONNECT\x10\x01\x12%\n!EXEC_CANCEL_REASON_USER_REQUESTED\
-    \x10\x02\x12$\n\x20EXEC_CANCEL_REASON_SLOW_CONSUMER\x10\x03\x12%\n!EXEC_\
-    CANCEL_REASON_PROTOCOL_ERROR\x10\x04*\xd1\x10\n\x15GuestControlErrorKind\
-    \x12(\n$GUEST_CONTROL_ERROR_KIND_UNSPECIFIED\x10\0\x12+\n'GUEST_CONTROL_\
-    ERROR_KIND_PROTOCOL_ERROR\x10\x01\x12/\n+GUEST_CONTROL_ERROR_KIND_MAX_CH\
-    UNK_EXCEEDED\x10\x02\x12/\n+GUEST_CONTROL_ERROR_KIND_STDIN_BACKPRESSURE\
-    \x10\x03\x12)\n%GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED\x10\x04\x12+\n'GUE\
-    ST_CONTROL_ERROR_KIND_STDIN_NOT_OPEN\x10\x05\x124\n0GUEST_CONTROL_ERROR_\
-    KIND_STDIN_CLOSED_BY_PROCESS\x10\x06\x122\n.GUEST_CONTROL_ERROR_KIND_STD\
-    IN_OFFSET_MISMATCH\x10\x07\x128\n4GUEST_CONTROL_ERROR_KIND_STDIN_BYTE_BU\
-    DGET_EXHAUSTED\x10\x08\x12+\n'GUEST_CONTROL_ERROR_KIND_OFFSET_EXPIRED\
-    \x10\t\x12-\n)GUEST_CONTROL_ERROR_KIND_OFFSET_IN_FUTURE\x10\n\x12-\n)GUE\
-    ST_CONTROL_ERROR_KIND_OFFSET_EXHAUSTED\x10\x0b\x12(\n$GUEST_CONTROL_ERRO\
-    R_KIND_OUTPUT_LOST\x10\x0c\x123\n/GUEST_CONTROL_ERROR_KIND_TTY_STDERR_UN\
-    AVAILABLE\x10\r\x12)\n%GUEST_CONTROL_ERROR_KIND_TTY_REQUIRED\x10\x0e\x12\
-    3\n/GUEST_CONTROL_ERROR_KIND_EXEC_CAPACITY_EXCEEDED\x10\x0f\x12:\n6GUEST\
-    _CONTROL_ERROR_KIND_EXEC_ATTACH_CAPACITY_EXCEEDED\x10\x10\x12+\n'GUEST_C\
-    ONTROL_ERROR_KIND_EXEC_NOT_FOUND\x10\x11\x120\n,GUEST_CONTROL_ERROR_KIND\
-    _EXEC_ALREADY_EXITED\x10\x12\x120\n,GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_\
-    DISABLED\x10\x13\x123\n/GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_ROOT_DENIED\
-    \x10\x14\x123\n/GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_USER_DENIED\x10\x15\
-    \x12(\n$GUEST_CONTROL_ERROR_KIND_CWD_INVALID\x10\x16\x12'\n#GUEST_CONTRO\
-    L_ERROR_KIND_CWD_DENIED\x10\x17\x125\n1GUEST_CONTROL_ERROR_KIND_RETAINED\
-    _LOG_PATH_UNSAFE\x10\x18\x128\n4GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_QU\
-    OTA_EXCEEDED\x10\x19\x128\n4GUEST_CONTROL_ERROR_KIND_READ_WAIT_CAPACITY_\
-    EXCEEDED\x10\x1a\x123\n/GUEST_CONTROL_ERROR_KIND_WAIT_CAPACITY_EXCEEDED\
-    \x10\x1b\x121\n-GUEST_CONTROL_ERROR_KIND_SUPERSEDED_READ_WAIT\x10\x1c\
-    \x12)\n%GUEST_CONTROL_ERROR_KIND_RATE_LIMITED\x10\x1d\x120\n,GUEST_CONTR\
-    OL_ERROR_KIND_REQUEST_ID_CONFLICT\x10\x1e\x121\n-GUEST_CONTROL_ERROR_KIN\
-    D_CONTROL_SEQ_MISMATCH\x10\x1f\x124\n0GUEST_CONTROL_ERROR_KIND_SLOW_CONS\
-    UMER_CANCELLED\x10\x20\x12*\n&GUEST_CONTROL_ERROR_KIND_STALE_SESSION\x10\
-    !\x12E\nAGUEST_CONTROL_ERROR_KIND_GUEST_CONTROL_UNAVAILABLE_OLD_GENERATI\
-    ON\x10\"\x12(\n$GUEST_CONTROL_ERROR_KIND_AUTH_FAILED\x10#\x122\n.GUEST_C\
-    ONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE\x10$\x12)\n%GUEST_CONTROL_ERROR_\
-    KIND_EXEC_EXPIRED\x10%\x12+\n'GUEST_CONTROL_ERROR_KIND_FILE_NOT_FOUND\
-    \x10&\x12+\n'GUEST_CONTROL_ERROR_KIND_FILE_TOO_LARGE\x10'\x12(\n$GUEST_C\
-    ONTROL_ERROR_KIND_PATH_UNSAFE\x10(\x12(\n$GUEST_CONTROL_ERROR_KIND_READ_\
-    DENIED\x10)\x12,\n(GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM\x10*b\x06pro\
-    to3\
+    ControlErrorR\x05error\"\xbb\x01\n\x12UsbipImportRequest\x12=\n\x08metad\
+    ata\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.RequestMetadataR\x08metadata\
+    \x12;\n\x06action\x18\x02\x20\x01(\x0e2#.nixling.guest.v1.UsbipImportAct\
+    ionR\x06action\x12\x12\n\x04host\x18\x03\x20\x01(\tR\x04host\x12\x15\n\
+    \x06bus_id\x18\x04\x20\x01(\tR\x05busId\"\xcb\x01\n\x13UsbipImportRespon\
+    se\x12;\n\x06action\x18\x01\x20\x01(\x0e2#.nixling.guest.v1.UsbipImportA\
+    ctionR\x06action\x12\x15\n\x06bus_id\x18\x02\x20\x01(\tR\x05busId\x12%\n\
+    \x0edetached_ports\x18\x03\x20\x01(\rR\rdetachedPorts\x129\n\x05error\
+    \x18\x04\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\
+    \xb8\x01\n\x0eTerminalStatus\x12\x1d\n\texit_code\x18\x01\x20\x01(\x05H\
+    \0R\x08exitCode\x12\x18\n\x06signal\x18\x02\x20\x01(\rH\0R\x06signal\x12\
+    !\n\x0bstatus_code\x18\x03\x20\x01(\x05H\0R\nstatusCode\x12?\n\x05error\
+    \x18\x04\x20\x01(\x0e2'.nixling.guest.v1.GuestControlErrorKindH\0R\x05er\
+    rorB\t\n\x07outcome\"\xd5\x01\n\x11GuestControlError\x12;\n\x04kind\x18\
+    \x01\x20\x01(\x0e2'.nixling.guest.v1.GuestControlErrorKindR\x04kind\x12E\
+    \n\x0bremediation\x18\x02\x20\x01(\x0e2#.nixling.guest.v1.HealthRemediat\
+    ionR\x0bremediation\x12)\n\x0eretry_after_ms\x18\x03\x20\x01(\x04H\0R\
+    \x0cretryAfterMs\x88\x01\x01B\x11\n\x0f_retry_after_ms*\x82\x03\n\x0fGue\
+    stCapability\x12\x20\n\x1cGUEST_CAPABILITY_UNSPECIFIED\x10\0\x12\x1b\n\
+    \x17GUEST_CAPABILITY_HEALTH\x10\x01\x12!\n\x1dGUEST_CAPABILITY_CAPABILIT\
+    IES\x10\x02\x12\"\n\x1eGUEST_CAPABILITY_EXEC_ATTACHED\x10\x03\x12\"\n\
+    \x1eGUEST_CAPABILITY_EXEC_DETACHED\x10\x04\x12\x1d\n\x19GUEST_CAPABILITY\
+    _EXEC_TTY\x10\x05\x12\x1e\n\x1aGUEST_CAPABILITY_EXEC_LOGS\x10\x06\x12\
+    \x1f\n\x1bGUEST_CAPABILITY_TTY_RESIZE\x10\x07\x12\x1c\n\x18GUEST_CAPABIL\
+    ITY_SIGNALS\x10\x08\x12$\n\x20GUEST_CAPABILITY_READ_GUEST_FILE\x10\t\x12\
+    !\n\x1dGUEST_CAPABILITY_USBIP_IMPORT\x10\n*\xf4\x01\n\x0eGuestSubsystem\
+    \x12\x1f\n\x1bGUEST_SUBSYSTEM_UNSPECIFIED\x10\0\x12\x1a\n\x16GUEST_SUBSY\
+    STEM_GUESTD\x10\x01\x12\x19\n\x15GUEST_SUBSYSTEM_USERD\x10\x02\x12\x18\n\
+    \x14GUEST_SUBSYSTEM_EXEC\x10\x03\x12\x1f\n\x1bGUEST_SUBSYSTEM_LOG_STORAG\
+    E\x10\x04\x12\x19\n\x15GUEST_SUBSYSTEM_TOKEN\x10\x05\x12\x19\n\x15GUEST_\
+    SUBSYSTEM_VSOCK\x10\x06\x12\x19\n\x15GUEST_SUBSYSTEM_USBIP\x10\x07*L\n\
+    \x0bGuestFileId\x12\x1d\n\x19GUEST_FILE_ID_UNSPECIFIED\x10\0\x12\x1e\n\
+    \x1aGUEST_FILE_ID_GUEST_CONFIG\x10\x01*x\n\x11UsbipImportAction\x12#\n\
+    \x1fUSBIP_IMPORT_ACTION_UNSPECIFIED\x10\0\x12\x1e\n\x1aUSBIP_IMPORT_ACTI\
+    ON_ATTACH\x10\x01\x12\x1e\n\x1aUSBIP_IMPORT_ACTION_DETACH\x10\x02*s\n\
+    \x0cHealthOrigin\x12\x1d\n\x19HEALTH_ORIGIN_UNSPECIFIED\x10\0\x12\x20\n\
+    \x1cHEALTH_ORIGIN_GUEST_REPORTED\x10\x01\x12\"\n\x1eHEALTH_ORIGIN_HOST_S\
+    YNTHESIZED\x10\x02*\xb9\x02\n\x0bHealthState\x12\x1c\n\x18HEALTH_STATE_U\
+    NSPECIFIED\x10\0\x12\x18\n\x14HEALTH_STATE_HEALTHY\x10\x01\x12\x19\n\x15\
+    HEALTH_STATE_DEGRADED\x10\x02\x12+\n'HEALTH_STATE_UNAVAILABLE_OLD_GENERA\
+    TION\x10\x03\x12\x20\n\x1cHEALTH_STATE_LISTENER_ABSENT\x10\x04\x12&\n\"H\
+    EALTH_STATE_TRANSPORT_UNREACHABLE\x10\x05\x12\x1c\n\x18HEALTH_STATE_AUTH\
+    _FAILED\x10\x06\x12\"\n\x1eHEALTH_STATE_PROTOCOL_MISMATCH\x10\x07\x12\
+    \x1e\n\x1aHEALTH_STATE_STALE_SESSION\x10\x08*\xa4\x05\n\x0cHealthReason\
+    \x12\x1d\n\x19HEALTH_REASON_UNSPECIFIED\x10\0\x12\x16\n\x12HEALTH_REASON\
+    _NONE\x10\x01\x12\x20\n\x1cHEALTH_REASON_OLD_GENERATION\x10\x02\x12!\n\
+    \x1dHEALTH_REASON_LISTENER_ABSENT\x10\x03\x12!\n\x1dHEALTH_REASON_CONNEC\
+    T_REFUSED\x10\x04\x12!\n\x1dHEALTH_REASON_CONNECT_TIMEOUT\x10\x05\x12\
+    \x20\n\x1cHEALTH_REASON_EOF_BEFORE_ACK\x10\x06\x12\x1f\n\x1bHEALTH_REASO\
+    N_MALFORMED_ACK\x10\x07\x12\x1e\n\x1aHEALTH_REASON_ACK_TOO_LONG\x10\x08\
+    \x12\x1e\n\x1aHEALTH_REASON_TRANSPORT_IO\x10\t\x12%\n!HEALTH_REASON_AUTH\
+    _TOKEN_REJECTED\x10\n\x12.\n*HEALTH_REASON_PROTOCOL_VERSION_UNSUPPORTED\
+    \x10\x0b\x12-\n)HEALTH_REASON_SESSION_GENERATION_MISMATCH\x10\x0c\x12,\n\
+    (HEALTH_REASON_EXEC_SUBSYSTEM_UNAVAILABLE\x10\r\x12)\n%HEALTH_REASON_LOG\
+    _STORAGE_UNAVAILABLE\x10\x0e\x12\x20\n\x1cHEALTH_REASON_QUOTA_EXCEEDED\
+    \x10\x0f\x12\x1e\n\x1aHEALTH_REASON_RATE_LIMITED\x10\x10\x12.\n*HEALTH_R\
+    EASON_INTERNAL_HEALTH_CHECK_FAILED\x10\x11*\xe0\x02\n\x11HealthRemediati\
+    on\x12\"\n\x1eHEALTH_REMEDIATION_UNSPECIFIED\x10\0\x12\x1b\n\x17HEALTH_R\
+    EMEDIATION_NONE\x10\x01\x12\x1c\n\x18HEALTH_REMEDIATION_RETRY\x10\x02\
+    \x12!\n\x1dHEALTH_REMEDIATION_RESTART_VM\x10\x03\x12$\n\x20HEALTH_REMEDI\
+    ATION_UPGRADE_GUEST\x10\x04\x12'\n#HEALTH_REMEDIATION_CHECK_AUTH_TOKEN\
+    \x10\x05\x12+\n'HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE\x10\x06\x12\"\n\
+    \x1eHEALTH_REMEDIATION_REDUCE_LOAD\x10\x07\x12)\n%HEALTH_REMEDIATION_INS\
+    PECT_GUEST_LOGS\x10\x08*a\n\x0cOutputStream\x12\x1d\n\x19OUTPUT_STREAM_U\
+    NSPECIFIED\x10\0\x12\x18\n\x14OUTPUT_STREAM_STDOUT\x10\x01\x12\x18\n\x14\
+    OUTPUT_STREAM_STDERR\x10\x02*\x96\x01\n\x10WriteDisposition\x12!\n\x1dWR\
+    ITE_DISPOSITION_UNSPECIFIED\x10\0\x12\x1e\n\x1aWRITE_DISPOSITION_ACCEPTE\
+    D\x10\x01\x12\x1f\n\x1bWRITE_DISPOSITION_DUPLICATE\x10\x02\x12\x1e\n\x1a\
+    WRITE_DISPOSITION_REJECTED\x10\x03*\x9b\x02\n\tExecState\x12\x1a\n\x16EX\
+    EC_STATE_UNSPECIFIED\x10\0\x12\x16\n\x12EXEC_STATE_CREATED\x10\x01\x12\
+    \x16\n\x12EXEC_STATE_RUNNING\x10\x02\x12\x15\n\x11EXEC_STATE_EXITED\x10\
+    \x03\x12\x17\n\x13EXEC_STATE_SIGNALED\x10\x04\x12\x18\n\x14EXEC_STATE_CA\
+    NCELLED\x10\x05\x12&\n\"EXEC_STATE_SLOW_CONSUMER_CANCELLED\x10\x06\x12\
+    \x1d\n\x19EXEC_STATE_PROTOCOL_ERROR\x10\x07\x12\x1a\n\x16EXEC_STATE_LOST\
+    _GUESTD\x10\x08\x12\x15\n\x11EXEC_STATE_REAPED\x10\t*\xbd\x01\n\nStdinSt\
+    ate\x12\x1b\n\x17STDIN_STATE_UNSPECIFIED\x10\0\x12\x14\n\x10STDIN_STATE_\
+    OPEN\x10\x01\x12\x17\n\x13STDIN_STATE_CLOSING\x10\x02\x12\x16\n\x12STDIN\
+    _STATE_CLOSED\x10\x03\x12!\n\x1dSTDIN_STATE_CLOSED_BY_PROCESS\x10\x04\
+    \x12(\n$STDIN_STATE_REJECTED_NOT_INTERACTIVE\x10\x05*y\n\x0cSignalTarget\
+    \x12\x1d\n\x19SIGNAL_TARGET_UNSPECIFIED\x10\0\x12*\n&SIGNAL_TARGET_FOREG\
+    ROUND_PROCESS_GROUP\x10\x01\x12\x1e\n\x1aSIGNAL_TARGET_PROCESS_TREE\x10\
+    \x02*\xd4\x01\n\x10ExecCancelReason\x12\"\n\x1eEXEC_CANCEL_REASON_UNSPEC\
+    IFIED\x10\0\x12(\n$EXEC_CANCEL_REASON_CLIENT_DISCONNECT\x10\x01\x12%\n!E\
+    XEC_CANCEL_REASON_USER_REQUESTED\x10\x02\x12$\n\x20EXEC_CANCEL_REASON_SL\
+    OW_CONSUMER\x10\x03\x12%\n!EXEC_CANCEL_REASON_PROTOCOL_ERROR\x10\x04*\
+    \xe7\x11\n\x15GuestControlErrorKind\x12(\n$GUEST_CONTROL_ERROR_KIND_UNSP\
+    ECIFIED\x10\0\x12+\n'GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR\x10\x01\x12\
+    /\n+GUEST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED\x10\x02\x12/\n+GUEST_CON\
+    TROL_ERROR_KIND_STDIN_BACKPRESSURE\x10\x03\x12)\n%GUEST_CONTROL_ERROR_KI\
+    ND_STDIN_CLOSED\x10\x04\x12+\n'GUEST_CONTROL_ERROR_KIND_STDIN_NOT_OPEN\
+    \x10\x05\x124\n0GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED_BY_PROCESS\x10\x06\
+    \x122\n.GUEST_CONTROL_ERROR_KIND_STDIN_OFFSET_MISMATCH\x10\x07\x128\n4GU\
+    EST_CONTROL_ERROR_KIND_STDIN_BYTE_BUDGET_EXHAUSTED\x10\x08\x12+\n'GUEST_\
+    CONTROL_ERROR_KIND_OFFSET_EXPIRED\x10\t\x12-\n)GUEST_CONTROL_ERROR_KIND_\
+    OFFSET_IN_FUTURE\x10\n\x12-\n)GUEST_CONTROL_ERROR_KIND_OFFSET_EXHAUSTED\
+    \x10\x0b\x12(\n$GUEST_CONTROL_ERROR_KIND_OUTPUT_LOST\x10\x0c\x123\n/GUES\
+    T_CONTROL_ERROR_KIND_TTY_STDERR_UNAVAILABLE\x10\r\x12)\n%GUEST_CONTROL_E\
+    RROR_KIND_TTY_REQUIRED\x10\x0e\x123\n/GUEST_CONTROL_ERROR_KIND_EXEC_CAPA\
+    CITY_EXCEEDED\x10\x0f\x12:\n6GUEST_CONTROL_ERROR_KIND_EXEC_ATTACH_CAPACI\
+    TY_EXCEEDED\x10\x10\x12+\n'GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND\x10\
+    \x11\x120\n,GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_EXITED\x10\x12\x120\n,\
+    GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_DISABLED\x10\x13\x123\n/GUEST_CONTRO\
+    L_ERROR_KIND_GUEST_EXEC_ROOT_DENIED\x10\x14\x123\n/GUEST_CONTROL_ERROR_K\
+    IND_GUEST_EXEC_USER_DENIED\x10\x15\x12(\n$GUEST_CONTROL_ERROR_KIND_CWD_I\
+    NVALID\x10\x16\x12'\n#GUEST_CONTROL_ERROR_KIND_CWD_DENIED\x10\x17\x125\n\
+    1GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_PATH_UNSAFE\x10\x18\x128\n4GUEST_\
+    CONTROL_ERROR_KIND_RETAINED_LOG_QUOTA_EXCEEDED\x10\x19\x128\n4GUEST_CONT\
+    ROL_ERROR_KIND_READ_WAIT_CAPACITY_EXCEEDED\x10\x1a\x123\n/GUEST_CONTROL_\
+    ERROR_KIND_WAIT_CAPACITY_EXCEEDED\x10\x1b\x121\n-GUEST_CONTROL_ERROR_KIN\
+    D_SUPERSEDED_READ_WAIT\x10\x1c\x12)\n%GUEST_CONTROL_ERROR_KIND_RATE_LIMI\
+    TED\x10\x1d\x120\n,GUEST_CONTROL_ERROR_KIND_REQUEST_ID_CONFLICT\x10\x1e\
+    \x121\n-GUEST_CONTROL_ERROR_KIND_CONTROL_SEQ_MISMATCH\x10\x1f\x124\n0GUE\
+    ST_CONTROL_ERROR_KIND_SLOW_CONSUMER_CANCELLED\x10\x20\x12*\n&GUEST_CONTR\
+    OL_ERROR_KIND_STALE_SESSION\x10!\x12E\nAGUEST_CONTROL_ERROR_KIND_GUEST_C\
+    ONTROL_UNAVAILABLE_OLD_GENERATION\x10\"\x12(\n$GUEST_CONTROL_ERROR_KIND_\
+    AUTH_FAILED\x10#\x122\n.GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE\
+    \x10$\x12)\n%GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED\x10%\x12+\n'GUEST_CON\
+    TROL_ERROR_KIND_FILE_NOT_FOUND\x10&\x12+\n'GUEST_CONTROL_ERROR_KIND_FILE\
+    _TOO_LARGE\x10'\x12(\n$GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE\x10(\x12(\n$\
+    GUEST_CONTROL_ERROR_KIND_READ_DENIED\x10)\x12,\n(GUEST_CONTROL_ERROR_KIN\
+    D_INVALID_PROGRAM\x10*\x12.\n*GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE\
+    \x10+\x121\n-GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED\x10,\x121\n-G\
+    UEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID\x10-b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -9495,7 +9955,7 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
     file_descriptor.get(|| {
         let generated_file_descriptor = generated_file_descriptor_lazy.get(|| {
             let mut deps = ::std::vec::Vec::with_capacity(0);
-            let mut messages = ::std::vec::Vec::with_capacity(39);
+            let mut messages = ::std::vec::Vec::with_capacity(41);
             messages.push(RequestMetadata::generated_message_descriptor_data());
             messages.push(ExecRequestMetadata::generated_message_descriptor_data());
             messages.push(HelloRequest::generated_message_descriptor_data());
@@ -9533,12 +9993,15 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             messages.push(ControlAck::generated_message_descriptor_data());
             messages.push(ReadGuestFileRequest::generated_message_descriptor_data());
             messages.push(ReadGuestFileResponse::generated_message_descriptor_data());
+            messages.push(UsbipImportRequest::generated_message_descriptor_data());
+            messages.push(UsbipImportResponse::generated_message_descriptor_data());
             messages.push(TerminalStatus::generated_message_descriptor_data());
             messages.push(GuestControlError::generated_message_descriptor_data());
-            let mut enums = ::std::vec::Vec::with_capacity(14);
+            let mut enums = ::std::vec::Vec::with_capacity(15);
             enums.push(GuestCapability::generated_enum_descriptor_data());
             enums.push(GuestSubsystem::generated_enum_descriptor_data());
             enums.push(GuestFileId::generated_enum_descriptor_data());
+            enums.push(UsbipImportAction::generated_enum_descriptor_data());
             enums.push(HealthOrigin::generated_enum_descriptor_data());
             enums.push(HealthState::generated_enum_descriptor_data());
             enums.push(HealthReason::generated_enum_descriptor_data());

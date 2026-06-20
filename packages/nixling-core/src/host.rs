@@ -136,6 +136,85 @@ pub struct HostJson {
     /// implicit "no managed firewall detected" Coexist default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub firewall_coexistence_policy: Option<crate::host_w3::FirewallCoexistencePolicy>,
+    /// Optional runtime-provider catalogue emitted by newer host configurations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_providers: Vec<RuntimeProvider>,
+    /// Optional per-VM runtime-provider assignment emitted by newer host
+    /// configurations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vm_runtimes: Vec<VmRuntime>,
+    /// Optional host-side QEMU/media source registry emitted by newer host
+    /// configurations. Current core/broker paths do not consume this field, but
+    /// the CLI must parse host.json forward-compatibly when the host already
+    /// emits it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qemu_media: Option<QemuMediaConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaConfig {
+    pub registry_dir: String,
+    pub reload_behavior: String,
+    pub runtime_rules_path: String,
+    pub sources: Vec<QemuMediaSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaSource {
+    pub vm: String,
+    pub slot: String,
+    pub source_kind: String,
+    pub media_ref: String,
+    pub format: String,
+    pub read_only: bool,
+    pub registry_scope: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProvider {
+    pub kind: String,
+    pub provider: RuntimeProviderIdentity,
+    pub capabilities: RuntimeProviderCapabilities,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProviderIdentity {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub provider_type: String,
+    pub driver: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProviderCapabilities {
+    pub lifecycle: bool,
+    pub store_sync: bool,
+    pub guest_control: bool,
+    pub exec: bool,
+    pub config_sync: bool,
+    pub display: bool,
+    pub usb_hotplug: bool,
+    pub in_guest_observability: bool,
+    pub keys: bool,
+    pub ssh: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmRuntime {
+    pub vm: String,
+    pub env: Option<String>,
+    pub runtime: RuntimeProvider,
+    pub state_dir: String,
+    pub static_ip: Option<String>,
+    pub bridge: Option<String>,
+    pub tap: Option<String>,
+    pub net_vm: Option<String>,
 }
 
 /// Hash-derived IfName mapping row exposed in `host.json`. The broker's
@@ -462,6 +541,66 @@ mod tests {
         let err = serde_json::from_str::<HostJson>(r#"{"schemaVersion":"v1","extra":true}"#)
             .expect_err("unknown fields fail closed");
         assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn host_json_accepts_optional_qemu_media() {
+        let host: HostJson = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture parses");
+        let mut value = serde_json::to_value(host).expect("host serializes");
+        value["qemuMedia"] = serde_json::json!({
+            "registryDir": "/var/lib/nixling/media-registry",
+            "reloadBehavior": "broker reloads udev rules after enrollment",
+            "runtimeRulesPath": "/run/udev/rules.d/99-nixling-media-ignore.rules",
+            "sources": [{
+                "vm": "dark-live",
+                "slot": "boot",
+                "sourceKind": "physical-usb",
+                "mediaRef": "boot",
+                "format": "raw",
+                "readOnly": false,
+                "registryScope": "root-only-runtime-state"
+            }]
+        });
+        value["runtimeProviders"] = serde_json::json!([{
+            "kind": "qemu-media",
+            "provider": {
+                "id": "local-qemu-media",
+                "type": "local",
+                "driver": "qemu"
+            },
+            "capabilities": {
+                "lifecycle": true,
+                "storeSync": false,
+                "guestControl": false,
+                "exec": false,
+                "configSync": false,
+                "display": true,
+                "usbHotplug": true,
+                "inGuestObservability": false,
+                "keys": false,
+                "ssh": false
+            }
+        }]);
+        value["vmRuntimes"] = serde_json::json!([{
+            "vm": "dark-live",
+            "env": "dark",
+            "runtime": value["runtimeProviders"][0].clone(),
+            "stateDir": "/var/lib/nixling/vms/dark-live",
+            "staticIp": "10.50.0.10",
+            "bridge": "br-dark-lan",
+            "tap": "dark-l10",
+            "netVm": "sys-dark-net"
+        }]);
+        let parsed: HostJson =
+            serde_json::from_value(value).expect("qemu/runtime extension fields parse");
+        let qemu = parsed.qemu_media.expect("qemuMedia present");
+        assert_eq!(qemu.registry_dir, "/var/lib/nixling/media-registry");
+        assert_eq!(qemu.sources[0].vm, "dark-live");
+        assert_eq!(parsed.runtime_providers[0].provider.driver, "qemu");
+        assert_eq!(parsed.vm_runtimes[0].runtime.kind, "qemu-media");
     }
 
     #[test]

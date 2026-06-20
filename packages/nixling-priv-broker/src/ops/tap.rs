@@ -806,6 +806,9 @@ mod tests {
             ],
             ch: None,
             firewall_coexistence_policy: None,
+            runtime_providers: Vec::new(),
+            vm_runtimes: Vec::new(),
+            qemu_media: None,
         };
         let manifest = ManifestV04::from_slice(br#"{"_manifest":{"manifestVersion":5},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"corp-vm":{"apiSocket":"/run/nixling/corp-vm.sock","audio":false,"audioService":"nixling-corp-vm-snd.service","audioStateFile":"/var/lib/nixling/vms/corp-vm/state/audio-state.json","bridge":"br-work-lan","env":"work","gpuSocket":"/run/nixling/corp-vm-gpu.sock","graphics":false,"isNetVm":false,"name":"corp-vm","netVm":"sys-work-net","observability":{"agentSocket":"/run/nixling/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/run/nixling/corp-vm-vsock.sock"},"sshUser":"alice","stateDir":"/var/lib/nixling/vms/corp-vm","staticIp":"10.20.0.10","tap":"work-l10","tpm":false,"tpmSocket":"/run/swtpm/corp-vm/sock","usbipYubikey":false,"usbipdHostIp":"192.0.2.1"}}"#.as_slice()).expect("manifest");
         BundleResolver::from_artifacts(

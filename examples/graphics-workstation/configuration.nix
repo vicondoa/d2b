@@ -142,6 +142,7 @@
     graphics.crossDomainTrusted = true;
     audio.enable    = true;         # vhost-user-sound → host PipeWire
     usbip.yubikey   = true;         # `nixling usb corp-desktop` attaches a YubiKey
+    guest.control.enable = true;    # guestd owns guest-side USBIP import
 
     # Audio grants are OFF by default. The host-side audio sidecar
     # is installed, but the per-VM state file at

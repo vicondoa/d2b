@@ -1407,7 +1407,6 @@ struct ManifestVm {
     audio: bool,
     usbip_yubikey: bool,
     static_ip: Option<String>,
-    usbipd_host_ip: Option<String>,
     is_net_vm: bool,
     state_dir: String,
     bridge: String,
@@ -2207,44 +2206,6 @@ fn warn_all_pending_staged_configs() {
     }
 }
 
-/// Build the host→guest SSH argv for `config sync`. The remote command
-/// is exactly `cat <guest_path>` placed AFTER the destination (where ssh
-/// expects the remote command); no `--` separator is used (it would be
-/// sent as part of the remote command). `guest_path` is validated by
-/// [`config_validate_remote_path`] (absolute, metacharacter-free) before
-/// reaching here, so it cannot inject into the remote shell. Host-key
-/// integrity is verified against the framework-managed known_hosts with
-/// `accept-new` (pins on first use; refuses a CHANGED key, so a same-env
-/// peer cannot silently MITM the pulled config).
-///
-/// Retained for the operator SSH compatibility transport; the guest-control
-/// config-sync path does not call it (it routes through the daemon's
-/// authenticated `ReadGuestConfig` verb instead).
-#[allow(dead_code)]
-fn config_sync_ssh_argv(
-    key_path: &Path,
-    known_hosts: &Path,
-    ssh_target: &str,
-    guest_path: &str,
-) -> Vec<String> {
-    // nixling-ssh-allowlist begin: operator SSH compatibility transport
-    vec![
-        "ssh".to_owned(),
-        "-i".to_owned(),
-        key_path.display().to_string(),
-        "-o".to_owned(),
-        format!("UserKnownHostsFile={}", known_hosts.display()),
-        "-o".to_owned(),
-        "StrictHostKeyChecking=accept-new".to_owned(),
-        "-o".to_owned(),
-        "BatchMode=yes".to_owned(),
-        ssh_target.to_owned(),
-        "cat".to_owned(),
-        guest_path.to_owned(),
-    ]
-    // nixling-ssh-allowlist end
-}
-
 /// Atomically publish `bytes` to `target`: write a UNIQUE sibling temp
 /// (O_CREAT|O_EXCL so it never clobbers a concurrent writer's temp or a
 /// stale leftover), fsync it, then rename over `target`. The rename is
@@ -2295,148 +2256,6 @@ fn config_atomic_write(target: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
     Ok(())
 }
 
-/// Run the `config sync` capture (testable, no `Context`): spawn
-/// `argv[0]` with `argv[1..]`, STREAM its stdout into a bounded buffer
-/// (hard byte cap + wall-clock timeout so a hostile guest cannot stream
-/// an unbounded file — e.g. a symlink to `/dev/zero` — and OOM/hang the
-/// host), fail on non-zero exit, validate the captured stdout
-/// (non-empty/UTF-8), then atomically publish it to `staging`. Returns
-/// the byte count. Spawning `argv[0]` (an absolute path or PATH-resolved
-/// binary) makes this hermetically testable with a fake `ssh`.
-///
-/// Retained for the operator SSH compatibility transport; the guest-control
-/// config-sync path does not spawn a subprocess.
-#[allow(dead_code)]
-fn config_sync_capture_to_staging(argv: &[String], staging: &Path) -> Result<usize, CliFailure> {
-    // A guest config file is small; bound the untrusted pull on both
-    // size and time. The guest controls the remote file, so both limits
-    // are load-bearing security controls, not just hygiene.
-    const MAX_BYTES: usize = 1 << 20; // 1 MiB
-    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-    config_sync_capture_to_staging_limited(argv, staging, MAX_BYTES, TIMEOUT)
-}
-
-/// Inner capture with injectable limits so the byte-cap AND timeout
-/// paths are both hermetically testable.
-#[allow(dead_code)]
-fn config_sync_capture_to_staging_limited(
-    argv: &[String],
-    staging: &Path,
-    max_bytes: usize,
-    timeout: std::time::Duration,
-) -> Result<usize, CliFailure> {
-    use std::io::Read as _;
-
-    // The deadline bounds the ENTIRE child lifetime, not just the stdout
-    // read: a hostile endpoint could send a small valid payload, close
-    // stdout (EOF), then linger to hang `child.wait()` forever.
-    let deadline = std::time::Instant::now() + timeout;
-    let timed_out = |child: &mut std::process::Child, reader: std::thread::JoinHandle<()>| {
-        let _ = child.kill();
-        let _ = child.wait();
-        let _ = reader.join();
-        CliFailure::new(
-            1,
-            format!(
-                "config sync: timed out after {}ms pulling guest config",
-                timeout.as_millis()
-            ),
-        )
-    };
-
-    let mut child = Command::new(&argv[0])
-        .args(&argv[1..])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| CliFailure::new(1, format!("config sync: spawn {}: {e}", argv[0])))?;
-
-    let mut stdout = child.stdout.take().expect("piped stdout");
-    let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
-    let reader = std::thread::spawn(move || {
-        let mut buf: Vec<u8> = Vec::new();
-        let mut chunk = [0u8; 8192];
-        let res = loop {
-            match stdout.read(&mut chunk) {
-                Ok(0) => break Ok(buf),
-                Ok(n) => {
-                    if buf.len() + n > max_bytes {
-                        break Err(format!("guest config exceeds the {max_bytes}-byte limit"));
-                    }
-                    buf.extend_from_slice(&chunk[..n]);
-                }
-                Err(e) => break Err(format!("read guest stdout: {e}")),
-            }
-        };
-        let _ = tx.send(res);
-    });
-
-    let read_budget = deadline.saturating_duration_since(std::time::Instant::now());
-    let stdout_bytes = match rx.recv_timeout(read_budget) {
-        Ok(Ok(buf)) => buf,
-        Ok(Err(msg)) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = reader.join();
-            return Err(CliFailure::new(1, format!("config sync: {msg}")));
-        }
-        Err(_) => return Err(timed_out(&mut child, reader)),
-    };
-    let _ = reader.join();
-
-    // Bounded wait for the child to actually exit (covers the
-    // stdout-closed-but-process-lingers case); kill on the deadline.
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(s)) => break s,
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(CliFailure::new(
-                        1,
-                        format!(
-                            "config sync: timed out after {}ms pulling guest config",
-                            timeout.as_millis()
-                        ),
-                    ));
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            Err(e) => {
-                let _ = child.kill();
-                return Err(CliFailure::new(1, format!("config sync: wait: {e}")));
-            }
-        }
-    };
-    if !status.success() {
-        let mut stderr = String::new();
-        if let Some(es) = child.stderr.take() {
-            let mut raw = Vec::new();
-            let _ = es.take(8192).read_to_end(&mut raw);
-            stderr = String::from_utf8_lossy(&raw).trim().to_owned();
-        }
-        return Err(CliFailure::new(
-            1,
-            format!(
-                "config sync: {} exited {}: {}",
-                argv[0],
-                status.code().unwrap_or(-1),
-                stderr
-            ),
-        ));
-    }
-
-    config_validate_staging_bytes(&stdout_bytes)?;
-    if let Some(parent) = staging.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| CliFailure::new(1, format!("config sync: create staging dir: {e}")))?;
-    }
-    config_atomic_write(staging, &stdout_bytes)?;
-    Ok(stdout_bytes.len())
-}
-
 /// Standard `sha256:<64-hex>` digest over `data`. Computed by the host from the
 /// RECEIVED bytes; the guest-reported size/hash is never trusted.
 fn sha256_hex(data: &[u8]) -> String {
@@ -2454,8 +2273,7 @@ fn sha256_hex(data: &[u8]) -> String {
 /// True iff `vm`'s committed bundle declares a guest-control health node, i.e.
 /// the VM exposes the authenticated guest-control transport. Old or partial
 /// generations without the node return false and fall to the fail-closed
-/// old-generation path (the operator SSH compatibility transport is wired in a
-/// later milestone).
+/// old-generation path; there is no SSH fallback.
 fn vm_uses_guest_control(context: &Context, vm: &str) -> Result<bool, CliFailure> {
     let Some(bundle) = context.load_bundle_context()? else {
         return Ok(false);
@@ -5678,34 +5496,6 @@ fn usb_mutating_verb(
     let flags = require_mutation_flag(verb, dry_run, apply, json_mode)?;
     require_known_vm(context, vm, json_mode)?;
     if flags.apply {
-        if verb == "usb attach" {
-            let guest_plan = usb_guest_attach_plan(context, vm, bus_id, json_mode)?;
-            let outcome = try_daemon_mutating_verb(
-                context,
-                request_type,
-                serde_json::json!({
-                    "vm": vm,
-                    "busId": bus_id,
-                }),
-                flags.dry_run,
-                flags.apply,
-                json_mode,
-            )?;
-            match outcome {
-                DaemonVerbOutcome::Applied { summary } => {
-                    run_usb_guest_attach(&guest_plan, json_mode)?;
-                    print_stdout(&format!("{summary}\n"));
-                    if !json_mode {
-                        print_stdout(&format!(
-                            "nixling usb attach --apply: imported busid '{}' inside vm '{}'\n",
-                            guest_plan.bus_id, guest_plan.vm_name
-                        ));
-                    }
-                    return Ok(0);
-                }
-                other => return emit_daemon_mutating_outcome(other, json_mode),
-            }
-        }
         return dispatch_mutating_verb(
             context,
             request_type,
@@ -5725,10 +5515,14 @@ fn usb_mutating_verb(
             "SpawnRunner(sys-<env>-usbipd/backend)",
             "SpawnRunner(sys-<env>-usbipd/proxy)",
             "UsbipProxyReconcile",
-            "GuestUsbipAttach(ssh sudo -n usbip attach)",
+            "GuestdUsbipImport(attach)",
         ]
     } else {
-        vec!["UsbipUnbind", "UsbipProxyReconcile"]
+        vec![
+            "GuestdUsbipImport(detach)",
+            "UsbipUnbind",
+            "UsbipProxyReconcile",
+        ]
     };
     let summary = serde_json::json!({
         "command": verb,
@@ -5737,9 +5531,9 @@ fn usb_mutating_verb(
         "busId": bus_id,
         "planned": planned,
         "notes": if verb == "usb attach" {
-            "USBIP dry-run reports the daemon → broker bind/lock, firewall, backend/proxy ensurement, reconcile plan, and guest import without mutating host or guest state."
+            "USBIP dry-run reports the daemon → broker bind/lock, firewall, backend/proxy ensurement, reconcile plan, and authenticated guestd import without mutating host or guest state."
         } else {
-            "USBIP dry-run reports the daemon → broker unbind and reconcile plan without mutating host state."
+            "USBIP dry-run reports authenticated guestd import cleanup plus the daemon → broker unbind/reconcile plan without mutating host or guest state."
         },
     });
     if json_mode {
@@ -5755,269 +5549,15 @@ fn usb_mutating_verb(
         };
         if verb == "usb attach" {
             print_stdout(&format!(
-                "nixling {verb} --dry-run: would {action} busid '{bus_id}' for vm '{vm}', reconcile the USBIP proxy, and SSH into the guest to run sudo -n usbip attach\n"
+                "nixling {verb} --dry-run: would {action} busid '{bus_id}' for vm '{vm}', reconcile the USBIP proxy, and ask guestd to import the device\n"
             ));
         } else {
             print_stdout(&format!(
-                "nixling {verb} --dry-run: would {action} busid '{bus_id}' for vm '{vm}', and reconcile the USBIP proxy\n"
+                "nixling {verb} --dry-run: would ask guestd to detach busid '{bus_id}' for vm '{vm}', {action} it on the host, and reconcile the USBIP proxy\n"
             ));
         }
     }
     Ok(0)
-}
-
-#[derive(Debug, Clone)]
-struct UsbGuestAttachPlan {
-    vm_name: String,
-    bus_id: String,
-    host: String,
-    user: String,
-    usbip_host: String,
-    key_path: PathBuf,
-    known_hosts: PathBuf,
-}
-
-fn usb_guest_attach_ssh_argv(
-    key_path: &Path,
-    known_hosts: &Path,
-    remote: &str,
-    usbip_host: &str,
-    bus_id: &str,
-) -> Vec<String> {
-    // nixling-ssh-allowlist begin: usb-connect guest attach convenience
-    vec![
-        "ssh".to_owned(),
-        "-i".to_owned(),
-        key_path.display().to_string(),
-        "-o".to_owned(),
-        format!("UserKnownHostsFile={}", known_hosts.display()),
-        "-o".to_owned(),
-        "BatchMode=yes".to_owned(),
-        "-o".to_owned(),
-        "ConnectTimeout=8".to_owned(),
-        "-o".to_owned(),
-        "StrictHostKeyChecking=accept-new".to_owned(),
-        remote.to_owned(),
-        "sudo".to_owned(),
-        "-n".to_owned(),
-        "usbip".to_owned(),
-        "attach".to_owned(),
-        "-r".to_owned(),
-        usbip_host.to_owned(),
-        "-b".to_owned(),
-        bus_id.to_owned(),
-    ]
-    // nixling-ssh-allowlist end
-}
-
-fn usb_attach_cli_failure(
-    kind: &str,
-    code: &str,
-    what_was_checked: &str,
-    observed_state: &str,
-    remediation: &str,
-    is_json: bool,
-) -> CliFailure {
-    let envelope = host_error_envelope(
-        kind,
-        code,
-        1,
-        what_was_checked,
-        observed_state,
-        remediation,
-        "docs/reference/components-usbip.md#common-gotchas--failure-modes",
-    );
-    let rendered_stderr = if is_json {
-        let mut rendered =
-            serde_json::to_string_pretty(&envelope).expect("serialize usb attach failure envelope");
-        rendered.push('\n');
-        rendered
-    } else {
-        format!(
-            "nixling: {} (code: {}, exit {})\n  what was checked : {}\n  observed         : {}\n  remediation      : {}\n  docs             : {}\n",
-            envelope.kind,
-            envelope.code,
-            envelope.exit_code,
-            envelope.what_was_checked,
-            envelope.observed_state,
-            envelope.remediation,
-            envelope.docs_anchor,
-        )
-    };
-    CliFailure {
-        exit_code: envelope.exit_code,
-        message: envelope.kind,
-        rendered_stderr: Some(rendered_stderr),
-    }
-}
-
-fn usb_resolve_bundle_key_path(
-    bundle_path: &Path,
-    vm_name: &str,
-    is_json: bool,
-) -> Result<Option<PathBuf>, CliFailure> {
-    match bundle_path.try_exists() {
-        Ok(true) => {
-            let bundle: Bundle = match read_json_file(bundle_path) {
-                Ok(bundle) => bundle,
-                Err(err) if err.kind() == io::ErrorKind::PermissionDenied => return Ok(None),
-                Err(err) => {
-                    return Err(usb_attach_cli_failure(
-                        "nixling usb attach --apply failed to read the trusted bundle",
-                        "usb-guest-import-prerequisite",
-                        "Whether the CLI can resolve the framework-managed VM SSH key before mutating host USBIP state.",
-                        &format!("Failed to read bundle {}: {err}", bundle_path.display()),
-                        "Rebuild the host so the bundle is readable to the launcher, or ensure the framework-managed key exists at /var/lib/nixling/keys/<vm>_ed25519.",
-                        is_json,
-                    ));
-                }
-            };
-            Ok(Some(bundle.managed_keys.effective_key_path(vm_name)))
-        }
-        Ok(false) => Ok(None),
-        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => Ok(None),
-        Err(err) => Err(usb_attach_cli_failure(
-            "nixling usb attach --apply failed to inspect the trusted bundle",
-            "usb-guest-import-prerequisite",
-            "Whether the CLI can resolve the framework-managed VM SSH key before mutating host USBIP state.",
-            &format!("Failed to inspect bundle {}: {err}", bundle_path.display()),
-            "Fix the bundle path or filesystem permissions, then retry `nixling usb attach`.",
-            is_json,
-        )),
-    }
-}
-
-fn usb_validate_key_exists(key_path: &Path, is_json: bool) -> Result<(), CliFailure> {
-    match key_path.try_exists() {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(usb_attach_cli_failure(
-            "nixling usb attach --apply cannot find the VM SSH key",
-            "usb-guest-import-prerequisite",
-            "Whether the framework-managed VM SSH key exists before mutating host USBIP state.",
-            &format!("SSH key not found at {}", key_path.display()),
-            "Rebuild the host or run `nixling keys rotate <vm>` for the target VM, then retry `nixling usb attach`.",
-            is_json,
-        )),
-        Err(err) => {
-            let remediation = if err.kind() == io::ErrorKind::PermissionDenied {
-                "Verify your shell session is a member of the `nixling` group (`id -nG | tr ' ' '\\n' | grep -x nixling`) and that /var/lib/nixling grants launcher traversal, then retry `nixling usb attach`."
-            } else {
-                "Fix the SSH key path or filesystem error, then retry `nixling usb attach`."
-            };
-            Err(usb_attach_cli_failure(
-                "nixling usb attach --apply cannot access the VM SSH key",
-                "usb-guest-import-prerequisite",
-                "Whether the framework-managed VM SSH key is accessible before mutating host USBIP state.",
-                &format!("Failed to inspect SSH key {}: {err}", key_path.display()),
-                remediation,
-                is_json,
-            ))
-        }
-    }
-}
-
-fn usb_guest_attach_plan(
-    context: &Context,
-    vm_name: &str,
-    bus_id: &str,
-    is_json: bool,
-) -> Result<UsbGuestAttachPlan, CliFailure> {
-    let manifest = context.load_manifest()?;
-    let vm = manifest.entries.get(vm_name).ok_or_else(|| {
-        usb_attach_cli_failure(
-            "nixling usb attach --apply target VM is not in the manifest",
-            "usage",
-            "Whether the requested VM exists in the active manifest before mutating host USBIP state.",
-            &format!("Unknown VM '{vm_name}' in manifest"),
-            "Run `nixling list` and retry with a declared VM name.",
-            is_json,
-        )
-    })?;
-    let host = vm.static_ip.clone().ok_or_else(|| {
-        usb_attach_cli_failure(
-            "nixling usb attach --apply target VM has no static IP",
-            "usb-guest-import-prerequisite",
-            "Whether the target VM has guest SSH metadata before mutating host USBIP state.",
-            &format!("VM '{vm_name}' has no staticIp in the manifest"),
-            "Start from a VM that belongs to a nixling env and has a generated static IP, then retry `nixling usb attach`.",
-            is_json,
-        )
-    })?;
-    let user = vm.ssh_user.clone().ok_or_else(|| {
-        usb_attach_cli_failure(
-            "nixling usb attach --apply target VM has no SSH user",
-            "usb-guest-import-prerequisite",
-            "Whether the target VM has guest SSH metadata before mutating host USBIP state.",
-            &format!("VM '{vm_name}' has no sshUser in the manifest"),
-            "Set `nixling.vms.<vm>.ssh.user`, rebuild the host, and retry `nixling usb attach`.",
-            is_json,
-        )
-    })?;
-    let usbip_host = vm.usbipd_host_ip.clone().ok_or_else(|| {
-        usb_attach_cli_failure(
-            "nixling usb attach --apply target VM has no USBIP proxy IP",
-            "usb-guest-import-prerequisite",
-            "Whether the target VM has per-env USBIP proxy metadata before mutating host USBIP state.",
-            &format!("VM '{vm_name}' has no usbipdHostIp in the manifest"),
-            "Rebuild the host with a current nixling module so the manifest includes usbipdHostIp, then retry `nixling usb attach`.",
-            is_json,
-        )
-    })?;
-    let key_path = usb_resolve_bundle_key_path(&context.bundle_path, vm_name, is_json)?
-        .unwrap_or_else(|| PathBuf::from(format!("/var/lib/nixling/keys/{vm_name}_ed25519")));
-    usb_validate_key_exists(&key_path, is_json)?;
-
-    Ok(UsbGuestAttachPlan {
-        vm_name: vm_name.to_owned(),
-        bus_id: bus_id.to_owned(),
-        host,
-        user,
-        usbip_host,
-        key_path,
-        known_hosts: PathBuf::from("/var/lib/nixling/known_hosts.nixling"),
-    })
-}
-
-fn run_usb_guest_attach(plan: &UsbGuestAttachPlan, is_json: bool) -> Result<(), CliFailure> {
-    let remote = format!("{}@{}", plan.user, plan.host);
-    let argv = usb_guest_attach_ssh_argv(
-        &plan.key_path,
-        &plan.known_hosts,
-        &remote,
-        &plan.usbip_host,
-        &plan.bus_id,
-    );
-    let status = Command::new(&argv[0])
-        .args(&argv[1..])
-        .status()
-        .map_err(|err| {
-            usb_attach_cli_failure(
-                "nixling usb attach --apply failed to SSH into the guest",
-                "usb-guest-import-failed",
-                "Guest-side USBIP import after the host-side daemon → broker attach succeeded.",
-                &format!("SSH guest import failed for vm '{}': {err}", plan.vm_name),
-                &format!("The host-side USBIP attach may already be active. Check VM reachability and guest sudo/usbip availability, then run `nixling usb detach {} {} --apply` before retrying if needed.", plan.vm_name, plan.bus_id),
-                is_json,
-            )
-        })?;
-    if !status.success() {
-        return Err(usb_attach_cli_failure(
-            "nixling usb attach --apply guest import command failed",
-            "usb-guest-import-failed",
-            "Guest-side `sudo -n usbip attach` after the host-side daemon → broker attach succeeded.",
-            &format!(
-                "Guest import in vm '{}' exited {}",
-                plan.vm_name,
-                status.code().unwrap_or(-1)
-            ),
-            &format!(
-                "The host-side USBIP attach may already be active. Check guest sudo permissions and `usbip`/`vhci_hcd`, then run `nixling usb detach {} {} --apply` before retrying if needed.",
-                plan.vm_name, plan.bus_id
-            ),
-            is_json,
-        ));
-    }
-    Ok(())
 }
 
 fn cmd_usb_probe(context: &Context, args: &UsbProbeArgs) -> Result<i32, CliFailure> {
@@ -7020,6 +6560,7 @@ fn process_role_name(role: &nixling_core::processes::ProcessRole) -> String {
         nixling_core::processes::ProcessRole::GpuRenderNode => "gpu-render-node",
         nixling_core::processes::ProcessRole::Audio => "audio",
         nixling_core::processes::ProcessRole::CloudHypervisorRunner => "cloud-hypervisor-runner",
+        nixling_core::processes::ProcessRole::QemuMediaRunner => "qemu-media-runner",
         nixling_core::processes::ProcessRole::VsockRelay => "vsock-relay",
         nixling_core::processes::ProcessRole::OtelHostBridge => "otel-host-bridge",
         nixling_core::processes::ProcessRole::GuestSshReadiness => "guest-ssh-readiness",
@@ -8776,30 +8317,6 @@ mod host_install_dispatch_tests {
             serde_json::to_vec(&manifest).expect("serialize manifest"),
         )
         .expect("write manifest");
-    }
-
-    fn write_usb_attach_manifest(path: &PathBuf, vm: &str) {
-        let manifest = json!({
-            (vm): {
-                "name": vm,
-                "env": "dev",
-                "graphics": false,
-                "tpm": false,
-                "audio": false,
-                "usbipYubikey": true,
-                "staticIp": "10.20.0.10",
-                "usbipdHostIp": "192.0.2.1",
-                "isNetVm": false,
-                "stateDir": format!("/var/lib/nixling/vms/{vm}"),
-                "bridge": "nl-dev",
-                "sshUser": "alice"
-            }
-        });
-        std::fs::write(
-            path,
-            serde_json::to_vec(&manifest).expect("serialize usb attach manifest"),
-        )
-        .expect("write usb attach manifest");
     }
 
     fn run_vm_start_with_mock_daemon(
@@ -10690,25 +10207,8 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
-    fn usb_attach_prevalidates_guest_import_before_daemon_dispatch() {
-        let manifest_path = test_socket_path("usb-attach-prevalidate", ".manifest.json");
-        if let Some(parent) = manifest_path.parent() {
-            std::fs::create_dir_all(parent).expect("create test manifest dir");
-        }
-        let vm = "unit-usb-missing-key";
-        write_usb_attach_manifest(&manifest_path, vm);
-        let context = Context {
-            manifest_path: manifest_path.clone(),
-            bundle_path: manifest_path.with_extension("bundle.json"),
-            public_socket: test_socket_path("usb-attach-prevalidate", ".sock"),
-            broker_socket: PathBuf::from("/dev/null"),
-            state_root: None,
-            host_runtime_path: PathBuf::from("/dev/null"),
-            system_state_fixture: None,
-            auth_status_fixture: None,
-            daemon_state_dir: PathBuf::from("/dev/null"),
-            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
-        };
+    fn usb_attach_dispatches_daemon_without_guest_ssh_prevalidation() {
+        let vm = "unit-usb";
         let args = UsbAttachArgs {
             vm: vm.to_owned(),
             busid: "1-2".to_owned(),
@@ -10718,15 +10218,22 @@ mod host_install_dispatch_tests {
             human: false,
         };
 
-        let err = super::cmd_usb_attach(&context, &args)
-            .expect_err("missing key must fail before daemon dispatch");
-        assert_eq!(err.exit_code, 1);
-        let rendered = err.rendered_stderr.as_deref().unwrap_or("");
-        assert!(rendered.contains("nixling usb attach --apply"));
-        assert!(!rendered.contains("--key"));
-        assert!(!rendered.contains("daemon-down"));
-
-        let _ = std::fs::remove_file(&manifest_path);
+        let (result, request, stdout) = run_public_command_with_mock_daemon(
+            "usb-ad",
+            vm,
+            json!({
+                "outcome": "applied",
+                "verb": "usb attach",
+                "summary": "usb attach ok"
+            }),
+            |context| super::cmd_usb_attach(context, &args),
+        );
+        assert_eq!(result.expect("usb attach should succeed"), 0);
+        assert_eq!(request["type"], "usbipBind");
+        assert_eq!(request["vm"], vm);
+        assert_eq!(request["busId"], "1-2");
+        assert_eq!(request["apply"], true);
+        assert!(!String::from_utf8_lossy(&stdout).contains("ssh"));
     }
 
     #[test]
@@ -10932,7 +10439,6 @@ mod host_install_dispatch_tests {
             audio: false,
             usbip_yubikey: false,
             static_ip: Some("10.20.0.10".to_owned()),
-            usbipd_host_ip: Some("192.0.2.1".to_owned()),
             is_net_vm: false,
             state_dir: "/var/lib/nixling/vms/vm-a".to_owned(),
             bridge: "nl-dev".to_owned(),
@@ -11015,7 +10521,6 @@ mod host_install_dispatch_tests {
             audio: true,
             usbip_yubikey: false,
             static_ip: None,
-            usbipd_host_ip: None,
             is_net_vm: false,
             state_dir: "/var/lib/nixling/vms/vm-a".to_owned(),
             bridge: "nl-dev".to_owned(),
@@ -11162,7 +10667,6 @@ mod host_install_dispatch_tests {
             audio: false,
             usbip_yubikey: true,
             static_ip: Some("10.20.0.10".to_owned()),
-            usbipd_host_ip: Some("192.0.2.1".to_owned()),
             is_net_vm: false,
             state_dir: root.join("vm-a").display().to_string(),
             bridge: "nl-dev".to_owned(),
@@ -11459,7 +10963,6 @@ mod host_install_dispatch_tests {
                             audio: false,
                             usbip_yubikey: false,
                             static_ip: None,
-                            usbipd_host_ip: None,
                             is_net_vm: false,
                             state_dir: format!("/var/lib/nixling/vms/{name}"),
                             bridge: "br-work-lan".to_owned(),
@@ -11640,9 +11143,7 @@ mod config_cmd_tests {
 
     use super::{
         config_approve_core, config_atomic_write, config_reject_core, config_staging_path_in,
-        config_sync_capture_to_staging, config_sync_capture_to_staging_limited,
-        config_sync_ssh_argv, config_validate_remote_path, config_validate_staging_bytes,
-        config_validate_vm_name,
+        config_validate_remote_path, config_validate_staging_bytes, config_validate_vm_name,
     };
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -11812,209 +11313,12 @@ mod config_cmd_tests {
         assert!(!config_reject_core(&staging).expect("reject-again"));
     }
 
-    // Hermetic coverage of the real sync capture path via a fake `ssh`
-    // script invoked through `/bin/sh` (read, not exec'd — avoids any
-    // ETXTBSY race exec'ing a just-written binary under CI load).
-    fn fake_ssh(dir: &std::path::Path, name: &str, body: &str) -> Vec<String> {
-        let p = dir.join(name);
-        fs::write(&p, body).expect("write fake ssh");
-        vec!["/bin/sh".to_owned(), p.display().to_string()]
-    }
-
-    #[test]
-    fn sync_capture_success_stages_stdout() {
-        let dir = scratch("sync-ok");
-        let mut argv = fake_ssh(
-            &dir,
-            "ssh",
-            "printf '{ environment.systemPackages = []; }\\n'\n",
-        );
-        argv.push("ignored-arg".to_owned());
-        let staging = dir.join("work-aad.guest.nix");
-        let n = config_sync_capture_to_staging(&argv, &staging).expect("sync ok");
-        assert_eq!(
-            fs::read(&staging).unwrap(),
-            b"{ environment.systemPackages = []; }\n"
-        );
-        assert_eq!(n, fs::read(&staging).unwrap().len());
-    }
-
-    #[test]
-    fn sync_capture_nonzero_exit_errors_and_does_not_stage() {
-        let dir = scratch("sync-fail");
-        let argv = fake_ssh(&dir, "ssh", "echo 'permission denied' >&2\nexit 255\n");
-        let staging = dir.join("work-aad.guest.nix");
-        let err = config_sync_capture_to_staging(&argv, &staging).expect_err("must error");
-        assert!(err.message.contains("exited 255"));
-        assert!(!staging.exists(), "must not stage on ssh failure");
-    }
-
-    #[test]
-    fn sync_capture_empty_stdout_is_rejected() {
-        let dir = scratch("sync-empty");
-        let argv = fake_ssh(&dir, "ssh", "exit 0\n");
-        let staging = dir.join("work-aad.guest.nix");
-        let err = config_sync_capture_to_staging(&argv, &staging).expect_err("empty rejected");
-        assert!(err.message.contains("empty"));
-        assert!(!staging.exists());
-    }
-
-    #[test]
-    fn sync_capture_oversized_stdout_is_rejected_and_not_staged() {
-        // A hostile guest streaming an unbounded file must be cut off by
-        // the byte cap, not buffered until OOM, and must not stage.
-        let dir = scratch("sync-oversized");
-        // Emit ~2 MiB, well past the 1 MiB cap.
-        let argv = fake_ssh(&dir, "ssh", "exec head -c 2097152 /dev/zero\n");
-        let staging = dir.join("work-aad.guest.nix");
-        let err = config_sync_capture_to_staging(&argv, &staging).expect_err("oversized rejected");
-        assert!(
-            err.message.contains("limit"),
-            "expected a size-limit error, got: {}",
-            err.message
-        );
-        assert!(!staging.exists(), "must not stage an oversized pull");
-    }
-
-    #[test]
-    fn sync_capture_times_out_and_does_not_stage() {
-        // A guest that stalls (writes nothing, never closes stdout) must
-        // hit the wall-clock timeout, get killed, and not stage. Uses an
-        // injected 200 ms timeout against a fake ssh that sleeps.
-        let dir = scratch("sync-timeout");
-        let argv = fake_ssh(&dir, "ssh", "exec sleep 30\n");
-        let staging = dir.join("work-aad.guest.nix");
-        let start = std::time::Instant::now();
-        let err = config_sync_capture_to_staging_limited(
-            &argv,
-            &staging,
-            1 << 20,
-            std::time::Duration::from_millis(200),
-        )
-        .expect_err("must time out");
-        assert!(
-            err.message.contains("timed out"),
-            "expected a timeout error, got: {}",
-            err.message
-        );
-        assert!(
-            start.elapsed() < std::time::Duration::from_secs(10),
-            "timeout did not fire promptly"
-        );
-        assert!(!staging.exists(), "must not stage on timeout");
-    }
-
-    #[test]
-    fn sync_capture_times_out_when_process_lingers_after_stdout_close() {
-        // A hostile endpoint sends a small valid payload, CLOSES stdout
-        // (EOF), then lingers. The deadline must cover the whole child
-        // lifetime (not just the stdout read), so this still times out,
-        // is killed, and does not stage.
-        let dir = scratch("sync-linger");
-        let argv = fake_ssh(
-            &dir,
-            "ssh",
-            "printf '{ environment.systemPackages = []; }\\n'\nexec 1>&-\nsleep 30\n",
-        );
-        let staging = dir.join("work-aad.guest.nix");
-        let start = std::time::Instant::now();
-        let err = config_sync_capture_to_staging_limited(
-            &argv,
-            &staging,
-            1 << 20,
-            std::time::Duration::from_millis(200),
-        )
-        .expect_err("must time out on the lingering process");
-        assert!(
-            err.message.contains("timed out"),
-            "expected a timeout error, got: {}",
-            err.message
-        );
-        assert!(
-            start.elapsed() < std::time::Duration::from_secs(10),
-            "lingering-process timeout did not fire promptly"
-        );
-        assert!(!staging.exists(), "must not stage when the process lingers");
-    }
-
     #[test]
     fn staging_path_in_is_per_vm() {
         let base = PathBuf::from("/x/state");
         assert_eq!(
             config_staging_path_in(&base, "work-aad"),
             PathBuf::from("/x/state/work-aad.guest.nix")
-        );
-    }
-
-    #[test]
-    fn sync_ssh_argv_remote_command_is_cat_after_destination() {
-        let argv = config_sync_ssh_argv(
-            &PathBuf::from("/var/lib/nixling/keys/work-aad_ed25519"),
-            &PathBuf::from("/var/lib/nixling/known_hosts.nixling"),
-            "alice@10.20.0.10",
-            "/var/lib/nixling-guest/guest-config.nix",
-        );
-        assert_eq!(argv[0], "ssh");
-        // key flag
-        let i = argv.iter().position(|a| a == "-i").unwrap();
-        assert_eq!(argv[i + 1], "/var/lib/nixling/keys/work-aad_ed25519");
-        // host-key integrity: managed known_hosts + accept-new (NOT
-        // StrictHostKeyChecking=no / UserKnownHostsFile=/dev/null).
-        assert!(
-            argv.iter()
-                .any(|a| a == "UserKnownHostsFile=/var/lib/nixling/known_hosts.nixling")
-        );
-        assert!(argv.iter().any(|a| a == "StrictHostKeyChecking=accept-new"));
-        assert!(!argv.iter().any(|a| a == "StrictHostKeyChecking=no"));
-        assert!(!argv.iter().any(|a| a == "UserKnownHostsFile=/dev/null"));
-        assert!(argv.iter().any(|a| a == "BatchMode=yes"));
-        // No `--`: ssh would send it as part of the remote command.
-        assert!(!argv.iter().any(|a| a == "--"), "`--` must not be present");
-        // The remote command (everything after the destination) is
-        // exactly `cat <guest_path>`.
-        let target = argv.iter().position(|a| a == "alice@10.20.0.10").unwrap();
-        assert_eq!(
-            &argv[target + 1..],
-            &["cat", "/var/lib/nixling-guest/guest-config.nix"]
-        );
-    }
-
-    #[test]
-    fn usb_guest_attach_ssh_argv_runs_guest_import_after_destination() {
-        let argv = super::usb_guest_attach_ssh_argv(
-            &PathBuf::from("/var/lib/nixling/keys/work-aad_ed25519"),
-            &PathBuf::from("/var/lib/nixling/known_hosts.nixling"),
-            "alice@10.20.0.10",
-            "192.0.2.1",
-            "1-2",
-        );
-
-        assert_eq!(argv[0], "ssh");
-        let key_pos = argv.iter().position(|a| a == "-i").unwrap();
-        assert_eq!(argv[key_pos + 1], "/var/lib/nixling/keys/work-aad_ed25519");
-        assert!(
-            argv.iter()
-                .any(|a| a == "UserKnownHostsFile=/var/lib/nixling/known_hosts.nixling")
-        );
-        assert!(argv.iter().any(|a| a == "StrictHostKeyChecking=accept-new"));
-        assert!(argv.iter().any(|a| a == "BatchMode=yes"));
-        assert!(argv.iter().any(|a| a == "ConnectTimeout=8"));
-        assert!(!argv.iter().any(|a| a == "StrictHostKeyChecking=no"));
-        assert!(!argv.iter().any(|a| a == "UserKnownHostsFile=/dev/null"));
-
-        let remote_pos = argv.iter().position(|a| a == "alice@10.20.0.10").unwrap();
-        assert_eq!(
-            &argv[remote_pos + 1..],
-            &[
-                "sudo",
-                "-n",
-                "usbip",
-                "attach",
-                "-r",
-                "192.0.2.1",
-                "-b",
-                "1-2"
-            ]
         );
     }
 
@@ -12193,12 +11497,10 @@ mod config_cmd_tests {
     }
 }
 
-/// Fail-closed source gate: `ssh`/`scp` may only be launched from sanctioned
-/// convenience/compatibility sites, each delimited by
-/// `// nixling-ssh-allowlist begin/end`. The guest-control transport (config
-/// sync, readiness) MUST NOT spawn an SSH client. This module scans the crate
-/// source for SSH/SCP argv tokens outside the allowlist and proves at runtime
-/// that the guest-control config path spawns no SSH client.
+/// Fail-closed source gate: the Rust CLI must not launch `ssh` or `scp`.
+/// Guest interaction goes through the authenticated guest-control transport.
+/// This module scans production source for SSH/SCP argv tokens and proves at
+/// runtime that the guest-control config path stages only received bytes.
 #[cfg(test)]
 mod ssh_spawn_gate {
     use std::path::PathBuf;
@@ -12207,11 +11509,6 @@ mod ssh_spawn_gate {
         Context, DEFAULT_GUEST_CONFIG_PATH, GuestConfigReadOutcome, cmd_config_sync,
         config_staging_path, finish_config_sync_from_reply, read_guest_config_via_socket,
     };
-
-    /// Allowlist comment markers. Built so this scanner's own source never
-    /// contains the literal SSH/SCP argv tokens it searches for.
-    const ALLOW_BEGIN: &str = "nixling-ssh-allowlist begin";
-    const ALLOW_END: &str = "nixling-ssh-allowlist end";
 
     /// Construct the quoted argv tokens (`"ssh"`, `"scp"`) without embedding the
     /// bare literal in this file, so the scanner is robust even if the
@@ -12222,15 +11519,13 @@ mod ssh_spawn_gate {
         [format!("\"{ssh}\""), format!("\"{scp}\"")]
     }
 
-    /// Return the 1-based line numbers that launch an SSH/SCP client outside an
-    /// allowlist region. `#[cfg(test)] mod` blocks are skipped wholesale (test
+    /// Return the 1-based line numbers that launch an SSH/SCP client. `#[cfg(test)] mod` blocks are skipped wholesale (test
     /// fixtures legitimately mention SSH); only column-0 `}` closes such a
     /// block, matching rustfmt's indentation of nested items.
     fn scan_ssh_argv_violations(src: &str) -> Vec<usize> {
         let [ssh_tok, scp_tok] = forbidden_tokens();
         let lines: Vec<&str> = src.lines().collect();
         let mut violations = Vec::new();
-        let mut allow_depth: usize = 0;
         let mut in_test_mod = false;
         let mut i = 0;
         while i < lines.len() {
@@ -12253,17 +11548,7 @@ mod ssh_spawn_gate {
                 i += 1;
                 continue;
             }
-            if trimmed.contains(ALLOW_BEGIN) {
-                allow_depth += 1;
-                i += 1;
-                continue;
-            }
-            if trimmed.contains(ALLOW_END) {
-                allow_depth = allow_depth.saturating_sub(1);
-                i += 1;
-                continue;
-            }
-            if allow_depth == 0 && (line.contains(&ssh_tok) || line.contains(&scp_tok)) {
+            if line.contains(&ssh_tok) || line.contains(&scp_tok) {
                 violations.push(i + 1);
             }
             i += 1;
@@ -12272,28 +11557,22 @@ mod ssh_spawn_gate {
     }
 
     #[test]
-    fn crate_source_launches_ssh_only_from_allowlisted_sites() {
+    fn crate_source_launches_no_ssh_or_scp_clients() {
         let src = include_str!("lib.rs");
         let violations = scan_ssh_argv_violations(src);
         assert!(
             violations.is_empty(),
-            "found SSH/SCP argv tokens outside the allowlist at lines {violations:?}; \
-             wrap legitimate convenience/compat sites in nixling-ssh-allowlist markers"
+            "found SSH/SCP argv tokens in production code at lines {violations:?}; \
+             route guest work through guest-control instead"
         );
     }
 
     #[test]
-    fn gate_flags_illicit_ssh_and_passes_allowlisted_and_test_blocks() {
+    fn gate_flags_illicit_ssh_and_ignores_test_blocks() {
         let [ssh_tok, _] = forbidden_tokens();
         // Illicit: a bare SSH argv in production code must be flagged.
         let illicit = format!("fn run() {{\n    let argv = vec![{ssh_tok}.to_owned()];\n}}\n");
         assert_eq!(scan_ssh_argv_violations(&illicit), vec![2]);
-
-        // Sanctioned: the same call inside allowlist markers must pass.
-        let sanctioned = format!(
-            "fn run() {{\n    // {ALLOW_BEGIN}: x\n    let argv = vec![{ssh_tok}.to_owned()];\n    // {ALLOW_END}\n}}\n"
-        );
-        assert!(scan_ssh_argv_violations(&sanctioned).is_empty());
 
         // Test fixtures: an SSH token inside a `#[cfg(test)] mod` is skipped.
         let in_test = format!("#[cfg(test)]\nmod t {{\n    fn f() {{ let _ = {ssh_tok}; }}\n}}\n");
@@ -12345,8 +11624,7 @@ mod ssh_spawn_gate {
         assert!(staging.exists());
 
         // The Unavailable outcome + byte-staging above prove this path uses
-        // only the socket/received bytes; `ssh`/`scp` is gated crate-wide to
-        // sanctioned sites by `crate_source_launches_ssh_only_from_allowlisted_sites`.
+        // only the socket/received bytes; `ssh`/`scp` is forbidden crate-wide.
         let _ = std::fs::remove_dir_all(&dir);
     }
 

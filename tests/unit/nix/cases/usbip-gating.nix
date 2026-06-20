@@ -76,6 +76,7 @@ let
       index = 10;
       ssh.user = "alice";
       usbip.yubikey = true;
+      guest.control.enable = true;
       config = {
         networking.hostName = lib.mkDefault "dev-vm";
         users.users.alice = { isNormalUser = true; uid = 1000; };
@@ -120,12 +121,14 @@ let
     ({ lib, ... }: {
       nixling.site.yubikey.enable = lib.mkForce false;
       nixling.vms.corp-vm.usbip.yubikey = true;
+      nixling.vms.corp-vm.guest.control.enable = true;
     })
   ];
   enabled = evalSingle [
     ({ lib, ... }: {
       nixling.site.yubikey.enable = lib.mkForce true;
       nixling.vms.corp-vm.usbip.yubikey = true;
+      nixling.vms.corp-vm.guest.control.enable = true;
     })
   ];
 

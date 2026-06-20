@@ -26,6 +26,9 @@ deprecations ship one minor release before removal.
 - CLI: `nixling host doctor --read-only` now surfaces
   `storage-lifecycle-report.json` with bounded issue kinds and inline
   remediation for storage/restart/sync contract drift.
+- CLI: `nixling host doctor --read-only` now treats the private broker
+  socket, optional metrics endpoint absence, and current swtpm namespace
+  posture as healthy when those surfaces match the deployed policy.
 - CLI: added `nixling host migrate-storage --dry-run`, which emits a
   checkpoint ID, exact rollback command, preserved-data inventory,
   cutover-only cleanup candidates, and fail-closed hazards for the
@@ -82,6 +85,9 @@ deprecations ship one minor release before removal.
   survives the synchronous `gatewayDisplay` request runtime, so Waypipe
   sessions remain connected after `nixling vm exec <aca target>` returns
   and the forwarded Wayland app can stay visible on the host compositor.
+- USBIP attach/detach now routes guest-side import cleanup through guestd
+  over authenticated guest-control, removing the CLI's SSH fallback and
+  preventing stale guest imports from blocking reattach after daemon restarts.
 
 ## [1.3.1] - 2026-06-18
 

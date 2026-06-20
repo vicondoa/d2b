@@ -29,6 +29,11 @@ service GuestControl {
   // guest-control is enabled (not gated on exec.enable). The request carries a
   // closed file-id enum, never a free-form path.
   rpc ReadGuestFile(ReadGuestFileRequest) returns (ReadGuestFileResponse);
+
+  // Framework op: guest-side USBIP import lifecycle. The host daemon owns the
+  // host bind/unbind through the broker and calls this authenticated RPC for the
+  // guest attach/detach half; the CLI never SSHes into the guest for USBIP.
+  rpc UsbipImport(UsbipImportRequest) returns (UsbipImportResponse);
 }
 
 message RequestMetadata {
@@ -337,6 +342,20 @@ message ReadGuestFileResponse {
   GuestControlError error = 5;
 }
 
+message UsbipImportRequest {
+  RequestMetadata metadata = 1;
+  UsbipImportAction action = 2;
+  string host = 3;
+  string bus_id = 4;
+}
+
+message UsbipImportResponse {
+  UsbipImportAction action = 1;
+  string bus_id = 2;
+  uint32 detached_ports = 3;
+  GuestControlError error = 4;
+}
+
 message TerminalStatus {
   oneof outcome {
     int32 exit_code = 1;
@@ -363,6 +382,7 @@ enum GuestCapability {
   GUEST_CAPABILITY_TTY_RESIZE = 7;
   GUEST_CAPABILITY_SIGNALS = 8;
   GUEST_CAPABILITY_READ_GUEST_FILE = 9;
+  GUEST_CAPABILITY_USBIP_IMPORT = 10;
 }
 
 enum GuestSubsystem {
@@ -373,6 +393,7 @@ enum GuestSubsystem {
   GUEST_SUBSYSTEM_LOG_STORAGE = 4;
   GUEST_SUBSYSTEM_TOKEN = 5;
   GUEST_SUBSYSTEM_VSOCK = 6;
+  GUEST_SUBSYSTEM_USBIP = 7;
 }
 
 // Closed set of host-declared guest files readable via ReadGuestFile.
@@ -380,6 +401,12 @@ enum GuestSubsystem {
 enum GuestFileId {
   GUEST_FILE_ID_UNSPECIFIED = 0;
   GUEST_FILE_ID_GUEST_CONFIG = 1;
+}
+
+enum UsbipImportAction {
+  USBIP_IMPORT_ACTION_UNSPECIFIED = 0;
+  USBIP_IMPORT_ACTION_ATTACH = 1;
+  USBIP_IMPORT_ACTION_DETACH = 2;
 }
 
 enum HealthOrigin {
@@ -526,4 +553,7 @@ enum GuestControlErrorKind {
   GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE = 40;
   GUEST_CONTROL_ERROR_KIND_READ_DENIED = 41;
   GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM = 42;
+  GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE = 43;
+  GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED = 44;
+  GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID = 45;
 }

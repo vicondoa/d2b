@@ -202,6 +202,7 @@ pub fn regenerate_argv(
         // pre-start hooks). The regenerator does not own these.
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
+        | ProcessRole::QemuMediaRunner
         | ProcessRole::GuestSshReadiness
         | ProcessRole::GuestControlHealth
         | ProcessRole::SwtpmPreStartFlush => {

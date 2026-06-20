@@ -2229,7 +2229,8 @@ fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::GuestSshReadiness
-        | ProcessRole::GuestControlHealth => None,
+        | ProcessRole::GuestControlHealth
+        | ProcessRole::QemuMediaRunner => None,
         ProcessRole::SwtpmPreStartFlush => Some("swtpm-flush"),
         ProcessRole::Swtpm => Some("swtpm"),
         ProcessRole::Virtiofsd => Some("virtiofsd"),
@@ -2267,6 +2268,7 @@ fn legacy_runner_spec(
         ProcessRole::GpuRenderNode => ("crosvm", format!("nixling-{}-gpu-render-node", dag.vm)),
         ProcessRole::Audio => ("vhost-device-sound", format!("nixling-{}-snd", dag.vm)),
         ProcessRole::CloudHypervisorRunner => ("cloud-hypervisor", format!("microvm@{}", dag.vm)),
+        ProcessRole::QemuMediaRunner => return None,
         ProcessRole::VsockRelay => ("socat", format!("nixling-otel-relay@{}", dag.vm)),
         // OtelHostBridge must always carry the closed argv from
         // processes.json; it has no legacy singleton fallback.
@@ -2957,6 +2959,9 @@ mod tests {
                 net_handoff_mode: ChNetHandoffMode::TapFd,
             }),
             firewall_coexistence_policy: None,
+            runtime_providers: Vec::new(),
+            vm_runtimes: Vec::new(),
+            qemu_media: None,
         };
 
         let state_dir = "/var/lib/nixling/vms/personal-dev";

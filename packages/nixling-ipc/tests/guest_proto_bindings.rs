@@ -176,3 +176,35 @@ fn generated_exec_list_shapes_round_trip() {
     response.entries.push(entry);
     round_trip(response);
 }
+
+#[test]
+fn generated_usbip_import_shapes_round_trip() {
+    let mut common = pb::RequestMetadata::new();
+    common.vm_id = "corp-vm".to_owned();
+    common.request_id = "req-usbip".to_owned();
+    common.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
+
+    let mut request = pb::UsbipImportRequest::new();
+    request.metadata = MessageField::some(common);
+    request.action = EnumOrUnknown::new(pb::UsbipImportAction::USBIP_IMPORT_ACTION_ATTACH);
+    request.host = "192.0.2.1".to_owned();
+    request.bus_id = "1-2.1".to_owned();
+    round_trip(request);
+
+    let mut response = pb::UsbipImportResponse::new();
+    response.action = EnumOrUnknown::new(pb::UsbipImportAction::USBIP_IMPORT_ACTION_ATTACH);
+    response.bus_id = "1-2.1".to_owned();
+    response.detached_ports = 1;
+    round_trip(response);
+
+    assert_eq!(
+        pb::GuestCapability::GUEST_CAPABILITY_USBIP_IMPORT as i32,
+        10,
+        "generated USBIP capability discriminant changed"
+    );
+    assert_eq!(
+        pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED as i32,
+        44,
+        "generated USBIP command-failed discriminant changed"
+    );
+}

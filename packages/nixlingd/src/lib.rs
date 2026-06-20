@@ -3198,6 +3198,18 @@ fn dispatch_broker_usbip_bind(
         return Ok(response);
     }
     let resolver = load_bundle_resolver(state)?;
+    if let Err(response) = validate_usbip_bus_id_for_daemon(VERB, &request.bus_id) {
+        return Ok(response);
+    }
+    if let Err(summary) = run_guest_usbip_import(
+        state,
+        &resolver,
+        &request.vm,
+        &request.bus_id,
+        guest_control_health::GuestUsbipAction::Detach,
+    ) {
+        return Ok(daemon_failure_response(VERB, summary));
+    }
     if let Err(response) = dispatch_broker_ack_request(
         state,
         VERB,
@@ -3212,6 +3224,7 @@ fn dispatch_broker_usbip_bind(
     if let Err(response) =
         ensure_usbipd_env_ready_for_attach(state, &resolver, &request.vm, &request.bus_id, VERB)
     {
+        compensate_usbip_bind_failure(state, &request.vm, &request.bus_id, VERB);
         return Ok(response);
     }
     if let Err(response) = dispatch_broker_ack_request(
@@ -3222,15 +3235,117 @@ fn dispatch_broker_usbip_bind(
             scope_id: ScopeId::new(format!("vm:{}", request.vm)),
         }),
     ) {
+        compensate_usbip_bind_failure(state, &request.vm, &request.bus_id, VERB);
         return Ok(response);
+    }
+    if let Err(summary) = run_guest_usbip_import(
+        state,
+        &resolver,
+        &request.vm,
+        &request.bus_id,
+        guest_control_health::GuestUsbipAction::Attach,
+    ) {
+        compensate_usbip_bind_failure(state, &request.vm, &request.bus_id, VERB);
+        return Ok(daemon_failure_response(VERB, summary));
     }
     Ok(applied_response(
         VERB,
         format!(
-            "nixling usb attach --apply: bound busid '{}' for vm '{}' via the native daemon → broker path",
+            "nixling usb attach --apply: bound busid '{}' for vm '{}' and imported it via guestd",
             request.bus_id, request.vm
         ),
     ))
+}
+
+fn validate_usbip_bus_id_for_daemon(verb: &str, bus_id: &str) -> Result<(), Value> {
+    nixling_ipc::usbip::validate_bus_id(bus_id).map_err(|_| {
+        daemon_failure_response(
+            verb,
+            format!("USBIP busid '{bus_id}' does not match the canonical sysfs bus-id shape"),
+        )
+    })
+}
+
+fn run_guest_usbip_import(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    vm: &str,
+    bus_id: &str,
+    action: guest_control_health::GuestUsbipAction,
+) -> Result<guest_control_health::GuestUsbipImportResult, String> {
+    let Some(entry) = resolver.manifest.vms.get(vm) else {
+        return Err(format!("VM '{vm}' is not present in the trusted manifest"));
+    };
+    let Some(host) = entry.usbipd_host_ip.as_deref() else {
+        return Err(format!(
+            "VM '{vm}' has no per-env USBIP host IP in the trusted manifest"
+        ));
+    };
+    let params = resolve_guest_control_probe_params(state, resolver, vm).map_err(|detail| {
+        tracing::warn!(
+            kind = "critical",
+            subsystem = "guest-control-usbip",
+            error_kind = "transport-io",
+            "guest-control USBIP import: probe params unresolved: {detail}"
+        );
+        format!(
+            "guest-control USBIP import for vm '{vm}' could not resolve guest-control transport"
+        )
+    })?;
+    guest_control_bridge::run_usbip_import_on_dedicated_thread(
+        params,
+        broker_socket_path(state),
+        action,
+        host.to_owned(),
+        bus_id.to_owned(),
+        guest_control_bridge::GUEST_CONTROL_CONFIG_READ_TIMEOUT,
+    )
+    .map_err(|error| guest_usbip_import_error_summary(vm, error))
+}
+
+fn guest_usbip_import_error_summary(
+    vm: &str,
+    error: guest_control_health::GuestUsbipImportError,
+) -> String {
+    use guest_control_health::{GuestControlHealthError as H, GuestUsbipImportError as E};
+    let detail = match error {
+        E::Probe(H::TransportIo) | E::Probe(H::Signer) | E::Probe(H::Ttrpc) => {
+            "guest-control transport unavailable"
+        }
+        E::Probe(H::Timeout) => "guest-control USBIP import timed out",
+        E::Probe(H::AuthFailed) | E::Probe(H::StaleSession) => {
+            "guest-control authentication failed"
+        }
+        E::Probe(H::Protocol) | E::Protocol => "guest-control USBIP protocol error",
+        E::CapabilityUnavailable => "guest does not advertise USBIP import capability",
+        E::UsbipUnavailable => "guestd has no usable usbip binary",
+        E::InvalidBusId => "guestd rejected the USBIP busid",
+        E::CommandFailed => "guest usbip command failed",
+    };
+    format!("guest-control USBIP import failed for vm '{vm}': {detail}")
+}
+
+fn compensate_usbip_bind_failure(state: &ServerState, vm: &str, bus_id: &str, verb: &str) {
+    if let Err(response) = dispatch_broker_ack_request(
+        state,
+        verb,
+        "UsbipUnbind",
+        BrokerRequest::UsbipUnbind(BrokerUsbipUnbindRequest {
+            bus_id: bus_id.to_owned(),
+        }),
+    ) {
+        tracing::warn!(vm = %vm, bus_id = %bus_id, response = %response, "USBIP attach compensation unbind failed");
+    }
+    if let Err(response) = dispatch_broker_ack_request(
+        state,
+        verb,
+        "UsbipProxyReconcile",
+        BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
+            scope_id: ScopeId::new(format!("vm:{vm}")),
+        }),
+    ) {
+        tracing::warn!(vm = %vm, bus_id = %bus_id, response = %response, "USBIP attach compensation proxy reconcile failed");
+    }
 }
 
 fn ensure_usbipd_env_ready_for_attach(
@@ -3330,6 +3445,18 @@ fn dispatch_broker_usbip_unbind(
     {
         return Ok(response);
     }
+    let resolver = load_bundle_resolver(state)?;
+    if let Err(response) = validate_usbip_bus_id_for_daemon(VERB, &request.bus_id) {
+        return Ok(response);
+    }
+    let guest_cleanup_failure = run_guest_usbip_import(
+        state,
+        &resolver,
+        &request.vm,
+        &request.bus_id,
+        guest_control_health::GuestUsbipAction::Detach,
+    )
+    .err();
     if let Err(response) = dispatch_broker_ack_request(
         state,
         VERB,
@@ -3350,10 +3477,16 @@ fn dispatch_broker_usbip_unbind(
     ) {
         return Ok(response);
     }
+    if let Some(summary) = guest_cleanup_failure {
+        return Ok(daemon_failure_response(
+            VERB,
+            format!("host USBIP unbind completed, but {summary}"),
+        ));
+    }
     Ok(applied_response(
         VERB,
         format!(
-            "nixling usb detach --apply: unbound busid '{}' for vm '{}' via the native daemon → broker path",
+            "nixling usb detach --apply: detached guest import and unbound busid '{}' for vm '{}'",
             request.bus_id, request.vm
         ),
     ))
@@ -5772,6 +5905,7 @@ fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
         ProcessRole::WaylandProxy => VmStartNodeMode::LongLived(RunnerRole::WaylandProxy),
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
+        | ProcessRole::QemuMediaRunner
         | ProcessRole::GuestSshReadiness
         | ProcessRole::GuestControlHealth => VmStartNodeMode::ReadinessOnly,
     }
