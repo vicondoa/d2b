@@ -40,8 +40,12 @@ in
       inherit (vm) enable env index autostart;
       runtimeKind = vm.runtime.kind;
       bootDriveSlot = vm.qemuMedia.bootDrive.slot;
-      qemuHypervisorService = cfg.nixling.manifest."dark-live".runtime.capabilities.services.hypervisor;
-      cloudHypervisorService = cfg.nixling.manifest."sys-dark-net".runtime.capabilities.services.hypervisor;
+      qemuHypervisorService =
+        lib.findFirst (service: service.role == "hypervisor") null
+          cfg.nixling.manifest."dark-live".runtime.services;
+      cloudHypervisorService =
+        lib.findFirst (service: service.role == "hypervisor") null
+          cfg.nixling.manifest."sys-dark-net".runtime.services;
       processNodes = {
         qemu = {
           inherit (darkQemuNode) id role;
@@ -59,22 +63,16 @@ in
       runtimeKind = "qemu-media";
       bootDriveSlot = "boot";
       qemuHypervisorService = {
-        supported = true;
-        nodeId = "qemu-media";
-        runnerRole = "qemu-media-runner";
-        driver = "qemu";
-        readiness = "qmp-socket";
-        contract = "spawn-runner";
-        unitStrategy = "daemon-supervised-runner";
+        id = "qemu-media";
+        role = "hypervisor";
+        processRole = "qemu-media-runner";
+        optional = false;
       };
       cloudHypervisorService = {
-        supported = true;
-        nodeId = "cloud-hypervisor";
-        runnerRole = "cloud-hypervisor-runner";
-        driver = "cloud-hypervisor";
-        readiness = "api-socket";
-        contract = "spawn-runner";
-        unitStrategy = "microvm-or-graphics-sidecar";
+        id = "cloud-hypervisor";
+        role = "hypervisor";
+        processRole = "cloud-hypervisor-runner";
+        optional = false;
       };
       processNodes = {
         qemu = {
