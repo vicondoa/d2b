@@ -216,6 +216,7 @@ pub fn live_create_tap_fd(
             detail: e.to_string(),
         }
     })?;
+    attach_tap_to_bridge(&intent.tap_ifname, &intent.bridge_ifname)?;
     Ok(LiveCreateTapOutcome {
         bridge_ifname: Some(intent.bridge_ifname),
         tap_ifname: intent.tap_ifname,
@@ -266,11 +267,49 @@ pub fn live_create_persistent_tap(
         path: PathBuf::from("/dev/net/tun"),
         detail: e.to_string(),
     })?;
+    attach_tap_to_bridge(&intent.tap_ifname, &intent.bridge_ifname)?;
     Ok(LiveCreateTapOutcome {
         bridge_ifname: Some(intent.bridge_ifname),
         tap_ifname: intent.tap_ifname,
         fd: None,
     })
+}
+
+fn attach_tap_to_bridge(
+    tap_ifname: &nixling_core::host::IfName,
+    bridge_ifname: &nixling_core::host::IfName,
+) -> Result<(), super::OpError> {
+    let ip = ip_binary_path();
+    run_ip_link(
+        &ip,
+        &[
+            "link",
+            "set",
+            "dev",
+            tap_ifname.as_str(),
+            "master",
+            bridge_ifname.as_str(),
+        ],
+    )?;
+    run_ip_link(&ip, &["link", "set", "dev", tap_ifname.as_str(), "up"])
+}
+
+fn run_ip_link(ip: &Path, args: &[&str]) -> Result<(), super::OpError> {
+    let output = Command::new(ip)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|err| super::OpError::Io {
+            path: ip.to_path_buf(),
+            detail: err.to_string(),
+        })?;
+    if !output.status.success() {
+        return Err(super::OpError::Io {
+            path: ip.to_path_buf(),
+            detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -787,6 +826,8 @@ mod tests {
             },
             kernel_modules: Vec::new(),
             fd_ownership: Vec::new(),
+            runtime_providers: Vec::new(),
+            vm_runtimes: Vec::new(),
             cloud_hypervisor_capabilities: Vec::new(),
             if_name_mappings: vec![
                 IfNameMapping {
@@ -804,10 +845,11 @@ mod tests {
                     derived_ifname: BundleIfName::new("nl-tWORK010").expect("derived tap"),
                 },
             ],
+            qemu_media: None,
             ch: None,
             firewall_coexistence_policy: None,
         };
-        let manifest = ManifestV04::from_slice(br#"{"_manifest":{"manifestVersion":5},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"corp-vm":{"apiSocket":"/run/nixling/corp-vm.sock","audio":false,"audioService":"nixling-corp-vm-snd.service","audioStateFile":"/var/lib/nixling/vms/corp-vm/state/audio-state.json","bridge":"br-work-lan","env":"work","gpuSocket":"/run/nixling/corp-vm-gpu.sock","graphics":false,"isNetVm":false,"name":"corp-vm","netVm":"sys-work-net","observability":{"agentSocket":"/run/nixling/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/run/nixling/corp-vm-vsock.sock"},"sshUser":"alice","stateDir":"/var/lib/nixling/vms/corp-vm","staticIp":"10.20.0.10","tap":"work-l10","tpm":false,"tpmSocket":"/run/swtpm/corp-vm/sock","usbipYubikey":false,"usbipdHostIp":"192.0.2.1"}}"#.as_slice()).expect("manifest");
+        let manifest = ManifestV04::from_slice(br#"{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"corp-vm":{"apiSocket":"/run/nixling/corp-vm.sock","audio":false,"audioService":"nixling-corp-vm-snd.service","audioStateFile":"/var/lib/nixling/vms/corp-vm/state/audio-state.json","bridge":"br-work-lan","env":"work","gpuSocket":"/run/nixling/corp-vm-gpu.sock","graphics":false,"isNetVm":false,"name":"corp-vm","netVm":"sys-work-net","observability":{"agentSocket":"/run/nixling/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/run/nixling/corp-vm-vsock.sock"},"runtime":{"kind":"nixos","provider":{"id":"local-cloud-hypervisor","type":"local","driver":"cloud-hypervisor"},"capabilities":{"lifecycle":true,"display":true,"usbHotplug":true,"guestControl":true,"exec":true,"configSync":true,"ssh":true,"storeSync":true,"keys":true,"inGuestObservability":true}},"sshUser":"alice","stateDir":"/var/lib/nixling/vms/corp-vm","staticIp":"10.20.0.10","tap":"work-l10","tpm":false,"tpmSocket":"/run/swtpm/corp-vm/sock","usbipYubikey":false,"usbipdHostIp":"192.0.2.1"}}"#.as_slice()).expect("manifest");
         BundleResolver::from_artifacts(
             bundle,
             host,

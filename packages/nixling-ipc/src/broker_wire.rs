@@ -10,7 +10,8 @@
 
 use crate::guest_auth::AUTH_NONCE_LEN;
 use crate::types::{
-    BundleClosureRef, BundleOpId, PathClass, RoleId, ScopeId, SubjectId, TracingSpanId, VmId,
+    BundleClosureRef, BundleOpId, MediaRef, PathClass, RoleId, ScopeId, SubjectId, TracingSpanId,
+    VmId,
 };
 use nixling_core::host::IfName;
 use schemars::JsonSchema;
@@ -43,6 +44,28 @@ pub enum BrokerRequest {
     OpenDevice(OpenDeviceRequest),
     OpenFuse(OpenFuseRequest),
     OpenKvm(OpenKvmRequest),
+    /// Enroll a physical USB block device for a qemu-media opaque ref.
+    /// The daemon supplies only VM/ref plus the transient sysfs busid; the
+    /// broker resolves declared policy from the trusted bundle, reads physical
+    /// identity as root, and writes root-only registry/rules outside the store.
+    QemuMediaEnroll(QemuMediaEnrollRequest),
+    /// Refresh redacted qemu-media runtime state from the root-only persistent
+    /// registry. The daemon calls this before public status/probe rendering so
+    /// `/run` loss after reboot does not make enrollments disappear.
+    QemuMediaRefreshRegistry(QemuMediaRefreshRegistryRequest),
+    /// Resolve and attach the declared boot source, then continue the paused
+    /// qemu-media runner. The broker resolves physical USB registry state or
+    /// direct image-file policy from the trusted bundle; the daemon supplies
+    /// only the VM id.
+    QemuMediaBoot(QemuMediaBootRequest),
+    /// Resolve an enrolled physical USB selector and execute qemu-media QMP
+    /// attach. The busid is a runtime selector only and is redacted from every
+    /// success response/audit field.
+    QemuMediaAttach(QemuMediaHotplugRequest),
+    /// Resolve an enrolled physical USB selector and execute qemu-media QMP
+    /// detach. The busid is a runtime selector only and is redacted from every
+    /// success response/audit field.
+    QemuMediaDetach(QemuMediaHotplugRequest),
     /// Daemon-side reconcile-and-adopt support. The daemon asks the
     /// broker to `pidfd_open(pid)` AND re-verify `/proc/<pid>/stat`
     /// field 22 matches the expected start-time in one atomic call (no
@@ -173,6 +196,11 @@ impl BrokerRequest {
             Self::OpenDevice(_) => "OpenDevice",
             Self::OpenFuse(_) => "OpenFuse",
             Self::OpenKvm(_) => "OpenKvm",
+            Self::QemuMediaEnroll(_) => "QemuMediaEnroll",
+            Self::QemuMediaRefreshRegistry(_) => "QemuMediaRefreshRegistry",
+            Self::QemuMediaBoot(_) => "QemuMediaBoot",
+            Self::QemuMediaAttach(_) => "QemuMediaAttach",
+            Self::QemuMediaDetach(_) => "QemuMediaDetach",
             Self::OpenPidfd(_) => "OpenPidfd",
             Self::OpenVhostNet(_) => "OpenVhostNet",
             Self::PauseBroker => "PauseBroker",
@@ -417,6 +445,11 @@ pub enum BrokerResponse {
     /// without a separate side-channel.
     Hello(HelloResponse),
     GuestControlSign(GuestControlSignResponse),
+    QemuMediaEnroll(QemuMediaEnrollResponse),
+    QemuMediaRefreshRegistry(QemuMediaRefreshRegistryResponse),
+    QemuMediaBoot(QemuMediaHotplugResponse),
+    QemuMediaAttach(QemuMediaHotplugResponse),
+    QemuMediaDetach(QemuMediaHotplugResponse),
     /// OpenPidfd response. The pidfd itself is returned via SCM_RIGHTS
     /// on the same frame; the JSON body confirms which `(pid,
     /// start_time_ticks)` the broker verified.
@@ -754,6 +787,110 @@ pub struct OpenKvmRequest {
     pub role_id: RoleId,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Physical USB enrollment for qemu-media.
+///
+/// `bus_id` is a transient selector used only by the privileged broker to
+/// locate the device under sysfs at enrollment time. It is intentionally not
+/// echoed in the success response and is never emitted into Nix-store-backed
+/// artifacts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaEnrollRequest {
+    pub vm_id: VmId,
+    pub media_ref: MediaRef,
+    pub bus_id: String,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaEnrollResponse {
+    pub vm_id: VmId,
+    pub media_ref: MediaRef,
+    pub read_only: bool,
+    pub enrolled: bool,
+    pub udev_rule_written: bool,
+    pub udev_reloaded: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaRefreshRegistryRequest {
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaRefreshRegistryResponse {
+    pub record_count: u32,
+    pub redacted_index_written: bool,
+    pub udev_rule_written: bool,
+    pub udev_reloaded: bool,
+}
+
+/// qemu-media boot request keyed by VM id only.
+///
+/// The broker resolves the VM's declared boot source from the trusted bundle.
+/// Physical USB boot sources use the root-only enrollment registry; image-file
+/// boot sources use the trusted bundle path. Media fds stay inside the broker
+/// until QMP consumes them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaBootRequest {
+    pub vm_id: VmId,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// qemu-media hotplug request keyed by a runtime USB busid selector.
+///
+/// The broker compares the current sysfs identity behind `bus_id` with the
+/// root-only registry records for `vm_id` and returns only opaque slot/ref
+/// information plus QMP command names. The success response never echoes the
+/// busid, by-id names, serials, block paths, or the registry path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaHotplugRequest {
+    pub vm_id: VmId,
+    pub bus_id: String,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum QemuMediaHotplugStatus {
+    IdentityResolved,
+    QmpConnected,
+    QmpCapabilities,
+    FdAdded,
+    BlockdevAdded,
+    DeviceAdded,
+    DeviceDeleted,
+    BlockdevDeleted,
+    FdRemoved,
+    VmContinued,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaHotplugEvent {
+    pub status: QemuMediaHotplugStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaHotplugResponse {
+    pub vm_id: VmId,
+    pub media_ref: MediaRef,
+    pub slot: String,
+    pub read_only: bool,
+    pub qmp_commands: Vec<String>,
+    pub events: Vec<QemuMediaHotplugEvent>,
 }
 
 /// OpenPidfd daemon-side reconcile-and-adopt support. The daemon's
@@ -1134,6 +1271,9 @@ pub enum RunnerRole {
     /// Cloud Hypervisor headless / hybrid VM. Broker invokes
     /// `nixling_host::ch_argv::generate_ch_argv`.
     CloudHypervisor,
+    /// QEMU media runtime scaffold. Broker invokes
+    /// `nixling_host::qemu_media_argv::generate_qemu_media_argv`.
+    QemuMedia,
     /// virtiofsd sidecar; one per `microvm.shares` row. The daemon/bundle
     /// provides argv from `nixos-modules/processes-json.nix`.
     Virtiofsd,
@@ -1171,6 +1311,7 @@ impl RunnerRole {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::CloudHypervisor => "cloud-hypervisor",
+            Self::QemuMedia => "qemu-media",
             Self::Virtiofsd => "virtiofsd",
             Self::Swtpm => "swtpm",
             Self::SwtpmFlush => "swtpm-flush",

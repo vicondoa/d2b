@@ -13,6 +13,12 @@ and daemon/broker execution.
 - `environments` — per-env network/firewall data.
 - `cloudHypervisorCapabilities` — capability matrix anchored to CH.
 - `fdOwnership` — broker-opened fd ownership table.
+- `runtimeProviders` — local runtime/provider catalog and support matrix.
+- `vmRuntimes` — per-VM runtime/provider rows with provider-neutral topology.
+- `qemuMedia` — optional qemu-media source contract. Physical USB sources
+  carry opaque refs and use the root-only enrollment registry; direct
+  `image-file` sources carry operator-authored absolute image paths from Nix
+  config and use `registryScope = "direct-config-path"`.
 - `hostsFile` — marked-block ownership rule for `/etc/hosts`.
 - `kernelModules` — allowed kernel module matrix and load policy.
 - `networkManager` — unmanaged-file materialization rules.
@@ -32,6 +38,14 @@ and daemon/broker execution.
   rolls up into the top-level `firewallCoexistencePolicy`.
 - `ipv6Sysctls` records the ordered per-link IPv6-disable writes.
 - `ch` stays optional for older fixtures but is part of the current v2 prose.
+- `runtimeProviders` and `vmRuntimes` are additive v2 fields; older fixtures may
+  omit them, while current Nix emitters include them for daemon lifecycle/status
+  joins.
+- `qemuMedia.sources[].imagePath` is present only for direct image-file
+  sources. The path is not a physical USB identity and may appear in this
+  private bundle, but the broker still fail-closes on unsafe paths, non-raw
+  formats, non-regular files, mounted/loop-backed files, and held locks before
+  returning a media fd.
 
 ## Contract notes
 

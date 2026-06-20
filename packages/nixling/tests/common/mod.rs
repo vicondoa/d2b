@@ -162,7 +162,8 @@ fn spawn_nixlingd_inner(
         "launcherUsers": ["launcher-user"],
         "adminUsers": ["admin-user"],
         "serverVersion": "0.4.0",
-        "acceptedClientVersionRange": ">=0.4.0, <0.5.0"
+        "acceptedClientVersionRange": ">=0.4.0, <0.5.0",
+        "gatewayConfigPath": run.join("gateway.json")
     });
     if let Some(dir) = artifacts_dir {
         config.as_object_mut().unwrap().insert(

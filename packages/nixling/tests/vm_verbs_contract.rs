@@ -81,6 +81,7 @@ const SYSTEM_STATE_JSON: &str = r#"{ "units": {}, "bridges": {} }"#;
 
 struct ScratchPaths {
     manifest: PathBuf,
+    bundle: PathBuf,
     socket: PathBuf,
     poison: PathBuf,
     system_state: PathBuf,
@@ -96,6 +97,7 @@ fn scratch(manifest_json: &str) -> (TempDir, ScratchPaths) {
 
     let manifest = tmp.path().join("vms.json");
     std::fs::write(&manifest, manifest_json).expect("write manifest");
+    let bundle = tmp.path().join("missing-bundle.json");
 
     let poison = tmp.path().join("legacy-poison.sh");
     std::fs::write(&poison, POISON_PILL).expect("write poison-pill");
@@ -120,6 +122,7 @@ fn scratch(manifest_json: &str) -> (TempDir, ScratchPaths) {
         tmp,
         ScratchPaths {
             manifest,
+            bundle,
             socket,
             poison,
             system_state,
@@ -136,6 +139,7 @@ fn run_cli(p: &ScratchPaths, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_nixling"))
         .args(args)
         .env("NIXLING_MANIFEST_PATH", &p.manifest)
+        .env("NIXLING_BUNDLE_PATH", &p.bundle)
         .env("NIXLING_PUBLIC_SOCKET", &p.socket)
         .env("NIXLING_LEGACY_CLI_PATH", &p.poison)
         .env("NIXLING_LEGACY_CLI", &p.poison)

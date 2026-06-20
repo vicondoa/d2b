@@ -933,6 +933,36 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
     // `BrokerRequest` aliases to the bootstrap `BootstrapCall`, which has no
     // GuestControlSign variant, so gate it out of the bootstrap build.
     #[cfg(not(feature = "layer1-bootstrap"))]
+    if let BrokerRequest::QemuMediaEnroll(req) = request {
+        return Ok(serde_json::json!({
+            "vmId": req.vm_id.as_str(),
+            "mediaRef": req.media_ref.as_str(),
+            "busIdProvided": true,
+            "tracingSpanIdPresent": req.tracing_span_id.is_some(),
+        }));
+    }
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    if let BrokerRequest::QemuMediaRefreshRegistry(req) = request {
+        return Ok(serde_json::json!({
+            "tracingSpanIdPresent": req.tracing_span_id.is_some(),
+        }));
+    }
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    if let BrokerRequest::QemuMediaBoot(req) = request {
+        return Ok(serde_json::json!({
+            "vmId": req.vm_id.as_str(),
+            "tracingSpanIdPresent": req.tracing_span_id.is_some(),
+        }));
+    }
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    if let BrokerRequest::QemuMediaAttach(req) | BrokerRequest::QemuMediaDetach(req) = request {
+        return Ok(serde_json::json!({
+            "vmId": req.vm_id.as_str(),
+            "busIdProvided": true,
+            "tracingSpanIdPresent": req.tracing_span_id.is_some(),
+        }));
+    }
+    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::GuestControlSign(req) = request {
         return Ok(serde_json::json!({
             "vmId": req.vm_id.as_str(),
@@ -1872,7 +1902,13 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 umask: intent.umask,
             };
             let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
-            let outcome = match backend.spawn_runner(runner_id.as_str(), &plan_input) {
+            let outcome = match backend.spawn_runner(
+                runner_id.as_str(),
+                &plan_input,
+                resolver,
+                &req,
+                audit_log,
+            ) {
                 Ok(outcome) => outcome,
                 // swtpm-dir hardening fail-closed: emit the terminal
                 // path-free PrepareSwtpmDir record here (exactly once),
@@ -2206,6 +2242,141 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::with_fd(ack_response("OpenKvm"), outcome.fd))
+        }
+        RealBrokerRequest::QemuMediaEnroll(req) => {
+            let resolver = require_resolver(resolver)?;
+            let outcome = crate::ops::media::enroll(resolver, &req)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "QemuMediaEnroll",
+                req.media_ref.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.media_ref.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::QemuMediaEnroll {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    media_ref: req.media_ref.as_str().to_owned(),
+                    read_only: outcome.response.read_only,
+                    by_id_count: outcome.by_id_count,
+                    udev_rule_written: outcome.response.udev_rule_written,
+                    udev_reloaded: outcome.response.udev_reloaded,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(BrokerResponse::QemuMediaEnroll(
+                outcome.response,
+            )))
+        }
+        RealBrokerRequest::QemuMediaRefreshRegistry(req) => {
+            let resolver = require_resolver(resolver)?;
+            let outcome = crate::ops::media::refresh_registry(resolver)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "QemuMediaRefreshRegistry",
+                "qemu-media",
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                "host",
+                "qemu-media",
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::QemuMediaRefreshRegistry {
+                    record_count: outcome.response.record_count,
+                    redacted_index_written: outcome.response.redacted_index_written,
+                    udev_rule_written: outcome.response.udev_rule_written,
+                    udev_reloaded: outcome.response.udev_reloaded,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::QemuMediaRefreshRegistry(outcome.response),
+            ))
+        }
+        RealBrokerRequest::QemuMediaBoot(req) => {
+            let resolver = require_resolver(resolver)?;
+            let outcome = crate::ops::media::boot(resolver, &req)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "QemuMediaBoot",
+                outcome.response.media_ref.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                outcome.response.vm_id.as_str(),
+                outcome.response.media_ref.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::QemuMediaBoot {
+                    vm_id: outcome.response.vm_id.as_str().to_owned(),
+                    media_ref: outcome.response.media_ref.as_str().to_owned(),
+                    slot: outcome.response.slot.clone(),
+                    read_only: outcome.response.read_only,
+                    qmp_commands: outcome.response.qmp_commands.clone(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(BrokerResponse::QemuMediaBoot(
+                outcome.response,
+            )))
+        }
+        RealBrokerRequest::QemuMediaAttach(req) => {
+            let resolver = require_resolver(resolver)?;
+            let outcome = crate::ops::media::attach(resolver, &req)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "QemuMediaAttach",
+                outcome.response.media_ref.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                outcome.response.vm_id.as_str(),
+                outcome.response.media_ref.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::QemuMediaAttach {
+                    vm_id: outcome.response.vm_id.as_str().to_owned(),
+                    media_ref: outcome.response.media_ref.as_str().to_owned(),
+                    slot: outcome.response.slot.clone(),
+                    read_only: outcome.response.read_only,
+                    qmp_commands: outcome.response.qmp_commands.clone(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(BrokerResponse::QemuMediaAttach(
+                outcome.response,
+            )))
+        }
+        RealBrokerRequest::QemuMediaDetach(req) => {
+            let resolver = require_resolver(resolver)?;
+            let outcome = crate::ops::media::detach(resolver, &req)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "QemuMediaDetach",
+                outcome.response.media_ref.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                outcome.response.vm_id.as_str(),
+                outcome.response.media_ref.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::QemuMediaDetach {
+                    vm_id: outcome.response.vm_id.as_str().to_owned(),
+                    media_ref: outcome.response.media_ref.as_str().to_owned(),
+                    slot: outcome.response.slot.clone(),
+                    read_only: outcome.response.read_only,
+                    qmp_commands: outcome.response.qmp_commands.clone(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(BrokerResponse::QemuMediaDetach(
+                outcome.response,
+            )))
         }
         RealBrokerRequest::OpenVhostNet(req) => {
             let resolver = require_resolver(resolver)?;
@@ -3800,6 +3971,9 @@ trait DispatchBackend {
         &self,
         runner_id: &str,
         plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
+        resolver: &BundleResolver,
+        req: &nixling_ipc::broker_wire::SpawnRunnerRequest,
+        audit_log: &crate::audit::AuditLog,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError>;
 
     fn run_host_install(
@@ -3867,6 +4041,49 @@ trait DispatchBackend {
 struct LiveDispatchBackend {
     daemon_uid: u32,
     daemon_gid: u32,
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn prepare_runner_preopened_fds(
+    _plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
+    resolver: &BundleResolver,
+    req: &nixling_ipc::broker_wire::SpawnRunnerRequest,
+    audit_log: &crate::audit::AuditLog,
+    daemon_uid: u32,
+    daemon_gid: u32,
+) -> Result<Vec<std::os::fd::OwnedFd>, BrokerError> {
+    if req.role != nixling_ipc::broker_wire::RunnerRole::QemuMedia {
+        return Ok(Vec::new());
+    }
+
+    let exec = crate::ops::exec_reconcile::SystemLiveExec::new(daemon_uid, daemon_gid);
+    let outcome = crate::ops::tap::live_create_tap_fd(
+        &exec,
+        resolver,
+        &nixling_ipc::broker_wire::CreateTapFdRequest {
+            vm_id: req.vm_id.clone(),
+            role_id: req.role_id.clone(),
+            tracing_span_id: req.tracing_span_id.clone(),
+        },
+        audit_log,
+    )
+    .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+
+    let reconcile = crate::ops::exec_reconcile::SystemReconcileExecutor;
+    let _bridge_flags = dispatch_set_bridge_port_flags_inner(
+        &nixling_ipc::broker_wire::SetBridgePortFlagsRequest {
+            vm_id: req.vm_id.clone(),
+            role_id: nixling_ipc::types::RoleId::new("workload-lan"),
+            tracing_span_id: req.tracing_span_id.clone(),
+        },
+        resolver,
+        &reconcile,
+    )?;
+
+    let tap_fd = outcome
+        .fd
+        .ok_or_else(|| BrokerError::LiveHandler("qemu-media tap fd missing".to_owned()))?;
+    Ok(vec![tap_fd])
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -4059,32 +4276,44 @@ impl DispatchBackend for LiveDispatchBackend {
         &self,
         runner_id: &str,
         plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
+        resolver: &BundleResolver,
+        req: &nixling_ipc::broker_wire::SpawnRunnerRequest,
+        audit_log: &crate::audit::AuditLog,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
         // Reserve the runner_id BEFORE spawning the child: refuse a
         // duplicate active registration up front so we never create an
         // orphan child (see `reserve_runner_id_for_spawn`).
         #[cfg(not(feature = "layer1-bootstrap"))]
         reserve_runner_id_for_spawn(runner_id)?;
-        let outcome = crate::live_handlers::live_spawn_runner(plan_input).map_err(|err| {
-            // Log the actual LiveHandlerError detail before wrapping it
-            // in the opaque BrokerError::LiveHandler envelope so
-            // operators can see WHY the spawn failed in journalctl.
-            tracing::error!(
-                runner_id = %runner_id,
-                error = %err,
-                "live_spawn_runner failed"
-            );
-            // swtpm-dir hardening fail-closed carries a structured,
-            // path-free audit that the dispatch arm must emit as a
-            // terminal PrepareSwtpmDir record; preserve it instead of
-            // collapsing to the opaque LiveHandler envelope.
-            match err {
-                crate::live_handlers::LiveHandlerError::SwtpmDirHardening { audit, reason } => {
-                    BrokerError::SwtpmDirHardening { audit, reason }
+        let pre_opened_device_fds = prepare_runner_preopened_fds(
+            plan_input,
+            resolver,
+            req,
+            audit_log,
+            self.daemon_uid,
+            self.daemon_gid,
+        )?;
+        let outcome = crate::live_handlers::live_spawn_runner(plan_input, pre_opened_device_fds)
+            .map_err(|err| {
+                // Log the actual LiveHandlerError detail before wrapping it
+                // in the opaque BrokerError::LiveHandler envelope so
+                // operators can see WHY the spawn failed in journalctl.
+                tracing::error!(
+                    runner_id = %runner_id,
+                    error = %err,
+                    "live_spawn_runner failed"
+                );
+                // swtpm-dir hardening fail-closed carries a structured,
+                // path-free audit that the dispatch arm must emit as a
+                // terminal PrepareSwtpmDir record; preserve it instead of
+                // collapsing to the opaque LiveHandler envelope.
+                match err {
+                    crate::live_handlers::LiveHandlerError::SwtpmDirHardening { audit, reason } => {
+                        BrokerError::SwtpmDirHardening { audit, reason }
+                    }
+                    other => BrokerError::LiveHandler(other.to_string()),
                 }
-                other => BrokerError::LiveHandler(other.to_string()),
-            }
-        })?;
+            })?;
         register_runner_pidfd(runner_id, &outcome.pidfd).inspect_err(|_err| {
             // Registration failed: the broker is about to drop this
             // just-spawned child's pidfd. Reap it now (targeted,
@@ -4742,6 +4971,7 @@ fn runner_role_for_process_role(
         ProcessRole::Gpu | ProcessRole::GpuRenderNode => Some(RunnerRole::Gpu),
         ProcessRole::Audio => Some(RunnerRole::Audio),
         ProcessRole::CloudHypervisorRunner => Some(RunnerRole::CloudHypervisor),
+        ProcessRole::QemuMediaRunner => Some(RunnerRole::QemuMedia),
         ProcessRole::VsockRelay => Some(RunnerRole::VsockRelay),
         ProcessRole::OtelHostBridge => Some(RunnerRole::OtelHostBridge),
         ProcessRole::Usbip => Some(RunnerRole::Usbip),
@@ -6700,6 +6930,7 @@ mod tests {
                 ProcessRole::CloudHypervisorRunner,
                 Some(RunnerRole::CloudHypervisor),
             ),
+            (ProcessRole::QemuMediaRunner, Some(RunnerRole::QemuMedia)),
             (ProcessRole::VsockRelay, Some(RunnerRole::VsockRelay)),
             (ProcessRole::Usbip, Some(RunnerRole::Usbip)),
             (ProcessRole::HostReconcile, None),
@@ -6710,6 +6941,63 @@ mod tests {
         for (role, expected) in cases {
             assert_eq!(runner_role_for_process_role(&role), expected);
         }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn qemu_media_enroll_request_fields_redact_raw_busid() {
+        let request =
+            BrokerRequest::QemuMediaEnroll(nixling_ipc::broker_wire::QemuMediaEnrollRequest {
+                vm_id: nixling_ipc::types::VmId::new("media"),
+                media_ref: nixling_ipc::types::MediaRef::new("installer-usb"),
+                bus_id: "1-2.3".to_owned(),
+                tracing_span_id: None,
+            });
+
+        let fields = request_fields_value(&request).expect("redacted fields");
+        assert_eq!(fields["vmId"], "media");
+        assert_eq!(fields["mediaRef"], "installer-usb");
+        assert_eq!(fields["busIdProvided"], true);
+        let rendered = fields.to_string();
+        assert!(!rendered.contains("1-2.3"));
+        assert!(!rendered.contains("/dev/"));
+        assert!(!rendered.contains("usb-Vendor_SecretSerial"));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn qemu_media_hotplug_request_fields_redact_runtime_busid() {
+        let request =
+            BrokerRequest::QemuMediaAttach(nixling_ipc::broker_wire::QemuMediaHotplugRequest {
+                vm_id: nixling_ipc::types::VmId::new("media"),
+                bus_id: "1-2.3".to_owned(),
+                tracing_span_id: None,
+            });
+
+        let fields = request_fields_value(&request).expect("redacted fields");
+        assert_eq!(fields["vmId"], "media");
+        assert_eq!(fields["busIdProvided"], true);
+        let rendered = fields.to_string();
+        assert!(!rendered.contains("1-2.3"));
+        assert!(!rendered.contains("/dev/"));
+        assert!(!rendered.contains("usb-Vendor_SecretSerial"));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn qemu_media_boot_request_fields_are_vm_only() {
+        let request =
+            BrokerRequest::QemuMediaBoot(nixling_ipc::broker_wire::QemuMediaBootRequest {
+                vm_id: nixling_ipc::types::VmId::new("media"),
+                tracing_span_id: None,
+            });
+
+        let fields = request_fields_value(&request).expect("redacted fields");
+        assert_eq!(fields["vmId"], "media");
+        let rendered = fields.to_string();
+        assert!(!rendered.contains("bus"));
+        assert!(!rendered.contains("/dev/"));
+        assert!(!rendered.contains("usb-Vendor_SecretSerial"));
     }
 
     struct AuditCase {
@@ -6778,6 +7066,7 @@ mod tests {
         use nixling_core::processes::{
             NodeId, ProcessNode, ProcessRole, ProcessesJson, VmProcessDag, VmProcessInvariants,
         };
+        use nixling_core::runtime::RuntimeMetadata;
         use nixling_core::test_support::RoleProfileBuilder;
 
         let bundle_dir = root.join("bundle");
@@ -6857,8 +7146,11 @@ mod tests {
             },
             kernel_modules: Vec::<KernelModulesEntry>::new(),
             fd_ownership: Vec::<FdOwnershipEntry>::new(),
+            runtime_providers: Vec::new(),
+            vm_runtimes: Vec::new(),
             cloud_hypervisor_capabilities: Vec::<CloudHypervisorCapability>::new(),
             if_name_mappings: Vec::<IfNameMapping>::new(),
+            qemu_media: None,
             ch: Some(HostChConfig {
                 net_handoff_mode: ChNetHandoffMode::TapFd,
             }),
@@ -6911,7 +7203,7 @@ mod tests {
 
         let manifest = ManifestV04 {
             manifest: ManifestMeta {
-                manifest_version: 5,
+                manifest_version: 6,
             },
             observability: ObservabilityMeta {
                 enabled: false,
@@ -6925,10 +7217,10 @@ mod tests {
             vms: BTreeMap::from([(
                 "corp-vm".to_owned(),
                 VmEntry {
-                    api_socket: "/run/nixling/vms/corp-vm/api.sock".to_owned(),
+                    api_socket: Some("/run/nixling/vms/corp-vm/api.sock".to_owned()),
                     audio: false,
-                    audio_service: String::new(),
-                    audio_state_file: String::new(),
+                    audio_service: Some(String::new()),
+                    audio_state_file: Some(String::new()),
                     bridge: Some("br-work".to_owned()),
                     env: Some("work".to_owned()),
                     mtu: Some(1500),
@@ -6937,23 +7229,26 @@ mod tests {
                         allow_east_west: false,
                         effective_east_west: false,
                     }),
-                    gpu_socket: String::new(),
+                    gpu_socket: Some(String::new()),
                     graphics: false,
                     is_net_vm: false,
                     name: "corp-vm".to_owned(),
                     net_vm: Some("sys-work-net".to_owned()),
                     observability: VmObservability {
-                        agent_socket: "/run/nixling/vms/corp-vm/agent.sock".to_owned(),
+                        agent_socket: Some("/run/nixling/vms/corp-vm/agent.sock".to_owned()),
                         enabled: false,
-                        vsock_cid: 17,
-                        vsock_host_socket: "/run/nixling/vms/corp-vm/agent-host.sock".to_owned(),
+                        vsock_cid: Some(17),
+                        vsock_host_socket: Some(
+                            "/run/nixling/vms/corp-vm/agent-host.sock".to_owned(),
+                        ),
                     },
+                    runtime: RuntimeMetadata::local_nixos(),
                     ssh_user: Some("alice".to_owned()),
                     state_dir: "/var/lib/nixling/vms/corp-vm".to_owned(),
                     static_ip: Some("192.0.2.10".to_owned()),
                     tap: "tap-corp-vm".to_owned(),
                     tpm: false,
-                    tpm_socket: String::new(),
+                    tpm_socket: Some(String::new()),
                     usbip_yubikey: true,
                     usbipd_host_ip: Some("192.0.2.1".to_owned()),
                 },
@@ -7492,6 +7787,9 @@ mod tests {
             &self,
             runner_id: &str,
             _plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
+            _resolver: &BundleResolver,
+            _req: &nixling_ipc::broker_wire::SpawnRunnerRequest,
+            _audit_log: &crate::audit::AuditLog,
         ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
             self.remember_runner(runner_id)?;
             Ok(crate::live_handlers::SpawnRunnerResult {

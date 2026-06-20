@@ -282,6 +282,7 @@ mod tests {
         ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmObservability,
     };
     use nixling_core::processes::ProcessesJson;
+    use nixling_core::runtime::RuntimeMetadata;
     use std::collections::BTreeMap;
     use std::fs;
 
@@ -342,32 +343,33 @@ mod tests {
         };
 
         let net_vm = VmEntry {
-            api_socket: "/run/nixling/vms/sys-work-net/api.sock".to_owned(),
+            api_socket: Some("/run/nixling/vms/sys-work-net/api.sock".to_owned()),
             audio: false,
-            audio_service: String::new(),
-            audio_state_file: String::new(),
+            audio_service: Some(String::new()),
+            audio_state_file: Some(String::new()),
             bridge: Some("nlworkbr0".to_owned()),
             env: Some("work".to_owned()),
             mtu: Some(1500),
             mss_clamp: Some(1460),
             lan: None,
-            gpu_socket: String::new(),
+            gpu_socket: Some(String::new()),
             graphics: false,
             is_net_vm: true,
             name: "sys-work-net".to_owned(),
             net_vm: None,
             observability: VmObservability {
-                agent_socket: String::new(),
+                agent_socket: Some(String::new()),
                 enabled: false,
-                vsock_cid: 100,
-                vsock_host_socket: String::new(),
+                vsock_cid: Some(100),
+                vsock_host_socket: Some(String::new()),
             },
+            runtime: RuntimeMetadata::local_nixos(),
             ssh_user: None,
             state_dir: "/var/lib/nixling/vms/sys-work-net".to_owned(),
             static_ip: Some("10.20.0.1".to_owned()),
             tap: "work-net".to_owned(),
             tpm: false,
-            tpm_socket: String::new(),
+            tpm_socket: Some(String::new()),
             usbip_yubikey: false,
             usbipd_host_ip: None,
         };
@@ -382,7 +384,7 @@ mod tests {
 
         let manifest = ManifestV04 {
             manifest: ManifestMeta {
-                manifest_version: 4,
+                manifest_version: 6,
             },
             observability: ObservabilityMeta {
                 enabled: false,

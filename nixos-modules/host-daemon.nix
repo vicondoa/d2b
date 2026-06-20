@@ -2,18 +2,12 @@
 
 let
   cfg = config.nixling;
+  nl = import ./lib.nix { inherit lib; };
   prebuilt = if cfg.site.usePrebuiltHostTools then import ./prebuilt-packages.nix { inherit pkgs lib; } else { };
 
   # filter out `target/` dev caches from the source
   # so the Nix copy stays small (workspace target alone is ~17 GB).
-  packagesSrc = lib.cleanSourceWith {
-    src = ../packages;
-    filter = path: type:
-      let
-        rel = lib.removePrefix (toString ../packages + "/") (toString path);
-        parts = lib.splitString "/" rel;
-      in !(builtins.elem "target" parts || lib.hasPrefix ".cargo/registry/" rel || lib.hasInfix "/.cargo/registry/" rel);
-  };
+  packagesSrc = nl.cleanRustPackagesSource ../packages;
   cargoLock = {
     lockFile = ../packages/Cargo.lock;
     outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
@@ -123,6 +117,7 @@ EOF
     adminUsers = cfg.site.adminUsers;
     serverVersion = "0.4.0";
     acceptedClientVersionRange = ">=0.4.0, <0.5.0";
+    gatewayConfigPath = "/etc/nixling/gateway.json";
     artifacts = {
       publicManifestPath = "/run/current-system/sw/share/nixling/vms.json";
       bundlePath = "/etc/nixling/bundle.json";

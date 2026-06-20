@@ -2,6 +2,7 @@
 
 let
   cfg = config.nixling;
+  nl = import ./lib.nix { inherit lib; };
   envMeta = cfg._envMeta;
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
   anyGraphics = builtins.any (vm: vm.graphics.enable) (lib.attrValues enabledVms);
@@ -160,6 +161,61 @@ let
     lib.concatLists (lib.mapAttrsToList envMappings envMeta);
 
   derivedIfNameList = map (row: row.derivedIfname) allIfNameMappings;
+
+  runtimeProviders = lib.sortOn (provider: provider.provider.id)
+    (lib.attrValues nl.runtimeProviderCatalog);
+
+  qemuMediaSourceId = vmName: slotName: source:
+    if source.kind == "physical-usb"
+    then (if source.ref != null then source.ref else "invalid-missing-ref")
+    else "image-${builtins.substring 0 16 (builtins.hashString "sha256" "${vmName}/${slotName}/${if source.path != null then source.path else "missing-path"}")}";
+
+  qemuMediaSourceRow = vmName: slotName: source: ({
+    vm = vmName;
+    mediaRef = qemuMediaSourceId vmName slotName source;
+    slot = slotName;
+    sourceKind = source.kind;
+    format = source.format;
+    readOnly = source.readOnly;
+    registryScope =
+      if source.kind == "image-file"
+      then "direct-config-path"
+      else "root-only-runtime-state";
+  } // lib.optionalAttrs (source.kind == "image-file") {
+    imagePath = source.path;
+  });
+
+  qemuMediaSourceRowsForVm = vmName: vm:
+    let
+      bootRows =
+        if vm.qemuMedia.source == null
+        then [ ]
+        else [ (qemuMediaSourceRow vmName "boot" vm.qemuMedia.source) ];
+      slotRows = lib.flatten (lib.mapAttrsToList
+        (slotName: slot:
+          if slot.source == null
+          then [ ]
+          else [ (qemuMediaSourceRow vmName slotName slot.source) ])
+        vm.qemuMedia.removableSlots);
+    in bootRows ++ slotRows;
+
+  qemuMediaSources = lib.sortOn (row: "${row.vm}/${row.mediaRef}/${row.slot}")
+    (lib.concatLists (lib.mapAttrsToList qemuMediaSourceRowsForVm (nl.qemuMediaVms cfg.vms)));
+
+  vmRuntimeRows = lib.sortOn (row: row.vm) (lib.mapAttrsToList
+    (name: vm:
+      let manifest = cfg.manifest.${name};
+      in {
+        vm = name;
+        runtime = nl.vmRuntimeMetadata name vm;
+        env = manifest.env;
+        stateDir = manifest.stateDir;
+        tap = manifest.tap;
+        bridge = manifest.bridge;
+        staticIp = manifest.staticIp;
+        netVm = manifest.netVm;
+      })
+    enabledVms);
 
   duplicateDerived =
     lib.unique (lib.filter
@@ -336,6 +392,15 @@ let
       (fdRow "/dev/fuse" "OpenFuse" "virtiofsd" "SCM_RIGHTS" false "virtiofsd receives /dev/fuse through the broker instead of a broad device namespace.")
       (fdRow "cgroup-dirfd" "OpenCgroupDir" "nixlingd" "SCM_RIGHTS or delegated path" false "The broker opens only the delegated nixling cgroup subtree for daemon-owned role placement.")
     ];
+    runtimeProviders = runtimeProviders;
+    vmRuntimes = vmRuntimeRows;
+    qemuMedia =
+      if qemuMediaSources == [ ] then null else {
+        registryDir = "/var/lib/nixling/media-registry";
+        runtimeRulesPath = "/run/udev/rules.d/99-nixling-media-ignore.rules";
+        reloadBehavior = "Broker writes root-only runtime udev rules with UDISKS_IGNORE=1 and reloads udev rules after physical USB enrollment; direct image-file paths do not use enrollment.";
+        sources = qemuMediaSources;
+      };
     cloudHypervisorCapabilities = [
       (capabilityRow "headless" "required"
         [ "/dev/kvm" "tun" "vhost_net" "fuse" ]

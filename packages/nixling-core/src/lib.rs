@@ -15,6 +15,7 @@ pub mod minijail_profile;
 pub mod privileges;
 pub mod privileges_w3;
 pub mod processes;
+pub mod runtime;
 pub mod static_invariants;
 pub mod storage;
 pub mod storage_lifecycle;

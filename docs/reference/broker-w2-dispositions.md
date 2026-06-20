@@ -40,7 +40,13 @@ side-effect audit operation that never reaches the wire dispatcher).
 | PrepareStateDir | promoted-live | Resolves the trusted state-dir intent and prepares ownership/mode for the per-VM state directory. | live in production broker |
 | PrepareStoreView | promoted-live | Resolves the per-VM store-view intent, builds the hardlink farm, and validates the generation marker. | live in production broker |
 | PrepareSwtpmDir | compile-time-only | Audit operation emitted as a `SpawnRunner` side-effect for the `Swtpm` runner (issue #64); it provisions/hardens the persistent per-VM swtpm state dir and writes the identity-bound tamper marker inside the broker's pre-spawn step. It is not a standalone wire request, so it never reaches the wire dispatcher. | broker `SpawnRunner` side-effect |
+| QemuMediaAttach | promoted-live | Resolves an enrolled qemu-media slot, passes the media fd to QEMU over QMP, and returns only redacted command labels. | live in production broker |
+| QemuMediaBoot | promoted-live | Resolves the declared boot source, passes the media fd to QEMU over QMP, attaches the boot USB storage device, and continues the paused runner. | live in production broker |
+| QemuMediaDetach | promoted-live | Resolves an enrolled qemu-media slot, removes the QMP device/block/fd nodes, and returns only redacted command labels. | live in production broker |
+| QemuMediaEnroll | promoted-live | Enrolls a physical USB device into root-only qemu-media registry state and reconciles runtime automount-inhibition rules. | live in production broker |
+| QemuMediaRefreshRegistry | promoted-live | Rebuilds redacted daemon-readable qemu-media registry state and runtime automount-inhibition rules from the root-only persistent registry. | live in production broker |
 | ReadSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret read paths are not implemented. | future work |
+| ReconcileStorageScope | promoted-live | Resolves the trusted storage contract row and reconciles or validates the static storage scope without exposing raw paths. | live in production broker |
 | ResumeBroker | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; broker admin resume controls are not implemented. | future work |
 | RotateSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret rotation is not implemented. | future work |
 | RunActivation | promoted-live | Resolves activation and store-view intents from the trusted bundle and runs the requested activation mode. | live in production broker |
@@ -64,4 +70,5 @@ side-effect audit operation that never reaches the wire dispatcher).
 | UsbipBindFirewallRule | promoted-live | Resolves the trusted USBIP firewall intent and reconciles the per-busid nftables carve-out. | live in production broker |
 | UsbipProxyReconcile | promoted-live | Reconciles USBIP proxy lock expectations derived from trusted bundle intents. | live in production broker |
 | UsbipUnbind | promoted-live | Resolves the current USBIP owner, revokes the backend ACL, and unbinds the device. | live in production broker |
+| ValidateLockSpec | promoted-live | Resolves the trusted sync contract row and validates lock policy without mutating host state. | live in production broker |
 | ValidateBundle | callable-read-only | Sole validation entry point; calls `nixling_core::manifest::validate_bundle` and logs only opaque metadata. | live read-only callable |

@@ -32,7 +32,7 @@
           "description": "Manifest schema version. Must equal the parser's supported version.",
           "type": "integer",
           "enum": [
-            5
+            6
           ]
         }
       },
@@ -80,36 +80,155 @@
       },
       "additionalProperties": false
     },
+    "RuntimeCapabilities": {
+      "description": "Runtime/provider support matrix. These flags describe support, not whether a VM currently enables a feature.",
+      "type": "object",
+      "required": [
+        "configSync",
+        "display",
+        "exec",
+        "guestControl",
+        "inGuestObservability",
+        "keys",
+        "lifecycle",
+        "ssh",
+        "storeSync",
+        "usbHotplug"
+      ],
+      "properties": {
+        "configSync": {
+          "type": "boolean"
+        },
+        "display": {
+          "type": "boolean"
+        },
+        "exec": {
+          "type": "boolean"
+        },
+        "guestControl": {
+          "type": "boolean"
+        },
+        "inGuestObservability": {
+          "type": "boolean"
+        },
+        "keys": {
+          "type": "boolean"
+        },
+        "lifecycle": {
+          "type": "boolean"
+        },
+        "ssh": {
+          "type": "boolean"
+        },
+        "storeSync": {
+          "type": "boolean"
+        },
+        "usbHotplug": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeKind": {
+      "description": "VM runtime family.",
+      "type": "string",
+      "enum": [
+        "nixos",
+        "qemu-media"
+      ]
+    },
+    "RuntimeMetadata": {
+      "description": "Runtime/provider metadata shared by the public manifest and private bundle artifacts.",
+      "type": "object",
+      "required": [
+        "capabilities",
+        "kind",
+        "provider"
+      ],
+      "properties": {
+        "capabilities": {
+          "$ref": "#/definitions/RuntimeCapabilities"
+        },
+        "kind": {
+          "$ref": "#/definitions/RuntimeKind"
+        },
+        "provider": {
+          "$ref": "#/definitions/RuntimeProvider"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeProvider": {
+      "description": "Local runtime provider identity.",
+      "type": "object",
+      "required": [
+        "driver",
+        "id",
+        "type"
+      ],
+      "properties": {
+        "driver": {
+          "$ref": "#/definitions/RuntimeProviderDriver"
+        },
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/RuntimeProviderType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeProviderDriver": {
+      "description": "Provider driver family.",
+      "type": "string",
+      "enum": [
+        "cloud-hypervisor",
+        "qemu"
+      ]
+    },
+    "RuntimeProviderType": {
+      "description": "Provider locality class.",
+      "type": "string",
+      "enum": [
+        "local"
+      ]
+    },
     "VmEntry": {
       "type": "object",
       "required": [
-        "apiSocket",
         "audio",
-        "audioService",
-        "audioStateFile",
-        "gpuSocket",
         "graphics",
         "isNetVm",
         "name",
         "observability",
+        "runtime",
         "stateDir",
         "tap",
         "tpm",
-        "tpmSocket",
         "usbipYubikey"
       ],
       "properties": {
         "apiSocket": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "audio": {
           "type": "boolean"
         },
         "audioService": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "audioStateFile": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "bridge": {
           "type": [
@@ -124,7 +243,10 @@
           ]
         },
         "gpuSocket": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "graphics": {
           "type": "boolean"
@@ -170,6 +292,9 @@
         "observability": {
           "$ref": "#/definitions/VmObservability"
         },
+        "runtime": {
+          "$ref": "#/definitions/RuntimeMetadata"
+        },
         "sshUser": {
           "type": [
             "string",
@@ -192,7 +317,10 @@
           "type": "boolean"
         },
         "tpmSocket": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "usbipYubikey": {
           "type": "boolean"
@@ -225,25 +353,31 @@
     "VmObservability": {
       "type": "object",
       "required": [
-        "agentSocket",
-        "enabled",
-        "vsockCid",
-        "vsockHostSocket"
+        "enabled"
       ],
       "properties": {
         "agentSocket": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "enabled": {
           "type": "boolean"
         },
         "vsockCid": {
-          "type": "integer",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint32",
           "minimum": 0.0
         },
         "vsockHostSocket": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false

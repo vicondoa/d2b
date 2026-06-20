@@ -17,6 +17,16 @@
         "usbip"
       ],
       "properties": {
+        "autostart": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/VmAutostartPosture"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "env": {
           "type": [
             "string",
@@ -32,9 +42,25 @@
         "name": {
           "type": "string"
         },
+        "qemuMedia": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/QemuMediaStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "runnerParityOk": {
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "runtimeKind": {
+          "type": [
+            "string",
             "null"
           ]
         },
@@ -50,8 +76,129 @@
         "tpm": {
           "type": "boolean"
         },
+        "unsupportedCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "usbip": {
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaRegistryStatus": {
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "remediation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaRunnerStatus": {
+      "type": "object",
+      "required": [
+        "preContProgress",
+        "role",
+        "state"
+      ],
+      "properties": {
+        "preContProgress": {
+          "type": "string"
+        },
+        "qmpReadiness": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaSourceStatus": {
+      "type": "object",
+      "required": [
+        "format",
+        "mediaRef",
+        "readOnly",
+        "registry",
+        "slot",
+        "sourceKind"
+      ],
+      "properties": {
+        "format": {
+          "type": "string"
+        },
+        "mediaRef": {
+          "type": "string"
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "registry": {
+          "$ref": "#/definitions/QemuMediaRegistryStatus"
+        },
+        "slot": {
+          "type": "string"
+        },
+        "sourceKind": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaStatus": {
+      "type": "object",
+      "required": [
+        "firmwareMode",
+        "media",
+        "runner"
+      ],
+      "properties": {
+        "firmwareMode": {
+          "type": "string"
+        },
+        "media": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/QemuMediaSourceStatus"
+          }
+        },
+        "runner": {
+          "$ref": "#/definitions/QemuMediaRunnerStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmAutostartPosture": {
+      "type": "object",
+      "required": [
+        "mode",
+        "reason"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
         }
       },
       "additionalProperties": false

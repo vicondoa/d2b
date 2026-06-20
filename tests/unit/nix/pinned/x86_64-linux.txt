@@ -10,7 +10,11 @@ niri-vm-borders/enabled-crosvm-hide-rule
 niri-vm-borders/enabled-has-kdl
 niri-vm-borders/enabled-headless-no-rule
 niri-vm-borders/enabled-include-comment
+niri-vm-borders/enabled-qemu-media-host-rule
+niri-vm-borders/enabled-qemu-media-no-guest-app-id-rule
+niri-vm-borders/enabled-qemu-media-stable-title-match
 niri-vm-borders/enabled-work-rule
+niri-vm-borders/qemu-media-color-override-verbatim
 umask-roundtrip/audio
 umask-roundtrip/gpu
 umask-roundtrip/swtpm

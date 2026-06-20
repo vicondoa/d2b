@@ -10,7 +10,7 @@
 # network.nix where the env iteration happens. This file owns the
 # per-VM-name and per-env-name format / reserved-prefix checks that
 # don't depend on network.nix's iteration of cfg.envs.
-{ config, lib, options, ... }:
+{ config, lib, options, pkgs, ... }:
 
 let
   cfg = config.nixling;
@@ -259,12 +259,24 @@ let
     (d: !(lib.hasSuffix "/nixos-modules/observability-vm.nix" d.file))
     obsVmDefinitions;
 
+  vmDefinitionsFor = name:
+    lib.filter
+      (d: builtins.isAttrs d.value && builtins.hasAttr name d.value)
+      options.nixling.vms.definitionsWithLocations;
+
+  vmSubOptionDefined = name: optionName:
+    lib.any
+      (d:
+        let value = d.value.${name};
+        in builtins.isAttrs value && builtins.hasAttr optionName value)
+      (vmDefinitionsFor name);
+
   vmVsockCidPairs = lib.mapAttrsToList
     (name: _vm: {
       inherit name;
       cid = config.nixling.manifest.${name}.observability.vsockCid;
     })
-    (lib.filterAttrs (_name: vm: vm.enable) cfg.vms);
+    (nl.normalNixosVms cfg.vms);
 
   vmVsockCidGroups = lib.groupBy
     (pair: toString pair.cid)
@@ -304,7 +316,7 @@ let
       inherit name;
       socket = config.nixling.manifest.${name}.observability.vsockHostSocket;
     })
-    (lib.filterAttrs (_name: vm: vm.enable) cfg.vms);
+    (nl.normalNixosVms cfg.vms);
 
   socketPathTooLong = path: builtins.stringLength path > 107;
 
@@ -501,8 +513,253 @@ let
           autostart entries).
         '';
       }
-    ])
+      ])
     cfg.vms;
+
+  qemuMediaAssertions = lib.flatten (lib.mapAttrsToList
+    (name: vm:
+      let
+        mediaSources =
+          (lib.optional (vm.qemuMedia.source != null) {
+            slot = "boot";
+            source = vm.qemuMedia.source;
+          })
+          ++ (lib.flatten (lib.mapAttrsToList
+            (slotName: slot:
+              lib.optional (slot.source != null) {
+                slot = slotName;
+                source = slot.source;
+              })
+            vm.qemuMedia.removableSlots));
+        declaredMediaRefs =
+          map (entry: entry.source.ref)
+            (lib.filter (entry: entry.source.ref != null) mediaSources);
+        duplicateMediaRefs =
+          lib.unique (lib.filter
+            (ref: lib.length (lib.filter (other: other == ref) declaredMediaRefs) > 1)
+            declaredMediaRefs);
+        sourceAssertions = lib.flatten (map
+          (entry:
+            let
+              source = entry.source;
+              sourceName = "nixling.vms.${name}.qemuMedia.${if entry.slot == "boot" then "source" else "removableSlots.${entry.slot}.source"}";
+              isPhysical = source.kind == "physical-usb";
+              isImage = source.kind == "image-file";
+            in [
+              {
+                assertion = (!isPhysical) || source.ref != null;
+                message = ''
+                  ${sourceName}: kind = "physical-usb" requires an opaque `ref`.
+                  Enroll the live device identity at runtime with
+                  `nixling usb enroll`; do not place bus IDs, serials, or paths
+                  in Nix config.
+                '';
+              }
+              {
+                assertion = (!isPhysical) || source.path == null;
+                message = ''
+                  ${sourceName}: kind = "physical-usb" must not set `path`.
+                  Physical USB remains ref/enrollment based so raw device
+                  identity stays out of Nix-store-backed artifacts.
+                '';
+              }
+              {
+                assertion = (!isImage) || source.path != null;
+                message = ''
+                  ${sourceName}: kind = "image-file" requires an absolute
+                  `path`, for example
+                  `/var/lib/nixling/images/${name}-${entry.slot}.img`.
+                '';
+              }
+              {
+                assertion = (!isImage) || source.format == "raw";
+                message = ''
+                  ${sourceName}: kind = "image-file" supports only
+                  `format = "raw"`; QEMU format auto-probing is never used.
+                '';
+              }
+              {
+                assertion =
+                  (!isImage)
+                  || (source.path != null
+                    && lib.hasPrefix "/" source.path
+                    && !(lib.hasInfix "\n" source.path)
+                    && !(lib.hasInfix "\r" source.path));
+                message = ''
+                  ${sourceName}: image-file `path` must be an absolute
+                  single-line host path.
+                '';
+              }
+            ])
+          mediaSources);
+      in
+      lib.optionals (vm.enable && vm.runtime.kind == "qemu-media") ([
+        {
+          assertion = vm.env != null;
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" requires
+            `env` in this foundational implementation so networking can be
+            derived without evaluating a guest NixOS configuration.
+          '';
+        }
+        {
+          assertion = pkgs.stdenv.hostPlatform.system == "x86_64-linux";
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" is currently
+            supported only on x86_64-linux because its QEMU argv uses the
+            q35/virtio-vga device model.
+          '';
+        }
+        {
+          assertion = vm.qemuMedia.source != null;
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" requires
+            `qemuMedia.source` in this implementation. Declare either a
+            physical-usb opaque ref enrolled with `nixling usb enroll`, or
+            a direct image-file source configured in Nix.
+          '';
+        }
+        {
+          assertion = !(builtins.hasAttr "boot" vm.qemuMedia.removableSlots);
+          message = ''
+            nixling.vms.${name}: qemu-media removable slot name `boot` is
+            reserved for `qemuMedia.source`. Use a different
+            `qemuMedia.removableSlots.<name>` such as `backup`.
+          '';
+        }
+        {
+          assertion = duplicateMediaRefs == [ ];
+          message = ''
+            nixling.vms.${name}: qemu-media refs must be unique per VM;
+            duplicate opaque ref(s): ${lib.concatStringsSep ", " duplicateMediaRefs}.
+          '';
+        }
+        {
+          assertion = vmSubOptionDefined name "index";
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" requires an
+            explicit `index` in this foundational implementation. Set
+            `nixling.vms.${name}.index` to this VM's env slot.
+          '';
+        }
+        {
+          assertion = !(vmSubOptionDefined name "config");
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" must not define
+            `config`. qemu-media VMs are external media runtimes and skip the
+            per-VM NixOS evaluator.
+          '';
+        }
+        {
+          assertion = vm.guestConfigFile == null;
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with guestConfigFile because there is no nixling-managed guest
+            NixOS configuration to sync.
+          '';
+        }
+        {
+          assertion =
+            !vm.guest.control.enable
+            && vm.guest.control.auth.tokenFile == null
+            && !vm.guest.exec.enable
+            && !vm.guest.exec.allowRoot
+            && vm.guest.exec.users == [ ];
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with guest-control and guest exec options. Disable
+            guest.control.* and guest.exec.* for this manual-only runtime.
+          '';
+        }
+        {
+          assertion =
+            vm.ssh.user == null
+            && vm.ssh.keyPath == null
+            && vm.userAuthorizedKeys == [ ]
+            && !vm.sudo;
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with nixling-managed SSH, sudo, and per-VM authorized-key options.
+          '';
+        }
+        {
+          assertion = !(vmSubOptionDefined name "homeManager");
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with home-manager guest configuration.
+          '';
+        }
+        {
+          assertion = !vm.audit.enable;
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with guest audit forwarding.
+          '';
+        }
+        {
+          assertion = !vm.observability.enable;
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with guest observability.
+          '';
+        }
+        {
+          assertion = !vm.usbip.yubikey && vm.usbip.busids == [ ];
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with nixling USBIP/YubiKey passthrough declarations.
+          '';
+        }
+        {
+          assertion =
+            !vm.graphics.enable
+            && !vm.graphics.crossDomainTrusted
+            && !vm.graphics.xwayland.enable
+            && !vm.graphics.videoSidecar
+            && !vm.graphics.videoNvidiaDecode
+            && !vm.graphics.virglVideo
+            && !vm.graphics.renderNodeOnly
+            && vm.graphics.niriBorderColor == null
+            && !vm.graphics.waylandFilter.debugLogging
+            && !vm.graphics.waylandFilter.byteLogging
+            && vm.graphics.waylandFilter.denyGlobals == [ ]
+            && vm.graphics.waylandFilter.allowGlobals == [ ]
+            && vm.graphics.waylandFilter.maxVersions == { }
+            && vm.graphics.waylandFilter.dmabufAllow == [ ]
+            && vm.graphics.waylandFilter.dmabufDeny == [ ];
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with nixling graphics options.
+          '';
+        }
+        {
+          assertion = !vm.tpm.enable;
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with nixling-managed TPM state.
+          '';
+        }
+        {
+          assertion =
+            !vm.audio.enable
+            && !vm.audio.allowMicByDefault
+            && !vm.audio.allowSpeakerByDefault
+            && vm.audio.users == [ ];
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with nixling audio sidecar options.
+          '';
+        }
+        {
+          assertion = !vm.autostart;
+          message = ''
+            nixling.vms.${name}: runtime.kind = "qemu-media" is manual-only in
+            this foundational implementation; `autostart = true` is not
+            supported until unattended QMP continuation is available.
+          '';
+        }
+      ] ++ sourceAssertions))
+    cfg.vms);
 
   envAssertions = lib.mapAttrsToList
     (name: env:
@@ -566,7 +823,7 @@ let
   # set the options the framework needs for the features it enables).
   needsWaylandUser =
     lib.any
-      (vm: vm.enable && (vm.graphics.enable || vm.audio.enable))
+      (vm: vm.enable && (vm.graphics.enable || vm.audio.enable || vm.runtime.kind == "qemu-media"))
       (lib.attrValues cfg.vms);
 
   siteAssertions =
@@ -589,17 +846,18 @@ let
       }
     ]
     ++
-    # If any VM uses graphics or audio, the host MUST point at a
-    # Wayland user — that's the user whose XDG_RUNTIME_DIR the GPU /
-    # audio sidecars bind into.
+    # If any VM uses graphics, audio, or qemu-media, the host MUST point
+    # at a Wayland user — that's the user whose XDG_RUNTIME_DIR holds the
+    # compositor / PipeWire sockets those host-side processes need.
     lib.optional needsWaylandUser {
       assertion = cfg.site.waylandUser != null;
       message = ''
-        nixling: at least one declared VM has graphics.enable = true
-        or audio.enable = true, but `nixling.site.waylandUser` is
-        unset (null). The GPU + audio sidecars need a Wayland user
-        so they can find the host compositor's pipewire-0 / wayland-0
-        sockets under /run/user/<uid>/.
+        nixling: at least one declared VM has graphics.enable = true,
+        audio.enable = true, or runtime.kind = "qemu-media", but
+        `nixling.site.waylandUser` is unset (null). The host-side
+        display/audio processes need a Wayland user so they can find the
+        host compositor's pipewire-0 / wayland-0 sockets under
+        /run/user/<uid>/.
 
         Set the option to the Plasma / sway / Hyprland user that
         invokes `nixling up <vm>`:
@@ -701,7 +959,7 @@ let
           '';
         }
       ])
-    cfg.vms);
+    (nl.normalNixosVms cfg.vms));
 
   # Containment for the per-VM guest-editable `guestConfigFile`: it may
   # only set guest OS options, never host-owned microvm.* / nixling.*.
@@ -735,6 +993,7 @@ in
 {
   assertions = lib.flatten (
     vmAssertions
+    ++ qemuMediaAssertions
     ++ envAssertions
     ++ vsockAssertions
     ++ siteAssertions

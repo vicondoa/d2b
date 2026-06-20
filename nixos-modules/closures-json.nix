@@ -4,7 +4,7 @@ let
   cfg = config.nixling;
   # nixling-owned access helpers (see lib.nix).
   nl = import ./lib.nix { inherit lib pkgs; };
-  enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
+  normalNixosVms = nl.normalNixosVms cfg.vms;
 
   privateEtc = source: {
     inherit source;
@@ -95,7 +95,7 @@ let
       inherit relativePath;
     };
 
-  closures = lib.mapAttrs (name: _: closureArtifact name) enabledVms;
+  closures = lib.mapAttrs (name: _: closureArtifact name) normalNixosVms;
 in
 {
   options.nixling._bundle.closures = lib.mkOption {

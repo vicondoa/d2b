@@ -329,6 +329,13 @@
           ]
         },
         {
+          "description": "QEMU media runner.",
+          "type": "string",
+          "enum": [
+            "qemu-media-runner"
+          ]
+        },
+        {
           "description": "vsock relay sidecar.",
           "type": "string",
           "enum": [

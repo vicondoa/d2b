@@ -30,9 +30,10 @@
 
 let
   cfg = config.nixling;
+  nl = import ../../lib.nix { inherit lib; };
   enabledVms = lib.filterAttrs
-    (_: vm: vm.enable && vm.audio.enable)
-    cfg.vms;
+    (_: vm: vm.audio.enable)
+    (nl.normalNixosVms cfg.vms);
 
   anyAudio = enabledVms != { };
 

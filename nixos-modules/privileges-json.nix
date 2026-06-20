@@ -247,6 +247,18 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "host migrate-storage --apply",
+    "subject": "host/storage",
+    "scope": "global",
+    "allowedGroups": [
+      "nixling-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "possible-paths-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "up",
     "subject": "VM/env",
     "scope": "per-VM/per-env",
@@ -582,6 +594,18 @@ let
     ],
     "destructive": true,
     "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "usb enroll",
+    "subject": "VM/USB media ref",
+    "scope": "per-VM/per-media-ref",
+    "allowedGroups": [
+      "nixling-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
   },
@@ -1177,6 +1201,90 @@ let
     ],
     "destructive": false,
     "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "QemuMediaEnroll",
+    "subject": "qemu-media registry",
+    "scope": "per-VM/per-media-ref",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "redacted-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "QemuMediaAttach",
+    "subject": "qemu-media hotplug",
+    "scope": "per-VM/per-media-ref",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "redacted-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "QemuMediaRefreshRegistry",
+    "subject": "qemu-media redacted registry",
+    "scope": "host",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": false,
+    "secretAccess": "redacted-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "ReconcileStorageScope",
+    "subject": "fs/storage-contract",
+    "scope": "global/per-VM/per-role",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "ValidateLockSpec",
+    "subject": "lock/sync-contract",
+    "scope": "global/per-VM/per-role",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": false,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "QemuMediaBoot",
+    "subject": "qemu-media boot media",
+    "scope": "per-VM/per-media-ref",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "redacted-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "QemuMediaDetach",
+    "subject": "qemu-media hotplug",
+    "scope": "per-VM/per-media-ref",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
   },
