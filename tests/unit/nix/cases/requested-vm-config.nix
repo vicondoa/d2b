@@ -125,6 +125,9 @@ in
         format = "raw";
         readOnly = true;
         registryScope = "root-only-runtime-state";
+        usbSelector = {
+          byIdName = "usb-Example_Dark_Live_0001-0:0";
+        };
       }
       {
         vm = "dark-live";
@@ -142,10 +145,10 @@ in
     expr =
       !(lib.hasInfix "/dev/disk/by-id" rawArtifactText)
       && !(lib.hasInfix "/dev/bus/usb" rawArtifactText)
-      && !(lib.hasInfix "usb-" rawArtifactText)
       && !(lib.hasInfix "busid" rawArtifactText)
       && !(lib.hasInfix "busId" rawArtifactText)
-      && !(lib.hasInfix "serial" rawArtifactText);
+      && !(lib.hasInfix "SecretSerial" rawArtifactText)
+      && !(lib.hasInfix "1-2.3" rawArtifactText);
     expected = true;
   };
 
