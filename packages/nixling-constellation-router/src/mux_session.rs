@@ -9,7 +9,7 @@
 
 use nixling_constellation_core::{
     ConstellationError, ConstellationFrame, OpaquePayload, StreamChannel, StreamClose,
-    StreamCloseReason, StreamData, StreamId, StreamMux, StreamOpen,
+    StreamCloseReason, StreamData, StreamId, StreamMux, StreamOpen, StreamResume,
 };
 use nixling_constellation_provider::error::ProviderResult;
 use nixling_constellation_provider::provider::ProtocolCodec;
@@ -90,6 +90,29 @@ impl<C: ProtocolCodec> MuxSession<C> {
             .await
     }
 
+    /// Send a stream resume request after validating the stream/cursor shape.
+    pub async fn resume_stream(&mut self, resume: StreamResume) -> ProviderResult<()> {
+        self.mux.validate_resume(&resume)?;
+        self.peer
+            .send(&ConstellationFrame::StreamResume(resume))
+            .await
+    }
+
+    /// Cancel a stream idempotently and notify the peer only for the first
+    /// cancel transition.
+    pub async fn cancel_stream(&mut self, stream: &StreamId) -> ProviderResult<bool> {
+        let first_cancel = self.mux.cancel(stream)?;
+        if first_cancel {
+            self.peer
+                .send(&ConstellationFrame::StreamClose(StreamClose {
+                    stream: stream.clone(),
+                    reason: StreamCloseReason::Cancelled,
+                }))
+                .await?;
+        }
+        Ok(first_cancel)
+    }
+
     /// Receive one frame and apply the mux state transition before exposing it.
     pub async fn recv(&mut self) -> ProviderResult<ConstellationFrame> {
         let frame = self.peer.recv().await?;
@@ -103,6 +126,7 @@ impl<C: ProtocolCodec> MuxSession<C> {
             ConstellationFrame::StreamData(data) => self.mux.accept_data(data),
             ConstellationFrame::StreamFlow(flow) => self.mux.receive_flow(flow),
             ConstellationFrame::StreamClose(close) => self.mux.close(close),
+            ConstellationFrame::StreamResume(resume) => self.mux.validate_resume(resume),
             ConstellationFrame::Handshake(_)
             | ConstellationFrame::HandshakeAccepted(_)
             | ConstellationFrame::HandshakeRejected(_)

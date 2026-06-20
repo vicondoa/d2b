@@ -85,6 +85,9 @@
       "$ref": "#/definitions/OperationResponse"
     },
     {
+      "$ref": "#/definitions/StreamResume"
+    },
+    {
       "$ref": "#/definitions/AdmissionAuditRecord"
     },
     {
@@ -1283,6 +1286,39 @@
           }
         },
         {
+          "description": "Resume a durable stream from a cursor.",
+          "type": "object",
+          "required": [
+            "cursor",
+            "frame",
+            "stream"
+          ],
+          "properties": {
+            "cursor": {
+              "description": "Durable cursor the peer wants to resume from.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StreamCursor"
+                }
+              ]
+            },
+            "frame": {
+              "type": "string",
+              "enum": [
+                "stream-resume"
+              ]
+            },
+            "stream": {
+              "description": "Stream being resumed.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StreamId"
+                }
+              ]
+            }
+          }
+        },
+        {
           "description": "A typed error frame.",
           "type": "object",
           "required": [
@@ -2270,6 +2306,33 @@
           ]
         }
       ]
+    },
+    "StreamResume": {
+      "description": "Reattach/resume request for a durable stream. The cursor is meaningful only for resumable stream kinds such as logs; the mux rejects resumes for non-resumable streams before any transport replay can occur.",
+      "type": "object",
+      "required": [
+        "cursor",
+        "stream"
+      ],
+      "properties": {
+        "cursor": {
+          "description": "Durable cursor the peer wants to resume from.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/StreamCursor"
+            }
+          ]
+        },
+        "stream": {
+          "description": "Stream being resumed.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/StreamId"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "TraceContext": {
       "type": "object",

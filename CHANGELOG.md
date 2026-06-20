@@ -84,6 +84,9 @@ deprecations ship one minor release before removal.
   handshake-accepted/rejected frames, bind codec schema fingerprints into
   plain and secure peer handshakes, and document the length-delimited
   semantic frame skeleton for future gateway transports.
+- Named stream plumbing now supports resumable log cursors,
+  deterministic stream draining, and retry-safe cancellation for future
+  remote execution and display sessions.
 
 ### Changed
 

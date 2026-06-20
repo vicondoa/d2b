@@ -435,6 +435,18 @@ pub struct StreamClose {
     pub reason: StreamCloseReason,
 }
 
+/// Reattach/resume request for a durable stream. The cursor is meaningful
+/// only for resumable stream kinds such as logs; the mux rejects resumes for
+/// non-resumable streams before any transport replay can occur.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StreamResume {
+    /// Stream being resumed.
+    pub stream: StreamId,
+    /// Durable cursor the peer wants to resume from.
+    pub cursor: StreamCursor,
+}
+
 /// The semantic frame exchanged over a constellation peer session. The
 /// codec layer maps bytes to/from this enum; the operation layer never
 /// depends on the encoding. Every variant wraps a `deny_unknown_fields`
@@ -460,6 +472,8 @@ pub enum ConstellationFrame {
     StreamFlow(StreamFlow),
     /// Close a named stream.
     StreamClose(StreamClose),
+    /// Resume a durable stream from a cursor.
+    StreamResume(StreamResume),
     /// A typed error frame.
     TypedError(ConstellationError),
     /// A redacted pre-auth/session-admission denial frame.
@@ -633,12 +647,17 @@ mod tests {
         assert!(serde_json::from_str::<ConstellationFrame>(data).is_ok());
         let close = "{\"frame\":\"stream-close\",\"stream\":\"s1\",\"reason\":\"completed\"}";
         assert!(serde_json::from_str::<ConstellationFrame>(close).is_ok());
+        let resume = "{\"frame\":\"stream-resume\",\"stream\":\"s1\",\"cursor\":\"cur-1\"}";
+        assert!(serde_json::from_str::<ConstellationFrame>(resume).is_ok());
         // Extra peer-supplied fields are rejected (deny_unknown_fields).
         let data_extra = "{\"frame\":\"stream-data\",\"stream\":\"s1\",\"sequence\":0,\"data\":[1],\"evil\":true}";
         assert!(serde_json::from_str::<ConstellationFrame>(data_extra).is_err());
         let close_extra =
             "{\"frame\":\"stream-close\",\"stream\":\"s1\",\"reason\":\"completed\",\"evil\":true}";
         assert!(serde_json::from_str::<ConstellationFrame>(close_extra).is_err());
+        let resume_extra =
+            "{\"frame\":\"stream-resume\",\"stream\":\"s1\",\"cursor\":\"cur-1\",\"evil\":true}";
+        assert!(serde_json::from_str::<ConstellationFrame>(resume_extra).is_err());
     }
 
     #[test]

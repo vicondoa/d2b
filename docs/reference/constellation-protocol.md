@@ -50,8 +50,26 @@ realm, principal, node, operation kind, and idempotency key. A lost-reply
 retry with the same request replays the recorded response, while a
 same-key different request or a post-retention reuse fails closed.
 
+## Named streams
+
+Post-handshake stream frames are typed and mux-validated before callers see
+them. A stream must open with a `StreamDescriptor` and capability-derived
+`StreamAuthz`; data before open, unknown streams, invalid channels, and
+data after close fail closed.
+
+Flow control is credit-based. `StreamFlow` grants a non-zero number of
+frames, `StreamData.sequence` is strictly increasing per stream, and the
+mux exposes deterministic sendable-stream ordering plus a round-robin
+selection primitive for fair draining. Cancellation is idempotent for
+already-cancelled streams so reconnect/cancel retries do not create
+spurious protocol errors.
+
+`StreamResume` carries a durable cursor and is accepted only for resumable
+stream kinds, currently logs. Non-resumable streams reject cursor resume
+requests before any transport replay or provider action.
+
 ## Non-goals
 
 This skeleton does not implement Azure Relay, remote full-host transport,
-stream lifecycle beyond the existing semantic frame/mux primitives, or
-durable execution. Those are later ADR 0032 waves.
+provider-specific display, or durable execution. Those are later ADR 0032
+waves.

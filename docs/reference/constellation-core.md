@@ -140,9 +140,12 @@ The pure `StreamMux` state machine enforces:
 - an open-stream cap;
 - strictly increasing per-stream sequence numbers;
 - credit-based backpressure through non-zero `StreamFlow` grants;
+- deterministic sendable-stream selection for fair draining;
 - `Stdout`/`Stderr` channels only on `Stdio` streams;
 - resume cursors only on `Logs` streams;
-- no data after close and no double close.
+- `StreamResume` only on resumable stream kinds;
+- idempotent cancellation retries for already-cancelled streams;
+- no data after close and no double close for non-cancel terminal states.
 
 ## Audit and error redaction
 

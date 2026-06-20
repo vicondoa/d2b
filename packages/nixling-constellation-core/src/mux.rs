@@ -15,22 +15,28 @@
 //!   (only `Stdio` carries `Stdout`/`Stderr`; every other kind is
 //!   `Primary`-only);
 //! - a resume [`crate::ids::StreamCursor`] only rides a `Logs` stream;
-//! - data after a close, or a double close, is rejected.
+//! - data after close is rejected, while repeated cancellation is
+//!   idempotent and non-cancel double-close remains a protocol error.
 //!
 //! The state machine is deliberately codec- and transport-neutral so the
 //! same enforcement runs identically over AF_VSOCK (host↔gateway) and over
 //! an Azure Relay peer session (gateway↔container).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::ops::Bound::{Excluded, Unbounded};
 
 use crate::error::{ConstellationError, ErrorKind};
-use crate::frame::{StreamClose, StreamData, StreamFlow, StreamOpen};
+use crate::frame::{StreamClose, StreamData, StreamFlow, StreamOpen, StreamResume};
 use crate::ids::{OperationId, StreamId};
 use crate::stream::{StreamChannel, StreamCloseReason, StreamKind};
 
 /// Default cap on concurrently-open streams in one peer session. Bounds the
 /// mux's memory against a peer that opens streams without closing them.
 pub const DEFAULT_MAX_OPEN_STREAMS: usize = 256;
+/// Default cap on recently-closed stream records retained for idempotent
+/// cancel/reconnect diagnostics. Older closed records are pruned so a
+/// long-lived session cannot grow with total historical stream count.
+pub const DEFAULT_MAX_CLOSED_STREAMS: usize = 1024;
 
 /// Lifecycle state of a single multiplexed stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,8 +69,12 @@ struct StreamEntry {
 /// A pure stream-mux state machine for one peer-session endpoint.
 #[derive(Debug, Clone)]
 pub struct StreamMux {
-    streams: HashMap<StreamId, StreamEntry>,
+    streams: BTreeMap<StreamId, StreamEntry>,
+    open_streams: BTreeSet<StreamId>,
+    sendable_streams: BTreeSet<StreamId>,
+    closed_order: VecDeque<StreamId>,
     max_open: usize,
+    max_closed: usize,
 }
 
 impl Default for StreamMux {
@@ -81,25 +91,29 @@ impl StreamMux {
 
     /// A mux with an explicit open-stream cap (must be non-zero).
     pub fn with_max_open(max_open: usize) -> Self {
+        Self::with_limits(max_open, DEFAULT_MAX_CLOSED_STREAMS)
+    }
+
+    /// A mux with explicit open-stream and closed-history caps.
+    pub fn with_limits(max_open: usize, max_closed: usize) -> Self {
         Self {
-            streams: HashMap::new(),
+            streams: BTreeMap::new(),
+            open_streams: BTreeSet::new(),
+            sendable_streams: BTreeSet::new(),
+            closed_order: VecDeque::new(),
             max_open: max_open.max(1),
+            max_closed: max_closed.max(1),
         }
     }
 
     /// Number of streams currently in the `Open` state.
     pub fn open_stream_count(&self) -> usize {
-        self.streams
-            .values()
-            .filter(|e| e.state == StreamState::Open)
-            .count()
+        self.open_streams.len()
     }
 
     /// Whether `stream` is known and currently open.
     pub fn is_open(&self, stream: &StreamId) -> bool {
-        self.streams
-            .get(stream)
-            .is_some_and(|e| e.state == StreamState::Open)
+        self.open_streams.contains(stream)
     }
 
     /// The recorded close reason for a closed stream, if any.
@@ -148,6 +162,7 @@ impl StreamMux {
                 send_credit: 0,
             },
         );
+        self.open_streams.insert(id.clone());
         Ok(())
     }
 
@@ -223,8 +238,33 @@ impl StreamMux {
             ));
         }
         let entry = self.open_entry_mut(&flow.stream)?;
+        let was_unsendable = entry.send_credit == 0;
         entry.send_credit = entry.send_credit.saturating_add(u64::from(flow.credits));
+        if was_unsendable {
+            self.sendable_streams.insert(flow.stream.clone());
+        }
         Ok(())
+    }
+
+    /// Return open streams with outbound credit in deterministic order. The
+    /// caller can use this to fairly drain sendable streams without peeking
+    /// into mux internals.
+    pub fn sendable_streams(&self) -> Vec<StreamId> {
+        self.sendable_streams.iter().cloned().collect()
+    }
+
+    /// Return the next sendable stream after `after`, wrapping around. This
+    /// gives callers a deterministic round-robin primitive; they store the
+    /// last selected stream and feed it back on the next scheduling pass.
+    pub fn next_sendable_after(&self, after: Option<&StreamId>) -> Option<StreamId> {
+        let Some(after) = after else {
+            return self.sendable_streams.iter().next().cloned();
+        };
+        self.sendable_streams
+            .range((Excluded(after), Unbounded))
+            .next()
+            .cloned()
+            .or_else(|| self.sendable_streams.iter().next().cloned())
     }
 
     /// Reserve the next outbound chunk on `stream`: validates the channel
@@ -253,15 +293,24 @@ impl StreamMux {
         entry.send_credit -= 1;
         let seq = entry.next_send_seq;
         entry.next_send_seq += 1;
+        if entry.send_credit == 0 {
+            self.sendable_streams.remove(stream);
+        }
         Ok(seq)
     }
 
-    /// Close a stream, recording the reason. A double close is rejected.
+    /// Close a stream, recording the reason. Repeated `Cancelled` closes are
+    /// idempotent; every other double close is rejected.
     pub fn close(&mut self, close: &StreamClose) -> Result<(), ConstellationError> {
         let entry = self.streams.get_mut(&close.stream).ok_or_else(|| {
             ConstellationError::new(ErrorKind::MalformedFrame, "close of an unknown stream")
         })?;
         if entry.state == StreamState::Closed {
+            if entry.close_reason == Some(StreamCloseReason::Cancelled)
+                && close.reason == StreamCloseReason::Cancelled
+            {
+                return Ok(());
+            }
             return Err(ConstellationError::new(
                 ErrorKind::MalformedFrame,
                 "stream is already closed",
@@ -269,12 +318,64 @@ impl StreamMux {
         }
         entry.state = StreamState::Closed;
         entry.close_reason = Some(close.reason);
+        self.open_streams.remove(&close.stream);
+        self.sendable_streams.remove(&close.stream);
+        self.remember_closed(close.stream.clone());
+        Ok(())
+    }
+
+    /// Cancel a stream idempotently. The first cancel closes an open stream
+    /// and returns `Ok(true)`. Repeating a cancel, racing a peer close, or
+    /// cancelling an already-pruned/unknown stream returns `Ok(false)` so a
+    /// reconnect/cancel retry cannot wedge or tear down the session.
+    pub fn cancel(&mut self, stream: &StreamId) -> Result<bool, ConstellationError> {
+        match self.streams.get_mut(stream) {
+            Some(entry) if entry.state == StreamState::Open => {
+                entry.state = StreamState::Closed;
+                entry.close_reason = Some(StreamCloseReason::Cancelled);
+                self.open_streams.remove(stream);
+                self.sendable_streams.remove(stream);
+                self.remember_closed(stream.clone());
+                Ok(true)
+            }
+            Some(_) | None => Ok(false),
+        }
+    }
+
+    /// Validate a resume request. Today only `Logs` streams are resumable:
+    /// other stream kinds carry no durable cursor contract and fail closed.
+    /// A closed logs stream can still validate a resume request so a later
+    /// transport wave can reattach before reopening provider state.
+    pub fn validate_resume(&self, resume: &StreamResume) -> Result<(), ConstellationError> {
+        let entry = self.streams.get(&resume.stream).ok_or_else(|| {
+            ConstellationError::new(ErrorKind::MalformedFrame, "resume of an unknown stream")
+        })?;
+        if entry.kind != StreamKind::Logs {
+            return Err(ConstellationError::new(
+                ErrorKind::MalformedFrame,
+                "only logs streams support cursor resume",
+            ));
+        }
         Ok(())
     }
 
     /// The operation id a stream is bound to (for audit/correlation).
     pub fn operation_id(&self, stream: &StreamId) -> Option<&OperationId> {
         self.streams.get(stream).map(|e| &e.operation_id)
+    }
+
+    fn remember_closed(&mut self, stream: StreamId) {
+        self.closed_order.push_back(stream);
+        while self.closed_order.len() > self.max_closed {
+            if let Some(old) = self.closed_order.pop_front()
+                && self
+                    .streams
+                    .get(&old)
+                    .is_some_and(|entry| entry.state == StreamState::Closed)
+            {
+                self.streams.remove(&old);
+            }
+        }
     }
 
     fn open_entry(&self, stream: &StreamId) -> Result<&StreamEntry, ConstellationError> {
@@ -517,7 +618,13 @@ mod tests {
                 .kind(),
             ErrorKind::Cancelled
         );
-        // A double close is rejected.
+        // A repeated cancel close from the peer is idempotent.
+        mux.close(&StreamClose {
+            stream: sid("s1"),
+            reason: StreamCloseReason::Cancelled,
+        })
+        .unwrap();
+        // A double close with another terminal reason is rejected.
         assert_eq!(
             mux.close(&StreamClose {
                 stream: sid("s1"),
@@ -527,6 +634,27 @@ mod tests {
             .kind(),
             ErrorKind::MalformedFrame
         );
+    }
+
+    #[test]
+    fn cancel_is_idempotent_only_for_cancelled_streams() {
+        let mut mux = StreamMux::new();
+        mux.open(&open_frame("s1", StreamKind::Display)).unwrap();
+        assert_eq!(mux.cancel(&sid("s1")), Ok(true));
+        assert_eq!(mux.cancel(&sid("s1")), Ok(false));
+        assert_eq!(
+            mux.close_reason(&sid("s1")),
+            Some(StreamCloseReason::Cancelled)
+        );
+
+        mux.open(&open_frame("s2", StreamKind::Display)).unwrap();
+        mux.close(&StreamClose {
+            stream: sid("s2"),
+            reason: StreamCloseReason::Completed,
+        })
+        .unwrap();
+        assert_eq!(mux.cancel(&sid("s2")), Ok(false));
+        assert_eq!(mux.cancel(&sid("unknown")), Ok(false));
     }
 
     #[test]
@@ -562,5 +690,102 @@ mod tests {
                 .kind(),
             ErrorKind::Backpressure
         );
+    }
+
+    #[test]
+    fn sendable_streams_are_deterministic_and_round_robin() {
+        let mut mux = StreamMux::new();
+        mux.open(&open_frame("b-stream", StreamKind::Display))
+            .unwrap();
+        mux.open(&open_frame("a-stream", StreamKind::Display))
+            .unwrap();
+        mux.receive_flow(&StreamFlow {
+            stream: sid("b-stream"),
+            credits: 1,
+        })
+        .unwrap();
+        mux.receive_flow(&StreamFlow {
+            stream: sid("a-stream"),
+            credits: 1,
+        })
+        .unwrap();
+        assert_eq!(
+            mux.sendable_streams(),
+            vec![sid("a-stream"), sid("b-stream")]
+        );
+        assert_eq!(mux.next_sendable_after(None), Some(sid("a-stream")));
+        assert_eq!(
+            mux.next_sendable_after(Some(&sid("a-stream"))),
+            Some(sid("b-stream"))
+        );
+        assert_eq!(
+            mux.next_sendable_after(Some(&sid("b-stream"))),
+            Some(sid("a-stream"))
+        );
+        // If the last-serviced stream drops out of the sendable set, the
+        // scheduler still moves to the next strictly greater stream rather
+        // than restarting at the beginning and starving later streams.
+        assert_eq!(
+            mux.reserve_send(&sid("a-stream"), StreamChannel::Primary)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            mux.next_sendable_after(Some(&sid("a-stream"))),
+            Some(sid("b-stream"))
+        );
+    }
+
+    #[test]
+    fn resume_is_allowed_only_for_logs_streams() {
+        let mut mux = StreamMux::new();
+        mux.open(&open_frame("logs", StreamKind::Logs)).unwrap();
+        mux.open(&open_frame("display", StreamKind::Display))
+            .unwrap();
+        let logs_resume = StreamResume {
+            stream: sid("logs"),
+            cursor: StreamCursor::parse("cur-1").unwrap(),
+        };
+        mux.validate_resume(&logs_resume).unwrap();
+        mux.close(&StreamClose {
+            stream: sid("logs"),
+            reason: StreamCloseReason::PeerGone,
+        })
+        .unwrap();
+        mux.validate_resume(&logs_resume).unwrap();
+
+        let display_resume = StreamResume {
+            stream: sid("display"),
+            cursor: StreamCursor::parse("cur-2").unwrap(),
+        };
+        assert_eq!(
+            mux.validate_resume(&display_resume).unwrap_err().kind(),
+            ErrorKind::MalformedFrame
+        );
+    }
+
+    #[test]
+    fn closed_stream_history_is_bounded() {
+        let mut mux = StreamMux::with_limits(4, 2);
+        for id in ["s1", "s2", "s3"] {
+            mux.open(&open_frame(id, StreamKind::Display)).unwrap();
+            mux.close(&StreamClose {
+                stream: sid(id),
+                reason: StreamCloseReason::Completed,
+            })
+            .unwrap();
+        }
+        assert_eq!(mux.close_reason(&sid("s1")), None);
+        assert_eq!(
+            mux.close_reason(&sid("s2")),
+            Some(StreamCloseReason::Completed)
+        );
+        assert_eq!(
+            mux.close_reason(&sid("s3")),
+            Some(StreamCloseReason::Completed)
+        );
+        // Once the old closed record is pruned, that id can be reused.
+        mux.open(&open_frame("s1", StreamKind::Display)).unwrap();
+        assert!(mux.is_open(&sid("s1")));
     }
 }

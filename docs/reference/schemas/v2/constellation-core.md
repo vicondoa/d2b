@@ -26,6 +26,7 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
 - `Handshake`, `HandshakeAccepted`, `HandshakeRejected`,
   `HandshakeRejectedReason`;
 - `OperationKind`, `OperationRequest`, `OperationResponse`;
+- `StreamResume`;
 - `AdmissionAuditRecord`, `AuditEnvelope`, `AuditHash`,
   `AuditChainLink`, `AuditChainRecord`, `AuditChainCheckResult`,
   `AuditSinkHealth`, `AuditRetentionFloorStatus`;
@@ -54,3 +55,5 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
   `ConstellationFrame` and preserve the same capability-derived authz and
   backpressure constraints described in
   [`constellation-core.md`](../../constellation-core.md).
+- `StreamResume` carries only a stream id and durable cursor; the mux
+  accepts it only for resumable stream kinds such as logs.
