@@ -120,8 +120,8 @@ in
   "requested-vm-config/purple-qemu-media-niri-border" = {
     expr =
       lib.hasInfix "// Borders for qemu-media VM host window: dark-live" kdl
-      && lib.hasInfix ''match title=r#"^nixling-dark-live-qemu-media$"#'' kdl
-      && lib.hasInfix ''active-color "#800080"'' kdl;
+      && lib.hasInfix ''match app-id=r#"^nixling\.dark-live\."#'' kdl
+      && lib.hasInfix ''active-color "#301934"'' kdl;
     expected = true;
   };
 }

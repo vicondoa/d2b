@@ -482,6 +482,7 @@ in
             wlproxy_wayland_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "wayland-proxy") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             audio_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "audio") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             gpu_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "gpu" or .role == "gpu-render-node") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+            wlproxy_client_uids=$(printf '%s\n%s\n' "$gpu_session_uids" "$qemu_media_session_uids" | ${pkgs.coreutils}/bin/sort -u)
             otel_host_bridge_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "otel-host-bridge") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             otel_obs_connect_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | .nodes[] | select(.role == "vsock-relay" or .role == "otel-host-bridge") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             overlay_uid=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | .ownerUid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
@@ -703,11 +704,11 @@ in
               if echo "$wlproxy_wayland_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
                 ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling-wlproxy/${name} 2>/dev/null || true
                 ${pkgs.acl}/bin/setfacl -d -x "u:$uid" /run/nixling-wlproxy/${name} 2>/dev/null || true
-              elif [ -n "$wlproxy_wayland_uids" ] && echo "$gpu_session_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+              elif [ -n "$wlproxy_wayland_uids" ] && echo "$wlproxy_client_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
                 ${pkgs.acl}/bin/setfacl -m "u:$uid:--x" /run/nixling-wlproxy/${name} 2>/dev/null || true
                 # DEFAULT ACL so the wlproxy-created socket (mode 0660
                 # under umask 0o007) inherits a named-user rw entry for
-                # the GPU principal that connects to it.
+                # the VM principal that connects to it.
                 ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling-wlproxy/${name} 2>/dev/null || true
               else
                 ${pkgs.acl}/bin/setfacl -m "u:$uid:--x" /run/nixling-wlproxy/${name} 2>/dev/null || true
@@ -766,30 +767,6 @@ in
                         --require-kind socket \
                         --setfacl-bin "${pkgs.acl}/bin/setfacl" \
                         2>/dev/null || true
-                    elif echo "$qemu_media_session_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
-                      # qemu-media: focused GTK/Wayland display access only.
-                      # Media devices are inherited/pre-opened by the broker;
-                      # PipeWire/Pulse and other session sockets stay denied.
-                      ${activationHelper} setfacl-on-path \
-                        --path "$rdir" \
-                        --acl-spec "u:$uid:rx" \
-                        --require-kind directory \
-                        --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-                        2>/dev/null || true
-                      ${activationHelper} setfacl-on-path \
-                        --path "$rdir/${cfg.site.waylandDisplay}" \
-                        --acl-spec "u:$uid:rwx" \
-                        --require-kind socket \
-                        --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-                        2>/dev/null || true
-                      for sock in pipewire-0 pulse/native; do
-                        ${activationHelper} setfacl-on-path \
-                          --path "$rdir/$sock" \
-                          --acl-spec "u:$uid:---" \
-                          --require-kind socket \
-                          --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-                          2>/dev/null || true
-                      done
                     elif [ -z "$wlproxy_wayland_uids" ] && echo "$gpu_session_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
                       # Direct graphics path (no wayland-proxy node): GPU gets
                       # Wayland socket access only, preserving legacy display

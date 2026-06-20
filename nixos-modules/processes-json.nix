@@ -225,17 +225,31 @@ EOF
     let
       vm = cfg.vms.${name};
       resources = vm.qemuMedia.resources;
+      security = vm.qemuMedia.security;
+      memoryBackendFlags = [
+        "memory-backend-ram"
+        "id=nlram"
+        "size=${toString resources.memoryMiB}M"
+        "dump=${if security.excludeMemoryFromCoreDump then "off" else "on"}"
+        "merge=${if security.disableMemoryMerge then "off" else "on"}"
+      ] ++ lib.optional security.lockMemory "prealloc=on";
     in [
       "nixling-qemu-media@${name}"
       "-nodefaults"
       "-no-user-config"
       "-S"
+      "-object"
+      (lib.concatStringsSep "," memoryBackendFlags)
       "-machine"
-      "q35,accel=kvm,usb=off"
+      "q35,accel=kvm,usb=off,memory-backend=nlram"
       "-m"
       "${toString resources.memoryMiB}M"
       "-smp"
       (toString resources.vcpu)
+    ] ++ lib.optionals security.lockMemory [
+      "-overcommit"
+      "mem-lock=on"
+    ] ++ [
       "-device"
       "usb-ehci,id=ehci"
       "-device"
@@ -261,11 +275,11 @@ EOF
       "-name"
       "nixling-${name}-qemu-media"
     ];
-  qemuMediaEnv =
+  qemuMediaEnv = name:
     lib.optionals (cfg.site.waylandUser != null) [
       "GDK_BACKEND=wayland"
-      "WAYLAND_DISPLAY=${waylandDisplay}"
-      "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
+      "WAYLAND_DISPLAY=wayland-0"
+      "XDG_RUNTIME_DIR=/run/nixling-wlproxy/${name}"
     ];
 
   cloudHypervisorArgv = name: vm: manifest:
@@ -629,7 +643,10 @@ EOF
       dmabufDenyArgs = lib.concatMap (filter: [ "--dmabuf-deny" filter ]) vm.graphics.waylandFilter.dmabufDeny;
     in {
       binaryPath = nixlingWaylandFilterBinary;
-      env = lib.optionals vm.graphics.waylandFilter.debugLogging [
+      env = [
+        "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
+        "WAYLAND_DISPLAY=${waylandDisplay}"
+      ] ++ lib.optionals vm.graphics.waylandFilter.debugLogging [
         "WL_PROXY_DEBUG=1"
         "WL_PROXY_PREFIX=nixling-${vmName}-wlproxy"
       ] ++ lib.optionals vm.graphics.waylandFilter.byteLogging [
@@ -1077,7 +1094,10 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       };
     };
 
-  qemuMediaDag = name: _vm:
+  qemuMediaDag = name: vm:
+    let
+      emitWaylandProxy = cfg.site.waylandUser != null;
+    in
     {
       vm = name;
       nodes = [
@@ -1086,18 +1106,30 @@ use devices::virtio::vhost_user_backend::run_video_device;'
           role = "host-reconcile";
           readiness = [ (componentReady "host state, runtime directories, and bridges are reconciled") ];
         })
+      ] ++ lib.optional emitWaylandProxy (node name ({
+        id = "wayland-proxy";
+        role = "wayland-proxy";
+        readiness = [
+          (unixSocketListening "/run/nixling-wlproxy/${name}/wayland-0")
+        ];
+      } // waylandProxyRunner name vm))
+      ++ [
         (node name {
           id = "qemu-media";
           role = "qemu-media-runner";
           binaryPath = qemuMediaBinaryPath;
           argv = qemuMediaArgv name;
-          env = qemuMediaEnv;
+          env = qemuMediaEnv name;
           readiness = [ (unixSocketListening (qemuMediaQmpSocket name)) ];
         })
       ];
-      edges = [
-        (edge "host-reconcile" "qemu-media" "QEMU media starts only after host reconciliation prepares runtime directories and network state.")
-      ];
+      edges =
+        if emitWaylandProxy then [
+          (edge "host-reconcile" "wayland-proxy" "The Wayland filter proxy starts only after host reconciliation prepares runtime directories and socket ACLs.")
+          (edge "wayland-proxy" "qemu-media" "QEMU media connects to the per-VM Wayland filter proxy instead of the host compositor socket.")
+        ] else [
+          (edge "host-reconcile" "qemu-media" "QEMU media starts only after host reconciliation prepares runtime directories and network state.")
+        ];
       invariants = {
         perVmAuditPipeline = true;
         swtpmPreStartFlush = true;

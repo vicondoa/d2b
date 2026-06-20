@@ -701,6 +701,23 @@ let
       cgroupSubtree = "nixling.slice/${name}/host-reconcile";
     };
 
+    "${profileIdFor name "wayland-proxy"}" = mkProfile {
+      profileId = profileIdFor name "wayland-proxy";
+      role = "wayland-proxy";
+      principal = "nixling-${name}-wlproxy";
+      capabilities = [ ];
+      seccompPolicyRef = "w1-wayland-proxy";
+      writablePaths = [
+        (mkWritablePath "/run/nixling-wlproxy/${name}"
+          "Create the per-VM qemu-media Wayland filter listen socket.")
+      ];
+      bindMounts = [ ];
+      deviceBinds = [ ];
+      cgroupSubtree = "nixling.slice/${name}/wayland-proxy";
+      controllers = serviceControllers;
+      umask = 7;
+    };
+
     "${profileIdFor name "qemu-media"}" = mkProfile {
       profileId = profileIdFor name "qemu-media";
       role = "qemu-media-runner";
@@ -711,6 +728,7 @@ let
       readOnlyPaths = [ "/" ];
       writablePaths = [
         (mkWritablePath "/run/nixling/vms/${name}" "Create the QMP control socket without exposing media paths.")
+        (mkWritablePath "/run/nixling-wlproxy/${name}" "Connect to the per-VM Wayland filter proxy socket.")
         (mkWritablePath (stateDirOf name) "Write only qemu-media runner state under this VM's state directory.")
       ];
       deviceBinds = [ "/dev/kvm" ];

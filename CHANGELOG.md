@@ -65,8 +65,9 @@ deprecations ship one minor release before removal.
   fetch the published host binaries by hash without manual updates.
 - `nixling.vms.<vm>.qemuMedia.window.niriBorderColor` lets
   qemu-media host QEMU windows use a VM-specific niri border color.
-  The generated niri include now matches qemu-media windows by the
-  stable `nixling-<vm>-qemu-media` host window title.
+  qemu-media windows now route through the nixling Wayland filter proxy
+  so the generated niri include can match the VM-prefixed app-id
+  `nixling.<vm>.*`.
 - `qemuMedia` image-file sources can now be declared directly with an
   absolute `path` and `format = "raw"`; physical USB sources continue to
   use opaque refs plus `nixling usb enroll`.
@@ -123,7 +124,10 @@ deprecations ship one minor release before removal.
   `host_device` block driver instead of the regular-file-only `file`
   driver. qemu-media runners now pass explicit QEMU memory and vCPU
   sizing, defaulting to 4 GiB and 2 vCPUs instead of QEMU's tiny
-  built-in RAM default.
+  built-in RAM default. qemu-media guest RAM now uses a non-dumpable,
+  non-KSM memory backend by default, and `qemuMedia.security.lockMemory`
+  can fail closed with QEMU `mem-lock` when the host cannot keep guest RAM
+  out of swap.
 - Documentation: sanitized ADR 0032's ACA/Relay live-proof record so the
   architectural validation summary remains without publishing live sandbox,
   disk-image, command-output, or compositor-window identifiers.

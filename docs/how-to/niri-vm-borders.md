@@ -84,13 +84,14 @@ across rebuilds.
 
 ### qemu-media host-window rules
 
-Each enabled qemu-media VM gets a `window-rule` block that matches the
-stable host QEMU window title `nixling-<vm>-qemu-media`. This is a host
-window rule, not a guest Wayland app-id rule:
+Each enabled qemu-media VM routes the host QEMU window through the
+nixling Wayland filter proxy. The generated `window-rule` block matches
+the proxy-rewritten app-id prefix `nixling.<vm>.`, just like graphics VM
+windows:
 
 ```kdl
 window-rule {
-    match title=r#"^nixling-media-qemu-media$"#
+    match app-id=r#"^nixling\.media\."#
     border {
         on
         active-color "#800080"
@@ -145,17 +146,18 @@ Then update the `include` line in `config.kdl` accordingly.
    niri msg action reload-config
    ```
 
-3. Open a window in a graphics VM and inspect its app-id from the
+3. Open a window in a graphics VM, or a qemu-media host window, and inspect its app-id from the
    niri IPC:
 
    ```bash
    niri msg windows
    ```
 
-   The `app_id` field should start with `nixling.<vm>.`.  If it shows
-   the original app-id without the prefix, the VM's
+   The `app_id` field should start with `nixling.<vm>.`.  For graphics
+   VMs, if it shows the original app-id without the prefix, the VM's
    `crossDomainTrusted` may be false or the Wayland filter proxy may
-   not be running.
+   not be running. For qemu-media VMs, qemu-media itself should start
+   only after the per-VM Wayland proxy is ready.
 
 4. Confirm the border rule is active by switching focus to a VM
    window — the active border should appear in the configured color.

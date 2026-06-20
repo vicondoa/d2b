@@ -4,6 +4,13 @@ This runbook uses the neutral VM name `dark-live` and does not depend on
 any specific live image. Use it for either a raw image file or a
 physical USB block device.
 
+Running sensitive external media inside QEMU is convenient, but it is not
+equivalent to bare-metal boot. The host OS, compositor, and QEMU process
+can observe the session. `lockMemory` addresses host swap for guest RAM
+when the host can satisfy QEMU's mem-lock request; `dump=off` addresses
+QEMU/process core dumps. Host kernel crash dumps require separate host-level
+policy.
+
 ## 1. Declare the VM
 
 For a direct raw image file:
@@ -22,6 +29,10 @@ nixling.vms.dark-live = {
       vcpu = 2;
     };
 
+    security = {
+      lockMemory = true;
+    };
+
     source = {
       kind = "image-file";
       path = "/var/lib/nixling/images/dark-live.raw";
@@ -29,7 +40,7 @@ nixling.vms.dark-live = {
       readOnly = true;
     };
 
-    window.niriBorderColor = "#800080";
+    window.niriBorderColor = "#301934";
   };
 };
 ```
@@ -42,6 +53,8 @@ nixling.vms.dark-live.qemuMedia = {
     memoryMiB = 4096;
     vcpu = 2;
   };
+
+  security.lockMemory = true;
 
   source = {
     kind = "physical-usb";
@@ -89,9 +102,10 @@ nixling status dark-live
 
 The dry-run should show `host-reconcile → qemu-media`. After start,
 status should show the qemu-media runner, QMP readiness, source refs,
-source kind/format/read-only policy, and registry state. The niri border
-rule matches the host QEMU window title
-`nixling-dark-live-qemu-media`.
+source kind/format/read-only policy, and registry state. The host QEMU
+window is routed through the nixling Wayland filter proxy, so the niri
+border rule matches the proxy-rewritten app-id prefix
+`nixling.dark-live.`.
 
 ## 4. Hotplug enrolled media
 

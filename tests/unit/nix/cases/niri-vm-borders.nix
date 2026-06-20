@@ -115,11 +115,11 @@ in
     expected = true;
   };
   "niri-vm-borders/enabled-qemu-media-stable-title-match" = {
-    expr = lib.hasInfix ''match title=r#"^nixling-media-qemu-media$"#'' enabledKdl;
+    expr = lib.hasInfix ''match app-id=r#"^nixling\.media\."#'' enabledKdl;
     expected = true;
   };
   "niri-vm-borders/enabled-qemu-media-no-guest-app-id-rule" = {
-    expr = lib.hasInfix ''match app-id=r#"^nixling\.media\."#'' enabledKdl;
+    expr = lib.hasInfix ''match app-id=r#"^qemu$"#'' enabledKdl;
     expected = false;
   };
   "niri-vm-borders/enabled-crosvm-hide-rule" = {
@@ -136,7 +136,7 @@ in
   };
   "niri-vm-borders/qemu-media-color-override-verbatim" = {
     expr =
-      lib.hasInfix ''match title=r#"^nixling-media-qemu-media$"#'' qemuMediaColorKdl
+      lib.hasInfix ''match app-id=r#"^nixling\.media\."#'' qemuMediaColorKdl
       && lib.hasInfix ''active-color "#800080"'' qemuMediaColorKdl;
     expected = true;
   };

@@ -48,6 +48,24 @@ The runner presents boot media as a removable USB storage device on an
 EHCI controller, matching the USB-disk/removable shape recommended by
 Linux VM frontends for external live media.
 
+### Memory security
+
+`qemu-media` uses a QEMU memory backend by default so guest RAM is excluded
+from QEMU/host core dumps (`dump=off`) and Kernel Samepage Merging
+(`merge=off`). Operators can additionally fail closed if guest RAM cannot
+be locked into host memory:
+
+```nix
+nixling.vms.dark-live.qemuMedia.security = {
+  lockMemory = true;
+  excludeMemoryFromCoreDump = true;
+  disableMemoryMerge = true;
+};
+```
+
+`lockMemory = true` adds `-overcommit mem-lock=on`; QEMU refuses to start
+if the host cannot keep the configured guest RAM resident.
+
 ### Direct image file
 
 Direct image files are configured in Nix. They do not use enrollment.
@@ -127,8 +145,16 @@ paths.
 - Direct image-file paths are trusted bundle configuration. Public CLI status
   reports source kind/format/read-only policy without echoing those paths; the
   broker fail-closes on unsafe paths and non-raw formats.
-- Host window presentation for niri matches the stable title
-  `nixling-<vm>-qemu-media`; set
+- Running sensitive external media inside a VM is not equivalent to bare
+  metal. The host OS, compositor, and QEMU process can observe the session,
+  and host swap can retain guest memory. The default memory backend sets
+  `dump=off,merge=off` to avoid QEMU/process core dumps and KSM for guest
+  RAM; host kernel crash dumps require separate host-level policy. Use
+  `qemuMedia.security.lockMemory = true` when the host must fail closed
+  rather than risk swapping guest RAM.
+- Host window presentation for niri routes through the nixling Wayland
+  filter proxy and matches the proxy-rewritten app-id prefix
+  `nixling.<vm>.`; set
   `nixling.vms.<vm>.qemuMedia.window.niriBorderColor` for a fixed color.
 
 ## See also
