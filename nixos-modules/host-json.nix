@@ -163,7 +163,8 @@ let
   derivedIfNameList = map (row: row.derivedIfname) allIfNameMappings;
 
   runtimeProviders = lib.sortOn (provider: provider.provider.id)
-    (lib.attrValues nl.runtimeProviderCatalog);
+    (map (provider: builtins.removeAttrs provider [ "_hypervisorService" ])
+      (lib.attrValues nl.runtimeProviderCatalog));
 
   qemuMediaSourceId = vmName: slotName: source:
     if source.kind == "physical-usb"

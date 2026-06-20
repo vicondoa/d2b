@@ -49,6 +49,7 @@
         ref = "boot";
         format = "raw";
         readOnly = true;
+        usbSelector.byIdName = "usb-Example_Dark_Live_0001-0:0";
       };
 
       removableSlots.backup.source = {

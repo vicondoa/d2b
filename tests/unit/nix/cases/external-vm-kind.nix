@@ -414,9 +414,6 @@ in
           format = "iso";
           readOnly = true;
           registryScope = "root-only-runtime-state";
-          usbSelector = {
-            byIdName = "usb-Test_Tools_0001-0:0";
-          };
         }
         {
           vm = "media";
@@ -426,6 +423,9 @@ in
           format = "iso";
           readOnly = true;
           registryScope = "root-only-runtime-state";
+          usbSelector = {
+            byIdName = "usb-Test_Tools_0001-0:0";
+          };
         }
       ];
     };
