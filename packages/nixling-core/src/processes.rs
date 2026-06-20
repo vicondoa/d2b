@@ -136,7 +136,7 @@ pub enum ProcessRole {
     Audio,
     /// Cloud Hypervisor runner.
     CloudHypervisorRunner,
-    /// QEMU media VM runner emitted by local runtime-provider configurations.
+    /// QEMU media runner.
     QemuMediaRunner,
     /// vsock relay sidecar.
     VsockRelay,

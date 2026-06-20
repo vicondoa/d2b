@@ -392,6 +392,15 @@ pub enum TypedError {
         step: crate::usbip_state_machine::UsbipBusidStep,
         reason: String,
     },
+    /// The selected VM runtime does not implement a capability required by the
+    /// requested verb. Payload is limited to public VM/runtime/capability names;
+    /// no guest data, argv, paths, or registry identities are included.
+    RuntimeCapabilityUnsupported {
+        vm: String,
+        runtime_kind: String,
+        capability: String,
+        verb: String,
+    },
     /// Authenticated guest-control config read failed. The closed-enum `kind`
     /// is the ONLY payload — never a path, byte, or guest-supplied string — so
     /// the public envelope cannot leak guest content.
@@ -464,6 +473,7 @@ impl TypedError {
             Self::OtelHostBridgeReadinessTimeout { .. } => "otel-host-bridge-readiness-timeout",
             Self::NetRoutePreflightDegraded { .. } => "net-route-preflight-degraded",
             Self::UsbipStepFailed { .. } => "usbip-step-failed",
+            Self::RuntimeCapabilityUnsupported { .. } => "runtime-capability-unsupported",
             Self::GuestControlReadFailed { kind } => kind.wire_kind(),
             Self::GuestControlExecFailed { kind } => kind.wire_kind(),
             Self::DaemonBusy => "daemon-busy",
@@ -506,6 +516,7 @@ impl TypedError {
             // (64), otel-bridge (65), or net-route-degraded (66)
             // adjacent surfaces.
             Self::UsbipStepFailed { .. } => 67,
+            Self::RuntimeCapabilityUnsupported { .. } => 70,
             // Guest-control config read failures share one exit code; the
             // distinct `kind` slug carries the sub-class.
             Self::GuestControlReadFailed { .. } => 70,
@@ -604,6 +615,16 @@ impl TypedError {
                     "usbip per-busid state machine refused at step '{step}' for busid '{busid}': {reason}"
                 )
             }
+            Self::RuntimeCapabilityUnsupported {
+                vm,
+                runtime_kind,
+                capability,
+                verb,
+            } => {
+                format!(
+                    "vm '{vm}' uses runtime '{runtime_kind}', which does not support capability '{capability}' required by '{verb}'"
+                )
+            }
             Self::GuestControlReadFailed { kind } => kind.human_message().to_owned(),
             Self::GuestControlExecFailed { kind } => kind.human_message().to_owned(),
             Self::DaemonBusy => "the daemon is at its in-flight connection limit".to_owned(),
@@ -688,6 +709,15 @@ impl TypedError {
             Self::UsbipStepFailed { step, .. } => {
                 format!(
                     "the per-busid USBIP state machine refused at step '{step}'. The canonical bring-up order is `modprobe → lock → withhold → firewall → backend → bind → proxy`; the stop path reverses it. Inspect the daemon log for the typed `usbip-step-failed` record (carries busid + step + reason) and re-run the lifecycle verb that triggered the bring-up. If `modprobe` failed, confirm `usbip-host` is in the trusted-bundle kernel-module matrix and that `ModprobeIfAllowed` is permitted. If `lock` failed, another env already owns `/run/nixling/locks/usbip/<busid>` — stop the owner first. If `firewall` failed, re-render the trusted bundle so `UsbipBindFirewallRule` exists for this env/busid. See docs/reference/usbip-state-machine.md."
+                )
+            }
+            Self::RuntimeCapabilityUnsupported {
+                runtime_kind,
+                capability,
+                ..
+            } => {
+                format!(
+                    "use a VM/runtime that supports '{capability}', or use the qemu-media lifecycle/media verbs that are available for runtime '{runtime_kind}'"
                 )
             }
             Self::GuestControlReadFailed { kind } => kind.remediation().to_owned(),
@@ -816,6 +846,7 @@ impl TypedError {
             | Self::OtelHostBridgeReadinessTimeout { .. }
             | Self::NetRoutePreflightDegraded { .. }
             | Self::UsbipStepFailed { .. }
+            | Self::RuntimeCapabilityUnsupported { .. }
             | Self::GuestControlReadFailed { .. }
             | Self::GuestControlExecFailed { .. }
             | Self::DaemonBusy => "internalError",

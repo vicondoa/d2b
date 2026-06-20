@@ -1,6 +1,6 @@
 # nixling JSON manifest schema
 
-**Status:** current public manifest version is `manifestVersion = 5`.
+**Status:** current public manifest version is `manifestVersion = 6`.
 **Source of truth:** [`manifest-schema.json`](./manifest-schema.json)
 (JSON Schema Draft 2020-12). When this prose and the JSON Schema
 disagree, the JSON Schema wins.
@@ -22,7 +22,7 @@ inventory. Private bundle artifacts live beside it and are documented in
 
 ```jsonc
 {
-  "_manifest": { "manifestVersion": 5 },
+  "_manifest": { "manifestVersion": 6 },
   "_observability": {
     "enabled": true,
     "vmName": "sys-obs",
@@ -35,6 +35,26 @@ inventory. Private bundle artifacts live beside it and are documented in
 
   "<vm-name>": {
     "name": "work",
+    "runtime": {
+      "kind": "nixos",
+      "provider": {
+        "id": "local-cloud-hypervisor",
+        "type": "local",
+        "driver": "cloud-hypervisor"
+      },
+      "capabilities": {
+        "lifecycle": true,
+        "display": true,
+        "usbHotplug": true,
+        "guestControl": true,
+        "exec": true,
+        "configSync": true,
+        "ssh": true,
+        "storeSync": true,
+        "keys": true,
+        "inGuestObservability": true
+      }
+    },
     "graphics": false,
     "tpm": false,
     "usbipYubikey": false,
@@ -77,6 +97,7 @@ Fields are listed in `nixos-modules/manifest.nix` declaration order.
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `name` | string | yes | VM name; matches the enclosing top-level key. Pattern `^[a-z][a-z0-9-]*$` (enforced by `nixos-modules/assertions.nix`). |
+| `runtime` | object | yes | Runtime/provider metadata and provider support matrix. Shape: `{ kind, provider: { id, type, driver }, capabilities }`. `qemu-media` uses provider `local-qemu-media`/driver `qemu`; its supported capabilities are lifecycle/display/USB hotplug, while guest-control, exec, config-sync, SSH, store-sync, keys, and in-guest observability are unsupported. |
 | `graphics` | boolean | yes | Mirror of `nixling.vms.<name>.graphics.enable`. The CLI uses it to pick the launch path. |
 | `tpm` | boolean | yes | Mirror of `nixling.vms.<name>.tpm.enable`. |
 | `usbipYubikey` | boolean | yes | Mirror of `nixling.vms.<name>.usbip.yubikey`. `nixling usb attach\|detach\|probe` refuses to run when false. |
@@ -91,11 +112,11 @@ Fields are listed in `nixos-modules/manifest.nix` declaration order.
 | `netVm` | string \| null | yes | For workload VMs: name of the net VM serving this VM's env. Null for net VMs and legacy VMs. |
 | `usbipdHostIp` | string \| null | yes | Host IP of the per-env usbipd proxy, passed to `usbip attach -r` via the broker. Null for net VMs and legacy. |
 | `stateDir` | string | yes | Per-VM state dir. Currently `/var/lib/nixling/vms/<name>`. |
-| `apiSocket` | string | yes | Runner API socket path (`<stateDir>/<name>.sock`). |
-| `gpuSocket` | string | yes | GPU sidecar control socket (`<stateDir>/<name>-gpu.sock`). Only meaningful when `graphics = true`. |
-| `tpmSocket` | string | yes | swtpm vTPM socket (`/run/nixling/vms/<name>/tpm.sock`). Only meaningful when `tpm = true`. |
-| `audioStateFile` | string | yes | Live audio-grant state file (`<stateDir>/state/audio-state.json`): `{ "mic": "on"\|"off", "speaker": "on"\|"off" }`. |
-| `audioService` | string | yes | Host-side audio sidecar identifier (`nixling-<name>-snd.service`). Retained for manifest backward-compat. |
+| `apiSocket` | string \| null | yes | Cloud Hypervisor runner API socket path (`<stateDir>/<name>.sock`). Null for providers without a CH API socket. |
+| `gpuSocket` | string \| null | yes | GPU sidecar control socket (`<stateDir>/<name>-gpu.sock`). Null for providers without the nixling GPU sidecar socket. |
+| `tpmSocket` | string \| null | yes | swtpm vTPM socket (`/run/nixling/vms/<name>/tpm.sock`). Null for providers without nixling-managed TPM state. |
+| `audioStateFile` | string \| null | yes | Live audio-grant state file (`<stateDir>/state/audio-state.json`). Null for providers without the nixling audio sidecar. |
+| `audioService` | string \| null | yes | Host-side audio sidecar identifier (`nixling-<name>-snd.service`). Null for providers without the nixling audio sidecar. |
 | `observability` | object | yes | Per-VM observability transport metadata (`enabled`, base `vsockCid`/`vsockHostSocket`, guest `agentSocket`). See [Per-VM observability block](#per-vm-observability-block). |
 | `staticIp` | string \| null | yes | The VM's static LAN IP. Derived for env-attached VMs; null when no IP source applies. |
 | `sshUser` | string \| null | yes | Username for `nixling`-driven SSH. Mirrors `nixling.vms.<name>.ssh.user`. Null for headless net VMs. |
@@ -122,6 +143,10 @@ Version history:
   Cloud Hypervisor vsock device shared by observability and guest
   control, not only the observability relay. These two changes each
   landed as a `4` on separate branches and are unified at `5`.
+- v6: adds per-VM runtime/provider metadata and provider capability
+  summaries. Provider-specific socket/vsock fields are now nullable so
+  `qemu-media` entries do not fabricate Cloud Hypervisor, guest-control,
+  SSH, store-sync, key, or in-guest-observability artifacts.
 
 ### `_observability`
 
@@ -145,9 +170,9 @@ about the vsock path without knowing SigNoz internals.
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `enabled` | boolean | yes | Whether telemetry collection is enabled for this VM. |
-| `vsockCid` | unsigned integer | yes | Deterministic base Cloud Hypervisor vsock CID for this VM, shared by observability and guest control. Env-backed VMs use `100 + envIndex * 1000 + slot` (slot 1 is reserved for the env net VM; workload VMs use their `nixling.vms.<vm>.index`). |
-| `vsockHostSocket` | string | yes | Host-side Cloud Hypervisor vsock socket for this VM. |
-| `agentSocket` | string | yes | Guest-local OTLP socket path used by the guest collector. |
+| `vsockCid` | unsigned integer \| null | yes | Deterministic base Cloud Hypervisor vsock CID for nixos/Cloud Hypervisor VMs. Null for providers without nixling guest-control or in-guest observability. |
+| `vsockHostSocket` | string \| null | yes | Host-side Cloud Hypervisor vsock socket for this VM. Null for providers without nixling guest-control or in-guest observability. |
+| `agentSocket` | string \| null | yes | Guest-local OTLP socket path used by the guest collector. Null for providers without in-guest observability. |
 
 The per-VM block is emitted for every VM so clients do not need to infer
 transport paths from naming conventions.

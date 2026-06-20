@@ -38,6 +38,7 @@
 use std::sync::Arc;
 
 use nixling_core::bundle_resolver::BundleResolver;
+use nixling_core::runtime::RuntimeKind;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -255,13 +256,10 @@ pub fn build_autostart_plan(resolver: &BundleResolver) -> AutostartPlan {
 }
 
 /// Today's heuristic: every VM the manifest knows about is an
-/// autostart candidate unless it is a graphics VM. Graphics VMs are
-/// barred from autostart by `nixos-modules/assertions.nix` — they have
-/// no Wayland session at boot so the runner would loop. In the daemon-only
-/// bundle, each VM gains a first-class `autostart: bool` field and this
-/// heuristic becomes `vm.autostart`.
+/// autostart candidate unless it is a graphics VM or a manual-only
+/// qemu-media runtime.
 fn vm_is_autostart_eligible(vm: &nixling_core::manifest_v04::VmEntry) -> bool {
-    !vm.graphics
+    !vm.graphics && vm.runtime.kind != RuntimeKind::QemuMedia
 }
 
 /// Drive a built plan. Net VMs are started first (up to
@@ -523,6 +521,53 @@ mod tests {
 
     fn plan_from(entries: Vec<VmAutostartEntry>) -> AutostartPlan {
         AutostartPlan { vms: entries }
+    }
+
+    fn manifest_vm_with_runtime(
+        runtime: nixling_core::runtime::RuntimeMetadata,
+    ) -> nixling_core::manifest_v04::VmEntry {
+        nixling_core::manifest_v04::VmEntry {
+            api_socket: None,
+            audio: false,
+            audio_service: None,
+            audio_state_file: None,
+            bridge: None,
+            env: Some("work".to_owned()),
+            mtu: None,
+            mss_clamp: None,
+            lan: None,
+            gpu_socket: None,
+            graphics: false,
+            is_net_vm: false,
+            name: "installer".to_owned(),
+            net_vm: None,
+            observability: nixling_core::manifest_v04::VmObservability {
+                agent_socket: None,
+                enabled: false,
+                vsock_cid: None,
+                vsock_host_socket: None,
+            },
+            runtime,
+            ssh_user: None,
+            state_dir: "/var/lib/nixling/vms/installer".to_owned(),
+            static_ip: None,
+            tap: "nl-installer".to_owned(),
+            tpm: false,
+            tpm_socket: None,
+            usbip_yubikey: false,
+            usbipd_host_ip: None,
+        }
+    }
+
+    #[test]
+    fn qemu_media_runtime_is_manual_only_for_autostart() {
+        let qemu_vm =
+            manifest_vm_with_runtime(nixling_core::runtime::RuntimeMetadata::local_qemu_media());
+        let nixos_vm =
+            manifest_vm_with_runtime(nixling_core::runtime::RuntimeMetadata::local_nixos());
+
+        assert!(!vm_is_autostart_eligible(&qemu_vm));
+        assert!(vm_is_autostart_eligible(&nixos_vm));
     }
 
     /// build_autostart_plan: when an env has a sys-net VM plus

@@ -49,7 +49,7 @@ let
   cfg = config.nixling;
   # nixling-owned access helpers (see lib.nix).
   nl = import ./lib.nix { inherit lib pkgs; };
-  enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
+  normalNixosVms = nl.normalNixosVms cfg.vms;
 
   # spectrum-ch package (cloud-hypervisor v52 with virtio-gpu patches).
   # Provides ch-remote v52 used by the vfsd-watchdog direct-launch path.
@@ -717,7 +717,7 @@ let
 
   # Map VM name → its generation derivation outPath. Used by the
   # activation script + the systemd template.
-  vmGenPaths = lib.mapAttrs (name: _: vmGenerationOf name) enabledVms;
+  vmGenPaths = lib.mapAttrs (name: _: vmGenerationOf name) normalNixosVms;
 
 in
 
@@ -909,7 +909,7 @@ in
             fi
           fi
         '')
-        enabledVms)}
+        normalNixosVms)}
     '';
   };
 }

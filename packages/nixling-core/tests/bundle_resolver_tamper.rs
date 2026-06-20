@@ -168,7 +168,7 @@ fn minimal_processes_json() -> Vec<u8> {
 fn minimal_vms_json() -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "_manifest": {
-            "manifestVersion": 5
+            "manifestVersion": 6
         },
         "_observability": {
             "enabled": false,

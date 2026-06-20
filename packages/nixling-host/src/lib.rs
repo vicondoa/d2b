@@ -39,6 +39,9 @@ pub mod runner_shape;
 // Pure CH argv generator. Consumed by nixlingd via the SpawnRunner
 // broker wire.
 pub mod ch_argv;
+// Pure QEMU media argv scaffold. It emits a paused QMP-ready baseline for
+// broker-owned media fd passing without exposing media paths.
+pub mod qemu_media_argv;
 // Pure virtiofsd argv generator (one instance per `microvm.shares` row;
 // consumed by nixlingd via SpawnRunner).
 pub mod virtiofsd_argv;
@@ -83,6 +86,9 @@ pub mod ownership_matrix;
 // the per-VM `microvm-tap-interfaces@` + `microvm-setup@` systemd
 // templates.
 pub mod host_prep_dag;
+// Pure qemu-media physical USB identity/preflight helpers. Live sysfs reads,
+// registry writes, udev reloads, and fd opens stay in the privileged broker.
+pub mod media;
 
 // Canonical Rust-side runner argv regenerator.
 // Documents the migration surface from the Nix-side argv

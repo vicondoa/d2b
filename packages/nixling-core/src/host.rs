@@ -5,6 +5,8 @@ use schemars::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::runtime::RuntimeMetadata;
+
 /// Linux interface name constrained to IFNAMSIZ-1 bytes and nixling's safe alphabet.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
@@ -115,6 +117,18 @@ pub struct HostJson {
     pub kernel_modules: Vec<KernelModulesEntry>,
     /// Broker-opened file descriptor ownership table.
     pub fd_ownership: Vec<FdOwnershipEntry>,
+    /// Runtime/provider catalog advertised by this host bundle.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_providers: Vec<RuntimeMetadata>,
+    /// Per-VM runtime/provider rows plus provider-neutral host topology.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vm_runtimes: Vec<VmRuntimeRow>,
+    /// QEMU media runtime contract. Physical USB rows carry only opaque media
+    /// refs and root-owned registry/rule locations; direct image-file rows may
+    /// carry operator-authored absolute image paths from Nix config. Raw USB
+    /// identities are never part of the Nix-store-backed bundle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qemu_media: Option<HostQemuMedia>,
     /// VMM/device capability matrix anchored to Cloud Hypervisor.
     pub cloud_hypervisor_capabilities: Vec<CloudHypervisorCapability>,
     /// Hash-derived IfName mapping exposure. One row per managed
@@ -136,85 +150,76 @@ pub struct HostJson {
     /// implicit "no managed firewall detected" Coexist default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub firewall_coexistence_policy: Option<crate::host_w3::FirewallCoexistencePolicy>,
-    /// Optional runtime-provider catalogue emitted by newer host configurations.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub runtime_providers: Vec<RuntimeProvider>,
-    /// Optional per-VM runtime-provider assignment emitted by newer host
-    /// configurations.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub vm_runtimes: Vec<VmRuntime>,
-    /// Optional host-side QEMU/media source registry emitted by newer host
-    /// configurations. Current core/broker paths do not consume this field, but
-    /// the CLI must parse host.json forward-compatibly when the host already
-    /// emits it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub qemu_media: Option<QemuMediaConfig>,
 }
 
+/// Per-VM runtime row emitted in host.json for daemon lifecycle/status joins.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct QemuMediaConfig {
-    pub registry_dir: String,
-    pub reload_behavior: String,
-    pub runtime_rules_path: String,
-    pub sources: Vec<QemuMediaSource>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct QemuMediaSource {
+pub struct VmRuntimeRow {
     pub vm: String,
-    pub slot: String,
-    pub source_kind: String,
-    pub media_ref: String,
-    pub format: String,
-    pub read_only: bool,
-    pub registry_scope: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RuntimeProvider {
-    pub kind: String,
-    pub provider: RuntimeProviderIdentity,
-    pub capabilities: RuntimeProviderCapabilities,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RuntimeProviderIdentity {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub provider_type: String,
-    pub driver: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RuntimeProviderCapabilities {
-    pub lifecycle: bool,
-    pub store_sync: bool,
-    pub guest_control: bool,
-    pub exec: bool,
-    pub config_sync: bool,
-    pub display: bool,
-    pub usb_hotplug: bool,
-    pub in_guest_observability: bool,
-    pub keys: bool,
-    pub ssh: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct VmRuntime {
-    pub vm: String,
+    pub runtime: RuntimeMetadata,
     pub env: Option<String>,
-    pub runtime: RuntimeProvider,
     pub state_dir: String,
-    pub static_ip: Option<String>,
+    pub tap: String,
     pub bridge: Option<String>,
-    pub tap: Option<String>,
+    pub static_ip: Option<String>,
     pub net_vm: Option<String>,
+}
+
+/// Host-side QEMU media registry/rule contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostQemuMedia {
+    /// Root-only registry directory outside the Nix store.
+    pub registry_dir: String,
+    /// Runtime udev rule path. The broker writes this as a root-only artifact.
+    pub runtime_rules_path: String,
+    /// Closed-text reload description; no shell fragments or raw device ids.
+    pub reload_behavior: String,
+    /// Declared opaque media references.
+    pub sources: Vec<QemuMediaSourceIntent>,
+}
+
+/// Opaque source intent for one QEMU media slot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaSourceIntent {
+    pub vm: String,
+    /// Opaque physical USB ref, or a generated stable source id for direct
+    /// image-file rows that omit `ref` in Nix config.
+    pub media_ref: String,
+    pub slot: String,
+    pub source_kind: QemuMediaSourceKind,
+    pub format: QemuMediaFormat,
+    pub read_only: bool,
+    pub registry_scope: QemuMediaRegistryScope,
+    /// Direct image-file path from operator-authored Nix config. Present only
+    /// when `source_kind = image-file`; physical USB identity stays in the
+    /// root-only runtime registry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum QemuMediaSourceKind {
+    PhysicalUsb,
+    ImageFile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum QemuMediaFormat {
+    Raw,
+    Qcow2,
+    Iso,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum QemuMediaRegistryScope {
+    RootOnlyRuntimeState,
+    DirectConfigPath,
 }
 
 /// Hash-derived IfName mapping row exposed in `host.json`. The broker's
@@ -599,8 +604,14 @@ mod tests {
         let qemu = parsed.qemu_media.expect("qemuMedia present");
         assert_eq!(qemu.registry_dir, "/var/lib/nixling/media-registry");
         assert_eq!(qemu.sources[0].vm, "dark-live");
-        assert_eq!(parsed.runtime_providers[0].provider.driver, "qemu");
-        assert_eq!(parsed.vm_runtimes[0].runtime.kind, "qemu-media");
+        assert!(matches!(
+            parsed.runtime_providers[0].provider.driver,
+            crate::runtime::RuntimeProviderDriver::Qemu
+        ));
+        assert!(matches!(
+            parsed.vm_runtimes[0].runtime.kind,
+            crate::runtime::RuntimeKind::QemuMedia
+        ));
     }
 
     #[test]

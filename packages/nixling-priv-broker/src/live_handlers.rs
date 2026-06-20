@@ -1547,6 +1547,11 @@ pub(crate) fn policy_ref_device_classes(
         // stabilization choice is to install permissive BPF so Seccomp:2
         // remains visible to the doctor probe without breaking CH spawn.
         "w1-cloud-hypervisor-runner" => Some(&[]),
+        // qemu-media is fd-backed: no media paths, no tun/vhost-net device
+        // binds, and any KVM access is scoped by the role-device claim + ACL/fd
+        // handoff. QEMU's KVM ioctl surface is too broad for the current small
+        // matrix, so install permissive BPF while keeping Seccomp:2 visible.
+        "w1-qemu-media" => Some(&[]),
         // virtiofsd accesses /dev/fuse via read/write; FUSE_NO_IOCTL
         // sentinel → permissive BPF (FUSE mount handshake needs ioctls).
         "w1-virtiofsd" => Some(&[DeviceClass::Fuse]),
@@ -1625,6 +1630,93 @@ fn load_runner_seccomp(
         }
         None => Ok(None),
     }
+}
+
+fn is_qemu_media_runner(plan: &SpawnRunnerPlan) -> bool {
+    plan.seccomp_policy_ref.as_deref() == Some("w1-qemu-media")
+        || plan
+            .argv
+            .first()
+            .map(|arg0| arg0.starts_with("nixling-qemu-media@"))
+            .unwrap_or(false)
+}
+
+fn validate_qemu_media_runner_hardening(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
+    if !is_qemu_media_runner(plan) {
+        return Ok(());
+    }
+
+    if plan.seccomp_policy_ref.as_deref() != Some("w1-qemu-media") {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: "qemu-media runner must declare seccompPolicyRef \"w1-qemu-media\"".to_owned(),
+        });
+    }
+    if !plan.capabilities.is_empty() {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: format!(
+                "qemu-media runner must have empty capabilities; got {:?}",
+                plan.capabilities
+            ),
+        });
+    }
+    const FORBIDDEN_CAPS: &[&str] = &[
+        "CAP_SYS_ADMIN",
+        "CAP_SYS_RAWIO",
+        "CAP_DAC_OVERRIDE",
+        "CAP_NET_ADMIN",
+    ];
+    if let Some(cap) = plan
+        .capabilities
+        .iter()
+        .find(|cap| FORBIDDEN_CAPS.contains(&cap.as_str()))
+    {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: format!("qemu-media runner forbids {cap}"),
+        });
+    }
+    if !plan.namespaces.mount || !plan.namespaces.pid {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: format!(
+                "qemu-media runner requires mount and pid namespaces; got {:?}",
+                plan.namespaces
+            ),
+        });
+    }
+    if !plan.mount_policy.nix_store_read_only
+        || !plan
+            .mount_policy
+            .read_only_paths
+            .iter()
+            .any(|path| path == "/")
+    {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: "qemu-media runner requires read-only root and read-only /nix/store".to_owned(),
+        });
+    }
+    if !plan.mount_policy.hide_device_nodes_by_default {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: "qemu-media runner must hide device nodes by default".to_owned(),
+        });
+    }
+    if plan.mount_policy.device_binds != ["/dev/kvm"] {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: format!(
+                "qemu-media runner permits exactly /dev/kvm by path; got {:?}",
+                plan.mount_policy.device_binds
+            ),
+        });
+    }
+    if plan.mount_policy.bind_mounts.iter().any(|bm| {
+        bm.src.starts_with("/var/lib/nixling/media") || bm.dst.starts_with("/var/lib/nixling/media")
+    }) {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail:
+                "qemu-media runner must receive media through inherited/pre-opened fds, not media path bind mounts"
+                    .to_owned(),
+        });
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2145,6 +2237,47 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
                     .map_err(|detail| LiveHandlerError::SpawnFailed {
                         detail: format!(
                             "revoke audio socket ACL for wayland-proxy uid {}: {detail}",
+                            plan.uid
+                        ),
+                    })?;
+            }
+        }
+    }
+    if plan.seccomp_policy_ref.as_deref() == Some("w1-qemu-media") {
+        // qemu-media uses QEMU's GTK/Wayland display path. Grant only the
+        // compositor socket plus directory traversal; keep audio sockets denied.
+        let runtime_dir = env_value(plan, "XDG_RUNTIME_DIR");
+        if let Some(runtime_dir) = runtime_dir {
+            let runtime = Path::new(runtime_dir);
+            let wayland_display = env_value(plan, "WAYLAND_DISPLAY").unwrap_or("wayland-0");
+            setfacl_fd_safe(
+                runtime,
+                &format!("u:{}:rx", plan.uid),
+                AclPathKind::Directory,
+            )
+            .map_err(|detail| LiveHandlerError::SpawnFailed {
+                detail: format!(
+                    "refresh session runtime ACL for qemu-media uid {}: {detail}",
+                    plan.uid
+                ),
+            })?;
+            setfacl_fd_safe(
+                &runtime.join(wayland_display),
+                &format!("u:{}:rwx", plan.uid),
+                AclPathKind::Socket,
+            )
+            .map_err(|detail| LiveHandlerError::SpawnFailed {
+                detail: format!(
+                    "refresh host compositor socket ACL for qemu-media uid {}: {detail}",
+                    plan.uid
+                ),
+            })?;
+            for socket in ["pipewire-0", "pulse/native"] {
+                let path = runtime.join(socket);
+                setfacl_fd_safe(&path, &format!("u:{}:---", plan.uid), AclPathKind::Socket)
+                    .map_err(|detail| LiveHandlerError::SpawnFailed {
+                        detail: format!(
+                            "revoke audio socket ACL for qemu-media uid {}: {detail}",
                             plan.uid
                         ),
                     })?;
@@ -2686,6 +2819,7 @@ fn refresh_guest_control_fs_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandle
 /// response frame.
 pub fn live_spawn_runner(
     plan_input: &SpawnRunnerPlanInput,
+    mut pre_opened_device_fds: Vec<std::os::fd::OwnedFd>,
 ) -> Result<SpawnRunnerResult, LiveHandlerError> {
     let plan = preflight(plan_input).map_err(LiveHandlerError::SpawnPreflight)?;
 
@@ -2704,6 +2838,7 @@ pub fn live_spawn_runner(
             });
         }
     }
+    validate_qemu_media_runner_hardening(&plan)?;
 
     let (binary, argv, env) =
         build_cstring_vectors(&plan).map_err(LiveHandlerError::SpawnPreflight)?;
@@ -2735,8 +2870,7 @@ pub fn live_spawn_runner(
     // sys layer dup2's it to RENDER_NODE_INHERITED_FD (10) in the child
     // closure before execve. The crosvm argv carries
     // --gpu-device-node /proc/self/fd/10 as the render node path.
-    let pre_opened_device_fds: Vec<std::os::fd::OwnedFd> = if plan.seccomp_policy_ref.as_deref()
-        == Some("w1-gpu-render-node")
+    if plan.seccomp_policy_ref.as_deref() == Some("w1-gpu-render-node")
         && plan.user_namespace.is_some()
     {
         let render_fd = crate::ops::device::open_device_fd(
@@ -2746,10 +2880,8 @@ pub fn live_spawn_runner(
         .map_err(|e| LiveHandlerError::SpawnFailed {
             detail: format!("pre-open /dev/dri/renderD128 for gpu-render-node: {e}"),
         })?;
-        vec![render_fd]
-    } else {
-        vec![]
-    };
+        pre_opened_device_fds.push(render_fd);
+    }
 
     let isolation = crate::sys::pidfd_sys::RunnerIsolationSpec {
         capabilities: plan.capabilities.clone(),
@@ -3635,7 +3767,7 @@ mod tests {
             user_namespace: None,
             umask: None,
         };
-        let err = live_spawn_runner(&plan).unwrap_err();
+        let err = live_spawn_runner(&plan, Vec::new()).unwrap_err();
         assert!(matches!(err, LiveHandlerError::SpawnPreflight(_)));
     }
 
@@ -3655,6 +3787,99 @@ mod tests {
             user_namespace: None,
             umask: None,
         }
+    }
+
+    fn hardened_qemu_media_plan() -> SpawnRunnerPlan {
+        let mut plan =
+            test_spawn_plan_with_argv(vec!["nixling-qemu-media@media".to_owned()], "w1-qemu-media");
+        plan.namespaces = NamespaceSet {
+            mount: true,
+            pid: true,
+            net: false,
+            ipc: true,
+            uts: false,
+            user: false,
+        };
+        plan.mount_policy = MountPolicy {
+            read_only_paths: vec!["/".to_owned()],
+            writable_paths: vec![
+                WritablePath {
+                    path: "/run/nixling/vms/media".to_owned(),
+                    purpose: "QMP socket".to_owned(),
+                },
+                WritablePath {
+                    path: "/var/lib/nixling/vms/media".to_owned(),
+                    purpose: "qemu-media state".to_owned(),
+                },
+            ],
+            nix_store_read_only: true,
+            hide_device_nodes_by_default: true,
+            device_binds: vec!["/dev/kvm".to_owned()],
+            bind_mounts: vec![],
+        };
+        plan
+    }
+
+    #[test]
+    fn qemu_media_runner_hardening_accepts_fd_backed_profile() {
+        let plan = hardened_qemu_media_plan();
+
+        validate_qemu_media_runner_hardening(&plan)
+            .expect("hardened qemu-media fd-backed profile should pass");
+    }
+
+    #[test]
+    fn qemu_media_runner_hardening_rejects_forbidden_caps_and_devices() {
+        let mut cap_plan = hardened_qemu_media_plan();
+        cap_plan.capabilities = vec!["CAP_SYS_ADMIN".to_owned()];
+        let cap_err = validate_qemu_media_runner_hardening(&cap_plan).unwrap_err();
+        assert!(cap_err.to_string().contains("empty capabilities"));
+
+        let mut missing_kvm_plan = hardened_qemu_media_plan();
+        missing_kvm_plan.mount_policy.device_binds.clear();
+        let missing_kvm_err = validate_qemu_media_runner_hardening(&missing_kvm_plan).unwrap_err();
+        assert!(missing_kvm_err.to_string().contains("exactly /dev/kvm"));
+
+        let mut vhost_plan = hardened_qemu_media_plan();
+        vhost_plan
+            .mount_policy
+            .device_binds
+            .push("/dev/vhost-net".to_owned());
+        let vhost_err = validate_qemu_media_runner_hardening(&vhost_plan).unwrap_err();
+        assert!(vhost_err.to_string().contains("exactly /dev/kvm"));
+
+        let mut media_bind_plan = hardened_qemu_media_plan();
+        media_bind_plan
+            .mount_policy
+            .bind_mounts
+            .push(nixling_core::minijail_profile::BindMount {
+                src: "/var/lib/nixling/media/install.iso".to_owned(),
+                dst: "/media/install.iso".to_owned(),
+            });
+        let media_err = validate_qemu_media_runner_hardening(&media_bind_plan).unwrap_err();
+        assert!(media_err.to_string().contains("inherited/pre-opened fds"));
+    }
+
+    #[test]
+    fn qemu_media_runner_hardening_rejects_missing_sandbox_contract() {
+        let mut no_seccomp = hardened_qemu_media_plan();
+        no_seccomp.seccomp_policy_ref = None;
+        let seccomp_err = validate_qemu_media_runner_hardening(&no_seccomp).unwrap_err();
+        assert!(seccomp_err.to_string().contains("seccompPolicyRef"));
+
+        let mut no_pid = hardened_qemu_media_plan();
+        no_pid.namespaces.pid = false;
+        let namespace_err = validate_qemu_media_runner_hardening(&no_pid).unwrap_err();
+        assert!(
+            namespace_err
+                .to_string()
+                .contains("mount and pid namespaces")
+        );
+
+        let mut no_readonly_root = hardened_qemu_media_plan();
+        no_readonly_root.mount_policy.read_only_paths.clear();
+        let readonly_err = validate_qemu_media_runner_hardening(&no_readonly_root).unwrap_err();
+        assert!(readonly_err.to_string().contains("read-only root"));
     }
 
     #[test]
@@ -4125,7 +4350,7 @@ mod tests {
             umask: None,
         };
 
-        let outcome = live_spawn_runner(&plan).expect("spawn privileged test child");
+        let outcome = live_spawn_runner(&plan, Vec::new()).expect("spawn privileged test child");
         let wait_status = nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(outcome.pid), None)
             .expect("wait for test child");
         assert!(matches!(

@@ -57,7 +57,7 @@ fn world_readable_negative_fixture_rejected() {
 #[test]
 fn world_readable_exempts_manifest_and_observability_blocks() {
     let manifest = json!({
-        "_manifest": { "manifestVersion": 5, "anythingInHere": "is-fine" },
+        "_manifest": { "manifestVersion": 6, "anythingInHere": "is-fine" },
         "_observability": { "enabled": false, "obsVsockCid": 1000 }
     });
     assert!(world_readable_field_leaks(&manifest).is_empty());

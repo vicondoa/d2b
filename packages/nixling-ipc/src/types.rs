@@ -102,6 +102,62 @@ opaque_id! {
     BundleClosureRef
 }
 
+opaque_id! {
+    /// Opaque qemu-media reference declared in public config. The broker
+    /// resolves it against the trusted bundle and root-only runtime registry;
+    /// callers never pass by-id paths, serials, block paths, or image paths.
+    MediaRef
+}
+
+impl MediaRef {
+    pub fn validate_value(value: &str) -> Result<(), String> {
+        if value.is_empty() {
+            return Err("media ref must not be empty".to_owned());
+        }
+        if value.len() > 63 {
+            return Err("media ref must be at most 63 bytes".to_owned());
+        }
+        let mut chars = value.chars();
+        let first = chars
+            .next()
+            .ok_or_else(|| "media ref must not be empty".to_owned())?;
+        if !first.is_ascii_lowercase() {
+            return Err("media ref must start with a lowercase ASCII letter".to_owned());
+        }
+        if !std::iter::once(first)
+            .chain(chars)
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+        {
+            return Err(
+                "media ref may contain only lowercase ASCII letters, digits, and '-'".to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+pub fn validate_usb_bus_id(value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err("USB busid must not be empty".to_owned());
+    }
+    if value.len() > 64 {
+        return Err("USB busid must be at most 64 bytes".to_owned());
+    }
+    if value.starts_with('-') || value.ends_with('-') || value.ends_with('.') {
+        return Err("USB busid has invalid edge punctuation".to_owned());
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_digit() || ch == '-' || ch == '.')
+    {
+        return Err("USB busid may contain only digits, '-' and '.'".to_owned());
+    }
+    if !value.contains('-') {
+        return Err("USB busid must include a bus-port separator '-'".to_owned());
+    }
+    Ok(())
+}
+
 /// Path classifier for [`PrepareStateDir`] / [`PrepareRuntimeDir`].
 /// The broker derives the concrete path from the bundle anchored by
 /// `vm_id` + `path_class`; the daemon never passes a raw path.
@@ -138,5 +194,13 @@ mod tests {
             serde_json::to_string(&PathClass::Runtime).expect("serialize"),
             "\"runtime\""
         );
+    }
+
+    #[test]
+    fn validates_media_refs_and_usb_busids() {
+        assert!(MediaRef::validate_value("installer-usb").is_ok());
+        assert!(MediaRef::validate_value("/dev/disk/by-id/secret").is_err());
+        assert!(validate_usb_bus_id("1-2.3").is_ok());
+        assert!(validate_usb_bus_id("/dev/sda").is_err());
     }
 }

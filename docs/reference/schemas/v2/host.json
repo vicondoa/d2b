@@ -97,10 +97,10 @@
       ]
     },
     "qemuMedia": {
-      "description": "Optional host-side QEMU/media source registry emitted by newer host configurations. Current core/broker paths do not consume this field, but the CLI must parse host.json forward-compatibly when the host already emits it.",
+      "description": "QEMU media runtime contract. Physical USB rows carry only opaque media refs and root-owned registry/rule locations; direct image-file rows may carry operator-authored absolute image paths from Nix config. Raw USB identities are never part of the Nix-store-backed bundle.",
       "anyOf": [
         {
-          "$ref": "#/definitions/QemuMediaConfig"
+          "$ref": "#/definitions/HostQemuMedia"
         },
         {
           "type": "null"
@@ -108,10 +108,10 @@
       ]
     },
     "runtimeProviders": {
-      "description": "Optional runtime-provider catalogue emitted by newer host configurations.",
+      "description": "Runtime/provider catalog advertised by this host bundle.",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/RuntimeProvider"
+        "$ref": "#/definitions/RuntimeMetadata"
       }
     },
     "schemaVersion": {
@@ -127,10 +127,10 @@
       ]
     },
     "vmRuntimes": {
-      "description": "Optional per-VM runtime-provider assignment emitted by newer host configurations.",
+      "description": "Per-VM runtime/provider rows plus provider-neutral host topology.",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/VmRuntime"
+        "$ref": "#/definitions/VmRuntimeRow"
       }
     }
   },
@@ -361,6 +361,38 @@
               "$ref": "#/definitions/ChNetHandoffMode"
             }
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostQemuMedia": {
+      "description": "Host-side QEMU media registry/rule contract.",
+      "type": "object",
+      "required": [
+        "registryDir",
+        "reloadBehavior",
+        "runtimeRulesPath",
+        "sources"
+      ],
+      "properties": {
+        "registryDir": {
+          "description": "Root-only registry directory outside the Nix store.",
+          "type": "string"
+        },
+        "reloadBehavior": {
+          "description": "Closed-text reload description; no shell fragments or raw device ids.",
+          "type": "string"
+        },
+        "runtimeRulesPath": {
+          "description": "Runtime udev rule path. The broker writes this as a root-only artifact.",
+          "type": "string"
+        },
+        "sources": {
+          "description": "Declared opaque media references.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/QemuMediaSourceIntent"
+          }
         }
       },
       "additionalProperties": false
@@ -747,34 +779,23 @@
       },
       "additionalProperties": false
     },
-    "QemuMediaConfig": {
-      "type": "object",
-      "required": [
-        "registryDir",
-        "reloadBehavior",
-        "runtimeRulesPath",
-        "sources"
-      ],
-      "properties": {
-        "registryDir": {
-          "type": "string"
-        },
-        "reloadBehavior": {
-          "type": "string"
-        },
-        "runtimeRulesPath": {
-          "type": "string"
-        },
-        "sources": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/QemuMediaSource"
-          }
-        }
-      },
-      "additionalProperties": false
+    "QemuMediaFormat": {
+      "type": "string",
+      "enum": [
+        "raw",
+        "qcow2",
+        "iso"
+      ]
     },
-    "QemuMediaSource": {
+    "QemuMediaRegistryScope": {
+      "type": "string",
+      "enum": [
+        "root-only-runtime-state",
+        "direct-config-path"
+      ]
+    },
+    "QemuMediaSourceIntent": {
+      "description": "Opaque source intent for one QEMU media slot.",
       "type": "object",
       "required": [
         "format",
@@ -787,22 +808,30 @@
       ],
       "properties": {
         "format": {
-          "type": "string"
+          "$ref": "#/definitions/QemuMediaFormat"
+        },
+        "imagePath": {
+          "description": "Direct image-file path from operator-authored Nix config. Present only when `source_kind = image-file`; physical USB identity stays in the root-only runtime registry.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "mediaRef": {
+          "description": "Opaque physical USB ref, or a generated stable source id for direct image-file rows that omit `ref` in Nix config.",
           "type": "string"
         },
         "readOnly": {
           "type": "boolean"
         },
         "registryScope": {
-          "type": "string"
+          "$ref": "#/definitions/QemuMediaRegistryScope"
         },
         "slot": {
           "type": "string"
         },
         "sourceKind": {
-          "type": "string"
+          "$ref": "#/definitions/QemuMediaSourceKind"
         },
         "vm": {
           "type": "string"
@@ -810,27 +839,15 @@
       },
       "additionalProperties": false
     },
-    "RuntimeProvider": {
-      "type": "object",
-      "required": [
-        "capabilities",
-        "kind",
-        "provider"
-      ],
-      "properties": {
-        "capabilities": {
-          "$ref": "#/definitions/RuntimeProviderCapabilities"
-        },
-        "kind": {
-          "type": "string"
-        },
-        "provider": {
-          "$ref": "#/definitions/RuntimeProviderIdentity"
-        }
-      },
-      "additionalProperties": false
+    "QemuMediaSourceKind": {
+      "type": "string",
+      "enum": [
+        "physical-usb",
+        "image-file"
+      ]
     },
-    "RuntimeProviderCapabilities": {
+    "RuntimeCapabilities": {
+      "description": "Runtime/provider support matrix. These flags describe support, not whether a VM currently enables a feature.",
       "type": "object",
       "required": [
         "configSync",
@@ -878,7 +895,37 @@
       },
       "additionalProperties": false
     },
-    "RuntimeProviderIdentity": {
+    "RuntimeKind": {
+      "description": "VM runtime family.",
+      "type": "string",
+      "enum": [
+        "nixos",
+        "qemu-media"
+      ]
+    },
+    "RuntimeMetadata": {
+      "description": "Runtime/provider metadata shared by the public manifest and private bundle artifacts.",
+      "type": "object",
+      "required": [
+        "capabilities",
+        "kind",
+        "provider"
+      ],
+      "properties": {
+        "capabilities": {
+          "$ref": "#/definitions/RuntimeCapabilities"
+        },
+        "kind": {
+          "$ref": "#/definitions/RuntimeKind"
+        },
+        "provider": {
+          "$ref": "#/definitions/RuntimeProvider"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeProvider": {
+      "description": "Local runtime provider identity.",
       "type": "object",
       "required": [
         "driver",
@@ -887,16 +934,31 @@
       ],
       "properties": {
         "driver": {
-          "type": "string"
+          "$ref": "#/definitions/RuntimeProviderDriver"
         },
         "id": {
           "type": "string"
         },
         "type": {
-          "type": "string"
+          "$ref": "#/definitions/RuntimeProviderType"
         }
       },
       "additionalProperties": false
+    },
+    "RuntimeProviderDriver": {
+      "description": "Provider driver family.",
+      "type": "string",
+      "enum": [
+        "cloud-hypervisor",
+        "qemu"
+      ]
+    },
+    "RuntimeProviderType": {
+      "description": "Provider locality class.",
+      "type": "string",
+      "enum": [
+        "local"
+      ]
     },
     "SitePolicy": {
       "description": "Host-wide policy bits used when deriving per-env settings.",
@@ -1001,11 +1063,13 @@
       },
       "additionalProperties": false
     },
-    "VmRuntime": {
+    "VmRuntimeRow": {
+      "description": "Per-VM runtime row emitted in host.json for daemon lifecycle/status joins.",
       "type": "object",
       "required": [
         "runtime",
         "stateDir",
+        "tap",
         "vm"
       ],
       "properties": {
@@ -1028,7 +1092,7 @@
           ]
         },
         "runtime": {
-          "$ref": "#/definitions/RuntimeProvider"
+          "$ref": "#/definitions/RuntimeMetadata"
         },
         "stateDir": {
           "type": "string"
@@ -1040,10 +1104,7 @@
           ]
         },
         "tap": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "vm": {
           "type": "string"

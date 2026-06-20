@@ -19,7 +19,8 @@ let
     path = profile.relativePath;
   }) (config.nixling._bundle.minijailProfiles or { }));
 
-  enabledVms = lib.filterAttrs (_: vm: vm.enable) config.nixling.vms;
+  nl = import ./lib.nix { inherit lib; };
+  normalNixosVms = nl.normalNixosVms config.nixling.vms;
   managedKeyOverrides = lib.sortOn (entry: entry.vm) (lib.filter (entry: entry != null)
     (lib.mapAttrsToList (name: vm:
       if vm.ssh.keyPath == null
@@ -28,7 +29,7 @@ let
         vm = name;
         keyPath = toString vm.ssh.keyPath;
       }
-    ) enabledVms));
+    ) normalNixosVms));
 
   # Per-artifact SHA-256 hashes are computed in the bundle derivation
   # below, not with builtins.hashFile at eval time. The closure artifacts

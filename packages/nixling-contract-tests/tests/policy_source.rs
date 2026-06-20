@@ -110,10 +110,16 @@ fn nix_package_source_filters_are_path_segment_based() {
              packages/nixling-constellation-core/src/target.rs"
         );
         assert!(
-            content.contains("builtins.elem \"target\" parts"),
-            "{rel}: package source filter must exclude only a path segment named `target`"
+            content.contains("nl.cleanRustPackagesSource ../packages"),
+            "{rel}: package source filters must use the centralized segment-based helper"
         );
     }
+
+    let helper = read_repo_file("nixos-modules/lib.nix");
+    assert!(
+        helper.contains(r#"type == "directory" && baseNameOf path == "target""#),
+        "nixos-modules/lib.nix: cleanRustPackagesSource must exclude only a directory segment named `target`"
+    );
 }
 
 // ---------------------------------------------------------------------------

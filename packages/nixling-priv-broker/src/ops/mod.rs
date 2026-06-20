@@ -81,6 +81,10 @@ pub mod store_view_farm;
 // SpawnRunner when `DiskInit` plan-ops are present.
 pub mod disk_init;
 
+// qemu-media physical USB enrollment/open by opaque ref. Raw device identity
+// stays in root-only registry/runtime artifacts outside the Nix store.
+pub mod media;
+
 use std::fmt;
 use std::path::PathBuf;
 

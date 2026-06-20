@@ -4,7 +4,7 @@
 
 let
   nl = import ./lib.nix { inherit lib; };
-  inherit (nl) subnetIp mkMac;
+  inherit (nl) subnetIp mkMac normalNixosVms;
   # Per-VM evaluator entry point. composeVm is the nixling-owned
   # replacement for microvm.nix's per-VM
   # lib.evalModules invocation; see vm-evaluator.nix +
@@ -96,7 +96,8 @@ let
     };
   };
 
-  enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
+  enabledVms = nl.enabledVms cfg.vms;
+  normalNixosVms' = normalNixosVms cfg.vms;
   # `nixling.vms.<vm>.supervisor` was removed per ADR 0015.
   # Every enabled VM is now daemon-supervised; the systemd-template
   # path is retired. The empty `systemdSupervisedVms` set keeps
@@ -104,7 +105,7 @@ let
   # template instances; the v1.1- phase deletes those sites
   # outright when the template definitions themselves go.
   systemdSupervisedVms = { };
-  daemonSupervisedVmNames = lib.attrNames enabledVms;
+  daemonSupervisedVmNames = lib.attrNames normalNixosVms';
 
   usbipYubikeyVmEnabled =
     builtins.any (vm: vm.usbip.yubikey or false) (lib.attrValues enabledVms);
@@ -364,7 +365,7 @@ in
             }
             vm'.guestConfigFile;
       })
-    enabledVms;
+    normalNixosVms';
 
   # Fail-fast stub `microvm@<vm>.service` units are no longer needed —
   # `microvm@<vm>.service` doesn't exist anymore

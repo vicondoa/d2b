@@ -213,37 +213,39 @@ mod tests {
     use nixling_core::manifest_v04::{
         ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmObservability,
     };
+    use nixling_core::runtime::RuntimeMetadata;
 
     use super::*;
 
     fn vm_entry(name: &str, is_net_vm: bool, static_ip: Option<&str>) -> VmEntry {
         VmEntry {
-            api_socket: format!("/run/nixling/vms/{name}/api.sock"),
+            api_socket: Some(format!("/run/nixling/vms/{name}/api.sock")),
             audio: false,
-            audio_service: String::new(),
-            audio_state_file: String::new(),
+            audio_service: Some(String::new()),
+            audio_state_file: Some(String::new()),
             bridge: Some("br-test".to_owned()),
             env: Some("test".to_owned()),
             mtu: Some(1500),
             mss_clamp: Some(1460),
             lan: None,
-            gpu_socket: String::new(),
+            gpu_socket: Some(String::new()),
             graphics: false,
             is_net_vm,
             name: name.to_owned(),
             net_vm: Some("sys-test-net".to_owned()),
             observability: VmObservability {
-                agent_socket: format!("/run/nixling/vms/{name}/agent.sock"),
+                agent_socket: Some(format!("/run/nixling/vms/{name}/agent.sock")),
                 enabled: false,
-                vsock_cid: 42,
-                vsock_host_socket: format!("/run/nixling/vms/{name}/agent-host.sock"),
+                vsock_cid: Some(42),
+                vsock_host_socket: Some(format!("/run/nixling/vms/{name}/agent-host.sock")),
             },
+            runtime: RuntimeMetadata::local_nixos(),
             ssh_user: Some("alice".to_owned()),
             state_dir: format!("/var/lib/nixling/vms/{name}"),
             static_ip: static_ip.map(str::to_owned),
             tap: format!("tap-{name}"),
             tpm: false,
-            tpm_socket: String::new(),
+            tpm_socket: Some(String::new()),
             usbip_yubikey: false,
             usbipd_host_ip: None,
         }
@@ -252,7 +254,7 @@ mod tests {
     fn manifest_with(vms: Vec<VmEntry>) -> ManifestV04 {
         ManifestV04 {
             manifest: ManifestMeta {
-                manifest_version: 4,
+                manifest_version: 6,
             },
             observability: ObservabilityMeta {
                 enabled: false,

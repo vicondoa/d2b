@@ -4,14 +4,8 @@
 let
   cfg = config.nixling;
   gateways = lib.filterAttrs (_: gw: gw.enable) cfg.gateways;
-  packagesSrc = lib.cleanSourceWith {
-    src = ../packages;
-    filter = path: type:
-      let
-        rel = lib.removePrefix (toString ../packages + "/") (toString path);
-        parts = lib.splitString "/" rel;
-      in !(builtins.elem "target" parts || lib.hasPrefix ".cargo/registry/" rel || lib.hasInfix "/.cargo/registry/" rel);
-  };
+  nl = import ./lib.nix { inherit lib; };
+  packagesSrc = nl.cleanRustPackagesSource ../packages;
   cargoLock = {
     lockFile = ../packages/Cargo.lock;
     outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
@@ -75,6 +69,7 @@ let
           adminUsers = [ "gateway" ];
           serverVersion = "0.4.0";
           acceptedClientVersionRange = ">=0.4.0, <0.5.0";
+          gatewayConfigPath = "/etc/nixling/gateway.json";
           artifacts = {
             publicManifestPath = "/etc/nixling/manifest.json";
             bundlePath = "/etc/nixling/bundle.json";

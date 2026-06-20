@@ -329,7 +329,7 @@
           ]
         },
         {
-          "description": "QEMU media VM runner emitted by local runtime-provider configurations.",
+          "description": "QEMU media runner.",
           "type": "string",
           "enum": [
             "qemu-media-runner"

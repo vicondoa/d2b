@@ -9,6 +9,8 @@ let
   # silently return.
   nixlingLib = import ./lib.nix { inherit lib; };
   inherit (nixlingLib) stablePrincipalId;
+  normalNixosVms = nixlingLib.normalNixosVms cfg.vms;
+  qemuMediaVms = nixlingLib.qemuMediaVms cfg.vms;
 in
 {
   # ---------------------------------------------------------------------------
@@ -32,22 +34,25 @@ in
     nixling-launcher = { };
   } // (lib.mapAttrs' (name: _:
       lib.nameValuePair "nixling-${name}-gpu" { gid = stablePrincipalId "nixling-${name}-gpu"; })
-    (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable) cfg.vms))
+    (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms))
   // (lib.mapAttrs' (name: _:
       lib.nameValuePair "nixling-${name}-video" { gid = stablePrincipalId "nixling-${name}-video"; })
-    (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable && vm.graphics.videoSidecar) cfg.vms))
+    (lib.filterAttrs (_: vm: vm.graphics.enable && vm.graphics.videoSidecar) normalNixosVms))
   // (lib.mapAttrs' (name: _:
       lib.nameValuePair "nixling-${name}-wlproxy" { gid = stablePrincipalId "nixling-${name}-wlproxy"; })
-    (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable) cfg.vms))
+    (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms))
   // (lib.mapAttrs' (name: _:
       lib.nameValuePair "nixling-${name}-snd" { gid = stablePrincipalId "nixling-${name}-snd"; })
-    (lib.filterAttrs (_: vm: vm.enable && vm.audio.enable) cfg.vms))
+    (lib.filterAttrs (_: vm: vm.audio.enable) normalNixosVms))
   // (lib.mapAttrs' (name: _:
       lib.nameValuePair "nixling-${name}-swtpm" { gid = stablePrincipalId "nixling-${name}-swtpm"; })
-    (lib.filterAttrs (_: vm: vm.enable && vm.tpm.enable) cfg.vms))
+    (lib.filterAttrs (_: vm: vm.tpm.enable) normalNixosVms))
   // (lib.mapAttrs' (name: _:
       lib.nameValuePair "nixling-${name}-runner" { gid = stablePrincipalId "nixling-${name}-runner"; })
-    (lib.filterAttrs (_: vm: vm.enable) cfg.vms));
+    normalNixosVms)
+  // (lib.mapAttrs' (name: _:
+      lib.nameValuePair "nixling-${name}-qemu-media" { gid = stablePrincipalId "nixling-${name}-qemu-media"; })
+    qemuMediaVms);
 
   users.users =
     # nixling lifecycle group membership for any user the site
@@ -64,21 +69,21 @@ in
       group = "nixling-${name}-gpu";
       extraGroups = [ "kvm" "nixling-${name}-runner" ];
       description = "nixling GPU+hypervisor sidecar for VM ${name}";
-    }) (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable) cfg.vms))
+    }) (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms))
   // (lib.mapAttrs' (name: _:
     lib.nameValuePair "nixling-${name}-video" {
       isSystemUser = true;
       uid = stablePrincipalId "nixling-${name}-video";
       group = "nixling-${name}-video";
       description = "nixling video decode sidecar for VM ${name}";
-    }) (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable && vm.graphics.videoSidecar) cfg.vms))
+    }) (lib.filterAttrs (_: vm: vm.graphics.enable && vm.graphics.videoSidecar) normalNixosVms))
   // (lib.mapAttrs' (name: _:
     lib.nameValuePair "nixling-${name}-wlproxy" {
       isSystemUser = true;
       uid = stablePrincipalId "nixling-${name}-wlproxy";
       group = "nixling-${name}-wlproxy";
       description = "nixling Wayland filter proxy sidecar for VM ${name}";
-    }) (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable) cfg.vms))
+    }) (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms))
   // (lib.mapAttrs' (name: _:
     lib.nameValuePair "nixling-${name}-snd" {
       isSystemUser = true;
@@ -86,12 +91,19 @@ in
       group = "nixling-${name}-snd";
       extraGroups = [ "audio" ];
       description = "nixling audio sidecar for VM ${name}";
-    }) (lib.filterAttrs (_: vm: vm.enable && vm.audio.enable) cfg.vms))
+    }) (lib.filterAttrs (_: vm: vm.audio.enable) normalNixosVms))
   // (lib.mapAttrs' (name: _:
     lib.nameValuePair "nixling-${name}-swtpm" {
       isSystemUser = true;
       uid = stablePrincipalId "nixling-${name}-swtpm";
       group = "nixling-${name}-swtpm";
       description = "nixling swtpm emulator for VM ${name}";
-    }) (lib.filterAttrs (_: vm: vm.enable && vm.tpm.enable) cfg.vms));
+    }) (lib.filterAttrs (_: vm: vm.tpm.enable) normalNixosVms))
+  // (lib.mapAttrs' (name: _:
+    lib.nameValuePair "nixling-${name}-qemu-media" {
+      isSystemUser = true;
+      uid = stablePrincipalId "nixling-${name}-qemu-media";
+      group = "nixling-${name}-qemu-media";
+      description = "nixling QEMU media runner for VM ${name}";
+    }) qemuMediaVms);
 }

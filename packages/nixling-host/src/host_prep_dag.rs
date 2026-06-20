@@ -67,6 +67,7 @@
 //! [`build_host_prep_dag`].
 
 use nixling_core::bundle_resolver::BundleResolver;
+use nixling_core::runtime::RuntimeKind;
 use nixling_ipc::types::{BundleOpId, ScopeId, VmId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -329,9 +330,11 @@ impl std::error::Error for CycleError {}
 /// The set of steps is derived from the VM's properties in the
 /// trusted bundle:
 ///
-/// - Every VM emits `SshHostKeyPreflight`, `OwnershipMatrixCheck`,
+/// - NixOS VMs emit `SshHostKeyPreflight`, `OwnershipMatrixCheck`,
 ///   `ApplyNftablesRules`, `BringUpTapInterface`, `PreOpenVhostNetFd`,
 ///   and `BindMountFromHardlinkFarm`.
+/// - QEMU media VMs skip the NixOS-only SSH, ownership-matrix, store,
+///   and vhost-net steps.
 /// - Net VMs (`VmEntry::is_net_vm`) additionally emit
 ///   `SeedDnsmasqLease`.
 ///
@@ -349,42 +352,62 @@ pub fn build_host_prep_dag(vm: &str, resolver: &BundleResolver) -> Vec<HostPrepS
     let Some(vm_entry) = resolver.find_manifest_vm(vm) else {
         return Vec::new();
     };
-    build_host_prep_dag_for(vm, vm_entry.is_net_vm, vm_entry.env.as_deref())
+    build_host_prep_dag_for_runtime(
+        vm,
+        vm_entry.is_net_vm,
+        vm_entry.env.as_deref(),
+        &vm_entry.runtime.kind,
+    )
 }
 
 /// Bundle-free constructor used by unit tests and integrators that
 /// already know the VM's net-VM flag + env. Keeps the production
 /// `build_host_prep_dag` thin and tests hermetic.
 pub fn build_host_prep_dag_for(vm: &str, is_net_vm: bool, env: Option<&str>) -> Vec<HostPrepStep> {
+    build_host_prep_dag_for_runtime(vm, is_net_vm, env, &RuntimeKind::Nixos)
+}
+
+pub fn build_host_prep_dag_for_runtime(
+    vm: &str,
+    is_net_vm: bool,
+    env: Option<&str>,
+    runtime_kind: &RuntimeKind,
+) -> Vec<HostPrepStep> {
     let vm_id = VmId::new(vm.to_string());
     let env_scope = env.map(|e| ScopeId::new(format!("env:{e}")));
     let nft_intent = env.map(|e| BundleOpId::new(format!("nft:env:{e}")));
+    let is_qemu_media = matches!(runtime_kind, RuntimeKind::QemuMedia);
+    let runner_role_id = if is_qemu_media { "qemu-media" } else { "ch" };
 
     let id = |k: HostPrepStepKind| HostPrepStepId::new(vm, k);
 
     let mut steps = Vec::with_capacity(10);
 
     // Preflights — no upstream deps; siblings of one another.
-    steps.push(HostPrepStep {
-        id: id(HostPrepStepKind::SshHostKeyPreflight),
-        depends_on: vec![],
-        kind: HostPrepStepKind::SshHostKeyPreflight,
-        bundle_ref: BundleStepRef {
-            vm_id: vm_id.clone(),
-            scope_id: None,
-            bundle_op_id: None,
-        },
-    });
-    steps.push(HostPrepStep {
-        id: id(HostPrepStepKind::OwnershipMatrixCheck),
-        depends_on: vec![],
-        kind: HostPrepStepKind::OwnershipMatrixCheck,
-        bundle_ref: BundleStepRef {
-            vm_id: vm_id.clone(),
-            scope_id: None,
-            bundle_op_id: None,
-        },
-    });
+    if !is_qemu_media {
+        steps.push(HostPrepStep {
+            id: id(HostPrepStepKind::SshHostKeyPreflight),
+            depends_on: vec![],
+            kind: HostPrepStepKind::SshHostKeyPreflight,
+            bundle_ref: BundleStepRef {
+                vm_id: vm_id.clone(),
+                scope_id: None,
+                bundle_op_id: None,
+            },
+        });
+    }
+    if !is_qemu_media {
+        steps.push(HostPrepStep {
+            id: id(HostPrepStepKind::OwnershipMatrixCheck),
+            depends_on: vec![],
+            kind: HostPrepStepKind::OwnershipMatrixCheck,
+            bundle_ref: BundleStepRef {
+                vm_id: vm_id.clone(),
+                scope_id: None,
+                bundle_op_id: None,
+            },
+        });
+    }
 
     // P2fu1 kernel-r1-1: NetworkManager unmanage must run BEFORE tap
     // creation so NM doesn't race the broker's TUNSETIFF + master-set
@@ -404,13 +427,14 @@ pub fn build_host_prep_dag_for(vm: &str, is_net_vm: bool, env: Option<&str>) -> 
     // Nftables: per-env scope, gated on both preflights + NM unmanage
     // (so the chain exists AND the tap-parent bridge is daemon-owned
     // before the tap is added to it).
+    let mut nft_deps = vec![id(HostPrepStepKind::ApplyNmUnmanaged)];
+    if !is_qemu_media {
+        nft_deps.push(id(HostPrepStepKind::OwnershipMatrixCheck));
+        nft_deps.push(id(HostPrepStepKind::SshHostKeyPreflight));
+    }
     steps.push(HostPrepStep {
         id: id(HostPrepStepKind::ApplyNftablesRules),
-        depends_on: vec![
-            id(HostPrepStepKind::SshHostKeyPreflight),
-            id(HostPrepStepKind::OwnershipMatrixCheck),
-            id(HostPrepStepKind::ApplyNmUnmanaged),
-        ],
+        depends_on: nft_deps,
         kind: HostPrepStepKind::ApplyNftablesRules,
         bundle_ref: BundleStepRef {
             vm_id: vm_id.clone(),
@@ -429,7 +453,9 @@ pub fn build_host_prep_dag_for(vm: &str, is_net_vm: bool, env: Option<&str>) -> 
             vm_id: vm_id.clone(),
             scope_id: env_scope.clone(),
             // Runner intent carries TUNSETOWNER target uid/gid.
-            bundle_op_id: Some(BundleOpId::new(format!("runner:vm:{vm}:role:ch"))),
+            bundle_op_id: Some(BundleOpId::new(format!(
+                "runner:vm:{vm}:role:{runner_role_id}"
+            ))),
         },
     });
 
@@ -466,16 +492,18 @@ pub fn build_host_prep_dag_for(vm: &str, is_net_vm: bool, env: Option<&str>) -> 
     // vhost-net fd: depends on the tap (and post-tap bridge flags
     // are now in their stable state) so the runner gets both fds
     // together with the bridge-port flags already pinned.
-    steps.push(HostPrepStep {
-        id: id(HostPrepStepKind::PreOpenVhostNetFd),
-        depends_on: vec![id(HostPrepStepKind::SetBridgePortFlags)],
-        kind: HostPrepStepKind::PreOpenVhostNetFd,
-        bundle_ref: BundleStepRef {
-            vm_id: vm_id.clone(),
-            scope_id: env_scope.clone(),
-            bundle_op_id: None,
-        },
-    });
+    if !is_qemu_media {
+        steps.push(HostPrepStep {
+            id: id(HostPrepStepKind::PreOpenVhostNetFd),
+            depends_on: vec![id(HostPrepStepKind::SetBridgePortFlags)],
+            kind: HostPrepStepKind::PreOpenVhostNetFd,
+            bundle_ref: BundleStepRef {
+                vm_id: vm_id.clone(),
+                scope_id: env_scope.clone(),
+                bundle_op_id: None,
+            },
+        });
+    }
 
     if is_net_vm {
         steps.push(HostPrepStep {
@@ -492,16 +520,18 @@ pub fn build_host_prep_dag_for(vm: &str, is_net_vm: bool, env: Option<&str>) -> 
 
     // Per-VM store-view bind: depends on ownership matrix (parent
     // dir must already be correct mode/owner). Tap-independent.
-    steps.push(HostPrepStep {
-        id: id(HostPrepStepKind::BindMountFromHardlinkFarm),
-        depends_on: vec![id(HostPrepStepKind::OwnershipMatrixCheck)],
-        kind: HostPrepStepKind::BindMountFromHardlinkFarm,
-        bundle_ref: BundleStepRef {
-            vm_id,
-            scope_id: None,
-            bundle_op_id: None,
-        },
-    });
+    if !is_qemu_media {
+        steps.push(HostPrepStep {
+            id: id(HostPrepStepKind::BindMountFromHardlinkFarm),
+            depends_on: vec![id(HostPrepStepKind::OwnershipMatrixCheck)],
+            kind: HostPrepStepKind::BindMountFromHardlinkFarm,
+            bundle_ref: BundleStepRef {
+                vm_id,
+                scope_id: None,
+                bundle_op_id: None,
+            },
+        });
+    }
 
     topo_sort(steps).expect("static host-prep DAG is acyclic")
 }
@@ -635,6 +665,28 @@ mod tests {
             "sys-work-net:apply-nftables-rules",
             "sys-work-net:seed-dnsmasq-lease",
         );
+    }
+
+    #[test]
+    fn qemu_media_vm_uses_qemu_role_and_skips_nixos_only_steps() {
+        let steps =
+            build_host_prep_dag_for_runtime("media", false, Some("work"), &RuntimeKind::QemuMedia);
+        let ids: Vec<&str> = steps.iter().map(|s| s.id.as_str()).collect();
+
+        assert!(!ids.contains(&"media:ssh-host-key-preflight"));
+        assert!(!ids.contains(&"media:ownership-matrix-check"));
+        assert!(!ids.contains(&"media:bind-mount-from-hardlink-farm"));
+        assert!(!ids.contains(&"media:pre-open-vhost-net-fd"));
+        assert!(ids.contains(&"media:bring-up-tap-interface"));
+        let tap = steps
+            .iter()
+            .find(|step| step.kind == HostPrepStepKind::BringUpTapInterface)
+            .expect("tap step");
+        assert_eq!(
+            tap.bundle_ref.bundle_op_id.as_ref().map(|id| id.as_str()),
+            Some("runner:vm:media:role:qemu-media")
+        );
+        assert_topo_valid(&steps);
     }
 
     #[test]

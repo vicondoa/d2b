@@ -865,6 +865,101 @@
           }
         },
         {
+          "description": "Enroll a physical USB block device for a qemu-media opaque ref. The daemon supplies only VM/ref plus the transient sysfs busid; the broker resolves declared policy from the trusted bundle, reads physical identity as root, and writes root-only registry/rules outside the store.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaEnroll"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaEnrollRequest"
+            }
+          }
+        },
+        {
+          "description": "Refresh redacted qemu-media runtime state from the root-only persistent registry. The daemon calls this before public status/probe rendering so `/run` loss after reboot does not make enrollments disappear.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaRefreshRegistry"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaRefreshRegistryRequest"
+            }
+          }
+        },
+        {
+          "description": "Resolve and attach the declared boot source, then continue the paused qemu-media runner. The broker resolves physical USB registry state or direct image-file policy from the trusted bundle; the daemon supplies only the VM id.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaBoot"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaBootRequest"
+            }
+          }
+        },
+        {
+          "description": "Resolve an enrolled physical USB selector and execute qemu-media QMP attach. The busid is a runtime selector only and is redacted from every success response/audit field.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaAttach"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaHotplugRequest"
+            }
+          }
+        },
+        {
+          "description": "Resolve an enrolled physical USB selector and execute qemu-media QMP detach. The busid is a runtime selector only and is redacted from every success response/audit field.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaDetach"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaHotplugRequest"
+            }
+          }
+        },
+        {
           "description": "Daemon-side reconcile-and-adopt support. The daemon asks the broker to `pidfd_open(pid)` AND re-verify `/proc/<pid>/stat` field 22 matches the expected start-time in one atomic call (no daemon-side syscall surface needed). The pidfd is returned via SCM_RIGHTS; if start-time drifted the broker closes the fd and surfaces a typed pidfd-race error.",
           "type": "object",
           "required": [
@@ -1800,6 +1895,96 @@
             },
             "payload": {
               "$ref": "#/definitions/GuestControlSignResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaEnroll"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaEnrollResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaRefreshRegistry"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaRefreshRegistryResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaBoot"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaHotplugResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaAttach"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaHotplugResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaDetach"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaHotplugResponse"
             }
           }
         },
@@ -4728,6 +4913,16 @@
         "vm"
       ],
       "properties": {
+        "autostart": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/VmAutostartPosture"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "env": {
           "type": [
             "string",
@@ -4745,6 +4940,16 @@
         },
         "name": {
           "type": "string"
+        },
+        "qemuMedia": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/QemuMediaStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "runtime": {
           "$ref": "#/definitions/RuntimeSummary"
@@ -4766,6 +4971,12 @@
         },
         "tpm": {
           "type": "boolean"
+        },
+        "unsupportedCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "usbip": {
           "type": "boolean"
@@ -5548,6 +5759,24 @@
         {
           "type": "object",
           "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "usb enroll"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UsbEnrollRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
             "kind"
           ],
           "properties": {
@@ -6021,6 +6250,12 @@
         "nixling": {
           "type": "string"
         },
+        "qemuMedia": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "snd": {
           "type": [
             "string",
@@ -6041,6 +6276,313 @@
         },
         "virtiofsd": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaBootRequest": {
+      "description": "qemu-media boot request keyed by VM id only.\n\nThe broker resolves the VM's declared boot source from the trusted bundle. Physical USB boot sources use the root-only enrollment registry; image-file boot sources use the trusted bundle path. Media fds stay inside the broker until QMP consumes them.",
+      "type": "object",
+      "required": [
+        "vmId"
+      ],
+      "properties": {
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaEnrollRequest": {
+      "description": "Physical USB enrollment for qemu-media.\n\n`bus_id` is a transient selector used only by the privileged broker to locate the device under sysfs at enrollment time. It is intentionally not echoed in the success response and is never emitted into Nix-store-backed artifacts.",
+      "type": "object",
+      "required": [
+        "busId",
+        "mediaRef",
+        "vmId"
+      ],
+      "properties": {
+        "busId": {
+          "type": "string"
+        },
+        "mediaRef": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaEnrollResponse": {
+      "type": "object",
+      "required": [
+        "enrolled",
+        "mediaRef",
+        "readOnly",
+        "udevReloaded",
+        "udevRuleWritten",
+        "vmId"
+      ],
+      "properties": {
+        "enrolled": {
+          "type": "boolean"
+        },
+        "mediaRef": {
+          "type": "string"
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "udevReloaded": {
+          "type": "boolean"
+        },
+        "udevRuleWritten": {
+          "type": "boolean"
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaHotplugEvent": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/QemuMediaHotplugStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaHotplugRequest": {
+      "description": "qemu-media hotplug request keyed by a runtime USB busid selector.\n\nThe broker compares the current sysfs identity behind `bus_id` with the root-only registry records for `vm_id` and returns only opaque slot/ref information plus QMP command names. The success response never echoes the busid, by-id names, serials, block paths, or the registry path.",
+      "type": "object",
+      "required": [
+        "busId",
+        "vmId"
+      ],
+      "properties": {
+        "busId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaHotplugResponse": {
+      "type": "object",
+      "required": [
+        "events",
+        "mediaRef",
+        "qmpCommands",
+        "readOnly",
+        "slot",
+        "vmId"
+      ],
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/QemuMediaHotplugEvent"
+          }
+        },
+        "mediaRef": {
+          "type": "string"
+        },
+        "qmpCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "slot": {
+          "type": "string"
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaHotplugStatus": {
+      "type": "string",
+      "enum": [
+        "identity-resolved",
+        "qmp-connected",
+        "qmp-capabilities",
+        "fd-added",
+        "blockdev-added",
+        "device-added",
+        "device-deleted",
+        "blockdev-deleted",
+        "fd-removed",
+        "vm-continued"
+      ]
+    },
+    "QemuMediaRefreshRegistryRequest": {
+      "type": "object",
+      "properties": {
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaRefreshRegistryResponse": {
+      "type": "object",
+      "required": [
+        "recordCount",
+        "redactedIndexWritten",
+        "udevReloaded",
+        "udevRuleWritten"
+      ],
+      "properties": {
+        "recordCount": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "redactedIndexWritten": {
+          "type": "boolean"
+        },
+        "udevReloaded": {
+          "type": "boolean"
+        },
+        "udevRuleWritten": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaRegistryStatus": {
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "remediation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaRunnerStatus": {
+      "type": "object",
+      "required": [
+        "preContProgress",
+        "role",
+        "state"
+      ],
+      "properties": {
+        "preContProgress": {
+          "type": "string"
+        },
+        "qmpReadiness": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaSourceStatus": {
+      "type": "object",
+      "required": [
+        "format",
+        "mediaRef",
+        "readOnly",
+        "registry",
+        "slot",
+        "sourceKind"
+      ],
+      "properties": {
+        "format": {
+          "type": "string"
+        },
+        "mediaRef": {
+          "type": "string"
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "registry": {
+          "$ref": "#/definitions/QemuMediaRegistryStatus"
+        },
+        "slot": {
+          "type": "string"
+        },
+        "sourceKind": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaStatus": {
+      "type": "object",
+      "required": [
+        "firmwareMode",
+        "media",
+        "runner"
+      ],
+      "properties": {
+        "firmwareMode": {
+          "type": "string"
+        },
+        "media": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/QemuMediaSourceStatus"
+          }
+        },
+        "runner": {
+          "$ref": "#/definitions/QemuMediaRunnerStatus"
         }
       },
       "additionalProperties": false
@@ -6554,6 +7096,13 @@
           ]
         },
         {
+          "description": "QEMU media runtime scaffold. Broker invokes `nixling_host::qemu_media_argv::generate_qemu_media_argv`.",
+          "type": "string",
+          "enum": [
+            "qemu-media"
+          ]
+        },
+        {
           "description": "virtiofsd sidecar; one per `microvm.shares` row. The daemon/bundle provides argv from `nixos-modules/processes-json.nix`.",
           "type": "string",
           "enum": [
@@ -6642,6 +7191,12 @@
       "properties": {
         "detail": {
           "type": "string"
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
@@ -7296,6 +7851,47 @@
       },
       "additionalProperties": false
     },
+    "UsbEnrollRequest": {
+      "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
+      "type": "object",
+      "required": [
+        "busId",
+        "mediaRef",
+        "vm"
+      ],
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "busId": {
+          "description": "Transient sysfs USB busid used only for privileged enrollment. Success responses intentionally do not echo it.",
+          "type": "string"
+        },
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "type": "boolean"
+        },
+        "mediaRef": {
+          "type": "string"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbProbeEntryKind": {
+      "type": "string",
+      "enum": [
+        "usbip",
+        "qemu-media-slot"
+      ]
+    },
     "UsbipBindCliRequest": {
       "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
       "type": "object",
@@ -7375,13 +7971,46 @@
         "busId": {
           "type": "string"
         },
+        "candidateBusIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "env": {
           "type": "string"
+        },
+        "followUpCommand": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/definitions/UsbProbeEntryKind"
         },
         "lockPath": {
           "type": "string"
         },
+        "mediaRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ownerVm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "slot": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceKind": {
           "type": [
             "string",
             "null"
@@ -7415,7 +8044,11 @@
       "type": "string",
       "enum": [
         "bound",
-        "unbound"
+        "unbound",
+        "enrollable",
+        "enrolled",
+        "stale",
+        "direct-config"
       ]
     },
     "UsbipProxyReconcileRequest": {
@@ -7539,6 +8172,22 @@
       "description": "Semantic version string used by the daemon and clients, for example `0.4.0`.",
       "type": "string"
     },
+    "VmAutostartPosture": {
+      "type": "object",
+      "required": [
+        "mode",
+        "reason"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "VmLifecycle": {
       "type": "object",
       "required": [
@@ -7613,6 +8262,16 @@
         "vm"
       ],
       "properties": {
+        "autostart": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/VmAutostartPosture"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "bridgeChecks": {
           "type": "array",
           "items": {
@@ -7637,6 +8296,16 @@
         "name": {
           "type": "string"
         },
+        "qemuMedia": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/QemuMediaStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "runtime": {
           "$ref": "#/definitions/RuntimeSummary"
         },
@@ -7657,6 +8326,12 @@
         },
         "tpm": {
           "type": "boolean"
+        },
+        "unsupportedCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "usbip": {
           "type": "boolean"

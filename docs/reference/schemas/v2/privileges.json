@@ -172,6 +172,11 @@
             "PrepareStateDir",
             "PrepareStoreView",
             "PrepareSwtpmDir",
+            "QemuMediaAttach",
+            "QemuMediaBoot",
+            "QemuMediaDetach",
+            "QemuMediaEnroll",
+            "QemuMediaRefreshRegistry",
             "ReadSecretById",
             "ReconcileStorageScope",
             "ResumeBroker",
@@ -225,6 +230,7 @@
             "host destroy --dry-run",
             "host doctor --read-only",
             "host install",
+            "host migrate-storage --apply",
             "host prepare",
             "host prepare --apply",
             "host prepare --dry-run",
@@ -247,6 +253,7 @@
             "usb",
             "usb attach",
             "usb detach",
+            "usb enroll",
             "usb probe"
           ]
         },

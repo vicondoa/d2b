@@ -233,6 +233,41 @@ pub enum OperationFields {
     UsbipBindFirewallRule {
         bundle_usbip_firewall_intent_ref: String,
     },
+    QemuMediaEnroll {
+        vm_id: String,
+        media_ref: String,
+        read_only: bool,
+        by_id_count: u32,
+        udev_rule_written: bool,
+        udev_reloaded: bool,
+    },
+    QemuMediaRefreshRegistry {
+        record_count: u32,
+        redacted_index_written: bool,
+        udev_rule_written: bool,
+        udev_reloaded: bool,
+    },
+    QemuMediaAttach {
+        vm_id: String,
+        media_ref: String,
+        slot: String,
+        read_only: bool,
+        qmp_commands: Vec<String>,
+    },
+    QemuMediaBoot {
+        vm_id: String,
+        media_ref: String,
+        slot: String,
+        read_only: bool,
+        qmp_commands: Vec<String>,
+    },
+    QemuMediaDetach {
+        vm_id: String,
+        media_ref: String,
+        slot: String,
+        read_only: bool,
+        qmp_commands: Vec<String>,
+    },
     GuestControlSign {
         vm_id: String,
         role: String,
@@ -502,6 +537,41 @@ impl OperationFields {
             "UsbipProxyReconcile" => parse_fields!(value => UsbipProxyReconcile {}),
             "UsbipBindFirewallRule" => parse_fields!(value => UsbipBindFirewallRule {
                 bundle_usbip_firewall_intent_ref: String,
+            }),
+            "QemuMediaEnroll" => parse_fields!(value => QemuMediaEnroll {
+                vm_id: String,
+                media_ref: String,
+                read_only: bool,
+                by_id_count: u32,
+                udev_rule_written: bool,
+                udev_reloaded: bool,
+            }),
+            "QemuMediaRefreshRegistry" => parse_fields!(value => QemuMediaRefreshRegistry {
+                record_count: u32,
+                redacted_index_written: bool,
+                udev_rule_written: bool,
+                udev_reloaded: bool,
+            }),
+            "QemuMediaAttach" => parse_fields!(value => QemuMediaAttach {
+                vm_id: String,
+                media_ref: String,
+                slot: String,
+                read_only: bool,
+                qmp_commands: Vec<String>,
+            }),
+            "QemuMediaBoot" => parse_fields!(value => QemuMediaBoot {
+                vm_id: String,
+                media_ref: String,
+                slot: String,
+                read_only: bool,
+                qmp_commands: Vec<String>,
+            }),
+            "QemuMediaDetach" => parse_fields!(value => QemuMediaDetach {
+                vm_id: String,
+                media_ref: String,
+                slot: String,
+                read_only: bool,
+                qmp_commands: Vec<String>,
             }),
             "GuestControlSign" => parse_fields!(value => GuestControlSign {
                 vm_id: String,
@@ -786,6 +856,78 @@ mod tests {
                 "isolated": true,
                 "neighSuppress": true,
             }),
+        }
+    );
+    roundtrip_test!(
+        qemu_media_attach_round_trip,
+        "QemuMediaAttach",
+        OperationFields::QemuMediaAttach {
+            vm_id: "media".to_owned(),
+            media_ref: "installer-usb".to_owned(),
+            slot: "cdrom".to_owned(),
+            read_only: true,
+            qmp_commands: vec![
+                "add-fd".to_owned(),
+                "blockdev-add:file".to_owned(),
+                "blockdev-add:raw".to_owned(),
+                "device_add".to_owned(),
+            ],
+        }
+    );
+    roundtrip_test!(
+        qemu_media_enroll_round_trip,
+        "QemuMediaEnroll",
+        OperationFields::QemuMediaEnroll {
+            vm_id: "media".to_owned(),
+            media_ref: "installer-usb".to_owned(),
+            read_only: true,
+            by_id_count: 1,
+            udev_rule_written: true,
+            udev_reloaded: true,
+        }
+    );
+    roundtrip_test!(
+        qemu_media_refresh_registry_round_trip,
+        "QemuMediaRefreshRegistry",
+        OperationFields::QemuMediaRefreshRegistry {
+            record_count: 2,
+            redacted_index_written: true,
+            udev_rule_written: true,
+            udev_reloaded: true,
+        }
+    );
+    roundtrip_test!(
+        qemu_media_boot_round_trip,
+        "QemuMediaBoot",
+        OperationFields::QemuMediaBoot {
+            vm_id: "media".to_owned(),
+            media_ref: "installer-usb".to_owned(),
+            slot: "boot".to_owned(),
+            read_only: true,
+            qmp_commands: vec![
+                "add-fd".to_owned(),
+                "blockdev-add:file".to_owned(),
+                "blockdev-add:raw".to_owned(),
+                "device_add".to_owned(),
+                "cont".to_owned(),
+            ],
+        }
+    );
+    roundtrip_test!(
+        qemu_media_detach_round_trip,
+        "QemuMediaDetach",
+        OperationFields::QemuMediaDetach {
+            vm_id: "media".to_owned(),
+            media_ref: "installer-usb".to_owned(),
+            slot: "cdrom".to_owned(),
+            read_only: true,
+            qmp_commands: vec![
+                "device_del".to_owned(),
+                "DEVICE_DELETED".to_owned(),
+                "blockdev-del:raw".to_owned(),
+                "blockdev-del:file".to_owned(),
+                "remove-fd".to_owned(),
+            ],
         }
     );
     roundtrip_test!(

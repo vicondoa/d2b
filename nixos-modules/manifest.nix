@@ -78,6 +78,8 @@ let
       asNetVmForEnv = envOfNetVm name;
       envName = if env != null then env else asNetVmForEnv;
       m = if env != null && envMeta ? ${env} then envMeta.${env} else null;
+      runtime = nl.vmRuntimeMetadata name vm;
+      isNixosRuntime = runtime.kind == "nixos";
       derivedIp =
         if m != null then subnetIp m.lanSubnet vm.index
         else if asNetVmForEnv != null && envMeta ? ${asNetVmForEnv}
@@ -94,27 +96,30 @@ let
         then envMeta.${asNetVmForEnv}.uplinkBridge
         else null;
       usbipdHostIp =
-        if m != null then m.hostUplinkIp
+        if isNixosRuntime && m != null then m.hostUplinkIp
         else null;
       stateRoot = "${config.nixling.store.stateDir}/${name}";
       envIndex =
         if envName != null && envIndexMap ? ${envName}
         then envIndexMap.${envName}
         else null;
-      baseVsockCid = nl.guestControlVsockCid {
-        inherit name envIndex;
-        index = vm.index;
-        isNetVm = asNetVmForEnv != null;
-        isObservabilityVm = obsCfg.enable && name == obsCfg.vmName;
-      };
-      baseVsockHostSocket = nl.guestControlVsockHostSocket stateRoot;
+      baseVsockCid =
+        if isNixosRuntime then nl.guestControlVsockCid {
+          inherit name envIndex;
+          index = vm.index;
+          isNetVm = asNetVmForEnv != null;
+          isObservabilityVm = obsCfg.enable && name == obsCfg.vmName;
+        } else null;
+      baseVsockHostSocket =
+        if isNixosRuntime then nl.guestControlVsockHostSocket stateRoot else null;
     in
     {
       inherit name;
-      graphics = vm.graphics.enable;
-      tpm = vm.tpm.enable;
-      usbipYubikey = vm.usbip.yubikey;
-      audio = vm.audio.enable;
+      runtime = runtime;
+      graphics = isNixosRuntime && vm.graphics.enable;
+      tpm = isNixosRuntime && vm.tpm.enable;
+      usbipYubikey = isNixosRuntime && vm.usbip.yubikey;
+      audio = isNixosRuntime && vm.audio.enable;
       tap = derivedTap;
       bridge = derivedBridge;
       env = envName;
@@ -122,22 +127,23 @@ let
       netVm = if env != null then netVmOfEnv env else null;
       usbipdHostIp = usbipdHostIp;
       stateDir = stateRoot;
-      apiSocket = "${stateRoot}/${name}.sock";
-      gpuSocket = "${stateRoot}/${name}-gpu.sock";
-      tpmSocket = "/run/nixling/vms/${name}/tpm.sock";
+      apiSocket = if isNixosRuntime then "${stateRoot}/${name}.sock" else null;
+      gpuSocket = if isNixosRuntime then "${stateRoot}/${name}-gpu.sock" else null;
+      tpmSocket = if isNixosRuntime then "/run/nixling/vms/${name}/tpm.sock" else null;
       # State file under root-owned non-group-writable subdir.
-      audioStateFile = "${stateRoot}/state/audio-state.json";
-      audioService = "nixling-${name}-snd.service";
+      audioStateFile =
+        if isNixosRuntime then "${stateRoot}/state/audio-state.json" else null;
+      audioService = if isNixosRuntime then "nixling-${name}-snd.service" else null;
       observability = {
-        enabled = vm.observability.enable;
+        enabled = isNixosRuntime && vm.observability.enable;
         vsockCid = baseVsockCid;
         vsockHostSocket = baseVsockHostSocket;
-        agentSocket = "/run/nixling/otlp.sock";
+        agentSocket = if isNixosRuntime then "/run/nixling/otlp.sock" else null;
       };
       staticIp =
         if derivedIp != null then derivedIp
         else vm.staticIp;
-      sshUser = vm.ssh.user;
+      sshUser = if isNixosRuntime then vm.ssh.user else null;
       # `sshKeyPath` is intentionally NOT part of the public manifest.
       # The manifest ships to
       # `/run/current-system/sw/share/nixling/vms.json` which is
@@ -183,7 +189,68 @@ let
     destination = "/share/nixling/vms.json";
   };
 
+  runtimeProviderType = lib.types.submodule {
+    freeformType = null;
+    options = {
+      id = lib.mkOption {
+        type = lib.types.enum [ "local-cloud-hypervisor" "local-qemu-media" ];
+        description = "Stable local runtime provider identifier.";
+      };
+
+      type = lib.mkOption {
+        type = lib.types.enum [ "local" ];
+        description = "Provider locality class. `local` means host-local VMM/provider state.";
+      };
+
+      driver = lib.mkOption {
+        type = lib.types.enum [ "cloud-hypervisor" "qemu" ];
+        description = "Provider driver family.";
+      };
+    };
+  };
+
+  runtimeCapabilitiesType = lib.types.submodule {
+    freeformType = null;
+    options = {
+      lifecycle = lib.mkOption { type = lib.types.bool; };
+      display = lib.mkOption { type = lib.types.bool; };
+      usbHotplug = lib.mkOption { type = lib.types.bool; };
+      guestControl = lib.mkOption { type = lib.types.bool; };
+      exec = lib.mkOption { type = lib.types.bool; };
+      configSync = lib.mkOption { type = lib.types.bool; };
+      ssh = lib.mkOption { type = lib.types.bool; };
+      storeSync = lib.mkOption { type = lib.types.bool; };
+      keys = lib.mkOption { type = lib.types.bool; };
+      inGuestObservability = lib.mkOption { type = lib.types.bool; };
+    };
+  };
+
+  runtimeMetadataType = lib.types.submodule {
+    freeformType = null;
+    options = {
+      kind = lib.mkOption {
+        type = lib.types.enum [ "nixos" "qemu-media" ];
+        description = "VM runtime family.";
+      };
+
+      provider = lib.mkOption {
+        type = runtimeProviderType;
+        description = "Local provider selected for this runtime kind.";
+      };
+
+      capabilities = lib.mkOption {
+        type = runtimeCapabilitiesType;
+        description = ''
+          Provider support matrix. These booleans describe whether the runtime
+          provider supports a capability, not whether a per-VM option currently
+          enables that feature.
+        '';
+      };
+    };
+  };
+
   manifestObservabilityType = lib.types.submodule {
+    freeformType = null;
     options = {
       enabled = lib.mkOption {
         type = lib.types.bool;
@@ -193,30 +260,31 @@ let
       };
 
       vsockCid = lib.mkOption {
-        type = lib.types.ints.unsigned;
+        type = lib.types.nullOr lib.types.ints.unsigned;
         description = ''
-          Deterministic base Cloud Hypervisor vsock CID for this VM.
-          Env-backed VMs use `100 + envIndex * 1000 + slot`, where
-          slot 1 is reserved for the env net VM and workload VMs use
-          `nixling.vms.<vm>.index`; legacy env-less VMs keep a
-          deterministic fallback so the field stays a no-op when
-          observability is disabled.
+          Deterministic base Cloud Hypervisor vsock CID for nixos/Cloud
+          Hypervisor VMs. Env-backed VMs use `100 + envIndex * 1000 + slot`,
+          where slot 1 is reserved for the env net VM and workload VMs use
+          `nixling.vms.<vm>.index`. Null for providers that do not expose
+          nixling guest-control or in-guest observability.
         '';
       };
 
       vsockHostSocket = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
         description = ''
           Host-side Unix socket backing this VM's Cloud Hypervisor vsock
-          device.
+          device. Null for providers without nixling guest-control or
+          in-guest observability.
         '';
       };
 
       agentSocket = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
         description = ''
-          In-guest Unix socket the future observability guest agent
-          listens on for local OTLP traffic.
+          In-guest Unix socket the observability guest agent listens on for
+          local OTLP traffic. Null for providers without in-guest
+          observability.
         '';
       };
     };
@@ -231,6 +299,16 @@ let
       name = lib.mkOption {
         type = lib.types.str;
         description = "VM name (attribute key in nixling.vms.<name>).";
+      };
+
+      runtime = lib.mkOption {
+        type = runtimeMetadataType;
+        description = ''
+          Runtime/provider metadata and provider capability summary. This is
+          the provider-neutral dispatch surface for daemon lifecycle/status
+          integration; provider-specific runner details stay in private bundle
+          artifacts.
+        '';
       };
 
       graphics = lib.mkOption {
@@ -335,26 +413,26 @@ let
       };
 
       apiSocket = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
         description = ''
-          microvm.nix runner API socket path
-          (`<stateDir>/<vm>.sock`). The CLI uses it to query VM
-          state (`crosvm control` / `cloud-hypervisor-api`) and to
-          send a clean shutdown signal during `nixling down`.
+          Cloud Hypervisor runner API socket path (`<stateDir>/<vm>.sock`).
+          Null for runtime providers that do not expose a Cloud Hypervisor API
+          socket.
         '';
       };
 
       gpuSocket = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
         description = ''
           crosvm-gpu sidecar control socket path
           (`<stateDir>/<vm>-gpu.sock`). Only meaningful when
-          `graphics = true`.
+          `graphics = true`; null when the runtime provider has no nixling GPU
+          sidecar socket.
         '';
       };
 
       tpmSocket = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
         description = ''
           swtpm vTPM socket path (`/run/nixling/vms/<vm>/tpm.sock`).
           Only meaningful when `tpm = true`. The framework's
@@ -362,28 +440,31 @@ let
           this socket; cloud-hypervisor connects to it via
           `--tpm <socket>`. Lives under the per-VM runtime dir so
           the existing default ACL grants every per-VM ephemeral
-          UID (including cloud-hypervisor) rw on it.
+          UID (including cloud-hypervisor) rw on it. Null for providers without
+          nixling-managed TPM state.
         '';
       };
 
       audioStateFile = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
         description = ''
           Per-VM live audio-grant state file
           (`<stateDir>/state/audio-state.json`). Holds
           `{ "mic": "on"|"off", "speaker": "on"|"off" }`. Read by
           the host-side `nixling-<vm>-snd.service` sidecar (which
           re-routes vhost-device-sound's INPUT/OUTPUT links) and
-          written atomically by `nixling audio …` subcommands.
+          written atomically by `nixling audio …` subcommands. Null for
+          providers without the nixling audio sidecar.
         '';
       };
 
       audioService = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
         description = ''
           Name of the host-side per-VM audio sidecar systemd unit
           (`nixling-<vm>-snd.service`). The CLI restarts this unit
-          on every audio-state change.
+          on every audio-state change. Null for providers without the nixling
+          audio sidecar.
         '';
       };
 
@@ -456,7 +537,7 @@ in
 
   options.nixling._manifestVersion = lib.mkOption {
     type = lib.types.ints.unsigned;
-    default = 5;
+    default = 6;
     internal = true;
     description = ''
       Internal: the integer schema version stamped into
@@ -500,6 +581,11 @@ in
           `signozOtlpHttpPort`). The vsock transport contract is
           unchanged. Pinned by
           `nixling_core::manifest_v04::MANIFEST_VERSION_CURRENT`.
+        * 6 — adds per-VM runtime/provider metadata and provider
+          capability summaries, and makes provider-specific socket/vsock
+          fields nullable so qemu-media entries do not fabricate Cloud
+          Hypervisor, guest-control, SSH, store-sync, key, or
+          in-guest-observability artifacts.
     '';
   };
 

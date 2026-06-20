@@ -34,6 +34,9 @@
 let
   cfg = config.nixling;
   nl = import ./lib.nix { inherit lib pkgs; };
+  normalNixosVms = nl.normalNixosVms cfg.vms;
+  qemuMediaVms = nl.qemuMediaVms cfg.vms;
+  roleAclVms = normalNixosVms // qemuMediaVms;
   prebuilt = import ./prebuilt-packages.nix { inherit pkgs lib; };
 
   # Build the nixling-activation-helper binary (defined in
@@ -44,14 +47,7 @@ let
   # egg during the very first activation). Each activation
   # snippet references `${activationHelper}` to get the absolute
   # store-path of the binary.
-  packagesSrc = lib.cleanSourceWith {
-    src = ../packages;
-    filter = path: type:
-      let
-        rel = lib.removePrefix (toString ../packages + "/") (toString path);
-        parts = lib.splitString "/" rel;
-      in !(builtins.elem "target" parts || lib.hasPrefix ".cargo/registry/" rel || lib.hasInfix "/.cargo/registry/" rel);
-  };
+  packagesSrc = nl.cleanRustPackagesSource ../packages;
   cargoLock = {
     lockFile = ../packages/Cargo.lock;
     outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
@@ -205,19 +201,20 @@ in
       LAUNCHER_GROUP=nixling \
       SETFACL_BIN=${pkgs.acl}/bin/setfacl \
       . ${./host-activation.d/state-dir-acl.sh}
-    # Per-VM sidecar users: enumerated by mapAttrs over cfg.vms
-    # — each VM contributes gpu/swtpm/audio/video/wlproxy users that
-    # may need traversal.
+    # Per-VM sidecar users: enumerated by mapAttrs over enabled
+    # nixos/qemu-media runtime VMs. Each VM contributes only the
+    # users that exist on this host; qemu-media uses the qemu-media
+    # suffix and normal NixOS VMs use gpu/swtpm/audio/video/wlproxy.
   '' + lib.concatStringsSep "\n" (lib.mapAttrsToList
     (name: _: ''
-      for suffix in gpu swtpm audio video wlproxy; do
+      for suffix in gpu swtpm audio video wlproxy qemu-media; do
         user="nixling-${name}-$suffix"
         if id "$user" >/dev/null 2>&1; then
           ${pkgs.acl}/bin/setfacl -m "u:$user:--x" /var/lib/nixling 2>/dev/null || true
         fi
       done
     '')
-    cfg.vms));
+    roleAclVms));
 
   # Per-graphics-VM state dir + var.img + extra-disk ownership.
   # update: ownership matches the per-VM ownership matrix
@@ -266,7 +263,7 @@ in
           fi
         fi
       '')
-      (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable) cfg.vms)));
+      (lib.filterAttrs (_: vm: vm.graphics.enable) (nl.normalNixosVms cfg.vms))));
 
   # TPM VMs need an explicit traverse ACL for the dedicated swtpm user on
   # the parent VM state dir, regardless of whether the VM is graphics-backed
@@ -287,7 +284,7 @@ in
           ${pkgs.acl}/bin/setfacl -m "u:nixling-${name}-swtpm:--x" /var/lib/nixling/vms/${name} || true
         fi
       '')
-      (lib.filterAttrs (_: vm: vm.enable && vm.tpm.enable) cfg.vms)));
+      (lib.filterAttrs (_: vm: vm.tpm.enable) (nl.normalNixosVms cfg.vms))));
 
   # Non-graphics VMs (net VMs) also need correct ownership on var.img.
   # same nixlingd:kvm 0660 as graphics VMs — the broker
@@ -326,7 +323,7 @@ in
             fi
           fi
       '')
-      (lib.filterAttrs (_: vm: vm.enable && !vm.graphics.enable) cfg.vms)));
+      (lib.filterAttrs (_: vm: !vm.graphics.enable) (nl.normalNixosVms cfg.vms))));
 
   system.activationScripts.nixlingMigrateOwnership = lib.stringAfter [ "users" ]
     (lib.concatStringsSep "\n" (lib.mapAttrsToList
@@ -373,7 +370,7 @@ in
           fi
         ''}
       '')
-      (lib.filterAttrs (_: vm: vm.enable) cfg.vms)));
+      (nl.normalNixosVms cfg.vms)));
 
   # Grant the ephemeral per-role UIDs from processes.json access to
   # the per-VM state directories. v1.1.1's `stablePrincipalId` mints a unique
@@ -393,8 +390,25 @@ in
         (name: _: ''
           guest_control_virtiofsd_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.id == "virtiofsd-nl-gctl") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
           guest_control_ch_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.id == "cloud-hypervisor") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+          qemu_media_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "qemu-media-runner") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
           ${activationHelper} clear-acl-on-path --path "/var/lib/nixling/guest-control-${name}" --require-kind directory --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
           ${activationHelper} clear-acl-on-path --path "/var/lib/nixling/guest-control-${name}/token" --require-kind regular --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
+          for uid in $qemu_media_session_uids; do
+            [ "$uid" = "0" ] && continue
+            ${pkgs.coreutils}/bin/mkdir -p /var/lib/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chown "$uid:$uid" /var/lib/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chmod 0750 /var/lib/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chmod g-s /var/lib/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/nixling 2>/dev/null || true
+            ${pkgs.coreutils}/bin/mkdir -p /run/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/nixling/vms 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/vms/${name} 2>/dev/null || true
+          done
           for uid in $guest_control_virtiofsd_uids; do
             [ "$uid" = "0" ] && continue
             ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /var/lib/nixling 2>/dev/null || true
@@ -447,15 +461,18 @@ in
           done
           if [ -d /var/lib/nixling/vms/${name} ]; then
             # panel-kernel + panel-virt R3 must-fix
-            # narrow /dev/kvm ACL to only KVM-consuming role UIDs.
+            # narrow /dev/kvm ACL to only KVM-consuming role UIDs, and
+            # keep /dev/vhost-net narrower still. qemu-media is fd-backed:
+            # it may receive broker-opened KVM/media fds, but never a
+            # broad vhost-net path grant.
             # role string is top-level on the NODE (kebab-case serde
             # via #[serde(rename_all = "kebab-case")] on ProcessRole),
-            # NOT on profile. The two consumers today are
-            # "cloud-hypervisor-runner" and "gpu". Adding a new
-            # KVM-consuming role would require expanding this list;
+            # NOT on profile. Adding a new KVM-consuming role requires
+            # expanding this list;
             # the eval gate tests/assertions-eval.sh has a future-
             # work item to enforce non-empty kvm_consuming_uids.
-            kvm_consuming_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "cloud-hypervisor-runner" or .role == "gpu") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+            kvm_consuming_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "cloud-hypervisor-runner" or .role == "gpu" or .role == "qemu-media-runner") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+            vhost_net_consuming_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "cloud-hypervisor-runner" or .role == "gpu") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             video_media_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "cloud-hypervisor-runner" or .role == "video") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             # Split session-socket grants by socket type:
             #   wlproxy → Wayland socket only (no PipeWire/Pulse)
@@ -566,10 +583,13 @@ in
                 ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/otel 2>/dev/null || true
                 ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/otel 2>/dev/null || true
               fi
-              # panel-security R2 must-fix B: /dev/kvm
-              # + /dev/vhost-net only for Hypervisor/Gpu UIDs.
+              # panel-security R2 must-fix B: /dev/kvm only for
+              # KVM-consuming UIDs; /dev/vhost-net only for roles that
+              # still declare a path-backed vhost-net device.
               if echo "$kvm_consuming_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
                 [ -e /dev/kvm ] && ${pkgs.acl}/bin/setfacl -m "u:$uid:rw" /dev/kvm 2>/dev/null || true
+              fi
+              if echo "$vhost_net_consuming_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
                 [ -e /dev/vhost-net ] && ${pkgs.acl}/bin/setfacl -m "u:$uid:rw" /dev/vhost-net 2>/dev/null || true
               fi
               # panel-software R2 must-fix #1, #3
@@ -746,6 +766,30 @@ in
                         --require-kind socket \
                         --setfacl-bin "${pkgs.acl}/bin/setfacl" \
                         2>/dev/null || true
+                    elif echo "$qemu_media_session_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                      # qemu-media: focused GTK/Wayland display access only.
+                      # Media devices are inherited/pre-opened by the broker;
+                      # PipeWire/Pulse and other session sockets stay denied.
+                      ${activationHelper} setfacl-on-path \
+                        --path "$rdir" \
+                        --acl-spec "u:$uid:rx" \
+                        --require-kind directory \
+                        --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                        2>/dev/null || true
+                      ${activationHelper} setfacl-on-path \
+                        --path "$rdir/${cfg.site.waylandDisplay}" \
+                        --acl-spec "u:$uid:rwx" \
+                        --require-kind socket \
+                        --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                        2>/dev/null || true
+                      for sock in pipewire-0 pulse/native; do
+                        ${activationHelper} setfacl-on-path \
+                          --path "$rdir/$sock" \
+                          --acl-spec "u:$uid:---" \
+                          --require-kind socket \
+                          --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                          2>/dev/null || true
+                      done
                     elif [ -z "$wlproxy_wayland_uids" ] && echo "$gpu_session_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
                       # Direct graphics path (no wayland-proxy node): GPU gets
                       # Wayland socket access only, preserving legacy display
@@ -821,6 +865,37 @@ in
                 fi
               fi
             ''}
+            # Revoke stale qemu-media display/KVM grants whenever the VM is
+            # no longer a qemu-media runtime. Keep vhost-net revoked even for
+            # current qemu-media runners: fd-backed mode never exposes that
+            # device path to QEMU.
+            stale_qemu_media_uid="${toString (nl.stablePrincipalId "nixling-${name}-qemu-media")}"
+            [ -e /dev/vhost-net ] && ${pkgs.acl}/bin/setfacl -x "u:$stale_qemu_media_uid" /dev/vhost-net 2>/dev/null || true
+            if ! echo "$qemu_media_session_uids" | ${pkgs.gnugrep}/bin/grep -qx "$stale_qemu_media_uid"; then
+              [ -e /dev/kvm ] && ${pkgs.acl}/bin/setfacl -x "u:$stale_qemu_media_uid" /dev/kvm 2>/dev/null || true
+              ${lib.optionalString (cfg.site.waylandUser != null) ''
+                wuid=$(${pkgs.coreutils}/bin/id -u ${cfg.site.waylandUser} 2>/dev/null)
+                if [ -n "$wuid" ]; then
+                  rdir="/run/user/$wuid"
+                  if [ -d "$rdir" ]; then
+                    ${activationHelper} setfacl-on-path \
+                      --path "$rdir" \
+                      --acl-spec "u:$stale_qemu_media_uid:---" \
+                      --require-kind directory \
+                      --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                      2>/dev/null || true
+                    for sock in pipewire-0 ${cfg.site.waylandDisplay} pulse/native; do
+                      ${activationHelper} setfacl-on-path \
+                        --path "$rdir/$sock" \
+                        --acl-spec "u:$stale_qemu_media_uid:---" \
+                        --require-kind socket \
+                        --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                        2>/dev/null || true
+                    done
+                  fi
+                fi
+              ''}
+            fi
             # Revoke stale direct compositor grants from the GPU principal.
             # Before this change, gpu/gpu-render-node UIDs had ACLs on the
             # real host Wayland socket. The new model routes all compositor
@@ -843,7 +918,7 @@ in
             ''}
           fi
         '')
-        (lib.filterAttrs (_: vm: vm.enable) cfg.vms))}
+        roleAclVms)}
     fi
     true
   '';

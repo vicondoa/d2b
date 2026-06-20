@@ -3,9 +3,10 @@
 # Opt-in niri window-rule include generation: disabled by default; when
 # enabled, the KDL at config.environment.etc."nixling/niri-vm-borders.kdl"
 # carries a per-graphics-VM border rule (and none for headless VMs), the
-# crosvm scanout-window hide rule, and the include-path comment; per-VM
-# color overrides appear verbatim; the default palette color is the stable
-# deterministic derivation; a custom outputPath relocates the file.
+# qemu-media host-window border rule, the crosvm scanout-window hide rule,
+# and the include-path comment; per-VM color overrides appear verbatim; the
+# default palette color is the stable deterministic derivation; a custom
+# outputPath relocates the file.
 #
 # Uses `mkEval` (== nixosSystem with the nixling module set) to render the
 # real host-level `environment.etc`, then asserts with lib.hasInfix
@@ -59,6 +60,11 @@ let
         users.users.alice = { isNormalUser = true; uid = 1000; };
       };
     };
+    nixling.vms.media = {
+      runtime.kind = "qemu-media";
+      env = "work";
+      index = 12;
+    };
   };
 
   etcOf = overrides: (mkEval ([ base ] ++ overrides)).config.environment.etc;
@@ -72,6 +78,12 @@ let
     ({ ... }: {
       nixling.site.niriVmBorders.enable = true;
       nixling.vms.work.graphics.niriBorderColor = "#aabbcc";
+    })
+  ]);
+  qemuMediaColorKdl = kdlText (etcOf [
+    ({ ... }: {
+      nixling.site.niriVmBorders.enable = true;
+      nixling.vms.media.qemuMedia.window.niriBorderColor = "#800080";
     })
   ]);
   customEtc = etcOf [
@@ -98,6 +110,18 @@ in
     expr = lib.hasInfix "// Borders for VM: headless" enabledKdl;
     expected = false;
   };
+  "niri-vm-borders/enabled-qemu-media-host-rule" = {
+    expr = lib.hasInfix "// Borders for qemu-media VM host window: media" enabledKdl;
+    expected = true;
+  };
+  "niri-vm-borders/enabled-qemu-media-stable-title-match" = {
+    expr = lib.hasInfix ''match title=r#"^nixling-media-qemu-media$"#'' enabledKdl;
+    expected = true;
+  };
+  "niri-vm-borders/enabled-qemu-media-no-guest-app-id-rule" = {
+    expr = lib.hasInfix ''match app-id=r#"^nixling\.media\."#'' enabledKdl;
+    expected = false;
+  };
   "niri-vm-borders/enabled-crosvm-hide-rule" = {
     expr = lib.hasInfix ''match app-id=r#"^crosvm$"#'' enabledKdl;
     expected = true;
@@ -108,6 +132,12 @@ in
   };
   "niri-vm-borders/color-override-verbatim" = {
     expr = lib.hasInfix ''"#aabbcc"'' colorKdl;
+    expected = true;
+  };
+  "niri-vm-borders/qemu-media-color-override-verbatim" = {
+    expr =
+      lib.hasInfix ''match title=r#"^nixling-media-qemu-media$"#'' qemuMediaColorKdl
+      && lib.hasInfix ''active-color "#800080"'' qemuMediaColorKdl;
     expected = true;
   };
   "niri-vm-borders/default-color-stable" = {

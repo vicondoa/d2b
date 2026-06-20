@@ -63,6 +63,13 @@ deprecations ship one minor release before removal.
   computes Nix SRI hashes for each tarball, writes `nix/prebuilt.json`,
   and auto-commits the manifest back to `main` so consuming flakes can
   fetch the published host binaries by hash without manual updates.
+- `nixling.vms.<vm>.qemuMedia.window.niriBorderColor` lets
+  qemu-media host QEMU windows use a VM-specific niri border color.
+  The generated niri include now matches qemu-media windows by the
+  stable `nixling-<vm>-qemu-media` host window title.
+- `qemuMedia` image-file sources can now be declared directly with an
+  absolute `path` and `format = "raw"`; physical USB sources continue to
+  use opaque refs plus `nixling usb enroll`.
 
 ### Changed
 
@@ -78,6 +85,13 @@ deprecations ship one minor release before removal.
   update `CHANGELOG.md`, or when the changelog is missing
   `## [Unreleased]`, uses duplicate/out-of-order version headers, or
   carries non-semver versions / non-ISO release dates.
+- `manifestVersion` 5 → 6: per-VM entries now carry runtime/provider
+  metadata and provider capability summaries. Provider-specific socket
+  and vsock fields are nullable so `qemu-media` entries do not fabricate
+  Cloud Hypervisor or guest-control artifacts.
+- `qemu-media` VMs now emit a typed QMP-only QEMU runner process node
+  instead of being absent from `processes.json`; they still do not emit
+  Cloud Hypervisor, store/virtiofs, or guest-control runner data.
 
 ### Fixed
 
@@ -101,7 +115,6 @@ deprecations ship one minor release before removal.
   refuses to re-bind a busid that the same VM already owns. Previously,
   every VM restart required a manual `nixling usb detach` + `nixling usb
   attach` cycle because the lock file persisted across the stop/start.
-
 ## [1.3.0] - 2026-06-18
 
 ### Fixed
@@ -555,7 +568,7 @@ deprecations ship one minor release before removal.
   behavior, conformance matrix, risks, and required tests.
 
 - Guest systemd-journal log collection. The per-VM OpenTelemetry
-  collector now tails the guest journal through the contrib `journald`
+  collector now follows the guest journal through the contrib `journald`
   receiver and forwards it to SigNoz as logs tagged with the VM's
   `vm.name` / `vm.env` resource attributes, with the journal `PRIORITY`
   mapped to a readable OTel severity (`INFO`/`WARN`/`ERROR`/…) and a
@@ -620,7 +633,7 @@ deprecations ship one minor release before removal.
   so no serializer ever receives the full host audit record; host-only
   fields (`caller_principal`, `retained_generations`, host/store paths,
   `db.dump`, marker payloads) are redacted by construction. Host Alloy
-  tails only this export glob (`local.file_match` + `loki.source.file`,
+  follows only this export glob (`local.file_match` + `loki.source.file`,
   following rotation) and the `alloy` identity receives focused
   read/traverse ACLs to the export directory only — never the unified
   broker audit log, the privileged daemon socket, or nixlingd state. The

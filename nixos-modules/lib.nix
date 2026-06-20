@@ -77,6 +77,84 @@ rec {
   inherit hex2;
   inherit nixlingReadAudioState;
 
+  cleanRustPackagesSource = packagesPath:
+    lib.cleanSourceWith {
+      src = packagesPath;
+      filter = path: type:
+        let rel = lib.removePrefix (toString packagesPath + "/") (toString path);
+        in !(
+          (type == "directory" && baseNameOf path == "target")
+          || lib.hasInfix ".cargo/registry" rel
+        );
+    };
+
+  vmRuntimeKind = vm: vm.runtime.kind or "nixos";
+  isNixosVm = vm: vmRuntimeKind vm == "nixos";
+  isQemuMediaVm = vm: vmRuntimeKind vm == "qemu-media";
+
+  enabledVms = vms: lib.filterAttrs (_: vm: vm.enable) vms;
+  normalNixosVms = vms: lib.filterAttrs (_: vm: vm.enable && isNixosVm vm) vms;
+  qemuMediaVms = vms: lib.filterAttrs (_: vm: vm.enable && isQemuMediaVm vm) vms;
+
+  localRuntimeProvider = { id, driver }: {
+    inherit id driver;
+    type = "local";
+  };
+
+  nixosRuntimeProvider = localRuntimeProvider {
+    id = "local-cloud-hypervisor";
+    driver = "cloud-hypervisor";
+  };
+
+  qemuMediaRuntimeProvider = localRuntimeProvider {
+    id = "local-qemu-media";
+    driver = "qemu";
+  };
+
+  nixosRuntimeCapabilities = {
+    lifecycle = true;
+    display = true;
+    usbHotplug = true;
+    guestControl = true;
+    exec = true;
+    configSync = true;
+    ssh = true;
+    storeSync = true;
+    keys = true;
+    inGuestObservability = true;
+  };
+
+  qemuMediaRuntimeCapabilities = {
+    lifecycle = true;
+    display = true;
+    usbHotplug = true;
+    guestControl = false;
+    exec = false;
+    configSync = false;
+    ssh = false;
+    storeSync = false;
+    keys = false;
+    inGuestObservability = false;
+  };
+
+  runtimeProviderCatalog = {
+    nixos = {
+      kind = "nixos";
+      provider = nixosRuntimeProvider;
+      capabilities = nixosRuntimeCapabilities;
+    };
+    qemu-media = {
+      kind = "qemu-media";
+      provider = qemuMediaRuntimeProvider;
+      capabilities = qemuMediaRuntimeCapabilities;
+    };
+  };
+
+  vmRuntimeMetadata = _name: vm:
+    let kind = vmRuntimeKind vm;
+    in runtimeProviderCatalog.${kind}
+      or (throw "nixling: unsupported runtime kind '${kind}'");
+
   # Shared helper extracted from minijail-profiles.nix and
   # host-users.nix to eliminate the 4-line duplicate that was a
   # drift-risk for broker/ownership-matrix UID agreement. If the hash
