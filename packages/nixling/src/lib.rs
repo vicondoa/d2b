@@ -9503,7 +9503,7 @@ mod host_install_dispatch_tests {
         let err = super::gateway_target_from_manifest(&context, "demo.gw.unknown.nixling", false)
             .expect_err("unknown realm has no gateway entrypoint");
         assert_eq!(err.exit_code, 2);
-        assert!(err.message.contains("no local gateway entrypoint"));
+        assert!(err.message.contains("no entrypoint on this daemon"));
         assert_eq!(
             super::gateway_target_from_manifest(&context, "vm-a", false).unwrap(),
             None
@@ -9614,15 +9614,6 @@ mod host_install_dispatch_tests {
 
     #[test]
     fn route_vm_target_preserves_local_names_and_routes_gateway_targets() {
-        let local = super::route_vm_target(&missing_daemon_context(), "demo.nixling", false)
-            .expect("local target routes without manifest");
-        assert_eq!(
-            local,
-            super::VmTargetRoute::Local {
-                vm: "demo".to_owned()
-            }
-        );
-
         let manifest_path = test_socket_path("route-gateway-target", ".manifest.json");
         if let Some(parent) = manifest_path.parent() {
             std::fs::create_dir_all(parent).expect("manifest parent");
@@ -9640,6 +9631,15 @@ mod host_install_dispatch_tests {
             daemon_state_dir: manifest_path.with_extension("daemon-state"),
             metrics_url: "http://127.0.0.1:9101/metrics".to_owned(),
         };
+        let local = super::route_vm_target(&context, "demo.nixling", false)
+            .expect("local target routes with manifest context");
+        assert_eq!(
+            local,
+            super::VmTargetRoute::Local {
+                vm: "demo".to_owned()
+            }
+        );
+
         let routed = super::route_vm_target(&context, "demo.aca.work.nixling", false)
             .expect("gateway target routes");
         match routed {
@@ -10322,8 +10322,8 @@ mod host_install_dispatch_tests {
 
     fn missing_daemon_context() -> Context {
         Context {
-            manifest_path: PathBuf::from("/dev/null"),
-            bundle_path: PathBuf::from("/dev/null"),
+            manifest_path: PathBuf::from("/run/nixling-test/missing-vms.json"),
+            bundle_path: PathBuf::from("/run/nixling-test/missing-bundle.json"),
             public_socket: PathBuf::from("/dev/null"),
             broker_socket: PathBuf::from("/dev/null"),
             state_root: None,
