@@ -46,7 +46,6 @@ in
       type = lib.types.nullOr lib.types.str;
       internal = true;
       readOnly = true;
-      default = null;
       description = ''
         Absolute in-guest path to the USBIP CLI. Non-null only for guests
         with the USBIP component enabled; guestd then advertises the

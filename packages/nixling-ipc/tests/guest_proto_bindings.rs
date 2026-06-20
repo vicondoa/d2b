@@ -207,4 +207,9 @@ fn generated_usbip_import_shapes_round_trip() {
         44,
         "generated USBIP command-failed discriminant changed"
     );
+    assert_eq!(
+        pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST as i32,
+        46,
+        "generated USBIP invalid-host discriminant changed"
+    );
 }

@@ -1116,7 +1116,8 @@
         "invalid-program",
         "usbip-unavailable",
         "usbip-command-failed",
-        "usbip-invalid-bus-id"
+        "usbip-invalid-bus-id",
+        "usbip-invalid-host"
       ]
     },
     "GuestCwd": {

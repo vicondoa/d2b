@@ -414,9 +414,6 @@ fn build_synthetic_resolver() -> BundleResolver {
         if_name_mappings: Vec::new(),
         ch: None,
         firewall_coexistence_policy: None,
-        runtime_providers: Vec::new(),
-        vm_runtimes: Vec::new(),
-        qemu_media: None,
     };
     let processes = ProcessesJson {
         schema_version: "v2".to_owned(),

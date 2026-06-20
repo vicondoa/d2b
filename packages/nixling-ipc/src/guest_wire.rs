@@ -1102,6 +1102,7 @@ pub enum GuestControlErrorKind {
     UsbipUnavailable,
     UsbipCommandFailed,
     UsbipInvalidBusId,
+    UsbipInvalidHost,
 }
 
 #[cfg(test)]
@@ -1187,6 +1188,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&GuestControlErrorKind::UsbipCommandFailed).unwrap(),
             "\"usbip-command-failed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&GuestControlErrorKind::UsbipInvalidHost).unwrap(),
+            "\"usbip-invalid-host\""
         );
         assert_eq!(
             serde_json::to_string(&UsbipImportAction::Attach).unwrap(),

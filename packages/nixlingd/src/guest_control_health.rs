@@ -410,6 +410,8 @@ pub enum GuestUsbipImportError {
     UsbipUnavailable,
     /// guestd rejected the host/busid shape.
     InvalidBusId,
+    /// guestd rejected the USBIP backend host address.
+    InvalidHost,
     /// `usbip port`, `usbip detach`, or `usbip attach` exited unsuccessfully.
     CommandFailed,
     /// The guest returned a malformed USBIP response or wrong error kind.
@@ -541,6 +543,7 @@ fn map_guest_usbip_error(kind: pb::GuestControlErrorKind) -> GuestUsbipImportErr
     match kind {
         K::GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE => GuestUsbipImportError::UsbipUnavailable,
         K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID => GuestUsbipImportError::InvalidBusId,
+        K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST => GuestUsbipImportError::InvalidHost,
         K::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED => GuestUsbipImportError::CommandFailed,
         _ => GuestUsbipImportError::Protocol,
     }
@@ -1020,6 +1023,10 @@ mod tests {
             (
                 pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID,
                 GuestUsbipImportError::InvalidBusId,
+            ),
+            (
+                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST,
+                GuestUsbipImportError::InvalidHost,
             ),
             (
                 pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED,

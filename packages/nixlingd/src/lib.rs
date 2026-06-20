@@ -3340,7 +3340,7 @@ fn run_guest_usbip_import(
         action,
         host.to_owned(),
         bus_id.to_owned(),
-        guest_control_bridge::GUEST_CONTROL_CONFIG_READ_TIMEOUT,
+        guest_control_bridge::GUEST_CONTROL_USBIP_IMPORT_TIMEOUT,
     )
     .map_err(|error| guest_usbip_import_error_summary(vm, error))
 }
@@ -3362,6 +3362,7 @@ fn guest_usbip_import_error_summary(
         E::CapabilityUnavailable => "guest does not advertise USBIP import capability",
         E::UsbipUnavailable => "guestd has no usable usbip binary",
         E::InvalidBusId => "guestd rejected the USBIP busid",
+        E::InvalidHost => "guestd rejected the USBIP backend host",
         E::CommandFailed => "guest usbip command failed",
     };
     format!("guest-control USBIP import failed for vm '{vm}': {detail}")
@@ -3541,7 +3542,11 @@ fn vm_is_qemu_media(resolver: &BundleResolver, vm: &str) -> Result<bool, TypedEr
     let Some(entry) = resolver.find_manifest_vm(vm) else {
         return Ok(false);
     };
-    Ok(entry.runtime.kind == nixling_core::runtime::RuntimeKind::QemuMedia)
+    Ok(!vm_requires_nixos_state_preflights(entry))
+}
+
+fn vm_requires_nixos_state_preflights(entry: &ManifestVmEntry) -> bool {
+    entry.runtime.kind != nixling_core::runtime::RuntimeKind::QemuMedia
 }
 
 fn refresh_qemu_media_registry_index_if_needed(
@@ -8897,7 +8902,9 @@ fn dispatch_broker_vm_start(
     // declared in nixos-modules/options-ownership-matrix.nix. Missing
     // subdirectories surface as warn-only (state is materialized
     // lazily); owner/group/mode drift on existing paths fails closed.
-    if let Some(manifest_entry) = resolver.manifest.vms.get(&request.vm) {
+    if let Some(manifest_entry) = resolver.manifest.vms.get(&request.vm)
+        && vm_requires_nixos_state_preflights(manifest_entry)
+    {
         let state_dir = std::path::PathBuf::from(&manifest_entry.state_dir);
         if let ownership_preflight::OwnershipPreflightOutcome::Drift(drift) =
             ownership_preflight::preflight(&request.vm, &state_dir)
@@ -11529,6 +11536,15 @@ mod public_status_tests {
             usbip_yubikey: false,
             usbipd_host_ip: None,
         }
+    }
+
+    #[test]
+    fn qemu_media_skips_nixos_state_preflights() {
+        let qemu = typed_manifest_vm(nixling_core::runtime::RuntimeMetadata::local_qemu_media());
+        let nixos = typed_manifest_vm(nixling_core::runtime::RuntimeMetadata::local_nixos());
+
+        assert!(!vm_requires_nixos_state_preflights(&qemu));
+        assert!(vm_requires_nixos_state_preflights(&nixos));
     }
 
     #[test]

@@ -73,6 +73,10 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- **Breaking:** VMs with `nixling.vms.<vm>.usbip.yubikey = true` must
+  now also enable `nixling.vms.<vm>.guest.control.enable = true`. USBIP
+  guest attach/detach is owned by guestd over authenticated
+  guest-control; there is no SSH fallback.
 - CI: the PR aarch64 flake leg now runs only the lightweight
   `smoke-eval-aarch64.nix` check instead of the full native aarch64
   flake sweep.
@@ -102,6 +106,12 @@ deprecations ship one minor release before removal.
 - USBIP attach/detach now routes guest-side import cleanup through guestd
   over authenticated guest-control, removing the CLI's SSH fallback and
   preventing stale guest imports from blocking reattach after daemon restarts.
+- `qemu-media` VM start no longer runs NixOS-only state ownership and
+  SSH host-key preflights, allowing externally booted media VMs to use
+  the qemu-media runner-owned state directory prepared by host
+  reconciliation. Physical USB boot media now attaches through QMP's
+  `host_device` block driver instead of the regular-file-only `file`
+  driver.
 
 ## [1.3.1] - 2026-06-18
 

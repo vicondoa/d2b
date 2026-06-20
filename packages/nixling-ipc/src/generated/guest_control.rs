@@ -9418,6 +9418,8 @@ pub enum GuestControlErrorKind {
     GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED = 44,
     // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID)
     GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID = 45,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST)
+    GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST = 46,
 }
 
 impl ::protobuf::Enum for GuestControlErrorKind {
@@ -9475,6 +9477,7 @@ impl ::protobuf::Enum for GuestControlErrorKind {
             43 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE),
             44 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED),
             45 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID),
+            46 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST),
             _ => ::std::option::Option::None
         }
     }
@@ -9527,6 +9530,7 @@ impl ::protobuf::Enum for GuestControlErrorKind {
             "GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE),
             "GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED),
             "GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID),
+            "GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST),
             _ => ::std::option::Option::None
         }
     }
@@ -9578,6 +9582,7 @@ impl ::protobuf::Enum for GuestControlErrorKind {
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE,
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED,
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST,
     ];
 }
 
@@ -9900,7 +9905,7 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     IFIED\x10\0\x12(\n$EXEC_CANCEL_REASON_CLIENT_DISCONNECT\x10\x01\x12%\n!E\
     XEC_CANCEL_REASON_USER_REQUESTED\x10\x02\x12$\n\x20EXEC_CANCEL_REASON_SL\
     OW_CONSUMER\x10\x03\x12%\n!EXEC_CANCEL_REASON_PROTOCOL_ERROR\x10\x04*\
-    \xe7\x11\n\x15GuestControlErrorKind\x12(\n$GUEST_CONTROL_ERROR_KIND_UNSP\
+    \x98\x12\n\x15GuestControlErrorKind\x12(\n$GUEST_CONTROL_ERROR_KIND_UNSP\
     ECIFIED\x10\0\x12+\n'GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR\x10\x01\x12\
     /\n+GUEST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED\x10\x02\x12/\n+GUEST_CON\
     TROL_ERROR_KIND_STDIN_BACKPRESSURE\x10\x03\x12)\n%GUEST_CONTROL_ERROR_KI\
@@ -9937,7 +9942,8 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     GUEST_CONTROL_ERROR_KIND_READ_DENIED\x10)\x12,\n(GUEST_CONTROL_ERROR_KIN\
     D_INVALID_PROGRAM\x10*\x12.\n*GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE\
     \x10+\x121\n-GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED\x10,\x121\n-G\
-    UEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID\x10-b\x06proto3\
+    UEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID\x10-\x12/\n+GUEST_CONTROL_E\
+    RROR_KIND_USBIP_INVALID_HOST\x10.b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file

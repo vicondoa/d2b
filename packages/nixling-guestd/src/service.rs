@@ -1847,7 +1847,7 @@ fn read_guest_file_safely(path: &Path) -> Result<Vec<u8>, pb::GuestControlErrorK
 fn validate_guest_usbip_request(host: &str, bus_id: &str) -> Result<(), pb::GuestControlErrorKind> {
     use pb::GuestControlErrorKind as K;
     host.parse::<IpAddr>()
-        .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID)?;
+        .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST)?;
     nixling_ipc::usbip::validate_bus_id(bus_id)
         .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID)
 }
@@ -1870,7 +1870,10 @@ async fn run_guest_usbip_command(
     )
     .await
     .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED)?
-    .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE)?;
+    .map_err(|err| match err.kind() {
+        std::io::ErrorKind::NotFound => K::GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE,
+        _ => K::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED,
+    })?;
     if output.status.success() {
         Ok(output)
     } else {
@@ -1949,7 +1952,8 @@ fn guest_error(kind: pb::GuestControlErrorKind) -> pb::GuestControlError {
         K::GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE => {
             (R::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE, None)
         }
-        K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID => (R::HEALTH_REMEDIATION_NONE, None),
+        K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID
+        | K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST => (R::HEALTH_REMEDIATION_NONE, None),
         K::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED => (R::HEALTH_REMEDIATION_RETRY, None),
         _ => (R::HEALTH_REMEDIATION_RETRY, None),
     };
@@ -3737,6 +3741,47 @@ mod tests {
             error.kind.enum_value().unwrap(),
             pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID
         );
+    }
+
+    #[tokio::test]
+    async fn usbip_import_rejects_invalid_host_before_command() {
+        let service = service_with_usbip(63, Some(PathBuf::from("/does/not/need/to/exist")));
+        authenticate(&service).await;
+        let ctx = ttrpc_context();
+        let response = service
+            .usbip_import(
+                &ctx,
+                usbip_request(
+                    pb::UsbipImportAction::USBIP_IMPORT_ACTION_DETACH,
+                    "not-an-ip",
+                    "1-2.1",
+                ),
+            )
+            .await
+            .unwrap();
+        let error = response.error.as_ref().expect("usbip error set");
+        assert_eq!(
+            error.kind.enum_value().unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST
+        );
+    }
+
+    #[tokio::test]
+    async fn usbip_command_spawn_permission_denied_is_command_failed() {
+        let dir = scratch_dir("usbip-perm-denied");
+        let path = dir.join("usbip");
+        std::fs::write(&path, b"#!/bin/sh\nexit 0\n").unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(&path, perms).unwrap();
+        let err = run_guest_usbip_command(&path, &["port"])
+            .await
+            .expect_err("non-executable file must fail");
+        assert_eq!(
+            err,
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

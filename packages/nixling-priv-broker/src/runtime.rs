@@ -7155,9 +7155,6 @@ mod tests {
                 net_handoff_mode: ChNetHandoffMode::TapFd,
             }),
             firewall_coexistence_policy: None,
-            runtime_providers: Vec::new(),
-            vm_runtimes: Vec::new(),
-            qemu_media: None,
         };
 
         let processes = ProcessesJson {

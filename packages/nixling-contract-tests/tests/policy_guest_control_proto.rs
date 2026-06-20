@@ -463,6 +463,7 @@ fn guest_control_proto_declares_service_methods_and_descriptor_sentinels() {
         "GUEST_CONTROL_ERROR_KIND_CWD_DENIED",
         "GUEST_CAPABILITY_USBIP_IMPORT",
         "GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED",
+        "GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST",
         "USBIP_IMPORT_ACTION_ATTACH",
         "USBIP_IMPORT_ACTION_DETACH",
     ] {

@@ -67,6 +67,12 @@ Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
 | `make nix-unit-pin` | regenerate the nix-unit case-presence pins | local |
 | `NL_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests | **manual, against a deployed nixling host** |
 
+Current live-host scripts include `nixling-store.sh` for per-VM store
+adoption and `usbip-guestd-lifecycle.sh` for USBIP guestd attach/detach across
+a `nixlingd` restart. The USBIP script requires
+`NL_USBIP_VM=<vm>` and `NL_USBIP_BUSID=<busid>` and uses only `nixling usb`
+verbs for USB state changes.
+
 CI runs the individual sub-targets (`test-lint`, `test-rust`, etc.) in parallel.
 The x86 `test-flake` leg is sharded one job per flake check (the matrix is
 enumerated at CI time by `make test-flake-list`; the `test-flake-x86` job is a
