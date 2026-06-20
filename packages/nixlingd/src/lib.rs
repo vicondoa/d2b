@@ -569,6 +569,10 @@ fn persist_json_report(path: &Path, json: &[u8]) -> std::io::Result<()> {
     {
         let mut file = File::create(&tmp)?;
         file.write_all(json)?;
+        // host doctor is an unprivileged read-only CLI surface. Keep
+        // diagnostic reports world-readable beneath the ACL-gated daemon-state
+        // tree; they contain bounded posture data, not authority or secrets.
+        file.set_permissions(fs::Permissions::from_mode(0o644))?;
         file.sync_all()?;
     }
     std::fs::rename(&tmp, path)?;
