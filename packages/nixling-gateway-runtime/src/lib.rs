@@ -1,6 +1,6 @@
 //! `nixling-gateway-runtime` — the composition root that ties the
 //! `nixling-gateway` per-session handshake to the `nixling-provider-relay`
-//! prologue gate (ADR 0032, P0). It provides the **matched pair** that makes
+//! prologue gate (ADR 0032). It provides the **matched pair** that makes
 //! the session credential gate the display byte stream over Azure Relay:
 //!
 //! - [`agent_prologue`] — built by the in-sandbox agent from the secret + the
@@ -29,8 +29,9 @@ pub use aca_workload::{
 };
 pub use audit_jsonl::{DEFAULT_GATEWAY_AUDIT_RETENTION_DAYS, JsonlGatewayAudit};
 pub use credential::{
-    CredentialError, CredentialFilePolicy, GATEWAY_CREDENTIAL_MODE, GatewayCredential,
-    MintedRelaySendToken,
+    CredentialEnvelopeMeta, CredentialError, CredentialFilePolicy, GATEWAY_CREDENTIAL_MODE,
+    GATEWAY_CREDENTIAL_SCHEMA_VERSION, GATEWAY_SEAL_KEY_LEN, GATEWAY_SEAL_KEY_MODE,
+    GatewayCredential, GatewayCredentialMaterial, MintedRelaySendToken, SealingKey,
 };
 pub use display_listener::{RelayDisplayListener, notifying_verifier};
 pub use production::production_deps_with_audit;

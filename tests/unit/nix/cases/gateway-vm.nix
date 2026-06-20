@@ -74,7 +74,8 @@ let
     "nixling-wayland-mi"
     "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/nixling"
     "11111111-1111-1111-1111-111111111111"
-    "/var/lib/nixling/gateways/work/credential.json"
+    "/var/lib/nixling/gateways/work/credential.sealed.json"
+    "/var/lib/nixling/gateways/work/seal.key"
   ];
   forbiddenRemoteRegistryMarkers = [
     "\"remoteNodes\""
@@ -123,6 +124,11 @@ let
   badCredentialOutsideStateMessages = failureMessages ((mkEval [
     (lib.recursiveUpdate base {
       nixling.gateways.work.credentialPath = "/var/lib/nixling/other/credential.json";
+    })
+  ]).config);
+  badSealKeyOutsideStateMessages = failureMessages ((mkEval [
+    (lib.recursiveUpdate base {
+      nixling.gateways.work.sealKeyPath = "/var/lib/nixling/other/seal.key";
     })
   ]).config);
   badTraversalMessages = failureMessages ((mkEval [
@@ -199,6 +205,11 @@ let
       nixling.gateways.work.realm = "local";
     })
   ]).config);
+  retiredHostRelayCredentialMessages = failureMessages ((mkEval [
+    (lib.recursiveUpdate base {
+      nixling.gateways.work.allowHostRelayCredentials = true;
+    })
+  ]).config);
   sourceToolsCfg = (mkEval [
     (lib.recursiveUpdate base {
       nixling.site.usePrebuiltHostTools = false;
@@ -254,6 +265,13 @@ in
     expected = true;
   };
 
+  "gateway-vm/rejects-seal-key-path-outside-gateway-state" = {
+    expr = lib.any
+      (m: lib.hasInfix "nixling.gateways.work.sealKeyPath must live under" m)
+      badSealKeyOutsideStateMessages;
+    expected = true;
+  };
+
   "gateway-vm/rejects-parent-traversal-in-state-paths" = {
     expr = lib.any
       (m: lib.hasInfix "must not contain `..` path" m)
@@ -300,6 +318,9 @@ in
       };
 
       hasWaypipeSocket = gatewayJson.display ? waypipeSocket;
+      sealKeyPath = gatewayJson.sealKeyPath;
+      credentialPath = gatewayJson.credentialPath;
+      hasEnrollmentHelper = builtins.elem "nixling-gateway-runtime" packageNames;
       hasWaypipeClient = builtins.hasAttr "nixling-gateway-waypipe-client" gatewayGuestCfg.systemd.services;
       hasWaypipeServer = builtins.hasAttr "nixling-gateway-waypipe-server" gatewayGuestCfg.systemd.services;
     };
@@ -319,6 +340,9 @@ in
         memory = "2048Mi";
         autoSuspendIntervalSecs = 600;
       };
+      sealKeyPath = "/var/lib/nixling/gateways/work/seal.key";
+      credentialPath = "/var/lib/nixling/gateways/work/credential.sealed.json";
+      hasEnrollmentHelper = true;
       hasWaypipeSocket = false;
       hasWaypipeClient = false;
       hasWaypipeServer = false;
@@ -370,7 +394,7 @@ in
       gatewayUserCanReachPublicSocket = builtins.elem "nixling" gatewayGuestCfg.users.users.gateway.extraGroups;
     };
     expected = {
-      hostStateDir = true;
+      hostStateDir = false;
       guestStateDir = true;
       guestDaemonStateDir = true;
       guestLockFile = true;
@@ -564,6 +588,13 @@ in
       inherit hostGatewayJsonPresent;
       guest = gatewayJson.allowHostRelayCredentials;
     };
+
+    "gateway-vm/rejects-retired-host-relay-credential-escape-hatch" = {
+      expr = lib.any
+        (m: lib.hasInfix "allowHostRelayCredentials has been retired" m)
+        retiredHostRelayCredentialMessages;
+      expected = true;
+    };
     expected = {
       hostGatewayJsonPresent = false;
       guest = false;
@@ -638,7 +669,7 @@ in
       noSystemPackagesScan = !(lib.hasInfix "config.environment.systemPackages" gatewayModuleSource);
       hasNixling = builtins.elem "nixling" packageNames;
       hasNixlingd = builtins.elem "nixlingd" packageNames;
-      hasGatewayRelaySourceBuild = builtins.elem "nixling-gateway-relay" packageNames;
+      hasGatewayRuntime = builtins.elem "nixling-gateway-runtime" packageNames;
     };
     expected = {
       noInlineBuildRustPackage = true;
@@ -646,7 +677,7 @@ in
       noSystemPackagesScan = true;
       hasNixling = true;
       hasNixlingd = true;
-      hasGatewayRelaySourceBuild = false;
+      hasGatewayRuntime = true;
     };
   };
 }

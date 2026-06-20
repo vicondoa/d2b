@@ -20,6 +20,13 @@ in
       internal = true;
       description = "Internal: resolved host nixlingd package.";
     };
+
+    nixlingGatewayRuntime = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal: resolved gateway runtime helper package.";
+    };
   };
 
   options.nixling.gateways = lib.mkOption {
@@ -92,12 +99,23 @@ in
 
         credentialPath = lib.mkOption {
           type = lib.types.str;
-          default = "/var/lib/nixling/gateways/${name}/credential.json";
+          default = "/var/lib/nixling/gateways/${name}/credential.sealed.json";
           description = ''
-            Host path for the sealed gateway credential envelope. This is a
-            runtime state path, not plaintext Nix data. Assertions require it to
+            Guest runtime path for the sealed gateway credential envelope. This
+            is not plaintext Nix data. Assertions require it to
             live under this gateway's `stateDir` and reject `/nix/store`,
             path-traversal, trailing-slash, or secret-looking values.
+          '';
+        };
+
+        sealKeyPath = lib.mkOption {
+          type = lib.types.str;
+          default = "/var/lib/nixling/gateways/${name}/seal.key";
+          description = ''
+            Guest-local sealing key path for the encrypted gateway credential
+            envelope. The key is created by the in-guest enrollment flow with
+            mode `0600`; it is a runtime state path and must live under this
+            gateway's `stateDir`.
           '';
         };
 
@@ -105,10 +123,9 @@ in
           type = lib.types.bool;
           default = false;
           description = ''
-            Transitional P0 escape hatch that lets the host daemon read the
-            gateway credential envelope and mint short-lived Relay Send bearers.
-            This must stay disabled for production realm rollout; Wave 12
-            removes or fail-closes the host-resident credential path.
+            Retired compatibility option. Host-side gateway credential reads
+            and Relay Send bearer minting are rejected; enroll credentials
+            inside the gateway guest instead.
           '';
         };
 

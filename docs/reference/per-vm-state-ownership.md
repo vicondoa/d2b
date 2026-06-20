@@ -14,6 +14,22 @@ via a VM-start preflight wired into nixlingd
 
 This page documents the current ownership matrix the daemon enforces.
 
+## Gateway credential state
+
+Realm gateway credentials are not part of the per-VM ownership matrix. They
+live under each gateway's `nixling.gateways.<name>.stateDir` (default
+`/var/lib/nixling/gateways/<name>` inside the gateway guest), not under
+`/var/lib/nixling/vms/<vm>/`. The host NixOS module does not create or
+manage these credential files; they are enrolled inside the guest:
+
+| Path | Owner | Group | Mode | Rationale |
+|---|---|---|---|---|
+| `credential.sealed.json` | `nixlingd` (inside gateway guest) | `nixlingd` | `0600` | Encrypted relay/provider credential envelope. The host daemon does not read or mint from it. |
+| `seal.key` | `nixlingd` (inside gateway guest) | `nixlingd` | `0600` | Guest-local 32-byte sealing key. Losing it requires re-enrollment and provider-side credential rotation. |
+
+`allowHostRelayCredentials` is retired; host-side gateway credential reads
+and Relay Send bearer minting are rejected.
+
 ## CRITICAL: hardlink-farm carve-out
 
 > Critical detail: the per-VM hardlink farm shares inodes with

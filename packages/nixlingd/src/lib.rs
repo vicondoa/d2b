@@ -48,7 +48,8 @@ use nixling_gateway::{
 };
 use nixling_gateway_runtime::{
     AcaGatewayWorkload, AgentBinaries, CredentialFilePolicy, GatewayCredential, RelayCoords,
-    RelayDisplayListener, production_deps, relay_sas_token_snippet, system_now_fn,
+    RelayDisplayListener, SealingKey, production_deps, relay_sas_token_snippet, system_now_fn,
+    system_now_unix,
 };
 use nixling_host::ssh_keygen;
 use nixling_ipc::{
@@ -344,6 +345,8 @@ pub struct GatewayFileConfig {
     state_dir: Option<PathBuf>,
     #[serde(default)]
     credential_path: Option<PathBuf>,
+    #[serde(default)]
+    seal_key_path: Option<PathBuf>,
     #[serde(default)]
     allow_host_relay_credentials: bool,
     #[serde(default)]
@@ -750,11 +753,11 @@ fn validate_gateway_host_relay_transition_guard(
     config: &GatewayFileConfig,
 ) -> Result<(), TypedError> {
     if config.allow_host_relay_credentials {
-        Ok(())
-    } else {
         Err(gateway_display_config_error(
-            "host-held gateway credentials and relay send-bearer minting are disabled by default; set allowHostRelayCredentials=true in the gateway config only for transition/dev hosts, or move relay credentials into the gateway guest",
+            "host-held gateway credentials and relay send-bearer minting are retired; enroll inside gateway then retry",
         ))
+    } else {
+        Ok(())
     }
 }
 
@@ -2749,6 +2752,7 @@ fn validate_gateway_display_open_preflight(state: &ServerState) -> Result<(), Ty
             realm: String::new(),
             state_dir: None,
             credential_path: None,
+            seal_key_path: None,
             allow_host_relay_credentials: preflight.allow_host_relay_credentials,
             relay: GatewayRelayFileConfig::default(),
             aca: GatewayAcaFileConfig::default(),
@@ -2936,15 +2940,26 @@ fn agent_bins_from_config(config: &GatewayFileConfig) -> AgentBinaries {
     bins
 }
 
-fn relay_auth_snippet_from_config(config: &GatewayFileConfig) -> Result<String, GatewayError> {
-    validate_gateway_host_relay_transition_guard(config)
-        .map_err(|_| GatewayError::ProviderAllocationFailed)?;
+fn gateway_credential_from_config(
+    config: &GatewayFileConfig,
+) -> Result<GatewayCredential, GatewayError> {
     let credential_path = config
         .credential_path
         .as_ref()
         .ok_or(GatewayError::ProviderAllocationFailed)?;
-    let credential = GatewayCredential::load(credential_path, &CredentialFilePolicy::default())
+    let seal_key_path = config
+        .seal_key_path
+        .as_ref()
+        .ok_or(GatewayError::ProviderAllocationFailed)?;
+    let policy = CredentialFilePolicy::default();
+    let key = SealingKey::load(seal_key_path, &policy)
         .map_err(|_| GatewayError::ProviderAllocationFailed)?;
+    GatewayCredential::load_sealed(credential_path, &key, &policy, system_now_unix())
+        .map_err(|_| GatewayError::ProviderAllocationFailed)
+}
+
+fn relay_auth_snippet_from_config(config: &GatewayFileConfig) -> Result<String, GatewayError> {
+    let credential = gateway_credential_from_config(config)?;
     let token = credential
         .mint_send_token(
             &relay_endpoint_from_config(config)?,
@@ -2957,14 +2972,7 @@ fn relay_auth_snippet_from_config(config: &GatewayFileConfig) -> Result<String, 
 fn display_listener_from_config(
     config: &GatewayFileConfig,
 ) -> Result<RelayDisplayListener, GatewayError> {
-    validate_gateway_host_relay_transition_guard(config)
-        .map_err(|_| GatewayError::ProviderAllocationFailed)?;
-    let credential_path = config
-        .credential_path
-        .as_ref()
-        .ok_or(GatewayError::ProviderAllocationFailed)?;
-    let credential = GatewayCredential::load(credential_path, &CredentialFilePolicy::default())
-        .map_err(|_| GatewayError::ProviderAllocationFailed)?;
+    let credential = gateway_credential_from_config(config)?;
     let waypipe_socket = required_gateway_field(&config.display.waypipe_socket)?;
     let validated = match validate_waypipe_receiver_socket(Path::new(&waypipe_socket)) {
         Ok(validated) => validated,
@@ -11266,6 +11274,7 @@ mod public_status_tests {
             realm: "demo".to_owned(),
             state_dir: None,
             credential_path: Some(PathBuf::from("/run/nixling/test-gateway-credential.json")),
+            seal_key_path: Some(PathBuf::from("/run/nixling/test-gateway-seal.key")),
             allow_host_relay_credentials,
             relay: GatewayRelayFileConfig {
                 namespace: Some("relay.example.invalid".to_owned()),
@@ -11297,22 +11306,16 @@ mod public_status_tests {
     }
 
     #[test]
-    fn gateway_host_relay_guard_defaults_closed() {
+    fn gateway_host_relay_guard_accepts_default_guest_owned_store() {
         let dir = tempfile::tempdir().expect("gateway guard dir");
         let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o600);
         let config = gateway_config_for_waypipe(&socket_path, false);
-        let err = validate_gateway_host_relay_transition_guard(&config)
-            .expect_err("host relay credentials require explicit guard");
-        let detail = gateway_unavailable_detail(&err);
-        assert!(detail.contains("disabled by default"));
-        assert!(detail.contains("allowHostRelayCredentials=true"));
+        validate_gateway_host_relay_transition_guard(&config)
+            .expect("default guest-owned credential store is accepted");
     }
 
     #[test]
-    fn gateway_host_relay_guard_accepts_explicit_unprivileged_socket() {
-        if Uid::effective().is_root() {
-            return;
-        }
+    fn gateway_host_relay_guard_rejects_retired_escape_hatch() {
         let dir = tempfile::tempdir().expect("gateway guard dir");
         let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o600);
         let config = gateway_config_for_waypipe(&socket_path, true);
@@ -11320,8 +11323,10 @@ mod public_status_tests {
             .expect("display preflight stores config without touching the user-session socket");
         assert_eq!(preflight.waypipe_socket_path.as_ref(), Some(&socket_path));
         assert!(preflight.allow_host_relay_credentials);
-        validate_waypipe_receiver_socket(&socket_path)
-            .expect("explicit guard and valid waypipe socket are accepted");
+        let err = validate_gateway_host_relay_transition_guard(&config)
+            .expect_err("retired escape hatch is rejected");
+        assert!(gateway_unavailable_detail(&err).contains("retired"));
+        assert!(gateway_unavailable_detail(&err).contains("enroll inside gateway then retry"));
     }
 
     #[test]
@@ -11345,10 +11350,10 @@ mod public_status_tests {
     }
 
     #[test]
-    fn gateway_display_open_validates_waypipe_socket_before_orchestrator() {
+    fn gateway_display_open_refuses_retired_host_relay_before_orchestrator() {
         let (mut state, _dir) = test_state();
         let dir = tempfile::tempdir().expect("waypipe dispatch dir");
-        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o660);
+        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o600);
         state.gateway_display = Arc::new(GatewayDisplayRuntime {
             orchestrator: GatewayOrchestrator::new(
                 daemon_gateway_deps(),
@@ -11376,8 +11381,9 @@ mod public_status_tests {
                 },
             )),
         )
-        .expect_err("invalid waypipe socket blocks gateway open");
-        assert!(gateway_unavailable_detail(&err).contains("mode 0600"));
+        .expect_err("retired host relay credential path blocks gateway open");
+        assert!(gateway_unavailable_detail(&err).contains("retired"));
+        assert!(gateway_unavailable_detail(&err).contains("enroll inside gateway then retry"));
         assert!(state.gateway_display.sessions.lock().unwrap().is_empty());
     }
 
@@ -15233,7 +15239,8 @@ mod broker_dispatch_tests {
             "authz-audit-requires-admin",
         ];
         for kind in &kinds {
-            let (summary, remediation) = redact_broker_error_for_launcher("Op", Some("W15"), kind);
+            let (summary, remediation) =
+                redact_broker_error_for_launcher("Op", Some("op-15"), kind);
             assert!(!summary.is_empty(), "kind={kind} summary empty");
             assert!(!remediation.is_empty(), "kind={kind} remediation empty");
             for forbidden in &["/etc/", "/var/lib/", "systemctl", "execve", "Caused by"] {
@@ -17805,8 +17812,6 @@ mod broker_dispatch_tests {
             "stateless guest-control readiness MUST be a loud Err so a routing regression cannot masquerade as a benign never-ready"
         );
     }
-
-    // --- fix2a: readiness-loop liveness fast-fail ( W1 ) -----------------
 
     /// Scripted observe-only liveness fake driving the readiness loop
     /// through the same call site as production. Pops the next scripted
