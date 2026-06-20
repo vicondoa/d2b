@@ -38,7 +38,7 @@ pub use execution::{ExecState, ExecutionSummary};
 pub use frame::{
     ConstellationFrame, Handshake, HandshakeAccepted, HandshakeRejected, HandshakeRejectedReason,
     OperationKind, OperationRequest, OperationResponse, PeerContext, StreamClose, StreamData,
-    StreamFlow, StreamOpen,
+    StreamFlow, StreamOpen, StreamResume,
 };
 pub use ids::{
     ExecutionId, GatewayId, IdempotencyKey, NodeId, OperationId, PrincipalId, ProviderId, RealmId,

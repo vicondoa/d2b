@@ -6,8 +6,8 @@ use nixling_constellation_core::{
     HandshakeRejectedReason, IdempotencyKey, NodeId, OpaquePayload, OperationId, OperationKind,
     OperationRequest, OperationResponse, PeerContext, PrincipalId, ProtocolToken, RealmId,
     RealmPath, StreamAuthz, StreamChannel, StreamClose, StreamCloseReason, StreamCursor,
-    StreamData, StreamDescriptor, StreamFlow, StreamId, StreamKind, StreamOpen, TraceContext,
-    WorkloadId,
+    StreamData, StreamDescriptor, StreamFlow, StreamId, StreamKind, StreamOpen, StreamResume,
+    TraceContext, WorkloadId,
 };
 use nixling_constellation_provider::ProtocolCodec;
 use nixling_ipc::MAX_FRAME_SIZE;
@@ -17,7 +17,7 @@ use prost::Message;
 pub const CODEC_ID: &str = "protobuf.v1";
 
 /// Deterministic fingerprint for the hand-authored prost schema in this crate.
-pub const SCHEMA_FINGERPRINT: &str = "pb.v1:f11:h4:op14:sk12:err19:audit11";
+pub const SCHEMA_FINGERPRINT: &str = "pb.v1:f12:h4:op14:sk12:err19:audit11";
 
 /// A prost-backed constellation frame codec.
 #[derive(Debug, Clone, Copy, Default)]
@@ -61,7 +61,7 @@ impl ProtocolCodec for ProtobufCodec {
 struct ProtoFrame {
     #[prost(
         oneof = "proto_frame::Body",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12"
     )]
     body: Option<proto_frame::Body>,
 }
@@ -91,6 +91,8 @@ mod proto_frame {
         HandshakeAccepted(super::ProtoHandshakeAccepted),
         #[prost(message, tag = "11")]
         HandshakeRejected(super::ProtoHandshakeRejected),
+        #[prost(message, tag = "12")]
+        StreamResume(super::ProtoStreamResume),
     }
 }
 
@@ -217,6 +219,14 @@ struct ProtoStreamClose {
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
+struct ProtoStreamResume {
+    #[prost(string, tag = "1")]
+    stream: String,
+    #[prost(string, tag = "2")]
+    cursor: String,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
 struct ProtoError {
     #[prost(int32, tag = "1")]
     kind: i32,
@@ -318,6 +328,9 @@ fn encode_proto_frame(frame: &ConstellationFrame) -> Result<ProtoFrame, Constell
         ConstellationFrame::StreamClose(frame) => {
             proto_frame::Body::StreamClose(encode_stream_close(frame))
         }
+        ConstellationFrame::StreamResume(frame) => {
+            proto_frame::Body::StreamResume(encode_stream_resume(frame))
+        }
         ConstellationFrame::TypedError(frame) => {
             proto_frame::Body::TypedError(encode_error(frame)?)
         }
@@ -359,6 +372,9 @@ fn decode_proto_frame(frame: ProtoFrame) -> Result<ConstellationFrame, Constella
         }
         proto_frame::Body::StreamClose(frame) => {
             decode_stream_close(frame).map(ConstellationFrame::StreamClose)
+        }
+        proto_frame::Body::StreamResume(frame) => {
+            decode_stream_resume(frame).map(ConstellationFrame::StreamResume)
         }
         proto_frame::Body::TypedError(frame) => {
             decode_error(frame).map(ConstellationFrame::TypedError)
@@ -634,6 +650,20 @@ fn decode_stream_close(frame: ProtoStreamClose) -> Result<StreamClose, Constella
     Ok(StreamClose {
         stream: parse_stream_id(frame.stream, "stream_close stream")?,
         reason: decode_close_reason(frame.reason)?,
+    })
+}
+
+fn encode_stream_resume(frame: &StreamResume) -> ProtoStreamResume {
+    ProtoStreamResume {
+        stream: frame.stream.as_str().to_owned(),
+        cursor: frame.cursor.as_str().to_owned(),
+    }
+}
+
+fn decode_stream_resume(frame: ProtoStreamResume) -> Result<StreamResume, ConstellationError> {
+    Ok(StreamResume {
+        stream: parse_stream_id(frame.stream, "stream_resume stream")?,
+        cursor: parse_stream_cursor(frame.cursor, "stream_resume cursor")?,
     })
 }
 
@@ -1358,6 +1388,10 @@ mod tests {
             ConstellationFrame::StreamClose(StreamClose {
                 stream: stream.clone(),
                 reason: StreamCloseReason::Completed,
+            }),
+            ConstellationFrame::StreamResume(StreamResume {
+                stream: stream.clone(),
+                cursor: StreamCursor::parse("cur-resume").unwrap(),
             }),
             ConstellationFrame::TypedError(ConstellationError::capability_denied(
                 Capability::WindowForwarding,

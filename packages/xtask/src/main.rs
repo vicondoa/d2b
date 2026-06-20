@@ -19,7 +19,7 @@ use nixling_constellation_core::{
     ConstellationFrame, ExecutionId, ExecutionSummary, GatewayId, Handshake, HandshakeAccepted,
     HandshakeRejected, HandshakeRejectedReason, IdempotencyKey, NodeId, NodeSummary, OperationId,
     OperationKind, OperationRequest, OperationResponse, PrincipalId, ProviderId, RealmId,
-    RealmPath, StreamCursor, StreamId, WorkloadId, WorkloadSelector, WorkloadSummary,
+    RealmPath, StreamCursor, StreamId, StreamResume, WorkloadId, WorkloadSelector, WorkloadSummary,
     audit::{
         AuditChainCheckFailure, AuditChainCheckResult, AuditChainLink, AuditChainRecord, AuditHash,
         AuditRetentionFloorReason, AuditRetentionFloorStatus, AuditSinkHealth,
@@ -67,6 +67,7 @@ enum ConstellationCoreSchema {
     OperationKind(OperationKind),
     OperationRequest(OperationRequest),
     OperationResponse(OperationResponse),
+    StreamResume(StreamResume),
     AdmissionAuditRecord(AdmissionAuditRecord),
     AuditEnvelope(AuditEnvelope),
     AuditHash(AuditHash),
