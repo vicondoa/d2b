@@ -151,6 +151,15 @@ deprecations ship one minor release before removal.
 - `qemu-media` restart now cleans up leftover dependency sidecars when
   the primary qemu-media runner has exited, so a stale Wayland proxy
   pidfd from a failed boot no longer blocks the next start.
+- `qemu-media` lockMemory now gives QEMU a bounded proportional memlock
+  allowance (guest RAM plus the larger of 2 GiB or 25% headroom), avoiding
+  runtime `mlockall` failures for larger media VMs without broadening the
+  broker service's memlock limit, and fails before spawn when host
+  `MemAvailable` cannot satisfy guest RAM plus fixed QEMU overhead.
+- `qemu-media` USB detach now reconciles QMP state idempotently when the
+  delete event is missed or the media nodes are already absent, and can
+  detach a uniquely attached same-vendor/product ref after a runtime USB
+  selector moves without requiring manual re-enrollment first.
 - Documentation: sanitized ADR 0032's ACA/Relay live-proof record so the
   architectural validation summary remains without publishing live sandbox,
   disk-image, command-output, or compositor-window identifiers.

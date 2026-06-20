@@ -20,7 +20,7 @@
 //! exercised by the broker integration tests (broker-pidfd-adopt-roundtrip.sh
 //! and broker-spawn-runner-smoke.sh).
 
-use std::fs::File;
+use std::fs::{self, File};
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
@@ -1719,16 +1719,86 @@ fn validate_qemu_media_runner_hardening(plan: &SpawnRunnerPlan) -> Result<(), Li
     Ok(())
 }
 
+const QEMU_MEDIA_MEMLOCK_MIN_HEADROOM_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const QEMU_MEDIA_MEMLOCK_HEADROOM_RATIO_DIVISOR: u64 = 4;
+const QEMU_MEDIA_MEMLOCK_PREFLIGHT_OVERHEAD_BYTES: u64 = 1024 * 1024 * 1024;
+
 fn qemu_media_memlock_limit_bytes(plan: &SpawnRunnerPlan) -> Result<Option<u64>, LiveHandlerError> {
+    Ok(qemu_media_memlock_guest_bytes(plan)?
+        .map(|guest_bytes| guest_bytes.saturating_add(qemu_media_memlock_headroom_bytes(guest_bytes))))
+}
+
+fn qemu_media_memlock_guest_bytes(
+    plan: &SpawnRunnerPlan,
+) -> Result<Option<u64>, LiveHandlerError> {
     if !is_qemu_media_runner(plan) || !qemu_media_argv_has_mem_lock(&plan.argv) {
         return Ok(None);
     }
-    let guest_bytes = qemu_media_memory_backend_size_bytes(&plan.argv).ok_or_else(|| {
-        LiveHandlerError::SpawnFailed {
+    qemu_media_memory_backend_size_bytes(&plan.argv)
+        .map(Some)
+        .ok_or_else(|| LiveHandlerError::SpawnFailed {
             detail: "qemu-media mem-lock requires a memory-backend-ram size".to_owned(),
+        })
+}
+
+fn qemu_media_memlock_headroom_bytes(guest_bytes: u64) -> u64 {
+    (guest_bytes / QEMU_MEDIA_MEMLOCK_HEADROOM_RATIO_DIVISOR)
+        .max(QEMU_MEDIA_MEMLOCK_MIN_HEADROOM_BYTES)
+}
+
+fn qemu_media_memlock_preflight_required_bytes(guest_bytes: u64) -> u64 {
+    guest_bytes.saturating_add(QEMU_MEDIA_MEMLOCK_PREFLIGHT_OVERHEAD_BYTES)
+}
+
+fn qemu_media_preflight_memlock_budget(required_bytes: u64) -> Result<(), LiveHandlerError> {
+    let meminfo = fs::read_to_string("/proc/meminfo").map_err(|err| {
+        LiveHandlerError::SpawnFailed {
+            detail: format!("qemu-media mem-lock preflight could not read host memory availability: {err}"),
         }
     })?;
-    Ok(Some(guest_bytes.saturating_add(256 * 1024 * 1024)))
+    let available = parse_meminfo_available_bytes(&meminfo).ok_or_else(|| {
+        LiveHandlerError::SpawnFailed {
+            detail: "qemu-media mem-lock preflight could not parse host MemAvailable".to_owned(),
+        }
+    })?;
+    if let Some(shortfall) = qemu_media_memlock_budget_shortfall(required_bytes, available) {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: format!(
+                "qemu-media mem-lock preflight requires {} bytes but host MemAvailable is {} bytes; lower qemuMedia.resources.memoryMiB or disable qemuMedia.security.lockMemory",
+                shortfall.required_bytes, shortfall.available_bytes
+            ),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct QemuMediaMemlockShortfall {
+    required_bytes: u64,
+    available_bytes: u64,
+}
+
+fn qemu_media_memlock_budget_shortfall(
+    required_bytes: u64,
+    available_bytes: u64,
+) -> Option<QemuMediaMemlockShortfall> {
+    (available_bytes < required_bytes).then_some(QemuMediaMemlockShortfall {
+        required_bytes,
+        available_bytes,
+    })
+}
+
+fn parse_meminfo_available_bytes(meminfo: &str) -> Option<u64> {
+    let value = meminfo
+        .lines()
+        .find_map(|line| line.strip_prefix("MemAvailable:"))?;
+    let mut parts = value.split_whitespace();
+    let amount = parts.next()?.parse::<u64>().ok()?;
+    let unit = parts.next().unwrap_or("kB");
+    if !unit.eq_ignore_ascii_case("kb") {
+        return None;
+    }
+    amount.checked_mul(1024)
 }
 
 fn qemu_media_argv_has_mem_lock(argv: &[String]) -> bool {
@@ -2928,6 +2998,16 @@ pub fn live_spawn_runner(
         pre_opened_device_fds.push(render_fd);
     }
 
+    let memlock_guest_bytes = qemu_media_memlock_guest_bytes(&plan)?;
+    let memlock_limit_bytes = memlock_guest_bytes.map(|guest_bytes| {
+        guest_bytes.saturating_add(qemu_media_memlock_headroom_bytes(guest_bytes))
+    });
+    if let Some(guest_bytes) = memlock_guest_bytes {
+        qemu_media_preflight_memlock_budget(qemu_media_memlock_preflight_required_bytes(
+            guest_bytes,
+        ))?;
+    }
+
     let isolation = crate::sys::pidfd_sys::RunnerIsolationSpec {
         capabilities: plan.capabilities.clone(),
         namespaces: plan.namespaces.clone(),
@@ -2952,7 +3032,7 @@ pub fn live_spawn_runner(
         // The sys layer dup2's it to fd 10 in the user-NS child before
         // execve.
         pre_opened_device_fds,
-        memlock_limit_bytes: qemu_media_memlock_limit_bytes(&plan)?,
+        memlock_limit_bytes,
     };
 
     let outcome = crate::sys::pidfd_sys::clone3_spawn_runner(
@@ -3887,7 +3967,7 @@ mod tests {
 
         assert_eq!(
             qemu_media_memlock_limit_bytes(&plan).expect("memlock parse"),
-            Some((4096_u64 + 256) * 1024 * 1024)
+            Some(6 * 1024 * 1024 * 1024)
         );
 
         plan.argv = vec![
@@ -3896,6 +3976,61 @@ mod tests {
             "memory-backend-ram,id=nlram,size=4096M,dump=off,merge=off".to_owned(),
         ];
         assert_eq!(qemu_media_memlock_limit_bytes(&plan).unwrap(), None);
+    }
+
+    #[test]
+    fn qemu_media_memlock_headroom_scales_for_large_guests() {
+        let guest = 10 * 1024_u64 * 1024 * 1024;
+
+        assert_eq!(
+            qemu_media_memlock_headroom_bytes(guest),
+            guest / QEMU_MEDIA_MEMLOCK_HEADROOM_RATIO_DIVISOR
+        );
+        assert_eq!(
+            qemu_media_memlock_limit_bytes(&SpawnRunnerPlan {
+                argv: vec![
+                    "nixling-qemu-media@media".to_owned(),
+                    "-object".to_owned(),
+                    "memory-backend-ram,id=nlram,size=10240M,dump=off,merge=off,prealloc=on"
+                        .to_owned(),
+                    "-overcommit".to_owned(),
+                    "mem-lock=on".to_owned(),
+                ],
+                ..hardened_qemu_media_plan()
+            })
+            .expect("memlock parse"),
+            Some(guest + (guest / QEMU_MEDIA_MEMLOCK_HEADROOM_RATIO_DIVISOR))
+        );
+        assert_eq!(
+            qemu_media_memlock_preflight_required_bytes(guest),
+            guest + QEMU_MEDIA_MEMLOCK_PREFLIGHT_OVERHEAD_BYTES
+        );
+    }
+
+    #[test]
+    fn qemu_media_memlock_preflight_parses_mem_available() {
+        assert_eq!(
+            parse_meminfo_available_bytes("MemTotal: 1 kB\nMemAvailable: 12345 kB\n"),
+            Some(12_641_280)
+        );
+        assert_eq!(
+            parse_meminfo_available_bytes("MemAvailable: 12345 B\n"),
+            None
+        );
+        assert_eq!(parse_meminfo_available_bytes("MemTotal: 1 kB\n"), None);
+    }
+
+    #[test]
+    fn qemu_media_memlock_preflight_shortfall_is_pure_and_actionable() {
+        assert_eq!(
+            qemu_media_memlock_budget_shortfall(4096, 4095),
+            Some(QemuMediaMemlockShortfall {
+                required_bytes: 4096,
+                available_bytes: 4095,
+            })
+        );
+        assert_eq!(qemu_media_memlock_budget_shortfall(4096, 4096), None);
+        assert_eq!(qemu_media_memlock_budget_shortfall(4096, 8192), None);
     }
 
     #[test]

@@ -259,13 +259,14 @@ pub fn detach(
     nixling_host::media::validate_usb_busid(&req.bus_id)
         .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
     let identity = read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id)?;
-    let (record, source) = resolve_runtime_selector(resolver, req.vm_id.as_str(), &identity)?;
+    let mut client = QmpClient::connect(&qmp_socket_path(req.vm_id.as_str()))?;
+    let (record, source) =
+        resolve_detach_runtime_selector(resolver, req.vm_id.as_str(), &identity, &mut client)?;
     let scaffold = qmp_scaffold(
         &record.media_ref,
         &source.slot,
         QemuMediaHotplugAction::Detach,
     )?;
-    let mut client = QmpClient::connect(&qmp_socket_path(req.vm_id.as_str()))?;
     let commands = qmp_detach(&mut client, &scaffold)?;
     Ok(HotplugOutcome {
         response: hotplug_response(
@@ -601,56 +602,120 @@ fn qmp_detach(
 ) -> Result<Vec<String>, MediaOpError> {
     let file_node_id = qemu_media_file_node_id(&scaffold.media_ref);
     let mut first_error = None;
+    let mut commands = Vec::new();
     match client.execute(
         "device_del",
         json!({ "id": scaffold.device_id.as_str() }),
         None,
     ) {
         Ok(_) => {
+            commands.push("device_del".to_owned());
             if let Err(error) = client.wait_for_device_deleted(&scaffold.device_id) {
                 first_error.get_or_insert(error);
+                commands.push("DEVICE_DELETED:reconciled".to_owned());
+            } else {
+                commands.push("DEVICE_DELETED".to_owned());
             }
         }
         Err(error) => {
             first_error.get_or_insert(error);
+            commands.push("device_del:absent".to_owned());
         }
     }
-    if let Err(error) = client.execute(
-        "blockdev-del",
-        json!({ "node-name": scaffold.blockdev_id.as_str() }),
-        None,
-    ) {
-        first_error.get_or_insert(error);
-    }
-    if let Err(error) = client.execute(
-        "blockdev-del",
-        json!({ "node-name": file_node_id.as_str() }),
-        None,
-    ) {
-        first_error.get_or_insert(error);
-    }
-    let fdset_entry = client.query_fdset_entry(&scaffold.media_ref).ok().flatten();
-    let remove_fd_args = if let Some((fdset_id, fd)) = fdset_entry {
-        json!({ "fdset-id": fdset_id, "fd": fd })
-    } else {
-        first_error.get_or_insert(MediaOpError::Qmp("fdset-fd-not-found".to_owned()));
-        json!({})
-    };
-    if fdset_entry.is_some()
-        && let Err(error) = client.execute("remove-fd", remove_fd_args, None)
-    {
-        first_error.get_or_insert(error);
-    }
+    qmp_delete_block_node(
+        client,
+        scaffold.blockdev_id.as_str(),
+        "blockdev-del:raw",
+        &mut commands,
+        &mut first_error,
+    );
+    qmp_delete_block_node(
+        client,
+        file_node_id.as_str(),
+        "blockdev-del:file",
+        &mut commands,
+        &mut first_error,
+    );
+    qmp_remove_fdset_entry(
+        client,
+        scaffold.media_ref.as_str(),
+        &mut commands,
+        &mut first_error,
+    );
     if let Some(error) = first_error {
-        return Err(error);
+        let raw_absent = client
+            .named_block_node_exists(scaffold.blockdev_id.as_str())
+            .map(|exists| !exists)
+            .unwrap_or(false);
+        let file_absent = client
+            .named_block_node_exists(file_node_id.as_str())
+            .map(|exists| !exists)
+            .unwrap_or(false);
+        let fd_absent = client
+            .query_fdset_entry(scaffold.media_ref.as_str())
+            .map(|entry| entry.is_none())
+            .unwrap_or(false);
+        if !(raw_absent && file_absent && fd_absent) {
+            return Err(error);
+        }
     }
-    Ok(vec![
-        "device_del".to_owned(),
-        "DEVICE_DELETED".to_owned(),
-        "blockdev-del:raw".to_owned(),
-        "blockdev-del:file".to_owned(),
-        "remove-fd".to_owned(),
-    ])
+    Ok(commands)
+}
+
+fn qmp_delete_block_node(
+    client: &mut QmpClient,
+    node_name: &str,
+    label: &str,
+    commands: &mut Vec<String>,
+    first_error: &mut Option<MediaOpError>,
+) {
+    match client.execute("blockdev-del", json!({ "node-name": node_name }), None) {
+        Ok(_) => commands.push(label.to_owned()),
+        Err(error) => match client.named_block_node_exists(node_name) {
+            Ok(false) => {
+                first_error.get_or_insert(error);
+                commands.push(format!("{label}:absent"));
+            }
+            Ok(true) | Err(_) => {
+                first_error.get_or_insert(error);
+            }
+        },
+    }
+}
+
+fn qmp_remove_fdset_entry(
+    client: &mut QmpClient,
+    media_ref: &str,
+    commands: &mut Vec<String>,
+    first_error: &mut Option<MediaOpError>,
+) {
+    let fdset_entry = match client.query_fdset_entry(media_ref) {
+        Ok(entry) => entry,
+        Err(error) => {
+            first_error.get_or_insert(error);
+            None
+        }
+    };
+    let Some((fdset_id, fd)) = fdset_entry else {
+        commands.push("remove-fd:absent".to_owned());
+        return;
+    };
+    match client.execute(
+        "remove-fd",
+        json!({ "fdset-id": fdset_id, "fd": fd }),
+        None,
+    ) {
+        Ok(_) => commands.push("remove-fd".to_owned()),
+        Err(error) => match client.query_fdset_entry(media_ref) {
+            Ok(None) => {
+                first_error.get_or_insert(error);
+                commands.push("remove-fd:absent".to_owned());
+            }
+            Ok(Some(_)) | Err(_) => {
+                first_error.get_or_insert(error);
+            }
+        },
+    }
 }
 
 struct QmpClient {
@@ -662,6 +727,10 @@ struct QmpClient {
 
 impl QmpClient {
     fn connect(path: &Path) -> Result<Self, MediaOpError> {
+        Self::connect_with_timeout(path, Duration::from_secs(5))
+    }
+
+    fn connect_with_timeout(path: &Path, timeout: Duration) -> Result<Self, MediaOpError> {
         let vm = path
             .parent()
             .and_then(Path::file_name)
@@ -671,16 +740,16 @@ impl QmpClient {
         let writer =
             UnixStream::connect(path).map_err(|err| MediaOpError::Qmp(format!("connect:{err}")))?;
         writer
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(timeout))
             .map_err(|err| MediaOpError::Qmp(format!("timeout:{err}")))?;
         writer
-            .set_write_timeout(Some(Duration::from_secs(5)))
+            .set_write_timeout(Some(timeout))
             .map_err(|err| MediaOpError::Qmp(format!("timeout:{err}")))?;
         let reader_stream = writer
             .try_clone()
             .map_err(|err| MediaOpError::Qmp(format!("clone:{err}")))?;
         reader_stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(timeout))
             .map_err(|err| MediaOpError::Qmp(format!("timeout:{err}")))?;
         let mut client = Self {
             vm,
@@ -771,6 +840,42 @@ impl QmpClient {
             }
         }
         Ok(None)
+    }
+
+    fn query_attached_media_refs(&mut self) -> Result<BTreeSet<String>, MediaOpError> {
+        let value = self.execute("query-fdsets", json!({}), None)?;
+        let mut refs = BTreeSet::new();
+        let Some(fdsets) = value.as_array() else {
+            return Ok(refs);
+        };
+        for fdset in fdsets {
+            let Some(fds) = fdset.get("fds").and_then(Value::as_array) else {
+                continue;
+            };
+            for fd in fds {
+                if let Some(media_ref) = fd
+                    .get("opaque")
+                    .and_then(Value::as_str)
+                    .and_then(|opaque| opaque.strip_prefix("nixling:"))
+                    && nixling_host::media::validate_media_ref(media_ref).is_ok()
+                {
+                    refs.insert(media_ref.to_owned());
+                }
+            }
+        }
+        Ok(refs)
+    }
+
+    fn named_block_node_exists(&mut self, node_name: &str) -> Result<bool, MediaOpError> {
+        let value = self.execute("query-named-block-nodes", json!({}), None)?;
+        let Some(nodes) = value.as_array() else {
+            return Ok(false);
+        };
+        Ok(nodes.iter().any(|node| {
+            node.get("node-name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name == node_name)
+        }))
     }
 
     fn wait_for_device_deleted(&mut self, device_id: &str) -> Result<(), MediaOpError> {
@@ -894,25 +999,86 @@ fn resolve_runtime_selector<'a>(
     identity: &UsbPhysicalIdentity,
 ) -> Result<(MediaRegistryRecord, &'a QemuMediaSourceIntent), MediaOpError> {
     let records = read_all_registry_records(resolver)?;
-    let record = select_unique_runtime_record(records, vm, identity)?;
+    let record = select_unique_runtime_record(&records, vm, identity)?;
     let source = resolve_physical_source(resolver, vm, &record.media_ref)?;
     Ok((record, source))
 }
 
+fn resolve_detach_runtime_selector<'a>(
+    resolver: &'a BundleResolver,
+    vm: &str,
+    identity: &UsbPhysicalIdentity,
+    client: &mut QmpClient,
+) -> Result<(MediaRegistryRecord, &'a QemuMediaSourceIntent), MediaOpError> {
+    let records = read_all_registry_records(resolver)?;
+    match select_unique_runtime_record(&records, vm, identity) {
+        Ok(record) => {
+            let source = resolve_physical_source(resolver, vm, &record.media_ref)?;
+            Ok((record, source))
+        }
+        Err(error) if runtime_selector_allows_detach_fallback(&error) => {
+            let attached_refs = client.query_attached_media_refs()?;
+            let record =
+                select_unique_attached_detach_record(&records, vm, identity, &attached_refs)?;
+            let source = resolve_physical_source(resolver, vm, &record.media_ref)?;
+            Ok((record, source))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn runtime_selector_allows_detach_fallback(error: &MediaOpError) -> bool {
+    matches!(
+        error,
+        MediaOpError::IdentityMismatch(reason) if reason == "runtime-selector"
+    )
+}
+
 fn select_unique_runtime_record(
-    records: Vec<MediaRegistryRecord>,
+    records: &[MediaRegistryRecord],
     vm: &str,
     identity: &UsbPhysicalIdentity,
 ) -> Result<MediaRegistryRecord, MediaOpError> {
     let matches: Vec<_> = records
-        .into_iter()
+        .iter()
         .filter(|record| record.vm == vm && runtime_identity_matches_record(record, identity))
+        .cloned()
         .collect();
     match matches.as_slice() {
         [] => Err(MediaOpError::IdentityMismatch(
             "runtime-selector".to_owned(),
         )),
         [record] => Ok(record.clone()),
+        many => {
+            let mut refs: Vec<_> = many.iter().map(|record| record.media_ref.clone()).collect();
+            refs.sort();
+            refs.dedup();
+            Err(MediaOpError::AmbiguousRuntimeSelector(refs))
+        }
+    }
+}
+
+fn select_unique_attached_detach_record(
+    records: &[MediaRegistryRecord],
+    vm: &str,
+    identity: &UsbPhysicalIdentity,
+    attached_refs: &BTreeSet<String>,
+) -> Result<MediaRegistryRecord, MediaOpError> {
+    let matches: Vec<_> = records
+        .iter()
+        .filter(|record| {
+            record.vm == vm
+                && attached_refs.contains(&record.media_ref)
+                && record.identity.vendor_id == identity.vendor_id
+                && record.identity.product_id == identity.product_id
+        })
+        .cloned()
+        .collect();
+    match matches.as_slice() {
+        [record] => Ok(record.clone()),
+        [] => Err(MediaOpError::IdentityMismatch(
+            "runtime-selector".to_owned(),
+        )),
         many => {
             let mut refs: Vec<_> = many.iter().map(|record| record.media_ref.clone()).collect();
             refs.sort();
@@ -1678,6 +1844,166 @@ mod tests {
     }
 
     #[test]
+    fn qmp_detach_reconciles_missed_device_deleted_event() {
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
+        let socket = dir.path().join("qmp.sock");
+        let listener = UnixListener::bind(&socket).expect("bind qmp");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept qmp");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("server read timeout");
+            let mut writer = stream.try_clone().expect("clone qmp writer");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone qmp reader"));
+            write_qmp_greeting_and_capabilities(&mut writer, &mut reader);
+
+            expect_qmp_command(&mut writer, &mut reader, "device_del");
+            for expected in ["blockdev-del", "blockdev-del"] {
+                expect_qmp_command(&mut writer, &mut reader, expected);
+            }
+            expect_qmp_query_fdsets_with(
+                &mut writer,
+                &mut reader,
+                r#"[{"fdset-id":1000,"fds":[{"fd":0,"opaque":"nixling:installer-usb"}]}]"#,
+            );
+            expect_qmp_command(&mut writer, &mut reader, "remove-fd");
+            expect_qmp_query_named_block_nodes(&mut writer, &mut reader, "[]");
+            expect_qmp_query_named_block_nodes(&mut writer, &mut reader, "[]");
+            expect_qmp_query_fdsets_with(&mut writer, &mut reader, "[]");
+        });
+
+        let mut client = QmpClient::connect_with_timeout(&socket, Duration::from_millis(50))
+            .expect("connect fake qmp");
+        let scaffold = qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Detach)
+            .expect("scaffold");
+        let commands = qmp_detach(&mut client, &scaffold).expect("qmp detach reconciles");
+        assert_eq!(
+            commands,
+            [
+                "device_del",
+                "DEVICE_DELETED:reconciled",
+                "blockdev-del:raw",
+                "blockdev-del:file",
+                "remove-fd"
+            ]
+        );
+        server.join().expect("fake qmp server joins");
+    }
+
+    #[test]
+    fn qmp_detach_is_idempotent_when_media_nodes_are_already_absent() {
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
+        let socket = dir.path().join("qmp.sock");
+        let listener = UnixListener::bind(&socket).expect("bind qmp");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept qmp");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("server read timeout");
+            let mut writer = stream.try_clone().expect("clone qmp writer");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone qmp reader"));
+            write_qmp_greeting_and_capabilities(&mut writer, &mut reader);
+
+            expect_qmp_command_error(&mut writer, &mut reader, "device_del", "DeviceNotFound");
+            for expected in ["blockdev-del", "blockdev-del"] {
+                expect_qmp_command_error(&mut writer, &mut reader, expected, "GenericError");
+                expect_qmp_query_named_block_nodes(&mut writer, &mut reader, "[]");
+            }
+            expect_qmp_query_fdsets_with(&mut writer, &mut reader, "[]");
+            expect_qmp_query_named_block_nodes(&mut writer, &mut reader, "[]");
+            expect_qmp_query_named_block_nodes(&mut writer, &mut reader, "[]");
+            expect_qmp_query_fdsets_with(&mut writer, &mut reader, "[]");
+        });
+
+        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
+        let scaffold = qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Detach)
+            .expect("scaffold");
+        let commands = qmp_detach(&mut client, &scaffold).expect("idempotent qmp detach");
+        assert_eq!(
+            commands,
+            [
+                "device_del:absent",
+                "blockdev-del:raw:absent",
+                "blockdev-del:file:absent",
+                "remove-fd:absent"
+            ]
+        );
+        server.join().expect("fake qmp server joins");
+    }
+
+    #[test]
+    fn qmp_detach_fails_closed_when_block_node_remains_after_error() {
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
+        let socket = dir.path().join("qmp.sock");
+        let listener = UnixListener::bind(&socket).expect("bind qmp");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept qmp");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("server read timeout");
+            let mut writer = stream.try_clone().expect("clone qmp writer");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone qmp reader"));
+            write_qmp_greeting_and_capabilities(&mut writer, &mut reader);
+
+            expect_qmp_command_error(&mut writer, &mut reader, "device_del", "DeviceNotFound");
+            expect_qmp_command_error(&mut writer, &mut reader, "blockdev-del", "GenericError");
+            expect_qmp_query_named_block_nodes(
+                &mut writer,
+                &mut reader,
+                r#"[{"node-name":"nl-media-installer-usb"}]"#,
+            );
+            expect_qmp_command(&mut writer, &mut reader, "blockdev-del");
+            expect_qmp_query_fdsets_with(&mut writer, &mut reader, "[]");
+            expect_qmp_query_named_block_nodes(
+                &mut writer,
+                &mut reader,
+                r#"[{"node-name":"nl-media-installer-usb"}]"#,
+            );
+            expect_qmp_query_named_block_nodes(&mut writer, &mut reader, "[]");
+            expect_qmp_query_fdsets_with(&mut writer, &mut reader, "[]");
+        });
+
+        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
+        let scaffold = qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Detach)
+            .expect("scaffold");
+        let err = qmp_detach(&mut client, &scaffold).expect_err("qmp detach must fail closed");
+        assert!(
+            matches!(err, MediaOpError::Qmp(reason) if reason == "device_del:DeviceNotFound")
+        );
+        server.join().expect("fake qmp server joins");
+    }
+
+    #[test]
+    fn qmp_attached_media_refs_ignore_non_nixling_and_invalid_opaque_values() {
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
+        let socket = dir.path().join("qmp.sock");
+        let listener = UnixListener::bind(&socket).expect("bind qmp");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept qmp");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("server read timeout");
+            let mut writer = stream.try_clone().expect("clone qmp writer");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone qmp reader"));
+            write_qmp_greeting_and_capabilities(&mut writer, &mut reader);
+            expect_qmp_query_fdsets_with(
+                &mut writer,
+                &mut reader,
+                r#"[{"fdset-id":1000,"fds":[{"fd":0,"opaque":"nixling:installer-usb"},{"fd":1,"opaque":"nixling:backup"},{"fd":2,"opaque":"nixling:Invalid"},{"fd":3,"opaque":"other:ignored"},{"fd":4}]}]"#,
+            );
+        });
+
+        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
+        assert_eq!(
+            client
+                .query_attached_media_refs()
+                .expect("query attached media refs"),
+            BTreeSet::from(["backup".to_owned(), "installer-usb".to_owned()])
+        );
+        server.join().expect("fake qmp server joins");
+    }
+
+    #[test]
     fn qmp_boot_path_attaches_media_and_continues_vm() {
         let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
         let socket = dir.path().join("qmp.sock");
@@ -1763,7 +2089,60 @@ mod tests {
         writer.write_all(b"\n").expect("command newline");
     }
 
+    fn expect_qmp_command_error(
+        writer: &mut UnixStream,
+        reader: &mut BufReader<UnixStream>,
+        expected: &str,
+        class: &str,
+    ) {
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read qmp command");
+        assert!(line.contains(expected), "missing {expected} in {line}");
+        let id = qmp_id_from_line(&line);
+        writer
+            .write_all(
+                format!(r#"{{"error":{{"class":"{class}","desc":"not present"}},"id":"{id}"}}"#)
+                    .as_bytes(),
+            )
+            .expect("command error");
+        writer.write_all(b"\n").expect("command error newline");
+    }
+
+    fn expect_qmp_query_named_block_nodes(
+        writer: &mut UnixStream,
+        reader: &mut BufReader<UnixStream>,
+        nodes_json: &str,
+    ) {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .expect("read query-named-block-nodes");
+        assert!(
+            line.contains("query-named-block-nodes"),
+            "missing query-named-block-nodes in {line}"
+        );
+        let id = qmp_id_from_line(&line);
+        writer
+            .write_all(format!(r#"{{"return":{nodes_json},"id":"{id}"}}"#).as_bytes())
+            .expect("query-named-block-nodes return");
+        writer
+            .write_all(b"\n")
+            .expect("query-named-block-nodes newline");
+    }
+
     fn expect_qmp_query_fdsets(writer: &mut UnixStream, reader: &mut BufReader<UnixStream>) {
+        expect_qmp_query_fdsets_with(
+            writer,
+            reader,
+            r#"[{"fdset-id":1000,"fds":[{"fd":0,"opaque":"nixling:installer-usb"}]}]"#,
+        );
+    }
+
+    fn expect_qmp_query_fdsets_with(
+        writer: &mut UnixStream,
+        reader: &mut BufReader<UnixStream>,
+        fdsets_json: &str,
+    ) {
         let mut line = String::new();
         reader.read_line(&mut line).expect("read query-fdsets");
         assert!(
@@ -1772,12 +2151,7 @@ mod tests {
         );
         let id = qmp_id_from_line(&line);
         writer
-            .write_all(
-                format!(
-                    r#"{{"return":[{{"fdset-id":1000,"fds":[{{"fd":0,"opaque":"nixling:installer-usb"}}]}}],"id":"{id}"}}"#
-                )
-                .as_bytes(),
-            )
+            .write_all(format!(r#"{{"return":{fdsets_json},"id":"{id}"}}"#).as_bytes())
             .expect("query-fdsets return");
         writer.write_all(b"\n").expect("query-fdsets newline");
     }
@@ -1909,10 +2283,97 @@ mod tests {
         second.media_ref = "tools-usb".to_owned();
 
         assert!(matches!(
-            select_unique_runtime_record(vec![first, second], "media", &physical_identity()),
+            select_unique_runtime_record(&[first, second], "media", &physical_identity()),
             Err(MediaOpError::AmbiguousRuntimeSelector(refs))
                 if refs == vec!["installer-usb".to_owned(), "tools-usb".to_owned()]
         ));
+    }
+
+    #[test]
+    fn detach_selector_falls_back_to_unique_attached_same_model_ref() {
+        let record = registry_record();
+        let mut moved_identity = physical_identity();
+        moved_identity.by_id_names = vec!["usb-Same_Model_New_Runtime_Id".to_owned()];
+        let attached_refs = BTreeSet::from(["installer-usb".to_owned()]);
+
+        assert!(matches!(
+            select_unique_runtime_record(std::slice::from_ref(&record), "media", &moved_identity),
+            Err(MediaOpError::IdentityMismatch(reason)) if reason == "runtime-selector"
+        ));
+        assert_eq!(
+            select_unique_attached_detach_record(
+                &[record],
+                "media",
+                &moved_identity,
+                &attached_refs
+            )
+            .expect("unique attached fallback")
+            .media_ref,
+            "installer-usb"
+        );
+    }
+
+    #[test]
+    fn detach_selector_fallback_uses_attached_ref_among_same_model_records() {
+        let first = registry_record();
+        let mut second = registry_record();
+        second.media_ref = "tools-usb".to_owned();
+        second.identity.by_id_names = vec!["usb-Tools_Original".to_owned()];
+        let mut moved_identity = physical_identity();
+        moved_identity.by_id_names = vec!["usb-Same_Model_New_Runtime_Id".to_owned()];
+
+        assert_eq!(
+            select_unique_attached_detach_record(
+                &[first.clone(), second.clone()],
+                "media",
+                &moved_identity,
+                &BTreeSet::from(["tools-usb".to_owned()])
+            )
+            .expect("unique attached fallback")
+            .media_ref,
+            "tools-usb"
+        );
+        assert!(matches!(
+            select_unique_attached_detach_record(
+                &[first, second],
+                "media",
+                &moved_identity,
+                &BTreeSet::new()
+            ),
+            Err(MediaOpError::IdentityMismatch(reason)) if reason == "runtime-selector"
+        ));
+    }
+
+    #[test]
+    fn detach_selector_fallback_fails_closed_when_ambiguous() {
+        let first = registry_record();
+        let mut second = registry_record();
+        second.media_ref = "tools-usb".to_owned();
+        let attached_refs = BTreeSet::from(["installer-usb".to_owned(), "tools-usb".to_owned()]);
+
+        assert!(matches!(
+            select_unique_attached_detach_record(
+                &[first, second],
+                "media",
+                &physical_identity(),
+                &attached_refs
+            ),
+            Err(MediaOpError::AmbiguousRuntimeSelector(refs))
+                if refs == vec!["installer-usb".to_owned(), "tools-usb".to_owned()]
+        ));
+    }
+
+    #[test]
+    fn detach_selector_fallback_is_allowed_only_for_empty_runtime_selector() {
+        let empty = MediaOpError::IdentityMismatch("runtime-selector".to_owned());
+        assert!(runtime_selector_allows_detach_fallback(&empty));
+
+        let by_id = MediaOpError::IdentityMismatch("by-id".to_owned());
+        assert!(!runtime_selector_allows_detach_fallback(&by_id));
+
+        let ambiguous =
+            MediaOpError::AmbiguousRuntimeSelector(vec!["a".to_owned(), "b".to_owned()]);
+        assert!(!runtime_selector_allows_detach_fallback(&ambiguous));
     }
 
     #[test]
