@@ -21,6 +21,11 @@
 //! a redacted `Debug` so it can never reach a log, span, or audit record.
 
 use std::fmt;
+use std::fs::{File, OpenOptions};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
@@ -128,9 +133,12 @@ impl fmt::Debug for RelayConnect {
     }
 }
 
+/// The maximum minted-SAS lifetime (seconds) accepted for the P0 relay path.
+pub const MAX_SAS_TTL_SECS: u64 = 15 * 60;
+
 /// The default minted-SAS lifetime (seconds). The gateway mints short-lived
-/// Listen tokens; a long-lived token is never persisted.
-pub const DEFAULT_SAS_TTL_SECS: u64 = 3600;
+/// SAS bearers; a long-lived token is never persisted.
+pub const DEFAULT_SAS_TTL_SECS: u64 = MAX_SAS_TTL_SECS;
 
 /// Mint a Service Bus SAS token conferring the rule's rights on the entity,
 /// expiring `ttl_secs` from now. This is the gateway-side minting the POC's
@@ -144,6 +152,13 @@ pub fn mint_sas(
     key: &str,
     ttl_secs: u64,
 ) -> Result<String, RelayError> {
+    if ttl_secs > MAX_SAS_TTL_SECS {
+        return Err(RelayError::TtlTooLong {
+            requested: ttl_secs,
+            max: MAX_SAS_TTL_SECS,
+        });
+    }
+
     let resource = format!("http://{}/{}", endpoint.namespace, endpoint.entity);
     let resource_enc = urlencoding::encode(&resource).to_lowercase();
     let expiry = SystemTime::now()
@@ -210,6 +225,8 @@ pub enum RelayError {
     Clock,
     /// The SAS key was not valid HMAC key material.
     Key,
+    /// The requested SAS TTL exceeded the P0 short-lived bearer bound.
+    TtlTooLong { requested: u64, max: u64 },
 }
 
 impl fmt::Display for RelayError {
@@ -217,6 +234,10 @@ impl fmt::Display for RelayError {
         match self {
             RelayError::Clock => write!(f, "system clock is before the unix epoch"),
             RelayError::Key => write!(f, "relay SAS key is invalid"),
+            RelayError::TtlTooLong { requested, max } => write!(
+                f,
+                "relay SAS TTL {requested}s exceeds maximum short-lived bound {max}s"
+            ),
         }
     }
 }
@@ -362,6 +383,18 @@ impl std::error::Error for RelayConnectError {}
 pub enum LocalTarget {
     /// Connect to an existing unix socket (`unix:/path`).
     UnixConnect(String),
+    /// Connect to an existing unix socket only if the final socket still has
+    /// the expected owner/mode at connect time. This is for user-session
+    /// sockets where a daemon must not race a validated path into a root-owned
+    /// privileged socket.
+    UnixConnectChecked {
+        /// Socket path.
+        path: String,
+        /// Required socket owner uid.
+        uid: u32,
+        /// Required socket mode bits.
+        mode: u32,
+    },
     /// Bind+listen a unix socket and accept one connection (`unix-listen:/path`).
     /// Lets the local peer (e.g. `waypipe server`) dial in without a socat hop.
     UnixListen(String),
@@ -400,10 +433,59 @@ async fn connect_local(target: &LocalTarget) -> std::io::Result<LocalIo> {
         LocalTarget::UnixConnect(path) => {
             Ok(LocalIo::Unix(tokio::net::UnixStream::connect(path).await?))
         }
+        LocalTarget::UnixConnectChecked { path, uid, mode } => {
+            let socket_fd = open_checked_unix_socket_target(path, *uid, *mode)?;
+            let fd_path = format!("/proc/self/fd/{}", socket_fd.as_raw_fd());
+            let stream = tokio::net::UnixStream::connect(fd_path).await?;
+            validate_connected_unix_peer(&stream, *uid)?;
+            Ok(LocalIo::Unix(stream))
+        }
         LocalTarget::TcpConnect(addr) => {
             Ok(LocalIo::Tcp(tokio::net::TcpStream::connect(addr).await?))
         }
     }
+}
+
+fn open_checked_unix_socket_target(
+    path: &str,
+    expected_uid: u32,
+    expected_mode: u32,
+) -> std::io::Result<File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(Path::new(path))?;
+    let metadata = file.metadata()?;
+    let file_type = metadata.file_type();
+    if !file_type.is_socket() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "relay local unix target is not a direct unix socket",
+        ));
+    }
+    let uid = metadata.uid();
+    let mode = metadata.mode() & 0o777;
+    if uid != expected_uid || mode != expected_mode {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "relay local unix target owner or mode changed before connect",
+        ));
+    }
+    Ok(file)
+}
+
+fn validate_connected_unix_peer(
+    stream: &tokio::net::UnixStream,
+    expected_uid: u32,
+) -> std::io::Result<()> {
+    let peer = stream.peer_cred()?;
+    if peer.uid() != expected_uid {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "relay local unix target peer uid does not match the validated socket owner",
+        ));
+    }
+    Ok(())
 }
 
 /// Pump bytes between the relay WebSocket and a local stream until either
@@ -768,6 +850,7 @@ pub async fn run_sender_with_prologue(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn extract_prologue_needs_full_length_prefix() {
@@ -807,10 +890,27 @@ mod tests {
         }
     }
 
+    fn now_unix_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    fn sas_param<'a>(token: &'a str, name: &str) -> &'a str {
+        let prefix = format!("{name}=");
+        token
+            .strip_prefix("SharedAccessSignature ")
+            .unwrap()
+            .split('&')
+            .find_map(|part| part.strip_prefix(&prefix))
+            .unwrap()
+    }
+
     #[test]
     fn mint_sas_is_deterministic_for_fixed_inputs_modulo_expiry() {
         let ep = endpoint();
-        let a = mint_sas(&ep, "gateway-listen", "c2VjcmV0a2V5", 3600).unwrap();
+        let a = mint_sas(&ep, "gateway-listen", "c2VjcmV0a2V5", DEFAULT_SAS_TTL_SECS).unwrap();
         // Shape: a SharedAccessSignature with sr/sig/se/skn.
         assert!(a.starts_with("SharedAccessSignature sr="));
         assert!(a.contains("&skn=gateway-listen"));
@@ -818,6 +918,31 @@ mod tests {
         assert!(a.contains("&se="));
         // The resource is the lowercased url-encoded http form of the entity.
         assert!(a.contains("relns-test.servicebus.windows.net"));
+    }
+
+    #[test]
+    fn mint_sas_rejects_ttl_above_short_lived_cap() {
+        let ep = endpoint();
+        assert_eq!(
+            mint_sas(&ep, "gateway-send", "c2VjcmV0a2V5", MAX_SAS_TTL_SECS + 1).unwrap_err(),
+            RelayError::TtlTooLong {
+                requested: MAX_SAS_TTL_SECS + 1,
+                max: MAX_SAS_TTL_SECS
+            }
+        );
+    }
+
+    #[test]
+    fn mint_sas_expiry_matches_requested_short_ttl() {
+        let ep = endpoint();
+        let ttl = 60;
+        let before = now_unix_secs();
+        let token = mint_sas(&ep, "gateway-send", "c2VjcmV0a2V5", ttl).unwrap();
+        let after = now_unix_secs();
+        let expiry = sas_param(&token, "se").parse::<u64>().unwrap();
+        assert!(expiry >= before + ttl);
+        assert!(expiry <= after + ttl);
+        assert!(expiry <= before + MAX_SAS_TTL_SECS);
     }
 
     #[test]
@@ -841,11 +966,24 @@ mod tests {
             key_name: "gateway-listen".into(),
             key: "c2VjcmV0a2V5".into(),
         };
-        let c = build_connect(&ep, RelayRole::Listener, &cred, 3600).unwrap();
+        let c = build_connect(&ep, RelayRole::Listener, &cred, DEFAULT_SAS_TTL_SECS).unwrap();
         assert!(c.url.contains("sb-hc-action=listen"));
         assert!(c.url.contains("sb-hc-token="));
         assert!(!c.url.contains("sb-hc-id=")); // listener has no rendezvous id
         assert!(c.auth_header.is_none());
+    }
+
+    #[test]
+    fn build_connect_rejects_sas_ttl_above_short_lived_cap() {
+        let ep = endpoint();
+        let cred = RelayCredential::Sas {
+            key_name: "gateway-listen".into(),
+            key: "c2VjcmV0a2V5".into(),
+        };
+        assert!(matches!(
+            build_connect(&ep, RelayRole::Listener, &cred, MAX_SAS_TTL_SECS + 1),
+            Err(RelayError::TtlTooLong { .. })
+        ));
     }
 
     #[test]
@@ -877,6 +1015,19 @@ mod tests {
     }
 
     #[test]
+    fn connect_debug_redacts_preminted_sas_query_token() {
+        let ep = endpoint();
+        let secret_token =
+            "SharedAccessSignature sr=x&sig=very-secret-signature&se=123&skn=gateway-send";
+        let cred = RelayCredential::SasToken(secret_token.into());
+        let c = build_connect(&ep, RelayRole::Sender, &cred, 3600).unwrap();
+        let d = format!("{c:?}");
+        assert!(!d.contains("SharedAccessSignature"));
+        assert!(!d.contains("very-secret-signature"));
+        assert!(d.contains("?<redacted>"));
+    }
+
+    #[test]
     fn connect_debug_redacts_url_query_and_header() {
         let ep = endpoint();
         let cred = RelayCredential::EntraBearer("jwt.abc.def".into());
@@ -905,5 +1056,35 @@ mod tests {
             LocalTarget::parse("127.0.0.1:9000"),
             LocalTarget::TcpConnect(a) if a == "127.0.0.1:9000"
         ));
+    }
+
+    #[test]
+    fn checked_unix_target_revalidates_owner_and_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("wpc.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let meta = std::fs::symlink_metadata(&socket_path).unwrap();
+        let path = socket_path.to_string_lossy().into_owned();
+        open_checked_unix_socket_target(&path, meta.uid(), 0o600).unwrap();
+        open_checked_unix_socket_target(&path, meta.uid(), 0o660).unwrap_err();
+
+        let link_path = dir.path().join("link.sock");
+        std::os::unix::fs::symlink(&socket_path, &link_path).unwrap();
+        open_checked_unix_socket_target(&link_path.to_string_lossy(), meta.uid(), 0o600)
+            .unwrap_err();
+    }
+
+    #[tokio::test]
+    async fn checked_unix_target_validates_connected_peer_uid() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("wpc.sock");
+        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let meta = std::fs::symlink_metadata(&socket_path).unwrap();
+        let stream = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let (_accepted, _) = listener.accept().await.unwrap();
+        validate_connected_unix_peer(&stream, meta.uid()).unwrap();
+        validate_connected_unix_peer(&stream, meta.uid().saturating_add(1)).unwrap_err();
     }
 }

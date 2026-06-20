@@ -1,5 +1,5 @@
 # Eval coverage for realm gateway declarations.
-{ lib, mkEval, ... }:
+{ lib, mkEval, flakeRoot, ... }:
 
 let
   base = {
@@ -36,6 +36,9 @@ let
 
   goodCfg = (mkEval [ base ]).config;
   gatewayGuestCfg = goodCfg.nixling._computed."sys-work-gateway".config;
+  gatewayGuestService = gatewayGuestCfg.systemd.services.nixlingd.serviceConfig;
+  gatewayGuestTmpfiles = gatewayGuestCfg.systemd.tmpfiles.rules;
+  hostTmpfiles = goodCfg.systemd.tmpfiles.rules;
   gatewayJson = builtins.fromJSON gatewayGuestCfg.environment.etc."nixling/gateway.json".text;
   hostDaemonJson = builtins.fromJSON goodCfg.environment.etc."nixling/daemon-config.json".text;
   hostGatewayJson = builtins.fromJSON goodCfg.environment.etc."nixling/gateway.json".text;
@@ -46,7 +49,42 @@ let
       nixling.gateways.work.credentialPath = "SharedAccessKey=bad";
     })
   ]).config;
-  badMessages = map (a: a.message) (lib.filter (a: !a.assertion) badCfg.assertions);
+  failureMessages = cfg: map (a: a.message) (lib.filter (a: !a.assertion) cfg.assertions);
+  badMessages = failureMessages badCfg;
+  badStateOutsideMessages = failureMessages ((mkEval [
+    (lib.recursiveUpdate base {
+      nixling.gateways.work = {
+        stateDir = "/var/lib/other/work";
+        credentialPath = "/var/lib/other/work/credential.json";
+      };
+    })
+  ]).config);
+  badCredentialOutsideStateMessages = failureMessages ((mkEval [
+    (lib.recursiveUpdate base {
+      nixling.gateways.work.credentialPath = "/var/lib/nixling/other/credential.json";
+    })
+  ]).config);
+  badTraversalMessages = failureMessages ((mkEval [
+    (lib.recursiveUpdate base {
+      nixling.gateways.work = {
+        stateDir = "/var/lib/nixling/gateways/../work";
+        credentialPath = "/var/lib/nixling/gateways/../work/credential.json";
+      };
+    })
+  ]).config);
+  badPerVmStateMessages = failureMessages ((mkEval [
+    (lib.recursiveUpdate base {
+      nixling.gateways.work = {
+        stateDir = "/var/lib/nixling/vms/sys-work-gateway";
+        credentialPath = "/var/lib/nixling/vms/sys-work-gateway/credential.json";
+      };
+    })
+  ]).config);
+  badDaemonDisabledMessages = failureMessages ((mkEval [
+    (lib.recursiveUpdate base {
+      nixling.daemonExperimental.enable = false;
+    })
+  ]).config);
   multiGatewayCfg = (mkEval [
     (lib.recursiveUpdate base {
       nixling.envs.personal = {
@@ -67,6 +105,9 @@ let
       nixling.site.usePrebuiltHostTools = false;
     })
   ]).config;
+  sourceGatewayGuestCfg = sourceToolsCfg.nixling._computed."sys-work-gateway".config;
+  gatewayModuleSource = builtins.readFile (flakeRoot + "/nixos-modules/gateway-vm.nix");
+  packageNames = map (pkg: pkg.pname or (lib.getName pkg)) gatewayGuestCfg.environment.systemPackages;
 in
 {
   "gateway-vm/auto-declared-name" = {
@@ -95,8 +136,43 @@ in
 
   "gateway-vm/rejects-secret-shaped-credential-path" = {
     expr = lib.any
-      (m: lib.hasInfix "nixling.gateways.work.credentialPath must be a runtime path" m)
+      (m: lib.hasInfix "nixling.gateways.work.credentialPath must be an absolute runtime" m)
       badMessages;
+    expected = true;
+  };
+
+  "gateway-vm/rejects-state-dir-outside-site-state" = {
+    expr = lib.any
+      (m: lib.hasInfix "nixling.gateways.work.stateDir must be an absolute runtime" m)
+      badStateOutsideMessages;
+    expected = true;
+  };
+
+  "gateway-vm/rejects-credential-path-outside-gateway-state" = {
+    expr = lib.any
+      (m: lib.hasInfix "nixling.gateways.work.credentialPath must live under" m)
+      badCredentialOutsideStateMessages;
+    expected = true;
+  };
+
+  "gateway-vm/rejects-parent-traversal-in-state-paths" = {
+    expr = lib.any
+      (m: lib.hasInfix "must not contain `..` path" m)
+      badTraversalMessages;
+    expected = true;
+  };
+
+  "gateway-vm/rejects-per-vm-state-root-for-gateway-secrets" = {
+    expr = lib.any
+      (m: lib.hasInfix "stateDir must not live under" m && lib.hasInfix "nixling.store.stateDir" m)
+      badPerVmStateMessages;
+    expected = true;
+  };
+
+  "gateway-vm/requires-daemon-control-plane" = {
+    expr = lib.any
+      (m: lib.hasInfix "nixling.gateways requires nixling.daemonExperimental.enable = true" m)
+      badDaemonDisabledMessages;
     expected = true;
   };
 
@@ -123,6 +199,7 @@ in
         memory = gatewayJson.aca.memory;
         autoSuspendIntervalSecs = gatewayJson.aca.autoSuspendIntervalSecs;
       };
+
       hasWaypipeSocket = gatewayJson.display ? waypipeSocket;
       hasWaypipeClient = builtins.hasAttr "nixling-gateway-waypipe-client" gatewayGuestCfg.systemd.services;
       hasWaypipeServer = builtins.hasAttr "nixling-gateway-waypipe-server" gatewayGuestCfg.systemd.services;
@@ -149,6 +226,46 @@ in
     };
   };
 
+  "gateway-vm/guest-daemon-runs-as-nixlingd-without-no-drop-flag" = {
+    expr = {
+      user = gatewayGuestService.User;
+      group = gatewayGuestService.Group;
+      supplementaryGroups = gatewayGuestService.SupplementaryGroups;
+      execStartHasNoDropFlag = lib.hasInfix "--no-drop-privileges" (toString gatewayGuestService.ExecStart);
+      noNewPrivileges = gatewayGuestService.NoNewPrivileges;
+      capabilityBoundingSet = gatewayGuestService.CapabilityBoundingSet;
+      ambientCapabilities = gatewayGuestService.AmbientCapabilities;
+      restartIfChanged = gatewayGuestCfg.systemd.services.nixlingd.restartIfChanged;
+    };
+    expected = {
+      user = "nixlingd";
+      group = "nixlingd";
+      supplementaryGroups = [ "nixling" ];
+      execStartHasNoDropFlag = false;
+      noNewPrivileges = true;
+      capabilityBoundingSet = [ "" ];
+      ambientCapabilities = [ "" ];
+      restartIfChanged = false;
+    };
+  };
+
+  "gateway-vm/host-guest-state-ownership-boundary" = {
+    expr = {
+      hostStateDir = builtins.elem "d /var/lib/nixling/gateways/work 0750 root nixlingd -" hostTmpfiles;
+      guestStateDir = builtins.elem "d /var/lib/nixling/gateways/work 0700 nixlingd nixlingd -" gatewayGuestTmpfiles;
+      guestDaemonStateDir = builtins.elem "d /var/lib/nixling/daemon-state 0700 nixlingd nixlingd -" gatewayGuestTmpfiles;
+      guestLockFile = builtins.elem "f /run/nixling/daemon.lock 0640 nixlingd nixlingd -" gatewayGuestTmpfiles;
+      gatewayUserCanReachPublicSocket = builtins.elem "nixling" gatewayGuestCfg.users.users.gateway.extraGroups;
+    };
+    expected = {
+      hostStateDir = true;
+      guestStateDir = true;
+      guestDaemonStateDir = true;
+      guestLockFile = true;
+      gatewayUserCanReachPublicSocket = true;
+    };
+  };
+
   "gateway-vm/host-daemon-stays-credential-free-facade" = {
     expr = {
       daemonConfigCarriesGateway = hostDaemonJson ? gateway;
@@ -158,6 +275,7 @@ in
         credentialPath = hostGatewayJson.credentialPath;
         relayEntity = hostGatewayJson.relay.entity;
         waypipeSocket = hostGatewayJson.display.waypipeSocket;
+        allowHostRelayCredentials = hostGatewayJson.allowHostRelayCredentials;
       };
     };
     expected = {
@@ -168,7 +286,19 @@ in
         credentialPath = "/var/lib/nixling/gateways/work/credential.json";
         relayEntity = "hc-nixling-display";
         waypipeSocket = "/run/user/1000/wpc.sock";
+        allowHostRelayCredentials = false;
       };
+    };
+  };
+
+  "gateway-vm/transitional-host-relay-guard-defaults-off" = {
+    expr = {
+      host = hostGatewayJson.allowHostRelayCredentials;
+      guest = gatewayJson.allowHostRelayCredentials;
+    };
+    expected = {
+      host = false;
+      guest = false;
     };
   };
 
@@ -181,7 +311,26 @@ in
 
   "gateway-vm/source-host-tools-opt-out-selects-source-daemon" = {
     expr = lib.hasInfix "nixlingd-0.0.0-bootstrap"
-      (toString sourceToolsCfg.systemd.services.nixlingd.serviceConfig.ExecStart);
+      (toString sourceGatewayGuestCfg.systemd.services.nixlingd.serviceConfig.ExecStart);
     expected = true;
+  };
+
+  "gateway-vm/reuses-standard-host-tool-package-plumbing" = {
+    expr = {
+      noInlineBuildRustPackage = !(lib.hasInfix "buildRustPackage" gatewayModuleSource);
+      noInlineBuildRustBin = !(lib.hasInfix "buildRustBin" gatewayModuleSource);
+      noSystemPackagesScan = !(lib.hasInfix "config.environment.systemPackages" gatewayModuleSource);
+      hasNixling = builtins.elem "nixling" packageNames;
+      hasNixlingd = builtins.elem "nixlingd" packageNames;
+      hasGatewayRelaySourceBuild = builtins.elem "nixling-gateway-relay" packageNames;
+    };
+    expected = {
+      noInlineBuildRustPackage = true;
+      noInlineBuildRustBin = true;
+      noSystemPackagesScan = true;
+      hasNixling = true;
+      hasNixlingd = true;
+      hasGatewayRelaySourceBuild = false;
+    };
   };
 }

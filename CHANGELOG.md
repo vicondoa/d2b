@@ -102,6 +102,9 @@ deprecations ship one minor release before removal.
   reconciliation. Physical USB boot media now attaches through QMP's
   `host_device` block driver instead of the regular-file-only `file`
   driver.
+- Documentation: sanitized ADR 0032's ACA/Relay live-proof record so the
+  architectural validation summary remains without publishing live sandbox,
+  disk-image, command-output, or compositor-window identifiers.
 
 ## [1.3.1] - 2026-06-18
 
