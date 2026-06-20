@@ -4180,7 +4180,7 @@ fn load_realm_entrypoint_table()
 fn load_realm_entrypoint_document_from_path(
     path: &Path,
 ) -> Result<Option<RealmEntrypointDocument>, CliFailure> {
-    let raw = match fs::read_to_string(&path) {
+    let raw = match fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
@@ -4385,21 +4385,19 @@ fn route_vm_target_with_table(
                     VmTargetRoute::Local { vm } => vm,
                 })
                 .is_none()
-            {
-                if let VmTargetRoute::Gateway {
+                && let VmTargetRoute::Gateway {
                     realm,
                     gateway_vm,
                     target,
                     ..
                 } = &route
-                {
-                    return Err(emit_missing_realm_entrypoint(
-                        realm,
-                        gateway_vm,
-                        Some(target),
-                        json,
-                    )?);
-                }
+            {
+                return Err(emit_missing_realm_entrypoint(
+                    realm,
+                    gateway_vm,
+                    Some(target),
+                    json,
+                )?);
             }
             return Ok(route);
         }
