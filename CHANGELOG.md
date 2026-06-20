@@ -70,7 +70,7 @@ deprecations ship one minor release before removal.
   `nixling.<vm>.*`.
 - `qemuMedia` image-file sources can now be declared directly with an
   absolute `path` and `format = "raw"`; physical USB sources continue to
-  use opaque refs plus `nixling usb enroll`.
+  use opaque refs plus config/probe-driven runtime selection.
 - ADR 0032 realm entrypoints now publish a host-visible
   `realm-entrypoints.json` table, allow separate gateway guests for
   separate realm/env segments, and add `nixling realm enter/run` plus
@@ -133,10 +133,16 @@ deprecations ship one minor release before removal.
 - `qemu-media` VMs now emit a typed QMP-only QEMU runner process node
   instead of being absent from `processes.json`; they still do not emit
   Cloud Hypervisor, store/virtiofs, or guest-control runner data.
-- Planned breaking cleanup: qemu-media will remove the public
-  `nixling usb enroll` workflow. Physical USB boot media resolution moves to
-  VM start, while runtime qemu-media attach/detach remains QMP-backed and
-  separate from USBIP.
+- Daemon and CLI list/status output now include positive
+  `runtimeCapabilities` and `serviceCapabilities` alongside unsupported
+  capability summaries.
+
+### Removed
+
+- Removed the public `nixling usb enroll` CLI and daemon/public-wire verb.
+  QEMU-media USB boot-drive remediation now points operators to config and
+  `nixling usb probe`, while running qemu-media VMs still use QMP-backed
+  `nixling usb attach` / `detach` hotplug.
 
 ### Fixed
 

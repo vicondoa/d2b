@@ -4954,6 +4954,18 @@
         "runtime": {
           "$ref": "#/definitions/RuntimeSummary"
         },
+        "runtimeCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "serviceCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "services": {
           "$ref": "#/definitions/PublicVmServices"
         },
@@ -5753,24 +5765,6 @@
             },
             "payload": {
               "$ref": "#/definitions/UsbipUnbindCliRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "usb enroll"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/UsbEnrollRequest"
             }
           }
         },
@@ -7851,40 +7845,6 @@
       },
       "additionalProperties": false
     },
-    "UsbEnrollRequest": {
-      "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
-      "type": "object",
-      "required": [
-        "busId",
-        "mediaRef",
-        "vm"
-      ],
-      "properties": {
-        "apply": {
-          "default": false,
-          "type": "boolean"
-        },
-        "busId": {
-          "description": "Transient sysfs USB busid used only for privileged enrollment. Success responses intentionally do not echo it.",
-          "type": "string"
-        },
-        "dryRun": {
-          "default": false,
-          "type": "boolean"
-        },
-        "json": {
-          "default": false,
-          "type": "boolean"
-        },
-        "mediaRef": {
-          "type": "string"
-        },
-        "vm": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
     "UsbProbeEntryKind": {
       "type": "string",
       "enum": [
@@ -8308,6 +8268,18 @@
         },
         "runtime": {
           "$ref": "#/definitions/RuntimeSummary"
+        },
+        "runtimeCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "serviceCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "services": {
           "$ref": "#/definitions/PublicVmServices"

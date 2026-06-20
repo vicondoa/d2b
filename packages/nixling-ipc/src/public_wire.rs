@@ -62,8 +62,6 @@ pub enum PublicRequest {
     UsbipBind(UsbipBindCliRequest),
     #[serde(rename = "usb detach")]
     UsbipUnbind(UsbipUnbindCliRequest),
-    #[serde(rename = "usb enroll")]
-    UsbEnroll(UsbEnrollRequest),
     #[serde(rename = "usb probe")]
     UsbipProbe,
     #[serde(rename = "store verify")]
@@ -368,18 +366,6 @@ pub struct UsbipBindCliRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipUnbindCliRequest {
     pub vm: String,
-    pub bus_id: String,
-    #[serde(default, flatten)]
-    pub flags: MutationFlags,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct UsbEnrollRequest {
-    pub vm: String,
-    pub media_ref: MediaRef,
-    /// Transient sysfs USB busid used only for privileged enrollment. Success
-    /// responses intentionally do not echo it.
     pub bus_id: String,
     #[serde(default, flatten)]
     pub flags: MutationFlags,
@@ -1343,7 +1329,11 @@ pub struct ListEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qemu_media: Option<QemuMediaStatus>,
     pub runtime: RuntimeSummary,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_capabilities: Vec<String>,
     pub services: PublicVmServices,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_capabilities: Vec<String>,
     pub ssh_user: Option<String>,
     pub static_ip: Option<String>,
     pub tpm: bool,
@@ -1367,7 +1357,11 @@ pub struct VmStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qemu_media: Option<QemuMediaStatus>,
     pub runtime: RuntimeSummary,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_capabilities: Vec<String>,
     pub services: PublicVmServices,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_capabilities: Vec<String>,
     pub ssh_user: Option<String>,
     pub static_ip: Option<String>,
     pub tpm: bool,
@@ -1584,6 +1578,22 @@ mod tests {
         let service: RuntimeServiceSummary =
             serde_json::from_value(value["services"][0].clone()).expect("service deserializes");
         assert_eq!(service.role, RuntimeServiceRole::Hypervisor);
+    }
+
+    #[test]
+    fn usb_enroll_is_not_public_wire() {
+        let frame = encode_frame(&serde_json::json!({
+            "kind": "usb enroll",
+            "payload": {
+                "vm": "corp-vm",
+                "mediaRef": "installer-usb",
+                "busId": "1-2.3",
+                "apply": true
+            }
+        }))
+        .expect("encodes");
+        decode_frame::<PublicRequest>("PublicRequest", &frame)
+            .expect_err("removed enroll verb fails");
     }
 
     // A stray `{:?}` on any exec DTO must never leak argv, env keys or

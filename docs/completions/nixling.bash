@@ -334,9 +334,6 @@ _nixling() {
             nixling__subcmd__help__subcmd__usb,detach)
                 cmd="nixling__subcmd__help__subcmd__usb__subcmd__detach"
                 ;;
-            nixling__subcmd__help__subcmd__usb,enroll)
-                cmd="nixling__subcmd__help__subcmd__usb__subcmd__enroll"
-                ;;
             nixling__subcmd__help__subcmd__usb,probe)
                 cmd="nixling__subcmd__help__subcmd__usb__subcmd__probe"
                 ;;
@@ -472,9 +469,6 @@ _nixling() {
             nixling__subcmd__usb,detach)
                 cmd="nixling__subcmd__usb__subcmd__detach"
                 ;;
-            nixling__subcmd__usb,enroll)
-                cmd="nixling__subcmd__usb__subcmd__enroll"
-                ;;
             nixling__subcmd__usb,help)
                 cmd="nixling__subcmd__usb__subcmd__help"
                 ;;
@@ -486,9 +480,6 @@ _nixling() {
                 ;;
             nixling__subcmd__usb__subcmd__help,detach)
                 cmd="nixling__subcmd__usb__subcmd__help__subcmd__detach"
-                ;;
-            nixling__subcmd__usb__subcmd__help,enroll)
-                cmd="nixling__subcmd__usb__subcmd__help__subcmd__enroll"
                 ;;
             nixling__subcmd__usb__subcmd__help,help)
                 cmd="nixling__subcmd__usb__subcmd__help__subcmd__help"
@@ -1795,7 +1786,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__help__subcmd__usb)
-            opts="attach detach enroll probe"
+            opts="attach detach probe"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1823,20 +1814,6 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__help__subcmd__usb__subcmd__detach)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        nixling__subcmd__help__subcmd__usb__subcmd__enroll)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2687,7 +2664,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__usb)
-            opts="-h --help attach detach enroll probe help"
+            opts="-h --help attach detach probe help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2728,26 +2705,8 @@ _nixling() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        nixling__subcmd__usb__subcmd__enroll)
-            opts="-h --busid --dry-run --apply --json --human --help <VM> <MEDIA_REF>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --busid)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
         nixling__subcmd__usb__subcmd__help)
-            opts="attach detach enroll probe help"
+            opts="attach detach probe help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2775,20 +2734,6 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__usb__subcmd__help__subcmd__detach)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        nixling__subcmd__usb__subcmd__help__subcmd__enroll)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )

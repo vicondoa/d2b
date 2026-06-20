@@ -607,16 +607,6 @@ pub const PUBLIC_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
-        "usb enroll",
-        "VM/USB media ref",
-        "per-VM/per-media-ref",
-        &["nixling-admin"],
-        true,
-        SecretAccess::RedactedOnly,
-        BrokerRequirement::Yes,
-        AuditMode::Yes,
-    ),
-    row(
         "usb detach",
         "VM/USB busid",
         "per-VM/per-env/per-busid",
