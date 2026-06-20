@@ -11406,10 +11406,10 @@ mod host_install_dispatch_tests {
         let bundle = json!({
             "bundleVersion": 4,
             "schemaVersion": "v2",
-            "publicManifestPath": base_dir.join(format!("{unique}.vms.json")).to_string_lossy(),
-            "hostPath": base_dir.join(format!("{unique}.host.json")).to_string_lossy(),
-            "processesPath": processes_path.to_string_lossy(),
-            "privilegesPath": base_dir.join(format!("{unique}.privileges.json")).to_string_lossy(),
+            "publicManifestPath": format!("{unique}.vms.json"),
+            "hostPath": format!("{unique}.host.json"),
+            "processesPath": format!("{unique}.processes.json"),
+            "privilegesPath": format!("{unique}.privileges.json"),
             "closures": [],
             "minijailProfiles": [],
             "generation": { "generator": "test", "sourceRevision": null, "generatedAt": null },
@@ -11501,7 +11501,6 @@ mod host_install_dispatch_tests {
             daemon_state_dir: PathBuf::from("/dev/null"),
             metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
         };
-
         let (result, stdout) = super::with_test_stdout_capture(|| {
             let _staging_guard = StagingBaseGuard::set(&staging_dir);
             super::cmd_config_sync(&context, &args)
@@ -13903,10 +13902,10 @@ mod ssh_spawn_gate {
         let bundle = serde_json::json!({
             "bundleVersion": 4,
             "schemaVersion": "v2",
-            "publicManifestPath": base_dir.join(format!("{unique}.vms.json")).to_string_lossy(),
-            "hostPath": base_dir.join(format!("{unique}.host.json")).to_string_lossy(),
-            "processesPath": processes_path.to_string_lossy(),
-            "privilegesPath": base_dir.join(format!("{unique}.privileges.json")).to_string_lossy(),
+            "publicManifestPath": format!("{unique}.vms.json"),
+            "hostPath": format!("{unique}.host.json"),
+            "processesPath": format!("{unique}.processes.json"),
+            "privilegesPath": format!("{unique}.privileges.json"),
             "closures": [],
             "minijailProfiles": [],
             "generation": { "generator": "test", "sourceRevision": null, "generatedAt": null },
