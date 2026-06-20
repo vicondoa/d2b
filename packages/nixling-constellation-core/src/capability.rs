@@ -22,7 +22,6 @@ use std::collections::BTreeSet;
     schemars::JsonSchema,
 )]
 #[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
 pub enum Capability {
     /// Workload create/start/stop/inspect.
     Lifecycle,

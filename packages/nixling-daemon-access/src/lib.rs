@@ -20,7 +20,7 @@ use std::{
 use async_trait::async_trait;
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
 use nixling_constellation_core::{
-    Capability, CapabilitySet, ErrorKind, NodeId, ProviderId, WorkloadId, WorkloadState,
+    Capability, CapabilitySet, ErrorKind, NodeId, ProviderId, RealmPath, WorkloadId, WorkloadState,
     WorkloadSummary,
 };
 use nixling_constellation_provider::{
@@ -374,6 +374,7 @@ pub fn workload_summary_lossy(
     })?;
     Ok(WorkloadSummary {
         id,
+        realm: RealmPath::local(),
         node: node_id.clone(),
         state: workload_state_from_lifecycle(entry.lifecycle.state),
         capabilities: capabilities_from_list_entry(entry),

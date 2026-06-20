@@ -7,7 +7,9 @@
 //!   `^[a-z][a-z0-9-]*$`.
 //! - **Opaque** ids ([`GatewayId`], [`ExecutionId`], [`StreamId`],
 //!   [`PrincipalId`], [`OperationId`], [`IdempotencyKey`]) are bounded,
-//!   non-empty, printable-ASCII tokens.
+//!   non-empty, log-safe tokens. They deliberately reject path-like and
+//!   credential-shaped strings because opaque ids appear in audit and
+//!   diagnostic metadata.
 //!
 //! All constructors validate; malformed input is rejected with
 //! [`IdError`] rather than silently accepted (fail-closed).
@@ -24,8 +26,23 @@ pub const MAX_ID_LEN: usize = 128;
 
 /// ECMA-regex for the nixling lowercase label shape `^[a-z][a-z0-9-]*$`.
 const LABEL_PATTERN: &str = "^[a-z][a-z0-9-]*$";
-/// ECMA-regex for a non-empty printable-ASCII opaque token (no spaces).
-const OPAQUE_PATTERN: &str = "^[\\x21-\\x7e]+$";
+/// ECMA-regex for a non-empty opaque token with an alphanumeric first
+/// character and only URL/filename-safe separators afterwards. Additional
+/// path/secret-like checks are enforced by [`is_opaque_token`].
+const OPAQUE_PATTERN: &str = "^[A-Za-z0-9][A-Za-z0-9._-]*$";
+
+const SECRET_MARKERS: &[&str] = &[
+    "secret",
+    "password",
+    "passwd",
+    "bearer",
+    "credential",
+    "apikey",
+    "privatekey",
+    "accesstoken",
+    "refreshtoken",
+    "sessiontoken",
+];
 
 /// Reason an identifier failed validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,17 +77,54 @@ pub fn is_label(s: &str) -> bool {
     chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-/// True for a bounded, non-empty printable-ASCII opaque token (no spaces
-/// or control characters).
+/// True for a bounded, non-empty opaque token safe for audit/log metadata.
 fn is_opaque_token(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_graphic() && c != ' ')
+    let Some(first) = s.chars().next() else {
+        return false;
+    };
+    if !first.is_ascii_alphanumeric() {
+        return false;
+    }
+    if !s
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return false;
+    }
+    if s.contains("..") {
+        return false;
+    }
+    let compact = s
+        .chars()
+        .filter(|c| !matches!(c, '-' | '_' | '.'))
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    !SECRET_MARKERS.iter().any(|marker| compact.contains(marker))
+}
+
+#[derive(Clone, Copy)]
+enum IdDebug {
+    Clear,
+    Redacted,
+}
+
+fn fmt_id_debug(
+    name: &str,
+    value: &str,
+    mode: IdDebug,
+    f: &mut core::fmt::Formatter<'_>,
+) -> core::fmt::Result {
+    match mode {
+        IdDebug::Clear => f.debug_tuple(name).field(&value).finish(),
+        IdDebug::Redacted => write!(f, "{name}(<{} bytes>)", value.len()),
+    }
 }
 
 macro_rules! id_newtype {
-    ($(#[$meta:meta])* $name:ident, $validate:expr_2021, $pattern:expr_2021) => {
+    ($(#[$meta:meta])* $name:ident, $validate:expr_2021, $pattern:expr_2021, $debug:expr_2021) => {
         $(#[$meta])*
         #[derive(
-            Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize,
+            Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize,
         )]
         #[serde(transparent)]
         pub struct $name(String);
@@ -105,6 +159,12 @@ macro_rules! id_newtype {
             }
         }
 
+        impl core::fmt::Debug for $name {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                fmt_id_debug(stringify!($name), &self.0, $debug, f)
+            }
+        }
+
         // Fail-closed decode: deserialization routes through `parse` so a
         // codec/serde path can never instantiate a malformed identifier.
         impl<'de> Deserialize<'de> for $name {
@@ -117,8 +177,9 @@ macro_rules! id_newtype {
             }
         }
 
-        // Schema carries the bound + shape so generated schemas advertise
-        // the same fail-closed constraints the validator enforces.
+        // Schema carries the bound + regular shape. Additional semantic
+        // deny-list checks (path/credential-shaped tokens) are enforced by
+        // `parse`/`Deserialize`.
         impl JsonSchema for $name {
             fn schema_name() -> String {
                 stringify!($name).to_owned()
@@ -144,43 +205,50 @@ id_newtype!(
     /// of these; see [`crate::realm::RealmPath`].
     RealmId,
     is_label,
-    LABEL_PATTERN
+    LABEL_PATTERN,
+    IdDebug::Clear
 );
 id_newtype!(
     /// A node within a realm (a host, gateway, or provider-managed node).
     NodeId,
     is_label,
-    LABEL_PATTERN
+    LABEL_PATTERN,
+    IdDebug::Clear
 );
 id_newtype!(
     /// A workload (VM, session, or sandbox) on a node.
     WorkloadId,
     is_label,
-    LABEL_PATTERN
+    LABEL_PATTERN,
+    IdDebug::Clear
 );
 id_newtype!(
     /// A provider implementation id.
     ProviderId,
     is_label,
-    LABEL_PATTERN
+    LABEL_PATTERN,
+    IdDebug::Clear
 );
 id_newtype!(
     /// A realm gateway guest identity. Opaque (not operator-typed).
     GatewayId,
     is_opaque_token,
-    OPAQUE_PATTERN
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
 );
 id_newtype!(
     /// A durable execution id.
     ExecutionId,
     is_opaque_token,
-    OPAQUE_PATTERN
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
 );
 id_newtype!(
     /// A multiplexed stream id within a peer session.
     StreamId,
     is_opaque_token,
-    OPAQUE_PATTERN
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
 );
 id_newtype!(
     /// An opaque resume cursor for a `Logs` stream. The peer echoes the
@@ -188,25 +256,29 @@ id_newtype!(
     /// without gaps or replay. Opaque + bounded (never operator-typed).
     StreamCursor,
     is_opaque_token,
-    OPAQUE_PATTERN
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
 );
 id_newtype!(
     /// An authenticated principal (never a relay credential).
     PrincipalId,
     is_opaque_token,
-    OPAQUE_PATTERN
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
 );
 id_newtype!(
     /// Audit/correlation id for a single operation.
     OperationId,
     is_opaque_token,
-    OPAQUE_PATTERN
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
 );
 id_newtype!(
     /// Caller-generated key for at-least-once mutating operations.
     IdempotencyKey,
     is_opaque_token,
-    OPAQUE_PATTERN
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
 );
 
 #[cfg(test)]
@@ -224,9 +296,18 @@ mod tests {
     }
 
     #[test]
-    fn opaque_tokens_reject_spaces_and_control() {
+    fn opaque_tokens_reject_unsafe_shapes() {
         assert!(ExecutionId::parse("exec-abc123").is_ok());
+        assert!(ExecutionId::parse("exec_ABC123.4").is_ok());
         assert_eq!(ExecutionId::parse("a b"), Err(IdError::BadShape));
+        assert_eq!(ExecutionId::parse("/etc/passwd"), Err(IdError::BadShape));
+        assert_eq!(ExecutionId::parse("path..child"), Err(IdError::BadShape));
+        assert_eq!(ExecutionId::parse("secret-abc"), Err(IdError::BadShape));
+        assert_eq!(
+            ExecutionId::parse("bearer.token.abc"),
+            Err(IdError::BadShape)
+        );
+        assert_eq!(ExecutionId::parse("-bad"), Err(IdError::BadShape));
         assert_eq!(StreamId::parse(""), Err(IdError::Empty));
         assert_eq!(
             PrincipalId::parse("x".repeat(MAX_ID_LEN + 1)),
@@ -244,6 +325,7 @@ mod tests {
         assert!(serde_json::from_str::<RealmId>("\"\"").is_err());
         assert!(serde_json::from_str::<NodeId>("\"a_b\"").is_err());
         assert!(serde_json::from_str::<ExecutionId>("\"a b\"").is_err());
+        assert!(serde_json::from_str::<ExecutionId>("\"../secret\"").is_err());
         let overlong = format!("\"{}\"", "x".repeat(MAX_ID_LEN + 1));
         assert!(serde_json::from_str::<PrincipalId>(&overlong).is_err());
     }
@@ -252,5 +334,16 @@ mod tests {
     fn serialize_is_transparent_string() {
         let id = WorkloadId::parse("build-vm").unwrap();
         assert_eq!(serde_json::to_string(&id).unwrap(), "\"build-vm\"");
+    }
+
+    #[test]
+    fn debug_redacts_opaque_ids_but_not_labels() {
+        let principal = PrincipalId::parse("principal-1").unwrap();
+        let principal_debug = format!("{principal:?}");
+        assert!(principal_debug.contains("PrincipalId(<11 bytes>)"));
+        assert!(!principal_debug.contains("principal-1"));
+
+        let node = NodeId::parse("gateway").unwrap();
+        assert_eq!(format!("{node:?}"), "NodeId(\"gateway\")");
     }
 }

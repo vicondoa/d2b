@@ -3,7 +3,7 @@
 //! operation/routing layer depends only on this module — never on a wire
 //! encoding (`prost`, protobuf-generated types, etc.).
 
-use crate::audit::AuditEnvelope;
+use crate::audit::AdmissionAuditRecord;
 use crate::capability::Capability;
 use crate::error::ConstellationError;
 use crate::ids::{
@@ -53,7 +53,6 @@ pub struct Handshake {
 /// kinds are rejected at decode (fail-closed).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
 pub enum OperationKind {
     NodeRegister,
     NodeHeartbeat,
@@ -411,7 +410,6 @@ pub struct StreamClose {
 /// struct so a peer cannot smuggle extra fields past the decoder.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "frame", rename_all = "kebab-case")]
-#[non_exhaustive]
 pub enum ConstellationFrame {
     /// Session handshake (version + codec negotiation).
     Handshake(Handshake),
@@ -429,8 +427,8 @@ pub enum ConstellationFrame {
     StreamClose(StreamClose),
     /// A typed error frame.
     TypedError(ConstellationError),
-    /// A redacted admission/audit frame.
-    AdmissionAudit(AuditEnvelope),
+    /// A redacted pre-auth/session-admission denial frame.
+    AdmissionAudit(AdmissionAuditRecord),
 }
 
 #[cfg(test)]
@@ -445,6 +443,35 @@ mod tests {
         let json = serde_json::to_string(&frame).unwrap();
         let back: ConstellationFrame = serde_json::from_str(&json).unwrap();
         assert_eq!(frame, back);
+    }
+
+    #[test]
+    fn admission_audit_frame_uses_denial_record_shape() {
+        use crate::audit::AuthorizationScope;
+        use crate::error::ErrorKind;
+        use crate::ids::{NodeId, OperationId, RealmId};
+
+        let realm = RealmPath::new(vec![RealmId::parse("work").unwrap()]).unwrap();
+        let record = AdmissionAuditRecord::denied(
+            OperationId::parse("op-1").unwrap(),
+            realm,
+            NodeId::parse("gw").unwrap(),
+            AuthorizationScope::Enrollment,
+            ErrorKind::AuthenticationFailed,
+        );
+        let frame = ConstellationFrame::AdmissionAudit(record);
+        let json = serde_json::to_string(&frame).unwrap();
+        assert!(json.contains("\"frame\":\"admission-audit\""));
+        assert!(json.contains("\"reason\":\"authentication-failed\""));
+        assert!(!json.contains("principal"));
+        let back: ConstellationFrame = serde_json::from_str(&json).unwrap();
+        assert_eq!(frame, back);
+
+        let bad = "{\"frame\":\"admission-audit\",\"operation_id\":\"op-1\",\
+                   \"realm\":[\"work\"],\"node\":\"gw\",\
+                   \"scope\":{\"scope\":\"enrollment\"},\"decision\":\"allow\",\
+                   \"reason\":\"authentication-failed\"}";
+        assert!(serde_json::from_str::<ConstellationFrame>(bad).is_err());
     }
 
     #[test]
@@ -512,6 +539,17 @@ mod tests {
         let read = "{\"operation_id\":\"op1\",\"realm\":[\"work\"],\"node\":\"n1\",\
                     \"principal\":\"p1\",\"kind\":\"workload-list\",\"body\":[]}";
         assert!(serde_json::from_str::<OperationRequest>(read).is_ok());
+    }
+
+    #[test]
+    fn operation_request_requires_realm_and_principal() {
+        let no_realm = "{\"operation_id\":\"op1\",\"node\":\"n1\",\"principal\":\"p1\",\
+                        \"kind\":\"workload-list\",\"body\":[]}";
+        assert!(serde_json::from_str::<OperationRequest>(no_realm).is_err());
+
+        let no_principal = "{\"operation_id\":\"op1\",\"realm\":[\"work\"],\"node\":\"n1\",\
+                            \"kind\":\"workload-list\",\"body\":[]}";
+        assert!(serde_json::from_str::<OperationRequest>(no_principal).is_err());
     }
 
     #[test]

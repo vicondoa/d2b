@@ -4050,6 +4050,7 @@ dependencies = [
  "clap_complete",
  "clap_mangen",
  "nixling",
+ "nixling-constellation-core",
  "nixling-core",
  "nixling-ipc",
  "protobuf-codegen",

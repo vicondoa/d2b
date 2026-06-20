@@ -71,6 +71,11 @@ pub const DEFAULT_RETENTION: Duration = Duration::from_secs(15 * 60);
 /// record dropped to bound memory.
 pub const DEFAULT_NO_REUSE_HORIZON: Duration = Duration::from_secs(60 * 60);
 
+/// Default maximum number of dedup records retained by one router scope. This
+/// bounds memory for completed/tombstoned/in-progress records; callers that
+/// need a tighter bound can use [`OperationRouter::with_max_dedup_records`].
+pub const DEFAULT_MAX_DEDUP_RECORDS: usize = 65_536;
+
 /// The router's decision for one operation. The caller (provider executor)
 /// acts on `Accept`/`Replay`; every other variant is a typed refusal that
 /// maps to a `ConstellationError` kind.
@@ -106,6 +111,9 @@ pub enum RouteDecision {
     MissingIdempotencyKey,
     /// The request principal does not match the authenticated session.
     PrincipalMismatch,
+    /// The router cannot retain another dedup record in this scope; refusing
+    /// avoids executing a mutating operation without a durable dedup lease.
+    DedupCapacityExceeded,
 }
 
 /// A monotonic clock, injectable so dedup expiry is deterministically
@@ -181,6 +189,7 @@ struct DedupEntry {
 pub struct OperationRouter<C: Clock = SystemClock> {
     retention: Duration,
     no_reuse_horizon: Duration,
+    max_dedup_records: usize,
     clock: C,
     dedup: HashMap<DedupKey, DedupEntry>,
 }
@@ -204,6 +213,7 @@ impl<C: Clock> OperationRouter<C> {
         Self {
             retention: DEFAULT_RETENTION,
             no_reuse_horizon: DEFAULT_NO_REUSE_HORIZON,
+            max_dedup_records: DEFAULT_MAX_DEDUP_RECORDS,
             clock,
             dedup: HashMap::new(),
         }
@@ -223,6 +233,17 @@ impl<C: Clock> OperationRouter<C> {
     /// Override the no-reuse horizon (tombstone lifetime past completion).
     pub fn with_no_reuse_horizon(mut self, horizon: Duration) -> Self {
         self.no_reuse_horizon = horizon;
+        self
+    }
+
+    /// Override the maximum number of dedup records tracked by this router.
+    /// When the bound is reached, a new mutating key fails closed with
+    /// [`RouteDecision::DedupCapacityExceeded`] rather than being dispatched
+    /// without a retained dedup lease. Existing keys can still replay,
+    /// conflict, or report in-progress state because those decisions do not
+    /// grow memory.
+    pub fn with_max_dedup_records(mut self, max: usize) -> Self {
+        self.max_dedup_records = max;
         self
     }
 
@@ -260,6 +281,10 @@ impl<C: Clock> OperationRouter<C> {
 
         match self.dedup.get_mut(&dedup_key) {
             None => {
+                self.gc_at(now);
+                if self.dedup.len() >= self.max_dedup_records {
+                    return RouteDecision::DedupCapacityExceeded;
+                }
                 self.dedup.insert(
                     dedup_key,
                     DedupEntry {
@@ -365,6 +390,10 @@ impl<C: Clock> OperationRouter<C> {
     /// the no-reuse horizon.
     pub fn gc(&mut self) {
         let now = self.clock.now();
+        self.gc_at(now);
+    }
+
+    fn gc_at(&mut self, now: Instant) {
         let retention = self.retention;
         let horizon = self.no_reuse_horizon;
         // First, age completed entries into tombstones.
@@ -495,11 +524,16 @@ mod tests {
     #[test]
     fn principal_mismatch_is_rejected() {
         let mut r = OperationRouter::new();
-        let req = req(OperationKind::WorkloadList, None, b"", "alice");
+        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         assert_eq!(
             r.route(&req, &principal("bob")),
             RouteDecision::PrincipalMismatch
         );
+        assert_eq!(r.tracked(), 0);
+        assert!(matches!(
+            r.route(&req, &principal("alice")),
+            RouteDecision::Accept { .. }
+        ));
     }
 
     #[test]
@@ -515,12 +549,110 @@ mod tests {
     }
 
     #[test]
-    fn mutating_without_key_is_rejected() {
+    fn required_capability_and_scope_are_derived_from_kind() {
         let mut r = OperationRouter::new();
-        let req = req(OperationKind::WorkloadStart, None, b"x", "alice");
+        let p = principal("alice");
+        let cases = [
+            (
+                OperationKind::NodeRegister,
+                None,
+                AuthorizationScope::Enrollment,
+            ),
+            (
+                OperationKind::NodeHeartbeat,
+                None,
+                AuthorizationScope::NodeControl,
+            ),
+            (
+                OperationKind::NodeCapabilities,
+                None,
+                AuthorizationScope::NodeControl,
+            ),
+            (OperationKind::GuestHealth, None, AuthorizationScope::Health),
+            (
+                OperationKind::WorkloadList,
+                Some(Capability::Lifecycle),
+                AuthorizationScope::capability(Capability::Lifecycle),
+            ),
+            (
+                OperationKind::WorkloadStart,
+                Some(Capability::Lifecycle),
+                AuthorizationScope::capability(Capability::Lifecycle),
+            ),
+            (
+                OperationKind::WorkloadStop,
+                Some(Capability::Lifecycle),
+                AuthorizationScope::capability(Capability::Lifecycle),
+            ),
+            (
+                OperationKind::ExecStart,
+                Some(Capability::Exec),
+                AuthorizationScope::capability(Capability::Exec),
+            ),
+            (
+                OperationKind::ExecAttach,
+                Some(Capability::Exec),
+                AuthorizationScope::capability(Capability::Exec),
+            ),
+            (
+                OperationKind::ExecCancel,
+                Some(Capability::Exec),
+                AuthorizationScope::capability(Capability::Exec),
+            ),
+            (
+                OperationKind::ExecLogs,
+                Some(Capability::Logs),
+                AuthorizationScope::capability(Capability::Logs),
+            ),
+            (
+                OperationKind::FileCopyStart,
+                Some(Capability::FileCopy),
+                AuthorizationScope::capability(Capability::FileCopy),
+            ),
+            (
+                OperationKind::PortForwardOpen,
+                Some(Capability::PortForward),
+                AuthorizationScope::capability(Capability::PortForward),
+            ),
+            (
+                OperationKind::DisplaySessionOpen,
+                Some(Capability::WindowForwarding),
+                AuthorizationScope::capability(Capability::WindowForwarding),
+            ),
+        ];
+
+        for (idx, (kind, expected_capability, expected_scope)) in cases.into_iter().enumerate() {
+            let key = format!("scope-key-{idx}");
+            let op_id = format!("op-{idx}");
+            let req = req_with_op(
+                kind,
+                kind.is_mutating().then_some(key.as_str()),
+                b"scope",
+                "alice",
+                &op_id,
+            );
+            assert_eq!(required_capability(&req), expected_capability);
+            match r.route(&req, &p) {
+                RouteDecision::Accept { scope } => assert_eq!(scope, expected_scope),
+                other => panic!("expected Accept for {kind:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn mutating_without_key_is_rejected() {
+        let mut r = OperationRouter::new().with_max_dedup_records(0);
+        let missing_key = req(OperationKind::WorkloadStart, None, b"x", "alice");
         assert_eq!(
-            r.route(&req, &principal("alice")),
+            r.route(&missing_key, &principal("alice")),
             RouteDecision::MissingIdempotencyKey
+        );
+        assert_eq!(r.tracked(), 0);
+
+        let keyed = req(OperationKind::WorkloadStart, Some("k1"), b"x", "alice");
+        assert_eq!(
+            r.route(&keyed, &principal("alice")),
+            RouteDecision::DedupCapacityExceeded
         );
     }
 
@@ -651,6 +783,72 @@ mod tests {
         assert!(r.mark_completed(&req, result(b"ok")));
         clock.advance(Duration::from_secs(61));
         assert_eq!(r.route(&req, &p), RouteDecision::IdempotencyKeyExpired);
+    }
+
+    #[test]
+    fn capacity_exhaustion_fails_closed_for_new_keys() {
+        let mut r = OperationRouter::new().with_max_dedup_records(1);
+        let p = principal("alice");
+        let first = req_with_op(
+            OperationKind::WorkloadStart,
+            Some("k1"),
+            b"start-one",
+            "alice",
+            "op-1",
+        );
+        let second = req_with_op(
+            OperationKind::WorkloadStart,
+            Some("k2"),
+            b"start-two",
+            "alice",
+            "op-2",
+        );
+
+        assert!(matches!(r.route(&first, &p), RouteDecision::Accept { .. }));
+        assert_eq!(r.route(&second, &p), RouteDecision::DedupCapacityExceeded);
+        assert_eq!(r.tracked(), 1);
+
+        assert!(r.mark_completed(&first, result(b"first-result")));
+        assert_eq!(
+            r.route(&first, &p),
+            RouteDecision::Replay {
+                original_operation_id: OperationId::parse("op-1").unwrap(),
+                result: result(b"first-result"),
+            }
+        );
+    }
+
+    #[test]
+    fn capacity_reclaims_expired_tombstones_before_refusing_new_keys() {
+        let clock = ManualClock::new();
+        let mut r = OperationRouter::with_clock(clock.clone())
+            .with_retention(Duration::from_secs(10))
+            .with_no_reuse_horizon(Duration::from_secs(10))
+            .with_max_dedup_records(1);
+        let p = principal("alice");
+        let first = req_with_op(
+            OperationKind::WorkloadStart,
+            Some("k1"),
+            b"start-one",
+            "alice",
+            "op-1",
+        );
+        let second = req_with_op(
+            OperationKind::WorkloadStart,
+            Some("k2"),
+            b"start-two",
+            "alice",
+            "op-2",
+        );
+
+        assert!(matches!(r.route(&first, &p), RouteDecision::Accept { .. }));
+        assert!(r.mark_completed(&first, result(b"first-result")));
+        clock.advance(Duration::from_secs(11));
+        assert_eq!(r.route(&first, &p), RouteDecision::IdempotencyKeyExpired);
+        clock.advance(Duration::from_secs(11));
+
+        assert!(matches!(r.route(&second, &p), RouteDecision::Accept { .. }));
+        assert_eq!(r.tracked(), 1);
     }
 
     #[test]

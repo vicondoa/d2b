@@ -41,10 +41,10 @@ use azure_core::time::{Duration as AzureDuration, OffsetDateTime};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use nixling_constellation_core::WorkloadSummary;
 use nixling_constellation_core::{
     Capability, CapabilitySet, ErrorKind, ExecutionId, NodeId, ProviderId, WorkloadId,
 };
+use nixling_constellation_core::{RealmPath, WorkloadSummary};
 use nixling_constellation_provider::capabilities::WorkloadCapabilitySet;
 use nixling_constellation_provider::error::{ProviderError, ProviderResult};
 use nixling_constellation_provider::provider::WorkloadProvider;
@@ -906,6 +906,7 @@ impl WorkloadProvider for AcaWorkloadProvider {
                 let id = WorkloadId::parse(workload.clone()).ok()?;
                 Some(WorkloadSummary {
                     id,
+                    realm: RealmPath::local(),
                     node: self.node.clone(),
                     state: sandbox_state(&sandbox),
                     capabilities: self.capabilities().caps,

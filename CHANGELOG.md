@@ -49,7 +49,7 @@ deprecations ship one minor release before removal.
   preview `aca` CLI.
 - ADR 0032 ACA display: gateway config can now carry the non-secret ACA
   managed-identity client id used by local validation probes, while the
-  live P0 display sender receives a gateway-minted short-lived Relay Send
+  live display sender receives a gateway-minted short-lived Relay Send
   bearer instead of the long-lived Relay rule key.
 - NixOS: added `nixling.site.usePrebuiltHostTools` so development hosts
   can validate source-built `nixling`, `nixlingd`, and activation helper
@@ -93,6 +93,12 @@ deprecations ship one minor release before removal.
   metadata and provider capability summaries. Provider-specific socket
   and vsock fields are nullable so `qemu-media` entries do not fabricate
   Cloud Hypervisor or guest-control artifacts.
+- ADR 0032 constellation core contracts now publish and document hardened
+  schema roots: target and identifier parsing is bounded and
+  fail-closed, capabilities are positive assertions, mutating operations
+  require idempotency keys, and audit/error/trace payloads carry only
+  redacted, bounded metadata. This is a contributor-facing contract; it
+  does not change CLI, daemon, or host behavior.
 - `qemu-media` VMs now emit a typed QMP-only QEMU runner process node
   instead of being absent from `processes.json`; they still do not emit
   Cloud Hypervisor, store/virtiofs, or guest-control runner data.

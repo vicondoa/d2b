@@ -21,7 +21,6 @@ use serde::{Deserialize, Deserializer, Serialize};
     schemars::JsonSchema,
 )]
 #[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
 pub enum ErrorKind {
     /// A required capability was not advertised; fail closed (no fallback).
     CapabilityDenied,

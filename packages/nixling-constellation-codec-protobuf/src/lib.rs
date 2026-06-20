@@ -1,12 +1,12 @@
 //! Protobuf `ProtocolCodec` implementation for ADR 0032 constellation frames.
 
 use nixling_constellation_core::{
-    AuditEnvelope, AuthorizationScope, AuthzDecision, Capability, ConstellationError,
-    ConstellationFrame, ErrorKind, ExecutionId, Handshake, IdempotencyKey, NodeId, OpaquePayload,
-    OperationId, OperationKind, OperationRequest, OperationResponse, PeerContext, PrincipalId,
-    ProtocolToken, RealmId, RealmPath, StreamAuthz, StreamChannel, StreamClose, StreamCloseReason,
-    StreamCursor, StreamData, StreamDescriptor, StreamFlow, StreamId, StreamKind, StreamOpen,
-    TraceContext, WorkloadId,
+    AdmissionAuditRecord, AuthorizationScope, AuthzDecision, Capability, ConstellationError,
+    ConstellationFrame, ErrorKind, Handshake, IdempotencyKey, NodeId, OpaquePayload, OperationId,
+    OperationKind, OperationRequest, OperationResponse, PeerContext, PrincipalId, ProtocolToken,
+    RealmId, RealmPath, StreamAuthz, StreamChannel, StreamClose, StreamCloseReason, StreamCursor,
+    StreamData, StreamDescriptor, StreamFlow, StreamId, StreamKind, StreamOpen, TraceContext,
+    WorkloadId,
 };
 use nixling_constellation_provider::ProtocolCodec;
 use nixling_ipc::MAX_FRAME_SIZE;
@@ -16,7 +16,7 @@ use prost::Message;
 pub const CODEC_ID: &str = "protobuf.v1";
 
 /// Deterministic fingerprint for the hand-authored prost schema in this crate.
-pub const SCHEMA_FINGERPRINT: &str = "protobuf.v1/frames=9/fields=handshake3,opreq9,opresp2,streamopen3,streamdata5,streamflow2,streamclose2,error3,audit10";
+pub const SCHEMA_FINGERPRINT: &str = "protobuf.v1/frames=9/fields=handshake3,opreq9,opresp2,streamopen3,streamdata5,streamflow2,streamclose2,error3,audit11";
 
 /// A prost-backed constellation frame codec.
 #[derive(Debug, Clone, Copy, Default)]
@@ -226,6 +226,8 @@ struct ProtoAuditEnvelope {
     decision: i32,
     #[prost(message, optional, tag = "10")]
     trace: Option<ProtoTraceContext>,
+    #[prost(int32, optional, tag = "11")]
+    reason: Option<i32>,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -292,9 +294,8 @@ fn encode_proto_frame(frame: &ConstellationFrame) -> Result<ProtoFrame, Constell
             proto_frame::Body::TypedError(encode_error(frame)?)
         }
         ConstellationFrame::AdmissionAudit(frame) => {
-            proto_frame::Body::AdmissionAudit(encode_audit(frame)?)
+            proto_frame::Body::AdmissionAudit(encode_admission_audit(frame)?)
         }
-        _ => return Err(malformed("unsupported constellation frame variant")),
     };
     Ok(ProtoFrame { body: Some(body) })
 }
@@ -329,7 +330,7 @@ fn decode_proto_frame(frame: ProtoFrame) -> Result<ConstellationFrame, Constella
             decode_error(frame).map(ConstellationFrame::TypedError)
         }
         proto_frame::Body::AdmissionAudit(frame) => {
-            decode_audit(frame).map(ConstellationFrame::AdmissionAudit)
+            decode_admission_audit(frame).map(ConstellationFrame::AdmissionAudit)
         }
     }
 }
@@ -600,7 +601,9 @@ fn decode_error(error: ProtoError) -> Result<ConstellationError, ConstellationEr
     }
 }
 
-fn encode_audit(audit: &AuditEnvelope) -> Result<ProtoAuditEnvelope, ConstellationError> {
+fn encode_admission_audit(
+    audit: &AdmissionAuditRecord,
+) -> Result<ProtoAuditEnvelope, ConstellationError> {
     Ok(ProtoAuditEnvelope {
         operation_id: audit.operation_id.as_str().to_owned(),
         realm: encode_realm(&audit.realm),
@@ -609,26 +612,25 @@ fn encode_audit(audit: &AuditEnvelope) -> Result<ProtoAuditEnvelope, Constellati
             .as_ref()
             .map(|principal| principal.as_str().to_owned()),
         node: audit.node.as_str().to_owned(),
-        workload: audit
-            .workload
-            .as_ref()
-            .map(|workload| workload.as_str().to_owned()),
-        stream: audit
-            .stream
-            .as_ref()
-            .map(|stream| stream.as_str().to_owned()),
-        execution: audit
-            .execution
-            .as_ref()
-            .map(|execution| execution.as_str().to_owned()),
+        workload: None,
+        stream: None,
+        execution: None,
         scope: Some(encode_authorization_scope(audit.scope)?),
         decision: encode_authz_decision(audit.decision),
         trace: audit.trace.as_ref().map(encode_trace_context),
+        reason: Some(encode_error_kind(audit.reason)?),
     })
 }
 
-fn decode_audit(audit: ProtoAuditEnvelope) -> Result<AuditEnvelope, ConstellationError> {
-    let envelope = AuditEnvelope {
+fn decode_admission_audit(
+    audit: ProtoAuditEnvelope,
+) -> Result<AdmissionAuditRecord, ConstellationError> {
+    if audit.workload.is_some() || audit.stream.is_some() || audit.execution.is_some() {
+        return Err(malformed(
+            "admission audit must not carry workload, stream, or execution fields",
+        ));
+    }
+    let record = AdmissionAuditRecord {
         operation_id: parse_operation_id(audit.operation_id, "audit operation_id")?,
         realm: decode_realm(audit.realm, "audit realm")?,
         principal: audit
@@ -636,32 +638,22 @@ fn decode_audit(audit: ProtoAuditEnvelope) -> Result<AuditEnvelope, Constellatio
             .map(|principal| parse_principal_id(principal, "audit principal"))
             .transpose()?,
         node: parse_node_id(audit.node, "audit node")?,
-        workload: audit
-            .workload
-            .map(|workload| parse_workload_id(workload, "audit workload"))
-            .transpose()?,
-        stream: audit
-            .stream
-            .map(|stream| parse_stream_id(stream, "audit stream"))
-            .transpose()?,
-        execution: audit
-            .execution
-            .map(|execution| parse_execution_id(execution, "audit execution"))
-            .transpose()?,
         scope: decode_authorization_scope(
             audit
                 .scope
                 .ok_or_else(|| malformed("audit scope is missing"))?,
         )?,
         decision: decode_authz_decision(audit.decision)?,
+        reason: audit
+            .reason
+            .ok_or_else(|| malformed("admission audit reason is missing"))
+            .and_then(decode_error_kind)?,
         trace: audit.trace.map(decode_trace_context).transpose()?,
     };
-    if envelope.is_principal_consistent() {
-        Ok(envelope)
+    if record.is_admission_denial() {
+        Ok(record)
     } else {
-        Err(malformed(
-            "audit record with decision=allow must name a principal",
-        ))
+        Err(malformed("admission audit records must be denials"))
     }
 }
 
@@ -756,7 +748,6 @@ parse_id_fn!(parse_workload_id, WorkloadId);
 parse_id_fn!(parse_principal_id, PrincipalId);
 parse_id_fn!(parse_stream_id, StreamId);
 parse_id_fn!(parse_stream_cursor, StreamCursor);
-parse_id_fn!(parse_execution_id, ExecutionId);
 parse_id_fn!(parse_protocol_token, ProtocolToken);
 
 fn encode_operation_kind(kind: OperationKind) -> Result<i32, ConstellationError> {
@@ -775,7 +766,6 @@ fn encode_operation_kind(kind: OperationKind) -> Result<i32, ConstellationError>
         OperationKind::FileCopyStart => 12,
         OperationKind::PortForwardOpen => 13,
         OperationKind::DisplaySessionOpen => 14,
-        _ => return Err(malformed("unsupported operation kind")),
     })
 }
 
@@ -899,7 +889,6 @@ fn encode_capability(capability: Capability) -> Result<i32, ConstellationError> 
         Capability::Hotplug => 18,
         Capability::EphemeralSessions => 19,
         Capability::ProviderManagedIsolation => 20,
-        _ => return Err(malformed("unsupported capability")),
     })
 }
 
@@ -950,7 +939,6 @@ fn encode_error_kind(kind: ErrorKind) -> Result<i32, ConstellationError> {
         ErrorKind::InvalidTarget => 17,
         ErrorKind::AuditUnavailable => 18,
         ErrorKind::UnsupportedFeature => 19,
-        _ => return Err(malformed("unsupported error kind")),
     })
 }
 
@@ -1135,6 +1123,31 @@ mod tests {
     }
 
     #[test]
+    fn protobuf_decode_rejects_admission_audit_with_workload_stream_or_execution() {
+        let codec = ProtobufCodec::new();
+        for invalid_audit in [
+            ProtoAuditEnvelope {
+                workload: Some("workload-a".to_owned()),
+                ..valid_admission_audit_proto()
+            },
+            ProtoAuditEnvelope {
+                stream: Some("stream-1".to_owned()),
+                ..valid_admission_audit_proto()
+            },
+            ProtoAuditEnvelope {
+                execution: Some("exec-1".to_owned()),
+                ..valid_admission_audit_proto()
+            },
+        ] {
+            let invalid = ProtoFrame {
+                body: Some(proto_frame::Body::AdmissionAudit(invalid_audit)),
+            }
+            .encode_to_vec();
+            assert_malformed(codec.decode_frame(&invalid));
+        }
+    }
+
+    #[test]
     fn alternate_codec_round_trips_the_same_semantic_frames() {
         let protobuf = ProtobufCodec::new();
         let json = JsonCodec;
@@ -1229,17 +1242,14 @@ mod tests {
                 Capability::WindowForwarding,
             )),
             ConstellationFrame::AdmissionAudit(
-                AuditEnvelope::post_auth(
+                AdmissionAuditRecord::denied(
                     operation_id,
                     realm,
-                    principal,
                     node,
                     AuthorizationScope::capability(Capability::Exec),
-                    AuthzDecision::Allow,
+                    ErrorKind::AuthenticationFailed,
                 )
-                .with_workload(workload)
-                .with_stream(stream)
-                .with_execution(execution("exec-1"))
+                .with_principal(principal)
                 .with_trace(trace),
             ),
         ]
@@ -1273,8 +1283,22 @@ mod tests {
         StreamId::parse(raw).unwrap()
     }
 
-    fn execution(raw: &str) -> ExecutionId {
-        ExecutionId::parse(raw).unwrap()
+    fn valid_admission_audit_proto() -> ProtoAuditEnvelope {
+        ProtoAuditEnvelope {
+            operation_id: "op-1".to_owned(),
+            realm: vec!["work".to_owned()],
+            principal: None,
+            node: "node-a".to_owned(),
+            workload: None,
+            stream: None,
+            execution: None,
+            scope: Some(ProtoAuthorizationScope {
+                scope: Some(proto_authorization_scope::Scope::Enrollment(ProtoUnit {})),
+            }),
+            decision: encode_authz_decision(AuthzDecision::Deny),
+            trace: None,
+            reason: Some(encode_error_kind(ErrorKind::AuthenticationFailed).unwrap()),
+        }
     }
 
     fn realm() -> RealmPath {
