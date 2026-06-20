@@ -42,6 +42,7 @@ use nixling_constellation_core::{
 };
 
 pub mod display_transport;
+pub mod execution;
 pub mod mux_session;
 pub mod secure_session;
 pub mod session;
@@ -52,6 +53,7 @@ pub use display_transport::{
     DISPLAY_TOKEN_LEN, DISPLAY_VSOCK_PORT, DisplayTransportBinding, DisplayTransportToken,
     encode_display_preface, verify_display_preface,
 };
+pub use execution::{DEFAULT_MAX_EXECUTIONS, DurableExecTable};
 pub use mux_session::MuxSession;
 pub use secure_session::{
     NonceReplayGuard, SecurePeerIdentity, SecurePeerSession, SecureSessionKey,

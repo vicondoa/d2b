@@ -80,6 +80,37 @@ pub trait WorkloadProvider: Send + Sync {
     ) -> ProviderResult<nixling_constellation_core::ExecutionId>;
 }
 
+/// Durable execution adapter over an already-addressed workload. This is the
+/// constellation-facing seam for guest-control exec, provider-managed exec, or
+/// future remote-node exec implementations; it carries only bounded metadata
+/// and opaque stream/payload contracts from `nixling-constellation-core`.
+#[async_trait]
+pub trait DurableExecutionProvider: Send + Sync {
+    /// Provider id.
+    fn provider_id(&self) -> ProviderId;
+    /// Start or rediscover a durable execution.
+    async fn start(
+        &self,
+        req: nixling_constellation_core::ExecStartRequest,
+    ) -> ProviderResult<nixling_constellation_core::ExecutionSummary>;
+    /// Attach or reconnect to a durable execution after generation validation.
+    async fn attach(
+        &self,
+        req: nixling_constellation_core::ExecAttachRequest,
+    ) -> ProviderResult<nixling_constellation_core::ExecutionSummary>;
+    /// Fetch retained log metadata under a bounded request.
+    async fn logs(
+        &self,
+        req: nixling_constellation_core::ExecLogsRequest,
+    ) -> ProviderResult<nixling_constellation_core::ExecutionSummary>;
+    /// Cancel an execution idempotently. `false` means it was already terminal
+    /// or unknown to this provider scope.
+    async fn cancel(
+        &self,
+        req: nixling_constellation_core::ExecCancelRequest,
+    ) -> ProviderResult<bool>;
+}
+
 /// Window/display forwarding for workloads that can present UI. A provider
 /// that cannot present windows returns a typed capability denial.
 #[async_trait]

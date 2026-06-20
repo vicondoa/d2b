@@ -34,6 +34,7 @@ Regenerate that file; do not edit generated JSON by hand.
 | `AuditSinkHealth` / `AuditRetentionFloorStatus` | `src/audit.rs` | Redacted audit-sink health and retention-floor status for degraded/fail-closed reporting. |
 | `ConstellationError` | `src/error.rs` | Typed error frame with stable `ErrorKind`, bounded message, and structured missing capability for capability denials. |
 | `NodeSummary` / `WorkloadSelector` / `WorkloadSummary` / `ExecutionSummary` | `src/node.rs`, `src/workload.rs`, `src/execution.rs` | Bounded status summaries and selectors for nodes, workloads, and durable executions. |
+| `ExecStartRequest` / `ExecAttachRequest` / `ExecLogsRequest` / `ExecCancelRequest` | `src/execution.rs` | Bounded durable-execution metadata for start, reconnect, retained logs, and retry-safe cancel. |
 | `RealmPath`, identifier newtypes, `CapabilitySet`, `TraceContext`, `OpaquePayload`, `ProtocolToken` | `src/realm.rs`, `src/ids.rs`, `src/capability.rs`, `src/trace_context.rs`, `src/payload.rs`, `src/token.rs` | Reusable bounded primitives that every higher-level root depends on. |
 
 ## Target addresses
@@ -146,6 +147,21 @@ The pure `StreamMux` state machine enforces:
 - `StreamResume` only on resumable stream kinds;
 - idempotent cancellation retries for already-cancelled streams;
 - no data after close and no double close for non-cancel terminal states.
+
+## Durable execution
+
+Durable execution metadata is keyed by `ExecutionId` and carries an
+`ExecutionGeneration` binding. Reconnect/attach requests must match the
+generation that created the execution; stale boot or workload-generation
+tokens fail closed before a stream is opened. `ExecLogsRequest` carries a
+non-zero byte bound and an optional retained cursor. `ExecCancelRequest` is
+idempotent so lost-reply and reconnect retries can safely repeat cancel
+without turning an already-terminal execution into a protocol error.
+
+`ExecutionSummary` carries only bounded metadata: execution id, workload,
+state, exit code, TTY flag, generation, attach mode, and retained cursors.
+Argv, env, cwd, stdio, and log bytes remain operation/stream payloads and
+are not schema fields.
 
 ## Audit and error redaction
 

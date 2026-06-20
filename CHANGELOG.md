@@ -87,6 +87,9 @@ deprecations ship one minor release before removal.
 - Named stream plumbing now supports resumable log cursors,
   deterministic stream draining, and retry-safe cancellation for future
   remote execution and display sessions.
+- Remote execution groundwork now supports reliable reconnects, bounded
+  retained-log reads, and safe repeated cancellation for future durable
+  remote exec sessions.
 
 ### Changed
 
