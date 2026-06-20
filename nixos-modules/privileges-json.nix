@@ -597,19 +597,6 @@ let
     "brokerRequired": "yes",
     "auditMode": "yes"
   },
-  {
-    "operation": "usb enroll",
-    "subject": "VM/USB media ref",
-    "scope": "per-VM/per-media-ref",
-    "allowedGroups": [
-      "nixling-admin"
-    ],
-    "destructive": true,
-    "secretAccess": "redacted-only",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
     "operation": "usb detach",
     "subject": "VM/USB busid",
     "scope": "per-VM/per-env/per-busid",

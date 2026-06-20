@@ -253,7 +253,6 @@
             "usb",
             "usb attach",
             "usb detach",
-            "usb enroll",
             "usb probe"
           ]
         },

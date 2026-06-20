@@ -46,7 +46,6 @@ pub enum Request {
     RotateKnownHost(public_wire::RotateKnownHostRequest),
     UsbipBind(public_wire::UsbipBindCliRequest),
     UsbipUnbind(public_wire::UsbipUnbindCliRequest),
-    UsbEnroll(public_wire::UsbEnrollRequest),
     UsbipProbe,
     StoreVerify(public_wire::StoreVerifyRequest),
     Migrate(public_wire::MigrateRequest),
@@ -82,7 +81,6 @@ impl Request {
             Self::RotateKnownHost(_) => "rotateKnownHost",
             Self::UsbipBind(_) => "usbipBind",
             Self::UsbipUnbind(_) => "usbipUnbind",
-            Self::UsbEnroll(_) => "usbEnroll",
             Self::UsbipProbe => "usbipProbe",
             Self::StoreVerify(_) => "storeVerify",
             Self::Migrate(_) => "migrate",
@@ -113,7 +111,6 @@ impl Request {
             }
             Self::UsbipBind(req) => OpLockClass::PerVm(req.vm.clone()),
             Self::UsbipUnbind(req) => OpLockClass::PerVm(req.vm.clone()),
-            Self::UsbEnroll(req) => OpLockClass::PerVm(req.vm.clone()),
             Self::StoreVerify(req) => OpLockClass::PerVm(req.vm.clone()),
             Self::RotateKnownHost(req) => OpLockClass::PerVm(req.vm.clone()),
             // Global mutating verbs: mutually exclusive with all per-VM ops.
@@ -301,9 +298,6 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
             .map_err(map_parse_error),
         "usbipUnbind" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::UsbipUnbind)
-            .map_err(map_parse_error),
-        "usbEnroll" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::UsbEnroll)
             .map_err(map_parse_error),
         "usbipProbe" => {
             if object.is_empty() {

@@ -99,6 +99,10 @@ pub struct ListItemOutputV2 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autostart: Option<IpcVmAutostartPosture>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unsupported_capabilities: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qemu_media: Option<IpcQemuMediaStatus>,
@@ -252,6 +256,10 @@ pub struct StatusVmOutputV2 {
     pub runtime_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autostart: Option<IpcVmAutostartPosture>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_capabilities: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unsupported_capabilities: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -547,7 +555,7 @@ enum NativeCommand {
     List(ListArgs),
     /// Show per-VM runtime status plus bridge health.
     Status(StatusArgs),
-    /// USB enroll / attach / detach / probe.
+    /// USB attach / detach / probe.
     Usb(UsbArgs),
     /// Foreground serial console bridge for headless VMs (not yet implemented).
     Console(ConsoleArgs),
@@ -636,8 +644,6 @@ enum UsbCommand {
     Attach(UsbAttachArgs),
     /// Unbind a host USB busid from a VM via the native daemon path.
     Detach(UsbDetachArgs),
-    /// Enroll a physical USB disk for an opaque qemu-media ref.
-    Enroll(UsbEnrollArgs),
     /// List daemon-declared USBIP claims and qemu-media USB candidates.
     Probe(UsbProbeArgs),
 }
@@ -659,22 +665,6 @@ struct UsbAttachArgs {
 #[derive(Debug, Args)]
 struct UsbDetachArgs {
     vm: String,
-    busid: String,
-    #[arg(long, conflicts_with = "apply")]
-    dry_run: bool,
-    #[arg(long, conflicts_with = "dry_run")]
-    apply: bool,
-    #[arg(long, conflicts_with = "human")]
-    json: bool,
-    #[arg(long, conflicts_with = "json")]
-    human: bool,
-}
-
-#[derive(Debug, Args)]
-struct UsbEnrollArgs {
-    vm: String,
-    media_ref: String,
-    #[arg(long = "busid")]
     busid: String,
     #[arg(long, conflicts_with = "apply")]
     dry_run: bool,
@@ -1942,7 +1932,6 @@ fn dispatch(
         NativeCommand::Usb(args) => match &args.command {
             UsbCommand::Attach(args) => cmd_usb_attach(context, args),
             UsbCommand::Detach(args) => cmd_usb_detach(context, args),
-            UsbCommand::Enroll(args) => cmd_usb_enroll(context, args),
             UsbCommand::Probe(args) => cmd_usb_probe(context, args),
         },
         NativeCommand::Console(args) => cmd_console(context, args, original_args),
@@ -2939,6 +2928,8 @@ fn list_output_from_manifest(
                     is_net_vm: vm.is_net_vm,
                     runtime_kind: output_runtime_kind(vm),
                     autostart: output_autostart_posture(vm),
+                    runtime_capabilities: output_runtime_capabilities(vm),
+                    service_capabilities: output_service_capabilities(&services),
                     unsupported_capabilities: output_unsupported_capabilities(vm),
                     qemu_media,
                     runner_parity_ok: bundle
@@ -2968,6 +2959,8 @@ fn list_output_from_public_entries(
                 is_net_vm: entry.is_net_vm,
                 runtime_kind: entry.runtime.kind.clone(),
                 autostart: entry.autostart.clone(),
+                runtime_capabilities: entry.runtime_capabilities.clone(),
+                service_capabilities: entry.service_capabilities.clone(),
                 unsupported_capabilities: entry.unsupported_capabilities.clone(),
                 qemu_media: entry.qemu_media.clone(),
                 runner_parity_ok: bundle
@@ -3000,6 +2993,28 @@ fn output_autostart_posture(vm: &ManifestVm) -> Option<IpcVmAutostartPosture> {
     })
 }
 
+fn output_runtime_capabilities(vm: &ManifestVm) -> Vec<String> {
+    let Some(runtime) = vm.runtime.as_ref() else {
+        return Vec::new();
+    };
+    let mut supported = runtime
+        .capabilities
+        .iter()
+        .filter(|(_capability, supported)| **supported)
+        .map(|(capability, _supported)| capability_name_for_output(capability).to_owned())
+        .collect::<Vec<_>>();
+    if supported.is_empty() && runtime.kind == "qemu-media" && runtime.capabilities.is_empty() {
+        supported = vec![
+            "display".to_owned(),
+            "lifecycle".to_owned(),
+            "usb-hotplug".to_owned(),
+        ];
+    }
+    supported.sort();
+    supported.dedup();
+    supported
+}
+
 fn output_unsupported_capabilities(vm: &ManifestVm) -> Vec<String> {
     let Some(runtime) = vm.runtime.as_ref() else {
         return Vec::new();
@@ -3024,6 +3039,32 @@ fn output_unsupported_capabilities(vm: &ManifestVm) -> Vec<String> {
     unsupported.sort();
     unsupported.dedup();
     unsupported
+}
+
+fn output_service_capabilities(services: &StatusServicesOutputV2) -> Vec<String> {
+    let mut capabilities = vec!["nixling".to_owned()];
+    if services.microvm != "unsupported" {
+        capabilities.push("microvm".to_owned());
+    }
+    if services.qemu_media.is_some() {
+        capabilities.push("qemu-media".to_owned());
+    }
+    capabilities.push("virtiofsd".to_owned());
+    if services.gpu.is_some() {
+        capabilities.push("gpu".to_owned());
+    }
+    if services.video.is_some() {
+        capabilities.push("video".to_owned());
+    }
+    if services.snd.is_some() {
+        capabilities.push("audio".to_owned());
+    }
+    if services.swtpm.is_some() {
+        capabilities.push("swtpm".to_owned());
+    }
+    capabilities.sort();
+    capabilities.dedup();
+    capabilities
 }
 
 fn capability_name_for_output(capability: &str) -> &str {
@@ -3183,7 +3224,7 @@ fn qemu_media_registry_status(
             return IpcQemuMediaRegistryStatus {
                 state: "missing".to_owned(),
                 remediation: Some(format!(
-                    "run `nixling usb probe`, then `nixling usb enroll {} {} --busid <busid> --apply`",
+                    "declare the boot-drive physical USB source for vm `{}` in config, then run `nixling usb probe` to verify the runtime selector for `{}`",
                     source.vm, source.media_ref
                 )),
             };
@@ -3192,7 +3233,7 @@ fn qemu_media_registry_status(
             return IpcQemuMediaRegistryStatus {
                 state: "unreadable".to_owned(),
                 remediation: Some(
-                    "the qemu-media registry is root-only; use daemon status or re-run as an authorized operator after enrollment".to_owned(),
+                    "the qemu-media registry is root-only; use daemon status or re-run as an authorized operator after updating config and probing USB media".to_owned(),
                 ),
             };
         }
@@ -3210,7 +3251,7 @@ fn qemu_media_registry_status(
         return IpcQemuMediaRegistryStatus {
             state: "stale".to_owned(),
             remediation: Some(format!(
-                "remove the malformed qemu-media registry entry and re-enroll `{}` for vm `{}`",
+                "remove the malformed qemu-media registry entry for `{}` on vm `{}`, update config if needed, then run `nixling usb probe`",
                 source.media_ref, source.vm
             )),
         };
@@ -3226,7 +3267,7 @@ fn qemu_media_registry_status(
         return IpcQemuMediaRegistryStatus {
             state: "stale".to_owned(),
             remediation: Some(format!(
-                "re-enroll `{}` for vm `{}` so the root-only registry matches the active bundle policy",
+                "update the qemu-media config for `{}` on vm `{}` so the root-only registry matches the active bundle policy, then run `nixling usb probe`",
                 source.media_ref, source.vm
             )),
         };
@@ -6537,68 +6578,6 @@ fn cmd_usb_detach(context: &Context, args: &UsbDetachArgs) -> Result<i32, CliFai
     )
 }
 
-fn cmd_usb_enroll(context: &Context, args: &UsbEnrollArgs) -> Result<i32, CliFailure> {
-    let json_mode = usb_json_mode(args.json, args.human);
-    let flags = require_mutation_flag("usb enroll", args.dry_run, args.apply, json_mode)?;
-    require_known_vm(context, &args.vm, json_mode)?;
-    if let Err(err) = MediaRef::validate_value(&args.media_ref) {
-        return Err(CliFailure::new(
-            2,
-            format!("usb enroll: invalid media ref: {err}"),
-        ));
-    }
-    if let Err(err) = validate_usb_bus_id(&args.busid) {
-        return Err(CliFailure::new(
-            2,
-            format!("usb enroll: invalid busid selector: {err}"),
-        ));
-    }
-    if flags.apply {
-        return dispatch_mutating_verb(
-            context,
-            "usbEnroll",
-            serde_json::json!({
-                "vm": args.vm,
-                "mediaRef": args.media_ref,
-                "busId": args.busid,
-            }),
-            flags.dry_run,
-            flags.apply,
-            json_mode,
-        );
-    }
-    let summary = serde_json::json!({
-        "command": "usb enroll",
-        "mode": "dry-run",
-        "vm": args.vm,
-        "mediaRef": args.media_ref,
-        "busIdProvided": true,
-        "planned": [
-            "QemuMediaEnroll",
-            "ReadSysfs(devnum/vendor/product)",
-            "ReadDevDiskById",
-            "PreflightMountedSwapHolders",
-            "OpenInitialMediaFd",
-            "WriteRootOnlyMediaRegistry",
-            "WriteRuntimeUdevUdisksIgnoreRule",
-            "ReloadUdevRules"
-        ],
-        "notes": "Dry-run is redacted: the transient busid, by-id path, serial, and block path are not echoed."
-    });
-    if json_mode {
-        let mut rendered = serde_json::to_string_pretty(&summary)
-            .map_err(|e| CliFailure::new(1, format!("serialize: {e}")))?;
-        rendered.push('\n');
-        print_stdout(&rendered);
-    } else {
-        print_stdout(&format!(
-            "nixling usb enroll --dry-run: would enroll media ref '{}' for vm '{}' without echoing the transient busid or physical identity\n",
-            args.media_ref, args.vm
-        ));
-    }
-    Ok(0)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn usb_mutating_verb(
     context: &Context,
@@ -7487,6 +7466,7 @@ fn build_vm_status_output(
     let pending_restart =
         is_pending_restart(vm, &service_states, current.as_deref(), booted.as_deref());
     let qemu_media = qemu_media_status(context, vm, bundle, process_vm, &service_states);
+    let service_capabilities = output_service_capabilities(&service_states);
     let declared_roles = process_vm
         .map(|entry| {
             entry
@@ -7527,6 +7507,8 @@ fn build_vm_status_output(
         runtime: RUNTIME_UNKNOWN.to_owned(),
         runtime_kind: output_runtime_kind(vm),
         autostart: output_autostart_posture(vm),
+        runtime_capabilities: output_runtime_capabilities(vm),
+        service_capabilities,
         unsupported_capabilities: output_unsupported_capabilities(vm),
         qemu_media,
         declared_roles,
@@ -7576,10 +7558,11 @@ fn build_vm_status_output_from_public(
             runner_parity_ok: closure.runner_parity_ok,
         });
 
+    let services = status_services_from_public(&public.services);
     StatusVmOutputV2 {
         name: vm.name.clone(),
         env: public.env.clone().or_else(|| vm.env.clone()),
-        services: status_services_from_public(&public.services),
+        services: services.clone(),
         current: current_symlink(context, vm),
         booted: booted_symlink(context, vm),
         pending_restart: public.lifecycle.pending_restart,
@@ -7593,15 +7576,25 @@ fn build_vm_status_output_from_public(
             .autostart
             .clone()
             .or_else(|| output_autostart_posture(vm)),
+        runtime_capabilities: if public.runtime_capabilities.is_empty() {
+            output_runtime_capabilities(vm)
+        } else {
+            public.runtime_capabilities.clone()
+        },
+        service_capabilities: if public.service_capabilities.is_empty() {
+            output_service_capabilities(&services)
+        } else {
+            public.service_capabilities.clone()
+        },
         unsupported_capabilities: if public.unsupported_capabilities.is_empty() {
             output_unsupported_capabilities(vm)
         } else {
             public.unsupported_capabilities.clone()
         },
-        qemu_media: public.qemu_media.clone().or_else(|| {
-            let services = status_services_from_public(&public.services);
-            qemu_media_status(context, vm, bundle, process_vm, &services)
-        }),
+        qemu_media: public
+            .qemu_media
+            .clone()
+            .or_else(|| qemu_media_status(context, vm, bundle, process_vm, &services)),
         declared_roles,
         readiness,
         api_ready: read_vm_api_ready(&context.daemon_state_dir, &vm.name),
@@ -7914,6 +7907,9 @@ fn render_list_human(output: &ListOutputV2) -> String {
                     item.unsupported_capabilities.join(",")
                 ));
             }
+            if !item.runtime_capabilities.is_empty() {
+                label.push_str(&format!(", caps={}", item.runtime_capabilities.join(",")));
+            }
             label
         } else {
             item.status.clone()
@@ -7994,6 +7990,20 @@ fn render_status_vm_human(
                 text,
                 "unsupported capabilities: {}",
                 output.unsupported_capabilities.join(", ")
+            );
+        }
+        if !output.runtime_capabilities.is_empty() {
+            let _ = writeln!(
+                text,
+                "runtime capabilities: {}",
+                output.runtime_capabilities.join(", ")
+            );
+        }
+        if !output.service_capabilities.is_empty() {
+            let _ = writeln!(
+                text,
+                "service capabilities: {}",
+                output.service_capabilities.join(", ")
             );
         }
     } else {
@@ -9405,11 +9415,10 @@ mod host_install_dispatch_tests {
         AddressFamily, ApiReadySimple, ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk,
         IpcUsbProbeEntryKind, IpcUsbipProbeEntry, IpcUsbipProbeStatus, MAX_FRAME_BYTES,
         ManifestDocument, ManifestVm, MediaRef, MsgFlags, NativeCli, SockFlag, SockType, UnixAddr,
-        UsbAttachArgs, UsbDetachArgs, UsbEnrollArgs, VmExecArgs, VmStartArgs,
-        broker_error_envelope, build_storage_migration_plan, cmd_host_install, cmd_vm_exec,
-        cmd_vm_start, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
-        parse_vm_exec_action, public_wire, render_usb_probe_human, send, socket,
-        storage_migration_checkpoint_id,
+        UsbAttachArgs, UsbDetachArgs, VmExecArgs, VmStartArgs, broker_error_envelope,
+        build_storage_migration_plan, cmd_host_install, cmd_vm_exec, cmd_vm_start,
+        daemon_supported_features, encode_type_tagged_message, nix_err_to_io, parse_vm_exec_action,
+        public_wire, render_usb_probe_human, send, socket, storage_migration_checkpoint_id,
     };
     use nixling_ipc::Version;
 
@@ -9919,13 +9928,10 @@ mod host_install_dispatch_tests {
 
     fn test_socket_path(test_name: &str, suffix: &str) -> PathBuf {
         let counter = TEST_SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::current_dir()
-            .expect("current dir")
-            .join("target")
-            .join(format!(
-                "{test_name}-{}-{counter}{suffix}",
-                std::process::id()
-            ))
+        PathBuf::from("target").join(format!(
+            "{test_name}-{}-{counter}{suffix}",
+            std::process::id()
+        ))
     }
 
     fn host_install_original_args(args: &HostInstallArgs) -> Vec<OsString> {
@@ -12105,45 +12111,22 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
-    fn qemu_media_usb_enroll_apply_output_redacts_busid() {
-        let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
-        let vm = "media";
-        let args = UsbEnrollArgs {
-            vm: vm.to_owned(),
-            media_ref: "installer-usb".to_owned(),
-            busid: "1-2.3".to_owned(),
-            dry_run: false,
-            apply: true,
-            json: false,
-            human: false,
-        };
-        let (result, request, stdout) = run_public_command_with_manifest(
-            "qemu-media-usb-enroll",
-            vm,
-            json!({
-                "type": "mutatingVerbResponse",
-                "verb": "usb enroll",
-                "outcome": "applied",
-                "summary": "nixling usb enroll --apply: enrolled media ref 'installer-usb' for vm 'media' (access=read-only, udevRuleWritten=true, udevReloaded=true)"
-            }),
-            write_qemu_media_manifest,
-            |context| super::cmd_usb_enroll(context, &args),
-        );
-
-        assert_eq!(result.expect("qemu usb enroll"), 0);
-        assert_eq!(
-            request.get("type").and_then(Value::as_str),
-            Some("usbEnroll")
-        );
-        assert_eq!(request.get("busId").and_then(Value::as_str), Some("1-2.3"));
-        let rendered = String::from_utf8(stdout).expect("stdout utf8");
-        assert!(rendered.contains("installer-usb"));
-        assert!(!rendered.contains("1-2.3"));
-        assert!(!rendered.contains("usb-Vendor_SecretSerial"));
+    fn usb_enroll_is_not_a_public_cli_subcommand() {
+        let parsed = NativeCli::try_parse_from([
+            "nixling",
+            "usb",
+            "enroll",
+            "media",
+            "installer-usb",
+            "--busid",
+            "1-2.3",
+            "--apply",
+        ]);
+        assert!(parsed.is_err(), "usb enroll must not remain parseable");
     }
 
     #[test]
-    fn usb_probe_human_renders_qemu_media_enroll_commands() {
+    fn usb_probe_human_renders_qemu_media_config_probe_followup() {
         let entries = vec![
             IpcUsbipProbeEntry {
                 kind: IpcUsbProbeEntryKind::QemuMediaSlot,
@@ -12158,7 +12141,7 @@ mod host_install_dispatch_tests {
                 source_kind: Some("physical-usb".to_owned()),
                 candidate_bus_ids: vec!["1-2.3".to_owned()],
                 follow_up_command: Some(
-                    "nixling usb enroll media installer-usb --busid 1-2.3 --apply".to_owned(),
+                    "update qemu-media config for vm 'media' and ref 'installer-usb', then run `nixling usb probe`; when the VM is running, hotplug this selector with `nixling usb attach media 1-2.3 --apply`".to_owned(),
                 ),
             },
             IpcUsbipProbeEntry {
@@ -12180,7 +12163,9 @@ mod host_install_dispatch_tests {
         let rendered = render_usb_probe_human(&entries);
         assert!(rendered.contains("QEMU-MEDIA-VM"));
         assert!(rendered.contains("media"));
-        assert!(rendered.contains("nixling usb enroll media installer-usb --busid 1-2.3 --apply"));
+        assert!(rendered.contains("nixling usb probe"));
+        assert!(rendered.contains("nixling usb attach media 1-2.3 --apply"));
+        assert!(!rendered.contains("usb enroll"));
         assert!(rendered.contains("direct-config"));
         assert!(!rendered.contains("usb-Vendor_SecretSerial"));
         assert!(!rendered.contains("/dev/disk/by-id"));
@@ -12378,6 +12363,8 @@ mod host_install_dispatch_tests {
             runtime: super::RUNTIME_UNKNOWN.to_owned(),
             runtime_kind: None,
             autostart: None,
+            runtime_capabilities: Vec::new(),
+            service_capabilities: Vec::new(),
             unsupported_capabilities: Vec::new(),
             qemu_media: None,
             declared_roles: vec!["gpu".to_owned()],
@@ -12558,6 +12545,8 @@ mod host_install_dispatch_tests {
             ssh_user: Some("alice".to_owned()),
             static_ip: Some("10.20.0.10".to_owned()),
             tpm: false,
+            runtime_capabilities: vec!["lifecycle".to_owned(), "usb-hotplug".to_owned()],
+            service_capabilities: vec!["microvm".to_owned(), "nixling".to_owned()],
             unsupported_capabilities: Vec::new(),
             usbip: true,
             vm: "vm-a".to_owned(),
@@ -12598,6 +12587,8 @@ mod host_install_dispatch_tests {
             is_net_vm: true,
             runtime_kind: None,
             autostart: None,
+            runtime_capabilities: Vec::new(),
+            service_capabilities: Vec::new(),
             unsupported_capabilities: Vec::new(),
             qemu_media: None,
             runner_parity_ok: None,
@@ -12668,6 +12659,8 @@ mod host_install_dispatch_tests {
             ssh_user: Some("alice".to_owned()),
             static_ip: Some("10.20.0.10".to_owned()),
             tpm: false,
+            runtime_capabilities: vec!["lifecycle".to_owned(), "usb-hotplug".to_owned()],
+            service_capabilities: vec!["microvm".to_owned(), "nixling".to_owned()],
             unsupported_capabilities: Vec::new(),
             usbip: true,
             vm: "vm-a".to_owned(),
@@ -12785,7 +12778,7 @@ mod host_install_dispatch_tests {
                                 "readOnly": true,
                                 "registry": {
                                     "state": "missing",
-                                    "remediation": "run nixling usb enroll"
+                                    "remediation": "declare the boot-drive source in config, then run nixling usb probe"
                                 }
                             },
                             {
@@ -12877,6 +12870,18 @@ mod host_install_dispatch_tests {
                 .pointer("/unsupportedCapabilities")
                 .and_then(Value::as_array)
                 .is_some_and(|items| items.iter().any(|item| item == "exec"))
+        );
+        assert!(
+            output
+                .pointer("/runtimeCapabilities")
+                .and_then(Value::as_array)
+                .is_some_and(|items| items.iter().any(|item| item == "usb-hotplug"))
+        );
+        assert!(
+            output
+                .pointer("/serviceCapabilities")
+                .and_then(Value::as_array)
+                .is_some_and(|items| items.iter().any(|item| item == "qemu-media"))
         );
     }
 

@@ -35,8 +35,8 @@ let
           bundle artifacts; the broker still validates the opened file at
           runtime (regular raw file, safe owner/mode/parents, no symlink escape,
           no mounted/loop-backed use, and non-blocking lease/lock checks).
-          `physical-usb` sources must leave this unset and use `ref` plus
-          `nixling usb enroll`.
+          `physical-usb` sources must leave this unset and use an opaque
+          `ref`; runtime selectors are discovered with `nixling usb probe`.
         '';
       };
 
