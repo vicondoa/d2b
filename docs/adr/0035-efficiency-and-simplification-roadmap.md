@@ -102,6 +102,80 @@ artifacts, runner roles, and provider capability records once, then pass
 indexes to consumers. Repeated `filterAttrs` / `mapAttrsToList` scans are
 acceptable only in leaf modules whose input is already narrowed.
 
+### Concern-first naming
+
+Names should tell a reviewer where code runs, what authority it has, and
+which layer owns the contract. Rust crate names stay kebab-case, Rust module
+and file names stay snake_case, and Rust types/traits stay UpperCamelCase.
+The domain prefix comes first so files and crates sort by concern.
+
+Canonical concern prefixes:
+
+| Prefix | Meaning |
+| --- | --- |
+| `core` | Pure shared model, validation, IDs, and DTOs with no runtime side effects. |
+| `ipc` | Local daemon, broker, and guest wire contracts. |
+| `daemon` | Unprivileged `nixlingd` request handling, task ownership, and supervision. Public binary crate may stay `nixlingd`; internal libraries/modules use `daemon`. |
+| `broker` | Privileged broker dispatch, audited ops, fd passing, and FFI quarantine. Public binary crate may stay `nixling-priv-broker`; internal libraries/modules use `broker`. |
+| `host` | Local or remote full-host substrate work: host OS state, NixOS/generic Linux integration, host networking, and broker-prepared host resources. |
+| `guest` | Code running inside workload or gateway guests, including guestd, user/session helpers, and in-guest exec runners. |
+| `gateway` | Per-realm gateway guest control-plane services and realm entrypoint glue. |
+| `provider` | External provider adapters such as ACA or Relay. Provider crates use `nixling-provider-<name>`. |
+| `constellation` | Transport-neutral cross-node/realm protocol, routing, streams, IDs, and capability negotiation from ADR 0032. |
+| `contract` | Schema, generated-artifact, policy, and fixture contract tests. |
+| `cli` | Operator presentation and command dispatch. Public binary crate may stay `nixling`; internal modules use `cli` or command-family names. |
+
+Avoid catch-all names such as `remote`, `manager`, `helper`, `util`, and
+`common` unless the item is genuinely generic and has no clearer authority
+or lifecycle owner. "Remote" is relative to the caller; code should instead
+name the actual concern (`constellation`, `provider`, `gateway`, or `host`).
+ADR 0032 target names remain DNS-shaped (`<workload>.<node>.<realm>.nixling`
+or `nl://...`) and do not encode whether a realm is host-resident or
+gateway-backed; crate/module/type names follow the implementation concern,
+not the address string.
+
+For v2 provider axes, name the axis explicitly:
+
+- local hypervisor providers sort under `nixling-provider-hypervisor-<name>`
+  or an equivalent `provider::hypervisor::<name>` module family;
+- host substrate providers sort under `nixling-host-substrate-<name>` or
+  `host::substrate::<name>`;
+- display/Wayland providers sort under `nixling-provider-display-<name>` or
+  `provider::display::<name>`;
+- transport providers sort under `nixling-constellation-transport-<name>` or
+  `constellation::transport::<name>`.
+
+Crate names should follow `nixling-<concern>-<specific-capability>` when the
+crate is not a public binary. Examples:
+
+- `nixling-constellation-core`, `nixling-constellation-router`,
+  `nixling-constellation-transport`;
+- `nixling-provider-aca`, `nixling-provider-relay`;
+- `nixling-host-activation-helper`, `nixling-host-substrate-nixos` or
+  `nixling-host-substrate-linux` for future host-substrate adapters;
+- `nixling-guest-exec-runner` rather than a locus-free exec crate if the
+  code runs in the guest.
+
+Rust type names should use standard Rust acronym casing (`VmId`, `IpcFrame`,
+`JsonSchema`, `HttpClient`) and carry the concern only when the unqualified
+name is ambiguous. Use consistent suffixes:
+
+- `Id`, `Name`, `Ref` for validated identifiers and references;
+- `Request`, `Response`, `Event`, `Frame` for wire shapes;
+- `Spec`, `Intent`, `Plan` for generated desired state;
+- `State`, `Snapshot`, `Report` for observed or persisted state;
+- `Policy`, `Capability`, `Permission` for authorization/feature gates;
+- `Actor`, `Worker`, `Task`, `Handle` for concurrency-owned runtime pieces;
+- `Error` for typed error enums.
+
+File and module paths should mirror the concern tree before the operation
+name. For example, daemon guest-control code belongs under
+`daemon/guest_control/*` or a `guest_control/` module family, broker ops under
+`broker/ops/<op>.rs`, provider adapters under `provider/<name>/*`, and
+constellation protocol code under `constellation/{frame,stream,capability,...}`.
+Do not encode historical wave names, temporary implementation phases, or
+review finding IDs in source file, type, crate, or package names.
+
 ### One side-effect owner
 
 Every mutable host surface has exactly one owner. NixOS tmpfiles creates
@@ -666,9 +740,10 @@ Exit criteria:
 - shell scripts orchestrate tools, while policy and contract logic lives in
   typed tests.
 
-### Wave 8 — Workspace and dependency graph simplification
+### Wave 8 — Workspace, dependency graph, and naming taxonomy simplification
 
-Goal: reduce compile cost and architectural ambiguity in the Rust workspace.
+Goal: reduce compile cost and architectural ambiguity in the Rust workspace,
+and make crate/file/type names sort by concern.
 
 Tasks:
 
@@ -685,6 +760,24 @@ Tasks:
 4. Gate heavyweight provider dependencies behind feature flags or separate
    binaries so the local-only path does not compile cloud providers.
 5. Ensure test-support features do not enter production builds.
+6. Classify every crate by concern prefix (`core`, `ipc`, `daemon`, `broker`,
+   `host`, `guest`, `gateway`, `provider`, `constellation`, `contract`, or
+   `cli`). Public binary crate names are allowed historical exceptions; library
+   crates and modules are not.
+7. Rename or delete ambiguous crates and modules as part of cleanup waves
+   instead of preserving compatibility aliases. Initial audit targets include
+   `nixling-host-providers` (ambiguous host/provider boundary),
+   locus-free runner names, and daemon modules that mix request handling,
+   background task ownership, and presentation DTOs in one root.
+8. Extend `docs/reference/naming-conventions.md` from host-visible resource
+   names to include crate/module/type naming so future code review has one
+   canonical taxonomy.
+9. Add policy coverage that rejects new crate names, module names, and public
+   type names containing process markers, ambiguous catch-all words, or the
+   `remote` prefix where a precise concern exists.
+10. Keep wire compatibility separate from Rust naming. Wire field names can
+   remain stable for schema/version reasons while Rust types/modules move to
+   concern-first names behind generated schemas.
 
 Primary targets:
 
@@ -695,19 +788,26 @@ Primary targets:
 - `packages/nixling-gateway*`;
 - `packages/nixling-host-providers`;
 - `flake.nix` Rust package source construction.
+- `docs/reference/naming-conventions.md`.
 
 Validation:
 
 - dependency-direction policy remains green;
 - local-only CLI/daemon build does not pull provider-only dependencies unless
   explicitly enabled;
-- supply-chain gates still cover every lockfile that can ship.
+- supply-chain gates still cover every lockfile that can ship;
+- naming policy accepts the intentional public binary exceptions and rejects
+  new ambiguous crate/module/type names;
+- generated docs/schemas preserve wire compatibility where Rust names move.
 
 Exit criteria:
 
-- each crate has a sentence-long reason to exist;
+- each crate has a sentence-long reason to exist and an explicit concern
+  prefix or documented public-binary exception;
 - compile graphs match operator paths: local-only users do not pay for
-  provider experiments.
+  provider experiments;
+- reviewers can identify host/guest/gateway/provider/constellation ownership
+  from crate and module paths without opening the implementation first.
 
 ### Wave 9 — v2 provider integration simplification
 
@@ -1029,7 +1129,8 @@ Tasks:
    - new full-tree Nix scan justification;
    - new public DTO location;
    - task/concurrency model for any new daemon/provider/relay path;
-   - unsafe-code disposition for any new kernel/FFI work.
+   - unsafe-code disposition for any new kernel/FFI work;
+   - concern-prefix naming for new crates, modules, and public Rust types.
 2. Add policy lints that prevent backsliding:
    - no unapproved `std::fs`, `std::net`, `std::process::Command`, blocking
      HTTP/DNS clients, or synchronous JSON file reads in daemon/provider
@@ -1088,6 +1189,7 @@ These targets are good first compatibility-removal and consolidation inputs:
 | Monolithic drift gate reporting | Named generated-artifact families. |
 | Shell policy checks that parse source | Rust contract/policy tests. |
 | Provider dependencies on local-only path | Feature-gated/provider-isolated compile graph. |
+| Ambiguous crate/module/type names | Concern-first naming taxonomy that separates host, guest, gateway, provider, constellation, daemon, broker, and CLI ownership. |
 | Example/template historical comments | Current-model examples with history moved to ADRs. |
 
 ## Anti-goals
