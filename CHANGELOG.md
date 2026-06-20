@@ -71,6 +71,9 @@ deprecations ship one minor release before removal.
 - `qemuMedia` image-file sources can now be declared directly with an
   absolute `path` and `format = "raw"`; physical USB sources continue to
   use opaque refs plus config/probe-driven runtime selection.
+- `nixling.vms.<vm>.qemuMedia.bootDrive.slot` adds boot-drive selector
+  metadata for future qemu-media runtime planning without changing the
+  current QEMU argv shape.
 - ADR 0032 realm entrypoints now publish a host-visible
   `realm-entrypoints.json` table, allow separate gateway guests for
   separate realm/env segments, and add `nixling realm enter/run` plus
@@ -136,6 +139,9 @@ deprecations ship one minor release before removal.
 - Daemon and CLI list/status output now include positive
   `runtimeCapabilities` and `serviceCapabilities` alongside unsupported
   capability summaries.
+- Runtime/provider capability metadata now carries shared `operations`
+  and `services` summaries for both Cloud Hypervisor-backed NixOS VMs and
+  qemu-media VMs while keeping the legacy flat capability booleans.
 
 ### Removed
 

@@ -10818,10 +10818,21 @@ fn public_runtime_summary(lifecycle: &Value, manifest_entry: &Value) -> Value {
         .and_then(Value::as_str)
         .unwrap_or("Unknown")
         .to_ascii_lowercase();
-    match public_runtime_kind(manifest_entry) {
-        Some(kind) => json!({ "detail": detail, "kind": kind }),
-        None => json!({ "detail": detail }),
+    let mut runtime = serde_json::Map::new();
+    runtime.insert("detail".to_owned(), Value::String(detail));
+    if let Some(kind) = public_runtime_kind(manifest_entry) {
+        runtime.insert("kind".to_owned(), Value::String(kind));
     }
+    if let Some(operation_capabilities) = manifest_entry.pointer("/runtime/operationCapabilities") {
+        runtime.insert(
+            "operationCapabilities".to_owned(),
+            operation_capabilities.clone(),
+        );
+    }
+    if let Some(services) = manifest_entry.pointer("/runtime/services") {
+        runtime.insert("services".to_owned(), services.clone());
+    }
+    Value::Object(runtime)
 }
 
 fn public_runtime_kind(manifest_entry: &Value) -> Option<String> {
