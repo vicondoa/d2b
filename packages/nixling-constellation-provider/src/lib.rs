@@ -27,7 +27,7 @@ pub use credential::{
 pub use error::ProviderError;
 pub use provider::{
     CredentialProvider, CredentialStatus, DaemonAccessApi, DaemonAccessTransport, DisplayProvider,
-    HostSubstrateProvider, InfrastructureProvider, NodeProvider, ObservabilitySinkProvider,
-    ProtocolCodec, RelayProvider, RuntimeProvider, StreamMux, TransportListener, TransportProvider,
-    WorkloadProvider,
+    DurableExecutionProvider, HostSubstrateProvider, InfrastructureProvider, NodeProvider,
+    ObservabilitySinkProvider, ProtocolCodec, RelayProvider, RuntimeProvider, StreamMux,
+    TransportListener, TransportProvider, WorkloadProvider,
 };

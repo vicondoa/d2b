@@ -68,8 +68,23 @@ spurious protocol errors.
 stream kinds, currently logs. Non-resumable streams reject cursor resume
 requests before any transport replay or provider action.
 
+## Durable execution
+
+Durable execution uses `ExecutionId` for reconnect and retry. A start
+request records bounded metadata plus an `ExecutionGeneration`; a same-id,
+same-generation retry returns the retained summary, while a same id with
+different metadata fails closed. Attach/reconnect validates the generation
+before exposing streams, preventing a stale boot from attaching to a new
+process. Logs requests carry explicit byte bounds and optional retained
+cursors. Cancel is idempotent so lost replies and reconnect retries can
+repeat the request safely.
+
+Command arguments, environment, cwd, stdio, and log bytes are never part of
+the routing metadata. They remain opaque operation or stream payloads owned
+by the execution adapter.
+
 ## Non-goals
 
 This skeleton does not implement Azure Relay, remote full-host transport,
-provider-specific display, or durable execution. Those are later ADR 0032
-waves.
+provider-specific display, or live execution adapters. Those are later
+ADR 0032 waves.

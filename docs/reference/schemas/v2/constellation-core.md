@@ -23,6 +23,8 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
 - `Capability`, `CapabilitySet`;
 - `NodeSummary`, `WorkloadSelector`, `WorkloadSummary`,
   `ExecutionSummary`;
+- `ExecutionGeneration`, `ExecAttachMode`, `ExecStartRequest`,
+  `ExecAttachRequest`, `ExecLogsRequest`, `ExecCancelRequest`;
 - `Handshake`, `HandshakeAccepted`, `HandshakeRejected`,
   `HandshakeRejectedReason`;
 - `OperationKind`, `OperationRequest`, `OperationResponse`;
@@ -39,6 +41,9 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
 - Capabilities are positive assertions. Missing capability means typed
   refusal, not fallback.
 - Mutating operation requests require an idempotency key at decode.
+- Durable execution roots carry bounded metadata only. Reconnects are
+  generation-bound, retained log requests require a non-zero byte bound,
+  and argv/env/cwd/stdio/log bytes are not schema fields.
 - Peer handshakes carry a bounded codec schema fingerprint and explicit
   accept/reject outcome shapes. A protocol, codec, schema, identity, or
   channel-binding mismatch is a typed refusal before operations or streams

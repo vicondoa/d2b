@@ -61,6 +61,24 @@
       "$ref": "#/definitions/WorkloadSummary"
     },
     {
+      "$ref": "#/definitions/ExecutionGeneration"
+    },
+    {
+      "$ref": "#/definitions/ExecAttachMode"
+    },
+    {
+      "$ref": "#/definitions/ExecStartRequest"
+    },
+    {
+      "$ref": "#/definitions/ExecAttachRequest"
+    },
+    {
+      "$ref": "#/definitions/ExecLogsRequest"
+    },
+    {
+      "$ref": "#/definitions/ExecCancelRequest"
+    },
+    {
       "$ref": "#/definitions/ExecutionSummary"
     },
     {
@@ -1589,6 +1607,141 @@
         }
       ]
     },
+    "ExecAttachMode": {
+      "description": "Execution attachment mode.",
+      "oneOf": [
+        {
+          "description": "Attach to the interactive owner stream.",
+          "type": "string",
+          "enum": [
+            "attached"
+          ]
+        },
+        {
+          "description": "Detached job with retained logs.",
+          "type": "string",
+          "enum": [
+            "detached"
+          ]
+        }
+      ]
+    },
+    "ExecAttachRequest": {
+      "description": "Attach/reconnect request for a durable execution.",
+      "type": "object",
+      "required": [
+        "execution_id",
+        "generation"
+      ],
+      "properties": {
+        "execution_id": {
+          "$ref": "#/definitions/ExecutionId"
+        },
+        "generation": {
+          "$ref": "#/definitions/ExecutionGeneration"
+        },
+        "stderr_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StreamCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stdout_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StreamCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecCancelRequest": {
+      "description": "Idempotent cancel request.",
+      "type": "object",
+      "required": [
+        "execution_id",
+        "generation"
+      ],
+      "properties": {
+        "execution_id": {
+          "$ref": "#/definitions/ExecutionId"
+        },
+        "generation": {
+          "$ref": "#/definitions/ExecutionGeneration"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecLogsRequest": {
+      "description": "Bounded retained-log request.",
+      "type": "object",
+      "required": [
+        "execution_id",
+        "generation",
+        "max_bytes"
+      ],
+      "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StreamCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "execution_id": {
+          "$ref": "#/definitions/ExecutionId"
+        },
+        "generation": {
+          "$ref": "#/definitions/ExecutionGeneration"
+        },
+        "max_bytes": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecStartRequest": {
+      "description": "Durable execution start request metadata. Command details live in the opaque operation body and are never logged by this DTO.",
+      "type": "object",
+      "required": [
+        "attach_mode",
+        "execution_id",
+        "generation",
+        "tty",
+        "workload"
+      ],
+      "properties": {
+        "attach_mode": {
+          "$ref": "#/definitions/ExecAttachMode"
+        },
+        "execution_id": {
+          "$ref": "#/definitions/ExecutionId"
+        },
+        "generation": {
+          "$ref": "#/definitions/ExecutionGeneration"
+        },
+        "tty": {
+          "type": "boolean"
+        },
+        "workload": {
+          "$ref": "#/definitions/WorkloadId"
+        }
+      },
+      "additionalProperties": false
+    },
     "ExecState": {
       "description": "Coarse execution lifecycle state.",
       "oneOf": [
@@ -1619,8 +1772,42 @@
           "enum": [
             "cancelled"
           ]
+        },
+        {
+          "description": "Failed before a normal exit code was available.",
+          "type": "string",
+          "enum": [
+            "failed"
+          ]
         }
       ]
+    },
+    "ExecutionGeneration": {
+      "description": "Generation/boot binding for reconnect safety. A reconnect request must match the generation the durable execution was created under; otherwise it is stale and must fail closed rather than attach to a different boot.",
+      "type": "object",
+      "required": [
+        "guest_boot_id",
+        "workload_generation"
+      ],
+      "properties": {
+        "guest_boot_id": {
+          "description": "Guest boot identifier or equivalent provider boot token.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            }
+          ]
+        },
+        "workload_generation": {
+          "description": "Workload generation/closure token.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "ExecutionId": {
       "type": "string",
@@ -1632,12 +1819,22 @@
       "description": "A durable execution summary. Argv/stdio/env are payload and never appear here; only bounded metadata.",
       "type": "object",
       "required": [
+        "attach_mode",
+        "generation",
         "id",
         "state",
         "tty",
         "workload"
       ],
       "properties": {
+        "attach_mode": {
+          "description": "Attachment mode selected at start.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExecAttachMode"
+            }
+          ]
+        },
         "exit_code": {
           "description": "Exit code once `state == Exited`.",
           "type": [
@@ -1645,6 +1842,14 @@
             "null"
           ],
           "format": "int32"
+        },
+        "generation": {
+          "description": "Generation this execution is bound to.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExecutionGeneration"
+            }
+          ]
         },
         "id": {
           "description": "Durable execution id.",
@@ -1659,6 +1864,28 @@
           "allOf": [
             {
               "$ref": "#/definitions/ExecState"
+            }
+          ]
+        },
+        "stderr_cursor": {
+          "description": "Last retained stderr cursor, if available.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StreamCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stdout_cursor": {
+          "description": "Last retained stdout cursor, if available.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StreamCursor"
+            },
+            {
+              "type": "null"
             }
           ]
         },

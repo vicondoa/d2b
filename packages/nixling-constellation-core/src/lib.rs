@@ -34,7 +34,10 @@ pub mod workload;
 pub use audit::{AdmissionAuditRecord, AuditEnvelope, AuthorizationScope, AuthzDecision};
 pub use capability::{Capability, CapabilitySet};
 pub use error::{ConstellationError, ErrorKind};
-pub use execution::{ExecState, ExecutionSummary};
+pub use execution::{
+    ExecAttachMode, ExecAttachRequest, ExecCancelRequest, ExecLogsRequest, ExecStartRequest,
+    ExecState, ExecutionGeneration, ExecutionSummary,
+};
 pub use frame::{
     ConstellationFrame, Handshake, HandshakeAccepted, HandshakeRejected, HandshakeRejectedReason,
     OperationKind, OperationRequest, OperationResponse, PeerContext, StreamClose, StreamData,
