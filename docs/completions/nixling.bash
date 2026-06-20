@@ -3000,7 +3000,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__vm__subcmd__list)
-            opts="-h --json --human --realm --help"
+            opts="-h --json --human --realm --all --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

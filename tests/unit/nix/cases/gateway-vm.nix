@@ -41,7 +41,7 @@ let
   hostTmpfiles = goodCfg.systemd.tmpfiles.rules;
   gatewayJson = builtins.fromJSON gatewayGuestCfg.environment.etc."nixling/gateway.json".text;
   hostDaemonJson = builtins.fromJSON goodCfg.environment.etc."nixling/daemon-config.json".text;
-  hostGatewayJson = builtins.fromJSON goodCfg.environment.etc."nixling/gateway.json".text;
+  hostGatewayJsonPresent = builtins.hasAttr "nixling/gateway.json" goodCfg.environment.etc;
   hostRealmEntrypoints = goodCfg.nixling._computed.realmEntrypoints;
   gatewayProc = lib.findFirst (vm: vm.vm == "sys-work-gateway") null
     goodCfg.nixling._bundle.processesJson.data.vms;
@@ -102,6 +102,12 @@ let
   ]).config;
   multiGatewayMessages = map (a: a.message) (lib.filter (a: !a.assertion) multiGatewayCfg.assertions);
   multiGatewayRealmEntrypoints = multiGatewayCfg.nixling._computed.realmEntrypoints;
+  customGatewayNameCfg = (mkEval [
+    (lib.recursiveUpdate base {
+      nixling.gateways.work.vmName = "corp-gateway";
+    })
+  ]).config;
+  customGatewayNameEntrypoints = customGatewayNameCfg.nixling._computed.realmEntrypoints;
   duplicateGatewayRealmMessages = failureMessages ((mkEval [
     (lib.recursiveUpdate base {
       nixling.envs.personal = {
@@ -302,25 +308,11 @@ in
   "gateway-vm/host-daemon-stays-credential-free-facade" = {
     expr = {
       daemonConfigCarriesGateway = hostDaemonJson ? gateway;
-      hostGateway = {
-        gateway = hostGatewayJson.gateway;
-        realm = hostGatewayJson.realm;
-        credentialPath = hostGatewayJson.credentialPath;
-        relayEntity = hostGatewayJson.relay.entity;
-        waypipeSocket = hostGatewayJson.display.waypipeSocket;
-        allowHostRelayCredentials = hostGatewayJson.allowHostRelayCredentials;
-      };
+      inherit hostGatewayJsonPresent;
     };
     expected = {
       daemonConfigCarriesGateway = false;
-      hostGateway = {
-        gateway = "work";
-        realm = "work";
-        credentialPath = "/var/lib/nixling/gateways/work/credential.json";
-        relayEntity = "hc-nixling-display";
-        waypipeSocket = "/run/user/1000/wpc.sock";
-        allowHostRelayCredentials = false;
-      };
+      hostGatewayJsonPresent = false;
     };
   };
 
@@ -348,13 +340,27 @@ in
     };
   };
 
+  "gateway-vm/realm-entrypoint-table-uses-custom-gateway-vm-name" = {
+    expr = {
+      declared = builtins.elem "corp-gateway" (builtins.attrNames customGatewayNameCfg.nixling.vms);
+      work = customGatewayNameEntrypoints.entries.work;
+    };
+    expected = {
+      declared = true;
+      work = {
+        mode = "gateway-backed";
+        gateway = "corp-gateway.nixling";
+      };
+    };
+  };
+
   "gateway-vm/transitional-host-relay-guard-defaults-off" = {
     expr = {
-      host = hostGatewayJson.allowHostRelayCredentials;
+      inherit hostGatewayJsonPresent;
       guest = gatewayJson.allowHostRelayCredentials;
     };
     expected = {
-      host = false;
+      hostGatewayJsonPresent = false;
       guest = false;
     };
   };

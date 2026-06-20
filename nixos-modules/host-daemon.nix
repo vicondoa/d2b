@@ -158,44 +158,6 @@ EOF
     text = builtins.toJSON realmEntrypointData;
     destination = "/share/nixling/realm-entrypoints.json";
   };
-  hostGatewayConfigJson =
-    if builtins.length enabledGateways == 1
-    then
-      let
-        gateway = builtins.head enabledGateways;
-        gw = gateway.gw;
-      in
-      builtins.toJSON {
-        gateway = gateway.name;
-        realm = gw.realm;
-        stateDir = gw.stateDir;
-        credentialPath = gw.credentialPath;
-        inherit (gw) allowHostRelayCredentials;
-        relay = {
-          inherit (gw.relay) namespace entity;
-        };
-        aca = {
-          inherit (gw.aca)
-            endpoint
-            subscription
-            resourceGroup
-            sandboxGroup
-            region
-            diskImageId
-            image
-            diskName
-            managedIdentityResourceId
-            managedIdentityClientId
-            cpu
-            memory
-            autoSuspendIntervalSecs
-            ;
-        };
-        display = {
-          inherit (gw.display) vsockPort waypipeCompression waypipeSocket;
-        };
-      }
-    else null;
 in
 {
   options.nixling.host.usbip.allowlist = lib.mkOption {
@@ -280,13 +242,6 @@ in
     environment.etc = {
       "nixling/daemon-config.json" = {
         text = daemonConfigJson;
-        mode = "0640";
-        user = "root";
-        group = "nixlingd";
-      };
-    } // lib.optionalAttrs (hostGatewayConfigJson != null) {
-      "nixling/gateway.json" = {
-        text = hostGatewayConfigJson;
         mode = "0640";
         user = "root";
         group = "nixlingd";

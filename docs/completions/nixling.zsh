@@ -569,9 +569,10 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (list)
 _arguments "${_arguments_options[@]}" : \
-'--realm=[Route list through a realm gateway VM]:REALM:_default' \
+'(--all)--realm=[Route list through a realm gateway VM]:REALM:_default' \
 '(--human)--json[]' \
 '(--json)--human[]' \
+'--all[Include configured realm gateway entrypoints in the list]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0

@@ -1068,8 +1068,11 @@ struct VmListArgs {
     #[arg(long, conflicts_with = "json")]
     human: bool,
     /// Route list through a realm gateway VM.
-    #[arg(long, value_name = "REALM")]
+    #[arg(long, value_name = "REALM", conflicts_with = "all")]
     realm: Option<String>,
+    /// Include configured realm gateway entrypoints in the list.
+    #[arg(long)]
+    all: bool,
 }
 
 #[derive(Debug, Args)]
@@ -4121,6 +4124,7 @@ fn require_known_vm(context: &Context, vm: &str, json: bool) -> Result<(), CliFa
 struct ResolvedRealmGateway {
     realm: String,
     gateway_vm: String,
+    gateway_target: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4151,6 +4155,15 @@ struct RealmEntrypointConfig {
     gateway: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RealmGatewayListEntry {
+    realm: String,
+    gateway_vm: String,
+    gateway_target: String,
+    state: String,
+}
+
 fn realm_entrypoints_path() -> PathBuf {
     env_path(
         "NIXLING_REALM_ENTRYPOINTS_PATH",
@@ -4164,9 +4177,9 @@ fn load_realm_entrypoint_table()
     load_realm_entrypoint_table_from_path(&path)
 }
 
-fn load_realm_entrypoint_table_from_path(
+fn load_realm_entrypoint_document_from_path(
     path: &Path,
-) -> Result<Option<nixling_constellation_router::RealmEntrypointTable>, CliFailure> {
+) -> Result<Option<RealmEntrypointDocument>, CliFailure> {
     let raw = match fs::read_to_string(&path) {
         Ok(raw) => raw,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -4179,6 +4192,15 @@ fn load_realm_entrypoint_table_from_path(
     };
     let doc: RealmEntrypointDocument = serde_json::from_str(&raw)
         .map_err(|err| CliFailure::new(1, format!("failed to parse {}: {err}", path.display())))?;
+    Ok(Some(doc))
+}
+
+fn load_realm_entrypoint_table_from_path(
+    path: &Path,
+) -> Result<Option<nixling_constellation_router::RealmEntrypointTable>, CliFailure> {
+    let Some(doc) = load_realm_entrypoint_document_from_path(path)? else {
+        return Ok(None);
+    };
     let mut table = nixling_constellation_router::RealmEntrypointTable::new();
     for (realm_raw, entry) in doc.entries {
         let realm = target_routing::parse_realm_arg(&realm_raw).map_err(|err| {
@@ -4218,11 +4240,46 @@ fn load_realm_entrypoint_table_from_path(
     Ok(Some(table))
 }
 
-fn gateway_vm_from_target_text(target: &str) -> Result<String, target_routing::RouteError> {
+fn configured_realm_gateways(json: bool) -> Result<Vec<ResolvedRealmGateway>, CliFailure> {
+    let Some(doc) = load_realm_entrypoint_document_from_path(&realm_entrypoints_path())? else {
+        return Ok(Vec::new());
+    };
+    let mut gateways = Vec::new();
+    for (realm_raw, entry) in doc.entries {
+        if entry.mode != "gateway-backed" {
+            continue;
+        }
+        let realm = target_routing::parse_realm_arg(&realm_raw).map_err(|err| {
+            CliFailure::new(
+                1,
+                format!("realm entrypoint `{realm_raw}` is invalid: {err}"),
+            )
+        })?;
+        let gateway_target = entry.gateway.ok_or_else(|| {
+            CliFailure::new(
+                1,
+                format!("gateway-backed realm `{realm_raw}` has no gateway target"),
+            )
+        })?;
+        gateways.push(ResolvedRealmGateway {
+            realm: realm.target_form(),
+            gateway_vm: gateway_vm_from_target_text(&realm.target_form(), &gateway_target)
+                .map_err(|err| emit_route_error(err, json).unwrap_or_else(|failure| failure))?,
+            gateway_target,
+        });
+    }
+    gateways.sort_by(|a, b| a.realm.cmp(&b.realm));
+    Ok(gateways)
+}
+
+fn gateway_vm_from_target_text(
+    realm: &str,
+    target: &str,
+) -> Result<String, target_routing::RouteError> {
     nixling_constellation_core::TargetName::parse(target)
         .map(|target| target.workload.as_str().to_owned())
         .map_err(|err| target_routing::RouteError::InvalidGatewayTarget {
-            realm: "unknown".to_owned(),
+            realm: realm.to_owned(),
             gateway: target.to_owned(),
             reason: err.to_string(),
         })
@@ -4349,12 +4406,19 @@ fn route_vm_target_with_table(
         let table = nixling_constellation_router::RealmEntrypointTable::with_local_default();
         return match target_routing::route(raw, &table) {
             Ok(target_routing::Route::Local { vm }) => Ok(VmTargetRoute::Local { vm }),
-            Ok(target_routing::Route::Gateway { gateway, target }) => Ok(VmTargetRoute::Gateway {
-                realm: "local".to_owned(),
-                gateway_vm: gateway.clone(),
-                gateway,
-                target,
-            }),
+            Ok(target_routing::Route::Gateway { gateway, target }) => {
+                let realm = nixling_constellation_core::TargetName::parse(&target)
+                    .map(|target| target.realm.target_form())
+                    .unwrap_or_else(|_| "unknown".to_owned());
+                let gateway_vm = gateway_vm_from_target_text(&realm, &gateway)
+                    .map_err(|err| emit_route_error(err, json).unwrap_or_else(|failure| failure))?;
+                Ok(VmTargetRoute::Gateway {
+                    realm,
+                    gateway_vm,
+                    gateway,
+                    target,
+                })
+            }
             Err(err) => Err(emit_route_error(err, json)?),
         };
     }
@@ -4363,11 +4427,11 @@ fn route_vm_target_with_table(
     match target_routing::route(raw, table.as_ref().expect("checked above")) {
         Ok(target_routing::Route::Local { vm }) => Ok(VmTargetRoute::Local { vm }),
         Ok(target_routing::Route::Gateway { gateway, target }) => {
-            let gateway_vm = gateway_vm_from_target_text(&gateway)
-                .map_err(|err| emit_route_error(err, json).unwrap_or_else(|failure| failure))?;
             let realm = nixling_constellation_core::TargetName::parse(&target)
                 .map(|target| target.realm.target_form())
                 .unwrap_or_else(|_| "unknown".to_owned());
+            let gateway_vm = gateway_vm_from_target_text(&realm, &gateway)
+                .map_err(|err| emit_route_error(err, json).unwrap_or_else(|failure| failure))?;
             if manifest.get_vm(&gateway_vm).is_none() {
                 return Err(emit_missing_realm_entrypoint(
                     &realm,
@@ -4401,12 +4465,13 @@ fn resolve_realm_gateway(
         )
         .unwrap_or_else(|failure| failure)
     })?;
-    let gateway_vm = if let Some(table) = load_realm_entrypoint_table()? {
+    let (gateway_vm, gateway_target) = if let Some(table) = load_realm_entrypoint_table()? {
         let probe_target = format!("probe.node.{}.nixling", realm.target_form());
         match target_routing::route(&probe_target, &table) {
             Ok(target_routing::Route::Gateway { gateway, .. }) => {
-                gateway_vm_from_target_text(&gateway)
-                    .map_err(|err| emit_route_error(err, json).unwrap_or_else(|failure| failure))?
+                let gateway_vm = gateway_vm_from_target_text(&realm.target_form(), &gateway)
+                    .map_err(|err| emit_route_error(err, json).unwrap_or_else(|failure| failure))?;
+                (gateway_vm, gateway)
             }
             Ok(target_routing::Route::Local { .. }) => {
                 return Err(emit_missing_realm_entrypoint(
@@ -4419,7 +4484,8 @@ fn resolve_realm_gateway(
             Err(err) => return Err(emit_route_error(err, json)?),
         }
     } else {
-        target_routing::gateway_vm_name(&realm)
+        let gateway_vm = target_routing::gateway_vm_name(&realm);
+        (gateway_vm.clone(), format!("{gateway_vm}.nixling"))
     };
     let manifest = context.load_manifest()?;
     if manifest.get_vm(&gateway_vm).is_none() {
@@ -4433,6 +4499,7 @@ fn resolve_realm_gateway(
     Ok(ResolvedRealmGateway {
         realm: realm.target_form(),
         gateway_vm,
+        gateway_target,
     })
 }
 
@@ -4939,10 +5006,90 @@ fn cmd_vm_list(context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> 
         } else if args.human {
             argv.push("--human".to_owned());
         }
-        let exec_args =
-            realm_gateway_exec_args(gateway.gateway_vm, argv, false, false, false, false);
+        let exec_args = realm_gateway_exec_args(
+            gateway.gateway_vm,
+            argv,
+            false,
+            false,
+            args.json,
+            args.human,
+        );
         return cmd_vm_exec(context, &exec_args);
     }
+    if args.all {
+        return cmd_vm_list_all(context, args);
+    }
+    cmd_vm_list_local(context, args)
+}
+
+fn cmd_vm_list_all(context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> {
+    let local_entries = match try_list_via_socket(context)? {
+        ListSocketOutcome::Entries(entries) => entries,
+        ListSocketOutcome::Unavailable => Vec::new(),
+    };
+    let gateway_entries = configured_realm_gateways(args.json)?
+        .into_iter()
+        .map(|gateway| {
+            let state = gateway_lifecycle_state(context, &gateway.gateway_vm)
+                .ok()
+                .flatten()
+                .map(gateway_state_label)
+                .unwrap_or("not reported by nixlingd")
+                .to_owned();
+            RealmGatewayListEntry {
+                gateway_target: gateway.gateway_target,
+                realm: gateway.realm,
+                gateway_vm: gateway.gateway_vm,
+                state,
+            }
+        })
+        .collect::<Vec<_>>();
+    if args.json {
+        let body = serde_json::json!({
+            "command": "vm list --all",
+            "local": local_entries,
+            "realmGateways": gateway_entries,
+            "notes": "gateway-backed realm workload inventory is queried inside each gateway with `nixling realm run <realm> -- nixling vm list`",
+        });
+        let mut rendered = serde_json::to_string_pretty(&body).map_err(|err| {
+            CliFailure::new(1, format!("failed to serialize vm list --all: {err}"))
+        })?;
+        rendered.push('\n');
+        print_stdout(&rendered);
+    } else {
+        if local_entries.is_empty() {
+            print_stdout("vm list --all: no local daemon runtime entries reported\n");
+        } else {
+            let mut rendered = String::from("LOCAL VM\tSTATE\tRUNTIME\n");
+            for entry in local_entries {
+                let _ = writeln!(
+                    rendered,
+                    "{}\t{}\t{}",
+                    entry.vm,
+                    public_lifecycle_status_label(&entry.lifecycle),
+                    entry.runtime.detail
+                );
+            }
+            print_stdout(&rendered);
+        }
+        if gateway_entries.is_empty() {
+            print_stdout("REALM GATEWAY\tREALM\tSTATE\n(none)\n");
+        } else {
+            let mut rendered = String::from("REALM GATEWAY\tREALM\tSTATE\n");
+            for entry in gateway_entries {
+                let _ = writeln!(
+                    rendered,
+                    "{}\t{}\t{}",
+                    entry.gateway_vm, entry.realm, entry.state
+                );
+            }
+            print_stdout(&rendered);
+        }
+    }
+    Ok(0)
+}
+
+fn cmd_vm_list_local(context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> {
     match try_list_via_socket(context)? {
         ListSocketOutcome::Entries(entries) => {
             if args.json {
@@ -9444,6 +9591,21 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
+    fn vm_list_all_parse_gateway_selector() {
+        let cli = NativeCli::try_parse_from(["nixling", "vm", "list", "--all"])
+            .expect("vm list --all parses");
+        match cli.command {
+            super::NativeCommand::Vm(super::VmArgs {
+                command: super::VmCommand::List(args),
+            }) => {
+                assert!(args.all);
+                assert!(args.realm.is_none());
+            }
+            other => panic!("expected vm list, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn route_vm_target_preserves_local_names_and_routes_gateway_targets() {
         let local = super::route_vm_target(&missing_daemon_context(), "demo.nixling", false)
             .expect("local target routes without manifest");
@@ -9487,6 +9649,52 @@ mod host_install_dispatch_tests {
             }
             other => panic!("expected gateway route, got {other:?}"),
         }
+        let _ = std::fs::remove_file(&manifest_path);
+    }
+
+    #[test]
+    fn route_vm_target_with_table_missing_gateway_fails_closed() {
+        let manifest_path = test_socket_path("route-custom-missing-gateway", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("manifest parent");
+        }
+        write_test_manifest(&manifest_path, "vm-a");
+        let mut table = nixling_constellation_router::RealmEntrypointTable::with_local_default();
+        table.gateway_backed(
+            nixling_constellation_core::RealmPath::new(vec![
+                nixling_constellation_core::RealmId::parse("work").unwrap(),
+            ])
+            .unwrap(),
+            nixling_constellation_core::TargetName::parse("corp-gateway.nixling").unwrap(),
+        );
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("bundle.json"),
+            public_socket: manifest_path.with_extension("sock"),
+            broker_socket: manifest_path.with_extension("broker.sock"),
+            state_root: None,
+            host_runtime_path: manifest_path.with_extension("host-runtime.json"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: manifest_path.with_extension("daemon-state"),
+            metrics_url: "http://127.0.0.1:9101/metrics".to_owned(),
+        };
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            super::route_vm_target_with_table(&context, "demo.aca.work.nixling", true, Some(table))
+        });
+        let err = result.expect_err("missing custom gateway must fail");
+        assert_eq!(err.exit_code, 2);
+        let envelope: Value = serde_json::from_slice(&stdout).expect("json error envelope");
+        assert_eq!(
+            envelope.get("code").and_then(Value::as_str),
+            Some("missing-realm-entrypoint")
+        );
+        assert!(
+            envelope
+                .get("remediation")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("corp-gateway"))
+        );
         let _ = std::fs::remove_file(&manifest_path);
     }
 
@@ -12845,6 +13053,7 @@ mod host_install_dispatch_tests {
             json: false,
             human: false,
             realm: None,
+            all: false,
         };
 
         let (result, stdout) =

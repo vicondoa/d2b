@@ -226,6 +226,7 @@ complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subc
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from list" -l realm -d 'Route list through a realm gateway VM' -r
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from list" -l json
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from list" -l human
+complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from list" -l all -d 'Include configured realm gateway entrypoints in the list'
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from status" -l json
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from status" -l human

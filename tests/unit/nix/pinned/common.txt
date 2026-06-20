@@ -157,6 +157,7 @@ gateway-vm/guest-services-installed-without-static-waypipe
 gateway-vm/host-daemon-stays-credential-free-facade
 gateway-vm/host-guest-state-ownership-boundary
 gateway-vm/host-realm-entrypoint-table-defaults-local-and-gateway
+gateway-vm/realm-entrypoint-table-uses-custom-gateway-vm-name
 gateway-vm/rejects-credential-path-outside-gateway-state
 gateway-vm/rejects-duplicate-gateway-realm-entrypoints
 gateway-vm/rejects-gateway-entrypoint-for-local-realm
