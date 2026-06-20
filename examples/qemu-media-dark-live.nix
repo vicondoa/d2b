@@ -59,7 +59,7 @@
         readOnly = true;
       };
 
-      window.niriBorderColor = "#800080";
+      window.niriBorderColor = "#301934";
     };
   };
 }

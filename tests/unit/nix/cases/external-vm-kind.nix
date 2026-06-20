@@ -61,6 +61,8 @@ let
     if positiveQemuProcess == null then [ ] else map (node: node.role) positiveQemuProcess.nodes;
   positiveQemuRunner =
     if positiveQemuProcess == null then null else lib.findFirst (node: node.id == "qemu-media") null positiveQemuProcess.nodes;
+  positiveQemuWaylandProxy =
+    if positiveQemuProcess == null then null else lib.findFirst (node: node.id == "wayland-proxy") null positiveQemuProcess.nodes;
   positiveProfileNames = lib.attrNames positiveCfg.nixling._bundle.minijailProfiles;
 
   failingMessages = args:
@@ -428,10 +430,17 @@ in
       runnerProfileRole = positiveQemuRunner.profile.profileId;
       runnerEnv = positiveQemuRunner.env;
       runnerArgv = positiveQemuRunner.argv;
+      waylandProxy = {
+        role = positiveQemuWaylandProxy.role;
+        profileRole = positiveQemuWaylandProxy.profile.profileId;
+        env = positiveQemuWaylandProxy.env;
+        readiness = positiveQemuWaylandProxy.readiness;
+        argv = positiveQemuWaylandProxy.argv;
+      };
     };
     expected = {
       vmPresent = true;
-      nodeIds = [ "host-reconcile" "qemu-media" ];
+      nodeIds = [ "host-reconcile" "wayland-proxy" "qemu-media" ];
       runnerRole = "qemu-media-runner";
       runnerReadiness = [
         { kind = "unix-socket-listening"; value = "/run/nixling/vms/media/qmp.sock"; }
@@ -440,7 +449,7 @@ in
       runnerEnv = [
         "GDK_BACKEND=wayland"
         "WAYLAND_DISPLAY=wayland-0"
-        "XDG_RUNTIME_DIR=/run/user/1000"
+        "XDG_RUNTIME_DIR=/run/nixling-wlproxy/media"
       ];
       runnerArgv = [
         "nixling-qemu-media@media"
@@ -451,6 +460,8 @@ in
         "memory-backend-ram,id=nlram,size=4096M,dump=off,merge=off"
         "-machine"
         "q35,accel=kvm,usb=off,memory-backend=nlram"
+        "-m"
+        "4096M"
         "-smp"
         "2"
         "-device"
@@ -478,6 +489,30 @@ in
         "-name"
         "nixling-media-qemu-media"
       ];
+      waylandProxy = {
+        role = "wayland-proxy";
+        profileRole = "vm-media-wayland-proxy";
+        env = [
+          "XDG_RUNTIME_DIR=/run/user/1000"
+          "WAYLAND_DISPLAY=wayland-0"
+        ];
+        readiness = [
+          { kind = "unix-socket-listening"; value = "/run/nixling-wlproxy/media/wayland-0"; }
+        ];
+        argv = [
+          "nixling-media-wlproxy"
+          "--listen"
+          "/run/nixling-wlproxy/media/wayland-0"
+          "--connect"
+          "/run/user/1000/wayland-0"
+          "--vm-name"
+          "media"
+          "--app-id-prefix"
+          "nixling.media."
+          "--title-prefix"
+          "[media] "
+        ];
+      };
     };
   };
 
@@ -507,6 +542,16 @@ in
     expr = {
       hasHostReconcile = lib.elem "vm-media-host-reconcile" positiveProfileNames;
       hasQemuMedia = lib.elem "vm-media-qemu-media" positiveProfileNames;
+      hasWaylandProxy = lib.elem "vm-media-wayland-proxy" positiveProfileNames;
+      waylandProxyProfile = {
+        role = positiveCfg.nixling._bundle.minijailProfiles."vm-media-wayland-proxy".data.role;
+        principal = positiveCfg.nixling._bundle.minijailProfiles."vm-media-wayland-proxy".data.principal;
+        capabilities = positiveCfg.nixling._bundle.minijailProfiles."vm-media-wayland-proxy".data.capabilities;
+        seccompPolicyRef = positiveCfg.nixling._bundle.minijailProfiles."vm-media-wayland-proxy".data.seccompPolicyRef;
+        writablePaths = map (p: p.path) positiveCfg.nixling._bundle.minijailProfiles."vm-media-wayland-proxy".data.mountPolicy.writablePaths;
+        inherit (positiveCfg.nixling._bundle.minijailProfiles."vm-media-wayland-proxy".data.mountPolicy)
+          deviceBinds bindMounts;
+      };
       role = positiveCfg.nixling._bundle.minijailProfiles."vm-media-qemu-media".data.role;
       principal = positiveCfg.nixling._bundle.minijailProfiles."vm-media-qemu-media".data.principal;
       capabilities = positiveCfg.nixling._bundle.minijailProfiles."vm-media-qemu-media".data.capabilities;
@@ -533,6 +578,18 @@ in
     expected = {
       hasHostReconcile = true;
       hasQemuMedia = true;
+      hasWaylandProxy = true;
+      waylandProxyProfile = {
+        role = "wayland-proxy";
+        principal = "nixling-media-wlproxy";
+        capabilities = [ ];
+        seccompPolicyRef = "w1-wayland-proxy";
+        writablePaths = [
+          "/run/nixling-wlproxy/media"
+        ];
+        deviceBinds = [ ];
+        bindMounts = [ ];
+      };
       role = "qemu-media-runner";
       principal = "nixling-media-qemu-media";
       capabilities = [ ];
@@ -549,6 +606,7 @@ in
         readOnlyPaths = [ "/" ];
         writablePaths = [
           "/run/nixling/vms/media"
+          "/run/nixling-wlproxy/media"
           "/var/lib/nixling/vms/media"
         ];
         nixStoreReadOnly = true;

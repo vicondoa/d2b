@@ -119,6 +119,8 @@ pub fn generate_qemu_media_argv(
         memory_backend.join(","),
         "-machine".to_owned(),
         "q35,accel=kvm,usb=off,memory-backend=nlram".to_owned(),
+        "-m".to_owned(),
+        format!("{}M", input.memory_mib),
         "-smp".to_owned(),
         input.vcpu.to_string(),
     ];
@@ -220,6 +222,7 @@ mod tests {
             joined.contains("-object memory-backend-ram,id=nlram,size=4096M,dump=off,merge=off")
         );
         assert!(joined.contains("-machine q35,accel=kvm,usb=off,memory-backend=nlram"));
+        assert!(joined.contains("-m 4096M"));
         assert!(joined.contains("-smp 2"));
         assert!(!joined.contains("mem-lock=on"));
         assert!(joined.contains("-device usb-ehci,id=ehci"));

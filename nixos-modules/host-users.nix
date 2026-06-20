@@ -11,6 +11,9 @@ let
   inherit (nixlingLib) stablePrincipalId;
   normalNixosVms = nixlingLib.normalNixosVms cfg.vms;
   qemuMediaVms = nixlingLib.qemuMediaVms cfg.vms;
+  waylandProxyVms =
+    (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms)
+    // qemuMediaVms;
 in
 {
   # ---------------------------------------------------------------------------
@@ -40,7 +43,7 @@ in
     (lib.filterAttrs (_: vm: vm.graphics.enable && vm.graphics.videoSidecar) normalNixosVms))
   // (lib.mapAttrs' (name: _:
       lib.nameValuePair "nixling-${name}-wlproxy" { gid = stablePrincipalId "nixling-${name}-wlproxy"; })
-    (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms))
+    waylandProxyVms)
   // (lib.mapAttrs' (name: _:
       lib.nameValuePair "nixling-${name}-snd" { gid = stablePrincipalId "nixling-${name}-snd"; })
     (lib.filterAttrs (_: vm: vm.audio.enable) normalNixosVms))
@@ -83,7 +86,7 @@ in
       uid = stablePrincipalId "nixling-${name}-wlproxy";
       group = "nixling-${name}-wlproxy";
       description = "nixling Wayland filter proxy sidecar for VM ${name}";
-    }) (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms))
+    }) waylandProxyVms)
   // (lib.mapAttrs' (name: _:
     lib.nameValuePair "nixling-${name}-snd" {
       isSystemUser = true;

@@ -40,7 +40,7 @@ nixling.vms.dark-live = {
       readOnly = true;
     };
 
-    window.niriBorderColor = "#800080";
+    window.niriBorderColor = "#301934";
   };
 };
 ```
@@ -102,9 +102,10 @@ nixling status dark-live
 
 The dry-run should show `host-reconcile → qemu-media`. After start,
 status should show the qemu-media runner, QMP readiness, source refs,
-source kind/format/read-only policy, and registry state. The niri border
-rule matches the host QEMU window title
-`nixling-dark-live-qemu-media`.
+source kind/format/read-only policy, and registry state. The host QEMU
+window is routed through the nixling Wayland filter proxy, so the niri
+border rule matches the proxy-rewritten app-id prefix
+`nixling.dark-live.`.
 
 ## 4. Hotplug enrolled media
 

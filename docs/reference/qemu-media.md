@@ -152,8 +152,9 @@ paths.
   RAM; host kernel crash dumps require separate host-level policy. Use
   `qemuMedia.security.lockMemory = true` when the host must fail closed
   rather than risk swapping guest RAM.
-- Host window presentation for niri matches the stable title
-  `nixling-<vm>-qemu-media`; set
+- Host window presentation for niri routes through the nixling Wayland
+  filter proxy and matches the proxy-rewritten app-id prefix
+  `nixling.<vm>.`; set
   `nixling.vms.<vm>.qemuMedia.window.niriBorderColor` for a fixed color.
 
 ## See also
