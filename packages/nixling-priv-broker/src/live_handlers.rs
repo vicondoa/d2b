@@ -1719,6 +1719,51 @@ fn validate_qemu_media_runner_hardening(plan: &SpawnRunnerPlan) -> Result<(), Li
     Ok(())
 }
 
+fn qemu_media_memlock_limit_bytes(plan: &SpawnRunnerPlan) -> Result<Option<u64>, LiveHandlerError> {
+    if !is_qemu_media_runner(plan) || !qemu_media_argv_has_mem_lock(&plan.argv) {
+        return Ok(None);
+    }
+    let guest_bytes = qemu_media_memory_backend_size_bytes(&plan.argv).ok_or_else(|| {
+        LiveHandlerError::SpawnFailed {
+            detail: "qemu-media mem-lock requires a memory-backend-ram size".to_owned(),
+        }
+    })?;
+    Ok(Some(guest_bytes.saturating_add(256 * 1024 * 1024)))
+}
+
+fn qemu_media_argv_has_mem_lock(argv: &[String]) -> bool {
+    argv.windows(2)
+        .any(|pair| pair[0] == "-overcommit" && pair[1] == "mem-lock=on")
+}
+
+fn qemu_media_memory_backend_size_bytes(argv: &[String]) -> Option<u64> {
+    let object = argv
+        .windows(2)
+        .find_map(|pair| (pair[0] == "-object").then_some(pair[1].as_str()))?;
+    let mut saw_backend = false;
+    let mut size = None;
+    for part in object.split(',') {
+        if part == "memory-backend-ram" {
+            saw_backend = true;
+        } else if let Some(value) = part.strip_prefix("size=") {
+            size = parse_qemu_size_bytes(value);
+        }
+    }
+    saw_backend.then_some(size).flatten()
+}
+
+fn parse_qemu_size_bytes(value: &str) -> Option<u64> {
+    let (number, multiplier) = match value.as_bytes().last().copied() {
+        Some(b'K') | Some(b'k') => (&value[..value.len() - 1], 1024_u64),
+        Some(b'M') | Some(b'm') => (&value[..value.len() - 1], 1024_u64 * 1024),
+        Some(b'G') | Some(b'g') => (&value[..value.len() - 1], 1024_u64 * 1024 * 1024),
+        Some(b'T') | Some(b't') => (&value[..value.len() - 1], 1024_u64 * 1024 * 1024 * 1024),
+        Some(b'0'..=b'9') => (value, 1),
+        _ => return None,
+    };
+    number.parse::<u64>().ok()?.checked_mul(multiplier)
+}
+
 #[derive(Debug, Clone, Copy)]
 enum AclPathKind {
     Directory,
@@ -2907,6 +2952,7 @@ pub fn live_spawn_runner(
         // The sys layer dup2's it to fd 10 in the user-NS child before
         // execve.
         pre_opened_device_fds,
+        memlock_limit_bytes: qemu_media_memlock_limit_bytes(&plan)?,
     };
 
     let outcome = crate::sys::pidfd_sys::clone3_spawn_runner(
@@ -3826,6 +3872,30 @@ mod tests {
 
         validate_qemu_media_runner_hardening(&plan)
             .expect("hardened qemu-media fd-backed profile should pass");
+    }
+
+    #[test]
+    fn qemu_media_memlock_limit_is_bounded_to_guest_ram_plus_headroom() {
+        let mut plan = hardened_qemu_media_plan();
+        plan.argv = vec![
+            "nixling-qemu-media@media".to_owned(),
+            "-object".to_owned(),
+            "memory-backend-ram,id=nlram,size=4096M,dump=off,merge=off,prealloc=on".to_owned(),
+            "-overcommit".to_owned(),
+            "mem-lock=on".to_owned(),
+        ];
+
+        assert_eq!(
+            qemu_media_memlock_limit_bytes(&plan).expect("memlock parse"),
+            Some((4096_u64 + 256) * 1024 * 1024)
+        );
+
+        plan.argv = vec![
+            "nixling-qemu-media@media".to_owned(),
+            "-object".to_owned(),
+            "memory-backend-ram,id=nlram,size=4096M,dump=off,merge=off".to_owned(),
+        ];
+        assert_eq!(qemu_media_memlock_limit_bytes(&plan).unwrap(), None);
     }
 
     #[test]

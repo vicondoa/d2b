@@ -1853,6 +1853,10 @@ pub mod pidfd_sys {
         /// See `RENDER_NODE_INHERITED_FD` for the well-known protocol
         /// constant used by the first (and currently only) entry.
         pub pre_opened_device_fds: Vec<OwnedFd>,
+        /// Optional bounded RLIMIT_MEMLOCK installed in the child before
+        /// dropping credentials. Used only for qemu-media runners whose
+        /// trusted argv requests QEMU `mem-lock=on`.
+        pub memlock_limit_bytes: Option<u64>,
     }
 
     /// Well-known fd number for the pre-opened render node.
@@ -2607,6 +2611,8 @@ pub mod pidfd_sys {
     /// in the child closure. Distinct from EXECVE so triage can
     /// immediately identify the fd-passing step.
     const CHILD_EXIT_PREOPEN_DUP2: libc::c_int = 76;
+    /// setrlimit(RLIMIT_MEMLOCK) failed for a runner that requested it.
+    const CHILD_EXIT_MEMLOCK_RLIMIT: libc::c_int = 77;
 
     /// Spawn a per-role runner with namespace / seccomp / capability
     /// setup plus `setgroups` + `setgid` + `setuid` + `execve` in a
@@ -2684,6 +2690,7 @@ pub mod pidfd_sys {
         let seccomp_program = isolation.seccomp_program;
         let cgroup_procs_fd = isolation.cgroup_procs_fd;
         let child_umask = isolation.umask;
+        let memlock_limit_bytes = isolation.memlock_limit_bytes;
         let gid = gid as libc::gid_t;
         let uid = uid as libc::uid_t;
 
@@ -2890,6 +2897,17 @@ pub mod pidfd_sys {
                 let m = b"DEBUG: write_self_to_cgroup failed\n";
                 libc::write(2, m.as_ptr() as *const _, m.len());
                 libc::_exit(CHILD_EXIT_CGROUP);
+            }
+            if let Some(limit) = memlock_limit_bytes {
+                let rlim = libc::rlimit {
+                    rlim_cur: limit as libc::rlim_t,
+                    rlim_max: limit as libc::rlim_t,
+                };
+                if libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) < 0 {
+                    let m = b"DEBUG: setrlimit RLIMIT_MEMLOCK failed\n";
+                    libc::write(2, m.as_ptr() as *const _, m.len());
+                    libc::_exit(CHILD_EXIT_MEMLOCK_RLIMIT);
+                }
             }
             // Credential changes here MUST go through the RAW syscalls, not
             // the glibc `setgroups`/`setgid`/`setuid` wrappers. glibc routes
@@ -3296,6 +3314,7 @@ mod tests {
             user_namespace: spec,
             umask: None,
             pre_opened_device_fds: Vec::new(),
+            memlock_limit_bytes: None,
         }
     }
 
@@ -3494,6 +3513,7 @@ mod tests {
             }),
             umask: None,
             pre_opened_device_fds: Vec::new(),
+            memlock_limit_bytes: None,
         };
 
         let bin = CString::new(true_path).unwrap();

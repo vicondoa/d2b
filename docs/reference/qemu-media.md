@@ -147,9 +147,11 @@ paths.
   broker fail-closes on unsafe paths and non-raw formats.
 - Running sensitive external media inside a VM is not equivalent to bare
   metal. The host OS, compositor, and QEMU process can observe the session,
-  and host swap or crash dumps can retain guest memory. The default memory
-  backend sets `dump=off,merge=off`; use `qemuMedia.security.lockMemory =
-  true` when the host must fail closed rather than risk swapping guest RAM.
+  and host swap can retain guest memory. The default memory backend sets
+  `dump=off,merge=off` to avoid QEMU/process core dumps and KSM for guest
+  RAM; host kernel crash dumps require separate host-level policy. Use
+  `qemuMedia.security.lockMemory = true` when the host must fail closed
+  rather than risk swapping guest RAM.
 - Host window presentation for niri matches the stable title
   `nixling-<vm>-qemu-media`; set
   `nixling.vms.<vm>.qemuMedia.window.niriBorderColor` for a fixed color.

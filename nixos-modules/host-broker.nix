@@ -200,11 +200,6 @@ in
           "CAP_KILL"
         ];
         AmbientCapabilities = [ "" ];
-        # qemu-media can opt in to `-overcommit mem-lock=on` so guest
-        # RAM is not written to host swap. The broker raises the service
-        # memlock ceiling; QEMU still only locks memory when the trusted
-        # qemu-media argv requests it.
-        LimitMEMLOCK = "infinity";
         # NoNewPrivileges=false because the broker re-execs after the
         # cgroup-delegation startup window with a reduced cap set.
         NoNewPrivileges = false;

@@ -6,8 +6,10 @@ physical USB block device.
 
 Running sensitive external media inside QEMU is convenient, but it is not
 equivalent to bare-metal boot. The host OS, compositor, and QEMU process
-can observe the session, and host swap or crash dumps can retain guest
-memory unless you enable memory hardening and the host can satisfy it.
+can observe the session. `lockMemory` addresses host swap for guest RAM
+when the host can satisfy QEMU's mem-lock request; `dump=off` addresses
+QEMU/process core dumps. Host kernel crash dumps require separate host-level
+policy.
 
 ## 1. Declare the VM
 
