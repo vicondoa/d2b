@@ -31,6 +31,9 @@ fn run(args: Vec<OsString>) -> Result<(), nixling_guestd::service::GuestdService
             if let Some(guest_config_path) = parsed.guest_config_path {
                 config = config.with_guest_config_path(guest_config_path);
             }
+            if let Some(usbip_path) = parsed.usbip_path {
+                config = config.with_usbip_path(usbip_path);
+            }
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -48,6 +51,7 @@ struct ServeArgs {
     detached: Option<DetachedRuntimeConfig>,
     interactive_max_runtime_sec: u64,
     guest_config_path: Option<PathBuf>,
+    usbip_path: Option<PathBuf>,
 }
 
 /// Parse `--serve` arguments: the required `--vm-id <name>` plus the optional
@@ -65,6 +69,7 @@ fn parse_serve_args(
     let mut detached_max_runtime_sec: u64 = 0;
     let mut interactive_max_runtime_sec: u64 = 0;
     let mut guest_config_path: Option<PathBuf> = None;
+    let mut usbip_path: Option<PathBuf> = None;
     while let Some(arg) = iter.next() {
         match arg.to_str() {
             Some("--vm-id") => {
@@ -91,6 +96,9 @@ fn parse_serve_args(
             }
             Some("--guest-config-path") => {
                 guest_config_path = Some(parse_abs_path(iter.next())?);
+            }
+            Some("--usbip-path") => {
+                usbip_path = Some(parse_abs_path(iter.next())?);
             }
             Some("--detached-max-runtime-sec") => {
                 detached_max_runtime_sec = iter
@@ -135,6 +143,7 @@ fn parse_serve_args(
         detached,
         interactive_max_runtime_sec,
         guest_config_path,
+        usbip_path,
     })
 }
 

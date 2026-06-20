@@ -29,6 +29,7 @@ use nix::sys::socket::{
 };
 use serde_json::Value;
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::fs::PermissionsExt;
 
 // Pinned manifest with observability disabled so the `signoz-ui-endpoint`
 // probe returns early on every host (without this, the probe reads the
@@ -387,23 +388,23 @@ fn host_doctor_autostart_degraded_outcome_warns() {
     );
 }
 
-// --- 7. metrics endpoint reported unreachable consistently ---------
+// --- 7. metrics endpoint is optional when not serving ----------------
 
 #[test]
-fn host_doctor_metrics_endpoint_unreachable_warns() {
+fn host_doctor_metrics_endpoint_unreachable_passes_as_optional() {
     let sandbox = Sandbox::new();
     let (_code, env) = sandbox.run_doctor_json();
     let metrics = check(&env, "metrics-endpoint");
     assert_eq!(
-        metrics["status"], "warn",
-        "closed-port metrics probe must warn"
+        metrics["status"], "pass",
+        "closed-port metrics probe should pass because metrics are optional"
     );
     assert!(
         metrics["detail"]
             .as_str()
             .expect("metrics detail")
-            .contains("unreachable"),
-        "metrics-endpoint detail must mention 'unreachable'; got {:?}",
+            .contains("not serving metrics"),
+        "metrics-endpoint detail must mention optional not-serving posture; got {:?}",
         metrics["detail"]
     );
 }
@@ -457,5 +458,63 @@ fn host_doctor_live_sockets_report_broker_and_daemon_ready() {
         env["broker_ready"],
         Value::Bool(true),
         "top-level broker_ready must be true when the broker socket is reachable"
+    );
+}
+
+#[test]
+fn host_doctor_private_broker_socket_denial_is_pass() {
+    let sandbox = Sandbox::new();
+    let _broker = listen_seqpacket(&sandbox.broker_socket);
+    let mut perms = std::fs::metadata(&sandbox.broker_socket)
+        .expect("stat broker socket")
+        .permissions();
+    perms.set_mode(0o000);
+    std::fs::set_permissions(&sandbox.broker_socket, perms).expect("chmod broker socket");
+
+    let (_code, env) = sandbox.run_doctor_json();
+
+    let broker = check(&env, "broker-ready");
+    assert_eq!(
+        broker["status"], "pass",
+        "permission-denied private broker socket is the expected unprivileged posture"
+    );
+    assert!(
+        broker["detail"]
+            .as_str()
+            .expect("broker detail")
+            .contains("correctly denies direct unprivileged access")
+    );
+    assert_eq!(
+        env["broker_ready"],
+        Value::Bool(true),
+        "top-level broker_ready remains true when private socket is present"
+    );
+}
+
+#[test]
+fn host_doctor_inaccessible_broker_parent_is_fail() {
+    let mut sandbox = Sandbox::new();
+    let broker_dir = sandbox._tmp.path().join("private-broker-dir");
+    std::fs::create_dir(&broker_dir).expect("create private broker dir");
+    sandbox.broker_socket = broker_dir.join("broker.sock");
+    let _broker = listen_seqpacket(&sandbox.broker_socket);
+    let mut perms = std::fs::metadata(&broker_dir)
+        .expect("stat broker dir")
+        .permissions();
+    perms.set_mode(0o000);
+    std::fs::set_permissions(&broker_dir, perms).expect("chmod broker dir");
+
+    let (_code, env) = sandbox.run_doctor_json();
+
+    let mut restore = std::fs::metadata(&broker_dir)
+        .expect("stat broker dir for restore")
+        .permissions();
+    restore.set_mode(0o700);
+    let _ = std::fs::set_permissions(&broker_dir, restore);
+
+    assert_eq!(
+        check(&env, "broker-ready")["status"],
+        "fail",
+        "permission denied from an inaccessible parent is not a healthy private broker socket"
     );
 }

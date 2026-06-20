@@ -18,8 +18,8 @@ Each probe is a passive, read-only check. Exit codes: `0` = all pass,
 |-------|-------|
 | Invariant | Broker socket is reachable |
 | Source | `connect(AF_UNIX, SOCK_SEQPACKET)` to `NIXLING_BROKER_SOCKET` |
-| Pass | Socket connect succeeds |
-| Fail | Socket connect fails |
+| Pass | Socket connect succeeds, or the socket exists and correctly denies direct unprivileged access |
+| Fail | Socket is absent, is not bound in `/proc/net/unix`, or connect fails for a reason other than permission denied |
 
 ### `daemon-ready`
 
@@ -36,15 +36,11 @@ Each probe is a passive, read-only check. Exit codes: `0` = all pass,
 |-------|-------|
 | Invariant | Prometheus text-format scrape endpoint returns HTTP 200 |
 | Source | `GET /metrics` to `NIXLING_METRICS_URL` (default `http://127.0.0.1:9101/metrics`) |
-| Pass | HTTP 200 |
-| Warn | Non-200 response or connection failure (scrape endpoint is optional) |
+| Pass | HTTP 200, or connection failure while the optional scrape endpoint is not serving |
+| Warn | Non-200 HTTP response from a reachable metrics server |
 
-> **v1.2 status.** The scrapable endpoint is **deferred to a later
-> release** (see [`daemon-metrics.md`](./daemon-metrics.md) status
-> banner and [`TODO.md`](../../TODO.md)). Until that release lands, this check is
-> expected to report `warn` — the in-process metric counters are
-> wired and correct, but no HTTP listener serves `/metrics` yet.
-> Operators can ignore `warn` on this row in v1.2.
+> **Status.** The scrapable endpoint is optional. When no HTTP listener serves
+> `/metrics`, this row reports `pass` with a "not serving metrics" detail.
 
 ### `signoz-ui-endpoint`
 
@@ -137,21 +133,19 @@ gone (process already exited) are silently skipped.
 
 ---
 
-### `pre-ns-posture` — D5 visibility
+### `pre-ns-posture` — pre-established user namespace visibility
 
 | Field | Value |
 |-------|-------|
-| Invariant | Every D5-scoped runner is inside a broker-pre-established user namespace |
-| Closes | D5 — broker-pre-NS extension to swtpm/gpu/audio roles |
-| Source data | `/proc/<pid>/status` field `NStgid:` for each D5-scoped PID in `pidfd-table.json` |
-| Pass | All live D5-scoped runners have ≥ 2 tab-separated values on the `NStgid:` line (nested user NS) |
-| Warn | `pidfd-table.json` missing, or no D5-scoped runners registered, or all PIDs exited |
-| Fail | Any live D5-scoped runner has exactly 1 `NStgid` value (process is in the initial user NS) |
+| Invariant | Every runner role that explicitly requires broker-pre-established user namespaces is inside one |
+| Source data | `/proc/<pid>/status` field `NStgid:` for each scoped PID in `pidfd-table.json` |
+| Pass | No shipped role currently requires broker-pre-NS, or all scoped runners have ≥ 2 tab-separated values on the `NStgid:` line |
+| Warn | `pidfd-table.json` missing, or all scoped PIDs exited |
+| Fail | Any scoped live runner has exactly 1 `NStgid` value (process is in the initial user NS) |
 
-**D5-scoped roles for v1.2**: `swtpm` only. gpu (render-node-only) and
-audio are conditionally scoped per the single-entry user-NS architectural
-constraint described in ADR 0021 §"Future work"; they are **not**
-mandatory in this probe for v1.2.
+**Currently scoped roles**: none. `swtpm` is intentionally not a
+broker-pre-NS-required role in the shipped profile; reporting it as a failure
+would make a healthy host look degraded.
 
 **`NStgid:` semantics**: the kernel populates one value per user namespace
 nesting level, innermost last. A process spawned via

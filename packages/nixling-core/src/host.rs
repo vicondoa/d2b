@@ -549,6 +549,72 @@ mod tests {
     }
 
     #[test]
+    fn host_json_accepts_optional_qemu_media() {
+        let host: HostJson = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture parses");
+        let mut value = serde_json::to_value(host).expect("host serializes");
+        value["qemuMedia"] = serde_json::json!({
+            "registryDir": "/var/lib/nixling/media-registry",
+            "reloadBehavior": "broker reloads udev rules after enrollment",
+            "runtimeRulesPath": "/run/udev/rules.d/99-nixling-media-ignore.rules",
+            "sources": [{
+                "vm": "dark-live",
+                "slot": "boot",
+                "sourceKind": "physical-usb",
+                "mediaRef": "boot",
+                "format": "raw",
+                "readOnly": false,
+                "registryScope": "root-only-runtime-state"
+            }]
+        });
+        value["runtimeProviders"] = serde_json::json!([{
+            "kind": "qemu-media",
+            "provider": {
+                "id": "local-qemu-media",
+                "type": "local",
+                "driver": "qemu"
+            },
+            "capabilities": {
+                "lifecycle": true,
+                "storeSync": false,
+                "guestControl": false,
+                "exec": false,
+                "configSync": false,
+                "display": true,
+                "usbHotplug": true,
+                "inGuestObservability": false,
+                "keys": false,
+                "ssh": false
+            }
+        }]);
+        value["vmRuntimes"] = serde_json::json!([{
+            "vm": "dark-live",
+            "env": "dark",
+            "runtime": value["runtimeProviders"][0].clone(),
+            "stateDir": "/var/lib/nixling/vms/dark-live",
+            "staticIp": "10.50.0.10",
+            "bridge": "br-dark-lan",
+            "tap": "dark-l10",
+            "netVm": "sys-dark-net"
+        }]);
+        let parsed: HostJson =
+            serde_json::from_value(value).expect("qemu/runtime extension fields parse");
+        let qemu = parsed.qemu_media.expect("qemuMedia present");
+        assert_eq!(qemu.registry_dir, "/var/lib/nixling/media-registry");
+        assert_eq!(qemu.sources[0].vm, "dark-live");
+        assert!(matches!(
+            parsed.runtime_providers[0].provider.driver,
+            crate::runtime::RuntimeProviderDriver::Qemu
+        ));
+        assert!(matches!(
+            parsed.vm_runtimes[0].runtime.kind,
+            crate::runtime::RuntimeKind::QemuMedia
+        ));
+    }
+
+    #[test]
     fn bridge_port_flags_resolve_legacy_defaults() {
         let row = BridgePortFlags {
             role: TapRole::WorkloadLan,

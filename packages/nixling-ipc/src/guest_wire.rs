@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const GUEST_CONTROL_SCHEMA_VERSION: &str = "v2";
-pub const GUEST_CONTROL_PROTOCOL_VERSION: u32 = 3;
+pub const GUEST_CONTROL_PROTOCOL_VERSION: u32 = 4;
 pub const GUEST_CONTROL_VSOCK_PORT: u32 = 14_318;
 pub const TTRPC_FRAME_CAP_BYTES: u64 = 4 * 1024 * 1024;
 pub const DEFAULT_MAX_CHUNK_BYTES: u64 = 64 * 1024;
@@ -261,6 +261,16 @@ bounded_string! {
     EnvValue, 8192
 }
 
+bounded_string! {
+    /// Guest-side USBIP backend host address.
+    GuestUsbipHost, 64
+}
+
+bounded_string! {
+    /// USB sysfs bus id (`B-P[.P...]`).
+    GuestUsbipBusId, 31
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum GuestCapability {
@@ -273,6 +283,7 @@ pub enum GuestCapability {
     TtyResize,
     Signals,
     ReadGuestFile,
+    UsbipImport,
 }
 
 /// Closed set of host-declared guest files readable via `ReadGuestFile`.
@@ -292,6 +303,7 @@ pub enum GuestSubsystem {
     LogStorage,
     Token,
     Vsock,
+    Usbip,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -350,6 +362,8 @@ pub struct GuestControlSchema {
     pub control_ack: ControlAck,
     pub read_guest_file: ReadGuestFileRequest,
     pub read_guest_file_result: ReadGuestFileResponse,
+    pub usbip_import: UsbipImportRequest,
+    pub usbip_import_result: UsbipImportResponse,
     pub error: GuestControlError,
 }
 
@@ -926,6 +940,35 @@ pub struct ReadGuestFileResponse {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
+pub enum UsbipImportAction {
+    Attach,
+    Detach,
+}
+
+/// Guest-side USBIP lifecycle operation. `host` and `bus_id` are host-declared
+/// values resolved by nixlingd from the trusted manifest; guestd validates both
+/// before invoking `usbip`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbipImportRequest {
+    pub metadata: GuestRequestMetadata,
+    pub action: UsbipImportAction,
+    pub host: GuestUsbipHost,
+    pub bus_id: GuestUsbipBusId,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbipImportResponse {
+    pub action: UsbipImportAction,
+    pub bus_id: GuestUsbipBusId,
+    #[schemars(range(max = 32))]
+    pub detached_ports: u32,
+    pub error: Option<GuestControlError>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
 pub enum OutputStream {
     Stdout,
     Stderr,
@@ -1056,6 +1099,10 @@ pub enum GuestControlErrorKind {
     PathUnsafe,
     ReadDenied,
     InvalidProgram,
+    UsbipUnavailable,
+    UsbipCommandFailed,
+    UsbipInvalidBusId,
+    UsbipInvalidHost,
 }
 
 #[cfg(test)]
@@ -1137,6 +1184,18 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&GuestControlErrorKind::ExecExpired).unwrap(),
             "\"exec-expired\""
+        );
+        assert_eq!(
+            serde_json::to_string(&GuestControlErrorKind::UsbipCommandFailed).unwrap(),
+            "\"usbip-command-failed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&GuestControlErrorKind::UsbipInvalidHost).unwrap(),
+            "\"usbip-invalid-host\""
+        );
+        assert_eq!(
+            serde_json::to_string(&UsbipImportAction::Attach).unwrap(),
+            "\"attach\""
         );
         assert_eq!(
             serde_json::to_string(&TerminalStatus::Signal { signal: 2 }).unwrap(),

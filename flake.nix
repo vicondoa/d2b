@@ -387,6 +387,7 @@
             graphics.videoSidecar = true;
             audio.enable = true;
             usbip.yubikey = true;
+            guest.control.enable = true;
             tpm.enable = true;
             observability.enable = true;
             config = {

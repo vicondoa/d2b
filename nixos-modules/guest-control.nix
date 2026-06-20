@@ -42,6 +42,17 @@ in
       '';
     };
 
+    usbipPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      internal = true;
+      readOnly = true;
+      description = ''
+        Absolute in-guest path to the USBIP CLI. Non-null only for guests
+        with the USBIP component enabled; guestd then advertises the
+        `UsbipImport` capability and owns guest-side USBIP attach/detach.
+      '';
+    };
+
     exec = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -189,8 +200,11 @@ in
               configFlags =
                 lib.optionalString (cfg.guestConfigPath != null)
                   " --guest-config-path ${lib.escapeShellArg cfg.guestConfigPath}";
+              usbipFlags =
+                lib.optionalString (cfg.usbipPath != null)
+                  " --usbip-path ${lib.escapeShellArg cfg.usbipPath}";
             in
-            "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}";
+            "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}${usbipFlags}";
           LoadCredential = [
             "guest_control_token:/run/nixling-guest-control-host/token"
           ];

@@ -46,14 +46,12 @@ pub enum UsbipSubcommand {
     Bind,
     /// Host-side unbind: `usbip unbind --busid <bus_id>`.
     Unbind,
-    /// Guest-side attach: `usbip attach -r <host_ip> -b <bus_id>`
-    /// (exec inside the guest; nixling drives this via the
-    /// `GuestUsbipAttach` SpawnRunner role which wraps ssh).
+    /// Guest-side attach: `usbip attach -r <host_ip> -b <bus_id>`.
+    /// In current nixling this is owned by guestd over authenticated
+    /// guest-control; this enum variant remains the pure argv shape.
     Attach,
-    /// Guest-side detach: `usbip detach -p <port>` (also exec
-    /// inside the guest via the `GuestUsbipDetach` SpawnRunner
-    /// role; bus-id alone isn't enough — we record the port the
-    /// guest's `usbip attach` assigned).
+    /// Guest-side detach: `usbip detach -p <port>`. Bus-id alone isn't enough;
+    /// guestd derives the assigned port from `usbip port`.
     Detach,
 }
 
@@ -93,11 +91,6 @@ pub enum UsbipArgvError {
     },
 }
 
-/// SYSFS_BUS_ID_SIZE per `include/linux/mod_devicetable.h` and
-/// `tools/usb/usbip/libsrc/usbip_common.h`: 32 bytes including the
-/// trailing NUL, so the printable busid is at most 31 chars.
-const USBIP_SYSFS_BUS_ID_MAX: usize = 31;
-
 /// Validate a USB bus id shape. Accepted forms:
 ///
 /// - `B` (root hub bus, rare): digits, no leading zeros except the
@@ -113,57 +106,17 @@ const USBIP_SYSFS_BUS_ID_MAX: usize = 31;
 /// - ASCII digits only — Unicode digits like ٢ (Arabic-Indic 2)
 ///   refused.
 pub fn validate_bus_id(bus_id: &str) -> Result<(), UsbipArgvError> {
-    if bus_id.is_empty() {
-        return Err(UsbipArgvError::EmptyBusId);
-    }
-    if bus_id.len() > USBIP_SYSFS_BUS_ID_MAX {
-        return Err(UsbipArgvError::BusIdTooLong {
+    match nixling_ipc::usbip::validate_bus_id(bus_id) {
+        Ok(()) => Ok(()),
+        Err(nixling_ipc::usbip::BusIdError::Empty) => Err(UsbipArgvError::EmptyBusId),
+        Err(nixling_ipc::usbip::BusIdError::Invalid) => Err(UsbipArgvError::InvalidBusId {
             bus_id: bus_id.to_owned(),
-            max: USBIP_SYSFS_BUS_ID_MAX,
-        });
+        }),
+        Err(nixling_ipc::usbip::BusIdError::TooLong { max }) => Err(UsbipArgvError::BusIdTooLong {
+            bus_id: bus_id.to_owned(),
+            max,
+        }),
     }
-    fn segment_ok(segment: &str) -> bool {
-        if segment.is_empty() {
-            return false;
-        }
-        if !segment.chars().all(|c| c.is_ascii_digit()) {
-            return false;
-        }
-        // Reject leading zeros except the literal "0".
-        if segment.len() > 1 && segment.starts_with('0') {
-            return false;
-        }
-        true
-    }
-    match bus_id.split_once('-') {
-        None => {
-            if !segment_ok(bus_id) {
-                return Err(UsbipArgvError::InvalidBusId {
-                    bus_id: bus_id.to_owned(),
-                });
-            }
-        }
-        Some((bus, port_chain)) => {
-            if !segment_ok(bus) {
-                return Err(UsbipArgvError::InvalidBusId {
-                    bus_id: bus_id.to_owned(),
-                });
-            }
-            if port_chain.is_empty() {
-                return Err(UsbipArgvError::InvalidBusId {
-                    bus_id: bus_id.to_owned(),
-                });
-            }
-            for segment in port_chain.split('.') {
-                if !segment_ok(segment) {
-                    return Err(UsbipArgvError::InvalidBusId {
-                        bus_id: bus_id.to_owned(),
-                    });
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Render the usbip argv for the requested subcommand.
@@ -183,127 +136,6 @@ pub fn generate_usbip_argv(
         "--busid".to_owned(),
         input.bus_id.clone(),
     ])
-}
-
-/// v1.1.1 guest-side USBIP attach/detach driver inputs.
-///
-/// Per ADR 0011 § "USBIP guest ssh attach/detach" + ADR 0018
-/// § "Per-attach SpawnRunner-leaf model": the daemon dispatches
-/// guest-side `usbip attach -r <host> -b <bus_id>` (or `detach -p
-/// <port>`) by SSHing into the guest. The ssh command is hardened
-/// against control-master leakage / job-control issues:
-/// - NO `-f` (don't background)
-/// - NO `-N` (DO run a command — we want `usbip attach/detach`)
-/// - NO `-M` (no control-master)
-/// - `-o ControlMaster=no` (defense-in-depth against
-///   `~/.ssh/config` defaults)
-/// - `-o ControlPersist=no`
-/// - `-o BatchMode=yes` (no interactive prompts)
-/// - `-F /dev/null` (ignore consumer `~/.ssh/config`)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GuestUsbipSshInput {
-    /// Absolute store path to the host's `ssh` binary.
-    pub ssh_binary_path: String,
-    /// User to ssh as on the guest (typically the workload VM's
-    /// `nixling.sshUser`).
-    pub ssh_user: String,
-    /// Guest's static IP for the ssh target.
-    pub guest_ip: String,
-    /// Path to the per-VM nixling-managed SSH private key on the
-    /// host (`/var/lib/nixling/keys/<vm>/id_ed25519`).
-    pub identity_path: String,
-    /// Path to the per-VM `known_hosts` file on the host
-    /// (`/var/lib/nixling/known_hosts.nixling`).
-    pub known_hosts_path: String,
-    /// USBIP subcommand to run in the guest. Must be Attach or
-    /// Detach; Bind/Unbind are host-side and rejected here.
-    pub sub: UsbipSubcommand,
-    /// Host's USBIP backend IP (the address the guest connects
-    /// back to). Required for Attach; ignored for Detach.
-    pub backend_ip: Option<String>,
-    /// Bus ID to attach (`Attach` mode only). Validated per
-    /// `validate_bus_id`.
-    pub bus_id: Option<String>,
-    /// Port to detach (`Detach` mode only). Set by tracking the
-    /// guest's `usbip attach` output port assignment.
-    pub detach_port: Option<u16>,
-}
-
-/// Generate the host-side `ssh ... -- usbip <sub> ...` argv that
-/// drives a guest's usbip attach/detach.
-pub fn generate_guest_usbip_ssh_argv(
-    input: &GuestUsbipSshInput,
-) -> Result<Vec<String>, UsbipArgvError> {
-    if input.ssh_binary_path.is_empty() || !input.ssh_binary_path.starts_with('/') {
-        return Err(UsbipArgvError::InvalidUsbipBinaryPath {
-            path: input.ssh_binary_path.clone(),
-        });
-    }
-    if !matches!(input.sub, UsbipSubcommand::Attach | UsbipSubcommand::Detach) {
-        return Err(UsbipArgvError::InvalidBusId {
-            bus_id: format!(
-                "guest-ssh USBIP requires Attach or Detach subcommand; got {:?}",
-                input.sub
-            ),
-        });
-    }
-    let mut argv: Vec<String> = vec![
-        input.ssh_binary_path.clone(),
-        "-F".to_owned(),
-        "/dev/null".to_owned(),
-        "-o".to_owned(),
-        "BatchMode=yes".to_owned(),
-        "-o".to_owned(),
-        "ControlMaster=no".to_owned(),
-        "-o".to_owned(),
-        "ControlPersist=no".to_owned(),
-        "-o".to_owned(),
-        format!("UserKnownHostsFile={}", input.known_hosts_path),
-        "-o".to_owned(),
-        "StrictHostKeyChecking=yes".to_owned(),
-        "-i".to_owned(),
-        input.identity_path.clone(),
-        "-l".to_owned(),
-        input.ssh_user.clone(),
-        input.guest_ip.clone(),
-        "--".to_owned(),
-        "usbip".to_owned(),
-        input.sub.as_str().to_owned(),
-    ];
-    match input.sub {
-        UsbipSubcommand::Attach => {
-            let backend =
-                input
-                    .backend_ip
-                    .as_ref()
-                    .ok_or_else(|| UsbipArgvError::InvalidBusId {
-                        bus_id: "backend_ip required for Attach".to_owned(),
-                    })?;
-            let bus = input
-                .bus_id
-                .as_ref()
-                .ok_or_else(|| UsbipArgvError::InvalidBusId {
-                    bus_id: "bus_id required for Attach".to_owned(),
-                })?;
-            validate_bus_id(bus)?;
-            argv.push("-r".to_owned());
-            argv.push(backend.clone());
-            argv.push("-b".to_owned());
-            argv.push(bus.clone());
-        }
-        UsbipSubcommand::Detach => {
-            let port = input
-                .detach_port
-                .ok_or_else(|| UsbipArgvError::InvalidBusId {
-                    bus_id: "detach_port required for Detach".to_owned(),
-                })?;
-            argv.push("-p".to_owned());
-            argv.push(port.to_string());
-        }
-        _ => unreachable!(),
-    }
-    Ok(argv)
 }
 
 #[cfg(test)]

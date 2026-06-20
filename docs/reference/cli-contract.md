@@ -536,8 +536,8 @@ The bridge-health probe is part of the read-only status surface, even though rec
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--dry-run` | boolean | `false` | Print the daemon → broker USBIP attach plan plus the guest-side SSH import step without mutating host or guest state. |
-| `--apply` | boolean | `false` | Prevalidate the guest import metadata and framework-managed SSH key, ask `nixlingd` to run `UsbipBind` (acquiring the per-busid lock and validating ownership), apply the USBIP firewall carve-out, ensure the per-env USBIP backend/proxy runners are ready, run `UsbipProxyReconcile` for the selected VM/busid pair, then SSH into the guest and run `sudo -n usbip attach -r <usbipdHostIp> -b <busid>`. |
+| `--dry-run` | boolean | `false` | Print the daemon → broker USBIP attach plan plus the authenticated guestd import step without mutating host or guest state. |
+| `--apply` | boolean | `false` | Ask `nixlingd` to first reconcile any stale guest-side import through guestd, run `UsbipBind` (acquiring the per-busid lock and validating ownership), apply the USBIP firewall carve-out, ensure the per-env USBIP backend/proxy runners are ready, run `UsbipProxyReconcile`, then ask guestd over authenticated guest-control to run the guest-side `usbip attach -r <usbipdHostIp> -b <busid>`. |
 | `--json` | boolean | `false` | Emit the dry-run summary as structured JSON. |
 | `--human` | boolean | `false` | Force the human dry-run summary on stdout. |
 
@@ -561,16 +561,17 @@ The bridge-health probe is part of the read-only status surface, even though rec
 
 ```text
 $ nixling usb attach corp-vm 1-2 --dry-run
-nixling usb attach --dry-run: would bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for busid '1-2' for vm 'corp-vm', reconcile the USBIP proxy, and SSH into the guest to run sudo -n usbip attach
+nixling usb attach --dry-run: would bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for busid '1-2' for vm 'corp-vm', reconcile the USBIP proxy, and ask guestd to import the device
 ```
 
 **Status**
 
-The native CLI drives the daemon → broker `UsbipBind`, `UsbipBindFirewallRule`, per-env backend/proxy ensurement, and `UsbipProxyReconcile` path directly.
+The native CLI sends one intent to `nixlingd`; the daemon drives broker host
+USBIP state and authenticated guestd import cleanup/attach over guest-control.
 
 **Native**
 
-- `--apply` routes through `nixlingd` → broker. The guest-side `usbip attach` is still performed over the framework-managed per-VM SSH key: USBIP attach is the one VM-lifecycle surface that intentionally retains SSH.
+- `--apply` routes through `nixlingd` → broker + guestd. There is no SSH fallback for USBIP.
 
 **Bash**
 
@@ -2650,8 +2651,8 @@ detached state lives in guestd's detached registry).
 | `vm list` | `rust-native` | Daemon-side runtime inventory from nixlingd's public socket; daemon-unavailable returns an explicit empty inventory with remediation text. |
 | `status` | `rust-native` | Status is a read-only daemon RPC, including the frozen per-VM JSON shape. |
 | `status --check-bridges` | `rust-native` | The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred. |
-| `usb attach` | `rust-native` | USBIP attach parses and dispatches through the native daemon → broker path; the guest-side `usbip attach` still runs over the framework-managed per-VM SSH key. |
-| `usb detach` | `rust-native` | USBIP detach parses and dispatches the daemon → broker `UsbipUnbind` / `UsbipProxyReconcile` path natively. |
+| `usb attach` | `rust-native` | USBIP attach parses and dispatches one intent to `nixlingd`; the daemon coordinates broker host bind/firewall/proxy state and authenticated guestd import over guest-control. |
+| `usb detach` | `rust-native` | USBIP detach parses and dispatches one intent to `nixlingd`; the daemon asks guestd to detach matching imports, then runs broker `UsbipUnbind` / `UsbipProxyReconcile`. |
 | `usb probe` | `rust-native` | USBIP probe is a read-only daemon query backed by the broker's `UsbipProxyReconcile` validation pass. |
 | `console` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native foreground console handoff is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
 | `audio status` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native audio-status surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
