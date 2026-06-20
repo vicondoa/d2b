@@ -12553,6 +12553,8 @@ mod host_install_dispatch_tests {
             runtime: nixling_ipc::public_wire::RuntimeSummary {
                 detail: "running".to_owned(),
                 kind: None,
+                operation_capabilities: Default::default(),
+                services: Vec::new(),
             },
             services,
             ssh_user: Some("alice".to_owned()),
@@ -12654,6 +12656,8 @@ mod host_install_dispatch_tests {
             runtime: nixling_ipc::public_wire::RuntimeSummary {
                 detail: "running".to_owned(),
                 kind: None,
+                operation_capabilities: Default::default(),
+                services: Vec::new(),
             },
             services: nixling_ipc::public_wire::PublicVmServices {
                 nixling: "active".to_owned(),

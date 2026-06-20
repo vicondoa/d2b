@@ -1736,6 +1736,8 @@ mod tests {
             runtime: RuntimeSummary {
                 detail: runtime_detail.to_owned(),
                 kind: None,
+                operation_capabilities: Default::default(),
+                services: Vec::new(),
             },
             services: PublicVmServices {
                 gpu: graphics.then(|| format!("nixling-{vm}-gpu.service")),
