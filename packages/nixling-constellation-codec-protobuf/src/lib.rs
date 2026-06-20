@@ -2,9 +2,10 @@
 
 use nixling_constellation_core::{
     AdmissionAuditRecord, AuthorizationScope, AuthzDecision, Capability, ConstellationError,
-    ConstellationFrame, ErrorKind, Handshake, IdempotencyKey, NodeId, OpaquePayload, OperationId,
-    OperationKind, OperationRequest, OperationResponse, PeerContext, PrincipalId, ProtocolToken,
-    RealmId, RealmPath, StreamAuthz, StreamChannel, StreamClose, StreamCloseReason, StreamCursor,
+    ConstellationFrame, ErrorKind, Handshake, HandshakeAccepted, HandshakeRejected,
+    HandshakeRejectedReason, IdempotencyKey, NodeId, OpaquePayload, OperationId, OperationKind,
+    OperationRequest, OperationResponse, PeerContext, PrincipalId, ProtocolToken, RealmId,
+    RealmPath, StreamAuthz, StreamChannel, StreamClose, StreamCloseReason, StreamCursor,
     StreamData, StreamDescriptor, StreamFlow, StreamId, StreamKind, StreamOpen, TraceContext,
     WorkloadId,
 };
@@ -16,7 +17,7 @@ use prost::Message;
 pub const CODEC_ID: &str = "protobuf.v1";
 
 /// Deterministic fingerprint for the hand-authored prost schema in this crate.
-pub const SCHEMA_FINGERPRINT: &str = "protobuf.v1/frames=9/fields=handshake3,opreq9,opresp2,streamopen3,streamdata5,streamflow2,streamclose2,error3,audit11";
+pub const SCHEMA_FINGERPRINT: &str = "pb.v1:f11:h4:op14:sk12:err19:audit11";
 
 /// A prost-backed constellation frame codec.
 #[derive(Debug, Clone, Copy, Default)]
@@ -58,7 +59,10 @@ impl ProtocolCodec for ProtobufCodec {
 
 #[derive(Clone, PartialEq, prost::Message)]
 struct ProtoFrame {
-    #[prost(oneof = "proto_frame::Body", tags = "1, 2, 3, 4, 5, 6, 7, 8, 9")]
+    #[prost(
+        oneof = "proto_frame::Body",
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11"
+    )]
     body: Option<proto_frame::Body>,
 }
 
@@ -83,6 +87,10 @@ mod proto_frame {
         AdmissionAudit(super::ProtoAuditEnvelope),
         #[prost(message, tag = "9")]
         StreamFlow(super::ProtoStreamFlow),
+        #[prost(message, tag = "10")]
+        HandshakeAccepted(super::ProtoHandshakeAccepted),
+        #[prost(message, tag = "11")]
+        HandshakeRejected(super::ProtoHandshakeRejected),
     }
 }
 
@@ -94,6 +102,20 @@ struct ProtoHandshake {
     codec_id: String,
     #[prost(message, optional, tag = "3")]
     peer: Option<ProtoPeerContext>,
+    #[prost(string, tag = "4")]
+    schema_fingerprint: String,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct ProtoHandshakeAccepted {
+    #[prost(message, optional, tag = "1")]
+    selected: Option<ProtoHandshake>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct ProtoHandshakeRejected {
+    #[prost(int32, tag = "1")]
+    reason: i32,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -272,6 +294,12 @@ fn encode_proto_frame(frame: &ConstellationFrame) -> Result<ProtoFrame, Constell
         ConstellationFrame::Handshake(frame) => {
             proto_frame::Body::Handshake(encode_handshake(frame))
         }
+        ConstellationFrame::HandshakeAccepted(frame) => {
+            proto_frame::Body::HandshakeAccepted(encode_handshake_accepted(frame))
+        }
+        ConstellationFrame::HandshakeRejected(frame) => {
+            proto_frame::Body::HandshakeRejected(encode_handshake_rejected(frame)?)
+        }
         ConstellationFrame::OperationRequest(frame) => {
             proto_frame::Body::OperationRequest(encode_operation_request(frame)?)
         }
@@ -308,6 +336,12 @@ fn decode_proto_frame(frame: ProtoFrame) -> Result<ConstellationFrame, Constella
         proto_frame::Body::Handshake(frame) => {
             decode_handshake(frame).map(ConstellationFrame::Handshake)
         }
+        proto_frame::Body::HandshakeAccepted(frame) => {
+            decode_handshake_accepted(frame).map(ConstellationFrame::HandshakeAccepted)
+        }
+        proto_frame::Body::HandshakeRejected(frame) => {
+            decode_handshake_rejected(frame).map(ConstellationFrame::HandshakeRejected)
+        }
         proto_frame::Body::OperationRequest(frame) => {
             decode_operation_request(frame).map(ConstellationFrame::OperationRequest)
         }
@@ -339,6 +373,7 @@ fn encode_handshake(frame: &Handshake) -> ProtoHandshake {
     ProtoHandshake {
         protocol_version: Some(frame.protocol_version),
         codec_id: frame.codec_id.as_str().to_owned(),
+        schema_fingerprint: frame.schema_fingerprint.as_str().to_owned(),
         peer: frame.peer.as_ref().map(encode_peer_context),
     }
 }
@@ -349,7 +384,45 @@ fn decode_handshake(frame: ProtoHandshake) -> Result<Handshake, ConstellationErr
             .protocol_version
             .ok_or_else(|| malformed("handshake protocol_version is missing"))?,
         codec_id: parse_protocol_token(frame.codec_id, "handshake codec_id")?,
+        schema_fingerprint: parse_protocol_token(
+            frame.schema_fingerprint,
+            "handshake schema_fingerprint",
+        )?,
         peer: frame.peer.map(decode_peer_context).transpose()?,
+    })
+}
+
+fn encode_handshake_accepted(frame: &HandshakeAccepted) -> ProtoHandshakeAccepted {
+    ProtoHandshakeAccepted {
+        selected: Some(encode_handshake(&frame.selected)),
+    }
+}
+
+fn decode_handshake_accepted(
+    frame: ProtoHandshakeAccepted,
+) -> Result<HandshakeAccepted, ConstellationError> {
+    Ok(HandshakeAccepted {
+        selected: decode_handshake(
+            frame
+                .selected
+                .ok_or_else(|| malformed("handshake_accepted selected is missing"))?,
+        )?,
+    })
+}
+
+fn encode_handshake_rejected(
+    frame: &HandshakeRejected,
+) -> Result<ProtoHandshakeRejected, ConstellationError> {
+    Ok(ProtoHandshakeRejected {
+        reason: encode_handshake_rejection(frame.reason),
+    })
+}
+
+fn decode_handshake_rejected(
+    frame: ProtoHandshakeRejected,
+) -> Result<HandshakeRejected, ConstellationError> {
+    Ok(HandshakeRejected {
+        reason: decode_handshake_rejection(frame.reason)?,
     })
 }
 
@@ -750,6 +823,29 @@ parse_id_fn!(parse_stream_id, StreamId);
 parse_id_fn!(parse_stream_cursor, StreamCursor);
 parse_id_fn!(parse_protocol_token, ProtocolToken);
 
+fn encode_handshake_rejection(reason: HandshakeRejectedReason) -> i32 {
+    match reason {
+        HandshakeRejectedReason::VersionSkew => 1,
+        HandshakeRejectedReason::CodecMismatch => 2,
+        HandshakeRejectedReason::SchemaFingerprintMismatch => 3,
+        HandshakeRejectedReason::ChannelBindingMismatch => 4,
+        HandshakeRejectedReason::MalformedHandshake => 5,
+    }
+}
+
+fn decode_handshake_rejection(raw: i32) -> Result<HandshakeRejectedReason, ConstellationError> {
+    match raw {
+        1 => Ok(HandshakeRejectedReason::VersionSkew),
+        2 => Ok(HandshakeRejectedReason::CodecMismatch),
+        3 => Ok(HandshakeRejectedReason::SchemaFingerprintMismatch),
+        4 => Ok(HandshakeRejectedReason::ChannelBindingMismatch),
+        5 => Ok(HandshakeRejectedReason::MalformedHandshake),
+        _ => Err(malformed(format!(
+            "unknown handshake rejection value {raw}"
+        ))),
+    }
+}
+
 fn encode_operation_kind(kind: OperationKind) -> Result<i32, ConstellationError> {
     Ok(match kind {
         OperationKind::NodeRegister => 1,
@@ -1079,6 +1175,19 @@ mod tests {
     }
 
     #[test]
+    fn protobuf_decode_rejects_unknown_handshake_rejection_reason() {
+        let codec = ProtobufCodec::new();
+        let invalid = ProtoFrame {
+            body: Some(proto_frame::Body::HandshakeRejected(
+                ProtoHandshakeRejected { reason: 99 },
+            )),
+        }
+        .encode_to_vec();
+
+        assert_malformed(codec.decode_frame(&invalid));
+    }
+
+    #[test]
     fn protobuf_decode_rejects_missing_required_stream_id() {
         let codec = ProtobufCodec::new();
         let invalid = ProtoFrame {
@@ -1187,11 +1296,23 @@ mod tests {
             ConstellationFrame::Handshake(Handshake {
                 protocol_version: 1,
                 codec_id: token(CODEC_ID),
+                schema_fingerprint: token(SCHEMA_FINGERPRINT),
                 peer: Some(PeerContext {
                     auth_mechanism: token("none"),
                     peer_principal: Some(principal.clone()),
                     peer_node: Some(node.clone()),
                 }),
+            }),
+            ConstellationFrame::HandshakeAccepted(HandshakeAccepted {
+                selected: Handshake {
+                    protocol_version: 1,
+                    codec_id: token(CODEC_ID),
+                    schema_fingerprint: token(SCHEMA_FINGERPRINT),
+                    peer: None,
+                },
+            }),
+            ConstellationFrame::HandshakeRejected(HandshakeRejected {
+                reason: HandshakeRejectedReason::SchemaFingerprintMismatch,
             }),
             ConstellationFrame::OperationRequest(OperationRequest {
                 operation_id: operation_id.clone(),

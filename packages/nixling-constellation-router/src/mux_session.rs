@@ -104,6 +104,8 @@ impl<C: ProtocolCodec> MuxSession<C> {
             ConstellationFrame::StreamFlow(flow) => self.mux.receive_flow(flow),
             ConstellationFrame::StreamClose(close) => self.mux.close(close),
             ConstellationFrame::Handshake(_)
+            | ConstellationFrame::HandshakeAccepted(_)
+            | ConstellationFrame::HandshakeRejected(_)
             | ConstellationFrame::OperationRequest(_)
             | ConstellationFrame::OperationResponse(_)
             | ConstellationFrame::TypedError(_)

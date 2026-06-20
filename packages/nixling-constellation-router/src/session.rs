@@ -15,7 +15,10 @@
 //! fragmenting stream transport (Relay, vsock) is reassembled correctly —
 //! unlike a seqpacket one-read-per-frame socket.
 
-use nixling_constellation_core::{ConstellationFrame, ErrorKind, Handshake};
+use nixling_constellation_core::{
+    ConstellationFrame, ErrorKind, Handshake, HandshakeAccepted, HandshakeRejected,
+    HandshakeRejectedReason,
+};
 use nixling_constellation_provider::error::{ProviderError, ProviderResult};
 use nixling_constellation_provider::provider::ProtocolCodec;
 use nixling_constellation_provider::types::{ByteStream, TransportSession};
@@ -75,19 +78,31 @@ impl<C: ProtocolCodec> PeerSession<C> {
         let ours = Handshake {
             protocol_version: PROTOCOL_VERSION,
             codec_id: parse_codec_id(codec.codec_id())?,
+            schema_fingerprint: parse_codec_id(&codec.schema_fingerprint())?,
             peer: None,
         };
         let negotiated = match role {
             Role::Client => {
                 write_frame(stream.as_mut(), &codec.encode_frame(&hs(ours.clone()))?).await?;
-                let theirs = expect_handshake(&codec, &read_frame(stream.as_mut()).await?)?;
-                reconcile(&codec, &ours, &theirs)?;
-                theirs
+                let accepted =
+                    expect_handshake_accept(&codec, &read_frame(stream.as_mut()).await?)?;
+                if let Err(reason) = reconcile(&ours, &accepted.selected) {
+                    return Err(handshake_rejected_error(reason));
+                }
+                accepted.selected
             }
             Role::Server => {
                 let theirs = expect_handshake(&codec, &read_frame(stream.as_mut()).await?)?;
-                reconcile(&codec, &ours, &theirs)?;
-                write_frame(stream.as_mut(), &codec.encode_frame(&hs(ours.clone()))?).await?;
+                if let Err(reason) = reconcile(&ours, &theirs) {
+                    let rejected =
+                        ConstellationFrame::HandshakeRejected(HandshakeRejected { reason });
+                    let _ = write_frame(stream.as_mut(), &codec.encode_frame(&rejected)?).await;
+                    return Err(handshake_rejected_error(reason));
+                }
+                let accepted = ConstellationFrame::HandshakeAccepted(HandshakeAccepted {
+                    selected: ours.clone(),
+                });
+                write_frame(stream.as_mut(), &codec.encode_frame(&accepted)?).await?;
                 // The server adopts its own (validated-equal) view.
                 ours
             }
@@ -121,6 +136,22 @@ fn parse_codec_id(id: &str) -> ProviderResult<nixling_constellation_core::Protoc
         .map_err(|err| ProviderError::new(ErrorKind::MalformedFrame, format!("codec id: {err}")))
 }
 
+fn expect_handshake_accept(
+    codec: &impl ProtocolCodec,
+    bytes: &[u8],
+) -> ProviderResult<HandshakeAccepted> {
+    match codec.decode_frame(bytes)? {
+        ConstellationFrame::HandshakeAccepted(h) => Ok(h),
+        ConstellationFrame::HandshakeRejected(rejected) => {
+            Err(handshake_rejected_error(rejected.reason))
+        }
+        _ => Err(ProviderError::new(
+            ErrorKind::MalformedFrame,
+            "expected a handshake-accepted frame before any other traffic",
+        )),
+    }
+}
+
 fn expect_handshake(codec: &impl ProtocolCodec, bytes: &[u8]) -> ProviderResult<Handshake> {
     match codec.decode_frame(bytes)? {
         ConstellationFrame::Handshake(h) => Ok(h),
@@ -131,24 +162,31 @@ fn expect_handshake(codec: &impl ProtocolCodec, bytes: &[u8]) -> ProviderResult<
     }
 }
 
-fn reconcile(
-    codec: &impl ProtocolCodec,
-    ours: &Handshake,
-    theirs: &Handshake,
-) -> ProviderResult<()> {
+fn reconcile(ours: &Handshake, theirs: &Handshake) -> Result<(), HandshakeRejectedReason> {
     if theirs.protocol_version != ours.protocol_version {
-        return Err(ProviderError::new(
-            ErrorKind::VersionSkew,
-            "peer proposed an unsupported protocol version",
-        ));
+        return Err(HandshakeRejectedReason::VersionSkew);
     }
-    if theirs.codec_id.as_str() != codec.codec_id() {
-        return Err(ProviderError::new(
-            ErrorKind::VersionSkew,
-            "peer proposed a codec this session does not speak",
-        ));
+    if theirs.codec_id != ours.codec_id {
+        return Err(HandshakeRejectedReason::CodecMismatch);
+    }
+    if theirs.schema_fingerprint != ours.schema_fingerprint {
+        return Err(HandshakeRejectedReason::SchemaFingerprintMismatch);
+    }
+    if theirs.peer != ours.peer {
+        return Err(HandshakeRejectedReason::ChannelBindingMismatch);
     }
     Ok(())
+}
+
+fn handshake_rejected_error(reason: HandshakeRejectedReason) -> ProviderError {
+    let kind = match reason {
+        HandshakeRejectedReason::VersionSkew => ErrorKind::VersionSkew,
+        HandshakeRejectedReason::CodecMismatch
+        | HandshakeRejectedReason::SchemaFingerprintMismatch => ErrorKind::VersionSkew,
+        HandshakeRejectedReason::ChannelBindingMismatch => ErrorKind::AuthenticationFailed,
+        HandshakeRejectedReason::MalformedHandshake => ErrorKind::MalformedFrame,
+    };
+    ProviderError::new(kind, format!("peer handshake rejected: {reason:?}"))
 }
 
 async fn write_frame(stream: &mut dyn ByteStream, payload: &[u8]) -> ProviderResult<()> {
@@ -205,7 +243,9 @@ async fn read_frame(stream: &mut dyn ByteStream) -> ProviderResult<Vec<u8>> {
 mod tests {
     use super::*;
     use nixling_constellation_codec_protobuf::ProtobufCodec;
-    use nixling_constellation_core::{Capability, ConstellationError};
+    use nixling_constellation_core::{
+        Capability, ConstellationError, NodeId, PrincipalId, ProtocolToken,
+    };
     use nixling_constellation_provider::provider::TransportProvider;
     use nixling_constellation_provider::types::{NodeRegistration, TransportTarget};
     use nixling_constellation_transport::LoopbackTransport;
@@ -267,12 +307,100 @@ mod tests {
         let bogus = Handshake {
             protocol_version: PROTOCOL_VERSION + 99,
             codec_id: parse_codec_id(codec.codec_id()).unwrap(),
+            schema_fingerprint: parse_codec_id(&codec.schema_fingerprint()).unwrap(),
             peer: None,
         };
         let bytes = codec.encode_frame(&hs(bogus)).unwrap();
         write_frame(client_s.stream_mut(), &bytes).await.unwrap();
         let err = server.await.unwrap().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::VersionSkew);
+    }
+
+    #[tokio::test]
+    async fn client_schema_fingerprint_skew_is_rejected_fail_closed() {
+        let (mut client_s, server_s) = connected_pair().await;
+        let server = tokio::spawn(async move {
+            PeerSession::accept(server_s, ProtobufCodec::new())
+                .await
+                .map(|_| ())
+        });
+        let codec = ProtobufCodec::new();
+        let bogus = Handshake {
+            protocol_version: PROTOCOL_VERSION,
+            codec_id: parse_codec_id(codec.codec_id()).unwrap(),
+            schema_fingerprint: parse_codec_id("pb.v1:other-schema").unwrap(),
+            peer: None,
+        };
+        let bytes = codec.encode_frame(&hs(bogus)).unwrap();
+        write_frame(client_s.stream_mut(), &bytes).await.unwrap();
+        let err = server.await.unwrap().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::VersionSkew);
+    }
+
+    #[tokio::test]
+    async fn client_receives_explicit_handshake_rejection_fail_closed() {
+        #[derive(Clone, Copy)]
+        struct SkewedSchemaCodec;
+
+        impl ProtocolCodec for SkewedSchemaCodec {
+            fn codec_id(&self) -> &str {
+                nixling_constellation_codec_protobuf::CODEC_ID
+            }
+
+            fn encode_frame(
+                &self,
+                frame: &ConstellationFrame,
+            ) -> Result<Vec<u8>, ConstellationError> {
+                ProtobufCodec::new().encode_frame(frame)
+            }
+
+            fn decode_frame(&self, bytes: &[u8]) -> Result<ConstellationFrame, ConstellationError> {
+                ProtobufCodec::new().decode_frame(bytes)
+            }
+
+            fn schema_fingerprint(&self) -> String {
+                "pb.v1:other-schema".to_owned()
+            }
+        }
+
+        let (client_s, server_s) = connected_pair().await;
+        let server = tokio::spawn(async move {
+            PeerSession::accept(server_s, SkewedSchemaCodec)
+                .await
+                .map(|_| ())
+        });
+        let client_err = match PeerSession::connect(client_s, ProtobufCodec::new()).await {
+            Ok(_) => panic!("schema mismatch must reject the client"),
+            Err(err) => err,
+        };
+        let server_err = server.await.unwrap().unwrap_err();
+        assert_eq!(client_err.kind(), ErrorKind::VersionSkew);
+        assert_eq!(server_err.kind(), ErrorKind::VersionSkew);
+    }
+
+    #[tokio::test]
+    async fn peer_binding_mismatch_is_rejected_fail_closed() {
+        let (mut client_s, server_s) = connected_pair().await;
+        let server = tokio::spawn(async move {
+            PeerSession::accept(server_s, ProtobufCodec::new())
+                .await
+                .map(|_| ())
+        });
+        let codec = ProtobufCodec::new();
+        let forged = Handshake {
+            protocol_version: PROTOCOL_VERSION,
+            codec_id: parse_codec_id(codec.codec_id()).unwrap(),
+            schema_fingerprint: parse_codec_id(&codec.schema_fingerprint()).unwrap(),
+            peer: Some(nixling_constellation_core::PeerContext {
+                auth_mechanism: ProtocolToken::parse("forged-binding").unwrap(),
+                peer_principal: Some(PrincipalId::parse("principal-1").unwrap()),
+                peer_node: Some(NodeId::parse("node-a").unwrap()),
+            }),
+        };
+        let bytes = codec.encode_frame(&hs(forged)).unwrap();
+        write_frame(client_s.stream_mut(), &bytes).await.unwrap();
+        let err = server.await.unwrap().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::AuthenticationFailed);
     }
 
     #[tokio::test]

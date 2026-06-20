@@ -681,6 +681,40 @@ mod tests {
     }
 
     #[test]
+    fn lost_reply_retry_replays_recorded_result_without_new_accept() {
+        let mut shared_router = OperationRouter::new();
+        let p = principal("alice");
+        let first = req_with_op(
+            OperationKind::WorkloadStart,
+            Some("lost-reply-key"),
+            b"start-once",
+            "alice",
+            "op-original",
+        );
+        assert!(matches!(
+            shared_router.route(&first, &p),
+            RouteDecision::Accept { .. }
+        ));
+        assert!(shared_router.mark_completed(&first, result(b"started")));
+
+        let retry_after_disconnect = req_with_op(
+            OperationKind::WorkloadStart,
+            Some("lost-reply-key"),
+            b"start-once",
+            "alice",
+            "op-retry",
+        );
+        assert_eq!(
+            shared_router.route(&retry_after_disconnect, &p),
+            RouteDecision::Replay {
+                original_operation_id: OperationId::parse("op-original").unwrap(),
+                result: result(b"started"),
+            }
+        );
+        assert_eq!(shared_router.tracked(), 1);
+    }
+
+    #[test]
     fn same_key_different_request_conflicts() {
         let mut r = OperationRouter::new();
         let p = principal("alice");
