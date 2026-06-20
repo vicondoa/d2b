@@ -7966,6 +7966,79 @@ fn rollback_failed_vm_start(
     Ok(())
 }
 
+fn qemu_media_primary_role_id(tracked_roles: &[String]) -> Option<&str> {
+    tracked_roles
+        .iter()
+        .find(|role| role.as_str() == RunnerRole::QemuMedia.as_str())
+        .map(String::as_str)
+}
+
+fn stale_qemu_media_dependency_roles_from_entries(
+    tracked_roles: &[String],
+    entries: &[PidfdRegistration],
+) -> Vec<String> {
+    let Some(primary_role) = qemu_media_primary_role_id(tracked_roles) else {
+        return Vec::new();
+    };
+    if entries.iter().any(|entry| entry.role == primary_role) {
+        return Vec::new();
+    }
+
+    let tracked: BTreeSet<&str> = tracked_roles.iter().map(String::as_str).collect();
+    let mut stale_roles = entries
+        .iter()
+        .filter(|entry| {
+            tracked.contains(entry.role.as_str()) && entry.role.as_str() != primary_role
+        })
+        .map(|entry| entry.role.clone())
+        .collect::<Vec<_>>();
+    stale_roles.sort_by(|left, right| {
+        vm_stop_role_priority(infer_runner_role_for_vm_stop(left))
+            .cmp(&vm_stop_role_priority(infer_runner_role_for_vm_stop(right)))
+            .then_with(|| left.cmp(right))
+    });
+    stale_roles
+}
+
+fn cleanup_stale_qemu_media_dependencies_before_start(
+    state: &ServerState,
+    vm: &str,
+    tracked_roles: &[String],
+) -> Result<usize, Value> {
+    let stale_roles = stale_qemu_media_dependency_roles_from_entries(
+        tracked_roles,
+        &ordered_vm_stop_entries(state, vm),
+    );
+    for role in &stale_roles {
+        tracing::warn!(
+            vm = %vm,
+            role = %role,
+            "qemu-media primary runner is absent; stopping leftover dependency before restart",
+        );
+        stop_vm_pidfd_role(
+            state,
+            BrokerCallerRole::AdminUid { uid: 0 },
+            "vm start",
+            vm,
+            role,
+            Duration::from_secs(10),
+            Duration::from_secs(5),
+        )?;
+    }
+    if !stale_roles.is_empty() {
+        let _mguard = state.pidfd_table.mutation_guard();
+        if let Err(error) = state.pidfd_table.snapshot() {
+            return Err(daemon_failure_response(
+                "vm start",
+                format!(
+                    "vm start {vm}: stale qemu-media dependency cleanup failed to persist pidfd_table ({error})"
+                ),
+            ));
+        }
+    }
+    Ok(stale_roles.len())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VmStopRoleReport {
     role_id: String,
@@ -9153,6 +9226,17 @@ fn dispatch_broker_vm_start(
                 "vm start: pidfd-table prune failed; proceeding with stale entries",
             );
         }
+    }
+    match cleanup_stale_qemu_media_dependencies_before_start(state, &request.vm, &tracked_roles) {
+        Ok(n) if n > 0 => {
+            tracing::info!(
+                vm = %request.vm,
+                stopped = n,
+                "vm start: stopped stale qemu-media dependency runners before duplicate check",
+            );
+        }
+        Ok(_) => {}
+        Err(response) => return Ok(response),
     }
     if let Some(existing_role_id) = tracked_roles
         .iter()
@@ -14235,7 +14319,8 @@ mod broker_dispatch_tests {
     use serde_json::json;
 
     use super::supervisor::pidfd_table::{
-        BrokerReapLog, PidfdEntry, PidfdTable, WaitTermination, force_signal_eperm_for_tests,
+        BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, WaitTermination,
+        force_signal_eperm_for_tests,
     };
     use super::supervisor::state::{
         FilesystemSnapshotStore, PidfdOpener, ProcReader, RunnerSnapshotRecord, SnapshotStore,
@@ -14251,7 +14336,8 @@ mod broker_dispatch_tests {
         dispatch_broker_trust, dispatch_broker_vm_restart, dispatch_broker_vm_start,
         dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout, dispatch_request,
         redact_broker_dispatch_failure_for_launcher, redact_broker_error_for_launcher,
-        resolve_store_view_intent_for_vm, vm_start_node_mode,
+        resolve_store_view_intent_for_vm, stale_qemu_media_dependency_roles_from_entries,
+        vm_start_node_mode,
     };
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
@@ -15472,6 +15558,60 @@ mod broker_dispatch_tests {
                 other => panic!("expected LongLived for {role:?}, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn qemu_media_stale_dependency_cleanup_detects_proxy_without_primary() {
+        let tracked_roles = vec!["wayland-proxy".to_owned(), "qemu-media".to_owned()];
+        let entries = vec![PidfdRegistration {
+            vm: "dark-live".to_owned(),
+            role: "wayland-proxy".to_owned(),
+            pid: 42,
+            start_time_ticks: 1,
+        }];
+
+        assert_eq!(
+            stale_qemu_media_dependency_roles_from_entries(&tracked_roles, &entries),
+            vec!["wayland-proxy".to_owned()]
+        );
+    }
+
+    #[test]
+    fn qemu_media_stale_dependency_cleanup_keeps_running_primary() {
+        let tracked_roles = vec!["wayland-proxy".to_owned(), "qemu-media".to_owned()];
+        let entries = vec![
+            PidfdRegistration {
+                vm: "dark-live".to_owned(),
+                role: "wayland-proxy".to_owned(),
+                pid: 42,
+                start_time_ticks: 1,
+            },
+            PidfdRegistration {
+                vm: "dark-live".to_owned(),
+                role: "qemu-media".to_owned(),
+                pid: 43,
+                start_time_ticks: 1,
+            },
+        ];
+
+        assert!(
+            stale_qemu_media_dependency_roles_from_entries(&tracked_roles, &entries).is_empty()
+        );
+    }
+
+    #[test]
+    fn qemu_media_stale_dependency_cleanup_ignores_non_qemu_media_dags() {
+        let tracked_roles = vec!["wayland-proxy".to_owned(), VM_RUNNER_ROLE_ID.to_owned()];
+        let entries = vec![PidfdRegistration {
+            vm: "work".to_owned(),
+            role: "wayland-proxy".to_owned(),
+            pid: 42,
+            start_time_ticks: 1,
+        }];
+
+        assert!(
+            stale_qemu_media_dependency_roles_from_entries(&tracked_roles, &entries).is_empty()
+        );
     }
 
     #[test]
