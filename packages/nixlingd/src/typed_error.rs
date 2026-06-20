@@ -445,6 +445,14 @@ pub struct ErrorEnvelope {
     pub remediation: String,
 }
 
+fn redact_path_like_tokens(detail: &str) -> String {
+    detail
+        .split_whitespace()
+        .map(|token| if token.contains('/') { "<path>" } else { token })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl TypedError {
     pub fn kind(&self) -> &'static str {
         match self {
@@ -554,8 +562,11 @@ impl TypedError {
                     redacted_lock_parent_reason(detail)
                 )
             }
-            Self::GatewayDisplayUnavailable { .. } => {
-                "gateway display orchestrator is not available on this daemon".to_owned()
+            Self::GatewayDisplayUnavailable { detail } => {
+                format!(
+                    "gateway display unavailable: {}",
+                    redact_path_like_tokens(detail)
+                )
             }
             Self::WireVersionMismatch {
                 client_range,
@@ -663,8 +674,17 @@ impl TypedError {
                 "repair the daemon runtime directory ownership, mode, or symlink posture and retry"
                     .to_owned()
             }
-            Self::GatewayDisplayUnavailable { .. } => {
-                "run the gateway display request against the realm gateway-mode nixlingd, or configure this daemon as a realm gateway with nixling.gateways.<realm> before retrying".to_owned()
+            Self::GatewayDisplayUnavailable { detail } => {
+                let redacted = redact_path_like_tokens(detail);
+                if detail.contains("allowHostRelayCredentials") {
+                    "set allowHostRelayCredentials=true only on an explicit transition/dev host, or move relay credentials into the gateway guest before retrying".to_owned()
+                } else if detail.contains("mode 0600") {
+                    format!("repair the operator Waypipe receiver socket permissions and retry: {redacted}")
+                } else if detail.contains("waypipeSocket") {
+                    format!("repair nixling.gateways.<realm>.display.waypipeSocket and retry: {redacted}")
+                } else {
+                    format!("repair the gateway display configuration and retry: {redacted}")
+                }
             }
             Self::WireVersionMismatch { .. } => {
                 "use a client whose SemverRange includes the daemon's selected version"
@@ -919,6 +939,19 @@ mod tests {
         };
         assert_eq!(err.kind(), "internal-lock-parent-invalid");
         assert_no_path_leak("InternalLockParentInvalid", &err.message());
+    }
+
+    #[test]
+    fn gateway_display_unavailable_preserves_actionable_detail_without_paths() {
+        let err = TypedError::GatewayDisplayUnavailable {
+            detail: "waypipeSocket /run/user/1000/wpc.sock must have mode 0600; current mode is 0o660; run chmod 0600 on the socket path".to_owned(),
+        };
+        assert_eq!(err.kind(), "gateway-display-unavailable");
+        assert!(err.message().contains("waypipeSocket"));
+        assert!(err.message().contains("mode 0600"));
+        assert!(err.remediation().contains("mode 0600"));
+        assert_no_path_leak("GatewayDisplayUnavailable", &err.message());
+        assert_no_path_leak("GatewayDisplayUnavailable", &err.remediation());
     }
 
     #[test]
