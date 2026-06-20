@@ -96,6 +96,10 @@ deprecations ship one minor release before removal.
   survives the synchronous `gatewayDisplay` request runtime, so Waypipe
   sessions remain connected after `nixling vm exec <aca target>` returns
   and the forwarded Wayland app can stay visible on the host compositor.
+- `qemu-media` VM start no longer runs NixOS-only state ownership and
+  SSH host-key preflights, allowing externally booted media VMs to use
+  the qemu-media runner-owned state directory prepared by host
+  reconciliation.
 
 ## [1.3.1] - 2026-06-18
 
