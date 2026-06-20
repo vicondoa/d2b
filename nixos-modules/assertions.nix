@@ -109,7 +109,21 @@ let
     lib.mapAttrsToList
       (_: gw: gw.vmName)
       (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
-  enabledGatewayNames = lib.attrNames (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
+  enabledGateways = lib.mapAttrsToList
+    (name: gw: { inherit name gw; })
+    (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
+  enabledGatewayNames = map (gateway: gateway.name) enabledGateways;
+  enabledGatewayRealms = map (gateway: gateway.gw.realm) enabledGateways;
+  enabledGatewayEnvs = map (gateway: gateway.gw.env) enabledGateways;
+  enabledGatewayVmNames = map (gateway: gateway.gw.vmName) enabledGateways;
+  duplicateValues = values:
+    let
+      countValue = value: lib.length (lib.filter (candidate: candidate == value) values);
+    in
+    lib.unique (lib.filter (value: countValue value > 1) values);
+  duplicateGatewayRealms = duplicateValues enabledGatewayRealms;
+  duplicateGatewayEnvs = duplicateValues enabledGatewayEnvs;
+  duplicateGatewayVmNames = duplicateValues enabledGatewayVmNames;
 
   autoSysVmNames =
     (lib.mapAttrsToList
@@ -226,13 +240,40 @@ let
           coordinates)
       (lib.filterAttrs (_: gw: gw.enable) cfg.gateways));
 
-  gatewayCountAssertions = [
+  gatewayEntrypointAssertions = [
     {
-      assertion = lib.length enabledGatewayNames <= 1;
+      assertion = !(builtins.elem "local" enabledGatewayRealms);
       message = ''
-        nixling.gateways currently supports at most one enabled gateway in the
-        P0 REST lifecycle implementation. Multiple enabled gateways would be
-        ambiguous until host-to-gateway routing supports per-realm dispatch.
+        nixling.gateways may not declare realm `local`: the local realm
+        entrypoint is always host-resident so the local fast path remains
+        unambiguous.
+      '';
+    }
+    {
+      assertion = duplicateGatewayRealms == [ ];
+      message = ''
+        nixling.gateways must declare at most one gateway-backed realm
+        entrypoint per realm path. Duplicate realm path(s): ${
+          lib.concatStringsSep ", " duplicateGatewayRealms
+        }.
+      '';
+    }
+    {
+      assertion = duplicateGatewayVmNames == [ ];
+      message = ''
+        nixling.gateways must declare a separate gateway guest per
+        gateway-backed realm. Duplicate gateway VM name(s): ${
+          lib.concatStringsSep ", " duplicateGatewayVmNames
+        }.
+      '';
+    }
+    {
+      assertion = duplicateGatewayEnvs == [ ];
+      message = ''
+        nixling.gateways must not place multiple gateway-backed realms on the
+        same nixling.envs L2 segment. Shared gateway env(s): ${
+          lib.concatStringsSep ", " duplicateGatewayEnvs
+        }.
       '';
     }
   ];
@@ -1056,7 +1097,7 @@ in
     ++ gatewayCredentialPathAssertions
     ++ gatewayStateBoundaryAssertions
     ++ gatewayCoordinateAssertions
-    ++ gatewayCountAssertions
+    ++ gatewayEntrypointAssertions
     ++ gatewayDaemonAssertions
   );
 

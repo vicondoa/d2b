@@ -41,7 +41,8 @@ let
   hostTmpfiles = goodCfg.systemd.tmpfiles.rules;
   gatewayJson = builtins.fromJSON gatewayGuestCfg.environment.etc."nixling/gateway.json".text;
   hostDaemonJson = builtins.fromJSON goodCfg.environment.etc."nixling/daemon-config.json".text;
-  hostGatewayJson = builtins.fromJSON goodCfg.environment.etc."nixling/gateway.json".text;
+  hostGatewayJsonPresent = builtins.hasAttr "nixling/gateway.json" goodCfg.environment.etc;
+  hostRealmEntrypoints = goodCfg.nixling._computed.realmEntrypoints;
   gatewayProc = lib.findFirst (vm: vm.vm == "sys-work-gateway") null
     goodCfg.nixling._bundle.processesJson.data.vms;
   badCfg = (mkEval [
@@ -89,7 +90,7 @@ let
     (lib.recursiveUpdate base {
       nixling.envs.personal = {
         lanSubnet = "10.45.0.0/24";
-        uplinkSubnet = "192.0.2.4/30";
+        uplinkSubnet = "198.51.100.0/30";
       };
       nixling.gateways.personal = {
         env = "personal";
@@ -100,6 +101,44 @@ let
     })
   ]).config;
   multiGatewayMessages = map (a: a.message) (lib.filter (a: !a.assertion) multiGatewayCfg.assertions);
+  multiGatewayRealmEntrypoints = multiGatewayCfg.nixling._computed.realmEntrypoints;
+  customGatewayNameCfg = (mkEval [
+    (lib.recursiveUpdate base {
+      nixling.gateways.work.vmName = "corp-gateway";
+    })
+  ]).config;
+  customGatewayNameEntrypoints = customGatewayNameCfg.nixling._computed.realmEntrypoints;
+  duplicateGatewayRealmMessages = failureMessages ((mkEval [
+    (lib.recursiveUpdate base {
+      nixling.envs.personal = {
+        lanSubnet = "10.45.0.0/24";
+        uplinkSubnet = "198.51.100.0/30";
+      };
+      nixling.gateways.personal = {
+        realm = "work";
+        env = "personal";
+        index = 21;
+        relay.namespace = "relns-personal.servicebus.windows.net";
+        relay.entity = "hc-nixling-display";
+      };
+    })
+  ]).config);
+  sharedGatewayEnvMessages = failureMessages ((mkEval [
+    (lib.recursiveUpdate base {
+      nixling.gateways.personal = {
+        realm = "personal";
+        env = "work";
+        index = 21;
+        relay.namespace = "relns-personal.servicebus.windows.net";
+        relay.entity = "hc-nixling-display";
+      };
+    })
+  ]).config);
+  localRealmGatewayMessages = failureMessages ((mkEval [
+    (lib.recursiveUpdate base {
+      nixling.gateways.work.realm = "local";
+    })
+  ]).config);
   sourceToolsCfg = (mkEval [
     (lib.recursiveUpdate base {
       nixling.site.usePrebuiltHostTools = false;
@@ -269,43 +308,115 @@ in
   "gateway-vm/host-daemon-stays-credential-free-facade" = {
     expr = {
       daemonConfigCarriesGateway = hostDaemonJson ? gateway;
-      hostGateway = {
-        gateway = hostGatewayJson.gateway;
-        realm = hostGatewayJson.realm;
-        credentialPath = hostGatewayJson.credentialPath;
-        relayEntity = hostGatewayJson.relay.entity;
-        waypipeSocket = hostGatewayJson.display.waypipeSocket;
-        allowHostRelayCredentials = hostGatewayJson.allowHostRelayCredentials;
-      };
+      inherit hostGatewayJsonPresent;
     };
     expected = {
       daemonConfigCarriesGateway = false;
-      hostGateway = {
-        gateway = "work";
-        realm = "work";
-        credentialPath = "/var/lib/nixling/gateways/work/credential.json";
-        relayEntity = "hc-nixling-display";
-        waypipeSocket = "/run/user/1000/wpc.sock";
-        allowHostRelayCredentials = false;
+      hostGatewayJsonPresent = false;
+    };
+  };
+
+  "gateway-vm/host-realm-entrypoint-table-defaults-local-and-gateway" = {
+    expr = {
+      path = hostRealmEntrypoints.path;
+      local = hostRealmEntrypoints.entries.local;
+      work = hostRealmEntrypoints.entries.work;
+      workCarriesProviderConfig =
+        (hostRealmEntrypoints.entries.work ? credentialPath)
+        || (hostRealmEntrypoints.entries.work ? relay)
+        || (hostRealmEntrypoints.entries.work ? aca);
+    };
+    expected = {
+      path = "/run/current-system/sw/share/nixling/realm-entrypoints.json";
+      local = {
+        mode = "host-resident";
+        gateway = null;
+      };
+      work = {
+        mode = "gateway-backed";
+        gateway = "sys-work-gateway.nixling";
+      };
+      workCarriesProviderConfig = false;
+    };
+  };
+
+  "gateway-vm/realm-entrypoint-table-uses-custom-gateway-vm-name" = {
+    expr = {
+      declared = builtins.elem "corp-gateway" (builtins.attrNames customGatewayNameCfg.nixling.vms);
+      work = customGatewayNameEntrypoints.entries.work;
+    };
+    expected = {
+      declared = true;
+      work = {
+        mode = "gateway-backed";
+        gateway = "corp-gateway.nixling";
       };
     };
   };
 
   "gateway-vm/transitional-host-relay-guard-defaults-off" = {
     expr = {
-      host = hostGatewayJson.allowHostRelayCredentials;
+      inherit hostGatewayJsonPresent;
       guest = gatewayJson.allowHostRelayCredentials;
     };
     expected = {
-      host = false;
+      hostGatewayJsonPresent = false;
       guest = false;
     };
   };
 
-  "gateway-vm/rejects-multiple-enabled-gateways" = {
+  "gateway-vm/accepts-multiple-gateways-with-separate-realms-and-envs" = {
+    expr = {
+      noAtMostOneFailure = !(lib.any
+        (m: lib.hasInfix "at most one enabled gateway" m)
+        multiGatewayMessages);
+      workGatewayEnv = multiGatewayCfg.nixling.vms."sys-work-gateway".env;
+      personalGatewayEnv = multiGatewayCfg.nixling.vms."sys-personal-gateway".env;
+      legacySingleGatewayJson = builtins.hasAttr "nixling/gateway.json" multiGatewayCfg.environment.etc;
+      entries = multiGatewayRealmEntrypoints.entries;
+    };
+    expected = {
+      noAtMostOneFailure = true;
+      workGatewayEnv = "work";
+      personalGatewayEnv = "personal";
+      legacySingleGatewayJson = false;
+      entries = {
+        local = {
+          mode = "host-resident";
+          gateway = null;
+        };
+        work = {
+          mode = "gateway-backed";
+          gateway = "sys-work-gateway.nixling";
+        };
+        personal = {
+          mode = "gateway-backed";
+          gateway = "sys-personal-gateway.nixling";
+        };
+      };
+    };
+  };
+
+  "gateway-vm/rejects-duplicate-gateway-realm-entrypoints" = {
     expr = lib.any
-      (m: lib.hasInfix "at most one enabled gateway" m)
-      multiGatewayMessages;
+      (m: lib.hasInfix "at most one gateway-backed realm" m
+        && lib.hasInfix "work" m)
+      duplicateGatewayRealmMessages;
+    expected = true;
+  };
+
+  "gateway-vm/rejects-gateway-realms-sharing-env-l2" = {
+    expr = lib.any
+      (m: lib.hasInfix "must not place multiple gateway-backed realms on the" m
+        && lib.hasInfix "work" m)
+      sharedGatewayEnvMessages;
+    expected = true;
+  };
+
+  "gateway-vm/rejects-gateway-entrypoint-for-local-realm" = {
+    expr = lib.any
+      (m: lib.hasInfix "may not declare realm `local`" m)
+      localRealmGatewayMessages;
     expected = true;
   };
 

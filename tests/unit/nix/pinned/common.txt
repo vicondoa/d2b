@@ -148,6 +148,7 @@ external-vm-kind/slot-source-rejects-busId
 external-vm-kind/source-rejects-busid
 external-vm-kind/source-rejects-busids
 external-vm-kind/source-rejects-relative-image-path
+gateway-vm/accepts-multiple-gateways-with-separate-realms-and-envs
 gateway-vm/admits-framework-sys-prefix
 gateway-vm/auto-declared-env-index
 gateway-vm/auto-declared-name
@@ -155,8 +156,12 @@ gateway-vm/guest-daemon-runs-as-nixlingd-without-no-drop-flag
 gateway-vm/guest-services-installed-without-static-waypipe
 gateway-vm/host-daemon-stays-credential-free-facade
 gateway-vm/host-guest-state-ownership-boundary
+gateway-vm/host-realm-entrypoint-table-defaults-local-and-gateway
+gateway-vm/realm-entrypoint-table-uses-custom-gateway-vm-name
 gateway-vm/rejects-credential-path-outside-gateway-state
-gateway-vm/rejects-multiple-enabled-gateways
+gateway-vm/rejects-duplicate-gateway-realm-entrypoints
+gateway-vm/rejects-gateway-entrypoint-for-local-realm
+gateway-vm/rejects-gateway-realms-sharing-env-l2
 gateway-vm/rejects-parent-traversal-in-state-paths
 gateway-vm/rejects-per-vm-state-root-for-gateway-secrets
 gateway-vm/rejects-secret-shaped-credential-path

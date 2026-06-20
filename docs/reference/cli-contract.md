@@ -121,6 +121,40 @@ static manifest/local status path.
 - There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 Rows are ordered by VM name because the historical bash implementation iterated `jq keys[]`; the current daemon-native path keeps that ordering contract.
+
+### `realm enter`
+
+**Synopsis:** `nixling realm enter <realm>`
+
+Enters the local gateway VM for a gateway-backed realm by opening an
+interactive `vm exec` session to the gateway workload. The host resolves
+the realm through the generated realm entrypoint table and verifies the
+gateway VM is declared and running before attempting the exec. Realm
+relay/provider credentials remain inside the gateway guest.
+
+### `realm run`
+
+**Synopsis:** `nixling realm run <realm> -- <argv...> [--human | --json]`
+
+Runs a one-shot command inside the local gateway VM for a
+gateway-backed realm. This is the low-level escape hatch for scripts that
+need to issue an exact command in the realm trust boundary. Daily
+workload operations should continue to use `nixling vm ...`; realm
+targets route through the configured gateway entrypoint when supported.
+
+### Realm target routing
+
+`nixling vm start|stop|restart|exec <workload>.<node>.<realm>.nixling`
+keeps local VM names on the existing host fast path. Fully qualified
+realm targets are resolved through the generated `realm-entrypoints.json`
+table. Missing entrypoints fail closed with an actionable
+`missing-realm-entrypoint` error; stopped gateway VMs fail with
+`gateway-not-running` and a remediation command to start the gateway.
+
+`nixling vm list --realm <realm>` runs `nixling vm list` inside the
+realm gateway through the same local guest-control exec path. It does not
+make the host persist a remote node/workload registry.
+
 ### `vm start`
 
 **Synopsis:** `nixling vm start <vm> [--dry-run | --apply] [--human | --json]`
