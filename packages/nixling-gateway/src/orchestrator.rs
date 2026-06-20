@@ -617,10 +617,7 @@ mod tests {
         assert_eq!(events[0].session_id.as_ref(), Some(&open.session_id));
         assert!(events[0].envelope.is_principal_consistent());
         assert_eq!(events[0].envelope.realm.target_form(), "work");
-        assert_eq!(
-            events[0].envelope.principal.as_ref().map(|p| p.as_str()),
-            Some("alice")
-        );
+        assert_eq!(events[0].envelope.principal.as_str(), "alice");
         assert_eq!(
             events[1].kind,
             crate::GatewayAuditKind::DisplaySessionRunning

@@ -108,10 +108,6 @@ impl<C: ProtocolCodec> MuxSession<C> {
             | ConstellationFrame::OperationResponse(_)
             | ConstellationFrame::TypedError(_)
             | ConstellationFrame::AdmissionAudit(_) => Ok(()),
-            _ => Err(ConstellationError::new(
-                nixling_constellation_core::ErrorKind::MalformedFrame,
-                "unsupported frame variant in mux session",
-            )),
         }
     }
 }

@@ -14,6 +14,13 @@ use nixling::{
     StoreVerifyOutputV2, VmExecCreateOutputV1, VmExecKillOutputV1, VmExecListOutputV1,
     VmExecLogsOutputV1, VmExecStatusOutputV1,
 };
+use nixling_constellation_core::{
+    AdmissionAuditRecord, AuditEnvelope, Capability, CapabilitySet, ConstellationError,
+    ConstellationFrame, ExecutionId, ExecutionSummary, GatewayId, Handshake, IdempotencyKey,
+    NodeId, NodeSummary, OperationId, OperationKind, OperationRequest, OperationResponse,
+    PrincipalId, ProviderId, RealmId, RealmPath, StreamCursor, StreamId, WorkloadId,
+    WorkloadSelector, WorkloadSummary,
+};
 use nixling_core::{
     bundle::Bundle, closures::ClosureMetadata, error::Error, host::HostJson,
     manifest_v04::ManifestV04, minijail_profile::MinijailProfile, privileges::PrivilegesJson,
@@ -25,6 +32,38 @@ use schemars::schema::RootSchema;
 
 const SCHEMA_VERSION: &str = "v2";
 const DAEMON_API_DOC: &str = "docs/reference/daemon-api.md";
+
+#[allow(dead_code)]
+#[derive(schemars::JsonSchema)]
+#[serde(untagged)]
+enum ConstellationCoreSchema {
+    RealmId(RealmId),
+    RealmPath(RealmPath),
+    NodeId(NodeId),
+    WorkloadId(WorkloadId),
+    ProviderId(ProviderId),
+    GatewayId(GatewayId),
+    ExecutionId(ExecutionId),
+    StreamId(StreamId),
+    StreamCursor(StreamCursor),
+    PrincipalId(PrincipalId),
+    OperationId(OperationId),
+    IdempotencyKey(IdempotencyKey),
+    Capability(Capability),
+    CapabilitySet(CapabilitySet),
+    NodeSummary(NodeSummary),
+    WorkloadSelector(WorkloadSelector),
+    WorkloadSummary(WorkloadSummary),
+    ExecutionSummary(ExecutionSummary),
+    Handshake(Handshake),
+    OperationKind(OperationKind),
+    OperationRequest(OperationRequest),
+    OperationResponse(OperationResponse),
+    AdmissionAuditRecord(AdmissionAuditRecord),
+    AuditEnvelope(AuditEnvelope),
+    TypedError(ConstellationError),
+    Frame(ConstellationFrame),
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ItemKind {
@@ -218,8 +257,12 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         .join(SCHEMA_VERSION);
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 12] = [
+    let schemas: [(&str, RootSchema); 13] = [
         ("bundle.json", schemars::schema_for!(Bundle)),
+        (
+            "constellation-core.json",
+            schemars::schema_for!(ConstellationCoreSchema),
+        ),
         ("host.json", schemars::schema_for!(HostJson)),
         ("processes.json", schemars::schema_for!(ProcessesJson)),
         ("storage.json", schemars::schema_for!(StorageJson)),

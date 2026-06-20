@@ -1,0 +1,1980 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConstellationCoreSchema",
+  "anyOf": [
+    {
+      "$ref": "#/definitions/RealmId"
+    },
+    {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/RealmId"
+      }
+    },
+    {
+      "$ref": "#/definitions/NodeId"
+    },
+    {
+      "$ref": "#/definitions/WorkloadId"
+    },
+    {
+      "$ref": "#/definitions/ProviderId"
+    },
+    {
+      "$ref": "#/definitions/GatewayId"
+    },
+    {
+      "$ref": "#/definitions/ExecutionId"
+    },
+    {
+      "$ref": "#/definitions/StreamId"
+    },
+    {
+      "$ref": "#/definitions/StreamCursor"
+    },
+    {
+      "$ref": "#/definitions/PrincipalId"
+    },
+    {
+      "$ref": "#/definitions/OperationId"
+    },
+    {
+      "$ref": "#/definitions/IdempotencyKey"
+    },
+    {
+      "$ref": "#/definitions/Capability"
+    },
+    {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Capability"
+      },
+      "uniqueItems": true
+    },
+    {
+      "$ref": "#/definitions/NodeSummary"
+    },
+    {
+      "$ref": "#/definitions/WorkloadSelector"
+    },
+    {
+      "$ref": "#/definitions/WorkloadSummary"
+    },
+    {
+      "$ref": "#/definitions/ExecutionSummary"
+    },
+    {
+      "$ref": "#/definitions/Handshake"
+    },
+    {
+      "$ref": "#/definitions/OperationKind"
+    },
+    {
+      "$ref": "#/definitions/OperationRequest"
+    },
+    {
+      "$ref": "#/definitions/OperationResponse"
+    },
+    {
+      "$ref": "#/definitions/AdmissionAuditRecord"
+    },
+    {
+      "$ref": "#/definitions/AuditEnvelope"
+    },
+    {
+      "$ref": "#/definitions/ConstellationError"
+    },
+    {
+      "$ref": "#/definitions/ConstellationFrame"
+    }
+  ],
+  "definitions": {
+    "AdmissionAuditRecord": {
+      "description": "A redacted pre-auth/session-admission denial record. This is separate from [`AuditEnvelope`] because no authenticated principal may exist yet.",
+      "type": "object",
+      "required": [
+        "decision",
+        "node",
+        "operation_id",
+        "realm",
+        "reason",
+        "scope"
+      ],
+      "properties": {
+        "decision": {
+          "description": "Admission decision. Admission records are denials only.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AuthzDecision"
+            }
+          ]
+        },
+        "node": {
+          "description": "Node that denied admission.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/NodeId"
+            }
+          ]
+        },
+        "operation_id": {
+          "description": "Stable audit/correlation id for this event.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/OperationId"
+            }
+          ]
+        },
+        "principal": {
+          "description": "Authenticated principal, when admission failed after a principal was bound. Absent for pre-auth denials.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PrincipalId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "realm": {
+          "description": "Realm path for the attempted admission.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "reason": {
+          "description": "Closed, redacted reason code.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ErrorKind"
+            }
+          ]
+        },
+        "scope": {
+          "description": "Authorization/admission scope that was evaluated.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AuthorizationScope"
+            }
+          ]
+        },
+        "trace": {
+          "description": "Bounded trace context for correlation.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TraceContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditEnvelope": {
+      "description": "A redacted post-auth audit envelope for one mutating operation or stream-open.\n\nConstruct via [`AuditEnvelope::post_auth`]. The principal is a mandatory value, not an `Option`, so an operation/stream audit event can never be recorded without an accountable authenticated principal.",
+      "type": "object",
+      "required": [
+        "decision",
+        "node",
+        "operation_id",
+        "principal",
+        "realm",
+        "scope"
+      ],
+      "properties": {
+        "decision": {
+          "description": "Authorization decision.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AuthzDecision"
+            }
+          ]
+        },
+        "execution": {
+          "description": "Correlated execution, for exec audit events.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExecutionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "node": {
+          "description": "Target node.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/NodeId"
+            }
+          ]
+        },
+        "operation_id": {
+          "description": "Stable audit id for this event.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/OperationId"
+            }
+          ]
+        },
+        "principal": {
+          "description": "Authenticated principal (never a relay credential).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PrincipalId"
+            }
+          ]
+        },
+        "realm": {
+          "description": "Realm path (mandatory; supports nested realms).",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "scope": {
+          "description": "Authorization scope the operation/stream required (mandatory).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AuthorizationScope"
+            }
+          ]
+        },
+        "stream": {
+          "description": "Correlated stream, for stream-open audit events.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StreamId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trace": {
+          "description": "Bounded trace context for correlation.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TraceContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workload": {
+          "description": "Target workload, when the operation has one.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkloadId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuthorizationScope": {
+      "description": "What an audited operation was authorized against. Workload operations require a [`Capability`]; node-control, enrollment, and read-only health operations are authorized by node enrollment / session identity, so they have their own scope rather than a synthetic capability.",
+      "oneOf": [
+        {
+          "description": "A workload capability (lifecycle/exec/display/…).",
+          "type": "object",
+          "required": [
+            "capability",
+            "scope"
+          ],
+          "properties": {
+            "capability": {
+              "description": "The required capability.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Capability"
+                }
+              ]
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "capability"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Node-control (register/heartbeat/capabilities).",
+          "type": "object",
+          "required": [
+            "scope"
+          ],
+          "properties": {
+            "scope": {
+              "type": "string",
+              "enum": [
+                "node-control"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Realm/node enrollment.",
+          "type": "object",
+          "required": [
+            "scope"
+          ],
+          "properties": {
+            "scope": {
+              "type": "string",
+              "enum": [
+                "enrollment"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Read-only health probe.",
+          "type": "object",
+          "required": [
+            "scope"
+          ],
+          "properties": {
+            "scope": {
+              "type": "string",
+              "enum": [
+                "health"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "AuthzDecision": {
+      "description": "The authorization decision recorded for an operation/stream.",
+      "oneOf": [
+        {
+          "description": "The operation/stream was authorized.",
+          "type": "string",
+          "enum": [
+            "allow"
+          ]
+        },
+        {
+          "description": "The operation/stream was refused (admission denial).",
+          "type": "string",
+          "enum": [
+            "deny"
+          ]
+        }
+      ]
+    },
+    "Capability": {
+      "description": "A named, independently-authorized capability. Display, clipboard, audio, HID, and USB are deliberately distinct so display forwarding cannot smuggle clipboard or device access.",
+      "oneOf": [
+        {
+          "description": "Workload create/start/stop/inspect.",
+          "type": "string",
+          "enum": [
+            "lifecycle"
+          ]
+        },
+        {
+          "description": "Command execution.",
+          "type": "string",
+          "enum": [
+            "exec"
+          ]
+        },
+        {
+          "description": "Interactive pseudo-terminal.",
+          "type": "string",
+          "enum": [
+            "pty"
+          ]
+        },
+        {
+          "description": "Durable execution logs with resume cursors.",
+          "type": "string",
+          "enum": [
+            "logs"
+          ]
+        },
+        {
+          "description": "Bounded file copy.",
+          "type": "string",
+          "enum": [
+            "file-copy"
+          ]
+        },
+        {
+          "description": "One stream per connection; never a generic network bridge.",
+          "type": "string",
+          "enum": [
+            "port-forward"
+          ]
+        },
+        {
+          "description": "virtio-vsock availability.",
+          "type": "string",
+          "enum": [
+            "vsock"
+          ]
+        },
+        {
+          "description": "virtiofs share availability.",
+          "type": "string",
+          "enum": [
+            "virtiofs"
+          ]
+        },
+        {
+          "description": "Semantic Wayland window/protocol forwarding.",
+          "type": "string",
+          "enum": [
+            "window-forwarding"
+          ]
+        },
+        {
+          "description": "Encoded frame/video stream for environments without host Wayland.",
+          "type": "string",
+          "enum": [
+            "display-streaming"
+          ]
+        },
+        {
+          "description": "Clipboard bridge (separate from display).",
+          "type": "string",
+          "enum": [
+            "clipboard"
+          ]
+        },
+        {
+          "description": "Audio playback.",
+          "type": "string",
+          "enum": [
+            "audio-playback"
+          ]
+        },
+        {
+          "description": "Audio capture.",
+          "type": "string",
+          "enum": [
+            "audio-capture"
+          ]
+        },
+        {
+          "description": "Named HID device operations.",
+          "type": "string",
+          "enum": [
+            "hid"
+          ]
+        },
+        {
+          "description": "Named USB device operations.",
+          "type": "string",
+          "enum": [
+            "usb"
+          ]
+        },
+        {
+          "description": "Local/runtime GPU acceleration (not automatically relay-exportable).",
+          "type": "string",
+          "enum": [
+            "gpu-accel"
+          ]
+        },
+        {
+          "description": "Snapshots.",
+          "type": "string",
+          "enum": [
+            "snapshots"
+          ]
+        },
+        {
+          "description": "Device hotplug.",
+          "type": "string",
+          "enum": [
+            "hotplug"
+          ]
+        },
+        {
+          "description": "Ephemeral provider-managed sessions.",
+          "type": "string",
+          "enum": [
+            "ephemeral-sessions"
+          ]
+        },
+        {
+          "description": "Provider-managed isolation boundary (not host-owned KVM).",
+          "type": "string",
+          "enum": [
+            "provider-managed-isolation"
+          ]
+        }
+      ]
+    },
+    "ConstellationError": {
+      "description": "A typed constellation error: a [`ErrorKind`], an optional structured missing capability (for `CapabilityDenied`), plus a bounded, operator-safe message. The message MUST NOT contain secrets, command output, store paths, argv, or stream payload, and is bounded at decode so it can never be an unbounded side channel.",
+      "type": "object",
+      "required": [
+        "kind",
+        "message"
+      ],
+      "properties": {
+        "capability": {
+          "description": "The structured missing capability, present for `CapabilityDenied` so callers route on a stable field rather than parsing the message.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Capability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "description": "Stable classification. Private so the `CapabilityDenied` => `Some(capability)` invariant cannot be broken by external mutation or struct-literal construction.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ErrorKind"
+            }
+          ]
+        },
+        "message": {
+          "description": "Bounded operator-actionable message (no payload/secrets).",
+          "type": "string",
+          "maxLength": 256
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConstellationFrame": {
+      "description": "The semantic frame exchanged over a constellation peer session. The codec layer maps bytes to/from this enum; the operation layer never depends on the encoding. Every variant wraps a `deny_unknown_fields` struct so a peer cannot smuggle extra fields past the decoder.",
+      "oneOf": [
+        {
+          "description": "Session handshake (version + codec negotiation).",
+          "type": "object",
+          "required": [
+            "codec_id",
+            "frame",
+            "protocol_version"
+          ],
+          "properties": {
+            "codec_id": {
+              "description": "Codec id negotiated for this session (bounded token).",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ProtocolToken"
+                }
+              ]
+            },
+            "frame": {
+              "type": "string",
+              "enum": [
+                "handshake"
+              ]
+            },
+            "peer": {
+              "description": "Reserved peer-binding seam. Absent in the bootstrap protocol.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PeerContext"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "protocol_version": {
+              "description": "Protocol version proposed/accepted (fail-closed on skew).",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        {
+          "description": "An operation request.",
+          "type": "object",
+          "required": [
+            "body",
+            "frame",
+            "kind",
+            "node",
+            "operation_id",
+            "principal",
+            "realm"
+          ],
+          "properties": {
+            "body": {
+              "description": "Opaque, bounded operation-specific body (codec-defined).",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/OpaquePayload"
+                }
+              ]
+            },
+            "frame": {
+              "type": "string",
+              "enum": [
+                "operation-request"
+              ]
+            },
+            "idempotency_key": {
+              "description": "Caller-generated idempotency key (required for mutating ops).",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/IdempotencyKey"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "description": "Operation kind.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/OperationKind"
+                }
+              ]
+            },
+            "node": {
+              "description": "Target node.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/NodeId"
+                }
+              ]
+            },
+            "operation_id": {
+              "description": "Audit/correlation id (per attempt).",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/OperationId"
+                }
+              ]
+            },
+            "principal": {
+              "description": "Authenticated principal (never a relay credential).",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/PrincipalId"
+                }
+              ]
+            },
+            "realm": {
+              "description": "Target realm path (most-specific-first; supports nested realms).",
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RealmId"
+              }
+            },
+            "trace": {
+              "description": "Bounded trace context.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TraceContext"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "workload": {
+              "description": "Target workload, when applicable.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WorkloadId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "description": "An operation response.",
+          "type": "object",
+          "required": [
+            "body",
+            "frame",
+            "operation_id"
+          ],
+          "properties": {
+            "body": {
+              "description": "Opaque, bounded operation-specific body (codec-defined).",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/OpaquePayload"
+                }
+              ]
+            },
+            "frame": {
+              "type": "string",
+              "enum": [
+                "operation-response"
+              ]
+            },
+            "operation_id": {
+              "description": "Correlates to the request.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/OperationId"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "description": "Open a named stream (descriptor + authorization context).",
+          "type": "object",
+          "required": [
+            "authz",
+            "descriptor",
+            "frame",
+            "operation_id"
+          ],
+          "properties": {
+            "authz": {
+              "description": "The authorization context (principal, realm, derived capability).",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StreamAuthz"
+                }
+              ]
+            },
+            "descriptor": {
+              "description": "The stream id + kind.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StreamDescriptor"
+                }
+              ]
+            },
+            "frame": {
+              "type": "string",
+              "enum": [
+                "stream-open"
+              ]
+            },
+            "operation_id": {
+              "description": "The authorizing operation id (binds this open to one operation).",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/OperationId"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "description": "A bounded chunk of stream data (opaque payload).",
+          "type": "object",
+          "required": [
+            "data",
+            "frame",
+            "sequence",
+            "stream"
+          ],
+          "properties": {
+            "channel": {
+              "description": "Logical sub-channel within the stream. Defaults to [`StreamChannel::Primary`]; `Stdio` streams use `Stdout`/`Stderr`.",
+              "default": "primary",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StreamChannel"
+                }
+              ]
+            },
+            "cursor": {
+              "description": "For a `Logs` stream, the durable resume cursor this chunk advances to. Absent for non-resumable streams.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/StreamCursor"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "data": {
+              "description": "Opaque, bounded chunk bytes. Never logged/audited as content.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/OpaquePayload"
+                }
+              ]
+            },
+            "frame": {
+              "type": "string",
+              "enum": [
+                "stream-data"
+              ]
+            },
+            "sequence": {
+              "description": "Monotonic, per-stream sequence number (starts at 0). The receiver rejects a gap or a regression (fail-closed) rather than silently reordering.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "stream": {
+              "description": "Stream the chunk belongs to.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StreamId"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "description": "Grant additional send credit on a stream (backpressure).",
+          "type": "object",
+          "required": [
+            "credits",
+            "frame",
+            "stream"
+          ],
+          "properties": {
+            "credits": {
+              "description": "Additional frames the sender may now emit on `stream`.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "frame": {
+              "type": "string",
+              "enum": [
+                "stream-flow"
+              ]
+            },
+            "stream": {
+              "description": "Stream the credit applies to.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StreamId"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "description": "Close a named stream.",
+          "type": "object",
+          "required": [
+            "frame",
+            "reason",
+            "stream"
+          ],
+          "properties": {
+            "frame": {
+              "type": "string",
+              "enum": [
+                "stream-close"
+              ]
+            },
+            "reason": {
+              "description": "Why the stream closed (orderly completion vs cancel/timeout/error/ peer-gone). Distinguishes an expected end-of-stream from a fault without inspecting payload bytes.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StreamCloseReason"
+                }
+              ]
+            },
+            "stream": {
+              "description": "Stream being closed.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StreamId"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "description": "A typed error frame.",
+          "type": "object",
+          "required": [
+            "frame",
+            "kind",
+            "message"
+          ],
+          "properties": {
+            "capability": {
+              "description": "The structured missing capability, present for `CapabilityDenied` so callers route on a stable field rather than parsing the message.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Capability"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "frame": {
+              "type": "string",
+              "enum": [
+                "typed-error"
+              ]
+            },
+            "kind": {
+              "description": "Stable classification. Private so the `CapabilityDenied` => `Some(capability)` invariant cannot be broken by external mutation or struct-literal construction.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ErrorKind"
+                }
+              ]
+            },
+            "message": {
+              "description": "Bounded operator-actionable message (no payload/secrets).",
+              "type": "string",
+              "maxLength": 256
+            }
+          }
+        },
+        {
+          "description": "A redacted pre-auth/session-admission denial frame.",
+          "type": "object",
+          "required": [
+            "decision",
+            "frame",
+            "node",
+            "operation_id",
+            "realm",
+            "reason",
+            "scope"
+          ],
+          "properties": {
+            "decision": {
+              "description": "Admission decision. Admission records are denials only.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AuthzDecision"
+                }
+              ]
+            },
+            "frame": {
+              "type": "string",
+              "enum": [
+                "admission-audit"
+              ]
+            },
+            "node": {
+              "description": "Node that denied admission.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/NodeId"
+                }
+              ]
+            },
+            "operation_id": {
+              "description": "Stable audit/correlation id for this event.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/OperationId"
+                }
+              ]
+            },
+            "principal": {
+              "description": "Authenticated principal, when admission failed after a principal was bound. Absent for pre-auth denials.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PrincipalId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "realm": {
+              "description": "Realm path for the attempted admission.",
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RealmId"
+              }
+            },
+            "reason": {
+              "description": "Closed, redacted reason code.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ErrorKind"
+                }
+              ]
+            },
+            "scope": {
+              "description": "Authorization/admission scope that was evaluated.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AuthorizationScope"
+                }
+              ]
+            },
+            "trace": {
+              "description": "Bounded trace context for correlation.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TraceContext"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ErrorKind": {
+      "description": "Stable, closed-enum classification of a constellation failure. Codecs map this to/from typed error frames; it never carries payload bytes.",
+      "oneOf": [
+        {
+          "description": "A required capability was not advertised; fail closed (no fallback).",
+          "type": "string",
+          "enum": [
+            "capability-denied"
+          ]
+        },
+        {
+          "description": "The principal is not authorized for this operation/stream.",
+          "type": "string",
+          "enum": [
+            "unauthorized"
+          ]
+        },
+        {
+          "description": "No realm entrypoint matched the target.",
+          "type": "string",
+          "enum": [
+            "no-realm-entrypoint"
+          ]
+        },
+        {
+          "description": "The selected gateway is unavailable.",
+          "type": "string",
+          "enum": [
+            "gateway-unavailable"
+          ]
+        },
+        {
+          "description": "The provider could not allocate/start the workload.",
+          "type": "string",
+          "enum": [
+            "provider-allocation-failed"
+          ]
+        },
+        {
+          "description": "Relay reachability or relay authentication failed.",
+          "type": "string",
+          "enum": [
+            "relay-unavailable"
+          ]
+        },
+        {
+          "description": "Peer-session authentication/handshake failed.",
+          "type": "string",
+          "enum": [
+            "authentication-failed"
+          ]
+        },
+        {
+          "description": "Negotiated version/capability skew; fail closed.",
+          "type": "string",
+          "enum": [
+            "version-skew"
+          ]
+        },
+        {
+          "description": "Same idempotency key, request still in progress.",
+          "type": "string",
+          "enum": [
+            "operation-in-progress"
+          ]
+        },
+        {
+          "description": "Same idempotency key, different request fingerprint.",
+          "type": "string",
+          "enum": [
+            "idempotency-key-conflict"
+          ]
+        },
+        {
+          "description": "Idempotency key reused after its dedup retention window.",
+          "type": "string",
+          "enum": [
+            "idempotency-key-expired"
+          ]
+        },
+        {
+          "description": "A bounded queue/credit window was exceeded.",
+          "type": "string",
+          "enum": [
+            "backpressure"
+          ]
+        },
+        {
+          "description": "The operation/stream was cancelled.",
+          "type": "string",
+          "enum": [
+            "cancelled"
+          ]
+        },
+        {
+          "description": "The operation/stream timed out.",
+          "type": "string",
+          "enum": [
+            "timeout"
+          ]
+        },
+        {
+          "description": "A frame exceeded the negotiated cap before decode.",
+          "type": "string",
+          "enum": [
+            "frame-too-large"
+          ]
+        },
+        {
+          "description": "A malformed or unknown-shaped frame/field was rejected.",
+          "type": "string",
+          "enum": [
+            "malformed-frame"
+          ]
+        },
+        {
+          "description": "The target name could not be parsed.",
+          "type": "string",
+          "enum": [
+            "invalid-target"
+          ]
+        },
+        {
+          "description": "Audit could not be recorded and policy is fail-closed.",
+          "type": "string",
+          "enum": [
+            "audit-unavailable"
+          ]
+        },
+        {
+          "description": "The requested feature/transport mode is not implemented by this build (a typed, non-fallback refusal).",
+          "type": "string",
+          "enum": [
+            "unsupported-feature"
+          ]
+        }
+      ]
+    },
+    "ExecState": {
+      "description": "Coarse execution lifecycle state.",
+      "oneOf": [
+        {
+          "description": "Accepted, not yet started.",
+          "type": "string",
+          "enum": [
+            "pending"
+          ]
+        },
+        {
+          "description": "Running.",
+          "type": "string",
+          "enum": [
+            "running"
+          ]
+        },
+        {
+          "description": "Exited (see `exit_code`).",
+          "type": "string",
+          "enum": [
+            "exited"
+          ]
+        },
+        {
+          "description": "Cancelled.",
+          "type": "string",
+          "enum": [
+            "cancelled"
+          ]
+        }
+      ]
+    },
+    "ExecutionId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "ExecutionSummary": {
+      "description": "A durable execution summary. Argv/stdio/env are payload and never appear here; only bounded metadata.",
+      "type": "object",
+      "required": [
+        "id",
+        "state",
+        "tty",
+        "workload"
+      ],
+      "properties": {
+        "exit_code": {
+          "description": "Exit code once `state == Exited`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "id": {
+          "description": "Durable execution id.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExecutionId"
+            }
+          ]
+        },
+        "state": {
+          "description": "State.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExecState"
+            }
+          ]
+        },
+        "tty": {
+          "description": "Whether a TTY was allocated (metadata only).",
+          "type": "boolean"
+        },
+        "workload": {
+          "description": "Workload the execution runs in.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkloadId"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "GatewayId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "Handshake": {
+      "description": "Negotiated wire/codec version and capability advertisement exchanged at the start of a peer session.",
+      "type": "object",
+      "required": [
+        "codec_id",
+        "protocol_version"
+      ],
+      "properties": {
+        "codec_id": {
+          "description": "Codec id negotiated for this session (bounded token).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            }
+          ]
+        },
+        "peer": {
+          "description": "Reserved peer-binding seam. Absent in the bootstrap protocol.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PeerContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "protocol_version": {
+          "description": "Protocol version proposed/accepted (fail-closed on skew).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "IdempotencyKey": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "NodeId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "NodeKind": {
+      "description": "What kind of node this is, and therefore what nixling can own.",
+      "oneOf": [
+        {
+          "description": "A full nixling host (KVM, broker, vsock, device control).",
+          "type": "string",
+          "enum": [
+            "full-host"
+          ]
+        },
+        {
+          "description": "A realm gateway guest.",
+          "type": "string",
+          "enum": [
+            "gateway"
+          ]
+        },
+        {
+          "description": "A provider-managed, limited-capability node (no broker/KVM).",
+          "type": "string",
+          "enum": [
+            "provider-managed"
+          ]
+        }
+      ]
+    },
+    "NodeSummary": {
+      "description": "A node's advertised summary. Capabilities are positive assertions.",
+      "type": "object",
+      "required": [
+        "capabilities",
+        "id",
+        "kind",
+        "realm"
+      ],
+      "properties": {
+        "capabilities": {
+          "description": "Advertised capabilities.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Capability"
+          },
+          "uniqueItems": true
+        },
+        "id": {
+          "description": "Stable node id.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/NodeId"
+            }
+          ]
+        },
+        "kind": {
+          "description": "Node kind.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/NodeKind"
+            }
+          ]
+        },
+        "realm": {
+          "description": "Realm this node belongs to. Inventory is realm-scoped; this is not a host-global registry key.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpaquePayload": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "minimum": 0.0
+      },
+      "maxItems": 1048576
+    },
+    "OperationId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "OperationKind": {
+      "description": "The kind of an operation (ADR 0032 examples). Closed enum; unknown kinds are rejected at decode (fail-closed).",
+      "type": "string",
+      "enum": [
+        "node-register",
+        "node-heartbeat",
+        "node-capabilities",
+        "workload-list",
+        "workload-start",
+        "workload-stop",
+        "guest-health",
+        "exec-start",
+        "exec-attach",
+        "exec-logs",
+        "exec-cancel",
+        "file-copy-start",
+        "port-forward-open",
+        "display-session-open"
+      ]
+    },
+    "OperationRequest": {
+      "description": "An operation request envelope. The operation-specific body is an opaque, bounded payload that a higher layer encodes; the routing/authz layer reasons over the typed envelope fields only.\n\nThe required capability is NOT a wire field — it is derived from [`OperationKind::required_capability`] in trusted code so a peer cannot downgrade it. The authenticated session principal MUST match [`OperationRequest::principal`]; the router rejects a mismatch.",
+      "type": "object",
+      "required": [
+        "body",
+        "kind",
+        "node",
+        "operation_id",
+        "principal",
+        "realm"
+      ],
+      "properties": {
+        "body": {
+          "description": "Opaque, bounded operation-specific body (codec-defined).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/OpaquePayload"
+            }
+          ]
+        },
+        "idempotency_key": {
+          "description": "Caller-generated idempotency key (required for mutating ops).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IdempotencyKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "description": "Operation kind.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/OperationKind"
+            }
+          ]
+        },
+        "node": {
+          "description": "Target node.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/NodeId"
+            }
+          ]
+        },
+        "operation_id": {
+          "description": "Audit/correlation id (per attempt).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/OperationId"
+            }
+          ]
+        },
+        "principal": {
+          "description": "Authenticated principal (never a relay credential).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PrincipalId"
+            }
+          ]
+        },
+        "realm": {
+          "description": "Target realm path (most-specific-first; supports nested realms).",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "trace": {
+          "description": "Bounded trace context.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TraceContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workload": {
+          "description": "Target workload, when applicable.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkloadId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OperationResponse": {
+      "description": "An operation response envelope.",
+      "type": "object",
+      "required": [
+        "body",
+        "operation_id"
+      ],
+      "properties": {
+        "body": {
+          "description": "Opaque, bounded operation-specific body (codec-defined).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/OpaquePayload"
+            }
+          ]
+        },
+        "operation_id": {
+          "description": "Correlates to the request.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/OperationId"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PeerContext": {
+      "description": "A reserved, non-secret peer-binding context for the session handshake. The bootstrap surface carries only the seam: later work populates the peer identity + transcript metadata so mutual auth can be added without a breaking wire change. It never carries secret key material.",
+      "type": "object",
+      "required": [
+        "auth_mechanism"
+      ],
+      "properties": {
+        "auth_mechanism": {
+          "description": "Stable, non-secret auth-mechanism id negotiated for the session (e.g. `none` initially; `mtls`/`relay-sas-bound` later). Bounded.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            }
+          ]
+        },
+        "peer_node": {
+          "description": "The peer's node id, once bound.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NodeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "peer_principal": {
+          "description": "The peer's authenticated principal, once a mechanism binds one.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PrincipalId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PrincipalId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "ProtocolToken": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[\\x21-\\x7e]+$"
+    },
+    "ProviderId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "RealmId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "StreamAuthz": {
+      "description": "The authorization context evaluated before a stream is opened. The `capability` is always derived from the stream kind via [`StreamAuthz::for_kind`] so a caller cannot pair a stream kind with a weaker capability.",
+      "type": "object",
+      "required": [
+        "capability",
+        "principal",
+        "realm"
+      ],
+      "properties": {
+        "capability": {
+          "description": "Capability required for the stream kind (derived from the kind).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Capability"
+            }
+          ]
+        },
+        "principal": {
+          "description": "Authenticated principal (never a relay credential).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PrincipalId"
+            }
+          ]
+        },
+        "realm": {
+          "description": "Realm the stream belongs to (full path; supports nested realms).",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "StreamChannel": {
+      "description": "The logical sub-channel a [`crate::frame::StreamData`] chunk belongs to.\n\nMost stream kinds carry a single `Primary` channel. A `Stdio` stream in non-TTY mode multiplexes `Stdout` and `Stderr` over one stream so the two are ordered against each other yet still distinguishable — a peer MUST NOT have to open two streams (and two authz contexts) just to split stdout from stderr. The channel is a closed enum; an unknown channel is rejected at decode (fail-closed).",
+      "oneOf": [
+        {
+          "description": "The default single channel for a stream kind.",
+          "type": "string",
+          "enum": [
+            "primary"
+          ]
+        },
+        {
+          "description": "Standard output (non-TTY `Stdio` streams).",
+          "type": "string",
+          "enum": [
+            "stdout"
+          ]
+        },
+        {
+          "description": "Standard error (non-TTY `Stdio` streams).",
+          "type": "string",
+          "enum": [
+            "stderr"
+          ]
+        }
+      ]
+    },
+    "StreamCloseReason": {
+      "description": "Why a stream was closed. Carried on [`crate::frame::StreamClose`] so the peer can distinguish an orderly end-of-stream from a cancellation, timeout, or error without inspecting payload bytes. Closed enum; an unknown reason is rejected at decode (fail-closed).",
+      "oneOf": [
+        {
+          "description": "Orderly end-of-stream: all data was delivered.",
+          "type": "string",
+          "enum": [
+            "completed"
+          ]
+        },
+        {
+          "description": "The stream was cancelled by a peer (e.g. `ExecCancel`).",
+          "type": "string",
+          "enum": [
+            "cancelled"
+          ]
+        },
+        {
+          "description": "The stream exceeded its inactivity/operation deadline.",
+          "type": "string",
+          "enum": [
+            "timed-out"
+          ]
+        },
+        {
+          "description": "The stream ended because of an error (details travel in a separate typed-error frame, never in this reason).",
+          "type": "string",
+          "enum": [
+            "errored"
+          ]
+        },
+        {
+          "description": "The remote end of the stream went away (process/relay/gateway gone).",
+          "type": "string",
+          "enum": [
+            "peer-gone"
+          ]
+        }
+      ]
+    },
+    "StreamCursor": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "StreamDescriptor": {
+      "description": "A request to open a named stream.",
+      "type": "object",
+      "required": [
+        "id",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "description": "Stream id within the peer session.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/StreamId"
+            }
+          ]
+        },
+        "kind": {
+          "description": "Stream kind.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/StreamKind"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "StreamId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "StreamKind": {
+      "description": "The kind of a named stream. Each kind maps to a required capability.",
+      "oneOf": [
+        {
+          "description": "Request/response operations and events.",
+          "type": "string",
+          "enum": [
+            "control"
+          ]
+        },
+        {
+          "description": "Terminal bytes, resize, exit metadata.",
+          "type": "string",
+          "enum": [
+            "pty"
+          ]
+        },
+        {
+          "description": "Separate stdout/stderr in non-TTY mode.",
+          "type": "string",
+          "enum": [
+            "stdio"
+          ]
+        },
+        {
+          "description": "Durable execution logs with resume cursors.",
+          "type": "string",
+          "enum": [
+            "logs"
+          ]
+        },
+        {
+          "description": "Bounded chunks, hashes, explicit destination policy.",
+          "type": "string",
+          "enum": [
+            "file-copy"
+          ]
+        },
+        {
+          "description": "One stream per connection; never a generic network bridge.",
+          "type": "string",
+          "enum": [
+            "port-forward"
+          ]
+        },
+        {
+          "description": "Display/window forwarding (late-stage capability).",
+          "type": "string",
+          "enum": [
+            "display"
+          ]
+        },
+        {
+          "description": "Explicit opt-in, realm-gated clipboard.",
+          "type": "string",
+          "enum": [
+            "clipboard"
+          ]
+        },
+        {
+          "description": "Audio playback (host → workload).",
+          "type": "string",
+          "enum": [
+            "audio-playback"
+          ]
+        },
+        {
+          "description": "Audio capture (workload → host); a distinct capability from playback.",
+          "type": "string",
+          "enum": [
+            "audio-capture"
+          ]
+        },
+        {
+          "description": "Named HID device operations.",
+          "type": "string",
+          "enum": [
+            "device-hid"
+          ]
+        },
+        {
+          "description": "Named USB device operations; a distinct capability from HID.",
+          "type": "string",
+          "enum": [
+            "device-usb"
+          ]
+        }
+      ]
+    },
+    "TraceContext": {
+      "type": "object",
+      "required": [
+        "span_id",
+        "trace_id"
+      ],
+      "properties": {
+        "span_id": {
+          "type": "string",
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "trace_id": {
+          "type": "string",
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkloadId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "WorkloadSelector": {
+      "description": "A selector for listing workloads.",
+      "oneOf": [
+        {
+          "description": "All workloads on the node.",
+          "type": "string",
+          "enum": [
+            "all"
+          ]
+        },
+        {
+          "description": "A single workload by id.",
+          "type": "object",
+          "required": [
+            "one"
+          ],
+          "properties": {
+            "one": {
+              "$ref": "#/definitions/WorkloadId"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "WorkloadState": {
+      "description": "Coarse workload lifecycle state.",
+      "oneOf": [
+        {
+          "description": "Declared/known but not running.",
+          "type": "string",
+          "enum": [
+            "stopped"
+          ]
+        },
+        {
+          "description": "Allocation/start in progress.",
+          "type": "string",
+          "enum": [
+            "starting"
+          ]
+        },
+        {
+          "description": "Running.",
+          "type": "string",
+          "enum": [
+            "running"
+          ]
+        },
+        {
+          "description": "Stop in progress.",
+          "type": "string",
+          "enum": [
+            "stopping"
+          ]
+        },
+        {
+          "description": "Terminal failure.",
+          "type": "string",
+          "enum": [
+            "failed"
+          ]
+        }
+      ]
+    },
+    "WorkloadSummary": {
+      "description": "A workload's advertised summary.",
+      "type": "object",
+      "required": [
+        "capabilities",
+        "id",
+        "node",
+        "realm",
+        "state"
+      ],
+      "properties": {
+        "capabilities": {
+          "description": "Capabilities this workload can present.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Capability"
+          },
+          "uniqueItems": true
+        },
+        "id": {
+          "description": "Stable operator-facing alias/id.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkloadId"
+            }
+          ]
+        },
+        "node": {
+          "description": "Node that owns this workload.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/NodeId"
+            }
+          ]
+        },
+        "realm": {
+          "description": "Realm this workload belongs to. Inventory is realm-scoped; this does not imply a host-global workload registry.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "state": {
+          "description": "Current state.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkloadState"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

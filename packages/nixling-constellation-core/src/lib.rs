@@ -31,7 +31,7 @@ pub mod token;
 pub mod trace_context;
 pub mod workload;
 
-pub use audit::{AuditEnvelope, AuthorizationScope, AuthzDecision};
+pub use audit::{AdmissionAuditRecord, AuditEnvelope, AuthorizationScope, AuthzDecision};
 pub use capability::{Capability, CapabilitySet};
 pub use error::{ConstellationError, ErrorKind};
 pub use execution::{ExecState, ExecutionSummary};

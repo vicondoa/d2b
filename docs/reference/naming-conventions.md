@@ -50,6 +50,29 @@ host-side group renames.
 
 These constraints let the CLI, manifest, and host-side units resolve resources mechanically without collisions. When docs and code differ, the passing code is canon; see [AGENTS.md](../../AGENTS.md#existing-code-is-canon).
 
+## Constellation target and model identifiers
+
+Constellation targets extend the VM/env naming rules without making a
+target address a network address. The canonical persisted form is:
+
+```text
+nl://<workload>.<node>.<realm-path>.nixling
+```
+
+The bare `<workload>` form remains the v1-compatible local workload
+alias. Multi-label human forms must end in `.nixling`; `all`, `*`, and
+non-suffix `nixling` labels are list selectors or reserved words, never
+target labels.
+
+Label-shaped constellation ids (`RealmId`, `NodeId`, `WorkloadId`,
+`ProviderId`) use the same lowercase label shape as VM names:
+`^[a-z][a-z0-9-]*$`, bounded to 128 bytes. Opaque ids
+(`GatewayId`, `ExecutionId`, `StreamId`, `StreamCursor`, `PrincipalId`,
+`OperationId`, and `IdempotencyKey`) are bounded printable-ASCII tokens
+without spaces. See
+[`constellation-core.md`](./constellation-core.md) for the complete
+core model contract.
+
 ## Network device names
 
 | Resource | Pattern | Notes |
@@ -151,6 +174,7 @@ unambiguously.
 
 - [AGENTS.md](../../AGENTS.md)
 - [Design explanation](../explanation/design.md)
+- [Constellation core model reference](./constellation-core.md)
 - [USB/IP component reference](./components-usbip.md)
 - [tests/README.md](../../tests/README.md)
 - [ADR 0012 — IPv6-off sysctl set, hash-derived IfName, bridge-port defaults](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md)
