@@ -4,7 +4,7 @@
 //! encoding (`prost`, protobuf-generated types, etc.).
 
 use crate::audit::AdmissionAuditRecord;
-use crate::capability::Capability;
+use crate::capability::{Capability, CapabilityNegotiation};
 use crate::error::ConstellationError;
 use crate::ids::{
     IdempotencyKey, NodeId, OperationId, PrincipalId, StreamCursor, StreamId, WorkloadId,
@@ -46,6 +46,8 @@ pub struct Handshake {
     pub codec_id: ProtocolToken,
     /// Codec schema fingerprint selected for this session (bounded token).
     pub schema_fingerprint: ProtocolToken,
+    /// Versioned positive capability assertions negotiated for this session.
+    pub capabilities: CapabilityNegotiation,
     /// Reserved peer-binding seam. Absent in the bootstrap protocol.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub peer: Option<PeerContext>,
@@ -67,6 +69,7 @@ pub enum HandshakeRejectedReason {
     VersionSkew,
     CodecMismatch,
     SchemaFingerprintMismatch,
+    CapabilityMismatch,
     ChannelBindingMismatch,
     MalformedHandshake,
 }
@@ -385,9 +388,9 @@ pub struct StreamData {
 ///
 /// The mux is credit-based: a sender may only emit a [`StreamData`] chunk
 /// while it holds positive credit, and the receiver replenishes budget by
-/// sending `StreamFlow`. Credit is counted in **frames** (not bytes) for
-/// P0; a chunk is already bounded by the frame cap. A grant of `0` is a
-/// no-op and is rejected at decode so a peer cannot use it to mask a stall.
+/// sending `StreamFlow`. Credit is counted in **frames** (not bytes); a
+/// chunk is already bounded by the frame cap. A grant of `0` is a no-op and
+/// is rejected at decode so a peer cannot use it to mask a stall.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StreamFlow {
@@ -499,7 +502,8 @@ mod tests {
         let accepted = "{\"frame\":\"handshake-accepted\",\"selected\":{\
                         \"protocol_version\":1,\
                         \"codec_id\":\"protobuf.v1\",\
-                        \"schema_fingerprint\":\"pb.v1:schema\"}}";
+                        \"schema_fingerprint\":\"pb.v1:schema\",\
+                        \"capabilities\":{\"schemaVersion\":1,\"capabilities\":[],\"fingerprint\":\"cap-v1-cbf29ce484222325\"}}}";
         assert!(serde_json::from_str::<ConstellationFrame>(accepted).is_ok());
 
         let rejected = "{\"frame\":\"handshake-rejected\",\"reason\":\"codec-mismatch\"}";
@@ -508,7 +512,8 @@ mod tests {
         let accepted_extra = "{\"frame\":\"handshake-accepted\",\"selected\":{\
                               \"protocol_version\":1,\
                               \"codec_id\":\"protobuf.v1\",\
-                              \"schema_fingerprint\":\"pb.v1:schema\"},\
+                              \"schema_fingerprint\":\"pb.v1:schema\",\
+                              \"capabilities\":{\"schemaVersion\":1,\"capabilities\":[],\"fingerprint\":\"cap-v1-cbf29ce484222325\"}},\
                               \"extra\":true}";
         assert!(serde_json::from_str::<ConstellationFrame>(accepted_extra).is_err());
 
@@ -626,15 +631,18 @@ mod tests {
 
     #[test]
     fn handshake_codec_id_is_bounded_at_decode() {
-        let ok = "{\"protocol_version\":1,\"codec_id\":\"protobuf.v1\",\"schema_fingerprint\":\"schema1\"}";
+        let ok = "{\"protocol_version\":1,\"codec_id\":\"protobuf.v1\",\"schema_fingerprint\":\"schema1\",\
+                  \"capabilities\":{\"schemaVersion\":1,\"capabilities\":[],\"fingerprint\":\"cap-v1-cbf29ce484222325\"}}";
         assert!(serde_json::from_str::<Handshake>(ok).is_ok());
         let overlong_codec = format!(
-            "{{\"protocol_version\":1,\"codec_id\":\"{}\",\"schema_fingerprint\":\"schema1\"}}",
+            "{{\"protocol_version\":1,\"codec_id\":\"{}\",\"schema_fingerprint\":\"schema1\",\
+              \"capabilities\":{{\"schemaVersion\":1,\"capabilities\":[],\"fingerprint\":\"cap-v1-cbf29ce484222325\"}}}}",
             "x".repeat(200)
         );
         assert!(serde_json::from_str::<Handshake>(&overlong_codec).is_err());
         let overlong_schema = format!(
-            "{{\"protocol_version\":1,\"codec_id\":\"protobuf.v1\",\"schema_fingerprint\":\"{}\"}}",
+            "{{\"protocol_version\":1,\"codec_id\":\"protobuf.v1\",\"schema_fingerprint\":\"{}\",\
+              \"capabilities\":{{\"schemaVersion\":1,\"capabilities\":[],\"fingerprint\":\"cap-v1-cbf29ce484222325\"}}}}",
             "x".repeat(200)
         );
         assert!(serde_json::from_str::<Handshake>(&overlong_schema).is_err());

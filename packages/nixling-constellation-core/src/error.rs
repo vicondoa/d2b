@@ -94,6 +94,8 @@ impl ErrorKind {
 /// constructed by trusted code and never carry payload, but the length is
 /// bounded so a message can never become an unbounded side channel.
 pub const MAX_MESSAGE_LEN: usize = 256;
+/// Maximum length of a bounded capability-negotiation fingerprint.
+pub const MAX_FINGERPRINT_LEN: usize = 64;
 
 /// A typed constellation error: a [`ErrorKind`], an optional structured
 /// missing capability (for `CapabilityDenied`), plus a bounded,
@@ -111,6 +113,10 @@ pub struct ConstellationError {
     /// so callers route on a stable field rather than parsing the message.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     capability: Option<Capability>,
+    /// Fingerprint of the negotiated capability set used for the denial.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[schemars(length(max = 64))]
+    negotiated_capability_fingerprint: Option<String>,
     /// Bounded operator-actionable message (no payload/secrets).
     #[schemars(length(max = 256))]
     message: String,
@@ -138,6 +144,7 @@ impl ConstellationError {
         Self {
             kind,
             capability: None,
+            negotiated_capability_fingerprint: None,
             message: bound_message(message.into()),
         }
     }
@@ -145,9 +152,19 @@ impl ConstellationError {
     /// Convenience: a capability-denied error carrying the structured
     /// missing capability (the capability name is not a secret).
     pub fn capability_denied(missing: Capability) -> Self {
+        Self::capability_denied_with_fingerprint(missing, None)
+    }
+
+    /// Capability-denied error with the negotiated set fingerprint that
+    /// produced the refusal.
+    pub fn capability_denied_with_fingerprint(
+        missing: Capability,
+        negotiated_fingerprint: impl Into<Option<String>>,
+    ) -> Self {
         Self {
             kind: ErrorKind::CapabilityDenied,
             capability: Some(missing),
+            negotiated_capability_fingerprint: negotiated_fingerprint.into().map(bound_fingerprint),
             message: bound_message(format!(
                 "required capability {} is not advertised",
                 missing.code()
@@ -164,6 +181,11 @@ impl ConstellationError {
     /// Guaranteed `Some` whenever [`kind`](Self::kind) is `CapabilityDenied`.
     pub fn missing_capability(&self) -> Option<Capability> {
         self.capability
+    }
+
+    /// Fingerprint of the negotiated capability set used for this denial.
+    pub fn negotiated_capability_fingerprint(&self) -> Option<&str> {
+        self.negotiated_capability_fingerprint.as_deref()
     }
 
     /// The bounded, operator-safe message.
@@ -186,6 +208,8 @@ impl<'de> Deserialize<'de> for ConstellationError {
             kind: ErrorKind,
             #[serde(default)]
             capability: Option<Capability>,
+            #[serde(default)]
+            negotiated_capability_fingerprint: Option<String>,
             message: String,
         }
         let raw = Raw::deserialize(deserializer)?;
@@ -194,9 +218,19 @@ impl<'de> Deserialize<'de> for ConstellationError {
                 "capability-denied error must carry the missing capability",
             ));
         }
+        if raw.kind != ErrorKind::CapabilityDenied
+            && raw.negotiated_capability_fingerprint.is_some()
+        {
+            return Err(serde::de::Error::custom(
+                "only capability-denied errors may carry a negotiated capability fingerprint",
+            ));
+        }
         Ok(Self {
             kind: raw.kind,
             capability: raw.capability,
+            negotiated_capability_fingerprint: raw
+                .negotiated_capability_fingerprint
+                .map(bound_fingerprint),
             message: bound_message(raw.message),
         })
     }
@@ -206,6 +240,17 @@ impl<'de> Deserialize<'de> for ConstellationError {
 fn bound_message(mut s: String) -> String {
     if s.len() > MAX_MESSAGE_LEN {
         let mut end = MAX_MESSAGE_LEN;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+    }
+    s
+}
+
+fn bound_fingerprint(mut s: String) -> String {
+    if s.len() > MAX_FINGERPRINT_LEN {
+        let mut end = MAX_FINGERPRINT_LEN;
         while end > 0 && !s.is_char_boundary(end) {
             end -= 1;
         }
@@ -232,6 +277,18 @@ mod tests {
         assert_eq!(e.kind(), ErrorKind::CapabilityDenied);
         assert_eq!(e.missing_capability(), Some(Capability::WindowForwarding));
         assert!(e.message().contains("window-forwarding"));
+    }
+
+    #[test]
+    fn capability_denied_can_carry_negotiated_fingerprint() {
+        let e = ConstellationError::capability_denied_with_fingerprint(
+            Capability::WindowForwarding,
+            Some("cap-v1-cbf29ce484222325".to_owned()),
+        );
+        assert_eq!(
+            e.negotiated_capability_fingerprint(),
+            Some("cap-v1-cbf29ce484222325")
+        );
     }
 
     #[test]

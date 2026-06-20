@@ -1,11 +1,11 @@
 //! Protobuf `ProtocolCodec` implementation for ADR 0032 constellation frames.
 
 use nixling_constellation_core::{
-    AdmissionAuditRecord, AuthorizationScope, AuthzDecision, Capability, ConstellationError,
-    ConstellationFrame, ErrorKind, Handshake, HandshakeAccepted, HandshakeRejected,
-    HandshakeRejectedReason, IdempotencyKey, NodeId, OpaquePayload, OperationId, OperationKind,
-    OperationRequest, OperationResponse, PeerContext, PrincipalId, ProtocolToken, RealmId,
-    RealmPath, StreamAuthz, StreamChannel, StreamClose, StreamCloseReason, StreamCursor,
+    AdmissionAuditRecord, AuthorizationScope, AuthzDecision, Capability, CapabilityNegotiation,
+    CapabilitySet, ConstellationError, ConstellationFrame, ErrorKind, Handshake, HandshakeAccepted,
+    HandshakeRejected, HandshakeRejectedReason, IdempotencyKey, NodeId, OpaquePayload, OperationId,
+    OperationKind, OperationRequest, OperationResponse, PeerContext, PrincipalId, ProtocolToken,
+    RealmId, RealmPath, StreamAuthz, StreamChannel, StreamClose, StreamCloseReason, StreamCursor,
     StreamData, StreamDescriptor, StreamFlow, StreamId, StreamKind, StreamOpen, StreamResume,
     TraceContext, WorkloadId,
 };
@@ -17,7 +17,7 @@ use prost::Message;
 pub const CODEC_ID: &str = "protobuf.v1";
 
 /// Deterministic fingerprint for the hand-authored prost schema in this crate.
-pub const SCHEMA_FINGERPRINT: &str = "pb.v1:f12:h4:op14:sk12:err19:audit11";
+pub const SCHEMA_FINGERPRINT: &str = "pb.v1:f12:h6:op14:sk12:err19:audit11:cap1";
 
 /// A prost-backed constellation frame codec.
 #[derive(Debug, Clone, Copy, Default)]
@@ -106,6 +106,12 @@ struct ProtoHandshake {
     peer: Option<ProtoPeerContext>,
     #[prost(string, tag = "4")]
     schema_fingerprint: String,
+    #[prost(int32, repeated, tag = "5")]
+    capabilities: Vec<i32>,
+    #[prost(uint32, tag = "6")]
+    capability_schema_version: u32,
+    #[prost(string, tag = "7")]
+    capability_fingerprint: String,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -234,6 +240,8 @@ struct ProtoError {
     capability: Option<i32>,
     #[prost(string, optional, tag = "3")]
     message: Option<String>,
+    #[prost(string, optional, tag = "4")]
+    negotiated_capability_fingerprint: Option<String>,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -302,10 +310,10 @@ struct ProtoUnit {}
 fn encode_proto_frame(frame: &ConstellationFrame) -> Result<ProtoFrame, ConstellationError> {
     let body = match frame {
         ConstellationFrame::Handshake(frame) => {
-            proto_frame::Body::Handshake(encode_handshake(frame))
+            proto_frame::Body::Handshake(encode_handshake(frame)?)
         }
         ConstellationFrame::HandshakeAccepted(frame) => {
-            proto_frame::Body::HandshakeAccepted(encode_handshake_accepted(frame))
+            proto_frame::Body::HandshakeAccepted(encode_handshake_accepted(frame)?)
         }
         ConstellationFrame::HandshakeRejected(frame) => {
             proto_frame::Body::HandshakeRejected(encode_handshake_rejected(frame)?)
@@ -385,13 +393,21 @@ fn decode_proto_frame(frame: ProtoFrame) -> Result<ConstellationFrame, Constella
     }
 }
 
-fn encode_handshake(frame: &Handshake) -> ProtoHandshake {
-    ProtoHandshake {
+fn encode_handshake(frame: &Handshake) -> Result<ProtoHandshake, ConstellationError> {
+    Ok(ProtoHandshake {
         protocol_version: Some(frame.protocol_version),
         codec_id: frame.codec_id.as_str().to_owned(),
         schema_fingerprint: frame.schema_fingerprint.as_str().to_owned(),
+        capabilities: frame
+            .capabilities
+            .capabilities
+            .iter()
+            .map(encode_capability)
+            .collect::<Result<Vec<_>, _>>()?,
+        capability_schema_version: frame.capabilities.schema_version,
+        capability_fingerprint: frame.capabilities.fingerprint.clone(),
         peer: frame.peer.as_ref().map(encode_peer_context),
-    }
+    })
 }
 
 fn decode_handshake(frame: ProtoHandshake) -> Result<Handshake, ConstellationError> {
@@ -404,14 +420,56 @@ fn decode_handshake(frame: ProtoHandshake) -> Result<Handshake, ConstellationErr
             frame.schema_fingerprint,
             "handshake schema_fingerprint",
         )?,
+        capabilities: decode_capability_negotiation(
+            frame.capabilities,
+            frame.capability_schema_version,
+            frame.capability_fingerprint,
+        )?,
         peer: frame.peer.map(decode_peer_context).transpose()?,
     })
 }
 
-fn encode_handshake_accepted(frame: &HandshakeAccepted) -> ProtoHandshakeAccepted {
-    ProtoHandshakeAccepted {
-        selected: Some(encode_handshake(&frame.selected)),
+fn decode_capability_negotiation(
+    capabilities: Vec<i32>,
+    schema_version: u32,
+    fingerprint: String,
+) -> Result<CapabilityNegotiation, ConstellationError> {
+    let wire_fingerprint = parse_protocol_token(fingerprint, "handshake capability_fingerprint")?;
+    let mut saw_unknown = false;
+    let caps = capabilities.into_iter().filter_map(|raw| {
+        let decoded = decode_capability(raw);
+        if decoded.is_none() {
+            saw_unknown = true;
+        }
+        decoded
+    });
+    let capabilities = CapabilitySet::from_caps(caps);
+    let expected = capabilities.stable_fingerprint();
+    if schema_version
+        != nixling_constellation_core::capability::CAPABILITY_NEGOTIATION_SCHEMA_VERSION
+    {
+        return Err(malformed(
+            "handshake capability negotiation schema version mismatch",
+        ));
     }
+    if !saw_unknown && wire_fingerprint.as_str() != expected {
+        return Err(malformed(
+            "handshake capability negotiation fingerprint mismatch",
+        ));
+    }
+    Ok(CapabilityNegotiation {
+        schema_version,
+        capabilities,
+        fingerprint: expected,
+    })
+}
+
+fn encode_handshake_accepted(
+    frame: &HandshakeAccepted,
+) -> Result<ProtoHandshakeAccepted, ConstellationError> {
+    Ok(ProtoHandshakeAccepted {
+        selected: Some(encode_handshake(&frame.selected)?),
+    })
 }
 
 fn decode_handshake_accepted(
@@ -595,7 +653,7 @@ fn decode_stream_authz(authz: ProtoStreamAuthz) -> Result<StreamAuthz, Constella
     Ok(StreamAuthz {
         principal: parse_principal_id(authz.principal, "stream_authz principal")?,
         realm: decode_realm(authz.realm, "stream_authz realm")?,
-        capability: decode_capability(authz.capability)?,
+        capability: decode_capability_strict(authz.capability)?,
     })
 }
 
@@ -675,12 +733,15 @@ fn encode_error(error: &ConstellationError) -> Result<ProtoError, ConstellationE
             .map(encode_capability)
             .transpose()?,
         message: Some(error.message().to_owned()),
+        negotiated_capability_fingerprint: error
+            .negotiated_capability_fingerprint()
+            .map(ToOwned::to_owned),
     })
 }
 
 fn decode_error(error: ProtoError) -> Result<ConstellationError, ConstellationError> {
     let kind = decode_error_kind(error.kind)?;
-    let capability = error.capability.map(decode_capability).transpose()?;
+    let capability = error.capability.map(decode_capability_strict).transpose()?;
     let message = error
         .message
         .ok_or_else(|| malformed("typed_error message is missing"))?;
@@ -688,16 +749,19 @@ fn decode_error(error: ProtoError) -> Result<ConstellationError, ConstellationEr
         let capability = capability.ok_or_else(|| {
             malformed("capability-denied typed_error is missing the capability field")
         })?;
-        let decoded = ConstellationError::capability_denied(capability);
+        let decoded = ConstellationError::capability_denied_with_fingerprint(
+            capability,
+            error.negotiated_capability_fingerprint,
+        );
         if decoded.message() != message {
             return Err(malformed(
                 "capability-denied typed_error message is not canonical",
             ));
         }
         Ok(decoded)
-    } else if capability.is_some() {
+    } else if capability.is_some() || error.negotiated_capability_fingerprint.is_some() {
         Err(malformed(
-            "non-capability-denied typed_error carries a capability field",
+            "non-capability-denied typed_error carries capability-denial context",
         ))
     } else {
         Ok(ConstellationError::new(kind, message))
@@ -786,7 +850,7 @@ fn decode_authorization_scope(
         .ok_or_else(|| malformed("authorization scope body is missing"))?
     {
         proto_authorization_scope::Scope::Capability(capability) => Ok(
-            AuthorizationScope::capability(decode_capability(capability)?),
+            AuthorizationScope::capability(decode_capability_strict(capability)?),
         ),
         proto_authorization_scope::Scope::NodeControl(_) => Ok(AuthorizationScope::NodeControl),
         proto_authorization_scope::Scope::Enrollment(_) => Ok(AuthorizationScope::Enrollment),
@@ -860,6 +924,7 @@ fn encode_handshake_rejection(reason: HandshakeRejectedReason) -> i32 {
         HandshakeRejectedReason::SchemaFingerprintMismatch => 3,
         HandshakeRejectedReason::ChannelBindingMismatch => 4,
         HandshakeRejectedReason::MalformedHandshake => 5,
+        HandshakeRejectedReason::CapabilityMismatch => 6,
     }
 }
 
@@ -870,6 +935,7 @@ fn decode_handshake_rejection(raw: i32) -> Result<HandshakeRejectedReason, Const
         3 => Ok(HandshakeRejectedReason::SchemaFingerprintMismatch),
         4 => Ok(HandshakeRejectedReason::ChannelBindingMismatch),
         5 => Ok(HandshakeRejectedReason::MalformedHandshake),
+        6 => Ok(HandshakeRejectedReason::CapabilityMismatch),
         _ => Err(malformed(format!(
             "unknown handshake rejection value {raw}"
         ))),
@@ -1018,30 +1084,34 @@ fn encode_capability(capability: Capability) -> Result<i32, ConstellationError> 
     })
 }
 
-fn decode_capability(raw: i32) -> Result<Capability, ConstellationError> {
+fn decode_capability(raw: i32) -> Option<Capability> {
     match raw {
-        1 => Ok(Capability::Lifecycle),
-        2 => Ok(Capability::Exec),
-        3 => Ok(Capability::Pty),
-        4 => Ok(Capability::Logs),
-        5 => Ok(Capability::FileCopy),
-        6 => Ok(Capability::PortForward),
-        7 => Ok(Capability::Vsock),
-        8 => Ok(Capability::Virtiofs),
-        9 => Ok(Capability::WindowForwarding),
-        10 => Ok(Capability::DisplayStreaming),
-        11 => Ok(Capability::Clipboard),
-        12 => Ok(Capability::AudioPlayback),
-        13 => Ok(Capability::AudioCapture),
-        14 => Ok(Capability::Hid),
-        15 => Ok(Capability::Usb),
-        16 => Ok(Capability::GpuAccel),
-        17 => Ok(Capability::Snapshots),
-        18 => Ok(Capability::Hotplug),
-        19 => Ok(Capability::EphemeralSessions),
-        20 => Ok(Capability::ProviderManagedIsolation),
-        _ => Err(malformed(format!("unknown capability value {raw}"))),
+        1 => Some(Capability::Lifecycle),
+        2 => Some(Capability::Exec),
+        3 => Some(Capability::Pty),
+        4 => Some(Capability::Logs),
+        5 => Some(Capability::FileCopy),
+        6 => Some(Capability::PortForward),
+        7 => Some(Capability::Vsock),
+        8 => Some(Capability::Virtiofs),
+        9 => Some(Capability::WindowForwarding),
+        10 => Some(Capability::DisplayStreaming),
+        11 => Some(Capability::Clipboard),
+        12 => Some(Capability::AudioPlayback),
+        13 => Some(Capability::AudioCapture),
+        14 => Some(Capability::Hid),
+        15 => Some(Capability::Usb),
+        16 => Some(Capability::GpuAccel),
+        17 => Some(Capability::Snapshots),
+        18 => Some(Capability::Hotplug),
+        19 => Some(Capability::EphemeralSessions),
+        20 => Some(Capability::ProviderManagedIsolation),
+        _ => None,
     }
+}
+
+fn decode_capability_strict(raw: i32) -> Result<Capability, ConstellationError> {
+    decode_capability(raw).ok_or_else(|| malformed(format!("unknown capability value {raw}")))
 }
 
 fn encode_error_kind(kind: ErrorKind) -> Result<i32, ConstellationError> {
@@ -1205,6 +1275,37 @@ mod tests {
     }
 
     #[test]
+    fn protobuf_decode_ignores_unknown_advertised_capabilities() {
+        let codec = ProtobufCodec::new();
+        let encoded = ProtoFrame {
+            body: Some(proto_frame::Body::Handshake(ProtoHandshake {
+                protocol_version: Some(1),
+                codec_id: CODEC_ID.to_owned(),
+                schema_fingerprint: SCHEMA_FINGERPRINT.to_owned(),
+                capabilities: vec![encode_capability(Capability::Exec).unwrap(), 999],
+                capability_schema_version:
+                    nixling_constellation_core::capability::CAPABILITY_NEGOTIATION_SCHEMA_VERSION,
+                capability_fingerprint: "cap-v1-future999".to_owned(),
+                peer: None,
+            })),
+        }
+        .encode_to_vec();
+
+        let decoded = codec.decode_frame(&encoded).unwrap();
+        let ConstellationFrame::Handshake(handshake) = decoded else {
+            panic!("expected handshake frame");
+        };
+        assert!(handshake.capabilities.capabilities.has(Capability::Exec));
+        assert!(!handshake.capabilities.capabilities.has(Capability::Logs));
+        assert_eq!(
+            handshake.capabilities.fingerprint,
+            CapabilitySet::empty()
+                .with(Capability::Exec)
+                .stable_fingerprint()
+        );
+    }
+
+    #[test]
     fn protobuf_decode_rejects_unknown_handshake_rejection_reason() {
         let codec = ProtobufCodec::new();
         let invalid = ProtoFrame {
@@ -1327,6 +1428,10 @@ mod tests {
                 protocol_version: 1,
                 codec_id: token(CODEC_ID),
                 schema_fingerprint: token(SCHEMA_FINGERPRINT),
+                capabilities: CapabilitySet::empty()
+                    .with(Capability::Exec)
+                    .with(Capability::WindowForwarding)
+                    .negotiation(),
                 peer: Some(PeerContext {
                     auth_mechanism: token("none"),
                     peer_principal: Some(principal.clone()),
@@ -1338,6 +1443,7 @@ mod tests {
                     protocol_version: 1,
                     codec_id: token(CODEC_ID),
                     schema_fingerprint: token(SCHEMA_FINGERPRINT),
+                    capabilities: CapabilitySet::empty().negotiation(),
                     peer: None,
                 },
             }),

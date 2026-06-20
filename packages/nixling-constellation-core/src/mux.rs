@@ -2,8 +2,8 @@
 //!
 //! No I/O lives here: the transport layer drives the mux by feeding it
 //! decoded [`crate::frame`] frames and emitting the control frames it asks
-//! for. The mux enforces the fail-closed multiplexing contract the P0
-//! design panel required *before* any Relay/Waypipe wiring exists:
+//! for. The mux enforces the fail-closed multiplexing contract before
+//! any Relay/Waypipe wiring exists:
 //!
 //! - a stream must be **opened** (authz-consistent, operation-bound) before
 //!   any data flows on it;
@@ -25,6 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ops::Bound::{Excluded, Unbounded};
 
+use crate::capability::CapabilitySet;
 use crate::error::{ConstellationError, ErrorKind};
 use crate::frame::{StreamClose, StreamData, StreamFlow, StreamOpen, StreamResume};
 use crate::ids::{OperationId, StreamId};
@@ -121,7 +122,8 @@ impl StreamMux {
         self.streams.get(stream).and_then(|e| e.close_reason)
     }
 
-    /// Register a newly-opened stream.
+    /// Register a newly-opened stream after checking the negotiated
+    /// capability set.
     ///
     /// Fails closed when the open is authz-inconsistent (capability does
     /// not match the descriptor kind), when the stream id is already in
@@ -129,11 +131,21 @@ impl StreamMux {
     /// starts with **zero** credit in both directions: the receiver must
     /// [`grant_inbound`](Self::grant_inbound) before the peer may send, and
     /// this endpoint may only send after it [`receive_flow`](Self::receive_flow)s.
-    pub fn open(&mut self, open: &StreamOpen) -> Result<(), ConstellationError> {
+    pub fn open_with_capabilities(
+        &mut self,
+        open: &StreamOpen,
+        capabilities: &CapabilitySet,
+    ) -> Result<(), ConstellationError> {
         if !open.is_consistent() {
             return Err(ConstellationError::new(
                 ErrorKind::Unauthorized,
                 "stream open authz capability does not match the descriptor kind",
+            ));
+        }
+        if !capabilities.has(open.authz.capability) {
+            return Err(ConstellationError::capability_denied_with_fingerprint(
+                open.authz.capability,
+                Some(capabilities.stable_fingerprint()),
             ));
         }
         let id = &open.descriptor.id;
@@ -179,6 +191,7 @@ impl StreamMux {
                 "credit grant must be non-zero",
             ));
         }
+
         let entry = self.open_entry_mut(stream)?;
         entry.recv_credit = entry.recv_credit.saturating_add(u64::from(credits));
         Ok(StreamFlow {
@@ -446,6 +459,15 @@ mod tests {
         }
     }
 
+    fn caps_for(kind: StreamKind) -> CapabilitySet {
+        CapabilitySet::empty().with(kind.required_capability())
+    }
+
+    fn open_ok(mux: &mut StreamMux, id: &str, kind: StreamKind) {
+        let open = open_frame(id, kind);
+        mux.open_with_capabilities(&open, &caps_for(kind)).unwrap();
+    }
+
     fn data(id: &str, sequence: u64, channel: StreamChannel) -> StreamData {
         StreamData {
             stream: sid(id),
@@ -459,7 +481,7 @@ mod tests {
     #[test]
     fn open_then_credit_then_sequential_data_is_accepted() {
         let mut mux = StreamMux::new();
-        mux.open(&open_frame("s1", StreamKind::Display)).unwrap();
+        open_ok(&mut mux, "s1", StreamKind::Display);
         assert!(mux.is_open(&sid("s1")));
         // No credit yet: data is refused (backpressure).
         let err = mux
@@ -494,7 +516,7 @@ mod tests {
     #[test]
     fn sequence_gap_and_replay_are_rejected() {
         let mut mux = StreamMux::new();
-        mux.open(&open_frame("s1", StreamKind::Display)).unwrap();
+        open_ok(&mut mux, "s1", StreamKind::Display);
         mux.grant_inbound(&sid("s1"), 8).unwrap();
         mux.accept_data(&data("s1", 0, StreamChannel::Primary))
             .unwrap();
@@ -517,7 +539,7 @@ mod tests {
     #[test]
     fn channel_must_match_kind() {
         let mut mux = StreamMux::new();
-        mux.open(&open_frame("disp", StreamKind::Display)).unwrap();
+        open_ok(&mut mux, "disp", StreamKind::Display);
         mux.grant_inbound(&sid("disp"), 4).unwrap();
         // Display is Primary-only: stdout is rejected.
         assert_eq!(
@@ -527,7 +549,7 @@ mod tests {
             ErrorKind::MalformedFrame
         );
 
-        mux.open(&open_frame("io", StreamKind::Stdio)).unwrap();
+        open_ok(&mut mux, "io", StreamKind::Stdio);
         mux.grant_inbound(&sid("io"), 4).unwrap();
         // Stdio must use Stdout/Stderr, not Primary.
         assert_eq!(
@@ -546,7 +568,7 @@ mod tests {
     #[test]
     fn cursor_only_on_logs() {
         let mut mux = StreamMux::new();
-        mux.open(&open_frame("disp", StreamKind::Display)).unwrap();
+        open_ok(&mut mux, "disp", StreamKind::Display);
         mux.grant_inbound(&sid("disp"), 4).unwrap();
         let mut chunk = data("disp", 0, StreamChannel::Primary);
         chunk.cursor = Some(StreamCursor::parse("cur-1").unwrap());
@@ -555,7 +577,7 @@ mod tests {
             ErrorKind::MalformedFrame
         );
 
-        mux.open(&open_frame("logs", StreamKind::Logs)).unwrap();
+        open_ok(&mut mux, "logs", StreamKind::Logs);
         mux.grant_inbound(&sid("logs"), 4).unwrap();
         let mut log_chunk = data("logs", 0, StreamChannel::Primary);
         log_chunk.cursor = Some(StreamCursor::parse("cur-1").unwrap());
@@ -565,27 +587,57 @@ mod tests {
     #[test]
     fn duplicate_open_and_inconsistent_open_are_rejected() {
         let mut mux = StreamMux::new();
-        mux.open(&open_frame("s1", StreamKind::Display)).unwrap();
+        open_ok(&mut mux, "s1", StreamKind::Display);
         assert_eq!(
-            mux.open(&open_frame("s1", StreamKind::Display))
-                .unwrap_err()
-                .kind(),
+            mux.open_with_capabilities(
+                &open_frame("s1", StreamKind::Display),
+                &caps_for(StreamKind::Display)
+            )
+            .unwrap_err()
+            .kind(),
             ErrorKind::MalformedFrame
         );
         // An authz/kind-inconsistent open is refused.
         let mut bad = open_frame("s2", StreamKind::Display);
         bad.authz.capability = crate::capability::Capability::Clipboard;
-        assert_eq!(mux.open(&bad).unwrap_err().kind(), ErrorKind::Unauthorized);
+        assert_eq!(
+            mux.open_with_capabilities(&bad, &caps_for(StreamKind::Display))
+                .unwrap_err()
+                .kind(),
+            ErrorKind::Unauthorized
+        );
+    }
+
+    #[test]
+    fn stream_open_requires_negotiated_capability_before_state_mutation() {
+        let mut mux = StreamMux::new();
+        let open = open_frame("display", StreamKind::Display);
+        assert_eq!(
+            mux.open_with_capabilities(&open, &CapabilitySet::empty())
+                .unwrap_err()
+                .kind(),
+            ErrorKind::CapabilityDenied
+        );
+        assert_eq!(mux.open_stream_count(), 0);
+        mux.open_with_capabilities(
+            &open,
+            &CapabilitySet::empty().with(crate::capability::Capability::WindowForwarding),
+        )
+        .unwrap();
+        assert!(mux.is_open(&sid("display")));
     }
 
     #[test]
     fn open_stream_cap_is_enforced() {
         let mut mux = StreamMux::with_max_open(1);
-        mux.open(&open_frame("s1", StreamKind::Display)).unwrap();
+        open_ok(&mut mux, "s1", StreamKind::Display);
         assert_eq!(
-            mux.open(&open_frame("s2", StreamKind::Display))
-                .unwrap_err()
-                .kind(),
+            mux.open_with_capabilities(
+                &open_frame("s2", StreamKind::Display),
+                &caps_for(StreamKind::Display)
+            )
+            .unwrap_err()
+            .kind(),
             ErrorKind::Backpressure
         );
         // Closing s1 frees a slot.
@@ -594,13 +646,13 @@ mod tests {
             reason: StreamCloseReason::Completed,
         })
         .unwrap();
-        mux.open(&open_frame("s2", StreamKind::Display)).unwrap();
+        open_ok(&mut mux, "s2", StreamKind::Display);
     }
 
     #[test]
     fn close_is_terminal_and_data_after_close_is_rejected() {
         let mut mux = StreamMux::new();
-        mux.open(&open_frame("s1", StreamKind::Display)).unwrap();
+        open_ok(&mut mux, "s1", StreamKind::Display);
         mux.grant_inbound(&sid("s1"), 4).unwrap();
         mux.close(&StreamClose {
             stream: sid("s1"),
@@ -639,7 +691,7 @@ mod tests {
     #[test]
     fn cancel_is_idempotent_only_for_cancelled_streams() {
         let mut mux = StreamMux::new();
-        mux.open(&open_frame("s1", StreamKind::Display)).unwrap();
+        open_ok(&mut mux, "s1", StreamKind::Display);
         assert_eq!(mux.cancel(&sid("s1")), Ok(true));
         assert_eq!(mux.cancel(&sid("s1")), Ok(false));
         assert_eq!(
@@ -647,7 +699,7 @@ mod tests {
             Some(StreamCloseReason::Cancelled)
         );
 
-        mux.open(&open_frame("s2", StreamKind::Display)).unwrap();
+        open_ok(&mut mux, "s2", StreamKind::Display);
         mux.close(&StreamClose {
             stream: sid("s2"),
             reason: StreamCloseReason::Completed,
@@ -660,7 +712,7 @@ mod tests {
     #[test]
     fn outbound_send_respects_credit_and_assigns_sequence() {
         let mut mux = StreamMux::new();
-        mux.open(&open_frame("s1", StreamKind::Display)).unwrap();
+        open_ok(&mut mux, "s1", StreamKind::Display);
         // No outbound credit yet.
         assert_eq!(
             mux.reserve_send(&sid("s1"), StreamChannel::Primary)
@@ -695,10 +747,8 @@ mod tests {
     #[test]
     fn sendable_streams_are_deterministic_and_round_robin() {
         let mut mux = StreamMux::new();
-        mux.open(&open_frame("b-stream", StreamKind::Display))
-            .unwrap();
-        mux.open(&open_frame("a-stream", StreamKind::Display))
-            .unwrap();
+        open_ok(&mut mux, "b-stream", StreamKind::Display);
+        open_ok(&mut mux, "a-stream", StreamKind::Display);
         mux.receive_flow(&StreamFlow {
             stream: sid("b-stream"),
             credits: 1,
@@ -739,9 +789,8 @@ mod tests {
     #[test]
     fn resume_is_allowed_only_for_logs_streams() {
         let mut mux = StreamMux::new();
-        mux.open(&open_frame("logs", StreamKind::Logs)).unwrap();
-        mux.open(&open_frame("display", StreamKind::Display))
-            .unwrap();
+        open_ok(&mut mux, "logs", StreamKind::Logs);
+        open_ok(&mut mux, "display", StreamKind::Display);
         let logs_resume = StreamResume {
             stream: sid("logs"),
             cursor: StreamCursor::parse("cur-1").unwrap(),
@@ -768,7 +817,7 @@ mod tests {
     fn closed_stream_history_is_bounded() {
         let mut mux = StreamMux::with_limits(4, 2);
         for id in ["s1", "s2", "s3"] {
-            mux.open(&open_frame(id, StreamKind::Display)).unwrap();
+            open_ok(&mut mux, id, StreamKind::Display);
             mux.close(&StreamClose {
                 stream: sid(id),
                 reason: StreamCloseReason::Completed,
@@ -785,7 +834,7 @@ mod tests {
             Some(StreamCloseReason::Completed)
         );
         // Once the old closed record is pruned, that id can be reused.
-        mux.open(&open_frame("s1", StreamKind::Display)).unwrap();
+        open_ok(&mut mux, "s1", StreamKind::Display);
         assert!(mux.is_open(&sid("s1")));
     }
 }
