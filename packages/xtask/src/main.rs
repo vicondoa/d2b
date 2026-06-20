@@ -15,13 +15,13 @@ use nixling::{
     VmExecLogsOutputV1, VmExecStatusOutputV1,
 };
 use nixling_constellation_core::{
-    AdmissionAuditRecord, AuditEnvelope, Capability, CapabilitySet, ConstellationError,
-    ConstellationFrame, ExecAttachMode, ExecAttachRequest, ExecCancelRequest, ExecLogsRequest,
-    ExecStartRequest, ExecutionGeneration, ExecutionId, ExecutionSummary, GatewayId, Handshake,
-    HandshakeAccepted, HandshakeRejected, HandshakeRejectedReason, IdempotencyKey, NodeId,
-    NodeSummary, OperationId, OperationKind, OperationRequest, OperationResponse, PrincipalId,
-    ProviderId, RealmId, RealmPath, StreamCursor, StreamId, StreamResume, WorkloadId,
-    WorkloadSelector, WorkloadSummary,
+    AdmissionAuditRecord, AuditEnvelope, Capability, CapabilityNegotiation, CapabilitySet,
+    ConstellationError, ConstellationFrame, ExecAttachMode, ExecAttachRequest, ExecCancelRequest,
+    ExecLogsRequest, ExecStartRequest, ExecutionGeneration, ExecutionId, ExecutionSummary,
+    GatewayId, Handshake, HandshakeAccepted, HandshakeRejected, HandshakeRejectedReason,
+    IdempotencyKey, NodeId, NodeSummary, OperationId, OperationKind, OperationRequest,
+    OperationResponse, PrincipalId, ProviderId, RealmId, RealmPath, StreamCursor, StreamId,
+    StreamResume, WorkloadId, WorkloadSelector, WorkloadSummary,
     audit::{
         AuditChainCheckFailure, AuditChainCheckResult, AuditChainLink, AuditChainRecord, AuditHash,
         AuditRetentionFloorReason, AuditRetentionFloorStatus, AuditSinkHealth,
@@ -58,6 +58,7 @@ enum ConstellationCoreSchema {
     IdempotencyKey(IdempotencyKey),
     Capability(Capability),
     CapabilitySet(CapabilitySet),
+    CapabilityNegotiation(CapabilityNegotiation),
     NodeSummary(NodeSummary),
     WorkloadSelector(WorkloadSelector),
     WorkloadSummary(WorkloadSummary),

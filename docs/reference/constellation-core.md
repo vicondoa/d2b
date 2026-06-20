@@ -35,7 +35,7 @@ Regenerate that file; do not edit generated JSON by hand.
 | `ConstellationError` | `src/error.rs` | Typed error frame with stable `ErrorKind`, bounded message, and structured missing capability for capability denials. |
 | `NodeSummary` / `WorkloadSelector` / `WorkloadSummary` / `ExecutionSummary` | `src/node.rs`, `src/workload.rs`, `src/execution.rs` | Bounded status summaries and selectors for nodes, workloads, and durable executions. |
 | `ExecStartRequest` / `ExecAttachRequest` / `ExecLogsRequest` / `ExecCancelRequest` | `src/execution.rs` | Bounded durable-execution metadata for start, reconnect, retained logs, and retry-safe cancel. |
-| `RealmPath`, identifier newtypes, `CapabilitySet`, `TraceContext`, `OpaquePayload`, `ProtocolToken` | `src/realm.rs`, `src/ids.rs`, `src/capability.rs`, `src/trace_context.rs`, `src/payload.rs`, `src/token.rs` | Reusable bounded primitives that every higher-level root depends on. |
+| `RealmPath`, identifier newtypes, `CapabilitySet`, `CapabilityNegotiation`, `TraceContext`, `OpaquePayload`, `ProtocolToken` | `src/realm.rs`, `src/ids.rs`, `src/capability.rs`, `src/trace_context.rs`, `src/payload.rs`, `src/token.rs` | Reusable bounded primitives that every higher-level root depends on. |
 
 ## Target addresses
 
@@ -85,6 +85,13 @@ storage key.
 Capabilities are positive assertions. A node, provider, workload, or
 stream advertises exactly what it supports; absence means typed refusal,
 not a silent fallback.
+
+Negotiated capability sets carry `CapabilityNegotiation` metadata: a schema
+version, the selected positive assertions both peers understand and
+support, and a deterministic bounded fingerprint for audit correlation.
+Operations and streams that require absent
+capabilities are rejected before execution with typed missing-capability
+errors.
 
 Capability codes:
 

@@ -37,8 +37,8 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use nixling_constellation_core::{
-    AuthorizationScope, Capability, IdempotencyKey, NodeId, OpaquePayload, OperationId,
-    OperationKind, OperationRequest, PrincipalId, RealmPath,
+    AuthorizationScope, Capability, CapabilitySet, IdempotencyKey, NodeId, OpaquePayload,
+    OperationId, OperationKind, OperationRequest, PrincipalId, RealmPath,
 };
 
 pub mod display_transport;
@@ -113,6 +113,13 @@ pub enum RouteDecision {
     MissingIdempotencyKey,
     /// The request principal does not match the authenticated session.
     PrincipalMismatch,
+    /// The target did not advertise a required capability.
+    CapabilityDenied {
+        /// Capability missing from the negotiated set.
+        capability: Capability,
+        /// Fingerprint of the negotiated set used for the denial.
+        negotiated_fingerprint: String,
+    },
     /// The router cannot retain another dedup record in this scope; refusing
     /// avoids executing a mutating operation without a durable dedup lease.
     DedupCapacityExceeded,
@@ -249,16 +256,13 @@ impl<C: Clock> OperationRouter<C> {
         self
     }
 
-    /// Route one operation against the authenticated `session_principal`.
-    ///
-    /// On `Accept` for a mutating operation the key is recorded as
-    /// in-progress; the caller MUST later call [`Self::mark_completed`]
-    /// (success) or [`Self::mark_failed`] (terminal failure) so the dedup
-    /// record reaches a terminal state instead of wedging `InProgress`.
-    pub fn route(
+    /// Route one operation after checking the negotiated capability set. A
+    /// missing capability fails before dedup state is mutated.
+    pub fn route_with_capabilities(
         &mut self,
         req: &OperationRequest,
         session_principal: &PrincipalId,
+        capabilities: &CapabilitySet,
     ) -> RouteDecision {
         // 1. Principal binding.
         if &req.principal != session_principal {
@@ -266,6 +270,14 @@ impl<C: Clock> OperationRouter<C> {
         }
 
         let scope = req.kind.authorization_scope();
+        if let Some(capability) = req.required_capability()
+            && !capabilities.has(capability)
+        {
+            return RouteDecision::CapabilityDenied {
+                capability,
+                negotiated_fingerprint: capabilities.stable_fingerprint(),
+            };
+        }
 
         // 2. Non-mutating operations need no dedup.
         if !req.kind.is_mutating() {
@@ -310,6 +322,7 @@ impl<C: Clock> OperationRouter<C> {
                             }
                         }
                     }
+
                     DedupState::Completed { result, since } => {
                         if now.duration_since(*since) > self.retention {
                             // Retention elapsed: tombstone it now (lazy) and
@@ -523,17 +536,55 @@ mod tests {
         OpaquePayload::new(bytes.to_vec()).unwrap()
     }
 
+    fn caps_for(req: &OperationRequest) -> CapabilitySet {
+        match req.required_capability() {
+            Some(cap) => CapabilitySet::empty().with(cap),
+            None => CapabilitySet::empty(),
+        }
+    }
+
+    fn route<C: Clock>(
+        router: &mut OperationRouter<C>,
+        req: &OperationRequest,
+        principal: &PrincipalId,
+    ) -> RouteDecision {
+        router.route_with_capabilities(req, principal, &caps_for(req))
+    }
+
     #[test]
     fn principal_mismatch_is_rejected() {
         let mut r = OperationRouter::new();
         let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         assert_eq!(
-            r.route(&req, &principal("bob")),
+            route(&mut r, &req, &principal("bob")),
             RouteDecision::PrincipalMismatch
         );
         assert_eq!(r.tracked(), 0);
         assert!(matches!(
-            r.route(&req, &principal("alice")),
+            route(&mut r, &req, &principal("alice")),
+            RouteDecision::Accept { .. }
+        ));
+    }
+
+    #[test]
+    fn missing_capability_is_denied_before_dedup_state() {
+        let mut r = OperationRouter::new();
+        let p = principal("alice");
+        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        assert_eq!(
+            r.route_with_capabilities(&req, &p, &CapabilitySet::empty()),
+            RouteDecision::CapabilityDenied {
+                capability: Capability::Lifecycle,
+                negotiated_fingerprint: CapabilitySet::empty().stable_fingerprint(),
+            }
+        );
+        assert_eq!(r.tracked(), 0);
+        assert!(matches!(
+            r.route_with_capabilities(
+                &req,
+                &p,
+                &CapabilitySet::empty().with(Capability::Lifecycle)
+            ),
             RouteDecision::Accept { .. }
         ));
     }
@@ -542,7 +593,7 @@ mod tests {
     fn non_mutating_accepts_without_key() {
         let mut r = OperationRouter::new();
         let req = req(OperationKind::WorkloadList, None, b"", "alice");
-        match r.route(&req, &principal("alice")) {
+        match route(&mut r, &req, &principal("alice")) {
             RouteDecision::Accept { scope } => {
                 assert_eq!(scope, AuthorizationScope::capability(Capability::Lifecycle))
             }
@@ -634,7 +685,7 @@ mod tests {
                 &op_id,
             );
             assert_eq!(required_capability(&req), expected_capability);
-            match r.route(&req, &p) {
+            match route(&mut r, &req, &p) {
                 RouteDecision::Accept { scope } => assert_eq!(scope, expected_scope),
                 other => panic!("expected Accept for {kind:?}, got {other:?}"),
             }
@@ -646,14 +697,14 @@ mod tests {
         let mut r = OperationRouter::new().with_max_dedup_records(0);
         let missing_key = req(OperationKind::WorkloadStart, None, b"x", "alice");
         assert_eq!(
-            r.route(&missing_key, &principal("alice")),
+            route(&mut r, &missing_key, &principal("alice")),
             RouteDecision::MissingIdempotencyKey
         );
         assert_eq!(r.tracked(), 0);
 
         let keyed = req(OperationKind::WorkloadStart, Some("k1"), b"x", "alice");
         assert_eq!(
-            r.route(&keyed, &principal("alice")),
+            route(&mut r, &keyed, &principal("alice")),
             RouteDecision::DedupCapacityExceeded
         );
     }
@@ -663,10 +714,13 @@ mod tests {
         let mut r = OperationRouter::new();
         let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         let p = principal("alice");
-        assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
+        assert!(matches!(
+            route(&mut r, &req, &p),
+            RouteDecision::Accept { .. }
+        ));
         // Still in progress before completion; carries the original op id.
         assert_eq!(
-            r.route(&req, &p),
+            route(&mut r, &req, &p),
             RouteDecision::InProgress {
                 original_operation_id: OperationId::parse("op-1").unwrap(),
             }
@@ -674,7 +728,7 @@ mod tests {
         assert!(r.mark_completed(&req, result(b"started-ok")));
         // After completion, the same key+request replays the recorded result.
         assert_eq!(
-            r.route(&req, &p),
+            route(&mut r, &req, &p),
             RouteDecision::Replay {
                 original_operation_id: OperationId::parse("op-1").unwrap(),
                 result: result(b"started-ok"),
@@ -694,7 +748,7 @@ mod tests {
             "op-original",
         );
         assert!(matches!(
-            shared_router.route(&first, &p),
+            route(&mut shared_router, &first, &p),
             RouteDecision::Accept { .. }
         ));
         assert!(shared_router.mark_completed(&first, result(b"started")));
@@ -707,7 +761,7 @@ mod tests {
             "op-retry",
         );
         assert_eq!(
-            shared_router.route(&retry_after_disconnect, &p),
+            route(&mut shared_router, &retry_after_disconnect, &p),
             RouteDecision::Replay {
                 original_operation_id: OperationId::parse("op-original").unwrap(),
                 result: result(b"started"),
@@ -732,8 +786,11 @@ mod tests {
             b"start-B",
             "alice",
         );
-        assert!(matches!(r.route(&a, &p), RouteDecision::Accept { .. }));
-        assert_eq!(r.route(&b, &p), RouteDecision::IdempotencyKeyConflict);
+        assert!(matches!(
+            route(&mut r, &a, &p),
+            RouteDecision::Accept { .. }
+        ));
+        assert_eq!(route(&mut r, &b, &p), RouteDecision::IdempotencyKeyConflict);
     }
 
     #[test]
@@ -744,13 +801,13 @@ mod tests {
         let alice = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         let bob = req(OperationKind::WorkloadStart, Some("k1"), b"start", "bob");
         assert!(matches!(
-            r.route(&alice, &principal("alice")),
+            route(&mut r, &alice, &principal("alice")),
             RouteDecision::Accept { .. }
         ));
         // Same opaque key, different principal -> independent record, not a
         // false conflict and not a replay of alice's op.
         assert!(matches!(
-            r.route(&bob, &principal("bob")),
+            route(&mut r, &bob, &principal("bob")),
             RouteDecision::Accept { .. }
         ));
         assert_eq!(r.tracked(), 2);
@@ -777,11 +834,14 @@ mod tests {
             "alice",
             "op-2",
         );
-        assert!(matches!(r.route(&first, &p), RouteDecision::Accept { .. }));
+        assert!(matches!(
+            route(&mut r, &first, &p),
+            RouteDecision::Accept { .. }
+        ));
         assert!(r.mark_completed(&first, result(b"ok")));
         // Different operation_id, same fingerprint -> Replay of the original.
         assert_eq!(
-            r.route(&retry, &p),
+            route(&mut r, &retry, &p),
             RouteDecision::Replay {
                 original_operation_id: OperationId::parse("op-1").unwrap(),
                 result: result(b"ok"),
@@ -798,10 +858,13 @@ mod tests {
             OperationRouter::with_clock(clock.clone()).with_retention(Duration::from_secs(60));
         let p = principal("alice");
         let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
-        assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
+        assert!(matches!(
+            route(&mut r, &req, &p),
+            RouteDecision::Accept { .. }
+        ));
         clock.advance(Duration::from_secs(61));
         assert_eq!(
-            r.route(&req, &p),
+            route(&mut r, &req, &p),
             RouteDecision::InProgress {
                 original_operation_id: OperationId::parse("op-1").unwrap(),
             }
@@ -815,10 +878,16 @@ mod tests {
             OperationRouter::with_clock(clock.clone()).with_retention(Duration::from_secs(60));
         let p = principal("alice");
         let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
-        assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
+        assert!(matches!(
+            route(&mut r, &req, &p),
+            RouteDecision::Accept { .. }
+        ));
         assert!(r.mark_completed(&req, result(b"ok")));
         clock.advance(Duration::from_secs(61));
-        assert_eq!(r.route(&req, &p), RouteDecision::IdempotencyKeyExpired);
+        assert_eq!(
+            route(&mut r, &req, &p),
+            RouteDecision::IdempotencyKeyExpired
+        );
     }
 
     #[test]
@@ -840,13 +909,19 @@ mod tests {
             "op-2",
         );
 
-        assert!(matches!(r.route(&first, &p), RouteDecision::Accept { .. }));
-        assert_eq!(r.route(&second, &p), RouteDecision::DedupCapacityExceeded);
+        assert!(matches!(
+            route(&mut r, &first, &p),
+            RouteDecision::Accept { .. }
+        ));
+        assert_eq!(
+            route(&mut r, &second, &p),
+            RouteDecision::DedupCapacityExceeded
+        );
         assert_eq!(r.tracked(), 1);
 
         assert!(r.mark_completed(&first, result(b"first-result")));
         assert_eq!(
-            r.route(&first, &p),
+            route(&mut r, &first, &p),
             RouteDecision::Replay {
                 original_operation_id: OperationId::parse("op-1").unwrap(),
                 result: result(b"first-result"),
@@ -877,13 +952,22 @@ mod tests {
             "op-2",
         );
 
-        assert!(matches!(r.route(&first, &p), RouteDecision::Accept { .. }));
+        assert!(matches!(
+            route(&mut r, &first, &p),
+            RouteDecision::Accept { .. }
+        ));
         assert!(r.mark_completed(&first, result(b"first-result")));
         clock.advance(Duration::from_secs(11));
-        assert_eq!(r.route(&first, &p), RouteDecision::IdempotencyKeyExpired);
+        assert_eq!(
+            route(&mut r, &first, &p),
+            RouteDecision::IdempotencyKeyExpired
+        );
         clock.advance(Duration::from_secs(11));
 
-        assert!(matches!(r.route(&second, &p), RouteDecision::Accept { .. }));
+        assert!(matches!(
+            route(&mut r, &second, &p),
+            RouteDecision::Accept { .. }
+        ));
         assert_eq!(r.tracked(), 1);
     }
 
@@ -898,21 +982,33 @@ mod tests {
             .with_no_reuse_horizon(Duration::from_secs(600));
         let p = principal("alice");
         let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
-        assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
+        assert!(matches!(
+            route(&mut r, &req, &p),
+            RouteDecision::Accept { .. }
+        ));
         assert!(r.mark_completed(&req, result(b"ok")));
         clock.advance(Duration::from_secs(61));
         // Retention elapsed: expired (and tombstoned).
-        assert_eq!(r.route(&req, &p), RouteDecision::IdempotencyKeyExpired);
+        assert_eq!(
+            route(&mut r, &req, &p),
+            RouteDecision::IdempotencyKeyExpired
+        );
         r.gc();
         // Tombstone kept; reuse still fails closed.
         assert_eq!(r.tracked(), 1);
-        assert_eq!(r.route(&req, &p), RouteDecision::IdempotencyKeyExpired);
+        assert_eq!(
+            route(&mut r, &req, &p),
+            RouteDecision::IdempotencyKeyExpired
+        );
         // Past the no-reuse horizon the tombstone is dropped.
         clock.advance(Duration::from_secs(601));
         r.gc();
         assert_eq!(r.tracked(), 0);
         // Only now (after the full no-reuse horizon) is the key fresh again.
-        assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
+        assert!(matches!(
+            route(&mut r, &req, &p),
+            RouteDecision::Accept { .. }
+        ));
     }
 
     #[test]
@@ -922,7 +1018,10 @@ mod tests {
             OperationRouter::with_clock(clock.clone()).with_retention(Duration::from_secs(60));
         let p = principal("alice");
         let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
-        assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
+        assert!(matches!(
+            route(&mut r, &req, &p),
+            RouteDecision::Accept { .. }
+        ));
         clock.advance(Duration::from_secs(61));
         r.gc();
         // In-progress record is never dropped.
@@ -934,10 +1033,16 @@ mod tests {
         let mut r = OperationRouter::new();
         let p = principal("alice");
         let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
-        assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
+        assert!(matches!(
+            route(&mut r, &req, &p),
+            RouteDecision::Accept { .. }
+        ));
         assert!(r.mark_failed(&req));
         // After terminal failure the key is fresh, not wedged InProgress.
-        assert!(matches!(r.route(&req, &p), RouteDecision::Accept { .. }));
+        assert!(matches!(
+            route(&mut r, &req, &p),
+            RouteDecision::Accept { .. }
+        ));
     }
 
     #[test]
@@ -950,11 +1055,11 @@ mod tests {
         let accepted = req(OperationKind::WorkloadStart, Some("k1"), b"real", "alice");
         let conflicting = req(OperationKind::WorkloadStart, Some("k1"), b"forged", "alice");
         assert!(matches!(
-            r.route(&accepted, &p),
+            route(&mut r, &accepted, &p),
             RouteDecision::Accept { .. }
         ));
         assert_eq!(
-            r.route(&conflicting, &p),
+            route(&mut r, &conflicting, &p),
             RouteDecision::IdempotencyKeyConflict
         );
         // The conflicting caller cannot terminalize the accepted record.
@@ -962,7 +1067,7 @@ mod tests {
         assert!(!r.mark_failed(&conflicting));
         // The accepted op is still in progress and still owns its record.
         assert_eq!(
-            r.route(&accepted, &p),
+            route(&mut r, &accepted, &p),
             RouteDecision::InProgress {
                 original_operation_id: OperationId::parse("op-1").unwrap(),
             }
@@ -970,7 +1075,7 @@ mod tests {
         // The legitimate completer (matching fingerprint) still works.
         assert!(r.mark_completed(&accepted, result(b"real-result")));
         assert_eq!(
-            r.route(&accepted, &p),
+            route(&mut r, &accepted, &p),
             RouteDecision::Replay {
                 original_operation_id: OperationId::parse("op-1").unwrap(),
                 result: result(b"real-result"),
@@ -991,7 +1096,7 @@ mod tests {
             "op-1",
         );
         assert!(matches!(
-            r.route(&op, &principal(p)),
+            route(&mut r, &op, &principal(p)),
             RouteDecision::Accept { .. }
         ));
 
@@ -1008,7 +1113,7 @@ mod tests {
         );
         // Surfacing did NOT resolve it: it is still InProgress to a retry.
         assert!(matches!(
-            r.route(&op, &principal(p)),
+            route(&mut r, &op, &principal(p)),
             RouteDecision::InProgress { .. }
         ));
 

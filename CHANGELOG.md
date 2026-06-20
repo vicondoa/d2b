@@ -96,6 +96,9 @@ deprecations ship one minor release before removal.
 - Documentation: ADR 0036 records the current qemu-media runtime contract,
   and ADR 0037 defines the shared local hypervisor runtime/service seam for
   qemu-media and Cloud Hypervisor/crosvm workloads.
+- Capability negotiation now rejects operations and streams when a
+  session lacks the required capability, with typed missing-capability
+  errors.
 
 ### Changed
 

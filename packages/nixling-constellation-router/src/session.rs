@@ -16,7 +16,7 @@
 //! unlike a seqpacket one-read-per-frame socket.
 
 use nixling_constellation_core::{
-    ConstellationFrame, ErrorKind, Handshake, HandshakeAccepted, HandshakeRejected,
+    CapabilitySet, ConstellationFrame, ErrorKind, Handshake, HandshakeAccepted, HandshakeRejected,
     HandshakeRejectedReason,
 };
 use nixling_constellation_provider::error::{ProviderError, ProviderResult};
@@ -54,18 +54,22 @@ pub struct PeerSession<C: ProtocolCodec> {
 }
 
 impl<C: ProtocolCodec> PeerSession<C> {
-    /// Perform the **client** handshake over `session`: propose
-    /// [`PROTOCOL_VERSION`] + `codec.codec_id()`, then require the server to
-    /// echo the same version and codec id (fail-closed on skew).
-    pub async fn connect(session: TransportSession, codec: C) -> ProviderResult<Self> {
-        Self::establish(session, codec, Role::Client).await
+    /// Client handshake with the explicit capabilities this endpoint proposes.
+    pub async fn connect_with_capabilities(
+        session: TransportSession,
+        codec: C,
+        capabilities: CapabilitySet,
+    ) -> ProviderResult<Self> {
+        Self::establish(session, codec, Role::Client, capabilities).await
     }
 
-    /// Perform the **server** handshake over `session`: read the client's
-    /// proposal, require it to match this build's version + codec id, then
-    /// echo the accepted handshake back (fail-closed on skew).
-    pub async fn accept(session: TransportSession, codec: C) -> ProviderResult<Self> {
-        Self::establish(session, codec, Role::Server).await
+    /// Server handshake with the explicit capabilities this endpoint supports.
+    pub async fn accept_with_capabilities(
+        session: TransportSession,
+        codec: C,
+        capabilities: CapabilitySet,
+    ) -> ProviderResult<Self> {
+        Self::establish(session, codec, Role::Server, capabilities).await
     }
 
     /// The handshake the peers agreed on.
@@ -73,12 +77,18 @@ impl<C: ProtocolCodec> PeerSession<C> {
         &self.negotiated
     }
 
-    async fn establish(session: TransportSession, codec: C, role: Role) -> ProviderResult<Self> {
+    async fn establish(
+        session: TransportSession,
+        codec: C,
+        role: Role,
+        capabilities: CapabilitySet,
+    ) -> ProviderResult<Self> {
         let mut stream = session.into_stream();
         let ours = Handshake {
             protocol_version: PROTOCOL_VERSION,
             codec_id: parse_codec_id(codec.codec_id())?,
             schema_fingerprint: parse_codec_id(&codec.schema_fingerprint())?,
+            capabilities: capabilities.negotiation(),
             peer: None,
         };
         let negotiated = match role {
@@ -86,25 +96,30 @@ impl<C: ProtocolCodec> PeerSession<C> {
                 write_frame(stream.as_mut(), &codec.encode_frame(&hs(ours.clone()))?).await?;
                 let accepted =
                     expect_handshake_accept(&codec, &read_frame(stream.as_mut()).await?)?;
-                if let Err(reason) = reconcile(&ours, &accepted.selected) {
+                if let Err(reason) = reconcile_selected(&ours, &accepted.selected) {
                     return Err(handshake_rejected_error(reason));
                 }
                 accepted.selected
             }
             Role::Server => {
                 let theirs = expect_handshake(&codec, &read_frame(stream.as_mut()).await?)?;
-                if let Err(reason) = reconcile(&ours, &theirs) {
+                if let Err(reason) = reconcile_proposal(&ours, &theirs) {
                     let rejected =
                         ConstellationFrame::HandshakeRejected(HandshakeRejected { reason });
                     let _ = write_frame(stream.as_mut(), &codec.encode_frame(&rejected)?).await;
                     return Err(handshake_rejected_error(reason));
                 }
+                let mut selected = ours.clone();
+                selected.capabilities = ours
+                    .capabilities
+                    .capabilities
+                    .intersection(&theirs.capabilities.capabilities)
+                    .negotiation();
                 let accepted = ConstellationFrame::HandshakeAccepted(HandshakeAccepted {
-                    selected: ours.clone(),
+                    selected: selected.clone(),
                 });
                 write_frame(stream.as_mut(), &codec.encode_frame(&accepted)?).await?;
-                // The server adopts its own (validated-equal) view.
-                ours
+                selected
             }
         };
         Ok(Self {
@@ -162,7 +177,7 @@ fn expect_handshake(codec: &impl ProtocolCodec, bytes: &[u8]) -> ProviderResult<
     }
 }
 
-fn reconcile(ours: &Handshake, theirs: &Handshake) -> Result<(), HandshakeRejectedReason> {
+fn reconcile_common(ours: &Handshake, theirs: &Handshake) -> Result<(), HandshakeRejectedReason> {
     if theirs.protocol_version != ours.protocol_version {
         return Err(HandshakeRejectedReason::VersionSkew);
     }
@@ -178,11 +193,35 @@ fn reconcile(ours: &Handshake, theirs: &Handshake) -> Result<(), HandshakeReject
     Ok(())
 }
 
+fn reconcile_proposal(ours: &Handshake, theirs: &Handshake) -> Result<(), HandshakeRejectedReason> {
+    reconcile_common(ours, theirs)
+}
+
+fn reconcile_selected(
+    ours: &Handshake,
+    selected: &Handshake,
+) -> Result<(), HandshakeRejectedReason> {
+    reconcile_common(ours, selected)?;
+    if !selected
+        .capabilities
+        .capabilities
+        .is_subset_of(&ours.capabilities.capabilities)
+    {
+        return Err(HandshakeRejectedReason::CapabilityMismatch);
+    }
+    if selected.capabilities.fingerprint != selected.capabilities.capabilities.stable_fingerprint()
+    {
+        return Err(HandshakeRejectedReason::CapabilityMismatch);
+    }
+    Ok(())
+}
+
 fn handshake_rejected_error(reason: HandshakeRejectedReason) -> ProviderError {
     let kind = match reason {
         HandshakeRejectedReason::VersionSkew => ErrorKind::VersionSkew,
         HandshakeRejectedReason::CodecMismatch
-        | HandshakeRejectedReason::SchemaFingerprintMismatch => ErrorKind::VersionSkew,
+        | HandshakeRejectedReason::SchemaFingerprintMismatch
+        | HandshakeRejectedReason::CapabilityMismatch => ErrorKind::VersionSkew,
         HandshakeRejectedReason::ChannelBindingMismatch => ErrorKind::AuthenticationFailed,
         HandshakeRejectedReason::MalformedHandshake => ErrorKind::MalformedFrame,
     };
@@ -276,15 +315,23 @@ mod tests {
     async fn handshake_succeeds_and_frame_round_trips() {
         let (client_s, server_s) = connected_pair().await;
         let server = tokio::spawn(async move {
-            let mut s = PeerSession::accept(server_s, ProtobufCodec::new())
-                .await
-                .unwrap();
+            let mut s = PeerSession::accept_with_capabilities(
+                server_s,
+                ProtobufCodec::new(),
+                CapabilitySet::empty(),
+            )
+            .await
+            .unwrap();
             // The server reads one frame the client sends post-handshake.
             s.recv().await.unwrap()
         });
-        let mut client = PeerSession::connect(client_s, ProtobufCodec::new())
-            .await
-            .unwrap();
+        let mut client = PeerSession::connect_with_capabilities(
+            client_s,
+            ProtobufCodec::new(),
+            CapabilitySet::empty(),
+        )
+        .await
+        .unwrap();
         assert_eq!(client.negotiated().protocol_version, PROTOCOL_VERSION);
         let frame =
             ConstellationFrame::TypedError(ConstellationError::capability_denied(Capability::Exec));
@@ -294,20 +341,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handshake_negotiates_capability_intersection() {
+        let (client_s, server_s) = connected_pair().await;
+        let server_caps = CapabilitySet::empty().with(Capability::Exec);
+        let client_caps = CapabilitySet::empty()
+            .with(Capability::Exec)
+            .with(Capability::WindowForwarding);
+        let server = tokio::spawn(async move {
+            PeerSession::accept_with_capabilities(server_s, ProtobufCodec::new(), server_caps)
+                .await
+                .unwrap()
+                .negotiated()
+                .capabilities
+                .capabilities
+                .clone()
+        });
+        let client =
+            PeerSession::connect_with_capabilities(client_s, ProtobufCodec::new(), client_caps)
+                .await
+                .unwrap();
+        let selected = &client.negotiated().capabilities.capabilities;
+        assert!(selected.has(Capability::Exec));
+        assert!(!selected.has(Capability::WindowForwarding));
+        assert_eq!(server.await.unwrap(), selected.clone());
+    }
+
+    #[tokio::test]
+    async fn client_rejects_accepted_capabilities_outside_its_proposal() {
+        let (client_s, mut server_s) = connected_pair().await;
+        let server = tokio::spawn(async move {
+            let codec = ProtobufCodec::new();
+            let _proposal = read_frame(server_s.stream_mut()).await.unwrap();
+            let accepted = ConstellationFrame::HandshakeAccepted(HandshakeAccepted {
+                selected: Handshake {
+                    protocol_version: PROTOCOL_VERSION,
+                    codec_id: parse_codec_id(codec.codec_id()).unwrap(),
+                    schema_fingerprint: parse_codec_id(&codec.schema_fingerprint()).unwrap(),
+                    capabilities: CapabilitySet::empty()
+                        .with(Capability::Lifecycle)
+                        .negotiation(),
+                    peer: None,
+                },
+            });
+            write_frame(
+                server_s.stream_mut(),
+                &codec.encode_frame(&accepted).unwrap(),
+            )
+            .await
+            .unwrap();
+        });
+        let err = match PeerSession::connect_with_capabilities(
+            client_s,
+            ProtobufCodec::new(),
+            CapabilitySet::empty(),
+        )
+        .await
+        {
+            Ok(_) => panic!("server-selected capabilities outside the proposal must be rejected"),
+            Err(err) => err,
+        };
+        server.await.unwrap();
+        assert_eq!(err.kind(), ErrorKind::VersionSkew);
+    }
+
+    #[tokio::test]
     async fn client_version_skew_is_rejected_fail_closed() {
         // Server speaks the real protocol; the client writes a handshake with
         // a bogus version, so the server must reject with VersionSkew.
         let (mut client_s, server_s) = connected_pair().await;
         let server = tokio::spawn(async move {
-            PeerSession::accept(server_s, ProtobufCodec::new())
-                .await
-                .map(|_| ())
+            PeerSession::accept_with_capabilities(
+                server_s,
+                ProtobufCodec::new(),
+                CapabilitySet::empty(),
+            )
+            .await
+            .map(|_| ())
         });
         let codec = ProtobufCodec::new();
         let bogus = Handshake {
             protocol_version: PROTOCOL_VERSION + 99,
             codec_id: parse_codec_id(codec.codec_id()).unwrap(),
             schema_fingerprint: parse_codec_id(&codec.schema_fingerprint()).unwrap(),
+            capabilities: CapabilitySet::empty().negotiation(),
             peer: None,
         };
         let bytes = codec.encode_frame(&hs(bogus)).unwrap();
@@ -320,15 +436,20 @@ mod tests {
     async fn client_schema_fingerprint_skew_is_rejected_fail_closed() {
         let (mut client_s, server_s) = connected_pair().await;
         let server = tokio::spawn(async move {
-            PeerSession::accept(server_s, ProtobufCodec::new())
-                .await
-                .map(|_| ())
+            PeerSession::accept_with_capabilities(
+                server_s,
+                ProtobufCodec::new(),
+                CapabilitySet::empty(),
+            )
+            .await
+            .map(|_| ())
         });
         let codec = ProtobufCodec::new();
         let bogus = Handshake {
             protocol_version: PROTOCOL_VERSION,
             codec_id: parse_codec_id(codec.codec_id()).unwrap(),
             schema_fingerprint: parse_codec_id("pb.v1:other-schema").unwrap(),
+            capabilities: CapabilitySet::empty().negotiation(),
             peer: None,
         };
         let bytes = codec.encode_frame(&hs(bogus)).unwrap();
@@ -365,11 +486,21 @@ mod tests {
 
         let (client_s, server_s) = connected_pair().await;
         let server = tokio::spawn(async move {
-            PeerSession::accept(server_s, SkewedSchemaCodec)
-                .await
-                .map(|_| ())
+            PeerSession::accept_with_capabilities(
+                server_s,
+                SkewedSchemaCodec,
+                CapabilitySet::empty(),
+            )
+            .await
+            .map(|_| ())
         });
-        let client_err = match PeerSession::connect(client_s, ProtobufCodec::new()).await {
+        let client_err = match PeerSession::connect_with_capabilities(
+            client_s,
+            ProtobufCodec::new(),
+            CapabilitySet::empty(),
+        )
+        .await
+        {
             Ok(_) => panic!("schema mismatch must reject the client"),
             Err(err) => err,
         };
@@ -382,15 +513,20 @@ mod tests {
     async fn peer_binding_mismatch_is_rejected_fail_closed() {
         let (mut client_s, server_s) = connected_pair().await;
         let server = tokio::spawn(async move {
-            PeerSession::accept(server_s, ProtobufCodec::new())
-                .await
-                .map(|_| ())
+            PeerSession::accept_with_capabilities(
+                server_s,
+                ProtobufCodec::new(),
+                CapabilitySet::empty(),
+            )
+            .await
+            .map(|_| ())
         });
         let codec = ProtobufCodec::new();
         let forged = Handshake {
             protocol_version: PROTOCOL_VERSION,
             codec_id: parse_codec_id(codec.codec_id()).unwrap(),
             schema_fingerprint: parse_codec_id(&codec.schema_fingerprint()).unwrap(),
+            capabilities: CapabilitySet::empty().negotiation(),
             peer: Some(nixling_constellation_core::PeerContext {
                 auth_mechanism: ProtocolToken::parse("forged-binding").unwrap(),
                 peer_principal: Some(PrincipalId::parse("principal-1").unwrap()),
@@ -407,9 +543,13 @@ mod tests {
     async fn non_handshake_first_frame_is_rejected() {
         let (mut client_s, server_s) = connected_pair().await;
         let server = tokio::spawn(async move {
-            PeerSession::accept(server_s, ProtobufCodec::new())
-                .await
-                .map(|_| ())
+            PeerSession::accept_with_capabilities(
+                server_s,
+                ProtobufCodec::new(),
+                CapabilitySet::empty(),
+            )
+            .await
+            .map(|_| ())
         });
         // Client sends a non-handshake frame first.
         let codec = ProtobufCodec::new();

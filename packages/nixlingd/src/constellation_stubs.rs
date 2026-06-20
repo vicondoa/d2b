@@ -26,7 +26,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use nixling_constellation_core::{OperationRequest, PrincipalId, TargetName};
+use nixling_constellation_core::{CapabilitySet, OperationRequest, PrincipalId, TargetName};
 use nixling_constellation_provider::error::ProviderResult;
 use nixling_constellation_provider::provider::{ProtocolCodec, WorkloadProvider};
 use nixling_constellation_router::{
@@ -122,12 +122,16 @@ impl Default for TargetResolver {
 /// dedup owner.
 pub struct PeerOperationRouter {
     router: SharedRouter,
+    capabilities: CapabilitySet,
 }
 
 impl PeerOperationRouter {
-    /// Bind a peer session to the injected node-scoped shared router.
-    pub fn new(router: SharedRouter) -> Self {
-        Self { router }
+    /// Bind a peer session to the injected router and negotiated capability set.
+    pub fn with_capabilities(router: SharedRouter, capabilities: CapabilitySet) -> Self {
+        Self {
+            router,
+            capabilities,
+        }
     }
 
     /// Route one operation against the authenticated session principal.
@@ -135,7 +139,7 @@ impl PeerOperationRouter {
         self.router
             .lock()
             .expect("shared operation router mutex poisoned")
-            .route(req, principal)
+            .route_with_capabilities(req, principal, &self.capabilities)
     }
 }
 
@@ -323,7 +327,10 @@ mod tests {
 
     #[test]
     fn peer_router_routes_through_the_codec_neutral_router() {
-        let r = PeerOperationRouter::new(new_shared_router());
+        let r = PeerOperationRouter::with_capabilities(
+            new_shared_router(),
+            CapabilitySet::empty().with(nixling_constellation_core::Capability::Lifecycle),
+        );
         let principal = PrincipalId::parse("alice").unwrap();
         let req = list_req(&principal);
         assert!(matches!(
@@ -341,8 +348,9 @@ mod tests {
         let shared = new_shared_router();
         let principal = PrincipalId::parse("alice").unwrap();
 
-        let session_a = PeerOperationRouter::new(shared.clone());
-        let session_b = PeerOperationRouter::new(shared.clone());
+        let caps = CapabilitySet::empty().with(nixling_constellation_core::Capability::Lifecycle);
+        let session_a = PeerOperationRouter::with_capabilities(shared.clone(), caps.clone());
+        let session_b = PeerOperationRouter::with_capabilities(shared.clone(), caps);
 
         let req = start_req(&principal, "op-1", "k1");
         assert!(matches!(

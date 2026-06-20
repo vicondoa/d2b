@@ -20,7 +20,7 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
 - `NodeId`, `WorkloadId`, `ProviderId`, `GatewayId`;
 - `ExecutionId`, `StreamId`, `StreamCursor`, `PrincipalId`,
   `OperationId`, `IdempotencyKey`;
-- `Capability`, `CapabilitySet`;
+- `Capability`, `CapabilitySet`, `CapabilityNegotiation`;
 - `NodeSummary`, `WorkloadSelector`, `WorkloadSummary`,
   `ExecutionSummary`;
 - `ExecutionGeneration`, `ExecAttachMode`, `ExecStartRequest`,
@@ -40,6 +40,8 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
   printable-ASCII tokens without spaces.
 - Capabilities are positive assertions. Missing capability means typed
   refusal, not fallback.
+- `CapabilityNegotiation` carries a schema version and deterministic
+  bounded fingerprint for audit correlation.
 - Mutating operation requests require an idempotency key at decode.
 - Durable execution roots carry bounded metadata only. Reconnects are
   generation-bound, retained log requests require a non-zero byte bound,
