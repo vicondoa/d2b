@@ -63,8 +63,14 @@ nixling.vms.dark-live.qemuMedia.security = {
 };
 ```
 
-`lockMemory = true` adds `-overcommit mem-lock=on`; QEMU refuses to start
-if the host cannot keep the configured guest RAM resident.
+`lockMemory = true` adds `-overcommit mem-lock=on`. The broker gives only
+that qemu-media runner a bounded memlock allowance derived from the trusted
+guest RAM setting: guest RAM plus the larger of 2 GiB or 25% headroom. This
+headroom is the child `RLIMIT_MEMLOCK` ceiling, not a promise that QEMU will
+lock the entire allowance. QEMU refuses to start if the host cannot keep guest
+RAM resident; the broker checks guest RAM plus 1 GiB of QEMU overhead against
+`MemAvailable` before spawn so clearly insufficient host memory fails before
+the QMP boot-media transaction begins.
 
 ### Direct image file
 
@@ -124,7 +130,7 @@ artifacts and is not echoed by successful enroll/attach/detach output.
 | `nixling status <vm>` | Shows qemu-media runner state, QMP readiness, source refs, source kind, format, read-only policy, and registry state. |
 | `nixling usb enroll <vm> <ref> --busid <busid> --apply` | Physical USB only. Writes the root-only registry record and udev ignore rule through the broker. |
 | `nixling usb attach <vm> <busid> --apply` | Resolves the current USB identity against enrolled refs, preflights that the block device is unused, opens the fd in the broker, sends it to QEMU over QMP, and returns only after QMP accepts the fd/block/device commands. |
-| `nixling usb detach <vm> <busid> --apply` | Resolves the enrolled source and removes the QMP device/block/fd nodes. |
+| `nixling usb detach <vm> <busid> --apply` | Resolves the enrolled source, with a fail-closed same-device fallback for a uniquely attached same-vendor/product ref when the runtime selector moved, then removes or reconciles the QMP device/block/fd nodes idempotently. |
 | `nixling usb probe` | Shows qemu-media slots as `unbound`, `enrollable`, `enrolled`, `stale`, or `direct-config`; direct image-file rows have no enrollment command. |
 
 Dry-run JSON for enroll and hotplug includes `busIdProvided: true`, but
