@@ -11740,7 +11740,6 @@ mod public_status_tests {
             host_path: root.join("host.json"),
             processes_path,
             closures_dir,
-            ..ArtifactPaths::default()
         }
     }
 
