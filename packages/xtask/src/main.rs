@@ -16,10 +16,10 @@ use nixling::{
 };
 use nixling_constellation_core::{
     AdmissionAuditRecord, AuditEnvelope, Capability, CapabilitySet, ConstellationError,
-    ConstellationFrame, ExecutionId, ExecutionSummary, GatewayId, Handshake, IdempotencyKey,
-    NodeId, NodeSummary, OperationId, OperationKind, OperationRequest, OperationResponse,
-    PrincipalId, ProviderId, RealmId, RealmPath, StreamCursor, StreamId, WorkloadId,
-    WorkloadSelector, WorkloadSummary,
+    ConstellationFrame, ExecutionId, ExecutionSummary, GatewayId, Handshake, HandshakeAccepted,
+    HandshakeRejected, HandshakeRejectedReason, IdempotencyKey, NodeId, NodeSummary, OperationId,
+    OperationKind, OperationRequest, OperationResponse, PrincipalId, ProviderId, RealmId,
+    RealmPath, StreamCursor, StreamId, WorkloadId, WorkloadSelector, WorkloadSummary,
     audit::{
         AuditChainCheckFailure, AuditChainCheckResult, AuditChainLink, AuditChainRecord, AuditHash,
         AuditRetentionFloorReason, AuditRetentionFloorStatus, AuditSinkHealth,
@@ -61,6 +61,9 @@ enum ConstellationCoreSchema {
     WorkloadSummary(WorkloadSummary),
     ExecutionSummary(ExecutionSummary),
     Handshake(Handshake),
+    HandshakeAccepted(HandshakeAccepted),
+    HandshakeRejected(HandshakeRejected),
+    HandshakeRejectedReason(HandshakeRejectedReason),
     OperationKind(OperationKind),
     OperationRequest(OperationRequest),
     OperationResponse(OperationResponse),

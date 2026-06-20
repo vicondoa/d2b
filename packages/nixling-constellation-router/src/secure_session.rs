@@ -74,6 +74,7 @@ impl NonceReplayGuard {
 struct Hello {
     version: u32,
     codec_id: ProtocolToken,
+    schema_fingerprint: ProtocolToken,
     identity: SecurePeerIdentity,
     nonce: [u8; 32],
     mac: [u8; 32],
@@ -115,6 +116,7 @@ impl<C: ProtocolCodec> SecurePeerSession<C> {
             "client",
             &key,
             codec.codec_id(),
+            &codec.schema_fingerprint(),
             local.clone(),
             client_nonce,
             &[],
@@ -130,6 +132,7 @@ impl<C: ProtocolCodec> SecurePeerSession<C> {
             "server",
             &key,
             codec.codec_id(),
+            &codec.schema_fingerprint(),
             &server,
             &expected_remote,
             &client.nonce,
@@ -163,6 +166,7 @@ impl<C: ProtocolCodec> SecurePeerSession<C> {
             "client",
             &key,
             codec.codec_id(),
+            &codec.schema_fingerprint(),
             &client,
             &expected_remote,
             &[],
@@ -177,6 +181,7 @@ impl<C: ProtocolCodec> SecurePeerSession<C> {
             "server",
             &key,
             codec.codec_id(),
+            &codec.schema_fingerprint(),
             local,
             server_nonce,
             &client.nonce,
@@ -254,15 +259,23 @@ fn hello(
     label: &str,
     key: &SecureSessionKey,
     codec_id: &str,
+    schema_fingerprint: &str,
     identity: SecurePeerIdentity,
     nonce: [u8; 32],
     peer_nonce: &[u8],
 ) -> ProviderResult<Hello> {
     let codec_id = ProtocolToken::parse(codec_id)
         .map_err(|err| ProviderError::new(ErrorKind::MalformedFrame, format!("codec id: {err}")))?;
+    let schema_fingerprint = ProtocolToken::parse(schema_fingerprint).map_err(|err| {
+        ProviderError::new(
+            ErrorKind::MalformedFrame,
+            format!("schema fingerprint: {err}"),
+        )
+    })?;
     let mut hello = Hello {
         version: PROTOCOL_VERSION,
         codec_id,
+        schema_fingerprint,
         identity,
         nonce,
         mac: [0u8; 32],
@@ -275,12 +288,14 @@ fn verify_hello(
     label: &str,
     key: &SecureSessionKey,
     codec_id: &str,
+    schema_fingerprint: &str,
     hello: &Hello,
     expected_identity: &SecurePeerIdentity,
     peer_nonce: &[u8],
 ) -> ProviderResult<()> {
     if hello.version != PROTOCOL_VERSION
         || hello.codec_id.as_str() != codec_id
+        || hello.schema_fingerprint.as_str() != schema_fingerprint
         || &hello.identity != expected_identity
     {
         return Err(ProviderError::new(
@@ -310,6 +325,7 @@ fn mac_hello(
     mac_update_field(&mut mac, label.as_bytes());
     mac_update_field(&mut mac, &hello.version.to_be_bytes());
     mac_update_field(&mut mac, hello.codec_id.as_str().as_bytes());
+    mac_update_field(&mut mac, hello.schema_fingerprint.as_str().as_bytes());
     mac_update_field(&mut mac, hello.identity.realm.target_form().as_bytes());
     mac_update_field(&mut mac, hello.identity.principal.as_str().as_bytes());
     mac_update_field(&mut mac, hello.identity.node.as_str().as_bytes());
@@ -480,11 +496,13 @@ mod tests {
         let key = SecureSessionKey::from_bytes([7u8; 32]);
         let client_id = id("client");
         let server_id = id("server");
+        let codec = ProtobufCodec::new();
 
         let hello = hello(
             "client",
             &key,
-            ProtobufCodec::new().codec_id(),
+            codec.codec_id(),
+            &codec.schema_fingerprint(),
             client_id.clone(),
             test_nonce("wrong-principal"),
             &[],
@@ -493,7 +511,8 @@ mod tests {
         let err = verify_hello(
             "client",
             &key,
-            ProtobufCodec::new().codec_id(),
+            codec.codec_id(),
+            &codec.schema_fingerprint(),
             &hello,
             &server_id,
             &[],
@@ -516,6 +535,7 @@ mod tests {
             "client",
             &key,
             codec.codec_id(),
+            &codec.schema_fingerprint(),
             client_id.clone(),
             test_nonce("invalid-mac"),
             &[],
@@ -524,9 +544,17 @@ mod tests {
 
         h.mac[0] ^= 0xff;
         assert_eq!(
-            verify_hello("client", &key, codec.codec_id(), &h, &client_id, &[])
-                .unwrap_err()
-                .kind(),
+            verify_hello(
+                "client",
+                &key,
+                codec.codec_id(),
+                &codec.schema_fingerprint(),
+                &h,
+                &client_id,
+                &[]
+            )
+            .unwrap_err()
+            .kind(),
             ErrorKind::AuthenticationFailed
         );
 
@@ -534,6 +562,7 @@ mod tests {
             "client",
             &key,
             codec.codec_id(),
+            &codec.schema_fingerprint(),
             client_id.clone(),
             test_nonce("invalid-version"),
             &[],
@@ -541,9 +570,17 @@ mod tests {
         .unwrap();
         h.version += 1;
         assert_eq!(
-            verify_hello("client", &key, codec.codec_id(), &h, &client_id, &[])
-                .unwrap_err()
-                .kind(),
+            verify_hello(
+                "client",
+                &key,
+                codec.codec_id(),
+                &codec.schema_fingerprint(),
+                &h,
+                &client_id,
+                &[]
+            )
+            .unwrap_err()
+            .kind(),
             ErrorKind::AuthenticationFailed
         );
 
@@ -551,15 +588,39 @@ mod tests {
             "client",
             &key,
             codec.codec_id(),
+            &codec.schema_fingerprint(),
             client_id.clone(),
             test_nonce("invalid-codec"),
             &[],
         )
         .unwrap();
         assert_eq!(
-            verify_hello("client", &key, "other-codec", &h, &client_id, &[])
-                .unwrap_err()
-                .kind(),
+            verify_hello(
+                "client",
+                &key,
+                "other-codec",
+                &codec.schema_fingerprint(),
+                &h,
+                &client_id,
+                &[]
+            )
+            .unwrap_err()
+            .kind(),
+            ErrorKind::AuthenticationFailed
+        );
+
+        assert_eq!(
+            verify_hello(
+                "client",
+                &key,
+                codec.codec_id(),
+                "pb.v1:other-schema",
+                &h,
+                &client_id,
+                &[]
+            )
+            .unwrap_err()
+            .kind(),
             ErrorKind::AuthenticationFailed
         );
     }

@@ -36,8 +36,9 @@ pub use capability::{Capability, CapabilitySet};
 pub use error::{ConstellationError, ErrorKind};
 pub use execution::{ExecState, ExecutionSummary};
 pub use frame::{
-    ConstellationFrame, Handshake, OperationKind, OperationRequest, OperationResponse, PeerContext,
-    StreamClose, StreamData, StreamFlow, StreamOpen,
+    ConstellationFrame, Handshake, HandshakeAccepted, HandshakeRejected, HandshakeRejectedReason,
+    OperationKind, OperationRequest, OperationResponse, PeerContext, StreamClose, StreamData,
+    StreamFlow, StreamOpen,
 };
 pub use ids::{
     ExecutionId, GatewayId, IdempotencyKey, NodeId, OperationId, PrincipalId, ProviderId, RealmId,

@@ -23,8 +23,9 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
 - `Capability`, `CapabilitySet`;
 - `NodeSummary`, `WorkloadSelector`, `WorkloadSummary`,
   `ExecutionSummary`;
-- `Handshake`, `OperationKind`, `OperationRequest`,
-  `OperationResponse`;
+- `Handshake`, `HandshakeAccepted`, `HandshakeRejected`,
+  `HandshakeRejectedReason`;
+- `OperationKind`, `OperationRequest`, `OperationResponse`;
 - `AdmissionAuditRecord`, `AuditEnvelope`, `AuditHash`,
   `AuditChainLink`, `AuditChainRecord`, `AuditChainCheckResult`,
   `AuditSinkHealth`, `AuditRetentionFloorStatus`;
@@ -37,6 +38,10 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
 - Capabilities are positive assertions. Missing capability means typed
   refusal, not fallback.
 - Mutating operation requests require an idempotency key at decode.
+- Peer handshakes carry a bounded codec schema fingerprint and explicit
+  accept/reject outcome shapes. A protocol, codec, schema, identity, or
+  channel-binding mismatch is a typed refusal before operations or streams
+  are routed.
 - `AuditEnvelope` is post-auth and requires a principal.
   `AdmissionAuditRecord` is the pre-auth/session-admission denial shape and
   may omit the principal.

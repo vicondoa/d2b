@@ -80,6 +80,10 @@ deprecations ship one minor release before removal.
   audit hash chaining, explicit audit-sink health reports, and
   host-boundary tests proving gateway relay/provider material stays out
   of host daemon artifacts.
+- ADR 0032 peer protocol foundations now expose explicit
+  handshake-accepted/rejected frames, bind codec schema fingerprints into
+  plain and secure peer handshakes, and document the length-delimited
+  semantic frame skeleton for future gateway transports.
 
 ### Changed
 

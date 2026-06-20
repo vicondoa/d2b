@@ -25,9 +25,9 @@ Regenerate that file; do not edit generated JSON by hand.
 | Root | Source | Contract |
 | --- | --- | --- |
 | `ConstellationCoreSchema` | `packages/xtask/src/main.rs` | Generated schema wrapper whose top-level `anyOf` enumerates the committed core roots. |
-| `ConstellationFrame` | `src/frame.rs` | Top-level semantic frame enum: handshake, operation request/response, stream open/data/flow/close, typed error, and admission audit. |
+| `ConstellationFrame` | `src/frame.rs` | Top-level semantic frame enum: handshake proposal/accept/reject, operation request/response, stream open/data/flow/close, typed error, and admission audit. |
 | `OperationRequest` / `OperationResponse` | `src/frame.rs` | Operation envelope with target realm/node/workload, authenticated principal, bounded body, trace context, and required idempotency for mutating kinds. |
-| `Handshake` / `OperationKind` | `src/frame.rs` | Negotiation and closed operation taxonomy roots. |
+| `Handshake` / `HandshakeAccepted` / `HandshakeRejected` / `OperationKind` | `src/frame.rs` | Negotiation outcome roots and closed operation taxonomy roots. |
 | `AuditEnvelope` | `src/audit.rs` | Redacted post-auth audit metadata for mutating operations and stream opens. |
 | `AdmissionAuditRecord` | `src/audit.rs` | Redacted pre-auth/session-admission denial metadata; principal may be absent only in this shape. |
 | `AuditChainRecord` / `AuditChainLink` / `AuditHash` | `src/audit.rs` | Tamper-evident audit-chain metadata for gateway, remote-node, and daemon audit streams. |
@@ -99,6 +99,20 @@ Display, clipboard, audio, HID, and USB are deliberately independent so
 one capability cannot smuggle another. Local GPU acceleration is not
 automatically relay-exportable.
 
+## Peer protocol handshake
+
+`Handshake` is the codec-neutral peer-session proposal/selection shape.
+It carries the protocol version, codec id, codec schema fingerprint, and
+an optional non-secret peer-binding context. Plain peer sessions exchange
+an explicit `HandshakeAccepted` or `HandshakeRejected`; secure sessions
+bind version, codec id, schema fingerprint, authenticated identity, and
+both nonces into the HMAC transcript before encrypted frames are accepted.
+
+The protobuf codec advertises a bounded schema fingerprint via
+`ProtocolCodec::schema_fingerprint()`. A version, codec, schema, identity,
+or channel-binding mismatch fails closed before operation or stream frames
+can be routed.
+
 ## Operation authorization and idempotency
 
 `OperationKind` is a closed, typed enum. The required capability is
@@ -167,6 +181,7 @@ the structured capability.
 ## Related references
 
 - [ADR 0032 — nixling v2 constellation control plane](../adr/0032-nixling-v2-constellation-control-plane.md)
+- [Constellation peer protocol reference](./constellation-protocol.md)
 - [Daemon API reference](./daemon-api.md)
 - [Naming conventions](./naming-conventions.md)
 - [Manifest bundle reference](./manifest-bundle.md)

@@ -44,9 +44,40 @@ pub struct Handshake {
     pub protocol_version: u32,
     /// Codec id negotiated for this session (bounded token).
     pub codec_id: ProtocolToken,
+    /// Codec schema fingerprint selected for this session (bounded token).
+    pub schema_fingerprint: ProtocolToken,
     /// Reserved peer-binding seam. Absent in the bootstrap protocol.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub peer: Option<PeerContext>,
+}
+
+/// Successful handshake outcome. Carries the exact version/codec/schema
+/// fingerprint selected for the session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandshakeAccepted {
+    /// The accepted handshake parameters.
+    pub selected: Handshake,
+}
+
+/// Closed reason a peer handshake was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum HandshakeRejectedReason {
+    VersionSkew,
+    CodecMismatch,
+    SchemaFingerprintMismatch,
+    ChannelBindingMismatch,
+    MalformedHandshake,
+}
+
+/// Fail-closed handshake rejection. The reason is a closed enum so callers
+/// never parse an unbounded peer-provided string for authz behavior.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandshakeRejected {
+    /// Why the session was refused.
+    pub reason: HandshakeRejectedReason,
 }
 
 /// The kind of an operation (ADR 0032 examples). Closed enum; unknown
@@ -413,6 +444,10 @@ pub struct StreamClose {
 pub enum ConstellationFrame {
     /// Session handshake (version + codec negotiation).
     Handshake(Handshake),
+    /// Session handshake accepted.
+    HandshakeAccepted(HandshakeAccepted),
+    /// Session handshake rejected.
+    HandshakeRejected(HandshakeRejected),
     /// An operation request.
     OperationRequest(OperationRequest),
     /// An operation response.
@@ -443,6 +478,29 @@ mod tests {
         let json = serde_json::to_string(&frame).unwrap();
         let back: ConstellationFrame = serde_json::from_str(&json).unwrap();
         assert_eq!(frame, back);
+    }
+
+    #[test]
+    fn handshake_outcome_frames_parse_and_reject_unknown_fields() {
+        let accepted = "{\"frame\":\"handshake-accepted\",\"selected\":{\
+                        \"protocol_version\":1,\
+                        \"codec_id\":\"protobuf.v1\",\
+                        \"schema_fingerprint\":\"pb.v1:schema\"}}";
+        assert!(serde_json::from_str::<ConstellationFrame>(accepted).is_ok());
+
+        let rejected = "{\"frame\":\"handshake-rejected\",\"reason\":\"codec-mismatch\"}";
+        assert!(serde_json::from_str::<ConstellationFrame>(rejected).is_ok());
+
+        let accepted_extra = "{\"frame\":\"handshake-accepted\",\"selected\":{\
+                              \"protocol_version\":1,\
+                              \"codec_id\":\"protobuf.v1\",\
+                              \"schema_fingerprint\":\"pb.v1:schema\"},\
+                              \"extra\":true}";
+        assert!(serde_json::from_str::<ConstellationFrame>(accepted_extra).is_err());
+
+        let rejected_extra =
+            "{\"frame\":\"handshake-rejected\",\"reason\":\"codec-mismatch\",\"extra\":true}";
+        assert!(serde_json::from_str::<ConstellationFrame>(rejected_extra).is_err());
     }
 
     #[test]
@@ -554,13 +612,18 @@ mod tests {
 
     #[test]
     fn handshake_codec_id_is_bounded_at_decode() {
-        let ok = "{\"protocol_version\":1,\"codec_id\":\"protobuf.v1\"}";
+        let ok = "{\"protocol_version\":1,\"codec_id\":\"protobuf.v1\",\"schema_fingerprint\":\"schema1\"}";
         assert!(serde_json::from_str::<Handshake>(ok).is_ok());
-        let overlong = format!(
-            "{{\"protocol_version\":1,\"codec_id\":\"{}\"}}",
+        let overlong_codec = format!(
+            "{{\"protocol_version\":1,\"codec_id\":\"{}\",\"schema_fingerprint\":\"schema1\"}}",
             "x".repeat(200)
         );
-        assert!(serde_json::from_str::<Handshake>(&overlong).is_err());
+        assert!(serde_json::from_str::<Handshake>(&overlong_codec).is_err());
+        let overlong_schema = format!(
+            "{{\"protocol_version\":1,\"codec_id\":\"protobuf.v1\",\"schema_fingerprint\":\"{}\"}}",
+            "x".repeat(200)
+        );
+        assert!(serde_json::from_str::<Handshake>(&overlong_schema).is_err());
     }
 
     #[test]
