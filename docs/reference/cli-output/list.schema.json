@@ -58,11 +58,23 @@
             "null"
           ]
         },
+        "runtimeCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "runtimeKind": {
           "type": [
             "string",
             "null"
           ]
+        },
+        "serviceCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "staticIp": {
           "type": [

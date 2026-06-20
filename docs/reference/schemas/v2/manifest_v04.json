@@ -80,6 +80,140 @@
       },
       "additionalProperties": false
     },
+    "ProcessRole": {
+      "description": "Known role types in the ADR 0004 process graph.",
+      "oneOf": [
+        {
+          "description": "Host reconciliation before VM-specific startup.",
+          "type": "string",
+          "enum": [
+            "host-reconcile"
+          ]
+        },
+        {
+          "description": "Store and virtiofs preflight validation.",
+          "type": "string",
+          "enum": [
+            "store-virtiofs-preflight"
+          ]
+        },
+        {
+          "description": "swtpm pre-start flush step.",
+          "type": "string",
+          "enum": [
+            "swtpm-pre-start-flush"
+          ]
+        },
+        {
+          "description": "swtpm sidecar.",
+          "type": "string",
+          "enum": [
+            "swtpm"
+          ]
+        },
+        {
+          "description": "virtiofsd sidecar.",
+          "type": "string",
+          "enum": [
+            "virtiofsd"
+          ]
+        },
+        {
+          "description": "Optional video sidecar.",
+          "type": "string",
+          "enum": [
+            "video"
+          ]
+        },
+        {
+          "description": "Optional GPU/graphics sidecar.",
+          "type": "string",
+          "enum": [
+            "gpu"
+          ]
+        },
+        {
+          "description": "Optional GPU/graphics sidecar — render-node-only mode (fd-passing, no device bind-mounts). Selected when `graphics.renderNodeOnly = true`; uses broker-pre-NS pattern (ADR 0021).",
+          "type": "string",
+          "enum": [
+            "gpu-render-node"
+          ]
+        },
+        {
+          "description": "Optional audio sidecar.",
+          "type": "string",
+          "enum": [
+            "audio"
+          ]
+        },
+        {
+          "description": "Cloud Hypervisor runner.",
+          "type": "string",
+          "enum": [
+            "cloud-hypervisor-runner"
+          ]
+        },
+        {
+          "description": "QEMU media runner.",
+          "type": "string",
+          "enum": [
+            "qemu-media-runner"
+          ]
+        },
+        {
+          "description": "vsock relay sidecar.",
+          "type": "string",
+          "enum": [
+            "vsock-relay"
+          ]
+        },
+        {
+          "description": "Host-to-observability-VM OTLP bridge.",
+          "type": "string",
+          "enum": [
+            "otel-host-bridge"
+          ]
+        },
+        {
+          "description": "Guest SSH readiness probe.\n\nRetained for the SSH-compatibility window (old-generation VMs that predate guestd). New generations use [`ProcessRole::GuestControlHealth`] for framework readiness instead.",
+          "type": "string",
+          "enum": [
+            "guest-ssh-readiness"
+          ]
+        },
+        {
+          "description": "Authenticated guest-control Health readiness probe.\n\nReplaces [`ProcessRole::GuestSshReadiness`] as the framework readiness gate on guest-control-capable VMs: readiness is a full authenticated Hello + token challenge-response + Health over the guest-control vsock, not a raw TCP-22 probe. It fails CLOSED.",
+          "type": "string",
+          "enum": [
+            "guest-control-health"
+          ]
+        },
+        {
+          "description": "USBIP proxy or attach helper.",
+          "type": "string",
+          "enum": [
+            "usbip"
+          ]
+        },
+        {
+          "description": "Host-jailed Wayland filter proxy. Runs as `nixling-<vm>-wlproxy` with the real host compositor socket bound read/write at a fixed in-jail upstream path and the per-VM filter socket at `/run/nixling-wlproxy/<vm>`. Empty host capabilities; mandatory `seccompPolicyRef`; no PipeWire/Pulse socket access.",
+          "type": "string",
+          "enum": [
+            "wayland-proxy"
+          ]
+        }
+      ]
+    },
+    "RuntimeAutostartPolicy": {
+      "description": "Runtime-level autostart policy exposed in public summaries.",
+      "type": "string",
+      "enum": [
+        "unknown",
+        "host-boot-eligible",
+        "manual-only",
+        "disabled"
+      ]
+    },
     "RuntimeCapabilities": {
       "description": "Runtime/provider support matrix. These flags describe support, not whether a VM currently enables a feature.",
       "type": "object",
@@ -129,6 +263,64 @@
       },
       "additionalProperties": false
     },
+    "RuntimeDisplayCapabilities": {
+      "description": "Display-side operations exposed by a runtime provider.",
+      "type": "object",
+      "required": [
+        "display",
+        "graphics",
+        "video",
+        "waylandProxy"
+      ],
+      "properties": {
+        "display": {
+          "type": "boolean"
+        },
+        "graphics": {
+          "type": "boolean"
+        },
+        "video": {
+          "type": "boolean"
+        },
+        "waylandProxy": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeGuestCapabilities": {
+      "description": "Guest-facing operations exposed by a runtime provider.",
+      "type": "object",
+      "required": [
+        "configSync",
+        "exec",
+        "guestControl",
+        "inGuestObservability",
+        "keys",
+        "ssh"
+      ],
+      "properties": {
+        "configSync": {
+          "type": "boolean"
+        },
+        "exec": {
+          "type": "boolean"
+        },
+        "guestControl": {
+          "type": "boolean"
+        },
+        "inGuestObservability": {
+          "type": "boolean"
+        },
+        "keys": {
+          "type": "boolean"
+        },
+        "ssh": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "RuntimeKind": {
       "description": "VM runtime family.",
       "type": "string",
@@ -136,6 +328,56 @@
         "nixos",
         "qemu-media"
       ]
+    },
+    "RuntimeLifecycleCapabilities": {
+      "description": "Lifecycle operations exposed by a runtime provider.",
+      "type": "object",
+      "required": [
+        "hostPrepare",
+        "restart",
+        "start",
+        "stop",
+        "switch"
+      ],
+      "properties": {
+        "hostPrepare": {
+          "type": "boolean"
+        },
+        "restart": {
+          "type": "boolean"
+        },
+        "start": {
+          "type": "boolean"
+        },
+        "stop": {
+          "type": "boolean"
+        },
+        "switch": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeMediaCapabilities": {
+      "description": "Media and hotplug operations exposed by a runtime provider.",
+      "type": "object",
+      "required": [
+        "qemuMedia",
+        "removableMedia",
+        "usbHotplug"
+      ],
+      "properties": {
+        "qemuMedia": {
+          "type": "boolean"
+        },
+        "removableMedia": {
+          "type": "boolean"
+        },
+        "usbHotplug": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
     },
     "RuntimeMetadata": {
       "description": "Runtime/provider metadata shared by the public manifest and private bundle artifacts.",
@@ -146,14 +388,55 @@
         "provider"
       ],
       "properties": {
+        "autostartPolicy": {
+          "$ref": "#/definitions/RuntimeAutostartPolicy"
+        },
         "capabilities": {
           "$ref": "#/definitions/RuntimeCapabilities"
         },
         "kind": {
           "$ref": "#/definitions/RuntimeKind"
         },
+        "operationCapabilities": {
+          "$ref": "#/definitions/RuntimeOperationCapabilities"
+        },
         "provider": {
           "$ref": "#/definitions/RuntimeProvider"
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RuntimeServiceSummary"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeOperationCapabilities": {
+      "description": "Runtime/provider operation support grouped by public feature axis.",
+      "type": "object",
+      "required": [
+        "display",
+        "guest",
+        "lifecycle",
+        "media",
+        "storage"
+      ],
+      "properties": {
+        "display": {
+          "$ref": "#/definitions/RuntimeDisplayCapabilities"
+        },
+        "guest": {
+          "$ref": "#/definitions/RuntimeGuestCapabilities"
+        },
+        "lifecycle": {
+          "$ref": "#/definitions/RuntimeLifecycleCapabilities"
+        },
+        "media": {
+          "$ref": "#/definitions/RuntimeMediaCapabilities"
+        },
+        "storage": {
+          "$ref": "#/definitions/RuntimeStorageCapabilities"
         }
       },
       "additionalProperties": false
@@ -184,6 +467,7 @@
       "type": "string",
       "enum": [
         "cloud-hypervisor",
+        "crosvm",
         "qemu"
       ]
     },
@@ -193,6 +477,74 @@
       "enum": [
         "local"
       ]
+    },
+    "RuntimeServiceRole": {
+      "description": "Normalized public role for a runtime service, derived from process roles.",
+      "type": "string",
+      "enum": [
+        "host",
+        "hypervisor",
+        "storage",
+        "tpm",
+        "display",
+        "audio",
+        "video",
+        "network",
+        "guest-control",
+        "usb",
+        "observability"
+      ]
+    },
+    "RuntimeServiceSummary": {
+      "description": "Public service summary that can be derived from the private process DAG.",
+      "type": "object",
+      "required": [
+        "id",
+        "role"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "optional": {
+          "type": "boolean"
+        },
+        "processRole": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProcessRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/RuntimeServiceRole"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeStorageCapabilities": {
+      "description": "Storage operations exposed by a runtime provider.",
+      "type": "object",
+      "required": [
+        "storeSync",
+        "virtiofs",
+        "volumes"
+      ],
+      "properties": {
+        "storeSync": {
+          "type": "boolean"
+        },
+        "virtiofs": {
+          "type": "boolean"
+        },
+        "volumes": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
     },
     "VmEntry": {
       "type": "object",

@@ -390,11 +390,23 @@
         "runtime": {
           "type": "string"
         },
+        "runtimeCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "runtimeKind": {
           "type": [
             "string",
             "null"
           ]
+        },
+        "serviceCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "services": {
           "$ref": "#/definitions/StatusServicesOutputV2"
