@@ -15,7 +15,7 @@
 //!   `local` realm (the host carries no realm config), so any realm target
 //!   surfaces a typed, actionable diagnostic rather than a host dispatch.
 
-use nixling_constellation_core::{RealmPath, TargetName};
+use nixling_constellation_core::{RealmId, RealmPath, TargetName};
 use nixling_constellation_router::{DispatchTarget, RealmEntrypointTable, ResolveError};
 
 /// The routing decision for a `vm start/exec <target>` argument.
@@ -38,6 +38,13 @@ pub enum RouteError {
     /// A gateway-backed realm whose table entry is missing its gateway target
     /// (malformed table).
     MissingGateway { target: String, realm: String },
+    /// The conventional local gateway VM name for a realm cannot be represented
+    /// as a target address.
+    InvalidGatewayTarget {
+        realm: String,
+        gateway: String,
+        reason: String,
+    },
 }
 
 impl core::fmt::Display for RouteError {
@@ -54,8 +61,87 @@ impl core::fmt::Display for RouteError {
                 "target `{target}` is in gateway-backed realm `{realm}`, but its entrypoint is \
                  missing a gateway address (malformed realm entrypoint table)"
             ),
+            RouteError::InvalidGatewayTarget {
+                realm,
+                gateway,
+                reason,
+            } => write!(
+                f,
+                "realm `{realm}` maps to gateway VM `{gateway}`, but that gateway target is \
+                 invalid: {reason}"
+            ),
         }
     }
+}
+
+/// Why a `nixling realm <verb> <realm>` argument was rejected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RealmArgError {
+    Empty,
+    BadLabel { label: String, reason: String },
+    BadPath { realm: String },
+}
+
+impl core::fmt::Display for RealmArgError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            RealmArgError::Empty => write!(f, "realm path is empty"),
+            RealmArgError::BadLabel { label, reason } => {
+                write!(f, "realm label `{label}` is invalid: {reason}")
+            }
+            RealmArgError::BadPath { realm } => {
+                write!(
+                    f,
+                    "realm path `{realm}` is empty, too long, or has too many labels"
+                )
+            }
+        }
+    }
+}
+
+/// A target's conventional local gateway entrypoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayHint {
+    pub target: String,
+    pub realm: RealmPath,
+    pub gateway_vm: String,
+    pub gateway_target: String,
+}
+
+/// Parse a CLI realm argument (`work`, `payments.work`) into a realm path.
+pub fn parse_realm_arg(raw: &str) -> Result<RealmPath, RealmArgError> {
+    if raw.is_empty() {
+        return Err(RealmArgError::Empty);
+    }
+    let labels = raw
+        .split('.')
+        .map(|label| {
+            RealmId::parse(label).map_err(|err| RealmArgError::BadLabel {
+                label: label.to_owned(),
+                reason: err.to_string(),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    RealmPath::new(labels).ok_or_else(|| RealmArgError::BadPath {
+        realm: raw.to_owned(),
+    })
+}
+
+/// Conventional local gateway VM name for a realm (`work` ->
+/// `sys-work-gateway`).
+pub fn gateway_vm_name(realm: &RealmPath) -> String {
+    format!("sys-{}-gateway", realm.target_form().replace('.', "-"))
+}
+
+/// Conventional local gateway target address for a realm gateway VM.
+pub fn gateway_target_name(realm: &RealmPath) -> Result<TargetName, RouteError> {
+    let gateway = gateway_vm_name(realm);
+    let raw = format!("{gateway}.nixling");
+    TargetName::parse(&raw).map_err(|err| RouteError::InvalidGatewayTarget {
+        realm: realm.target_form(),
+        gateway,
+        reason: err.to_string(),
+    })
 }
 
 /// Classify and resolve a `vm`/target argument against `table`.
@@ -102,6 +188,7 @@ pub fn route(raw: &str, table: &RealmEntrypointTable) -> Result<Route, RouteErro
 
 /// Return the canonical gateway target for a fully-qualified non-local target.
 /// Bare/local names return `None` and stay on the local fast path.
+#[cfg(test)]
 pub fn gateway_candidate(raw: &str) -> Option<String> {
     let target = TargetName::parse(raw).ok()?;
     if target.node_is_this() && target.realm == RealmPath::local() {
@@ -109,6 +196,27 @@ pub fn gateway_candidate(raw: &str) -> Option<String> {
     } else {
         Some(target.to_string())
     }
+}
+
+/// Return the realm/gateway hint for a fully-qualified non-local target.
+/// Bare/local names return `None` and stay on the local fast path.
+pub fn gateway_hint(raw: &str) -> Result<Option<GatewayHint>, RouteError> {
+    let target = match TargetName::parse(raw) {
+        Ok(target) => target,
+        Err(_) => return Ok(None),
+    };
+    if target.node_is_this() && target.realm == RealmPath::local() {
+        return Ok(None);
+    }
+    let realm = target.realm.clone();
+    let gateway_vm = gateway_vm_name(&realm);
+    let gateway_target = gateway_target_name(&realm)?;
+    Ok(Some(GatewayHint {
+        target: target.to_string(),
+        realm,
+        gateway_vm,
+        gateway_target: gateway_target.to_string(),
+    }))
 }
 
 #[cfg(test)]
@@ -193,6 +301,50 @@ mod tests {
             gateway_candidate("demo.gw.work.nixling").as_deref(),
             Some("nl://demo.gw.work.nixling")
         );
+    }
+
+    #[test]
+    fn realm_arg_and_gateway_name_follow_gateway_vm_convention() {
+        let work = parse_realm_arg("work").unwrap();
+        assert_eq!(work.target_form(), "work");
+        assert_eq!(gateway_vm_name(&work), "sys-work-gateway");
+        assert_eq!(
+            gateway_target_name(&work).unwrap().to_string(),
+            "nl://sys-work-gateway.this.local.nixling"
+        );
+
+        let nested = parse_realm_arg("payments.work").unwrap();
+        assert_eq!(nested.target_form(), "payments.work");
+        assert_eq!(gateway_vm_name(&nested), "sys-payments-work-gateway");
+    }
+
+    #[test]
+    fn realm_arg_rejects_bad_labels() {
+        assert!(matches!(parse_realm_arg(""), Err(RealmArgError::Empty)));
+        assert!(matches!(
+            parse_realm_arg("Work"),
+            Err(RealmArgError::BadLabel { .. })
+        ));
+        assert!(matches!(
+            parse_realm_arg("work."),
+            Err(RealmArgError::BadLabel { .. })
+        ));
+    }
+
+    #[test]
+    fn gateway_hint_describes_gateway_backed_target_without_routing_it() {
+        let hint = gateway_hint("demo.aca.work.nixling")
+            .unwrap()
+            .expect("realm target has a gateway hint");
+        assert_eq!(hint.target, "nl://demo.aca.work.nixling");
+        assert_eq!(hint.realm.target_form(), "work");
+        assert_eq!(hint.gateway_vm, "sys-work-gateway");
+        assert_eq!(
+            hint.gateway_target,
+            "nl://sys-work-gateway.this.local.nixling"
+        );
+        assert!(gateway_hint("vm-a").unwrap().is_none());
+        assert!(gateway_hint("demo.aca.work").unwrap().is_none());
     }
 
     #[test]

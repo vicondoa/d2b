@@ -73,6 +73,12 @@ without spaces. See
 [`constellation-core.md`](./constellation-core.md) for the complete
 core model contract.
 
+Gateway-backed realms use a local gateway VM entrypoint. The default
+gateway VM name is `sys-<realm-path-with-dashes>-gateway`, but
+operators may override `nixling.gateways.<name>.vmName`; consumers
+should read the generated `realm-entrypoints.json` table rather than
+reconstructing the name from the realm path.
+
 ## Network device names
 
 | Resource | Pattern | Notes |

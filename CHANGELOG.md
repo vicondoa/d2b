@@ -70,6 +70,10 @@ deprecations ship one minor release before removal.
 - `qemuMedia` image-file sources can now be declared directly with an
   absolute `path` and `format = "raw"`; physical USB sources continue to
   use opaque refs plus `nixling usb enroll`.
+- ADR 0032 realm entrypoints now publish a host-visible
+  `realm-entrypoints.json` table, allow separate gateway guests for
+  separate realm/env segments, and add `nixling realm enter/run` plus
+  manifest-backed realm target routing for gateway-backed VM verbs.
 
 ### Changed
 
