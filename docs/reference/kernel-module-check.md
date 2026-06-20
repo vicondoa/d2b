@@ -57,6 +57,7 @@ list in the public message. KVM alternatives render as
 | `virtio_console` | Always. |
 | `virtiofs` | Any VM has a `Virtiofsd` process node. |
 | `udmabuf` | Any VM has `graphics = true` or a `Gpu` process node. |
+| `drm_virtgpu` | Any VM has `graphics = true` or a `Gpu` process node. |
 
 A module is "present" when either `/proc/modules` contains it OR the
 daemon can prove the corresponding `CONFIG_*` option is built into the
