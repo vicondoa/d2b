@@ -90,6 +90,9 @@ deprecations ship one minor release before removal.
 - Remote execution groundwork now supports reliable reconnects, bounded
   retained-log reads, and safe repeated cancellation for future durable
   remote exec sessions.
+- Documentation: ADR 0036 records the current qemu-media runtime contract,
+  and ADR 0037 defines the shared local hypervisor runtime/service seam for
+  qemu-media and Cloud Hypervisor/crosvm workloads.
 
 ### Changed
 
@@ -130,6 +133,10 @@ deprecations ship one minor release before removal.
 - `qemu-media` VMs now emit a typed QMP-only QEMU runner process node
   instead of being absent from `processes.json`; they still do not emit
   Cloud Hypervisor, store/virtiofs, or guest-control runner data.
+- Planned breaking cleanup: qemu-media will remove the public
+  `nixling usb enroll` workflow. Physical USB boot media resolution moves to
+  VM start, while runtime qemu-media attach/detach remains QMP-backed and
+  separate from USBIP.
 
 ### Fixed
 
