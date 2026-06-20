@@ -88,15 +88,15 @@ pub fn generate_qemu_media_argv(
         "-smp".to_owned(),
         input.vcpu.to_string(),
         "-device".to_owned(),
-        "qemu-xhci,id=xhci,p2=15,p3=15".to_owned(),
+        "usb-ehci,id=ehci".to_owned(),
         "-device".to_owned(),
         "virtio-vga".to_owned(),
         "-display".to_owned(),
         "gtk,gl=off,show-cursor=on".to_owned(),
         "-device".to_owned(),
-        "usb-kbd,bus=xhci.0,port=1".to_owned(),
+        "usb-kbd,bus=ehci.0".to_owned(),
         "-device".to_owned(),
-        "usb-tablet,bus=xhci.0,port=2".to_owned(),
+        "usb-tablet,bus=ehci.0".to_owned(),
         "-netdev".to_owned(),
         format!("tap,id=nl0,fd={},vhost=off", input.tap_fd),
         "-device".to_owned(),
@@ -171,9 +171,9 @@ mod tests {
         assert!(joined.contains("-nodefaults -no-user-config -S"));
         assert!(joined.contains("-machine q35,accel=kvm,usb=off"));
         assert!(joined.contains("-m 4096M -smp 2"));
-        assert!(joined.contains("-device qemu-xhci,id=xhci,p2=15,p3=15"));
-        assert!(joined.contains("-device usb-kbd,bus=xhci.0,port=1"));
-        assert!(joined.contains("-device usb-tablet,bus=xhci.0,port=2"));
+        assert!(joined.contains("-device usb-ehci,id=ehci"));
+        assert!(joined.contains("-device usb-kbd,bus=ehci.0"));
+        assert!(joined.contains("-device usb-tablet,bus=ehci.0"));
         assert!(joined.contains("-display gtk,gl=off,show-cursor=on"));
         assert!(joined.contains("-netdev tap,id=nl0,fd=10,vhost=off"));
         assert!(joined.contains("-device virtio-net-pci,netdev=nl0,mac=02:76:53:AE:57:2A"));

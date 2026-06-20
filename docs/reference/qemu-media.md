@@ -44,6 +44,10 @@ nixling.vms.dark-live.qemuMedia.resources = {
 };
 ```
 
+The runner presents boot media as a removable USB storage device on an
+EHCI controller, matching the USB-disk/removable shape recommended by
+Linux VM frontends for external live media.
+
 ### Direct image file
 
 Direct image files are configured in Nix. They do not use enrollment.
