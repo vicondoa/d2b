@@ -65,6 +65,10 @@ surface while preserving the load-bearing contracts from earlier ADRs:
 - The Rust CLI remains the only operator CLI surface.
 - Generated bundle artifacts remain versioned contracts, not ad hoc JSON.
 - Storage, lock, ACL, cleanup, and restart behavior follow ADR 0034.
+- Task, thread, and I/O ownership become explicit. Request/task threads do
+  not perform unbounded synchronous I/O; blocking filesystem, process,
+  network, or broker work runs behind bounded blocking pools, workers, or
+  actor-owned queues with cancellation and backpressure.
 - v2 provider/transport work follows ADR 0032; this ADR narrows and cleans
   that path rather than introducing another abstraction hierarchy.
 - Tests remain fail-closed and follow the Layer-1-first test model; this ADR
@@ -77,10 +81,11 @@ surface while preserving the load-bearing contracts from earlier ADRs:
   the framework's ability to ship deliberate migrations later.
 
 The waves below are ordered to reduce future work first. Wave 0 creates
-measurement and starts compatibility deletion; Waves 1-4 remove duplicated infrastructure;
-Waves 5-8 reshape Rust/Nix boundaries; Waves 9-11 tighten runtime and
-operator-facing efficiency; Wave 12 is the recurring ratchet that keeps the
-codebase from growing back.
+measurement and starts compatibility deletion; Waves 1-4 remove duplicated
+infrastructure; Waves 5-8 reshape Rust/Nix boundaries; Wave 9 aligns v2
+providers; Waves 10-11 fix task/runtime hot paths; Wave 12 trims docs and
+examples; Wave 13 removes avoidable unsafe code; Wave 14 is the recurring
+ratchet that keeps the codebase from growing back.
 
 ## Efficiency principles
 
@@ -119,6 +124,69 @@ has an explicit source version, target version, validation path, and removal
 or support policy. A compatibility shim silently keeps old behavior alive in
 the current code path. The cleanup waves delete the latter while preserving
 the former capability for future breakage.
+
+NixOS option tombstones are migration machinery, not compatibility shims.
+When a public option is removed or renamed, use `mkRemovedOptionModule` or
+`mkRenamedOptionModule` so evaluation fails closed with an actionable message
+that names the ADR/release path. Deleting the old behavior is required; making
+the failure understandable is also required.
+
+### Non-blocking task model by default
+
+Nixling's daemon, guest-control, provider, gateway, relay, and metrics paths
+must have a declared task model. Async tasks may perform CPU-light state
+transitions and non-blocking socket I/O; they must not perform unbounded
+blocking filesystem walks, process spawning/waiting, synchronous network
+calls, JSON reads on hot paths, or broker round trips while holding global
+locks. Blocking work is isolated behind one of:
+
+- a bounded `spawn_blocking` pool with per-operation admission limits;
+- a dedicated worker thread or actor that owns the resource and exposes a
+  bounded queue;
+- a broker operation whose caller awaits a typed response without holding
+  unrelated daemon locks;
+- a startup/reconcile phase that is outside request-response hot paths.
+
+Every long-running task needs a cancellation path, a bounded queue or
+concurrency limit, and an observability surface for saturation. The minimum
+runtime surface is queue depth, admission rejections/dropped requests,
+backpressure triggers, blocking-pool/worker exhaustion, task age, and
+blocking-duration histograms. Add runtime stall detection where the executor
+supports it; static linting is necessary but not sufficient. This applies to
+local-only paths and ADR 0032 constellation/provider paths: adding remote
+transports must not move blocking I/O onto the daemon's request handlers.
+
+The concurrency model has four hard rules:
+
+1. **One runtime, structured supervision.** A daemon or broker that owns a
+   Tokio runtime uses structured tasks, cancellation tokens, bounded queues,
+   and semaphores for independent connection/background work. Raw
+   `std::thread::spawn` / `std::thread::Builder` is not used for request,
+   socket, relay, or retry loops.
+2. **No nested runtimes.** Code must not hide async work inside
+   `spawn_blocking` by constructing a fresh `tokio::runtime::Runtime`.
+   Async guest-control, provider, and relay clients join the parent runtime
+   and inherit its cancellation/backpressure model.
+3. **Subprocess waits are owned work.** `std::process::Command` is not used
+   in daemon/provider async hot paths. Subprocess execution either uses
+   `tokio::process::Command`, a dedicated worker/actor, or a broker op whose
+   blocking wait is explicitly outside request/task runtime workers.
+4. **State ownership beats mutex contention.** Broad ledgers and supervisor
+   maps move toward actor ownership with message-passing mutation. A mutex may
+   protect a small in-memory invariant; it must not be held across filesystem,
+   network, broker, process, or metrics I/O.
+5. **Thread-local kernel state never runs on runtime workers.** Operations
+   such as `setns`, `capset`, `prctl(PR_SET_SECCOMP)`, seccomp install,
+   namespace setup, credential mutation, and `clone3` child setup run only on
+   dedicated isolated OS-thread workers or inside tightly-scoped `pre_exec`
+   / fork-child paths that follow async-signal-safety rules. The ban on raw
+   thread-per-request handling does not ban isolated kernel workers whose
+   only job is to avoid poisoning the async runtime.
+6. **File descriptor receive is cancellation-safe.** Any `SCM_RIGHTS`
+   receive path must guarantee that delivered fds are immediately wrapped in
+   `OwnedFd` or closed before the next cancellation point. Use a
+   cancellation-safe readiness pattern plus synchronous `recvmsg`, or an
+   owned blocking worker that performs receive-and-wrap atomically.
 
 ### Future compatibility bridge keys
 
@@ -164,11 +232,31 @@ logic. If an implementation wave believes unkeyed compatibility code still
 protects a current invariant, that wave either converts it into an explicit
 keyed bridge under the scheme above or deletes it while updating callers.
 
+For JSON, bundle, and schema surfaces, the key metadata lives in the
+generating source, not in the final artifact. Security-sensitive JSON keeps
+`deny_unknown_fields`; do not add compatibility metadata fields to emitted
+bundle/manifest/schema JSON unless that field is part of a deliberate schema
+version bump. Put the `compat-ADR...` key in the Rust DTO docs/source, Nix
+emitter, schema-generation code, or migration record that produces the
+artifact.
+
 ### Prefer typed builders over string assembly
 
 Repeated argv, readiness, process, path, lock, and audit shapes should move
 toward typed builders that validate once and render once. Builders must
 encode security invariants; they are not string-concatenation helpers.
+
+### Remove unsafe code or quarantine it behind safe crates
+
+The workspace already forbids unsafe code in most crates and quarantines
+kernel FFI in narrow areas. Efficiency cleanup should make that stronger:
+remove local `unsafe` when a maintained safe wrapper exists (`rustix`, `nix`,
+or another focused crate), and keep unavoidable Linux FFI in a small audited
+module with documented safety preconditions. New unsafe code is an
+architecture finding, not a local implementation detail. If a syscall still
+requires project-local unsafe, the ADR or module contract must explain why no
+safe crate is sufficient and what would allow deleting the unsafe wrapper
+later.
 
 ### Make generated output families explicit
 
@@ -319,6 +407,11 @@ Tasks:
    typed inputs.
 4. Keep index generation pure and read-only; it may not perform activation,
    tmpfiles, broker, or host mutation work.
+5. Build the index only from base-level declared inputs that cannot depend on
+   the index itself, such as option values, enable flags, env names, VM names,
+   component toggles, and explicit IDs. Do not compute the index from fully
+   evaluated config subtrees whose definitions may read the index, or the
+   module system can recurse.
 
 Primary targets:
 
@@ -336,6 +429,8 @@ Validation:
   artifacts unless intentional changes are documented;
 - eval cases cover multi-env, net VM, USBIP, observability, and graphics
   selection from the index;
+- recursion guards or focused eval cases prove index consumers do not create
+  cycles;
 - `nix flake check --no-build` does not regress in eval time.
 
 Exit criteria:
@@ -658,7 +753,108 @@ Exit criteria:
 - adding a provider is mostly adapter code plus capability records, not a new
   copy of lifecycle, display, transport, audit, and storage logic.
 
-### Wave 10 — Runtime hot-path efficiency
+### Wave 10 — Threading, task, and non-blocking I/O model
+
+Goal: make nixling's concurrency model explicit and keep request/task threads
+from doing unbounded blocking I/O.
+
+Tasks:
+
+1. Inventory every daemon, broker, guest-control, gateway, relay, provider,
+   metrics, and CLI path that performs filesystem, socket, process, DNS/HTTP,
+   JSON parse/read, or broker IPC work.
+2. Classify each operation by owner and execution class:
+   - async non-blocking socket I/O;
+   - bounded blocking filesystem/process work;
+   - broker-owned privileged work;
+   - startup/reconcile-only work;
+   - CPU-bound serialization or policy computation;
+   - long-running stream/relay task.
+3. Define a task-supervision contract with:
+   - task owner;
+   - cancellation trigger;
+   - maximum concurrency;
+   - queue bound/backpressure behavior;
+   - shutdown ordering;
+   - saturation metric/log posture;
+   - whether blocking work may run on a generic blocking pool or needs a
+     dedicated worker/actor.
+4. Remove ad hoc thread spawning from daemon/provider hot paths in favor of
+   structured task groups, owned workers, or bounded blocking pools.
+5. Forbid holding global daemon locks while awaiting broker IPC, reading
+   files, spawning processes, scraping metrics, or performing provider
+   network calls.
+6. Move synchronous JSON reads and bundle parsing off list/status/doctor hot
+   paths through explicit snapshot/cache ownership and bundle-hash
+   invalidation.
+7. Require provider/relay transports from ADR 0032 to expose async traits or
+   actor-owned blocking adapters so remote I/O cannot stall local lifecycle
+   request handling.
+8. Replace OS-thread-per-connection handling in daemon request paths with
+   runtime-owned tasks and bounded admission. The initial audit includes
+   `nixlingd` connection handling for public socket requests, exec-owner
+   sessions, gateway display sessions, and exec writer plumbing.
+9. Delete runtime-in-runtime bridge patterns. Guest-control probes and ttRPC
+   clients become natively async or actor-owned adapters; they do not consume
+   the blocking pool just to create a private single-thread Tokio runtime.
+10. Move broker and daemon background retry loops under structured
+   supervision. ACL refresh retries, vsock/observability retries, and similar
+   polling loops use cancellation-aware tasks with bounded retry policy, not
+   detached sleep loops.
+11. Classify subprocess execution sites. Host mutation commands such as
+   `systemctl`, `mkfs`, `nft`, NetworkManager tools, detached exec
+   reconciliation, and activation helpers either become async subprocesses,
+   broker-owned blocking work, or pure Rust operations with explicit
+   backpressure.
+12. Move broad supervisor state and pidfd/task ledgers toward actor ownership
+   so mutation is serialized by the owner task instead of guarded by global
+   synchronous mutexes that can be touched by blocking worker code.
+
+Primary targets:
+
+- `packages/nixlingd/src/lib.rs`;
+- `packages/nixlingd/src/autostart.rs`;
+- `packages/nixlingd/src/concurrency.rs`;
+- `packages/nixlingd/src/exec_session*.rs`;
+- `packages/nixlingd/src/guest_control_bridge.rs`;
+- `packages/nixlingd/src/guest_control_*`;
+- `packages/nixlingd/src/supervisor/*`;
+- `packages/nixlingd/src/metrics.rs`;
+- `packages/nixlingd/src/ch_stats.rs`;
+- `packages/nixling-priv-broker/src/live_handlers.rs`;
+- `packages/nixling-priv-broker/src/runtime.rs`;
+- `packages/nixling-priv-broker/src/ops/*`;
+- `packages/nixling-gateway-runtime/*`;
+- `packages/nixling-provider-*`;
+- `packages/nixling-constellation-*`;
+- `packages/nixling-core/src/bundle_resolver.rs`.
+
+Validation:
+
+- policy lint or Rust tests identify blocking APIs in async/request-handler
+  modules and require an explicit allowlist with owner and execution class;
+- request handlers do not hold global locks across I/O awaits or blocking
+  work;
+- every long-running stream/relay/task path has cancellation and bounded
+  queue/backpressure coverage;
+- list/status/doctor hot paths use snapshots or cached reads with freshness
+  metadata where appropriate.
+- no nested Tokio runtime construction is used to service request-path async
+  work;
+- subprocess sites have explicit execution-class coverage: async process,
+  actor/worker, broker-owned blocking op, or startup/reconcile only.
+
+Exit criteria:
+
+- contributors can name where blocking work is allowed and why;
+- local lifecycle requests cannot be starved by provider HTTP calls, metric
+  scraping, filesystem walks, or subprocess waits;
+- the v2 transport-neutral API has one task model for CLI, future web UI,
+  local daemon peers, gateway-backed realms, and remote providers.
+- daemon/broker background tasks are owned, cancellable, and visible to
+  shutdown/doctor/metrics surfaces.
+
+### Wave 11 — Runtime hot-path efficiency
 
 Goal: improve runtime behavior where simplicity and performance align.
 
@@ -671,6 +867,10 @@ Tasks:
 3. Batch broker requests where the ordering is contractually one operation,
    such as host prepare phases, storage repair sets, or network reconcile,
    while keeping per-op audit records.
+   Batching must include audit burst controls: bounded batch sizes, stable
+   low-cardinality labels, rate-limited diagnostic summaries, and metrics
+   that report dropped/throttled audit emission if the fail-closed policy ever
+   refuses a batch due to audit pressure.
 4. Use pidfd and cgroup discovery helpers consistently so restart/adoption
    code does not duplicate kernel traversal.
 5. Keep expensive observability scraping off command-response paths; surface
@@ -690,6 +890,8 @@ Validation:
 
 - no stale-bundle dispatch after host switch;
 - broker audit remains per typed operation;
+- batched operations cannot create unbounded audit/log cardinality or burst
+  volume;
 - list/status/doctor output includes freshness where cached health is used.
 
 Exit criteria:
@@ -697,7 +899,7 @@ Exit criteria:
 - runtime speedups come from fewer repeated reads/parses/locks, not from
   skipping validation or swallowing errors.
 
-### Wave 11 — Example, template, and documentation diet
+### Wave 12 — Example, template, and documentation diet
 
 Goal: make shipped docs/examples teach the current model without preserving
 historical scaffolding.
@@ -735,7 +937,83 @@ Exit criteria:
 - new users see the current architecture first; historical context remains
   available in ADRs but does not dominate day-to-day docs.
 
-### Wave 12 — Recurring efficiency ratchet
+### Wave 13 — Unsafe-code removal and FFI quarantine
+
+Goal: remove avoidable project-local `unsafe` and make unavoidable kernel FFI
+small, audited, and replaceable by maintained safe wrappers when available.
+
+Tasks:
+
+1. Inventory every `unsafe` block, `unsafe fn`, `unsafe impl`, and
+   `allow(unsafe_code)` in tracked Rust code. The initial audit starts with
+   the broker FFI quarantine and tests plus the host activation helper:
+   - `packages/nixling-priv-broker/src/sys.rs`;
+   - `packages/nixling-priv-broker/src/seccomp_compile_tests.rs`;
+   - `packages/nixling-priv-broker/tests/socket_activation.rs`;
+   - `packages/nixling-host-activation-helper/src/main.rs`.
+2. For each site, choose one disposition:
+   - replace with a maintained safe API (`rustix`, `nix`, `capctl`, or another
+     focused crate);
+   - move behind the existing broker FFI quarantine with a safe wrapper and
+     documented safety preconditions;
+   - delete because the compatibility or legacy path is removed;
+   - keep temporarily only when no safe crate exposes the required Linux API.
+3. Prefer `rustix`/`nix` safe wrappers for fd-relative filesystem operations,
+   fd flags, owned-fd conversion helpers, directory iteration, pidfd helpers,
+   waits, and mount/capability primitives where they preserve the same kernel
+   semantics.
+4. Keep raw `libc` only for syscalls or structs not safely exposed by a
+   maintained crate, such as specific `clone3`, TUN/TAP ioctl, seccomp, or
+   capability operations that lack a suitable wrapper.
+5. Require `openat2` with `RESOLVE_BENEATH`, `RESOLVE_NO_MAGICLINKS`, and
+   symlink refusal for path resolution that crosses into untrusted,
+   guest-controlled, or externally writable filesystem boundaries. Plain
+   `openat` is acceptable only for already-trusted anchored paths whose parent
+   ownership/mode invariants are proven by the storage contract.
+6. Add policy coverage that fails on new unsafe outside the approved
+   quarantine and prints the owning ADR/module rationale for each remaining
+   site.
+7. Add policy coverage that fails on new blocking I/O in async/request-handler
+   modules unless the call is routed through the approved task model
+   (`spawn_blocking`, actor/worker, broker op, or startup/reconcile phase)
+   with a bounded queue/concurrency limit.
+
+Primary targets:
+
+- `packages/nixling-priv-broker/src/sys.rs`;
+- `packages/nixling-priv-broker/src/seccomp_compile_tests.rs`;
+- `packages/nixling-priv-broker/tests/socket_activation.rs`;
+- `packages/nixling-host-activation-helper/src/main.rs`;
+- `packages/*/Cargo.toml` lint settings;
+- `packages/nixling-contract-tests/tests/policy_*.rs`.
+
+Validation:
+
+- workspace lint policy continues to forbid unsafe by default;
+- each remaining unsafe site has a documented safety contract and no safe
+  wrapper replacement available at the pinned dependency versions;
+- thread-local kernel mutations are isolated from async runtime workers;
+- `SCM_RIGHTS` fd receive paths use a cancellation-safe receive-and-wrap
+  pattern;
+- untrusted path resolution uses `openat2`/equivalent anchored resolution;
+- tests cover any safe-wrapper conversion with behavior-equivalent fd,
+  syscall, or process semantics;
+- no production crate broadens `allow(unsafe_code)` beyond the quarantine;
+- blocking-I/O policy coverage rejects new unbounded sync filesystem,
+  process, network, or JSON reads in request/async hot paths.
+
+Exit criteria:
+
+- avoidable unsafe is gone;
+- unavoidable unsafe is centralized, audited, and tied to a removal condition
+  such as "replace when rustix/nix exposes this safe API";
+- runtime worker threads are never poisoned by namespace/capability/seccomp
+  mutations;
+- fd-passing code cannot leak fds on task cancellation;
+- new blocking I/O and new unsafe code are prevented by policy tests or
+  review gates, not just by convention.
+
+### Wave 14 — Recurring efficiency ratchet
 
 Goal: prevent re-growth.
 
@@ -749,24 +1027,47 @@ Tasks:
    - required `compat-ADR<NNNN>-added-<YYYYMMDD>-<surface>-<slug>` key for any
      explicitly authorized future bridge;
    - new full-tree Nix scan justification;
-   - new public DTO location.
-2. Add lightweight budgets to policy tests where they are stable enough to
+   - new public DTO location;
+   - task/concurrency model for any new daemon/provider/relay path;
+   - unsafe-code disposition for any new kernel/FFI work.
+2. Add policy lints that prevent backsliding:
+   - no unapproved `std::fs`, `std::net`, `std::process::Command`, blocking
+     HTTP/DNS clients, or synchronous JSON file reads in daemon/provider
+     request-handler and async task modules;
+   - no new `unsafe`, `unsafe fn`, `unsafe impl`, `allow(unsafe_code)`, or
+     generated unsafe bindings outside the approved quarantine;
+   - every allowlisted blocking/unsafe site carries an owner, execution class
+     or safety contract, and removal condition.
+3. Add runtime telemetry that catches what static lints miss:
+   - executor/task stall counters or histograms where supported;
+   - blocking-section duration histograms;
+   - blocking-pool/worker queue depth and saturation;
+   - dropped/admission-refused counts for bounded queues;
+   - audit batch size, throttling, and cardinality posture.
+4. Add lightweight budgets to policy tests where they are stable enough to
    avoid churn. Budgets should warn or fail only on trends that predict real
    maintenance cost, not on arbitrary line counts.
-3. Require every future ADR with implementation waves to include a
+5. Require every future ADR with implementation waves to include a
    simplification/deletion row.
-4. Periodically retire stale ADR process markers from unreleased changelog
+6. Periodically retire stale ADR process markers from unreleased changelog
    prose before release.
 
 Validation:
 
 - policy tests enforce the checklist only where mechanically reliable;
+- blocking-I/O and unsafe-code policy lints fail closed on new unapproved
+  sites;
+- runtime telemetry exposes executor stalls, blocking-section duration,
+  queue saturation, dropped/admission-refused requests, and audit burst
+  behavior;
 - panel review treats budget increases as design questions, not automatic
   blockers.
 
 Exit criteria:
 
 - every growth wave also pays down or deletes something;
+- future blocking I/O and unsafe code require explicit architectural review
+  and machine-checkable allowlisting;
 - efficiency remains part of architecture review, not a one-time cleanup.
 
 ## Highest-leverage deletion and consolidation targets
@@ -781,6 +1082,8 @@ These targets are good first compatibility-removal and consolidation inputs:
 | `nixlingd`, `nixling`, and broker hub files | Focused modules with narrow APIs. |
 | One-off argv/readiness/audit assembly | Typed runner/process builder shared by Nix and Rust contracts. |
 | Activation/tmpfiles/broker ownership overlap | ADR 0034 storage/sync ownership rows with one repair owner. |
+| Blocking I/O in daemon/provider hot paths | Declared task model with bounded blocking pools, workers, actors, cancellation, and backpressure. |
+| Avoidable project-local unsafe code | Safe crate wrappers where available; remaining FFI quarantined with safety contracts and removal conditions. |
 | Duplicate shell lint entrypoints | One lint owner; update callers and delete retired aliases. |
 | Monolithic drift gate reporting | Named generated-artifact families. |
 | Shell policy checks that parse source | Rust contract/policy tests. |
@@ -805,6 +1108,10 @@ These targets are good first compatibility-removal and consolidation inputs:
 - Do not delete explicit migration/versioning infrastructure just because
   stale compatibility shims are being removed. Future incompatible changes
   still need deliberate migration paths.
+- Do not move blocking I/O from one hot path to another. Blocking work must
+  become explicit, bounded, cancellable, and observable.
+- Do not hide unsafe code inside helper crates or generated bindings without
+  an audited safe API and documented safety contract.
 
 ## Consequences
 
@@ -821,6 +1128,11 @@ Positive:
 - The daemon and CLI crates become easier to review because public DTOs and
   presentation/dispatch code no longer live in the same hub files.
 - Deletion becomes a normal implementation task with explicit owners.
+- Request/task threads stop being the default place for filesystem walks,
+  subprocess waits, provider HTTP calls, metrics scraping, and other blocking
+  I/O.
+- Unsafe-code review becomes a bounded inventory rather than a search through
+  unrelated crates.
 
 Negative:
 
@@ -834,6 +1146,11 @@ Negative:
   requires careful CI wiring to avoid accidental coverage gaps.
 - Compile-graph feature gating can make local development more sensitive to
   missing feature flags if not documented well.
+- Moving blocking work behind actors or bounded pools can reveal backpressure
+  and timeout choices that were previously implicit.
+- Removing unsafe wrappers may require dependency updates or waiting for safe
+  crate APIs for kernel features that are still only exposed through raw
+  syscalls.
 
 ## Review and validation policy
 
