@@ -57,14 +57,11 @@ list in the public message. KVM alternatives render as
 | `virtio_console` | Always. |
 | `virtiofs` | Any VM has a `Virtiofsd` process node. |
 | `udmabuf` | Any VM has `graphics = true` or a `Gpu` process node. |
-| `drm_virtgpu` | Any VM has `graphics = true` or a `Gpu` process node. |
 
 A module is "present" when either `/proc/modules` contains it OR the
-caller passed it in the built-in set. The daemon currently does not
-read the built-in set (TODO once the host probe path is daemon-
-callable); on hosts where required modules are statically linked,
-operators must `modprobe` an alias or surface them in
-`/proc/modules` to satisfy the gate.
+daemon can prove the corresponding `CONFIG_*` option is built into the
+running kernel. This matters for `udmabuf`, which many kernels expose
+as `CONFIG_UDMABUF=y` with no loadable `.ko`.
 
 ### OPTIONAL — warn-only, may degrade VMs
 
