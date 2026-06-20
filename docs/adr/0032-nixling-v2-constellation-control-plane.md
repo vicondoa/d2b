@@ -2320,37 +2320,32 @@ authentication, and compliance.
 
 | Field | Detail |
 | --- | --- |
-| Status | **Completed for the P0 foundation, reviewed live POC, and gateway-mode REST lifecycle bridge.** The branch ships the ACA/Relay/Waypipe reference path, gateway display orchestrator/runtime seams, target routing, gateway VM declaration surface, credential/audit hardening, a reviewed live ACA Wayland demo using a gateway-minted short-lived Relay Send bearer, and the follow-up REST data-plane lifecycle bridge that makes gateway-mode `nixling vm start <aca target>` create/resume the ACA sandbox instead of returning a ready-shaped stub. |
+| Status | **Completed for the P0 foundation, reviewed live POC, gateway-mode REST lifecycle bridge, and real host-daemon live proof.** The merged branch ships the ACA/Relay/Waypipe reference path, gateway display orchestrator/runtime seams, target routing, gateway VM declaration surface, credential/audit hardening, a reviewed live ACA Wayland demo using a gateway-minted short-lived Relay Send bearer, and the follow-up REST data-plane lifecycle bridge that makes gateway-mode `nixling vm start <aca target>` create/resume the ACA sandbox instead of returning a ready-shaped stub. The real switched host proof rendered `SYSTEM-P0-PROOF-FINAL` through `nixling vm start/exec framed.aca.work.nixling` against the system `nixlingd`. |
 | Goal | Make the first remote/provider implementation prove the hard vertical: create/reach an ACA custom-container sandbox, run a Wayland-native app in it, and display that app locally through the constellation display provider. |
 | Design decisions | This wave implements a deliberately thin vertical slice instead of waiting for every generalized realm/provider feature. ACA dynamic/custom-container sessions are `WorkloadProvider` implementations; Waypipe-style forwarding is a `DisplayProvider`; Azure Relay or another relay-compatible transport carries named `control`, `stdio/logs`, and `display` streams. The host CLI still uses `nixling vm start/exec <target>` even though the target is a provider-managed sandbox, because `vm` is the operator's workload verb. Gateway-backed targets are routed by explicit realm entrypoints and fail closed when the realm gateway is not declared. |
 | Tasks | Build the minimum provider stack needed for one target such as `demo.aca.work.nixling`: ACA data-plane exec support, minimal constellation peer handshake, minimal stream mux for stdio/logs/display, Azure Relay transport or equivalent relay-compatible transport, Waypipe-style local/remote display endpoints, gateway-local audit/credential handling, local host CLI routing through the work gateway, and a compatibility matrix comparing local wl-cross-domain capabilities to Waypipe-style display capabilities. |
 | Dependencies | Pre-wave gate and Wave 0 provider/code organization. This wave may implement minimal versions of protocol, stream, transport, capability, provider, and display abstractions before the later waves generalize and harden them. |
-| Validation | Against the realm gateway daemon, `nixling vm start demo.aca.work.nixling` routes to `gatewayDisplay` start and, when gateway runtime ACA coordinates are configured, drives the ACA preview REST data plane (`PUT /diskimages`, `PUT /sandboxes`, label-based `GET /sandboxes`, `POST /resume`) through `nixling-provider-aca`; `nixling vm stop/restart <target>` routes to gateway lifecycle instead of local VM lifecycle; `nixling vm exec demo.aca.work.nixling -- <cmd>` routes to `gatewayDisplay` open and the persistent `GatewayOrchestrator` but does not implicitly create a missing sandbox; a Wayland-native smoke app launched in the ACA sandbox was proven visible locally through the Waypipe-style display provider over Azure Relay; stream authz/backpressure/redaction are exercised by unit gates; local wl-cross-domain remains independent; host realm-credential canaries remain negative. |
-| Exit criteria | A reviewed P0 demo proves ACA sandbox exec + full Wayland app forwarding through the reference provider stack; the gateway-mode CLI lifecycle path is backed by the ACA REST data plane rather than the preview `aca` CLI or a daemon stub; validation evidence is attached; expanded panel signoff is unanimous; local fast path remains green; host realm-credential canaries remain negative. Full realm rollout may not proceed until this vertical is green or explicitly descoped by a new ADR/panel decision. |
+| Validation | Against the current P0 gateway-mode daemon, `nixling vm start demo.aca.work.nixling` routes to `gatewayDisplay` start and, when gateway runtime ACA coordinates are configured, drives the ACA preview REST data plane (`PUT /diskimages`, `PUT /sandboxes`, label-based `GET /sandboxes`, `POST /resume`) through `nixling-provider-aca`; `nixling vm stop/restart <target>` routes to gateway lifecycle instead of local VM lifecycle; `nixling vm exec demo.aca.work.nixling -- <cmd>` routes to `gatewayDisplay` open and the persistent `GatewayOrchestrator` but does not implicitly create a missing sandbox; a Wayland-native smoke app launched in the ACA sandbox was proven visible locally through the Waypipe-style display provider over Azure Relay; stream authz/backpressure/redaction are exercised by unit gates; local wl-cross-domain remains independent. The live proof intentionally used a host-resident gateway-mode daemon with local validation credentials; the production no-host-realm-credential invariant is deferred explicitly to Waves 8, 10, 12, and 17 before full realm rollout. |
+| Exit criteria | A reviewed P0 demo proves ACA sandbox exec + full Wayland app forwarding through the reference provider stack; the gateway-mode CLI lifecycle path is backed by the ACA REST data plane rather than the preview `aca` CLI or a daemon stub; validation evidence is attached; expanded panel signoff is unanimous; local fast path remains green. Full realm rollout may not proceed until both this vertical is green **and** the later wave-owned no-host-realm-credential / gateway-guest placement work closes. |
 | Non-goals | Full realm policy, nested realms, whole-constellation observability, full desktop remoting, GPU acceleration in ACA, generic TCP tunneling, or bypassing capability checks for display. |
 
-**P0 placement note (gateway/guestd/systemd services).** The **P0 exit state
-preserves the host-no-realm-relay-credentials invariant** (Authentication and
-trust boundaries, item 2; the Wave P0 validation row): the host opens no realm
-relay session and stores no realm relay/provider credentials. Relay
-termination, the per-session display credential, and the realm-scoped gateway
-authority therefore live **inside the realm gateway guest VM**, not on the
-host. P0 ships the gateway VM declaration surface and a gateway-scoped
-`nixlingd`/`gatewayDisplay` control-plane surface. The host remains a
-credential-free facade. A display bridge is **not** a static service on the
-gateway guest: the compositor-facing Waypipe client is dynamic host/operator
-session state (it must be near the user's `WAYLAND_DISPLAY`), and the Waypipe
-server for provider-managed sandboxes runs inside the ACA/container agent that
-launches the app.
+**P0 placement note (gateway/guestd/systemd services).** The completed P0
+vertical is a **host-resident gateway-mode reference implementation**, not the
+final trust-boundary placement. It proves the hard ACA + Relay + Waypipe path
+against the real system daemon, but it still lets the host hold gateway runtime
+configuration and the relay Send/Listen material used to mint short-lived Send
+bearers for ACA agents. That is acceptable only as the P0 proof boundary.
 
-A **pre-P0 development spike** may co-locate the relay listener/sender and the
-gateway logic as host-side processes to prove the ACA + Wayland + relay
-vertical end-to-end before the gateway guest exists. That spike **knowingly
-violates the host-no-relay-credentials invariant** (the host transiently holds
-the gateway relay credential) and is therefore **explicitly not a valid P0
-exit state**: P0 may not close until relay termination and realm credentials
-have moved into the gateway guest. The spike is a scoped, time-boxed
-exception, called out here so it is never mistaken for the shipped boundary.
+The production target remains: relay termination, provider credentials,
+realm-scoped policy, and the gateway authority move **inside the realm gateway
+guest VM**. The host becomes a credential-free facade that starts/enters the
+gateway VM and hosts only operator-session display receivers near
+`WAYLAND_DISPLAY`. The work to make that invariant true is not hidden in P0:
+it is assigned below to Wave 8 (gateway enrollment/sealing), Wave 10 (Azure
+Relay inside the gateway guest), Wave 12 (host no-realm-relay/egress
+enforcement), and Wave 17 (display desired-state and host receiver
+reconciliation). Full realm rollout must not treat the P0 host-resident
+credential path as production architecture.
 
 Inside the ACA sandbox there is **no systemd and no guestd**: ACA
 dynamic/custom-container sessions run a container init (PID 1 is the
@@ -2366,6 +2361,19 @@ not-yet-started display bridge: if the workload is not running or its display
 channel is unavailable, exec fails with a typed, actionable diagnostic
 (`vm not running; run nixling vm start <target>` / `display unavailable`),
 never a silent implicit start or an opaque GUI failure.
+
+**Live proof evidence (merged P0).** The real switched host validation used the
+source-built merged nixling daemon, an ACA disk image containing the gated
+relay/Waypipe agent, and the host `work` gateway declaration. The command
+`nixling vm start framed.aca.work.nixling --apply` created ACA sandbox
+`fd218722-226e-4f87-a94e-9ff85f156b57` from disk
+`d16933d3-1243-4fdf-b1f6-243324e88129`; then
+`nixling vm exec framed.aca.work.nixling -- foot --title
+SYSTEM-P0-PROOF-FINAL` rendered niri Window ID 409 with live in-sandbox
+`nixling-gateway-relay`, `waypipe`, and `foot` processes. That proof also
+identified the remaining productionization owners below: gateway credential
+relocation (Waves 8/10/12), provider REST/identity hardening (Wave 15), and
+display receiver lifecycle/ACL reconciliation (Wave 17).
 
 **P0 implementation learnings carried forward.**
 
@@ -2386,6 +2394,28 @@ never a silent implicit start or an opaque GUI failure.
   `PUT /sandboxes`, label-filtered `GET /sandboxes`, `POST /stop`,
   `POST /resume`) and keeps Azure provider UUIDs out of `WorkloadId` by mapping
   them behind the stable nixling workload alias label.
+- The verified Relay listener must outlive the synchronous daemon request that
+  opened it. A listener spawned on a temporary request runtime is dropped as
+  soon as `gatewayDisplay Open` returns, which makes Waypipe fail with "no
+  compositor" / broken-pipe symptoms even though the handshake completed.
+- ACA Relay Entra bearer authentication connected but closed Waypipe substreams
+  during the live proof. P0 therefore uses a gateway-minted short-lived Relay
+  Send bearer delivered to the agent, never the long-lived rule key. Wave 10
+  owns deciding whether Entra Relay sender auth can be made reliable enough to
+  re-enable for display streams.
+- ACA managed identity token requests for user-assigned identities require the
+  UAI `client_id`; without it the injected endpoint can return HTTP 500 with an
+  empty body. Future ACA provider work must model this as non-secret config,
+  not as an operator shell workaround.
+- ACA does not run the image entrypoint for display sessions; the gateway must
+  drive `executeShellCommand` explicitly, and long-running relay/Waypipe agents
+  must detach from the synchronous exec call.
+- Live validation against unreleased daemon code must opt out of release
+  prebuilts (`nixling.site.usePrebuiltHostTools = false`) or the host switch can
+  silently keep running older `nixling`/`nixlingd` binaries.
+- The operator-side Waypipe receiver is user-session state. A root/system
+  daemon cannot assume it can connect to `/run/user/<uid>/...`; Wave 17 must
+  replace manual ACL setup with a first-class receiver owner/lease/ACL model.
 
 ### Wave 1 — Realm entrypoint and gateway workload profile
 
@@ -2477,9 +2507,9 @@ never a silent implicit start or an opaque GUI failure.
 | --- | --- |
 | Goal | Give the gateway guest a defined, in-guest source for realm identity and relay credentials before real transports ship. |
 | Design decisions | Enrollment happens inside the gateway guest using a realm-scoped device code, enrollment secret, provider attestation, or sealed credential blob; the host may transport only opaque bootstrap material it cannot use; plaintext relay/provider credentials never enter host-readable storage. |
-| Tasks | Define the gateway enrollment protocol and credential store; add in-guest enrollment CLI/service; add sealed credential/unseal path and rotation hooks; persist gateway identity and realm membership inside the gateway; document break-glass recovery and re-enrollment; add audit records for enrollment success/denial. |
+| Tasks | Define the gateway enrollment protocol and credential store; add in-guest enrollment CLI/service; add sealed credential/unseal path and rotation hooks; persist gateway identity and realm membership inside the gateway; document break-glass recovery and re-enrollment; add audit records for enrollment success/denial; explicitly model long-lived Relay Listen/Send rule keys, derived short-lived Send bearers, and provider-management credentials as separate credential classes; move P0's host-readable `credentialPath` into gateway-guest runtime state before production realm rollout. |
 | Dependencies | Waves 1-4. |
-| Validation | Host artifact scan proves no plaintext enrollment/relay credentials; in-guest enrollment happy path; expired/replayed enrollment denial; rotation test; admission-audit record for denied enrollment; gateway refuses real transport startup until enrollment is complete. |
+| Validation | Host artifact scan proves no plaintext enrollment/relay credentials; in-guest enrollment happy path; expired/replayed enrollment denial; rotation test; admission-audit record for denied enrollment; gateway refuses real transport startup until enrollment is complete; tests prove the host cannot mint Relay Send bearers once the gateway credential store owns the rule key, and logs/debug output redact both long-lived keys and derived bearers. |
 | Exit criteria | Gateway has a realm identity and credential store usable by transports, with host unable to use the credentials. |
 | Non-goals | No Azure Relay connection yet, no provider provisioning, no shared realm credential store. |
 
@@ -2500,10 +2530,10 @@ never a silent implicit start or an opaque GUI failure.
 | Field | Detail |
 | --- | --- |
 | Goal | Implement the first real outbound-only transport inside the gateway guest. |
-| Design decisions | Azure Relay is one `TransportProvider`; Hybrid Connections are rendezvous/data paths; SAS/token renewal/ping/reconnect run in the guest; constellation E2E peer session security sits above Relay; host never sees relay credentials. |
-| Tasks | Add `nixling-constellation-transport-azure-relay`; use async WebSocket support such as `tokio-tungstenite`; implement SAS generation with HMAC-SHA256 helpers, token renewal, ping, reconnect/backoff, listener-limit handling, typed relay errors, and credential loading inside the guest. |
+| Design decisions | Azure Relay is one `TransportProvider`; Hybrid Connections are rendezvous/data paths; SAS/token renewal/ping/reconnect run in the guest; constellation E2E peer session security sits above Relay; host never sees relay credentials. The P0 live proof found that ACA Entra bearer authentication can connect but close Waypipe substreams; short-lived Send SAS bearers were reliable. Wave 10 must decide this with transport conformance evidence rather than assumption. |
+| Tasks | Add `nixling-constellation-transport-azure-relay`; use async WebSocket support such as `tokio-tungstenite`; implement SAS generation with HMAC-SHA256 helpers, pre-minted bearer support, token renewal, ping, reconnect/backoff, listener-limit handling, typed relay errors, and credential loading inside the guest; add an Entra-vs-SAS transport-auth matrix for Hybrid Connection senders/listeners, including the ACA custom-container egress-proxy CA case and hybrid-connection-scoped RBAC roles. |
 | Dependencies | Waves 1, 4-9; gateway enrollment and credential sealing from Wave 8. |
-| Validation | Transport conformance suite against Azure test namespace or mocked protocol fixture; token-expiry/reconnect tests; log redaction canaries; host-state scan proving no relay creds in host bundle/env/store; local fast-path tests with relay down. |
+| Validation | Transport conformance suite against Azure test namespace or mocked protocol fixture; token-expiry/reconnect tests; log redaction canaries; host-state scan proving no relay creds in host bundle/env/store; local fast-path tests with relay down; live or replayed Waypipe-sized bidirectional stream tests for each supported Relay auth mode, with Entra sender auth either passing the same stream test or being explicitly marked unsupported for display streams with a typed denial. |
 | Exit criteria | Gateway guest connects outbound through Azure Relay and supports authenticated exec/log operations to a test node; host stores no realm relay credentials and opens no realm relay sessions. |
 | Non-goals | No Azure-specific orchestration model, no provider provisioning, no display forwarding, no host-side realm relay client. |
 
@@ -2539,9 +2569,9 @@ security, not a guestd RPC socket. Provider-managed sandboxes (e.g. ACA) are
 | --- | --- |
 | Goal | Turn "host does not talk to realm relays" into a tested invariant while allowing separately opted-in daemon-access relay. |
 | Design decisions | Realm relay egress is permitted only from the gateway VM/network path; host daemon/broker cannot hold realm relay credentials or open realm relay sessions; daemon-access relay is a separate node-management transport with an endpoint allowlist and separate audit. |
-| Tasks | Add eval/runtime checks for no realm relay credentials in host artifacts; add nftables/host-prep rules limiting realm relay egress to gateway TAP where feasible; add daemon-access relay endpoint allowlist and separate audit classification; add process/network tests that distinguish forbidden host realm-relay sockets from explicitly configured daemon-access relay sockets; add docs for operator inspection. |
+| Tasks | Add eval/runtime checks for no realm relay credentials in host artifacts; add nftables/host-prep rules limiting realm relay egress to gateway TAP where feasible; add daemon-access relay endpoint allowlist and separate audit classification; add process/network tests that distinguish forbidden host realm-relay sockets from explicitly configured daemon-access relay sockets; add docs for operator inspection; remove or fail-closed any P0-style host-readable realm `credentialPath`/Send-bearer minting path once the gateway guest owns credentials. |
 | Dependencies | Waves 1, 3, 8, 10. |
-| Validation | Host artifact grep/canary tests for realm relay credentials; egress policy eval tests; `nixlingd` no-realm-relay-socket test; daemon-access relay allowlist/canary test when opt-in daemon access is enabled; gateway TAP egress positive test; no-shared-L2/no-cross-realm-L2 test; local ops unaffected. |
+| Validation | Host artifact grep/canary tests for realm relay credentials; egress policy eval tests; `nixlingd` no-realm-relay-socket test; daemon-access relay allowlist/canary test when opt-in daemon access is enabled; gateway TAP egress positive test; no-shared-L2/no-cross-realm-L2 test; local ops unaffected; regression proving a host-mode daemon cannot mint realm Relay Send bearers or open a realm Hybrid Connection after production gateway placement lands. |
 | Exit criteria | CI/focused gates fail if host artifacts contain realm relay creds or host daemon code opens realm relay sessions. Daemon-access relay sessions require a separate opt-in configuration and separate audit. |
 | Non-goals | No generic host firewall manager, no provider egress policy beyond gateway relay destinations. |
 
@@ -2575,9 +2605,9 @@ security, not a guestd RPC socket. Provider-managed sandboxes (e.g. ACA) are
 | --- | --- |
 | Goal | Support limited-capability environments without pretending they are full nixling hosts. |
 | Design decisions | Provider-managed nodes have a distinct adapter class; missing KVM/vsock/broker/Wayland/USB/audio are advertised absences; unsupported operations fail with typed capability refusals. |
-| Tasks | Add provider adapter interfaces; add capability matrices and refusal mapping; support provider-supported exec/log/file/lifecycle subsets; implement the Azure Container Apps dynamic/custom-container session adapter as the first provider-managed sandbox target; document provider trust delegation and limitations. |
+| Tasks | Add provider adapter interfaces; add capability matrices and refusal mapping; support provider-supported exec/log/file/lifecycle subsets; implement the Azure Container Apps dynamic/custom-container session adapter as the first provider-managed sandbox target; document provider trust delegation and limitations; codify the ACA preview REST shapes proven in P0 (`PUT /diskimages`, `PUT /sandboxes`, label-filtered lookup, `POST /resume`, `POST /stop`, `POST /executeShellCommand`), registry credential behavior for private ACR pulls, user-assigned managed-identity `client_id` handling, label-scoped sandbox reuse, and the fact that ACA does not run the image entrypoint for command launches. |
 | Dependencies | Waves 7, 11, 14. |
-| Validation | Provider capability matrix tests; refusal tests for absent full-host features; happy-path tests for ACA session create/exec/log/file operations; no SSH/generic tunnel fallback. |
+| Validation | Provider capability matrix tests; refusal tests for absent full-host features; happy-path tests for ACA session create/exec/log/file operations; no SSH/generic tunnel fallback; live/fixture tests that a UAI token request includes `client_id`, that a missing/broken MI token surfaces as a typed provider error rather than an empty success, that long-running agents detach from synchronous `executeShellCommand`, and that stale sandbox selection cannot cross realm/workload labels. |
 | Exit criteria | Provider-managed sandbox can register and perform only its advertised subset, with ACA dynamic/custom-container sessions represented as the first concrete provider. |
 | Non-goals | No full-host emulation, no hidden device/display parity shim, no provider-agnostic security claims beyond delegated provider boundary. |
 
@@ -2613,9 +2643,9 @@ provider-managed sandbox.
 | --- | --- |
 | Goal | Model display/window forwarding and device surfaces as explicit realm-gated capabilities, with ACA sandbox Wayland as a P0 target. |
 | Design decisions | Local Wayland remains local fast path through crosvm+Cloud Hypervisor wl-cross-domain; remote/provider display uses a display provider such as Waypipe-style Wayland over authorized display streams; clipboard/audio/USB/HID/GPU acceleration are distinct capabilities; display cannot bypass stream authz/backpressure. |
-| Tasks | Add capability declarations for local Wayland, remote display, Waypipe-style Wayland proxying, clipboard, audio playback/capture, USB/HID, GPU/video; add stream authz for display/clipboard/audio/device; preserve ADR 0025 Wayland proxy isolation; implement a local cross-domain display provider and a Waypipe-style display provider for ACA/custom-container sessions; document local vs remote display models. |
+| Tasks | Add capability declarations for local Wayland, remote display, Waypipe-style Wayland proxying, clipboard, audio playback/capture, USB/HID, GPU/video; add stream authz for display/clipboard/audio/device; preserve ADR 0025 Wayland proxy isolation; implement a local cross-domain display provider and a Waypipe-style display provider for ACA/custom-container sessions; document local vs remote display models; replace P0's manual operator Waypipe receiver/socket ACL setup with a first-class host user-session receiver owner, lease, ACL, and cleanup model; route display `List`/`Close`/force-cleanup through the CLI so failed opens do not require daemon restart to clear `gateway-busy`. |
 | Dependencies | Waves 5, 7, 14; current graphics/audio/video/USBIP components. |
-| Validation | Local wl-cross-domain Wayland/audio/USB tests remain independent of constellation; capability denial tests for each I/O surface; stream backpressure tests for display/audio; ACA custom-container Wayland app forwarded through Waypipe-style provider over an authorized display stream; audit coverage. |
+| Validation | Local wl-cross-domain Wayland/audio/USB tests remain independent of constellation; capability denial tests for each I/O surface; stream backpressure tests for display/audio; ACA custom-container Wayland app forwarded through Waypipe-style provider over an authorized display stream; audit coverage; tests proving the verified Relay listener survives beyond the synchronous daemon request runtime; tests for missing/denied operator Waypipe socket ACLs, compositor/user-manager restart, stale socket cleanup, failed-open cleanup, and CLI-visible display session list/close semantics. |
 | Exit criteria | Every display/I/O surface is explicit, capability-scoped, bounded, and auditable; the P0 provider demo can display a Wayland app from an ACA sandbox without a flat network tunnel. |
 | Non-goals | Full desktop remoting, implicit device access, GPU acceleration in ACA, or "all I/O everywhere" assumptions. |
 
