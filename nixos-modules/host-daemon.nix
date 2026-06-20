@@ -141,6 +141,7 @@ EOF
         realm = gw.realm;
         stateDir = gw.stateDir;
         credentialPath = gw.credentialPath;
+        inherit (gw) allowHostRelayCredentials;
         relay = {
           inherit (gw.relay) namespace entity;
         };
@@ -229,6 +230,11 @@ in
           extraGroups = [ "nixling" ];
         };
       };
+
+    nixling._hostToolPackages = {
+      nixling = nixlingCliPackage;
+      nixlingd = nixlingdPackage;
+    };
 
     environment.systemPackages = [ nixlingdPackage nixlingCliPackage nixlingCliShellArtifactsPackage nixlingActivationHelperPackage ];
 

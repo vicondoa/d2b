@@ -2320,7 +2320,7 @@ authentication, and compliance.
 
 | Field | Detail |
 | --- | --- |
-| Status | **Completed for the P0 foundation, reviewed live POC, gateway-mode REST lifecycle bridge, and real host-daemon live proof.** The merged branch ships the ACA/Relay/Waypipe reference path, gateway display orchestrator/runtime seams, target routing, gateway VM declaration surface, credential/audit hardening, a reviewed live ACA Wayland demo using a gateway-minted short-lived Relay Send bearer, and the follow-up REST data-plane lifecycle bridge that makes gateway-mode `nixling vm start <aca target>` create/resume the ACA sandbox instead of returning a ready-shaped stub. The real switched host proof rendered `SYSTEM-P0-PROOF-FINAL` through `nixling vm start/exec framed.aca.work.nixling` against the system `nixlingd`. |
+| Status | **Completed for the P0 foundation, reviewed live POC, gateway-mode REST lifecycle bridge, and real host-daemon live proof.** The merged branch ships the ACA/Relay/Waypipe reference path, gateway display orchestrator/runtime seams, target routing, gateway VM declaration surface, credential/audit hardening, a reviewed live ACA Wayland demo using a gateway-minted short-lived Relay Send bearer, and the follow-up REST data-plane lifecycle bridge that makes gateway-mode `nixling vm start <aca target>` create/resume the ACA sandbox instead of returning a ready-shaped stub. The real switched host proof rendered a Wayland proof window through `nixling vm start/exec <aca target>` against the system `nixlingd`; sanitized PR/session evidence carries the concrete run details without publishing live identifiers here. |
 | Goal | Make the first remote/provider implementation prove the hard vertical: create/reach an ACA custom-container sandbox, run a Wayland-native app in it, and display that app locally through the constellation display provider. |
 | Design decisions | This wave implements a deliberately thin vertical slice instead of waiting for every generalized realm/provider feature. ACA dynamic/custom-container sessions are `WorkloadProvider` implementations; Waypipe-style forwarding is a `DisplayProvider`; Azure Relay or another relay-compatible transport carries named `control`, `stdio/logs`, and `display` streams. The host CLI still uses `nixling vm start/exec <target>` even though the target is a provider-managed sandbox, because `vm` is the operator's workload verb. Gateway-backed targets are routed by explicit realm entrypoints and fail closed when the realm gateway is not declared. |
 | Tasks | Build the minimum provider stack needed for one target such as `demo.aca.work.nixling`: ACA data-plane exec support, minimal constellation peer handshake, minimal stream mux for stdio/logs/display, Azure Relay transport or equivalent relay-compatible transport, Waypipe-style local/remote display endpoints, gateway-local audit/credential handling, local host CLI routing through the work gateway, and a compatibility matrix comparing local wl-cross-domain capabilities to Waypipe-style display capabilities. |
@@ -2364,16 +2364,16 @@ never a silent implicit start or an opaque GUI failure.
 
 **Live proof evidence (merged P0).** The real switched host validation used the
 source-built merged nixling daemon, an ACA disk image containing the gated
-relay/Waypipe agent, and the host `work` gateway declaration. The command
-`nixling vm start framed.aca.work.nixling --apply` created ACA sandbox
-`fd218722-226e-4f87-a94e-9ff85f156b57` from disk
-`d16933d3-1243-4fdf-b1f6-243324e88129`; then
-`nixling vm exec framed.aca.work.nixling -- foot --title
-SYSTEM-P0-PROOF-FINAL` rendered niri Window ID 409 with live in-sandbox
-`nixling-gateway-relay`, `waypipe`, and `foot` processes. That proof also
-identified the remaining productionization owners below: gateway credential
-relocation (Waves 8/10/12), provider REST/identity hardening (Wave 15), and
-display receiver lifecycle/ACL reconciliation (Wave 17).
+relay/Waypipe agent, and the host `work` gateway declaration. Lifecycle start
+and exec requests against a gateway ACA target created or resumed the provider
+sandbox, entered it through the daemon's gateway-mode route, and rendered a
+Wayland proof window on the host compositor while the in-sandbox relay, Waypipe,
+and application processes were live. Sanitized PR/session evidence records the
+concrete sandbox, disk-image, compositor-window, and command-output details; the
+ADR intentionally keeps only the proof summary and architectural lessons. That
+proof also identified the remaining productionization owners below: gateway
+credential relocation (Waves 8/10/12), provider REST/identity hardening (Wave
+15), and display receiver lifecycle/ACL reconciliation (Wave 17).
 
 **P0 implementation learnings carried forward.**
 

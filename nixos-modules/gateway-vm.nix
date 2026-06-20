@@ -4,37 +4,51 @@
 let
   cfg = config.nixling;
   gateways = lib.filterAttrs (_: gw: gw.enable) cfg.gateways;
-  nl = import ./lib.nix { inherit lib; };
-  packagesSrc = nl.cleanRustPackagesSource ../packages;
-  cargoLock = {
-    lockFile = ../packages/Cargo.lock;
-    outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-  };
-  buildRustBin = packageName: binName: pkgs.rustPlatform.buildRustPackage {
-    pname = binName;
-    version = "0.0.0-bootstrap";
-    src = packagesSrc;
-    inherit cargoLock;
-    cargoBuildFlags = [ "--package" packageName "--bin" binName ];
-    doCheck = false;
-    postPatch = ''
-      mkdir -p .cargo
-      cat > .cargo/config.toml <<EOF
-      [build]
-      rustc-wrapper = ""
-      EOF
-      rm -f .cargo/rustc-wrapper.sh
-    '';
+  currentSystem = pkgs.stdenv.hostPlatform.system;
+
+  unavailableHostToolPackage = name: pkgs.stdenvNoCC.mkDerivation {
+    pname = name;
+    version = "unavailable-for-${currentSystem}";
+    dontUnpack = true;
     installPhase = ''
-      runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/${binName} $out/bin/${binName} 2>/dev/null \
-        || install -Dm755 target/release/${binName} $out/bin/${binName}
-      runHook postInstall
+      echo "nixling gateway VM: ${name} is not available for ${currentSystem}; set nixling.site.usePrebuiltHostTools = false to use source host-tool packages." >&2
+      exit 1
     '';
   };
-  nixlingdPackage = buildRustBin "nixlingd" "nixlingd";
-  nixlingPackage = buildRustBin "nixling" "nixling";
-  gatewayRelayPackage = buildRustBin "nixling-gateway-runtime" "nixling-gateway-relay";
+
+  hostToolPackage = attr: name:
+    let
+      pkg = cfg._hostToolPackages.${attr} or null;
+    in
+    if pkg != null then pkg else unavailableHostToolPackage name;
+
+  nixlingdPackage = hostToolPackage "nixlingd" "nixlingd";
+  nixlingPackage = hostToolPackage "nixling" "nixling";
+
+  secretShaped = s:
+    lib.hasInfix "SharedAccessKey" s
+    || lib.hasInfix "Endpoint=sb://" s
+    || lib.hasInfix "AccountKey=" s
+    || lib.hasInfix "PRIVATE KEY" s
+    || lib.hasInfix "BEGIN " s;
+
+  safeRuntimePath = s:
+    lib.hasPrefix "/" s
+    && lib.hasPrefix "${toString cfg.site.stateDir}/" s
+    && !(builtins.elem ".." (lib.splitString "/" s))
+    && !(lib.hasSuffix "/" s)
+    && !(lib.hasPrefix "/nix/store/" s)
+    && !(secretShaped s);
+
+  gatewayStateDirs = gw:
+    lib.unique (lib.filter safeRuntimePath [
+      gw.stateDir
+      (builtins.dirOf gw.credentialPath)
+    ]);
+
+  hostGatewayStateTmpfiles = lib.flatten (lib.mapAttrsToList
+    (_: gw: map (dir: "d ${dir} 0750 root nixlingd -") (gatewayStateDirs gw))
+    gateways);
 
   gatewayVm = name: gw: {
     name = gw.vmName;
@@ -55,7 +69,7 @@ let
         };
         users.users.gateway = {
           isNormalUser = true;
-          extraGroups = [ "wheel" ];
+          extraGroups = [ "wheel" "nixling" ];
         };
         environment.etc."nixling/daemon-config.json".text = builtins.toJSON {
           publicSocketPath = "/run/nixling/public.sock";
@@ -83,6 +97,7 @@ let
           realm = gw.realm;
           stateDir = gw.stateDir;
           credentialPath = gw.credentialPath;
+          inherit (gw) allowHostRelayCredentials;
           relay = {
             inherit (gw.relay) namespace entity;
           };
@@ -144,23 +159,36 @@ let
           curl
           nixlingPackage
           nixlingdPackage
-          gatewayRelayPackage
         ];
         systemd.tmpfiles.rules = [
           "d /run/nixling 0750 nixlingd nixling -"
-          "d /run/nixling/locks 0750 nixlingd nixling -"
-          "d ${gw.stateDir} 0700 gateway gateway -"
-        ];
+          "f /run/nixling/daemon.lock 0640 nixlingd nixlingd -"
+          "d /run/nixling/locks 0700 nixlingd nixlingd -"
+          "d /run/nixling/state 0700 nixlingd nixlingd -"
+          "d /var/lib/nixling 0750 nixlingd nixlingd -"
+          "d /var/lib/nixling/daemon-state 0700 nixlingd nixlingd -"
+        ] ++ (map (dir: "d ${dir} 0700 nixlingd nixlingd -") (gatewayStateDirs gw));
         systemd.services.nixlingd = {
           description = "nixling realm gateway daemon";
           wantedBy = [ "multi-user.target" ];
           after = [ "network-online.target" ];
           wants = [ "network-online.target" ];
+          restartIfChanged = false;
           serviceConfig = {
-            ExecStart = "${nixlingdPackage}/bin/nixlingd serve --config /etc/nixling/daemon-config.json --no-drop-privileges";
+            Type = "simple";
+            User = "nixlingd";
+            Group = "nixlingd";
+            SupplementaryGroups = [ "nixling" ];
+            ExecStart = "${nixlingdPackage}/bin/nixlingd serve --config /etc/nixling/daemon-config.json";
             Restart = "on-failure";
-            User = "root";
-            Group = "root";
+            RestartSec = "2s";
+            NoNewPrivileges = true;
+            CapabilityBoundingSet = [ "" ];
+            AmbientCapabilities = [ "" ];
+            PrivateTmp = true;
+            ProtectHome = true;
+            RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" "AF_VSOCK" ];
+            UMask = "0077";
           };
         };
       };
@@ -168,6 +196,8 @@ let
   };
 in
 {
+  systemd.tmpfiles.rules = hostGatewayStateTmpfiles;
+
   nixling.vms = lib.mkMerge [
     (lib.listToAttrs (lib.mapAttrsToList gatewayVm gateways))
   ];

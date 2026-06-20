@@ -29,6 +29,8 @@ serde_json = { workspace = true }
 rustls-pki-types = "1"
 webpki-roots = "0.26"
 tracing = "0.1"
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tempfile = "3"

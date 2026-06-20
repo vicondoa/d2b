@@ -6,6 +6,22 @@ let
   realmPath = "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$";
 in
 {
+  options.nixling._hostToolPackages = {
+    nixling = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal: resolved host nixling CLI package.";
+    };
+
+    nixlingd = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal: resolved host nixlingd package.";
+    };
+  };
+
   options.nixling.gateways = lib.mkOption {
     description = ''
       Realm gateway guests. Each enabled entry auto-declares a dedicated
@@ -66,8 +82,11 @@ in
           default = "/var/lib/nixling/gateways/${name}";
           description = ''
             Gateway guest state directory on the host. Must live under
-            `nixling.site.stateDir`; assertions reject `/nix/store` or
-            secret-looking inline values.
+            `nixling.site.stateDir`, outside the per-VM state root; assertions
+            reject `/nix/store`, `..` path components, trailing slashes, or
+            secret-looking inline values. The host creates this directory as
+            `root:nixlingd`, while the gateway guest creates its internal copy
+            as `nixlingd:nixlingd`.
           '';
         };
 
@@ -77,7 +96,19 @@ in
           description = ''
             Host path for the sealed gateway credential envelope. This is a
             runtime state path, not plaintext Nix data. Assertions require it to
-            live under `nixling.site.stateDir` and reject secret-looking values.
+            live under this gateway's `stateDir` and reject `/nix/store`,
+            path-traversal, trailing-slash, or secret-looking values.
+          '';
+        };
+
+        allowHostRelayCredentials = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            Transitional P0 escape hatch that lets the host daemon read the
+            gateway credential envelope and mint short-lived Relay Send bearers.
+            This must stay disabled for production realm rollout; Wave 12
+            removes or fail-closes the host-resident credential path.
           '';
         };
 

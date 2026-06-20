@@ -128,6 +128,21 @@ let
   underStateDir = s:
     lib.hasPrefix "${toString cfg.site.stateDir}/" s;
 
+  pathComponents = s:
+    lib.filter (part: part != "") (lib.splitString "/" s);
+
+  hasParentTraversal = s:
+    builtins.elem ".." (pathComponents s);
+
+  hasTrailingSlash = s:
+    s != "/" && lib.hasSuffix "/" s;
+
+  absoluteRuntimePathUnder = root: s:
+    lib.hasPrefix "/" s
+    && lib.hasPrefix "${toString root}/" s
+    && !(hasParentTraversal s)
+    && !(hasTrailingSlash s);
+
   gatewayPathAssertions =
     lib.flatten (lib.mapAttrsToList
       (name: gw:
@@ -140,18 +155,45 @@ let
         lib.mapAttrsToList
           (field: value: {
             assertion =
-              underStateDir value
+              absoluteRuntimePathUnder cfg.site.stateDir value
               && !(lib.hasPrefix "/nix/store/" value)
               && !(secretShaped value);
             message = ''
-              nixling.gateways.${name}.${field} must be a runtime path under
-              nixling.site.stateDir and must not contain inline secret-shaped
-              material. Put plaintext credentials in the gateway guest's sealed
-              runtime state, not in the host Nix configuration.
+              nixling.gateways.${name}.${field} must be an absolute runtime
+              path under nixling.site.stateDir, must not contain `..` path
+              components or a trailing slash, and must not contain inline
+              secret-shaped material. Put plaintext credentials in the gateway
+              guest's sealed runtime state, not in the host Nix configuration.
             '';
           })
           paths)
       (lib.filterAttrs (_: gw: gw.enable) cfg.gateways));
+
+  gatewayCredentialPathAssertions =
+    lib.mapAttrsToList
+      (name: gw: {
+        assertion = absoluteRuntimePathUnder gw.stateDir gw.credentialPath;
+        message = ''
+          nixling.gateways.${name}.credentialPath must live under
+          nixling.gateways.${name}.stateDir so the gateway credential envelope
+          stays inside the gateway runtime-state boundary.
+        '';
+      })
+      (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
+
+  gatewayStateBoundaryAssertions =
+    lib.mapAttrsToList
+      (name: gw: {
+        assertion =
+          gw.stateDir != toString cfg.store.stateDir
+          && !(underStateDir gw.stateDir && lib.hasPrefix "${toString cfg.store.stateDir}/" gw.stateDir);
+        message = ''
+          nixling.gateways.${name}.stateDir must not live under
+          nixling.store.stateDir. Gateway credential state is distinct from
+          per-VM runtime state and has different host/guest ownership.
+        '';
+      })
+      (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
 
   gatewayCoordinateAssertions =
     lib.flatten (lib.mapAttrsToList
@@ -194,6 +236,15 @@ let
       '';
     }
   ];
+
+  gatewayDaemonAssertions = lib.optional (enabledGatewayNames != [ ]) {
+    assertion = cfg.daemonExperimental.enable;
+    message = ''
+      nixling.gateways requires nixling.daemonExperimental.enable = true. The
+      gateway guest is supervised by the daemon control-plane package plumbing
+      and has no legacy service or bash fallback.
+    '';
+  };
 
   # Systemd-escape identity regex (lower-case alnum and `-`, must
   # start with a LETTER). `^[a-z][a-z0-9-]*$` deliberately excludes
@@ -1002,8 +1053,11 @@ in
     ++ volumeSerialAssertions
     ++ guestConfigContainmentAssertions
     ++ gatewayPathAssertions
+    ++ gatewayCredentialPathAssertions
+    ++ gatewayStateBoundaryAssertions
     ++ gatewayCoordinateAssertions
     ++ gatewayCountAssertions
+    ++ gatewayDaemonAssertions
   );
 
   # The daemon-only end state is now the default. Do not warn on the

@@ -9,11 +9,19 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use nixling_provider_relay::{RelayCredential, RelayEndpoint, RelayError, mint_sas};
+use nixling_provider_relay::{
+    MAX_SAS_TTL_SECS, RelayCredential, RelayEndpoint, RelayError, mint_sas,
+};
 use serde_json::Value;
 
 /// Required file mode for gateway credential envelopes.
 pub const GATEWAY_CREDENTIAL_MODE: u32 = 0o600;
+
+/// Maximum lifetime for gateway-minted Relay Send SAS bearers in the P0 path.
+pub const MAX_RELAY_SEND_TOKEN_TTL_SECS: u64 = MAX_SAS_TTL_SECS;
+
+/// Default lifetime for gateway-minted Relay Send SAS bearers in the P0 path.
+pub const DEFAULT_RELAY_SEND_TOKEN_TTL_SECS: u64 = MAX_RELAY_SEND_TOKEN_TTL_SECS;
 
 /// Runtime credential file policy.
 #[derive(Debug, Clone, Default)]
@@ -80,6 +88,13 @@ impl GatewayCredential {
         endpoint: &RelayEndpoint,
         ttl_secs: u64,
     ) -> Result<MintedRelaySendToken, RelayError> {
+        if ttl_secs > MAX_RELAY_SEND_TOKEN_TTL_SECS {
+            return Err(RelayError::TtlTooLong {
+                requested: ttl_secs,
+                max: MAX_RELAY_SEND_TOKEN_TTL_SECS,
+            });
+        }
+
         Ok(MintedRelaySendToken(mint_sas(
             endpoint,
             &self.send_key_name,
@@ -182,6 +197,30 @@ mod tests {
         path
     }
 
+    fn endpoint() -> RelayEndpoint {
+        RelayEndpoint {
+            namespace: "relns-example.servicebus.windows.net".into(),
+            entity: "hc-display".into(),
+        }
+    }
+
+    fn now_unix_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    fn sas_param<'a>(token: &'a str, name: &str) -> &'a str {
+        let prefix = format!("{name}=");
+        token
+            .strip_prefix("SharedAccessSignature ")
+            .unwrap()
+            .split('&')
+            .find_map(|part| part.strip_prefix(&prefix))
+            .unwrap()
+    }
+
     #[test]
     fn loads_only_runtime_0600_files_and_redacts_debug() {
         let dir = tempfile::tempdir().unwrap();
@@ -238,16 +277,32 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cred =
             GatewayCredential::load(fixture(dir.path()), &CredentialFilePolicy::default()).unwrap();
-        let token = cred
-            .mint_send_token(
-                &RelayEndpoint {
-                    namespace: "relns-example.servicebus.windows.net".into(),
-                    entity: "hc-display".into(),
-                },
-                60,
-            )
-            .unwrap();
+        let ttl = 60;
+        let before = now_unix_secs();
+        let token = cred.mint_send_token(&endpoint(), ttl).unwrap();
+        let after = now_unix_secs();
         assert!(token.expose().starts_with("SharedAccessSignature "));
+        assert_eq!(sas_param(token.expose(), "skn"), "gateway-send");
+        let expiry = sas_param(token.expose(), "se").parse::<u64>().unwrap();
+        assert!(expiry >= before + ttl);
+        assert!(expiry <= after + ttl);
+        assert!(!token.expose().contains("send-secret"));
         assert_eq!(format!("{token:?}"), "MintedRelaySendToken(<redacted>)");
+        assert!(!format!("{token:?}").contains("SharedAccessSignature"));
+    }
+
+    #[test]
+    fn rejects_send_token_ttl_above_short_lived_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let cred =
+            GatewayCredential::load(fixture(dir.path()), &CredentialFilePolicy::default()).unwrap();
+        assert_eq!(
+            cred.mint_send_token(&endpoint(), MAX_RELAY_SEND_TOKEN_TTL_SECS + 1)
+                .unwrap_err(),
+            RelayError::TtlTooLong {
+                requested: MAX_RELAY_SEND_TOKEN_TTL_SECS + 1,
+                max: MAX_RELAY_SEND_TOKEN_TTL_SECS
+            }
+        );
     }
 }

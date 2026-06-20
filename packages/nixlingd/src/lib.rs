@@ -345,6 +345,8 @@ pub struct GatewayFileConfig {
     #[serde(default)]
     credential_path: Option<PathBuf>,
     #[serde(default)]
+    allow_host_relay_credentials: bool,
+    #[serde(default)]
     relay: GatewayRelayFileConfig,
     #[serde(default)]
     aca: GatewayAcaFileConfig,
@@ -484,6 +486,7 @@ struct GatewayDisplayRuntime {
     orchestrator: GatewayOrchestrator,
     sessions: Mutex<HashMap<String, GatewayDisplaySession>>,
     lifecycle: Box<dyn GatewayLifecycle>,
+    preflight: Option<GatewayDisplayPreflight>,
 }
 
 impl std::fmt::Debug for GatewayDisplayRuntime {
@@ -497,6 +500,18 @@ struct GatewayDisplaySession {
     target: String,
     open: OpenSession,
     opened_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct GatewayDisplayPreflight {
+    allow_host_relay_credentials: bool,
+    waypipe_socket_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+struct ValidatedWaypipeSocket {
+    uid: u32,
+    mode: u32,
 }
 
 #[async_trait]
@@ -514,6 +529,7 @@ fn new_gateway_display_runtime() -> Arc<GatewayDisplayRuntime> {
         ),
         sessions: Mutex::new(HashMap::new()),
         lifecycle: Box::new(UnavailableGatewayLifecycle),
+        preflight: None,
     })
 }
 
@@ -523,6 +539,7 @@ fn new_gateway_display_runtime_for_tests() -> Arc<GatewayDisplayRuntime> {
         orchestrator: GatewayOrchestrator::new(daemon_gateway_deps(), 1, LedgerLimits::default()),
         sessions: Mutex::new(HashMap::new()),
         lifecycle: Box::new(DaemonGatewayLifecycle),
+        preflight: None,
     })
 }
 
@@ -702,6 +719,7 @@ fn load_gateway_file_config(path: &Path) -> Result<Option<GatewayFileConfig>, Ty
 fn new_gateway_display_runtime_from_config(
     config: GatewayFileConfig,
 ) -> Result<Arc<GatewayDisplayRuntime>, TypedError> {
+    let preflight = gateway_display_preflight_from_config(&config)?;
     let deps = gateway_deps_from_config(&config)?;
     let provider =
         Arc::new(aca_provider_from_gateway_config(&config).map_err(gateway_error_to_typed)?);
@@ -709,7 +727,108 @@ fn new_gateway_display_runtime_from_config(
         orchestrator: GatewayOrchestrator::new(deps, 1, LedgerLimits::default()),
         sessions: Mutex::new(HashMap::new()),
         lifecycle: Box::new(AcaGatewayLifecycle { provider }),
+        preflight: Some(preflight),
     }))
+}
+
+fn gateway_display_preflight_from_config(
+    config: &GatewayFileConfig,
+) -> Result<GatewayDisplayPreflight, TypedError> {
+    let waypipe_socket_path = config
+        .display
+        .waypipe_socket
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from);
+    Ok(GatewayDisplayPreflight {
+        allow_host_relay_credentials: config.allow_host_relay_credentials,
+        waypipe_socket_path,
+    })
+}
+
+fn validate_gateway_host_relay_transition_guard(
+    config: &GatewayFileConfig,
+) -> Result<(), TypedError> {
+    if config.allow_host_relay_credentials {
+        Ok(())
+    } else {
+        Err(gateway_display_config_error(
+            "host-held gateway credentials and relay send-bearer minting are disabled by default; set allowHostRelayCredentials=true in the gateway config only for transition/dev hosts, or move relay credentials into the gateway guest",
+        ))
+    }
+}
+
+fn validate_waypipe_receiver_socket(path: &Path) -> Result<ValidatedWaypipeSocket, TypedError> {
+    if !path.is_absolute() {
+        return Err(gateway_display_config_error(format!(
+            "waypipeSocket {} must be an absolute Unix socket path",
+            path.display()
+        )));
+    }
+    reject_symlink_components(path)?;
+    let metadata = fs::symlink_metadata(path).map_err(|err| {
+        gateway_display_config_error(format!(
+            "waypipeSocket {} cannot be inspected without following symlinks: {err}; create an operator-owned Unix socket with mode 0600",
+            path.display()
+        ))
+    })?;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Err(gateway_display_config_error(format!(
+            "waypipeSocket {} must point directly at an operator-owned Unix socket, not a symlink",
+            path.display()
+        )));
+    }
+    if !file_type.is_socket() {
+        return Err(gateway_display_config_error(format!(
+            "waypipeSocket {} must be a Unix socket owned by the operator with mode 0600",
+            path.display()
+        )));
+    }
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode != 0o600 {
+        return Err(gateway_display_config_error(format!(
+            "waypipeSocket {} must have mode 0600; current mode is {mode:#05o}; run chmod 0600 on the socket path",
+            path.display()
+        )));
+    }
+    let uid = metadata.uid();
+    if uid == 0 {
+        return Err(gateway_display_config_error(format!(
+            "waypipeSocket {} must be owned by an unprivileged operator uid, not root",
+            path.display()
+        )));
+    }
+    Ok(ValidatedWaypipeSocket { uid, mode })
+}
+
+fn reject_symlink_components(path: &Path) -> Result<(), TypedError> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        if current.parent().is_none() {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&current).map_err(|err| {
+            gateway_display_config_error(format!(
+                "waypipeSocket component {} cannot be inspected without following symlinks: {err}",
+                current.display()
+            ))
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(gateway_display_config_error(format!(
+                "waypipeSocket component {} must not be a symlink",
+                current.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn gateway_display_config_error(detail: impl Into<String>) -> TypedError {
+    TypedError::GatewayDisplayUnavailable {
+        detail: detail.into(),
+    }
 }
 
 pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
@@ -2478,6 +2597,7 @@ fn dispatch_gateway_display(
                         "gatewayDisplay app_argv must be non-empty and contain no empty arguments"
                             .to_owned(),
                 })?;
+            validate_gateway_display_open_preflight(state)?;
             let target_key = TargetKey {
                 realm: target.realm.target_form(),
                 workload: target.workload.as_str().to_owned(),
@@ -2620,6 +2740,29 @@ fn parse_gateway_display_lifecycle_target(
         }
     })?;
     Ok(target)
+}
+
+fn validate_gateway_display_open_preflight(state: &ServerState) -> Result<(), TypedError> {
+    if let Some(preflight) = state.gateway_display.preflight.as_ref() {
+        let guard_config = GatewayFileConfig {
+            gateway: String::new(),
+            realm: String::new(),
+            state_dir: None,
+            credential_path: None,
+            allow_host_relay_credentials: preflight.allow_host_relay_credentials,
+            relay: GatewayRelayFileConfig::default(),
+            aca: GatewayAcaFileConfig::default(),
+            display: GatewayDisplayFileConfig::default(),
+        };
+        validate_gateway_host_relay_transition_guard(&guard_config)?;
+        let waypipe_socket_path = preflight.waypipe_socket_path.as_ref().ok_or_else(|| {
+            gateway_display_config_error(
+                "gateway config field display.waypipeSocket is required; set it to the operator Waypipe receiver Unix socket path",
+            )
+        })?;
+        validate_waypipe_receiver_socket(waypipe_socket_path)?;
+    }
+    Ok(())
 }
 
 fn close_gateway_sessions_for_target(state: &ServerState, target: &str) -> Result<(), TypedError> {
@@ -2794,6 +2937,8 @@ fn agent_bins_from_config(config: &GatewayFileConfig) -> AgentBinaries {
 }
 
 fn relay_auth_snippet_from_config(config: &GatewayFileConfig) -> Result<String, GatewayError> {
+    validate_gateway_host_relay_transition_guard(config)
+        .map_err(|_| GatewayError::ProviderAllocationFailed)?;
     let credential_path = config
         .credential_path
         .as_ref()
@@ -2812,6 +2957,8 @@ fn relay_auth_snippet_from_config(config: &GatewayFileConfig) -> Result<String, 
 fn display_listener_from_config(
     config: &GatewayFileConfig,
 ) -> Result<RelayDisplayListener, GatewayError> {
+    validate_gateway_host_relay_transition_guard(config)
+        .map_err(|_| GatewayError::ProviderAllocationFailed)?;
     let credential_path = config
         .credential_path
         .as_ref()
@@ -2819,10 +2966,24 @@ fn display_listener_from_config(
     let credential = GatewayCredential::load(credential_path, &CredentialFilePolicy::default())
         .map_err(|_| GatewayError::ProviderAllocationFailed)?;
     let waypipe_socket = required_gateway_field(&config.display.waypipe_socket)?;
+    let validated = match validate_waypipe_receiver_socket(Path::new(&waypipe_socket)) {
+        Ok(validated) => validated,
+        Err(error) => {
+            tracing::warn!(
+                error = %error.message(),
+                "gateway display waypipe receiver socket rejected",
+            );
+            return Err(GatewayError::ProviderAllocationFailed);
+        }
+    };
     Ok(RelayDisplayListener::new(
         relay_endpoint_from_config(config)?,
         credential.listener_credential(),
-        LocalTarget::UnixConnect(waypipe_socket),
+        LocalTarget::UnixConnectChecked {
+            path: waypipe_socket,
+            uid: validated.uid,
+            mode: validated.mode,
+        },
         nixling_provider_relay::DEFAULT_SAS_TTL_SECS,
         None,
         system_now_fn(),
@@ -10877,6 +11038,130 @@ mod public_status_tests {
             role: PeerRole::Launcher,
             uid: 1001,
         }
+    }
+
+    fn gateway_config_for_waypipe(
+        path: &Path,
+        allow_host_relay_credentials: bool,
+    ) -> GatewayFileConfig {
+        GatewayFileConfig {
+            gateway: "gateway".to_owned(),
+            realm: "demo".to_owned(),
+            state_dir: None,
+            credential_path: Some(PathBuf::from("/run/nixling/test-gateway-credential.json")),
+            allow_host_relay_credentials,
+            relay: GatewayRelayFileConfig {
+                namespace: Some("relay.example.invalid".to_owned()),
+                entity: Some("gateway".to_owned()),
+            },
+            aca: GatewayAcaFileConfig::default(),
+            display: GatewayDisplayFileConfig {
+                vsock_port: None,
+                waypipe_compression: None,
+                waypipe_socket: Some(path.display().to_string()),
+            },
+        }
+    }
+
+    fn bind_test_waypipe_socket(root: &Path, name: &str, mode: u32) -> PathBuf {
+        let socket_path = root.join(name);
+        let _listener =
+            std::os::unix::net::UnixListener::bind(&socket_path).expect("bind test socket");
+        fs::set_permissions(&socket_path, fs::Permissions::from_mode(mode))
+            .expect("set socket mode");
+        socket_path
+    }
+
+    fn gateway_unavailable_detail(error: &TypedError) -> &str {
+        match error {
+            TypedError::GatewayDisplayUnavailable { detail } => detail,
+            other => panic!("expected GatewayDisplayUnavailable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gateway_host_relay_guard_defaults_closed() {
+        let dir = tempfile::tempdir().expect("gateway guard dir");
+        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o600);
+        let config = gateway_config_for_waypipe(&socket_path, false);
+        let err = validate_gateway_host_relay_transition_guard(&config)
+            .expect_err("host relay credentials require explicit guard");
+        let detail = gateway_unavailable_detail(&err);
+        assert!(detail.contains("disabled by default"));
+        assert!(detail.contains("allowHostRelayCredentials=true"));
+    }
+
+    #[test]
+    fn gateway_host_relay_guard_accepts_explicit_unprivileged_socket() {
+        if Uid::effective().is_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("gateway guard dir");
+        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o600);
+        let config = gateway_config_for_waypipe(&socket_path, true);
+        let preflight = gateway_display_preflight_from_config(&config)
+            .expect("display preflight stores config without touching the user-session socket");
+        assert_eq!(preflight.waypipe_socket_path.as_ref(), Some(&socket_path));
+        assert!(preflight.allow_host_relay_credentials);
+        validate_waypipe_receiver_socket(&socket_path)
+            .expect("explicit guard and valid waypipe socket are accepted");
+    }
+
+    #[test]
+    fn waypipe_receiver_socket_validation_rejects_symlink() {
+        let dir = tempfile::tempdir().expect("waypipe symlink dir");
+        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o600);
+        let link_path = dir.path().join("waypipe-link.sock");
+        std::os::unix::fs::symlink(&socket_path, &link_path).expect("symlink test socket");
+        let err = validate_waypipe_receiver_socket(&link_path)
+            .expect_err("waypipe socket validation must not follow symlinks");
+        assert!(gateway_unavailable_detail(&err).contains("symlink"));
+    }
+
+    #[test]
+    fn waypipe_receiver_socket_validation_requires_0600() {
+        let dir = tempfile::tempdir().expect("waypipe mode dir");
+        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o660);
+        let err = validate_waypipe_receiver_socket(&socket_path)
+            .expect_err("waypipe socket must be private to the owner");
+        assert!(gateway_unavailable_detail(&err).contains("mode 0600"));
+    }
+
+    #[test]
+    fn gateway_display_open_validates_waypipe_socket_before_orchestrator() {
+        let (mut state, _dir) = test_state();
+        let dir = tempfile::tempdir().expect("waypipe dispatch dir");
+        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o660);
+        state.gateway_display = Arc::new(GatewayDisplayRuntime {
+            orchestrator: GatewayOrchestrator::new(
+                daemon_gateway_deps(),
+                1,
+                LedgerLimits::default(),
+            ),
+            sessions: Mutex::new(HashMap::new()),
+            lifecycle: Box::new(DaemonGatewayLifecycle),
+            preflight: Some(GatewayDisplayPreflight {
+                allow_host_relay_credentials: true,
+                waypipe_socket_path: Some(socket_path),
+            }),
+        });
+
+        let err = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
+                public_wire::GatewayDisplayOpenArgs {
+                    target: "nl://demo.gw.work.nixling".to_owned(),
+                    operation_id: "gw-exec-invalid-waypipe".to_owned(),
+                    principal: "uid-1000".to_owned(),
+                    app_argv: vec!["foot".to_owned()],
+                    request_hash: 42,
+                },
+            )),
+        )
+        .expect_err("invalid waypipe socket blocks gateway open");
+        assert!(gateway_unavailable_detail(&err).contains("mode 0600"));
+        assert!(state.gateway_display.sessions.lock().unwrap().is_empty());
     }
 
     #[test]
