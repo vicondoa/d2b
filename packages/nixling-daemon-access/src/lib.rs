@@ -20,8 +20,8 @@ use std::{
 use async_trait::async_trait;
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
 use nixling_constellation_core::{
-    Capability, CapabilitySet, ErrorKind, NodeId, ProviderId, RealmPath, WorkloadId, WorkloadState,
-    WorkloadSummary,
+    Capability, CapabilitySet, ErrorKind, NodeId, PrincipalId, ProviderId, RealmPath, WorkloadId,
+    WorkloadState, WorkloadSummary,
 };
 use nixling_constellation_provider::{
     error::{ProviderError, ProviderResult},
@@ -45,9 +45,506 @@ pub use relay::RelayDaemonAccess;
 
 /// Default daemon public socket used by the current CLI and `nixlingd`.
 pub const DEFAULT_PUBLIC_SOCKET_PATH: &str = PUBLIC_SOCKET_PATH;
+/// Stable transport id for the local Unix daemon-access binding.
+pub const LOCAL_UNIX_DAEMON_ACCESS_TRANSPORT_ID: &str = "local-unix-daemon-access";
+/// Stable transport id for the declared relay daemon-access slot.
+pub const RELAY_DAEMON_ACCESS_TRANSPORT_ID: &str = "relay-daemon-access";
+/// Stable transport id for the declared direct-TLS daemon-access slot.
+pub const DIRECT_TLS_DAEMON_ACCESS_TRANSPORT_ID: &str = "direct-tls-daemon-access";
+/// Credential byte-length metadata is capped before serialization.
+pub const MAX_REDACTED_CREDENTIAL_BYTES: u16 = u16::MAX;
 const DEFAULT_CLIENT_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 const LOCAL_NODE_ID: &str = "local";
 
+/// Redacted evidence that a credential was presented.
+///
+/// The daemon-access admission/audit model records only presence and bounded
+/// byte length. It never stores certificate PEM/DER, bearer tokens, browser
+/// cookies, CSRF values, or relay secrets.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RedactedDaemonAccessCredential {
+    pub present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub byte_len: Option<u16>,
+}
+
+impl RedactedDaemonAccessCredential {
+    /// No credential material was presented.
+    pub const fn absent() -> Self {
+        Self {
+            present: false,
+            byte_len: None,
+        }
+    }
+
+    /// Record credential presence while discarding the material itself.
+    pub fn from_secret(secret: impl AsRef<[u8]>) -> Self {
+        let byte_len = secret
+            .as_ref()
+            .len()
+            .min(MAX_REDACTED_CREDENTIAL_BYTES as usize) as u16;
+        Self {
+            present: true,
+            byte_len: Some(byte_len),
+        }
+    }
+}
+
+impl fmt::Debug for RedactedDaemonAccessCredential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.present {
+            f.debug_tuple("RedactedDaemonAccessCredential")
+                .field(&format_args!(
+                    "<{} bytes redacted>",
+                    self.byte_len.unwrap_or_default()
+                ))
+                .finish()
+        } else {
+            f.write_str("RedactedDaemonAccessCredential(<absent>)")
+        }
+    }
+}
+
+/// Credential evidence for a remote direct daemon-access frontend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RemoteDaemonAccessCredential {
+    None,
+    MutualTls {
+        certificate: RedactedDaemonAccessCredential,
+    },
+    BearerToken {
+        token: RedactedDaemonAccessCredential,
+    },
+    MutualTlsAndBearerToken {
+        certificate: RedactedDaemonAccessCredential,
+        token: RedactedDaemonAccessCredential,
+    },
+}
+
+impl RemoteDaemonAccessCredential {
+    /// No authenticated daemon-access credential was presented.
+    pub const fn unauthenticated() -> Self {
+        Self::None
+    }
+
+    /// mTLS credential evidence; certificate material is discarded.
+    pub fn mutual_tls(certificate: impl AsRef<[u8]>) -> Self {
+        Self::MutualTls {
+            certificate: RedactedDaemonAccessCredential::from_secret(certificate),
+        }
+    }
+
+    /// Bearer-token credential evidence; token material is discarded.
+    pub fn bearer_token(token: impl AsRef<[u8]>) -> Self {
+        Self::BearerToken {
+            token: RedactedDaemonAccessCredential::from_secret(token),
+        }
+    }
+
+    /// Combined mTLS + bearer-token evidence; both inputs are discarded.
+    pub fn mutual_tls_and_bearer_token(
+        certificate: impl AsRef<[u8]>,
+        token: impl AsRef<[u8]>,
+    ) -> Self {
+        Self::MutualTlsAndBearerToken {
+            certificate: RedactedDaemonAccessCredential::from_secret(certificate),
+            token: RedactedDaemonAccessCredential::from_secret(token),
+        }
+    }
+}
+
+/// Relay daemon-access credential evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RelayDaemonAccessCredential {
+    pub relay_credential: RedactedDaemonAccessCredential,
+    pub daemon_credential: RemoteDaemonAccessCredential,
+}
+
+impl RelayDaemonAccessCredential {
+    /// Relay reachability without an authenticated daemon principal.
+    pub const fn unauthenticated() -> Self {
+        Self {
+            relay_credential: RedactedDaemonAccessCredential::absent(),
+            daemon_credential: RemoteDaemonAccessCredential::unauthenticated(),
+        }
+    }
+
+    /// Relay-backed credential evidence; relay secret material is discarded.
+    pub fn from_relay_secret(
+        relay_secret: impl AsRef<[u8]>,
+        daemon_credential: RemoteDaemonAccessCredential,
+    ) -> Self {
+        Self {
+            relay_credential: RedactedDaemonAccessCredential::from_secret(relay_secret),
+            daemon_credential,
+        }
+    }
+}
+
+/// Browser daemon-access credential evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum BrowserDaemonAccessCredential {
+    None,
+    CookieSession {
+        cookie: RedactedDaemonAccessCredential,
+        csrf_token: RedactedDaemonAccessCredential,
+    },
+    BearerSession {
+        token: RedactedDaemonAccessCredential,
+        csrf_token: RedactedDaemonAccessCredential,
+    },
+}
+
+impl BrowserDaemonAccessCredential {
+    /// No authenticated browser credential was presented.
+    pub const fn unauthenticated() -> Self {
+        Self::None
+    }
+
+    /// Cookie-backed browser session evidence; cookie and CSRF material are discarded.
+    pub fn cookie_session(cookie: impl AsRef<[u8]>, csrf_token: impl AsRef<[u8]>) -> Self {
+        Self::CookieSession {
+            cookie: RedactedDaemonAccessCredential::from_secret(cookie),
+            csrf_token: RedactedDaemonAccessCredential::from_secret(csrf_token),
+        }
+    }
+
+    /// Bearer-backed browser session evidence; token and CSRF material are discarded.
+    pub fn bearer_session(token: impl AsRef<[u8]>, csrf_token: impl AsRef<[u8]>) -> Self {
+        Self::BearerSession {
+            token: RedactedDaemonAccessCredential::from_secret(token),
+            csrf_token: RedactedDaemonAccessCredential::from_secret(csrf_token),
+        }
+    }
+}
+
+/// Local Unix `SO_PEERCRED` admission source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalUnixAdmissionSource {
+    pub uid: u32,
+    pub gid: u32,
+}
+
+impl LocalUnixAdmissionSource {
+    /// Construct a local Unix peer credential source.
+    pub const fn new(uid: u32, gid: u32) -> Self {
+        Self { uid, gid }
+    }
+}
+
+/// Remote direct daemon-access admission source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteDaemonAccessAdmissionSource {
+    pub transport_id: ProviderId,
+    pub mode: DaemonAccessMode,
+    pub credential: RemoteDaemonAccessCredential,
+    pub principal_id: Option<PrincipalId>,
+}
+
+impl RemoteDaemonAccessAdmissionSource {
+    /// Construct a remote admission source from transport-advertised metadata.
+    pub fn new(
+        transport_id: ProviderId,
+        mode: DaemonAccessMode,
+        credential: RemoteDaemonAccessCredential,
+        principal_id: Option<PrincipalId>,
+    ) -> Self {
+        Self {
+            transport_id,
+            mode,
+            credential,
+            principal_id,
+        }
+    }
+}
+
+/// Relay-backed daemon-access admission source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RelayDaemonAccessAdmissionSource {
+    pub transport_id: ProviderId,
+    pub mode: DaemonAccessMode,
+    pub credential: RelayDaemonAccessCredential,
+    pub principal_id: Option<PrincipalId>,
+}
+
+impl RelayDaemonAccessAdmissionSource {
+    /// Construct a relay admission source from transport-advertised metadata.
+    pub fn new(
+        transport_id: ProviderId,
+        mode: DaemonAccessMode,
+        credential: RelayDaemonAccessCredential,
+        principal_id: Option<PrincipalId>,
+    ) -> Self {
+        Self {
+            transport_id,
+            mode,
+            credential,
+            principal_id,
+        }
+    }
+}
+
+/// Browser web-session daemon-access admission source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BrowserDaemonAccessAdmissionSource {
+    pub credential: BrowserDaemonAccessCredential,
+    pub session_id: Option<PrincipalId>,
+}
+
+impl BrowserDaemonAccessAdmissionSource {
+    /// Construct a browser admission source.
+    pub fn new(credential: BrowserDaemonAccessCredential, session_id: Option<PrincipalId>) -> Self {
+        Self {
+            credential,
+            session_id,
+        }
+    }
+}
+
+/// Transport-neutral daemon-access admission source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "camelCase")]
+pub enum DaemonAccessAdmissionSource {
+    LocalUnix(LocalUnixAdmissionSource),
+    Remote(RemoteDaemonAccessAdmissionSource),
+    Relay(RelayDaemonAccessAdmissionSource),
+    Browser(BrowserDaemonAccessAdmissionSource),
+}
+
+impl DaemonAccessAdmissionSource {
+    /// Construct a local Unix source from `SO_PEERCRED`.
+    pub const fn local_unix(uid: u32, gid: u32) -> Self {
+        Self::LocalUnix(LocalUnixAdmissionSource::new(uid, gid))
+    }
+
+    /// Construct a direct-TLS source using the declared direct-TLS transport id.
+    pub fn direct_tls(
+        credential: RemoteDaemonAccessCredential,
+        principal_id: Option<PrincipalId>,
+    ) -> Self {
+        Self::Remote(RemoteDaemonAccessAdmissionSource::new(
+            ProviderId::parse(DIRECT_TLS_DAEMON_ACCESS_TRANSPORT_ID)
+                .expect("static provider id is valid"),
+            DaemonAccessMode::DirectTls,
+            credential,
+            principal_id,
+        ))
+    }
+
+    /// Construct a relay source using the declared relay transport id.
+    pub fn relay(
+        credential: RelayDaemonAccessCredential,
+        principal_id: Option<PrincipalId>,
+    ) -> Self {
+        Self::Relay(RelayDaemonAccessAdmissionSource::new(
+            ProviderId::parse(RELAY_DAEMON_ACCESS_TRANSPORT_ID)
+                .expect("static provider id is valid"),
+            DaemonAccessMode::Relay,
+            credential,
+            principal_id,
+        ))
+    }
+}
+
+/// Resolved local Unix allowlist/group role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LocalUnixAllowlistRole {
+    Admin,
+    Launcher,
+    Denied,
+}
+
+/// Explicit daemon-access policy role for non-local principals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DaemonAccessPolicyRole {
+    RealmAdmin,
+    RealmOperator,
+    ReadOnly,
+    Scoped,
+}
+
+/// Bounded fail-closed admission denial reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DaemonAccessDenyReason {
+    LocalNotAllowlisted,
+    Unauthenticated,
+    Unmapped,
+}
+
+/// Admission decision for daemon-access principals.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "decision", rename_all = "camelCase")]
+pub enum DaemonAccessDecision {
+    Authorized { role: DaemonAccessPolicyRole },
+    Denied { reason: DaemonAccessDenyReason },
+}
+
+impl DaemonAccessDecision {
+    /// An authorized admission with an explicit daemon-access policy role.
+    pub const fn authorized(role: DaemonAccessPolicyRole) -> Self {
+        Self::Authorized { role }
+    }
+
+    /// A denied admission with a bounded reason.
+    pub const fn denied(reason: DaemonAccessDenyReason) -> Self {
+        Self::Denied { reason }
+    }
+
+    /// Whether this admission was denied.
+    pub const fn is_denied(&self) -> bool {
+        matches!(self, Self::Denied { .. })
+    }
+}
+
+/// Transport-neutral mapped principal result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum MappedDaemonAccessPrincipal {
+    LocalAdmin {
+        uid: u32,
+    },
+    LocalLauncher {
+        uid: u32,
+    },
+    LocalDenied {
+        uid: u32,
+        reason: DaemonAccessDenyReason,
+    },
+    RemotePrincipal {
+        principal_id: Option<PrincipalId>,
+        decision: DaemonAccessDecision,
+    },
+    BrowserSession {
+        session_id: Option<PrincipalId>,
+        decision: DaemonAccessDecision,
+    },
+    RelayPrincipal {
+        principal_id: Option<PrincipalId>,
+        decision: DaemonAccessDecision,
+    },
+}
+
+impl MappedDaemonAccessPrincipal {
+    /// True only for local `SO_PEERCRED` identities admitted by the local gate.
+    pub const fn is_local_admin_or_launcher(&self) -> bool {
+        matches!(self, Self::LocalAdmin { .. } | Self::LocalLauncher { .. })
+    }
+
+    /// Whether this principal mapping was denied.
+    pub const fn is_denied(&self) -> bool {
+        match self {
+            Self::LocalDenied { .. } => true,
+            Self::RemotePrincipal { decision, .. }
+            | Self::BrowserSession { decision, .. }
+            | Self::RelayPrincipal { decision, .. } => decision.is_denied(),
+            Self::LocalAdmin { .. } | Self::LocalLauncher { .. } => false,
+        }
+    }
+}
+
+/// Auditable admission record pairing source and mapped principal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DaemonAccessAdmissionRecord {
+    pub source: DaemonAccessAdmissionSource,
+    pub principal: MappedDaemonAccessPrincipal,
+}
+
+/// Map a local Unix `SO_PEERCRED` source using the existing allowlist role.
+pub fn map_local_unix_daemon_access(
+    source: &LocalUnixAdmissionSource,
+    role: LocalUnixAllowlistRole,
+) -> MappedDaemonAccessPrincipal {
+    match role {
+        LocalUnixAllowlistRole::Admin => {
+            MappedDaemonAccessPrincipal::LocalAdmin { uid: source.uid }
+        }
+        LocalUnixAllowlistRole::Launcher => {
+            MappedDaemonAccessPrincipal::LocalLauncher { uid: source.uid }
+        }
+        LocalUnixAllowlistRole::Denied => MappedDaemonAccessPrincipal::LocalDenied {
+            uid: source.uid,
+            reason: DaemonAccessDenyReason::LocalNotAllowlisted,
+        },
+    }
+}
+
+/// Map a remote direct daemon-access source through explicit daemon policy.
+pub fn map_remote_daemon_access(
+    source: &RemoteDaemonAccessAdmissionSource,
+    policy_role: Option<DaemonAccessPolicyRole>,
+) -> MappedDaemonAccessPrincipal {
+    MappedDaemonAccessPrincipal::RemotePrincipal {
+        principal_id: source.principal_id.clone(),
+        decision: non_local_decision(source.principal_id.as_ref(), policy_role),
+    }
+}
+
+/// Map a browser daemon-access source through explicit daemon policy.
+pub fn map_browser_daemon_access(
+    source: &BrowserDaemonAccessAdmissionSource,
+    policy_role: Option<DaemonAccessPolicyRole>,
+) -> MappedDaemonAccessPrincipal {
+    MappedDaemonAccessPrincipal::BrowserSession {
+        session_id: source.session_id.clone(),
+        decision: non_local_decision(source.session_id.as_ref(), policy_role),
+    }
+}
+
+/// Map a relay-backed daemon-access source through explicit daemon policy.
+pub fn map_relay_daemon_access(
+    source: &RelayDaemonAccessAdmissionSource,
+    policy_role: Option<DaemonAccessPolicyRole>,
+) -> MappedDaemonAccessPrincipal {
+    MappedDaemonAccessPrincipal::RelayPrincipal {
+        principal_id: source.principal_id.clone(),
+        decision: non_local_decision(source.principal_id.as_ref(), policy_role),
+    }
+}
+
+/// Build a complete audit/admission record from a source and policy outcome.
+pub fn map_daemon_access_admission(
+    source: DaemonAccessAdmissionSource,
+    local_role: Option<LocalUnixAllowlistRole>,
+    policy_role: Option<DaemonAccessPolicyRole>,
+) -> DaemonAccessAdmissionRecord {
+    let principal = match &source {
+        DaemonAccessAdmissionSource::LocalUnix(local) => map_local_unix_daemon_access(
+            local,
+            local_role.unwrap_or(LocalUnixAllowlistRole::Denied),
+        ),
+        DaemonAccessAdmissionSource::Remote(remote) => {
+            map_remote_daemon_access(remote, policy_role)
+        }
+        DaemonAccessAdmissionSource::Relay(relay) => map_relay_daemon_access(relay, policy_role),
+        DaemonAccessAdmissionSource::Browser(browser) => {
+            map_browser_daemon_access(browser, policy_role)
+        }
+    };
+    DaemonAccessAdmissionRecord { source, principal }
+}
+
+fn non_local_decision(
+    principal_id: Option<&PrincipalId>,
+    policy_role: Option<DaemonAccessPolicyRole>,
+) -> DaemonAccessDecision {
+    match (principal_id, policy_role) {
+        (None, _) => DaemonAccessDecision::denied(DaemonAccessDenyReason::Unauthenticated),
+        (Some(_), None) => DaemonAccessDecision::denied(DaemonAccessDenyReason::Unmapped),
+        (Some(_), Some(role)) => DaemonAccessDecision::authorized(role),
+    }
+}
 /// Lossless daemon list response for the current public socket contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -239,7 +736,7 @@ impl LocalUnixDaemonAccess {
     pub fn with_socket_path(path: impl Into<PathBuf>) -> Self {
         Self {
             socket_path: path.into(),
-            transport_id: ProviderId::parse("local-unix-daemon-access")
+            transport_id: ProviderId::parse(LOCAL_UNIX_DAEMON_ACCESS_TRANSPORT_ID)
                 .expect("static provider id is valid"),
             node_id: NodeId::parse(LOCAL_NODE_ID).expect("static node id is valid"),
         }
@@ -709,6 +1206,226 @@ mod tests {
         assert_eq!(access.socket_path(), Path::new(DEFAULT_PUBLIC_SOCKET_PATH));
     }
 
+    #[test]
+    fn local_unix_mapping_matches_allowlist_roles() {
+        let source = LocalUnixAdmissionSource::new(1000, 100);
+
+        assert_eq!(
+            map_local_unix_daemon_access(&source, LocalUnixAllowlistRole::Admin),
+            MappedDaemonAccessPrincipal::LocalAdmin { uid: 1000 }
+        );
+        assert_eq!(
+            map_local_unix_daemon_access(&source, LocalUnixAllowlistRole::Launcher),
+            MappedDaemonAccessPrincipal::LocalLauncher { uid: 1000 }
+        );
+        assert_eq!(
+            map_local_unix_daemon_access(&source, LocalUnixAllowlistRole::Denied),
+            MappedDaemonAccessPrincipal::LocalDenied {
+                uid: 1000,
+                reason: DaemonAccessDenyReason::LocalNotAllowlisted,
+            }
+        );
+    }
+
+    #[test]
+    fn remote_direct_tls_mapping_denies_without_auth_or_policy() {
+        let direct_tls = DirectTlsDaemonAccess::new();
+        let unauthenticated = remote_source(
+            direct_tls.admission_source(RemoteDaemonAccessCredential::unauthenticated(), None),
+        );
+        assert_eq!(
+            unauthenticated.transport_id.as_str(),
+            DIRECT_TLS_DAEMON_ACCESS_TRANSPORT_ID
+        );
+        assert_eq!(unauthenticated.mode, DaemonAccessMode::DirectTls);
+
+        let denied =
+            map_remote_daemon_access(&unauthenticated, Some(DaemonAccessPolicyRole::RealmAdmin));
+        assert_eq!(
+            denied,
+            MappedDaemonAccessPrincipal::RemotePrincipal {
+                principal_id: None,
+                decision: DaemonAccessDecision::denied(DaemonAccessDenyReason::Unauthenticated),
+            }
+        );
+        assert!(denied.is_denied());
+        assert!(!denied.is_local_admin_or_launcher());
+
+        let authenticated_unmapped = remote_source(direct_tls.admission_source(
+            RemoteDaemonAccessCredential::mutual_tls("cert-material"),
+            Some(principal_id("remote-principal")),
+        ));
+        let denied = map_remote_daemon_access(&authenticated_unmapped, None);
+        assert_eq!(
+            denied,
+            MappedDaemonAccessPrincipal::RemotePrincipal {
+                principal_id: Some(principal_id("remote-principal")),
+                decision: DaemonAccessDecision::denied(DaemonAccessDenyReason::Unmapped),
+            }
+        );
+        assert!(denied.is_denied());
+        assert!(!denied.is_local_admin_or_launcher());
+
+        let explicitly_mapped = map_remote_daemon_access(
+            &authenticated_unmapped,
+            Some(DaemonAccessPolicyRole::RealmAdmin),
+        );
+        assert!(matches!(
+            explicitly_mapped,
+            MappedDaemonAccessPrincipal::RemotePrincipal {
+                decision: DaemonAccessDecision::Authorized {
+                    role: DaemonAccessPolicyRole::RealmAdmin
+                },
+                ..
+            }
+        ));
+        assert!(!explicitly_mapped.is_local_admin_or_launcher());
+    }
+
+    #[test]
+    fn browser_and_relay_mapping_denies_without_auth_or_policy() {
+        let browser_unauthenticated = BrowserDaemonAccessAdmissionSource::new(
+            BrowserDaemonAccessCredential::unauthenticated(),
+            None,
+        );
+        let denied = map_browser_daemon_access(
+            &browser_unauthenticated,
+            Some(DaemonAccessPolicyRole::RealmOperator),
+        );
+        assert_eq!(
+            denied,
+            MappedDaemonAccessPrincipal::BrowserSession {
+                session_id: None,
+                decision: DaemonAccessDecision::denied(DaemonAccessDenyReason::Unauthenticated),
+            }
+        );
+        assert!(!denied.is_local_admin_or_launcher());
+
+        let browser_unmapped = BrowserDaemonAccessAdmissionSource::new(
+            BrowserDaemonAccessCredential::cookie_session("cookie-material", "csrf-material"),
+            Some(principal_id("browser-principal")),
+        );
+        let denied = map_browser_daemon_access(&browser_unmapped, None);
+        assert_eq!(
+            denied,
+            MappedDaemonAccessPrincipal::BrowserSession {
+                session_id: Some(principal_id("browser-principal")),
+                decision: DaemonAccessDecision::denied(DaemonAccessDenyReason::Unmapped),
+            }
+        );
+        assert!(!denied.is_local_admin_or_launcher());
+
+        let relay = RelayDaemonAccess::new();
+        let relay_unauthenticated = relay_source(
+            relay.admission_source(RelayDaemonAccessCredential::unauthenticated(), None),
+        );
+        assert_eq!(
+            relay_unauthenticated.transport_id.as_str(),
+            RELAY_DAEMON_ACCESS_TRANSPORT_ID
+        );
+        assert_eq!(relay_unauthenticated.mode, DaemonAccessMode::Relay);
+        let denied = map_relay_daemon_access(
+            &relay_unauthenticated,
+            Some(DaemonAccessPolicyRole::RealmOperator),
+        );
+        assert_eq!(
+            denied,
+            MappedDaemonAccessPrincipal::RelayPrincipal {
+                principal_id: None,
+                decision: DaemonAccessDecision::denied(DaemonAccessDenyReason::Unauthenticated),
+            }
+        );
+        assert!(!denied.is_local_admin_or_launcher());
+
+        let relay_unmapped = relay_source(relay.admission_source(
+            RelayDaemonAccessCredential::from_relay_secret(
+                "relay-secret-material",
+                RemoteDaemonAccessCredential::bearer_token("daemon-token-material"),
+            ),
+            Some(principal_id("relay-principal")),
+        ));
+        let denied = map_relay_daemon_access(&relay_unmapped, None);
+        assert_eq!(
+            denied,
+            MappedDaemonAccessPrincipal::RelayPrincipal {
+                principal_id: Some(principal_id("relay-principal")),
+                decision: DaemonAccessDecision::denied(DaemonAccessDenyReason::Unmapped),
+            }
+        );
+        assert!(!denied.is_local_admin_or_launcher());
+    }
+
+    #[test]
+    fn admission_record_serialization_redacts_credential_material() {
+        let cert = "-----BEGIN CERTIFICATE-----cert-canary-material-----END CERTIFICATE-----";
+        let token = "Bearer token-canary-material";
+        let cookie = "session=cookie-canary-material";
+        let csrf = "csrf-canary-material";
+        let relay_secret = "SharedAccessSignature sig=relay-canary-material";
+
+        let records = [
+            map_daemon_access_admission(
+                DaemonAccessAdmissionSource::direct_tls(
+                    RemoteDaemonAccessCredential::mutual_tls_and_bearer_token(cert, token),
+                    Some(principal_id("remote-principal")),
+                ),
+                None,
+                None,
+            ),
+            map_daemon_access_admission(
+                DaemonAccessAdmissionSource::relay(
+                    RelayDaemonAccessCredential::from_relay_secret(
+                        relay_secret,
+                        RemoteDaemonAccessCredential::bearer_token(token),
+                    ),
+                    Some(principal_id("relay-principal")),
+                ),
+                None,
+                None,
+            ),
+            map_daemon_access_admission(
+                DaemonAccessAdmissionSource::Browser(BrowserDaemonAccessAdmissionSource::new(
+                    BrowserDaemonAccessCredential::cookie_session(cookie, csrf),
+                    Some(principal_id("browser-principal")),
+                )),
+                None,
+                None,
+            ),
+        ];
+
+        for record in records {
+            let serialized = serde_json::to_string(&record).expect("serialize admission record");
+            for secret in [cert, token, cookie, csrf, relay_secret] {
+                assert!(
+                    !serialized.contains(secret),
+                    "serialized admission record leaked {secret:?}: {serialized}"
+                );
+            }
+            for canary in [
+                "cert-canary-material",
+                "token-canary-material",
+                "cookie-canary-material",
+                "csrf-canary-material",
+                "relay-canary-material",
+            ] {
+                assert!(
+                    !serialized.contains(canary),
+                    "serialized admission record leaked {canary:?}: {serialized}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn redacted_credential_length_is_capped_for_oversized_inputs() {
+        let oversized = vec![b'x'; usize::from(MAX_REDACTED_CREDENTIAL_BYTES) + 4096];
+        let redacted = RedactedDaemonAccessCredential::from_secret(&oversized);
+        assert!(redacted.present);
+        assert_eq!(redacted.byte_len, Some(MAX_REDACTED_CREDENTIAL_BYTES));
+        let serialized = serde_json::to_string(&redacted).expect("serialize redacted credential");
+        assert!(!serialized.contains(&"x".repeat(256)));
+    }
+
     #[tokio::test]
     async fn relay_and_direct_tls_fail_closed() {
         let target = TransportTarget {
@@ -976,6 +1693,23 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::GatewayUnavailable);
     }
 
+    fn principal_id(raw: &str) -> PrincipalId {
+        PrincipalId::parse(raw).expect("principal id")
+    }
+
+    fn remote_source(source: DaemonAccessAdmissionSource) -> RemoteDaemonAccessAdmissionSource {
+        match source {
+            DaemonAccessAdmissionSource::Remote(source) => source,
+            other => panic!("expected remote source, got {other:?}"),
+        }
+    }
+
+    fn relay_source(source: DaemonAccessAdmissionSource) -> RelayDaemonAccessAdmissionSource {
+        match source {
+            DaemonAccessAdmissionSource::Relay(source) => source,
+            other => panic!("expected relay source, got {other:?}"),
+        }
+    }
     fn list_entry(vm: &str, state: VmLifecycleState, graphics: bool, usbip: bool) -> ListEntry {
         list_entry_with(vm, state, false, "running", graphics, usbip)
     }

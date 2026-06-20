@@ -484,6 +484,23 @@ broker `serve` CLI takes `--audit-dir <path>` instead of the prior
 > `authz_result`) carry only the local `SO_PEERCRED`-derived
 > classification, and `decision` is the local broker operation outcome.
 
+`nixlingd` also writes daemon-owned JSONL events for transitions that are
+not broker operations, such as guest-control exec session establishment
+and runner readiness failures. Those records live under the daemon state
+directory as `daemon-events-<utc-date>.jsonl`. Each daemon record carries
+bounded event metadata plus `prev_hash` and `record_hash` fields so a
+verifier can detect missing, reordered, or modified lines. The hash-chain
+helper reports tampering explicitly; the write path remains best-effort so
+an audit sink outage does not abort an already-authorized local operation.
+
+Daemon audit sink health is exposed as an explicit report rather than a
+silent fallback. The report distinguishes writable, degraded, and
+unavailable states, including retention-floor degradation. It intentionally
+records only closed reason codes such as `write-probe-failed` or
+`retention-below-floor`; it does not include filesystem paths, raw IO
+errors, argv/env content, output bytes, provider credentials, or relay
+tokens.
+
 ## Forward-compatibility policy
 
 The protocol deliberately mixes **strict shape checking** with

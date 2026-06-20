@@ -2,7 +2,7 @@
 { lib, mkEval, flakeRoot, ... }:
 
 let
-  base = {
+  hostBase = {
     boot.loader.grub.enable = false;
     boot.loader.systemd-boot.enable = false;
     boot.initrd.includeDefaultModules = false;
@@ -14,6 +14,9 @@ let
       lanSubnet = "10.44.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
+  };
+
+  base = lib.recursiveUpdate hostBase {
     nixling.gateways.work = {
       env = "work";
       index = 20;
@@ -35,6 +38,15 @@ let
   };
 
   goodCfg = (mkEval [ base ]).config;
+  noGatewayCfg = (mkEval [ hostBase ]).config;
+  noRelayGatewayCfg = (mkEval [
+    (lib.recursiveUpdate hostBase {
+      nixling.gateways.work = {
+        env = "work";
+        index = 20;
+      };
+    })
+  ]).config;
   gatewayGuestCfg = goodCfg.nixling._computed."sys-work-gateway".config;
   gatewayGuestService = gatewayGuestCfg.systemd.services.nixlingd.serviceConfig;
   gatewayGuestTmpfiles = gatewayGuestCfg.systemd.tmpfiles.rules;
@@ -43,6 +55,54 @@ let
   hostDaemonJson = builtins.fromJSON goodCfg.environment.etc."nixling/daemon-config.json".text;
   hostGatewayJsonPresent = builtins.hasAttr "nixling/gateway.json" goodCfg.environment.etc;
   hostRealmEntrypoints = goodCfg.nixling._computed.realmEntrypoints;
+  hostPackageRefs = map (pkg: {
+    name = pkg.pname or (pkg.name or (lib.getName pkg));
+    path = toString pkg;
+  }) goodCfg.environment.systemPackages;
+  forbiddenHostRealmMaterial = [
+    "SharedAccessKey"
+    "Endpoint=sb://"
+    "AccountKey"
+    "relns-example.servicebus.windows.net"
+    "hc-nixling-display"
+    "https://example.azurecontainerapps.io"
+    "00000000-0000-0000-0000-000000000000"
+    "rg-nixling-centralus"
+    "casbx-nixling-demo"
+    "centralus"
+    "registry.example.azurecr.io/nixling-wayland:mi"
+    "nixling-wayland-mi"
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/nixling"
+    "11111111-1111-1111-1111-111111111111"
+    "/var/lib/nixling/gateways/work/credential.json"
+  ];
+  forbiddenRemoteRegistryMarkers = [
+    "\"remoteNodes\""
+    "\"remoteNodeRegistry\""
+    "\"nodeRegistry\""
+    "\"realmNodeRegistry\""
+    "\"realmRegistry\""
+    "\"registryNodes\""
+    "remote-node-registry"
+  ];
+  jsonContainsAny = needles: value:
+    lib.any (needle: lib.hasInfix needle (builtins.toJSON value)) needles;
+  containsForbiddenRealmMaterial = jsonContainsAny forbiddenHostRealmMaterial;
+  containsRemoteRegistryMarker = jsonContainsAny forbiddenRemoteRegistryMarkers;
+  localFastPathSnapshot = cfg:
+    let daemonJson = builtins.fromJSON cfg.environment.etc."nixling/daemon-config.json".text;
+    in {
+      daemonConfigPresent = builtins.hasAttr "nixling/daemon-config.json" cfg.environment.etc;
+      publicSocketPath = daemonJson.publicSocketPath;
+      publicSocketGroup = daemonJson.publicSocketGroup;
+      brokerSocketPath = daemonJson.brokerSocketPath;
+      nixlingdServicePresent = builtins.hasAttr "nixlingd" cfg.systemd.services;
+      nixlingdSupplementaryGroups = cfg.systemd.services.nixlingd.serviceConfig.SupplementaryGroups;
+      runDirAllowsLocalLaunchers = builtins.elem "d /run/nixling 0750 nixlingd nixling -" cfg.systemd.tmpfiles.rules;
+      realmEntries = lib.sort lib.lessThan (builtins.attrNames cfg.nixling._computed.realmEntrypoints.entries);
+      localEntrypoint = cfg.nixling._computed.realmEntrypoints.entries.local;
+      hostGatewayJsonPresent = builtins.hasAttr "nixling/gateway.json" cfg.environment.etc;
+    };
   gatewayProc = lib.findFirst (vm: vm.vm == "sys-work-gateway") null
     goodCfg.nixling._bundle.processesJson.data.vms;
   badCfg = (mkEval [
@@ -265,6 +325,19 @@ in
     };
   };
 
+  "gateway-vm/gateway-guest-json-retains-realm-provider-material" = {
+    expr = {
+      guestGatewayJsonPresent = builtins.hasAttr "nixling/gateway.json" gatewayGuestCfg.environment.etc;
+      guestCarriesGatewayProviderMaterial = containsForbiddenRealmMaterial gatewayJson;
+      inherit hostGatewayJsonPresent;
+    };
+    expected = {
+      guestGatewayJsonPresent = true;
+      guestCarriesGatewayProviderMaterial = true;
+      hostGatewayJsonPresent = false;
+    };
+  };
+
   "gateway-vm/guest-daemon-runs-as-nixlingd-without-no-drop-flag" = {
     expr = {
       user = gatewayGuestService.User;
@@ -316,6 +389,69 @@ in
     };
   };
 
+  "gateway-vm/host-daemon-config-excludes-realm-provider-material" = {
+    expr = {
+      daemonConfigCarriesGateway = hostDaemonJson ? gateway;
+      carriesRelayOrAcaMaterial = containsForbiddenRealmMaterial hostDaemonJson;
+      carriesRemoteNodeRegistry = containsRemoteRegistryMarker hostDaemonJson;
+      gatewayConfigPath = hostDaemonJson.gatewayConfigPath;
+    };
+    expected = {
+      daemonConfigCarriesGateway = false;
+      carriesRelayOrAcaMaterial = false;
+      carriesRemoteNodeRegistry = false;
+      gatewayConfigPath = "/etc/nixling/gateway.json";
+    };
+  };
+
+  "gateway-vm/host-system-packages-exclude-realm-provider-material" = {
+    expr = {
+      carriesRelayOrAcaMaterial = containsForbiddenRealmMaterial hostPackageRefs;
+      carriesRemoteNodeRegistry = containsRemoteRegistryMarker hostPackageRefs;
+      hasGatewayRelayPackage = lib.any
+        (pkg: lib.hasInfix "nixling-gateway-relay" pkg.name || lib.hasInfix "nixling-gateway-relay" pkg.path)
+        hostPackageRefs;
+      hasGatewayRuntimePackage = lib.any
+        (pkg: lib.hasInfix "nixling-gateway-runtime" pkg.name || lib.hasInfix "nixling-gateway-runtime" pkg.path)
+        hostPackageRefs;
+    };
+    expected = {
+      carriesRelayOrAcaMaterial = false;
+      carriesRemoteNodeRegistry = false;
+      hasGatewayRelayPackage = false;
+      hasGatewayRuntimePackage = false;
+    };
+  };
+
+  "gateway-vm/host-bundle-process-artifacts-exclude-realm-provider-material" = {
+    expr = {
+      gatewayVmProcessPresent = gatewayProc != null;
+      realmMaterial = {
+        bundle = containsForbiddenRealmMaterial goodCfg.nixling._bundle.bundle.data;
+        host = containsForbiddenRealmMaterial goodCfg.nixling._bundle.hostJson.data;
+        processes = containsForbiddenRealmMaterial goodCfg.nixling._bundle.processesJson.data;
+      };
+      remoteNodeRegistry = {
+        bundle = containsRemoteRegistryMarker goodCfg.nixling._bundle.bundle.data;
+        host = containsRemoteRegistryMarker goodCfg.nixling._bundle.hostJson.data;
+        processes = containsRemoteRegistryMarker goodCfg.nixling._bundle.processesJson.data;
+      };
+    };
+    expected = {
+      gatewayVmProcessPresent = true;
+      realmMaterial = {
+        bundle = false;
+        host = false;
+        processes = false;
+      };
+      remoteNodeRegistry = {
+        bundle = false;
+        host = false;
+        processes = false;
+      };
+    };
+  };
+
   "gateway-vm/host-realm-entrypoint-table-defaults-local-and-gateway" = {
     expr = {
       path = hostRealmEntrypoints.path;
@@ -337,6 +473,75 @@ in
         gateway = "sys-work-gateway.nixling";
       };
       workCarriesProviderConfig = false;
+    };
+  };
+
+  "gateway-vm/host-realm-entrypoints-exclude-realm-provider-material" = {
+    expr = {
+      entries = hostRealmEntrypoints.entries;
+      carriesRelayOrAcaMaterial = containsForbiddenRealmMaterial hostRealmEntrypoints;
+      carriesRemoteNodeRegistry = containsRemoteRegistryMarker hostRealmEntrypoints;
+      workCarriesProviderConfig =
+        (hostRealmEntrypoints.entries.work ? credentialPath)
+        || (hostRealmEntrypoints.entries.work ? relay)
+        || (hostRealmEntrypoints.entries.work ? aca)
+        || (hostRealmEntrypoints.entries.work ? remoteNodes)
+        || (hostRealmEntrypoints.entries.work ? remoteNodeRegistry)
+        || (hostRealmEntrypoints.entries.work ? nodeRegistry);
+    };
+    expected = {
+      entries = {
+        local = {
+          mode = "host-resident";
+          gateway = null;
+        };
+        work = {
+          mode = "gateway-backed";
+          gateway = "sys-work-gateway.nixling";
+        };
+      };
+      carriesRelayOrAcaMaterial = false;
+      carriesRemoteNodeRegistry = false;
+      workCarriesProviderConfig = false;
+    };
+  };
+
+  "gateway-vm/local-fast-path-auth-socket-does-not-require-gateway-relay" = {
+    expr = {
+      noGateway = localFastPathSnapshot noGatewayCfg;
+      gatewayWithoutRelay = localFastPathSnapshot noRelayGatewayCfg;
+    };
+    expected = {
+      noGateway = {
+        daemonConfigPresent = true;
+        publicSocketPath = "/run/nixling/public.sock";
+        publicSocketGroup = "nixling";
+        brokerSocketPath = "/run/nixling/priv.sock";
+        nixlingdServicePresent = true;
+        nixlingdSupplementaryGroups = [ "nixling" ];
+        runDirAllowsLocalLaunchers = true;
+        realmEntries = [ "local" ];
+        localEntrypoint = {
+          mode = "host-resident";
+          gateway = null;
+        };
+        hostGatewayJsonPresent = false;
+      };
+      gatewayWithoutRelay = {
+        daemonConfigPresent = true;
+        publicSocketPath = "/run/nixling/public.sock";
+        publicSocketGroup = "nixling";
+        brokerSocketPath = "/run/nixling/priv.sock";
+        nixlingdServicePresent = true;
+        nixlingdSupplementaryGroups = [ "nixling" ];
+        runDirAllowsLocalLaunchers = true;
+        realmEntries = [ "local" "work" ];
+        localEntrypoint = {
+          mode = "host-resident";
+          gateway = null;
+        };
+        hostGatewayJsonPresent = false;
+      };
     };
   };
 

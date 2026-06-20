@@ -12,6 +12,348 @@ use crate::realm::RealmPath;
 use crate::trace_context::TraceContext;
 use serde::{Deserialize, Deserializer, Serialize};
 
+const AUDIT_HASH_PREFIX: &str = "sha256:";
+const AUDIT_HASH_HEX_LEN: usize = 64;
+
+/// Closed audit stream kinds that can carry tamper-evident hash chains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuditStreamKind {
+    /// Gateway-guest audit stream.
+    Gateway,
+    /// Remote full-node audit stream.
+    RemoteNode,
+    /// Local daemon audit stream.
+    Daemon,
+}
+
+/// Validation error for [`AuditHash`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditHashError {
+    Empty,
+    BadShape,
+}
+
+impl core::fmt::Display for AuditHashError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "audit hash is empty"),
+            Self::BadShape => write!(f, "audit hash must be sha256:<64 lowercase hex chars>"),
+        }
+    }
+}
+
+impl std::error::Error for AuditHashError {}
+
+/// Bounded SHA-256 hash marker used by audit-chain metadata.
+///
+/// This pure core crate defines the contract and validation shape; daemon,
+/// gateway, or provider crates compute the canonical hashes with their local
+/// hashing dependencies.
+#[derive(Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct AuditHash(String);
+
+impl AuditHash {
+    /// Parse `sha256:<64 lowercase hex chars>`.
+    pub fn parse(raw: impl Into<String>) -> Result<Self, AuditHashError> {
+        let raw = raw.into();
+        if raw.is_empty() {
+            return Err(AuditHashError::Empty);
+        }
+        let Some(hex) = raw.strip_prefix(AUDIT_HASH_PREFIX) else {
+            return Err(AuditHashError::BadShape);
+        };
+        if hex.len() != AUDIT_HASH_HEX_LEN
+            || !hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
+        {
+            return Err(AuditHashError::BadShape);
+        }
+        Ok(Self(raw))
+    }
+
+    /// Borrow the canonical string form.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl core::fmt::Debug for AuditHash {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("AuditHash(<redacted>)")
+    }
+}
+
+impl<'de> Deserialize<'de> for AuditHash {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(raw).map_err(serde::de::Error::custom)
+    }
+}
+
+/// One link in a tamper-evident audit stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuditChainLink {
+    /// Monotonic stream sequence number.
+    pub sequence: u64,
+    /// Previous record hash, or the stream's genesis hash for sequence 0.
+    pub previous_hash: AuditHash,
+    /// Hash of the canonical redacted audit payload.
+    pub payload_hash: AuditHash,
+    /// Hash of the canonical chain record.
+    pub record_hash: AuditHash,
+}
+
+impl AuditChainLink {
+    /// Construct a chain link from precomputed canonical hashes.
+    pub fn new(
+        sequence: u64,
+        previous_hash: AuditHash,
+        payload_hash: AuditHash,
+        record_hash: AuditHash,
+    ) -> Self {
+        Self {
+            sequence,
+            previous_hash,
+            payload_hash,
+            record_hash,
+        }
+    }
+
+    /// Verify this link against trusted recomputed hash values.
+    pub fn verify(
+        &self,
+        expected_previous_hash: &AuditHash,
+        canonical_payload_hash: &AuditHash,
+        canonical_record_hash: &AuditHash,
+    ) -> AuditChainCheckResult {
+        if &self.previous_hash != expected_previous_hash {
+            return AuditChainCheckResult::failed(AuditChainCheckFailure::PreviousHashMismatch);
+        }
+        if &self.payload_hash != canonical_payload_hash {
+            return AuditChainCheckResult::failed(AuditChainCheckFailure::PayloadHashMismatch);
+        }
+        if &self.record_hash != canonical_record_hash {
+            return AuditChainCheckResult::failed(AuditChainCheckFailure::RecordHashMismatch);
+        }
+        AuditChainCheckResult::verified()
+    }
+}
+
+/// Redacted chain metadata for a gateway, remote-node, or daemon audit event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuditChainRecord {
+    pub stream: AuditStreamKind,
+    pub realm: RealmPath,
+    pub node: NodeId,
+    pub operation_id: OperationId,
+    pub link: AuditChainLink,
+}
+
+impl AuditChainRecord {
+    /// Construct a redacted audit-chain record.
+    pub fn new(
+        stream: AuditStreamKind,
+        realm: RealmPath,
+        node: NodeId,
+        operation_id: OperationId,
+        link: AuditChainLink,
+    ) -> Self {
+        Self {
+            stream,
+            realm,
+            node,
+            operation_id,
+            link,
+        }
+    }
+
+    /// Verify this record's link against trusted recomputed hash values.
+    pub fn verify(
+        &self,
+        expected_previous_hash: &AuditHash,
+        canonical_payload_hash: &AuditHash,
+        canonical_record_hash: &AuditHash,
+    ) -> AuditChainCheckResult {
+        self.link.verify(
+            expected_previous_hash,
+            canonical_payload_hash,
+            canonical_record_hash,
+        )
+    }
+}
+
+/// Closed audit-chain verification failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuditChainCheckFailure {
+    PreviousHashMismatch,
+    PayloadHashMismatch,
+    RecordHashMismatch,
+}
+
+/// Verification result for one audit-chain link.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", tag = "status")]
+pub enum AuditChainCheckResult {
+    Verified,
+    Failed { failure: AuditChainCheckFailure },
+}
+
+impl AuditChainCheckResult {
+    /// Successful chain verification.
+    pub fn verified() -> Self {
+        Self::Verified
+    }
+
+    /// Failed chain verification.
+    pub fn failed(failure: AuditChainCheckFailure) -> Self {
+        Self::Failed { failure }
+    }
+
+    /// True when the chain check failed closed.
+    pub fn is_fail_closed(&self) -> bool {
+        matches!(self, Self::Failed { .. })
+    }
+}
+
+/// Bounded reason for audit retention-floor status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuditRetentionFloorReason {
+    WindowBelowFloor,
+    EvidenceMissing,
+    SinkUnavailable,
+}
+
+/// Retention-floor status for an audit sink.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", tag = "status")]
+pub enum AuditRetentionFloorStatus {
+    Met,
+    BelowFloor { reason: AuditRetentionFloorReason },
+    Unknown { reason: AuditRetentionFloorReason },
+}
+
+impl AuditRetentionFloorStatus {
+    pub fn met() -> Self {
+        Self::Met
+    }
+
+    pub fn below_floor(reason: AuditRetentionFloorReason) -> Self {
+        Self::BelowFloor { reason }
+    }
+
+    pub fn unknown(reason: AuditRetentionFloorReason) -> Self {
+        Self::Unknown { reason }
+    }
+
+    pub fn is_fail_closed(&self) -> bool {
+        !matches!(self, Self::Met)
+    }
+}
+
+/// Bounded reason for audit sink health.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuditSinkHealthReason {
+    Backpressure,
+    ChainVerificationFailed,
+    SinkMissing,
+    SinkUnavailable,
+    WriteFailed,
+}
+
+/// Health state for a gateway/remote-node/daemon audit sink.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", tag = "status")]
+pub enum AuditSinkHealth {
+    Ok {
+        stream: AuditStreamKind,
+        retention_floor: AuditRetentionFloorStatus,
+    },
+    Degraded {
+        stream: AuditStreamKind,
+        reason: AuditSinkHealthReason,
+        retention_floor: AuditRetentionFloorStatus,
+    },
+    Unavailable {
+        stream: AuditStreamKind,
+        reason: AuditSinkHealthReason,
+        retention_floor: AuditRetentionFloorStatus,
+    },
+}
+
+impl AuditSinkHealth {
+    pub fn ok(stream: AuditStreamKind, retention_floor: AuditRetentionFloorStatus) -> Self {
+        Self::Ok {
+            stream,
+            retention_floor,
+        }
+    }
+
+    pub fn degraded(
+        stream: AuditStreamKind,
+        reason: AuditSinkHealthReason,
+        retention_floor: AuditRetentionFloorStatus,
+    ) -> Self {
+        Self::Degraded {
+            stream,
+            reason,
+            retention_floor,
+        }
+    }
+
+    pub fn unavailable(
+        stream: AuditStreamKind,
+        reason: AuditSinkHealthReason,
+        retention_floor: AuditRetentionFloorStatus,
+    ) -> Self {
+        Self::Unavailable {
+            stream,
+            reason,
+            retention_floor,
+        }
+    }
+
+    pub fn is_degraded(&self) -> bool {
+        matches!(self, Self::Degraded { .. } | Self::Unavailable { .. })
+    }
+
+    pub fn is_fail_closed(&self) -> bool {
+        matches!(self, Self::Unavailable { .. })
+            || self.retention_floor().is_fail_closed()
+            || matches!(
+                self,
+                Self::Degraded {
+                    reason: AuditSinkHealthReason::ChainVerificationFailed,
+                    ..
+                }
+            )
+    }
+
+    pub fn retention_floor(&self) -> &AuditRetentionFloorStatus {
+        match self {
+            Self::Ok {
+                retention_floor, ..
+            }
+            | Self::Degraded {
+                retention_floor, ..
+            }
+            | Self::Unavailable {
+                retention_floor, ..
+            } => retention_floor,
+        }
+    }
+}
+
 /// The authorization decision recorded for an operation/stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -353,6 +695,20 @@ mod tests {
         RealmPath::new(vec![RealmId::parse(label).unwrap()]).unwrap()
     }
 
+    fn hash(ch: char) -> AuditHash {
+        AuditHash::parse(format!("sha256:{}", ch.to_string().repeat(64))).unwrap()
+    }
+
+    fn chain_record() -> AuditChainRecord {
+        AuditChainRecord::new(
+            AuditStreamKind::Gateway,
+            realm("work"),
+            NodeId::parse("gateway").unwrap(),
+            OperationId::parse("op-chain").unwrap(),
+            AuditChainLink::new(7, hash('a'), hash('b'), hash('c')),
+        )
+    }
+
     #[test]
     fn admission_denial_record_may_omit_principal() {
         let env = AdmissionAuditRecord::denied(
@@ -416,5 +772,122 @@ mod tests {
                                         \"scope\":{\"scope\":\"node-control\",\"capability\":\"exec\"},\
                                         \"decision\":\"deny\",\"reason\":\"authentication-failed\"}";
         assert!(serde_json::from_str::<AdmissionAuditRecord>(capability_on_node_scope).is_err());
+    }
+
+    #[test]
+    fn audit_hash_rejects_malformed_or_secret_shaped_values() {
+        assert_eq!(AuditHash::parse("").unwrap_err(), AuditHashError::Empty);
+        assert_eq!(
+            AuditHash::parse("secret-token").unwrap_err(),
+            AuditHashError::BadShape
+        );
+        assert_eq!(
+            AuditHash::parse(
+                "sha256:ABCDEF0000000000000000000000000000000000000000000000000000000000"
+            )
+            .unwrap_err(),
+            AuditHashError::BadShape
+        );
+        assert_eq!(
+            AuditHash::parse(
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaagaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            )
+            .unwrap_err(),
+            AuditHashError::BadShape
+        );
+        assert_eq!(
+            AuditHash::parse("sha256:aaaaaaaa").unwrap_err(),
+            AuditHashError::BadShape
+        );
+        assert_eq!(hash('f').as_str().len(), "sha256:".len() + 64);
+    }
+
+    #[test]
+    fn audit_chain_verify_detects_tampered_hashes() {
+        let record = chain_record();
+        let previous = hash('a');
+        let payload = hash('b');
+        let record_hash = hash('c');
+        assert_eq!(
+            record.verify(&previous, &payload, &record_hash),
+            AuditChainCheckResult::verified()
+        );
+
+        assert_eq!(
+            record.verify(&hash('d'), &payload, &record_hash),
+            AuditChainCheckResult::failed(AuditChainCheckFailure::PreviousHashMismatch)
+        );
+        assert_eq!(
+            record.verify(&previous, &hash('d'), &record_hash),
+            AuditChainCheckResult::failed(AuditChainCheckFailure::PayloadHashMismatch)
+        );
+        let failed = record.verify(&previous, &payload, &hash('d'));
+        assert_eq!(
+            failed,
+            AuditChainCheckResult::failed(AuditChainCheckFailure::RecordHashMismatch)
+        );
+        assert!(failed.is_fail_closed());
+    }
+
+    #[test]
+    fn audit_chain_record_serialization_is_redacted_and_strict() {
+        const SENTINEL: &str = "SharedAccessKey=secret-token /nix/store/leak argv env";
+        let json = serde_json::to_string(&chain_record()).unwrap();
+        assert!(!json.contains(SENTINEL));
+        assert!(!json.contains("secret-token"));
+        assert!(!json.contains("/nix/store"));
+        assert!(json.contains("\"stream\":\"gateway\""));
+
+        let with_unknown = json.replacen("\"stream\"", "\"unexpected\":true,\"stream\"", 1);
+        assert!(serde_json::from_str::<AuditChainRecord>(&with_unknown).is_err());
+    }
+
+    #[test]
+    fn audit_sink_health_reports_degraded_and_fail_closed_states() {
+        let ok = AuditSinkHealth::ok(AuditStreamKind::Daemon, AuditRetentionFloorStatus::met());
+        assert!(!ok.is_degraded());
+        assert!(!ok.is_fail_closed());
+
+        let degraded = AuditSinkHealth::degraded(
+            AuditStreamKind::Gateway,
+            AuditSinkHealthReason::Backpressure,
+            AuditRetentionFloorStatus::met(),
+        );
+        assert!(degraded.is_degraded());
+        assert!(!degraded.is_fail_closed());
+
+        let chain_failed = AuditSinkHealth::degraded(
+            AuditStreamKind::Gateway,
+            AuditSinkHealthReason::ChainVerificationFailed,
+            AuditRetentionFloorStatus::met(),
+        );
+        assert!(chain_failed.is_fail_closed());
+
+        let unavailable = AuditSinkHealth::unavailable(
+            AuditStreamKind::RemoteNode,
+            AuditSinkHealthReason::SinkMissing,
+            AuditRetentionFloorStatus::unknown(AuditRetentionFloorReason::EvidenceMissing),
+        );
+        assert!(unavailable.is_degraded());
+        assert!(unavailable.is_fail_closed());
+    }
+
+    #[test]
+    fn retention_floor_below_floor_is_fail_closed_and_redacted() {
+        let below =
+            AuditRetentionFloorStatus::below_floor(AuditRetentionFloorReason::WindowBelowFloor);
+        assert!(below.is_fail_closed());
+
+        let health = AuditSinkHealth::unavailable(
+            AuditStreamKind::Gateway,
+            AuditSinkHealthReason::WriteFailed,
+            below,
+        );
+        let json = serde_json::to_string(&health).unwrap();
+        assert!(json.contains("\"status\":\"unavailable\""));
+        assert!(json.contains("\"status\":\"belowFloor\""));
+        assert!(!json.contains("SharedAccessKey"));
+        assert!(!json.contains("token"));
+        assert!(!json.contains("/var/lib"));
     }
 }

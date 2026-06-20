@@ -30,6 +30,8 @@ Regenerate that file; do not edit generated JSON by hand.
 | `Handshake` / `OperationKind` | `src/frame.rs` | Negotiation and closed operation taxonomy roots. |
 | `AuditEnvelope` | `src/audit.rs` | Redacted post-auth audit metadata for mutating operations and stream opens. |
 | `AdmissionAuditRecord` | `src/audit.rs` | Redacted pre-auth/session-admission denial metadata; principal may be absent only in this shape. |
+| `AuditChainRecord` / `AuditChainLink` / `AuditHash` | `src/audit.rs` | Tamper-evident audit-chain metadata for gateway, remote-node, and daemon audit streams. |
+| `AuditSinkHealth` / `AuditRetentionFloorStatus` | `src/audit.rs` | Redacted audit-sink health and retention-floor status for degraded/fail-closed reporting. |
 | `ConstellationError` | `src/error.rs` | Typed error frame with stable `ErrorKind`, bounded message, and structured missing capability for capability denials. |
 | `NodeSummary` / `WorkloadSelector` / `WorkloadSummary` / `ExecutionSummary` | `src/node.rs`, `src/workload.rs`, `src/execution.rs` | Bounded status summaries and selectors for nodes, workloads, and durable executions. |
 | `RealmPath`, identifier newtypes, `CapabilitySet`, `TraceContext`, `OpaquePayload`, `ProtocolToken` | `src/realm.rs`, `src/ids.rs`, `src/capability.rs`, `src/trace_context.rs`, `src/payload.rs`, `src/token.rs` | Reusable bounded primitives that every higher-level root depends on. |
@@ -146,6 +148,16 @@ paths, or provider credential material. Decode rejects any audit envelope
 without a principal. Pre-auth/session-admission failures use
 `AdmissionAuditRecord`, whose principal is optional and whose decision is
 always `deny`.
+
+`AuditChainRecord` describes the tamper-evident metadata attached to
+gateway, remote-node, and daemon audit streams. The core crate validates
+hash shape (`sha256:<64 lowercase hex chars>`) and verifies a link against
+trusted recomputed previous, payload, and record hashes; hash computation
+is owned by the concrete daemon/gateway/provider crate so the core model
+stays codec- and host-neutral. `AuditSinkHealth` and
+`AuditRetentionFloorStatus` report bounded degraded/unavailable states and
+never carry paths, credential material, argv, stdio, or raw provider
+errors.
 
 `ConstellationError` carries a stable `ErrorKind`, a bounded
 operator-safe message, and a structured missing capability when
