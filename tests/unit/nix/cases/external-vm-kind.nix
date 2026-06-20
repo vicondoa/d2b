@@ -34,6 +34,7 @@ let
         runtime.kind = "qemu-media";
         env = "work";
         qemuMedia = {
+          bootDrive.slot = "cdrom";
           source = {
             ref = "installer-usb";
             format = "iso";
@@ -64,6 +65,163 @@ let
   positiveQemuWaylandProxy =
     if positiveQemuProcess == null then null else lib.findFirst (node: node.id == "wayland-proxy") null positiveQemuProcess.nodes;
   positiveProfileNames = lib.attrNames positiveCfg.nixling._bundle.minijailProfiles;
+  expectedNixosRuntime = {
+    kind = "nixos";
+    provider = {
+      id = "local-cloud-hypervisor";
+      type = "local";
+      driver = "cloud-hypervisor";
+    };
+    capabilities = {
+      lifecycle = true;
+      display = true;
+      usbHotplug = true;
+      guestControl = true;
+      exec = true;
+      configSync = true;
+      ssh = true;
+      storeSync = true;
+      keys = true;
+      inGuestObservability = true;
+      operations = {
+        lifecycle = true;
+        display = true;
+        usbHotplug = true;
+        guestControl = true;
+        exec = true;
+        configSync = true;
+        storeSync = true;
+        keys = true;
+      };
+      services = {
+        hypervisor = {
+          supported = true;
+          nodeId = "cloud-hypervisor";
+          runnerRole = "cloud-hypervisor-runner";
+          driver = "cloud-hypervisor";
+          readiness = "api-socket";
+          contract = "spawn-runner";
+          unitStrategy = "microvm-or-graphics-sidecar";
+        };
+        display = {
+          supported = true;
+          contract = "host-display";
+        };
+        usbHotplug = {
+          supported = true;
+          contract = "broker-mediated-hotplug";
+        };
+        guestControl = {
+          supported = true;
+          nodeId = "guest-control-health";
+          contract = "guest-control";
+          transport = "vsock";
+        };
+        exec = {
+          supported = true;
+          contract = "guest-control-exec";
+        };
+        configSync = {
+          supported = true;
+          contract = "guest-control-config-sync";
+        };
+        ssh = {
+          supported = true;
+          contract = "ssh-compat";
+        };
+        storeSync = {
+          supported = true;
+          nodeId = "store-virtiofs-preflight";
+          contract = "store-sync";
+        };
+        keys = {
+          supported = true;
+          contract = "host-key-material";
+        };
+        inGuestObservability = {
+          supported = true;
+          contract = "guest-otel";
+        };
+      };
+    };
+  };
+  expectedQemuRuntime = {
+    kind = "qemu-media";
+    provider = {
+      id = "local-qemu-media";
+      type = "local";
+      driver = "qemu";
+    };
+    capabilities = {
+      lifecycle = true;
+      display = true;
+      usbHotplug = true;
+      guestControl = false;
+      exec = false;
+      configSync = false;
+      ssh = false;
+      storeSync = false;
+      keys = false;
+      inGuestObservability = false;
+      operations = {
+        lifecycle = true;
+        display = true;
+        usbHotplug = true;
+        guestControl = false;
+        exec = false;
+        configSync = false;
+        storeSync = false;
+        keys = false;
+      };
+      services = {
+        hypervisor = {
+          supported = true;
+          nodeId = "qemu-media";
+          runnerRole = "qemu-media-runner";
+          driver = "qemu";
+          readiness = "qmp-socket";
+          contract = "spawn-runner";
+          unitStrategy = "daemon-supervised-runner";
+        };
+        display = {
+          supported = true;
+          contract = "host-display";
+        };
+        usbHotplug = {
+          supported = true;
+          contract = "broker-mediated-hotplug";
+        };
+        guestControl = {
+          supported = false;
+          contract = "guest-control";
+        };
+        exec = {
+          supported = false;
+          contract = "guest-control-exec";
+        };
+        configSync = {
+          supported = false;
+          contract = "guest-control-config-sync";
+        };
+        ssh = {
+          supported = false;
+          contract = "ssh-compat";
+        };
+        storeSync = {
+          supported = false;
+          contract = "store-sync";
+        };
+        keys = {
+          supported = false;
+          contract = "host-key-material";
+        };
+        inGuestObservability = {
+          supported = false;
+          contract = "guest-otel";
+        };
+      };
+    };
+  };
 
   failingMessages = args:
     let cfg = (mkEval [ (mkHost args) ]).config;
@@ -196,6 +354,7 @@ in
   "external-vm-kind/qemu-media-source-schema" = {
     expr = {
       inherit (positiveVm.qemuMedia.source) kind ref path format readOnly;
+      bootDriveSlot = positiveVm.qemuMedia.bootDrive.slot;
       slot = {
         inherit (positiveVm.qemuMedia.removableSlots.cdrom.source) ref path format readOnly;
       };
@@ -206,6 +365,7 @@ in
       path = null;
       format = "iso";
       readOnly = true;
+      bootDriveSlot = "cdrom";
       slot = {
         ref = "tools-usb";
         path = null;
@@ -252,26 +412,7 @@ in
 
   "external-vm-kind/qemu-media-manifest-runtime" = {
     expr = positiveManifest.runtime;
-    expected = {
-      kind = "qemu-media";
-      provider = {
-        id = "local-qemu-media";
-        type = "local";
-        driver = "qemu";
-      };
-      capabilities = {
-        lifecycle = true;
-        display = true;
-        usbHotplug = true;
-        guestControl = false;
-        exec = false;
-        configSync = false;
-        ssh = false;
-        storeSync = false;
-        keys = false;
-        inGuestObservability = false;
-      };
-    };
+    expected = expectedQemuRuntime;
   };
 
   "external-vm-kind/qemu-media-manifest-provider-neutral" = {
@@ -319,8 +460,8 @@ in
   "external-vm-kind/host-json-runtime-provider-catalog" = {
     expr = positiveHostJson.runtimeProviders;
     expected = [
-      positiveCfg.nixling.manifest."sys-work-net".runtime
-      positiveManifest.runtime
+      expectedNixosRuntime
+      expectedQemuRuntime
     ];
   };
 

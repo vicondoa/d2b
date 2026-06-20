@@ -7,6 +7,11 @@ let
   cfg = requested.config;
   vm = cfg.nixling.vms."dark-live";
   hostJson = cfg.nixling._bundle.hostJson.data;
+  processes = cfg.nixling._bundle.processesJson.data.vms;
+  darkProcess = lib.findFirst (entry: entry.vm == "dark-live") null processes;
+  darkQemuNode = lib.findFirst (node: node.id == "qemu-media") null darkProcess.nodes;
+  netProcess = lib.findFirst (entry: entry.vm == "sys-dark-net") null processes;
+  netCloudHypervisorNode = lib.findFirst (node: node.id == "cloud-hypervisor") null netProcess.nodes;
   kdl = cfg.environment.etc."nixling/niri-vm-borders.kdl".text;
   rawArtifactText = builtins.toJSON {
     inherit (hostJson) qemuMedia vmRuntimes;
@@ -34,6 +39,17 @@ in
     expr = {
       inherit (vm) enable env index autostart;
       runtimeKind = vm.runtime.kind;
+      bootDriveSlot = vm.qemuMedia.bootDrive.slot;
+      qemuHypervisorService = cfg.nixling.manifest."dark-live".runtime.capabilities.services.hypervisor;
+      cloudHypervisorService = cfg.nixling.manifest."sys-dark-net".runtime.capabilities.services.hypervisor;
+      processNodes = {
+        qemu = {
+          inherit (darkQemuNode) id role;
+        };
+        cloudHypervisor = {
+          inherit (netCloudHypervisorNode) id role;
+        };
+      };
     };
     expected = {
       enable = true;
@@ -41,6 +57,35 @@ in
       index = 10;
       autostart = false;
       runtimeKind = "qemu-media";
+      bootDriveSlot = "boot";
+      qemuHypervisorService = {
+        supported = true;
+        nodeId = "qemu-media";
+        runnerRole = "qemu-media-runner";
+        driver = "qemu";
+        readiness = "qmp-socket";
+        contract = "spawn-runner";
+        unitStrategy = "daemon-supervised-runner";
+      };
+      cloudHypervisorService = {
+        supported = true;
+        nodeId = "cloud-hypervisor";
+        runnerRole = "cloud-hypervisor-runner";
+        driver = "cloud-hypervisor";
+        readiness = "api-socket";
+        contract = "spawn-runner";
+        unitStrategy = "microvm-or-graphics-sidecar";
+      };
+      processNodes = {
+        qemu = {
+          id = "qemu-media";
+          role = "qemu-media-runner";
+        };
+        cloudHypervisor = {
+          id = "cloud-hypervisor";
+          role = "cloud-hypervisor-runner";
+        };
+      };
     };
   };
 

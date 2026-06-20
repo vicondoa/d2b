@@ -35,8 +35,8 @@ let
           bundle artifacts; the broker still validates the opened file at
           runtime (regular raw file, safe owner/mode/parents, no symlink escape,
           no mounted/loop-backed use, and non-blocking lease/lock checks).
-          `physical-usb` sources must leave this unset and use `ref` plus
-          `nixling usb enroll`.
+          `physical-usb` sources must leave this unset and resolve through
+          root-only runtime enrollment state keyed by `ref`.
         '';
       };
 
@@ -146,6 +146,32 @@ in
                   runtime. Each slot and each nested slot source is a closed
                   submodule, so unsupported declarative USB bus-id fields are
                   schema errors.
+                '';
+              };
+
+              bootDrive = lib.mkOption {
+                type = lib.types.submodule {
+                  freeformType = null;
+                  options = {
+                    slot = lib.mkOption {
+                      type = lib.types.strMatching "^(boot|[a-z][a-z0-9-]{0,62})$";
+                      default = "boot";
+                      example = "installer";
+                      description = ''
+                        Slot selected as the intended boot drive. `boot`
+                        selects `qemuMedia.source`; any other value names a
+                        `qemuMedia.removableSlots.<slot>` entry. The selector
+                        is metadata for the runtime boot-drive planner and
+                        never carries raw USB identity.
+                      '';
+                    };
+                  };
+                };
+                default = { };
+                description = ''
+                  Boot-drive selection metadata for `runtime.kind =
+                  "qemu-media"`. This is additive foundation for runtime media
+                  planning; it does not change the current QEMU argv shape.
                 '';
               };
 

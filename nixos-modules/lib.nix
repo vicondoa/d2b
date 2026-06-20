@@ -111,31 +111,131 @@ rec {
     driver = "qemu";
   };
 
-  nixosRuntimeCapabilities = {
-    lifecycle = true;
-    display = true;
-    usbHotplug = true;
-    guestControl = true;
-    exec = true;
-    configSync = true;
-    ssh = true;
-    storeSync = true;
-    keys = true;
-    inGuestObservability = true;
+  mkServiceCapability =
+    { supported
+    , nodeId ? null
+    , runnerRole ? null
+    , driver ? null
+    , readiness ? null
+    , contract ? null
+    , transport ? null
+    , unitStrategy ? null
+    }:
+    {
+      inherit supported;
+    }
+    // lib.optionalAttrs (nodeId != null) { inherit nodeId; }
+    // lib.optionalAttrs (runnerRole != null) { inherit runnerRole; }
+    // lib.optionalAttrs (driver != null) { inherit driver; }
+    // lib.optionalAttrs (readiness != null) { inherit readiness; }
+    // lib.optionalAttrs (contract != null) { inherit contract; }
+    // lib.optionalAttrs (transport != null) { inherit transport; }
+    // lib.optionalAttrs (unitStrategy != null) { inherit unitStrategy; };
+
+  mkRuntimeCapabilities =
+    { legacy
+    , hypervisor
+    , services ? { }
+    }:
+    legacy // {
+      operations = {
+        inherit (legacy)
+          lifecycle
+          display
+          usbHotplug
+          guestControl
+          exec
+          configSync
+          storeSync
+          keys;
+      };
+      services = {
+        inherit hypervisor;
+        display = mkServiceCapability { supported = legacy.display; contract = "host-display"; };
+        usbHotplug = mkServiceCapability { supported = legacy.usbHotplug; contract = "broker-mediated-hotplug"; };
+        guestControl = mkServiceCapability { supported = legacy.guestControl; contract = "guest-control"; };
+        exec = mkServiceCapability { supported = legacy.exec; contract = "guest-control-exec"; };
+        configSync = mkServiceCapability { supported = legacy.configSync; contract = "guest-control-config-sync"; };
+        ssh = mkServiceCapability { supported = legacy.ssh; contract = "ssh-compat"; };
+        storeSync = mkServiceCapability { supported = legacy.storeSync; contract = "store-sync"; };
+        keys = mkServiceCapability { supported = legacy.keys; contract = "host-key-material"; };
+        inGuestObservability = mkServiceCapability { supported = legacy.inGuestObservability; contract = "guest-otel"; };
+      } // services;
+    };
+
+  nixosRuntimeCapabilities = mkRuntimeCapabilities {
+    legacy = {
+      lifecycle = true;
+      display = true;
+      usbHotplug = true;
+      guestControl = true;
+      exec = true;
+      configSync = true;
+      ssh = true;
+      storeSync = true;
+      keys = true;
+      inGuestObservability = true;
+    };
+    hypervisor = mkServiceCapability {
+      supported = true;
+      nodeId = "cloud-hypervisor";
+      runnerRole = "cloud-hypervisor-runner";
+      driver = "cloud-hypervisor";
+      readiness = "api-socket";
+      contract = "spawn-runner";
+      unitStrategy = "microvm-or-graphics-sidecar";
+    };
+    services = {
+      guestControl = mkServiceCapability {
+        supported = true;
+        nodeId = "guest-control-health";
+        contract = "guest-control";
+        transport = "vsock";
+      };
+      storeSync = mkServiceCapability {
+        supported = true;
+        nodeId = "store-virtiofs-preflight";
+        contract = "store-sync";
+      };
+    };
   };
 
-  qemuMediaRuntimeCapabilities = {
-    lifecycle = true;
-    display = true;
-    usbHotplug = true;
-    guestControl = false;
-    exec = false;
-    configSync = false;
-    ssh = false;
-    storeSync = false;
-    keys = false;
-    inGuestObservability = false;
+  qemuMediaRuntimeCapabilities = mkRuntimeCapabilities {
+    legacy = {
+      lifecycle = true;
+      display = true;
+      usbHotplug = true;
+      guestControl = false;
+      exec = false;
+      configSync = false;
+      ssh = false;
+      storeSync = false;
+      keys = false;
+      inGuestObservability = false;
+    };
+    hypervisor = mkServiceCapability {
+      supported = true;
+      nodeId = "qemu-media";
+      runnerRole = "qemu-media-runner";
+      driver = "qemu";
+      readiness = "qmp-socket";
+      contract = "spawn-runner";
+      unitStrategy = "daemon-supervised-runner";
+    };
+    services = {
+      guestControl = mkServiceCapability {
+        supported = false;
+        contract = "guest-control";
+      };
+      storeSync = mkServiceCapability {
+        supported = false;
+        contract = "store-sync";
+      };
+    };
   };
+
+  runtimeHypervisorService = kind: (runtimeProviderCatalog.${kind}
+    or (throw "nixling: unsupported runtime kind '${kind}'")).capabilities.services.hypervisor;
 
   runtimeProviderCatalog = {
     nixos = {

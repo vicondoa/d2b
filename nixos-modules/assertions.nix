@@ -642,9 +642,8 @@ let
                 assertion = (!isPhysical) || source.ref != null;
                 message = ''
                   ${sourceName}: kind = "physical-usb" requires an opaque `ref`.
-                  Enroll the live device identity at runtime with
-                  `nixling usb enroll`; do not place bus IDs, serials, or paths
-                  in Nix config.
+                  Device identity resolves through root-only runtime enrollment
+                  state; do not place bus IDs, serials, or paths in Nix config.
                 '';
               }
               {
@@ -707,8 +706,8 @@ let
           message = ''
             nixling.vms.${name}: runtime.kind = "qemu-media" requires
             `qemuMedia.source` in this implementation. Declare either a
-            physical-usb opaque ref enrolled with `nixling usb enroll`, or
-            a direct image-file source configured in Nix.
+            physical-usb opaque ref resolved from root-only runtime state, or a
+            direct image-file source configured in Nix.
           '';
         }
         {

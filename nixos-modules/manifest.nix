@@ -222,6 +222,26 @@ let
       storeSync = lib.mkOption { type = lib.types.bool; };
       keys = lib.mkOption { type = lib.types.bool; };
       inGuestObservability = lib.mkOption { type = lib.types.bool; };
+      operations = lib.mkOption {
+        type = lib.types.submodule {
+          freeformType = null;
+          options = {
+            lifecycle = lib.mkOption { type = lib.types.bool; };
+            display = lib.mkOption { type = lib.types.bool; };
+            usbHotplug = lib.mkOption { type = lib.types.bool; };
+            guestControl = lib.mkOption { type = lib.types.bool; };
+            exec = lib.mkOption { type = lib.types.bool; };
+            configSync = lib.mkOption { type = lib.types.bool; };
+            storeSync = lib.mkOption { type = lib.types.bool; };
+            keys = lib.mkOption { type = lib.types.bool; };
+          };
+        };
+        description = "Operation-level provider capability map.";
+      };
+      services = lib.mkOption {
+        type = lib.types.attrsOf lib.types.anything;
+        description = "Service-level provider capability metadata.";
+      };
     };
   };
 
