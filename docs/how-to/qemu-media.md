@@ -17,6 +17,11 @@ nixling.vms.dark-live = {
   autostart = false;
 
   qemuMedia = {
+    resources = {
+      memoryMiB = 4096;
+      vcpu = 2;
+    };
+
     source = {
       kind = "image-file";
       path = "/var/lib/nixling/images/dark-live.raw";
@@ -33,6 +38,11 @@ For physical USB media, keep only opaque refs in Nix:
 
 ```nix
 nixling.vms.dark-live.qemuMedia = {
+  resources = {
+    memoryMiB = 4096;
+    vcpu = 2;
+  };
+
   source = {
     kind = "physical-usb";
     ref = "boot";

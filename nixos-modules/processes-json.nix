@@ -221,38 +221,46 @@ EOF
   qemuMediaMac = name:
     let vm = cfg.vms.${name};
     in nl.mkMac vm.env "lan" vm.index;
-  qemuMediaArgv = name: [
-    "nixling-qemu-media@${name}"
-    "-nodefaults"
-    "-no-user-config"
-    "-S"
-    "-machine"
-    "q35,accel=kvm,usb=off"
-    "-device"
-    "qemu-xhci,id=xhci,p2=15,p3=15"
-    "-device"
-    "virtio-vga"
-    "-display"
-    "gtk,gl=off,show-cursor=on"
-    "-device"
-    "usb-kbd,bus=xhci.0,port=1"
-    "-device"
-    "usb-tablet,bus=xhci.0,port=2"
-    "-netdev"
-    "tap,id=nl0,fd=10,vhost=off"
-    "-device"
-    "virtio-net-pci,netdev=nl0,mac=${qemuMediaMac name}"
-    "-qmp"
-    "unix:${qemuMediaQmpSocket name},server=on,wait=off"
-    "-monitor"
-    "none"
-    "-serial"
-    "none"
-    "-parallel"
-    "none"
-    "-name"
-    "nixling-${name}-qemu-media"
-  ];
+  qemuMediaArgv = name:
+    let
+      vm = cfg.vms.${name};
+      resources = vm.qemuMedia.resources;
+    in [
+      "nixling-qemu-media@${name}"
+      "-nodefaults"
+      "-no-user-config"
+      "-S"
+      "-machine"
+      "q35,accel=kvm,usb=off"
+      "-m"
+      "${toString resources.memoryMiB}M"
+      "-smp"
+      (toString resources.vcpu)
+      "-device"
+      "qemu-xhci,id=xhci,p2=15,p3=15"
+      "-device"
+      "virtio-vga"
+      "-display"
+      "gtk,gl=off,show-cursor=on"
+      "-device"
+      "usb-kbd,bus=xhci.0,port=1"
+      "-device"
+      "usb-tablet,bus=xhci.0,port=2"
+      "-netdev"
+      "tap,id=nl0,fd=10,vhost=off"
+      "-device"
+      "virtio-net-pci,netdev=nl0,mac=${qemuMediaMac name}"
+      "-qmp"
+      "unix:${qemuMediaQmpSocket name},server=on,wait=off"
+      "-monitor"
+      "none"
+      "-serial"
+      "none"
+      "-parallel"
+      "none"
+      "-name"
+      "nixling-${name}-qemu-media"
+    ];
   qemuMediaEnv =
     lib.optionals (cfg.site.waylandUser != null) [
       "GDK_BACKEND=wayland"

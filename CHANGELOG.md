@@ -101,7 +101,9 @@ deprecations ship one minor release before removal.
   the qemu-media runner-owned state directory prepared by host
   reconciliation. Physical USB boot media now attaches through QMP's
   `host_device` block driver instead of the regular-file-only `file`
-  driver.
+  driver. qemu-media runners now pass explicit QEMU memory and vCPU
+  sizing, defaulting to 4 GiB and 2 vCPUs instead of QEMU's tiny
+  built-in RAM default.
 
 ## [1.3.1] - 2026-06-18
 
