@@ -11,7 +11,7 @@ doctest = false
 [lints]
 workspace = true
 
-# Top-level gateway composition (ADR 0032, P0): ties the codec-neutral
+# Top-level gateway composition (ADR 0032): ties the codec-neutral
 # nixling-gateway orchestrator/handshake to the concrete Azure Relay transport
 # (nixling-provider-relay) and the ACA workload provider (nixling-provider-aca).
 # This is the only crate that depends on both the gateway and the providers; it
@@ -27,9 +27,14 @@ nixling-constellation-provider = { path = "../nixling-constellation-provider", v
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 base64 = "0.22"
+chacha20poly1305 = "0.10"
+getrandom = "0.2"
+libc = "0.2"
+serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tracing = "0.1"
+tracing-subscriber = "0.3"
 
 [dev-dependencies]
 azure_core = "1.0.0"

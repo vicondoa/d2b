@@ -73,7 +73,62 @@ credentials or SSH.
 ## Credential boundary
 
 The host declaration carries non-secret coordinates and state paths only.
-The transitional host-resident ACA/Relay proof path is guarded by
-`allowHostRelayCredentials = false` by default and is not the production
-realm model. Production realm rollout keeps relay/provider credentials in
-the gateway guest.
+Relay/provider credentials are enrolled from inside the gateway guest and
+stored as an encrypted runtime envelope under that gateway's state
+directory. Host-side gateway credential reads and Relay Send bearer
+minting are rejected; `allowHostRelayCredentials` is retained only as a
+compatibility option that produces a clear error for older configs.
+
+## Enroll relay credentials in the gateway
+
+Start the gateway, enter it, then run enrollment from inside the guest.
+The helper reads the plaintext enrollment JSON from stdin so long-lived
+keys never appear in argv:
+
+```bash
+nixling realm enter work
+sudo -u nixlingd NIXLING_GATEWAY_STATE_DIR=/var/lib/nixling/gateways/work \
+  nixling-gateway-enroll enroll \
+  /var/lib/nixling/gateways/work/credential.sealed.json \
+  /var/lib/nixling/gateways/work/seal.key <<'JSON'
+{
+  "relayListen": { "keyName": "gateway-listen", "key": "<listen-rule-key>" },
+  "relaySend": { "keyName": "gateway-send", "key": "<send-rule-key>" }
+}
+JSON
+```
+
+Enrollment creates the sealing key if it does not exist, writes both
+files with mode `0600`, and emits only the new credential generation as
+JSON. The sealed credential file does not contain the Relay rule keys in
+plaintext.
+
+## Rotate credentials
+
+Rotate by passing the replacement JSON through the same in-guest helper:
+
+```bash
+nixling realm enter work
+sudo -u nixlingd NIXLING_GATEWAY_STATE_DIR=/var/lib/nixling/gateways/work \
+  nixling-gateway-enroll rotate \
+  /var/lib/nixling/gateways/work/credential.sealed.json \
+  /var/lib/nixling/gateways/work/seal.key <<'JSON'
+{
+  "relayListen": { "keyName": "gateway-listen", "key": "<new-listen-rule-key>" },
+  "relaySend": { "keyName": "gateway-send", "key": "<new-send-rule-key>" }
+}
+JSON
+```
+
+Rotation must unseal the existing envelope, increments the gateway
+credential generation, and rewrites the envelope atomically. Existing
+display/session credentials bound to an older generation are rejected by
+the gateway verifier on reconnect.
+
+## Recovery
+
+If the seal key is lost, the existing credential envelope cannot be
+unsealed. Remove both the stale `credential.sealed.json` and `seal.key`
+inside the gateway guest, then enroll fresh Relay credentials. Treat this
+as credential rotation at the provider: revoke the old Relay rules or keys
+before enrolling replacements.

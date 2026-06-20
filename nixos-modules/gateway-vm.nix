@@ -24,6 +24,7 @@ let
 
   nixlingdPackage = hostToolPackage "nixlingd" "nixlingd";
   nixlingPackage = hostToolPackage "nixling" "nixling";
+  nixlingGatewayRuntimePackage = hostToolPackage "nixlingGatewayRuntime" "nixling-gateway-runtime";
 
   secretShaped = s:
     lib.hasInfix "SharedAccessKey" s
@@ -44,11 +45,8 @@ let
     lib.unique (lib.filter safeRuntimePath [
       gw.stateDir
       (builtins.dirOf gw.credentialPath)
+      (builtins.dirOf gw.sealKeyPath)
     ]);
-
-  hostGatewayStateTmpfiles = lib.flatten (lib.mapAttrsToList
-    (_: gw: map (dir: "d ${dir} 0750 root nixlingd -") (gatewayStateDirs gw))
-    gateways);
 
   gatewayVm = name: gw: {
     name = gw.vmName;
@@ -97,6 +95,7 @@ let
           realm = gw.realm;
           stateDir = gw.stateDir;
           credentialPath = gw.credentialPath;
+          sealKeyPath = gw.sealKeyPath;
           inherit (gw) allowHostRelayCredentials;
           relay = {
             inherit (gw.relay) namespace entity;
@@ -159,6 +158,7 @@ let
           curl
           nixlingPackage
           nixlingdPackage
+          nixlingGatewayRuntimePackage
         ];
         systemd.tmpfiles.rules = [
           "d /run/nixling 0750 nixlingd nixling -"
@@ -196,8 +196,6 @@ let
   };
 in
 {
-  systemd.tmpfiles.rules = hostGatewayStateTmpfiles;
-
   nixling.vms = lib.mkMerge [
     (lib.listToAttrs (lib.mapAttrsToList gatewayVm gateways))
   ];
