@@ -198,6 +198,16 @@ pub struct QemuMediaSourceIntent {
     /// root-only runtime registry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_path: Option<String>,
+    /// Optional physical-USB selector for start-time boot-drive resolution.
+    /// Public status/audit surfaces must not echo this value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usb_selector: Option<QemuMediaUsbSelector>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaUsbSelector {
+    pub by_id_name: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

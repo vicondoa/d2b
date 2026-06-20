@@ -15,7 +15,9 @@ use std::time::Duration;
 
 use nix::libc;
 use nixling_core::bundle_resolver::BundleResolver;
-use nixling_core::host::{QemuMediaFormat, QemuMediaSourceIntent, QemuMediaSourceKind};
+use nixling_core::host::{
+    QemuMediaFormat, QemuMediaSourceIntent, QemuMediaSourceKind, QemuMediaUsbSelector,
+};
 use nixling_host::media::{
     MediaAccessMode, QemuMediaHotplugAction, QemuMediaHotplugScaffold, UsbPhysicalIdentity,
 };
@@ -298,7 +300,14 @@ fn open_runtime_selector_source<'a>(
     nixling_host::media::validate_usb_busid(&req.bus_id)
         .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
     let identity = read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id)?;
-    let (_record, source) = resolve_runtime_selector(resolver, req.vm_id.as_str(), &identity)?;
+    let (_record, source) = resolve_runtime_selector(resolver, req.vm_id.as_str(), &identity)
+        .or_else(|error| {
+            if runtime_selector_allows_declared_fallback(&error) {
+                resolve_declared_runtime_selector(resolver, req.vm_id.as_str(), &identity)
+            } else {
+                Err(error)
+            }
+        })?;
     preflight_identity_not_busy(Path::new("/sys"), &identity)?;
     let fd = open_block_device(&identity.block_device, access_mode(source))?;
     Ok(OpenedMedia { source, fd })
@@ -311,9 +320,19 @@ fn open_declared_source<'a>(
     let access = access_mode(source);
     let fd = match source.source_kind {
         QemuMediaSourceKind::PhysicalUsb => {
-            let record =
-                read_registry_record(resolver, source.vm.as_str(), source.media_ref.as_str())?;
-            let identity = read_current_identity_for_record(&record)?;
+            let identity = if let Some(selector) = source.usb_selector.as_ref() {
+                let identity = read_usb_identity_for_selector(selector)?;
+                let record = MediaRegistryRecord::from_identity(source, identity.clone());
+                write_registry_record(resolver, &record)?;
+                let records = read_all_registry_records(resolver).unwrap_or_else(|_| vec![record]);
+                write_redacted_registry_index(&records)?;
+                let _ = write_runtime_udev_rules(resolver, &records);
+                identity
+            } else {
+                let record =
+                    read_registry_record(resolver, source.vm.as_str(), source.media_ref.as_str())?;
+                read_current_identity_for_record(&record)?
+            };
             preflight_identity_not_busy(Path::new("/sys"), &identity)?;
             open_block_device(&identity.block_device, access)?
         }
@@ -529,6 +548,87 @@ fn qmp_error_may_have_applied(error: &MediaOpError) -> bool {
                 || reason.starts_with("send-fd:")
                 || reason == "eof"
     )
+}
+
+fn runtime_selector_allows_declared_fallback(error: &MediaOpError) -> bool {
+    matches!(
+        error,
+        MediaOpError::IdentityMismatch(reason) if reason == "runtime-selector"
+    )
+}
+
+fn resolve_declared_runtime_selector<'a>(
+    resolver: &'a BundleResolver,
+    vm: &str,
+    identity: &UsbPhysicalIdentity,
+) -> Result<(MediaRegistryRecord, &'a QemuMediaSourceIntent), MediaOpError> {
+    let source = select_unique_declared_physical_source(resolver, vm, identity, None)?;
+    Ok((MediaRegistryRecord::from_identity(source, identity.clone()), source))
+}
+
+fn resolve_declared_attached_runtime_selector<'a>(
+    resolver: &'a BundleResolver,
+    vm: &str,
+    identity: &UsbPhysicalIdentity,
+    attached_refs: &BTreeSet<String>,
+) -> Result<(MediaRegistryRecord, &'a QemuMediaSourceIntent), MediaOpError> {
+    let source = select_unique_declared_physical_source(resolver, vm, identity, Some(attached_refs))?;
+    Ok((MediaRegistryRecord::from_identity(source, identity.clone()), source))
+}
+
+fn select_unique_declared_physical_source<'a>(
+    resolver: &'a BundleResolver,
+    vm: &str,
+    identity: &UsbPhysicalIdentity,
+    attached_refs: Option<&BTreeSet<String>>,
+) -> Result<&'a QemuMediaSourceIntent, MediaOpError> {
+    let Some(qemu_media) = resolver.host.qemu_media.as_ref() else {
+        return Err(MediaOpError::MissingBundlePolicy);
+    };
+    let candidates = qemu_media
+        .sources
+        .iter()
+        .filter(|source| source.vm == vm)
+        .filter(|source| matches!(source.source_kind, QemuMediaSourceKind::PhysicalUsb))
+        .filter(|source| {
+            attached_refs
+                .map(|refs| refs.contains(&source.media_ref))
+                .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
+    let selector_matches = candidates
+        .iter()
+        .copied()
+        .filter(|source| {
+            source
+                .usb_selector
+                .as_ref()
+                .is_some_and(|selector| usb_selector_matches(selector, identity))
+        })
+        .collect::<Vec<_>>();
+    let matches = if selector_matches.is_empty() {
+        candidates
+            .into_iter()
+            .filter(|source| source.usb_selector.is_none())
+            .collect::<Vec<_>>()
+    } else {
+        selector_matches
+    };
+    match matches.as_slice() {
+        [source] => Ok(*source),
+        [] => Err(MediaOpError::IdentityMismatch(
+            "runtime-selector".to_owned(),
+        )),
+        many => {
+            let mut refs = many
+                .iter()
+                .map(|source| source.media_ref.clone())
+                .collect::<Vec<_>>();
+            refs.sort();
+            refs.dedup();
+            Err(MediaOpError::AmbiguousRuntimeSelector(refs))
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -976,6 +1076,41 @@ fn read_current_identity_for_record(
     }
 }
 
+fn read_usb_identity_for_selector(
+    selector: &QemuMediaUsbSelector,
+) -> Result<UsbPhysicalIdentity, MediaOpError> {
+    let candidates = nixling_host::media::safe_usb_block_candidates(
+        Path::new("/sys"),
+        Path::new("/dev/disk/by-id"),
+    );
+    let matches = candidates
+        .into_iter()
+        .filter(|candidate| candidate.by_id_names.iter().any(|name| name == &selector.by_id_name))
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [] => Err(MediaOpError::IdentityMismatch(
+            "configured-selector".to_owned(),
+        )),
+        [candidate] => read_usb_identity(
+            Path::new("/sys"),
+            Path::new("/dev/disk/by-id"),
+            &candidate.bus_id,
+        ),
+        many => Err(MediaOpError::AmbiguousRuntimeSelector(
+            many.iter()
+                .map(|candidate| candidate.bus_id.clone())
+                .collect(),
+        )),
+    }
+}
+
+fn usb_selector_matches(selector: &QemuMediaUsbSelector, identity: &UsbPhysicalIdentity) -> bool {
+    identity
+        .by_id_names
+        .iter()
+        .any(|name| name == &selector.by_id_name)
+}
+
 fn runtime_identity_matches_record(
     record: &MediaRegistryRecord,
     identity: &UsbPhysicalIdentity,
@@ -1018,10 +1153,16 @@ fn resolve_detach_runtime_selector<'a>(
         }
         Err(error) if runtime_selector_allows_detach_fallback(&error) => {
             let attached_refs = client.query_attached_media_refs()?;
-            let record =
-                select_unique_attached_detach_record(&records, vm, identity, &attached_refs)?;
-            let source = resolve_physical_source(resolver, vm, &record.media_ref)?;
-            Ok((record, source))
+            match select_unique_attached_detach_record(&records, vm, identity, &attached_refs) {
+                Ok(record) => {
+                    let source = resolve_physical_source(resolver, vm, &record.media_ref)?;
+                    Ok((record, source))
+                }
+                Err(fallback_error) if runtime_selector_allows_declared_fallback(&fallback_error) => {
+                    resolve_declared_attached_runtime_selector(resolver, vm, identity, &attached_refs)
+                }
+                Err(fallback_error) => Err(fallback_error),
+            }
         }
         Err(error) => Err(error),
     }

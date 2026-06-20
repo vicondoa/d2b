@@ -11835,6 +11835,7 @@ mod public_status_tests {
             read_only: true,
             registry_scope: nixling_core::host::QemuMediaRegistryScope::RootOnlyRuntimeState,
             image_path: None,
+            usb_selector: None,
         }
     }
 
@@ -11848,6 +11849,7 @@ mod public_status_tests {
             read_only: false,
             registry_scope: nixling_core::host::QemuMediaRegistryScope::DirectConfigPath,
             image_path: Some("/var/lib/nixling/images/installer.img".to_owned()),
+            usb_selector: None,
         }
     }
 

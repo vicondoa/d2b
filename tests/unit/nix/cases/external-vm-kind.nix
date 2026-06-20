@@ -42,6 +42,7 @@ let
           removableSlots.cdrom.source = {
             ref = "tools-usb";
             format = "iso";
+            usbSelector.byIdName = "usb-Test_Tools_0001-0:0";
           };
         };
       } // lib.optionalAttrs includeIndex {
@@ -83,67 +84,27 @@ let
       storeSync = true;
       keys = true;
       inGuestObservability = true;
-      operations = {
-        lifecycle = true;
-        display = true;
-        usbHotplug = true;
-        guestControl = true;
-        exec = true;
-        configSync = true;
-        storeSync = true;
-        keys = true;
-      };
-      services = {
-        hypervisor = {
-          supported = true;
-          nodeId = "cloud-hypervisor";
-          runnerRole = "cloud-hypervisor-runner";
-          driver = "cloud-hypervisor";
-          readiness = "api-socket";
-          contract = "spawn-runner";
-          unitStrategy = "microvm-or-graphics-sidecar";
-        };
-        display = {
-          supported = true;
-          contract = "host-display";
-        };
-        usbHotplug = {
-          supported = true;
-          contract = "broker-mediated-hotplug";
-        };
-        guestControl = {
-          supported = true;
-          nodeId = "guest-control-health";
-          contract = "guest-control";
-          transport = "vsock";
-        };
-        exec = {
-          supported = true;
-          contract = "guest-control-exec";
-        };
-        configSync = {
-          supported = true;
-          contract = "guest-control-config-sync";
-        };
-        ssh = {
-          supported = true;
-          contract = "ssh-compat";
-        };
-        storeSync = {
-          supported = true;
-          nodeId = "store-virtiofs-preflight";
-          contract = "store-sync";
-        };
-        keys = {
-          supported = true;
-          contract = "host-key-material";
-        };
-        inGuestObservability = {
-          supported = true;
-          contract = "guest-otel";
-        };
-      };
     };
+    operationCapabilities = {
+      lifecycle = { start = true; stop = true; restart = true; switch = true; hostPrepare = true; };
+      media = { usbHotplug = true; removableMedia = false; qemuMedia = false; };
+      display = { display = true; graphics = true; video = true; waylandProxy = true; };
+      guest = { guestControl = true; exec = true; configSync = true; ssh = true; keys = true; inGuestObservability = true; };
+      storage = { storeSync = true; virtiofs = true; volumes = true; };
+    };
+    autostartPolicy = "host-boot-eligible";
+    services = [
+      { id = "host-reconcile"; role = "host"; processRole = "host-reconcile"; optional = false; }
+      { id = "store-virtiofs-preflight"; role = "storage"; processRole = "store-virtiofs-preflight"; optional = false; }
+      { id = "virtiofsd"; role = "storage"; processRole = "virtiofsd"; optional = false; }
+      { id = "cloud-hypervisor"; role = "hypervisor"; processRole = "cloud-hypervisor-runner"; optional = false; }
+      { id = "guest-control-health"; role = "guest-control"; processRole = "guest-control-health"; optional = false; }
+      { id = "swtpm"; role = "tpm"; processRole = "swtpm"; optional = true; }
+      { id = "gpu"; role = "display"; processRole = "gpu"; optional = true; }
+      { id = "audio"; role = "audio"; processRole = "audio"; optional = true; }
+      { id = "video"; role = "video"; processRole = "video"; optional = true; }
+      { id = "usbip"; role = "usb"; processRole = "usbip"; optional = true; }
+    ];
   };
   expectedQemuRuntime = {
     kind = "qemu-media";
@@ -163,64 +124,20 @@ let
       storeSync = false;
       keys = false;
       inGuestObservability = false;
-      operations = {
-        lifecycle = true;
-        display = true;
-        usbHotplug = true;
-        guestControl = false;
-        exec = false;
-        configSync = false;
-        storeSync = false;
-        keys = false;
-      };
-      services = {
-        hypervisor = {
-          supported = true;
-          nodeId = "qemu-media";
-          runnerRole = "qemu-media-runner";
-          driver = "qemu";
-          readiness = "qmp-socket";
-          contract = "spawn-runner";
-          unitStrategy = "daemon-supervised-runner";
-        };
-        display = {
-          supported = true;
-          contract = "host-display";
-        };
-        usbHotplug = {
-          supported = true;
-          contract = "broker-mediated-hotplug";
-        };
-        guestControl = {
-          supported = false;
-          contract = "guest-control";
-        };
-        exec = {
-          supported = false;
-          contract = "guest-control-exec";
-        };
-        configSync = {
-          supported = false;
-          contract = "guest-control-config-sync";
-        };
-        ssh = {
-          supported = false;
-          contract = "ssh-compat";
-        };
-        storeSync = {
-          supported = false;
-          contract = "store-sync";
-        };
-        keys = {
-          supported = false;
-          contract = "host-key-material";
-        };
-        inGuestObservability = {
-          supported = false;
-          contract = "guest-otel";
-        };
-      };
     };
+    operationCapabilities = {
+      lifecycle = { start = true; stop = true; restart = true; switch = false; hostPrepare = true; };
+      media = { usbHotplug = true; removableMedia = true; qemuMedia = true; };
+      display = { display = true; graphics = false; video = false; waylandProxy = false; };
+      guest = { guestControl = false; exec = false; configSync = false; ssh = false; keys = false; inGuestObservability = false; };
+      storage = { storeSync = false; virtiofs = false; volumes = false; };
+    };
+    autostartPolicy = "manual-only";
+    services = [
+      { id = "host-reconcile"; role = "host"; processRole = "host-reconcile"; optional = false; }
+      { id = "qemu-media"; role = "hypervisor"; processRole = "qemu-media-runner"; optional = false; }
+      { id = "usbip"; role = "usb"; processRole = "usbip"; optional = true; }
+    ];
   };
 
   failingMessages = args:
@@ -356,7 +273,7 @@ in
       inherit (positiveVm.qemuMedia.source) kind ref path format readOnly;
       bootDriveSlot = positiveVm.qemuMedia.bootDrive.slot;
       slot = {
-        inherit (positiveVm.qemuMedia.removableSlots.cdrom.source) ref path format readOnly;
+        inherit (positiveVm.qemuMedia.removableSlots.cdrom.source) ref path format readOnly usbSelector;
       };
     };
     expected = {
@@ -371,6 +288,9 @@ in
         path = null;
         format = "iso";
         readOnly = true;
+        usbSelector = {
+          byIdName = "usb-Test_Tools_0001-0:0";
+        };
       };
     };
   };
@@ -484,7 +404,7 @@ in
     expected = {
       registryDir = "/var/lib/nixling/media-registry";
       runtimeRulesPath = "/run/udev/rules.d/99-nixling-media-ignore.rules";
-      reloadBehavior = "Broker writes root-only runtime udev rules with UDISKS_IGNORE=1 and reloads udev rules after physical USB enrollment; direct image-file paths do not use enrollment.";
+      reloadBehavior = "Broker writes root-only runtime udev rules with UDISKS_IGNORE=1 and reloads udev rules after physical USB resolution; direct image-file paths do not use runtime USB rules.";
       sources = [
         {
           vm = "media";
@@ -494,6 +414,9 @@ in
           format = "iso";
           readOnly = true;
           registryScope = "root-only-runtime-state";
+          usbSelector = {
+            byIdName = "usb-Test_Tools_0001-0:0";
+          };
         }
         {
           vm = "media";

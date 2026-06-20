@@ -8,6 +8,7 @@
 
 let
   qemuMediaRefType = lib.types.strMatching "^[a-z][a-z0-9-]{0,62}$";
+  qemuMediaByIdNameType = lib.types.strMatching "^[A-Za-z0-9._:+-]{1,255}$";
 
   qemuMediaSourceType = lib.types.submodule {
     freeformType = null;
@@ -19,9 +20,9 @@ let
         description = ''
           Opaque media reference for `physical-usb` sources. Raw physical USB
           identity (busid, by-id names, serials, devnums, and block-device
-          paths) is enrolled at runtime by the privileged broker and stored
-          outside the Nix store. `image-file` sources do not require enrollment
-          and may omit this field.
+          paths) is never accepted as a CLI enrollment. Boot media uses
+          `usbSelector` plus broker-side runtime probing; `image-file` sources
+          may omit this field.
         '';
       };
 
@@ -40,14 +41,37 @@ let
         '';
       };
 
+      usbSelector = lib.mkOption {
+        type = lib.types.nullOr (lib.types.submodule {
+          freeformType = null;
+          options = {
+            byIdName = lib.mkOption {
+              type = qemuMediaByIdNameType;
+              example = "usb-Example_Flash_Disk_123456-0:0";
+              description = ''
+                Exact `/dev/disk/by-id` basename used to resolve a physical USB
+                source at VM start or hotplug time. This value is operator-authored
+                configuration, but public status, CLI success output, and audit
+                summaries must not echo it.
+              '';
+            };
+          };
+        });
+        default = null;
+        description = ''
+          Optional stable selector for `physical-usb` sources. The selector is
+          used by the broker to find the current sysfs busid and open the block
+          device; it never contains a raw `/dev` path.
+        '';
+      };
+
       kind = lib.mkOption {
         type = lib.types.enum [ "physical-usb" "image-file" ];
         default = "physical-usb";
         description = ''
           Source class for the opaque media reference. `physical-usb` resolves
-          through root-only enrollment state. `image-file` is configured
-          directly with an absolute `path` and never uses the USB enrollment
-          registry.
+          through config/probe-driven runtime selection. `image-file` is
+          configured directly with an absolute `path`.
         '';
       };
 
@@ -132,7 +156,7 @@ in
                 type = lib.types.nullOr qemuMediaSourceType;
                 default = null;
                 description = ''
-                  Optional primary media source for `runtime.kind =
+                  Optional primary OS/boot media source for `runtime.kind =
                   "qemu-media"`. This closed submodule rejects undeclared
                   declarative USB bus-id fields instead of ignoring them.
                 '';
