@@ -2166,8 +2166,9 @@ mod tests {
         // Read state; if it's already reaped by the OS before we get here
         // (proc entry gone), skip the assertion.
         if let Some(state_char) = read_proc_stat_state(pid) {
-            // May be 'Z' (zombie), already gone ('X'), or transiently still
-            // runnable/sleeping before the scheduler reaches process teardown.
+            // May be zombie ('Z'), already gone/dead ('X'), or transiently
+            // still runnable ('R'), sleeping ('S'), or in uninterruptible
+            // sleep ('D') before the scheduler reaches process teardown.
             assert!(
                 state_char == 'Z'
                     || state_char == 'X'
