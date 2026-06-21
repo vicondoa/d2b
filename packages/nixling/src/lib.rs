@@ -4543,9 +4543,10 @@ fn load_realm_entrypoint_table_from_path(
                         CliFailure::new(
                             1,
                             format!(
-                                "realm `{}` gateway target `{}` is invalid: {err}",
+                                "realm `{}` gateway target `{}` is invalid: {}",
                                 safe_error_snippet(&realm_raw),
-                                safe_error_snippet(&gateway)
+                                safe_error_snippet(&gateway),
+                                safe_error_snippet(&err.to_string())
                             ),
                         )
                     })?;
@@ -5025,7 +5026,7 @@ fn realm_policy_rows_from_entries(
                             format!(
                                 "realm `{}` gateway target is invalid: {}",
                                 safe_error_snippet(&realm_target),
-                                err
+                                safe_error_snippet(&err.to_string())
                             ),
                         )
                     })?;
@@ -9153,10 +9154,18 @@ fn allowed_subcommands(role: AuthRoleV2) -> BTreeSet<String> {
             .into_iter()
             .filter(|command| command != "audit")
             .collect(),
-        AuthRoleV2::None => ["list", "status", "host check", "auth status"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
+        AuthRoleV2::None => [
+            "list",
+            "status",
+            "host check",
+            "auth status",
+            "op inspect",
+            "realm list",
+            "realm inspect",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
     }
 }
 
