@@ -306,4 +306,76 @@ mod tests {
             nixling_constellation_core::ErrorKind::Backpressure
         );
     }
+
+    #[tokio::test]
+    async fn send_data_without_outbound_credit_is_rejected() {
+        let (client_s, server_s) = connected_pair().await;
+        let server = tokio::spawn(async move {
+            let peer = PeerSession::accept_with_capabilities(
+                server_s,
+                ProtobufCodec::new(),
+                display_caps(),
+            )
+            .await
+            .unwrap();
+            let mut s = MuxSession::new(peer);
+            let _ = s.recv().await.unwrap();
+        });
+
+        let peer =
+            PeerSession::connect_with_capabilities(client_s, ProtobufCodec::new(), display_caps())
+                .await
+                .unwrap();
+        let mut client = MuxSession::new(peer);
+        client.open_stream(display_open()).await.unwrap();
+        let err = client
+            .send_data(
+                &stream_id(),
+                StreamChannel::Primary,
+                OpaquePayload::new(b"without-credit".to_vec()).unwrap(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.kind(),
+            nixling_constellation_core::ErrorKind::Backpressure
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancel_stream_is_idempotent() {
+        let (client_s, server_s) = connected_pair().await;
+        let server = tokio::spawn(async move {
+            let peer = PeerSession::accept_with_capabilities(
+                server_s,
+                ProtobufCodec::new(),
+                display_caps(),
+            )
+            .await
+            .unwrap();
+            let mut s = MuxSession::new(peer);
+            assert!(matches!(
+                s.recv().await.unwrap(),
+                ConstellationFrame::StreamOpen(_)
+            ));
+            assert!(matches!(
+                s.recv().await.unwrap(),
+                ConstellationFrame::StreamClose(StreamClose {
+                    reason: StreamCloseReason::Cancelled,
+                    ..
+                })
+            ));
+        });
+
+        let peer =
+            PeerSession::connect_with_capabilities(client_s, ProtobufCodec::new(), display_caps())
+                .await
+                .unwrap();
+        let mut client = MuxSession::new(peer);
+        client.open_stream(display_open()).await.unwrap();
+        assert!(client.cancel_stream(&stream_id()).await.unwrap());
+        assert!(!client.cancel_stream(&stream_id()).await.unwrap());
+        server.await.unwrap();
+    }
 }
