@@ -4321,11 +4321,36 @@ struct RealmEntrypointDocument {
     entries: BTreeMap<String, RealmEntrypointConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RealmEntrypointConfig {
     mode: String,
     gateway: Option<String>,
+}
+
+fn local_realm_entrypoint_config() -> RealmEntrypointConfig {
+    RealmEntrypointConfig {
+        mode: "host-resident".to_owned(),
+        gateway: None,
+    }
+}
+
+fn normalize_realm_entrypoint_entries(
+    mut entries: BTreeMap<String, RealmEntrypointConfig>,
+) -> Result<BTreeMap<String, RealmEntrypointConfig>, CliFailure> {
+    match entries.get("local") {
+        Some(entry) if entry.mode == "host-resident" && entry.gateway.is_none() => {}
+        Some(_) => {
+            return Err(CliFailure::new(
+                1,
+                "realm entrypoint `local` must remain host-resident and credential-free",
+            ));
+        }
+        None => {
+            entries.insert("local".to_owned(), local_realm_entrypoint_config());
+        }
+    }
+    Ok(entries)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -4375,7 +4400,7 @@ fn load_realm_entrypoint_table_from_path(
         return Ok(None);
     };
     let mut table = nixling_constellation_router::RealmEntrypointTable::new();
-    for (realm_raw, entry) in doc.entries {
+    for (realm_raw, entry) in normalize_realm_entrypoint_entries(doc.entries)? {
         let realm = target_routing::parse_realm_arg(&realm_raw).map_err(|err| {
             CliFailure::new(
                 1,
@@ -4418,7 +4443,7 @@ fn configured_realm_gateways(json: bool) -> Result<Vec<ResolvedRealmGateway>, Cl
         return Ok(Vec::new());
     };
     let mut gateways = Vec::new();
-    for (realm_raw, entry) in doc.entries {
+    for (realm_raw, entry) in normalize_realm_entrypoint_entries(doc.entries)? {
         if entry.mode != "gateway-backed" {
             continue;
         }
@@ -4786,16 +4811,10 @@ fn realm_policy_rows(
             doc.entries
         } else {
             let mut entries = std::collections::BTreeMap::new();
-            entries.insert(
-                "local".to_owned(),
-                RealmEntrypointConfig {
-                    mode: "host-resident".to_owned(),
-                    gateway: None,
-                },
-            );
+            entries.insert("local".to_owned(), local_realm_entrypoint_config());
             entries
         };
-    realm_policy_rows_from_entries(context, entries, json)
+    realm_policy_rows_from_entries(context, normalize_realm_entrypoint_entries(entries)?, json)
 }
 
 fn realm_policy_rows_from_entries(
@@ -10627,6 +10646,49 @@ mod host_install_dispatch_tests {
             );
         }
         let _ = std::fs::remove_file(&manifest_path);
+    }
+
+    #[test]
+    fn realm_policy_rows_inject_local_host_resident_entrypoint() {
+        let manifest_path = test_socket_path("realm-policy-local-inject", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("manifest parent");
+        }
+        write_test_manifest(&manifest_path, "sys-work-gateway");
+        let context = test_context(manifest_path.clone());
+        let mut entries = std::collections::BTreeMap::new();
+        entries.insert(
+            "work".to_owned(),
+            super::RealmEntrypointConfig {
+                mode: "gateway-backed".to_owned(),
+                gateway: Some("sys-work-gateway.nixling".to_owned()),
+            },
+        );
+        let rows = super::realm_policy_rows_from_entries(
+            &context,
+            super::normalize_realm_entrypoint_entries(entries).unwrap(),
+            true,
+        )
+        .expect("realm rows render");
+        assert_eq!(rows[0].realm, "local");
+        assert_eq!(rows[0].mode, "host-resident");
+        let _ = std::fs::remove_file(&manifest_path);
+    }
+
+    #[test]
+    fn realm_policy_rows_reject_local_gateway_backed_entrypoint() {
+        let mut entries = std::collections::BTreeMap::new();
+        entries.insert(
+            "local".to_owned(),
+            super::RealmEntrypointConfig {
+                mode: "gateway-backed".to_owned(),
+                gateway: Some("sys-local-gateway.nixling".to_owned()),
+            },
+        );
+        let err = super::normalize_realm_entrypoint_entries(entries)
+            .expect_err("local gateway-backed entrypoint must fail closed");
+        assert!(err.message.contains("local"));
+        assert!(err.message.contains("host-resident"));
     }
 
     fn write_qemu_media_manifest(path: &PathBuf, vm: &str) {
