@@ -4947,7 +4947,7 @@ fn realm_policy_rows(
 fn realm_policy_rows_from_entries(
     context: &Context,
     entries: BTreeMap<String, RealmEntrypointConfig>,
-    json: bool,
+    _json: bool,
 ) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
     let gateway_states = gateway_lifecycle_states(context)?;
     let mut rows = Vec::new();
@@ -4984,7 +4984,16 @@ fn realm_policy_rows_from_entries(
                     )
                 })?;
                 let gateway_vm = gateway_vm_from_target_text(&realm_target, &gateway_target)
-                    .map_err(|err| emit_route_error(err, json).unwrap_or_else(|failure| failure))?;
+                    .map_err(|err| {
+                        CliFailure::new(
+                            1,
+                            format!(
+                                "realm `{}` gateway target is invalid: {}",
+                                safe_error_snippet(&realm_target),
+                                err
+                            ),
+                        )
+                    })?;
                 let gateway_state = gateway_states
                     .get(&gateway_vm)
                     .map(String::as_str)
