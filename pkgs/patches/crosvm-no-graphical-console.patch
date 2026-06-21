@@ -16,14 +16,12 @@ placeholder icon. The window stays visible for the lifetime of the
 VM. The DisplayParameters.hidden field that microvm.nix passes is
 silently ignored on Linux/Wayland.
 
-talex5 (the wayland-proxy-virtwl author who designed nixling's
-cross-domain forwarding model) hit the same artifact and dropped
-the Wayland + X DisplayBackends entirely, leaving Stub as the only
-backend. The scanout protocol still works against Stub (it
-discards SetScanout silently); the guest's virtio_gpu driver gets
-RESP_OK and proceeds. Cross-domain wayland forwarding (the path
-nixling actually uses for guest GUI apps via wayland-proxy-virtwl)
-is independent of the scanout backend and unaffected.
+The upstream author who designed the original cross-domain forwarding
+model hit the same artifact and dropped the Wayland + X DisplayBackends
+entirely, leaving Stub as the only backend. The scanout protocol still
+works against Stub (it discards SetScanout silently); the guest's
+virtio_gpu driver gets RESP_OK and proceeds. Cross-domain Wayland
+forwarding is independent of the scanout backend and unaffected.
 
 --- a/devices/src/virtio/vhost_user_backend/gpu/sys/linux.rs
 +++ b/devices/src/virtio/vhost_user_backend/gpu/sys/linux.rs
@@ -39,7 +37,7 @@ is independent of the scanout backend and unaffected.
 +    // xdg_toplevel, no chromeless "crosvm" window on the host
 +    // compositor. The scanout protocol still validates against Stub;
 +    // SetScanout calls discard silently. Cross-domain wayland
-+    // forwarding (via wayland-proxy-virtwl) is independent of the
++    // forwarding is independent of the
 +    // scanout backend and unaffected.
 +    let _ = x_display;
 +    let display_backends = vec![

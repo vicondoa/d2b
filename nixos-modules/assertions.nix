@@ -495,7 +495,6 @@ let
       {
         # Xwayland is intentionally unsupported during the Wayland-only
         # migration to wl-cross-domain-proxy + nixling-wayland-filter.
-        # The previous wayland-proxy-virtwl had --xwayland-binary support;
         # wl-cross-domain-proxy is a plain cross-domain transport and
         # carries no Xwayland helper. A standalone host-side Xwayland
         # proxy is tracked as future work.

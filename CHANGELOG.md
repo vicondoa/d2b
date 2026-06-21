@@ -16,6 +16,7 @@ deprecations ship one minor release before removal.
   `sync.json` contracts for managed paths, process restart/adoption
   policies, degraded-state taxonomy, and lock/lease synchronization
   policy.
+
 - Broker: added bundle-resolved `ReconcileStorageScope` and
   `ValidateLockSpec` operations so storage and synchronization contracts
   can be inspected and, for static directory specs, reconciled without
@@ -115,6 +116,11 @@ deprecations ship one minor release before removal.
 - Host-to-realm isolation is now documented and checked with a redacted
   host egress policy artifact, so host daemon/broker/CLI surfaces remain
   free of realm relay credentials and sessions.
+
+### Removed
+
+- Removed obsolete references to the legacy Wayland proxy from
+  documentation and comments.
 
 ### Changed
 

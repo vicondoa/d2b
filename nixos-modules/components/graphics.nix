@@ -30,12 +30,11 @@ let
   # `passthru.testedWithCrosvmRev` and compare to `pkgs.crosvm.src.rev`.
   spectrumCH = import ../../pkgs/spectrum-ch { inherit pkgs; };
 
-  # wl-cross-domain-proxy: replaces wayland-proxy-virtwl as the
-  # guest-side virtio-gpu Wayland transport. It handles the kernel
-  # cross-domain channel only; filtering, global hiding, and app-id
-  # rewriting are performed by the host-side nixling-wayland-filter
-  # proxy. The binary is gated on crossDomainTrusted so it does not
-  # start crash-looping when the cross-domain crosvm context is absent.
+  # wl-cross-domain-proxy handles the guest-side virtio-gpu Wayland
+  # transport only. Filtering, global hiding, and app-id rewriting are
+  # performed by the host-side nixling-wayland-filter proxy. The binary
+  # is gated on crossDomainTrusted so it does not start crash-looping
+  # when the cross-domain crosvm context is absent.
   wlCrossDomainProxy = import ../../pkgs/wl-cross-domain-proxy { inherit pkgs; };
 
   # The GPU sidecar is `crosvm device gpu`, spawned by microvm.nix's

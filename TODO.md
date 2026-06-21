@@ -216,47 +216,17 @@ that attaches the declared busids from the per-env proxy.
 - Drop the per-consumer guest poller once this lands (remove
   `openterface-usbip-import` from `work-ssd.nix`).
 
-## wayland-proxy-virtwl advertises globals inconsistently (xdg_wm_base / wl_seat late)
+## Guest Wayland-EGL apps fall back to llvmpipe through the cross-domain proxy
 
-> **Superseded.** The guest-side `wayland-proxy-virtwl` relay has been
-> replaced by `wl-cross-domain-proxy` (guest) + `nixling-wayland-filter`
-> (host). The new host filter enumerates upstream compositor globals and
-> enforces the complete advertised set before accepting guest clients, so
-> the race described below no longer applies to the new proxy chain. See
-> `docs/reference/components-graphics.md` § "Runtime invariants".
-
-**Original observation (2026-06-07, historic).** The cross-domain `wayland-proxy-virtwl --virtio-gpu`
-(guest-side, forwarding to the host compositor) did not advertise the
-re-exported host globals to a freshly-connected guest client in a single
-registry round. In particular `xdg_wm_base` and `wl_seat` (and the
-`wl_seat.capabilities` that follow a seat bind) frequently arrived AFTER
-the client's first `wl_display_dispatch`, i.e. across multiple event
-batches with proxy/host latency in between. Reproduced 2026-06-07 with
-the Openterface KVM client in `work-ssd`: 4/5 launches failed; worked
-around by patching the app to `wl_display_roundtrip()` (forked to
-`vicondoa/openterface`).
-
-## Guest Wayland-EGL apps fall back to llvmpipe (cross-domain proxy hides virgl render node)
-
-> **Partially superseded.** The guest-side proxy is now
-> `wl-cross-domain-proxy` instead of `wayland-proxy-virtwl`. Whether
-> `wl-cross-domain-proxy` exposes `zwp_linux_dmabuf_v1` with the
-> virtio-gpu render node (and thus whether in-guest Wayland-EGL binds
-> virgl rather than llvmpipe) has not yet been confirmed on a live VM
-> with the new proxy chain. The host-side `nixling-wayland-filter` passes
-> `linux_dmabuf_v1` by default (not denied in the secure preset) so the
-> host compositor's dmabuf globals are available at the filter socket.
-> The open question is whether the guest cross-domain proxy correctly
-> presents the virtio-gpu render node to the in-guest EGL platform. Track
-> the result in the Wave 4 host acceptance checklist.
-
-**Original observation (2026-06-07, historic).** `wayland-proxy-virtwl --virtio-gpu`
-did not advertise a usable `wl_drm` / `zwp_linux_dmabuf` render-node
-global to the guest, so Mesa's Wayland-EGL platform fell back to
-`wl_shm` + swrast (llvmpipe). Guest apps that render via `wl_egl_window`
-(e.g. the Openterface KVM client) got a software GL context even though
-`/dev/dri/renderD128` (virtio-gpu/virgl) was present and worked for GBM.
-Firefox/Chromium dodged this via the VA-API/dmabuf shim.
+**Current state.** The guest-side proxy is `wl-cross-domain-proxy`.
+Whether it advertises dmabuf feedback tied to the virtio-gpu render node
+identity (and thus whether in-guest Wayland-EGL binds virgl rather than
+llvmpipe) has not yet been confirmed on a live VM with the current proxy
+chain. The host-side `nixling-wayland-filter` passes `linux_dmabuf_v1` by
+default (not denied in the secure preset) so the host compositor's dmabuf
+globals are available at the filter socket. The open question is whether
+the guest cross-domain proxy correctly presents the virtio-gpu device
+identity to the in-guest EGL platform.
 
 ## `nixling switch <vm>` fails with `broker-error` (RunActivation intent not found)
 
@@ -810,20 +780,3 @@ opt-in for overly-broad coverage.
 
 Both currently return the typed `not-yet-implemented` exit-78
 envelope. The CLI surface is shipped; the daemon side is not.
-
-## wayland-proxy-virtwl does not forward `xdg_toplevel.close` to the guest
-
-> **Superseded.** The guest-side `wayland-proxy-virtwl` relay has been
-> replaced by `wl-cross-domain-proxy` (guest) + `nixling-wayland-filter`
-> (host). The host filter passes `xdg_toplevel` events in the
-> host→guest direction without filtering them, so compositor-initiated
-> `xdg_toplevel.close` events should propagate to the guest. Verify in
-> the Wave 4 host acceptance checklist that `Mod+Q` (niri close-window)
-> reaches the guest app cleanly.
-
-**Original observation (2026-06-07, historic).** Compositor-initiated
-window closes never reached guest apps over the `wayland-proxy-virtwl`
-cross-domain path. Observed with the `work-ssd` Openterface app on niri:
-`niri msg action close-window --id <id>` left the guest window mapped.
-Consumers worked around this by using the app's own close button or a
-guest-side signal (SIGINT/SIGTERM).

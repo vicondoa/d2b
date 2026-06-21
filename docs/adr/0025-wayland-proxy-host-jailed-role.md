@@ -10,11 +10,11 @@
 
 ## Context
 
-Nixling graphics VMs currently use `wayland-proxy-virtwl --virtio-gpu`
-inside the guest to bridge the virtio-gpu cross-domain channel to the
-host Wayland compositor. This proxy runs inside the VM — inside the
-security boundary — so it holds a direct connection to the host
-compositor socket from the perspective of the host's ACL policy.
+At the time this ADR was accepted, Nixling graphics VMs bridged guest
+Wayland clients to the host compositor over a guest-side virtio-gpu
+cross-domain relay. That relay runs inside the untrusted guest
+environment, so the host must treat all bytes crossing the channel as
+untrusted before they reach the real compositor socket.
 
 The crosvm GPU sidecar (`nixling-<vm>-gpu`) and render-node sidecar
 (`nixling-<vm>-gpu`, render-node mode) both currently bind-mount the
