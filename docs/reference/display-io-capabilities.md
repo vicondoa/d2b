@@ -41,6 +41,10 @@ ledger. The ledger records non-secret session state:
 - authorizing operation id and principal;
 - owning gateway generation.
 
+The listed principal is derived from the daemon's local socket peer
+credentials for the opener, not from relay identity or a caller-supplied
+display payload.
+
 The gateway list surface returns only these bounded identifiers and state.
 It never exposes session secrets, app argv, Wayland socket paths, relay
 endpoints, file descriptors, pidfds, cgroup paths, namespace identifiers, or

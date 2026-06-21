@@ -2311,7 +2311,7 @@ fn handle_connection_authorized(
         // Gateway display operations can perform provider/relay orchestration.
         // Hand them off the serial accept loop just like exec owner sessions.
         if let wire::Request::GatewayDisplay(op) = &request {
-            if !matches!(peer.role, PeerRole::Admin) {
+            if gateway_display_op_requires_admin(op) && !matches!(peer.role, PeerRole::Admin) {
                 let error = TypedError::AuthzNotAdmin {
                     verb: "gatewayDisplay".to_owned(),
                 };
@@ -2458,8 +2458,23 @@ fn verb_requires_admin(verb: &str) -> bool {
             | "hostReconcile"
             | "readGuestConfig"
             | "exec"
-            | "gatewayDisplay"
     )
+}
+
+fn gateway_display_op_requires_admin(op: &public_wire::GatewayDisplayOp) -> bool {
+    matches!(
+        op,
+        public_wire::GatewayDisplayOp::Start(_) | public_wire::GatewayDisplayOp::Stop(_)
+    )
+}
+
+fn gateway_display_peer_principal(peer: &PeerIdentity) -> nixling_constellation_core::PrincipalId {
+    nixling_constellation_core::PrincipalId::parse(format!("uid-{}", peer.uid))
+        .expect("trusted display principal derived from numeric uid is valid")
+}
+
+fn gateway_display_peer_principal_string(peer: &PeerIdentity) -> String {
+    gateway_display_peer_principal(peer).to_string()
 }
 
 fn dispatch_request(
@@ -2546,15 +2561,21 @@ fn dispatch_request_locked(
 
 fn dispatch_gateway_display(
     state: &ServerState,
-    _peer: &PeerIdentity,
+    peer: &PeerIdentity,
     op: public_wire::GatewayDisplayOp,
 ) -> Result<Value, TypedError> {
     let response = match op {
         public_wire::GatewayDisplayOp::Start(args) => {
+            if !matches!(peer.role, PeerRole::Admin) {
+                return Err(TypedError::AuthzNotAdmin {
+                    verb: "gatewayDisplay".to_owned(),
+                });
+            }
+            let principal = gateway_display_peer_principal_string(peer);
             let target = parse_gateway_display_lifecycle_target(
                 &args.target,
                 &args.operation_id,
-                &args.principal,
+                &principal,
             )?;
             let lifecycle_state = block_on_future(state.gateway_display.lifecycle.start(&target))
                 .map_err(gateway_error_to_typed)?;
@@ -2564,10 +2585,16 @@ fn dispatch_gateway_display(
             })
         }
         public_wire::GatewayDisplayOp::Stop(args) => {
+            if !matches!(peer.role, PeerRole::Admin) {
+                return Err(TypedError::AuthzNotAdmin {
+                    verb: "gatewayDisplay".to_owned(),
+                });
+            }
+            let principal = gateway_display_peer_principal_string(peer);
             let target = parse_gateway_display_lifecycle_target(
                 &args.target,
                 &args.operation_id,
-                &args.principal,
+                &principal,
             )?;
             close_gateway_sessions_for_target(state, &args.target)?;
             let lifecycle_state = block_on_future(state.gateway_display.lifecycle.stop(&target))
@@ -2587,10 +2614,7 @@ fn dispatch_gateway_display(
                 .map_err(|err| TypedError::WireInvalidFrame {
                     detail: format!("gatewayDisplay operation_id invalid: {err}"),
                 })?;
-            let principal = nixling_constellation_core::PrincipalId::parse(args.principal)
-                .map_err(|err| TypedError::WireInvalidFrame {
-                    detail: format!("gatewayDisplay principal invalid: {err}"),
-                })?;
+            let principal = gateway_display_peer_principal(peer);
             let app =
                 AppCommand::new(args.app_argv).ok_or_else(|| TypedError::WireInvalidFrame {
                     detail:
@@ -2644,6 +2668,22 @@ fn dispatch_gateway_display(
         }
         public_wire::GatewayDisplayOp::Close(args) => {
             gateway_display_gc(state);
+            let peer_principal = gateway_display_peer_principal_string(peer);
+            let owner = state
+                .gateway_display
+                .orchestrator
+                .list_sessions()
+                .map_err(gateway_error_to_typed)?
+                .into_iter()
+                .find(|summary| summary.session_id.as_str() == args.session_id)
+                .map(|summary| summary.peer_principal.to_string());
+            if !matches!(peer.role, PeerRole::Admin)
+                && owner.as_deref() != Some(peer_principal.as_str())
+            {
+                return Err(TypedError::AuthzNotAdmin {
+                    verb: "gatewayDisplay close".to_owned(),
+                });
+            }
             let session = state
                 .gateway_display
                 .sessions
@@ -2669,6 +2709,7 @@ fn dispatch_gateway_display(
         }
         public_wire::GatewayDisplayOp::List(args) => {
             gateway_display_gc(state);
+            let peer_principal = gateway_display_peer_principal_string(peer);
             let target_by_id: HashMap<String, String> = state
                 .gateway_display
                 .sessions
@@ -2690,6 +2731,11 @@ fn dispatch_gateway_display(
                     let session_id = summary.session_id.to_string();
                     let target = target_by_id.get(&session_id)?.clone();
                     if args.target.as_ref().is_some_and(|wanted| wanted != &target) {
+                        return None;
+                    }
+                    if !matches!(peer.role, PeerRole::Admin)
+                        && summary.peer_principal.as_str() != peer_principal.as_str()
+                    {
                         return None;
                     }
                     let state = format!("{:?}", summary.state).to_ascii_lowercase();
@@ -11431,6 +11477,14 @@ mod public_status_tests {
             sessions[0].get("sessionId").and_then(Value::as_str),
             Some(session_id.as_str())
         );
+        assert_eq!(
+            sessions[0].get("operationId").and_then(Value::as_str),
+            Some("gw-exec-1")
+        );
+        assert_eq!(
+            sessions[0].get("principal").and_then(Value::as_str),
+            Some("uid-1000")
+        );
 
         let close = dispatch_request(
             &state,
@@ -11465,6 +11519,138 @@ mod public_status_tests {
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(0)
+        );
+    }
+
+    #[test]
+    fn gateway_display_open_uses_peer_uid_as_trusted_principal() {
+        let (state, _dir) = test_state();
+        dispatch_request(
+            &state,
+            &launcher_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
+                public_wire::GatewayDisplayOpenArgs {
+                    target: "nl://demo.gw.work.nixling".to_owned(),
+                    operation_id: "gw-exec-launcher".to_owned(),
+                    principal: "uid-9999".to_owned(),
+                    app_argv: vec!["foot".to_owned()],
+                    request_hash: 43,
+                },
+            )),
+        )
+        .expect("launcher can open owned gateway display session");
+
+        let list = dispatch_request(
+            &state,
+            &launcher_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+                public_wire::GatewayDisplayListArgs { target: None },
+            )),
+        )
+        .expect("launcher list dispatches");
+        let sessions = list
+            .get("result")
+            .and_then(|r| r.get("sessions"))
+            .and_then(Value::as_array)
+            .expect("list response sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].get("principal").and_then(Value::as_str),
+            Some("uid-1001")
+        );
+    }
+
+    #[test]
+    fn gateway_display_list_and_close_are_owner_scoped_for_launchers() {
+        let (state, _dir) = test_state();
+        let other_peer = PeerIdentity {
+            role: PeerRole::Launcher,
+            uid: 1002,
+        };
+
+        let first = dispatch_request(
+            &state,
+            &launcher_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
+                public_wire::GatewayDisplayOpenArgs {
+                    target: "nl://demo.gw.work.nixling".to_owned(),
+                    operation_id: "gw-exec-owner".to_owned(),
+                    principal: "ignored".to_owned(),
+                    app_argv: vec!["foot".to_owned()],
+                    request_hash: 44,
+                },
+            )),
+        )
+        .expect("first launcher open dispatches");
+        let first_session_id = first
+            .get("result")
+            .and_then(|r| r.get("sessionId"))
+            .and_then(Value::as_str)
+            .expect("first open response has session id")
+            .to_owned();
+
+        dispatch_request(
+            &state,
+            &other_peer,
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
+                public_wire::GatewayDisplayOpenArgs {
+                    target: "nl://other.gw.work.nixling".to_owned(),
+                    operation_id: "gw-exec-other".to_owned(),
+                    principal: "ignored".to_owned(),
+                    app_argv: vec!["foot".to_owned()],
+                    request_hash: 45,
+                },
+            )),
+        )
+        .expect("second launcher open dispatches");
+
+        let list = dispatch_request(
+            &state,
+            &launcher_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+                public_wire::GatewayDisplayListArgs { target: None },
+            )),
+        )
+        .expect("owner list dispatches");
+        let sessions = list
+            .get("result")
+            .and_then(|r| r.get("sessions"))
+            .and_then(Value::as_array)
+            .expect("list response sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].get("principal").and_then(Value::as_str),
+            Some("uid-1001")
+        );
+
+        let denied = dispatch_request(
+            &state,
+            &other_peer,
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
+                public_wire::GatewayDisplayCloseArgs {
+                    session_id: first_session_id.clone(),
+                },
+            )),
+        )
+        .expect_err("other launcher cannot close session");
+        assert!(matches!(denied, TypedError::AuthzNotAdmin { .. }));
+
+        let closed = dispatch_request(
+            &state,
+            &launcher_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
+                public_wire::GatewayDisplayCloseArgs {
+                    session_id: first_session_id,
+                },
+            )),
+        )
+        .expect("owner close dispatches");
+        assert_eq!(
+            closed
+                .get("result")
+                .and_then(|r| r.get("closed"))
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 
@@ -11623,17 +11809,38 @@ mod public_status_tests {
     }
 
     #[test]
-    fn gateway_display_requires_admin() {
+    fn gateway_display_lifecycle_requires_admin_but_listing_is_launcher_scoped() {
         let (state, _dir) = test_state();
         let err = dispatch_request(
+            &state,
+            &launcher_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Start(
+                public_wire::GatewayDisplayStartArgs {
+                    target: "nl://demo.gw.work.nixling".to_owned(),
+                    operation_id: "gw-start-launcher".to_owned(),
+                    principal: "uid-1001".to_owned(),
+                    request_hash: 1,
+                },
+            )),
+        )
+        .expect_err("launcher must not start gateway display lifecycle");
+        assert!(matches!(err, TypedError::AuthzNotAdmin { .. }));
+
+        let list = dispatch_request(
             &state,
             &launcher_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
                 public_wire::GatewayDisplayListArgs { target: None },
             )),
         )
-        .expect_err("launcher must not use gatewayDisplay");
-        assert!(matches!(err, TypedError::AuthzNotAdmin { .. }));
+        .expect("launcher can list its own gateway display sessions");
+        assert_eq!(
+            list.get("result")
+                .and_then(|r| r.get("sessions"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
     }
 
     fn write_public_status_artifacts_with_state_dir(

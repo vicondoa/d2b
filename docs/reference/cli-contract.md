@@ -166,9 +166,12 @@ make the host persist a remote node/workload registry.
 gateway daemon's public socket and does not fall back to SSH or host-side
 Wayland setup. `list` returns only bounded non-secret session metadata:
 session id, realm target, lifecycle state, authorizing operation id, and
-principal. `close` asks the gateway daemon to tear down the listener plus the
-provider-side display agent when the session is still active, and reports
-`closed = false` for an already-absent session.
+principal. For launcher-role callers, `list` returns only sessions owned by
+the caller's local socket uid and `close` can tear down only those sessions;
+admin callers can inspect or close any active display session. `close` asks
+the gateway daemon to tear down the listener plus the provider-side display
+agent when the session is still active, and reports `closed = false` for an
+already-absent session.
 
 `--json` for `list` emits:
 
