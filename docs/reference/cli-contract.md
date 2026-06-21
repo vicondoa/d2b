@@ -155,6 +155,48 @@ table. Missing entrypoints fail closed with an actionable
 realm gateway through the same local guest-control exec path. It does not
 make the host persist a remote node/workload registry.
 
+### `vm display`
+
+**Synopsis:**
+
+- `nixling vm display list [--target <nl://...>] [--human | --json]`
+- `nixling vm display close <session-id> [--human | --json]`
+
+`vm display` manages active gateway display sessions. It requires the
+gateway daemon's public socket and does not fall back to SSH or host-side
+Wayland setup. `list` returns only bounded non-secret session metadata:
+session id, realm target, lifecycle state, authorizing operation id, and
+principal. For launcher-role callers, `list` returns only sessions owned by
+the caller's local socket uid and `close` can tear down only those sessions;
+admin callers can inspect or close any active display session. `close` asks
+the gateway daemon to tear down the listener plus the provider-side display
+agent when the session is still active, and reports `closed = false` for an
+already-absent session.
+
+`--json` for `list` emits:
+
+```json
+{
+  "command": "vm display list",
+  "target": "nl://demo.gw.work.nixling",
+  "sessions": [
+    {
+      "sessionId": "s0",
+      "target": "nl://demo.gw.work.nixling",
+      "state": "running",
+      "operationId": "gw-exec-1",
+      "principal": "uid-1000"
+    }
+  ]
+}
+```
+
+The response never contains app argv, socket paths, relay endpoints,
+credentials, file descriptors, pidfds, cgroup paths, namespace ids, or
+process output. See
+[display and virtual I/O capabilities](./display-io-capabilities.md) for the
+capability boundary.
+
 ### `vm start`
 
 **Synopsis:** `nixling vm start <vm> [--dry-run | --apply] [--human | --json]`

@@ -3937,6 +3937,21 @@
       },
       "additionalProperties": false
     },
+    "GatewayDisplayListDetailedResult": {
+      "type": "object",
+      "required": [
+        "sessions"
+      ],
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/GatewayDisplaySessionDetail"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "GatewayDisplayListResult": {
       "type": "object",
       "required": [
@@ -4043,6 +4058,24 @@
               ]
             }
           }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/GatewayDisplayListArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "list-detailed"
+              ]
+            }
+          }
         }
       ]
     },
@@ -4137,6 +4170,24 @@
               "$ref": "#/definitions/GatewayDisplayListResult"
             }
           }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "list-detailed"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/GatewayDisplayListDetailedResult"
+            }
+          }
         }
       ]
     },
@@ -4184,6 +4235,34 @@
           "type": "string"
         },
         "state": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GatewayDisplaySessionDetail": {
+      "type": "object",
+      "required": [
+        "operationId",
+        "principal",
+        "sessionId",
+        "state",
+        "target"
+      ],
+      "properties": {
+        "operationId": {
+          "type": "string"
+        },
+        "principal": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "target": {
           "type": "string"
         }
       },

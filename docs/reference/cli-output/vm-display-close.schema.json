@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VmDisplayCloseOutputV1",
+  "type": "object",
+  "required": [
+    "closed",
+    "command",
+    "sessionId"
+  ],
+  "properties": {
+    "closed": {
+      "type": "boolean"
+    },
+    "command": {
+      "type": "string"
+    },
+    "sessionId": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

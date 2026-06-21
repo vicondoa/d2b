@@ -19,7 +19,9 @@ use crate::error::GatewayError;
 use crate::handshake::{DisplaySessionId, SessionBinding, SessionSecret};
 use crate::ledger::{LedgerLimits, OpOutcome, SessionLedger, SessionState, TargetKey};
 use crate::types::{AppCommand, DisplaySessionContext};
-use nixling_constellation_core::AuthzDecision;
+use nixling_constellation_core::{
+    AuthzDecision, OperationId, PrincipalId, RealmId, RealmPath, WorkloadId,
+};
 
 /// How long a minted session credential is valid (seconds) before
 /// `not_after`. The agent must complete its handshake within this window.
@@ -145,6 +147,57 @@ pub struct OpenSession {
     pub listener: ListenerHandle,
 }
 
+/// Non-secret summary for `display list` style inspection. It contains only
+/// bounded identifiers and state; handles, secrets, argv, sockets, and paths
+/// stay out of the listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplaySessionSummary {
+    /// The session id.
+    pub session_id: DisplaySessionId,
+    /// The current lifecycle state.
+    pub state: SessionState,
+    /// Gateway generation that owns the record.
+    pub generation: u64,
+    /// Target realm.
+    pub realm: RealmPath,
+    /// Target workload.
+    pub workload: WorkloadId,
+    /// Authorizing operation id.
+    pub operation_id: OperationId,
+    /// Authorizing principal.
+    pub peer_principal: PrincipalId,
+}
+
+impl DisplaySessionSummary {
+    fn from_record(record: crate::ledger::SessionRecord) -> Result<Self, GatewayError> {
+        let realm = parse_target_realm(&record.target.realm)?;
+        let workload =
+            WorkloadId::parse(record.target.workload).map_err(|_| GatewayError::Internal)?;
+        let operation_id =
+            OperationId::parse(record.operation_id).map_err(|_| GatewayError::Internal)?;
+        let peer_principal =
+            PrincipalId::parse(record.principal).map_err(|_| GatewayError::Internal)?;
+        Ok(Self {
+            session_id: record.id,
+            state: record.state,
+            generation: record.generation,
+            realm,
+            workload,
+            operation_id,
+            peer_principal,
+        })
+    }
+}
+
+fn parse_target_realm(target: &str) -> Result<RealmPath, GatewayError> {
+    let labels = target
+        .split('.')
+        .map(|label| RealmId::parse(label.to_owned()).ok())
+        .collect::<Option<Vec<_>>>()
+        .ok_or(GatewayError::Internal)?;
+    RealmPath::new(labels).ok_or(GatewayError::Internal)
+}
+
 impl GatewayOrchestrator {
     /// Build an orchestrator owned by gateway `generation`.
     pub fn new(deps: GatewayDeps, generation: u64, limits: LedgerLimits) -> Self {
@@ -169,6 +222,15 @@ impl GatewayOrchestrator {
     /// The current state of a session, if tracked.
     pub fn state(&self, id: &DisplaySessionId) -> Option<SessionState> {
         self.ledger().ok().and_then(|ledger| ledger.state(id))
+    }
+
+    /// Active display sessions known to this gateway generation.
+    pub fn list_sessions(&self) -> Result<Vec<DisplaySessionSummary>, GatewayError> {
+        self.ledger()?
+            .active_records()
+            .into_iter()
+            .map(DisplaySessionSummary::from_record)
+            .collect()
     }
 
     /// Open a display session for `ctx_seed` (which carries the realm,
@@ -594,6 +656,44 @@ mod tests {
         assert_eq!(orch.state(&open.session_id), Some(SessionState::Running));
         assert_eq!(w.spawns.load(Ordering::SeqCst), 1);
         assert_eq!(l.arms.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn list_sessions_returns_bounded_active_summaries() {
+        let w = Arc::new(MockWorkload::default());
+        let l = Arc::new(MockListener::default());
+        let orch = GatewayOrchestrator::new(deps(w, l), 1, LedgerLimits::default());
+        let (tk, cs, app) = seed();
+        let open = orch.open(tk, cs, app, 42).await.unwrap();
+
+        let sessions = orch.list_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+        let summary = &sessions[0];
+        assert_eq!(summary.session_id, open.session_id);
+        assert_eq!(summary.state, SessionState::Running);
+        assert_eq!(summary.realm.target_form(), "work");
+        assert_eq!(summary.workload.as_str(), "demo");
+        assert_eq!(summary.operation_id.as_str(), "op-1");
+        assert_eq!(summary.peer_principal.as_str(), "alice");
+        let rendered = format!("{summary:?}");
+        for forbidden in ["foot", "secret", "socket", "/run/", "waypipe"] {
+            assert!(
+                !rendered.contains(forbidden),
+                "display session summary leaked {forbidden}: {rendered}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn closed_sessions_drop_out_of_list() {
+        let w = Arc::new(MockWorkload::default());
+        let l = Arc::new(MockListener::default());
+        let orch = GatewayOrchestrator::new(deps(w, l), 1, LedgerLimits::default());
+        let (tk, cs, app) = seed();
+        let open = orch.open(tk, cs, app, 42).await.unwrap();
+        assert_eq!(orch.list_sessions().unwrap().len(), 1);
+        orch.close(&open).await.unwrap();
+        assert!(orch.list_sessions().unwrap().is_empty());
     }
 
     #[tokio::test]

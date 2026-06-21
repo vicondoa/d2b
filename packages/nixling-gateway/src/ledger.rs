@@ -256,6 +256,18 @@ impl SessionLedger {
             .collect()
     }
 
+    /// Cloned non-terminal records in deterministic order for session listing.
+    pub fn active_records(&self) -> Vec<SessionRecord> {
+        let mut records = self
+            .records
+            .values()
+            .filter(|r| !r.state.is_terminal())
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+        records
+    }
+
     /// Drop terminal records to bound memory.
     pub fn gc_terminal(&mut self) {
         self.records.retain(|_, r| !r.state.is_terminal());
@@ -336,6 +348,22 @@ mod tests {
             .unwrap_err();
         assert_eq!(err, GatewayError::Internal);
         assert_eq!(l.state(&id("s1")), Some(SessionState::Minting)); // original intact
+    }
+
+    #[test]
+    fn active_records_are_deterministically_sorted_by_session_id() {
+        let mut l = SessionLedger::new(1, LedgerLimits::default());
+        l.open(key("work", "b"), "alice", "op-2", 2, id("s2"))
+            .unwrap();
+        l.open(key("work", "a"), "alice", "op-1", 1, id("s1"))
+            .unwrap();
+
+        let ids = l
+            .active_records()
+            .into_iter()
+            .map(|record| record.id.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["s1".to_owned(), "s2".to_owned()]);
     }
 
     #[test]

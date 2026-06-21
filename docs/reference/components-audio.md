@@ -17,6 +17,8 @@ Audio-capable VMs use the Cloud Hypervisor runtime provider plus the
 broker-spawned sound sidecar; see
 [runtime provider selection](./runtime-provider-selection.md) for runtime
 provider capability boundaries.
+Audio remains separate from display; see
+[display and virtual I/O capabilities](./display-io-capabilities.md).
 
 Each VM has independent **mic** and **speaker** grants. The
 host-side state file is `/var/lib/nixling/vms/<vm>/state/audio-state.json`.

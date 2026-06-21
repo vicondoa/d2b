@@ -150,6 +150,7 @@ pub enum GatewayDisplayOp {
     Open(GatewayDisplayOpenArgs),
     Close(GatewayDisplayCloseArgs),
     List(GatewayDisplayListArgs),
+    ListDetailed(GatewayDisplayListArgs),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -201,6 +202,7 @@ pub enum GatewayDisplayOpResponse {
     Open(GatewayDisplayOpenResult),
     Close(GatewayDisplayCloseResult),
     List(GatewayDisplayListResult),
+    ListDetailed(GatewayDisplayListDetailedResult),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -242,6 +244,22 @@ pub struct GatewayDisplaySessionSummary {
     pub session_id: String,
     pub target: String,
     pub state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayDisplayListDetailedResult {
+    pub sessions: Vec<GatewayDisplaySessionDetail>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayDisplaySessionDetail {
+    pub session_id: String,
+    pub target: String,
+    pub state: String,
+    pub operation_id: String,
+    pub principal: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

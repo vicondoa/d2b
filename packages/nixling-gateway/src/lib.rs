@@ -34,6 +34,7 @@ pub use handshake::{
 pub use ledger::{LedgerLimits, OpOutcome, SessionLedger, SessionRecord, SessionState, TargetKey};
 pub use orchestrator::{
     AgentHandle, AgentSpawnRequest, Clock, ContextSeed, DEFAULT_SESSION_TTL_SECS, DisplayListener,
-    GatewayDeps, GatewayOrchestrator, GatewayWorkload, IdSource, ListenerHandle, OpenSession,
+    DisplaySessionSummary, GatewayDeps, GatewayOrchestrator, GatewayWorkload, IdSource,
+    ListenerHandle, OpenSession,
 };
 pub use types::{AppCommand, DisplaySessionContext, DisplaySocket};

@@ -29,6 +29,9 @@ host-side machinery (usbipd backend + proxy broker-spawned runners,
 udev rules, firewall rules, the `usbip-host` kernel module) lives
 elsewhere — see "Host-side resources" below.
 
+USB and HID capabilities remain independent from display; see
+[display and virtual I/O capabilities](./display-io-capabilities.md).
+
 ## Options (host-side)
 
 | Option | Type | Default | Description |

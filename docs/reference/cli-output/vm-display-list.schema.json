@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VmDisplayListOutputV1",
+  "type": "object",
+  "required": [
+    "command",
+    "sessions"
+  ],
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/VmDisplaySessionOutputV1"
+      }
+    },
+    "target": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "VmDisplaySessionOutputV1": {
+      "type": "object",
+      "required": [
+        "operationId",
+        "principal",
+        "sessionId",
+        "state",
+        "target"
+      ],
+      "properties": {
+        "operationId": {
+          "type": "string"
+        },
+        "principal": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
