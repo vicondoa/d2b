@@ -1314,41 +1314,58 @@ nl_check_disk_budget "post-w3-gates" || fail "disk budget exhausted after W3 hos
 # rewrites an example's pinned lock. Some historical example locks carry a
 # mutable `path:../..` nixling node; Lix rejects that when the example itself is
 # reached through the root git+file fetcher. The gate therefore evaluates a
-# scratch copy whose `nixling` lock node is rewritten to the current git+file
-# checkout while preserving any external sibling-flake pins. Adds
+# scratch copy whose `nixling` lock node target is rewritten to the current
+# git+file checkout while preserving the example's lock graph and any external
+# sibling-flake pins. Adds
 # templates/default/ to the same check surface. Skips gracefully if examples/ or
 # templates/default/ don't exist (some downstream consumers may strip them).
 # -----------------------------------------------------------------------------
 nl_static_gate_begin "per-example/template flake check" "per-example/template flake check"
-example_nixling_lock_dir=$(mktemp -d "${TMPDIR:-/tmp}/nixling-example-lock.XXXXXX")
+example_nixling_lock_dir=$(mktemp -d "${TMPDIR:-/tmp}/nixling-example-lock.XXXXXX") \
+  || fail "example flake check: could not create temporary nixling lock directory"
 add_cleanup "rm -rf -- $(printf '%q' "$example_nixling_lock_dir")"
-cat > "$example_nixling_lock_dir/flake.nix" <<'NIX'
+cat > "$example_nixling_lock_dir/flake.nix" <<'NIX' || fail "example flake check: could not write temporary nixling lock flake"
 {
   inputs.nixling.url = "path:../..";
   outputs = { ... }: { };
 }
 NIX
 (
-  cd "$example_nixling_lock_dir"
+  cd "$example_nixling_lock_dir" || exit 1
   nix flake lock --override-input nixling "git+file://$ROOT" >/dev/null
-)
+) || fail "example flake check: could not prepare temporary nixling git+file lock"
 
 nl_static_check_example_flake() {
-  local src="$1" name="$2" scratch
-  scratch=$(mktemp -d "${TMPDIR:-/tmp}/nixling-example-${name}.XXXXXX")
-  add_cleanup "rm -rf -- $(printf '%q' "$scratch")"
-  cp -a "$src"/. "$scratch"/
+  local src="$1" name="$2" scratch rc
+  scratch=$(mktemp -d "${TMPDIR:-/tmp}/nixling-example-${name}.XXXXXX") || return 1
+  cp -a "$src"/. "$scratch"/ || {
+    log "  example flake check: $name  preserving scratch after copy failure: $scratch"
+    return 1
+  }
   if [ -f "$scratch/flake.lock" ]; then
     jq --slurpfile node "$example_nixling_lock_dir/flake.lock" \
-      '.nodes.nixling = $node[0].nodes.nixling' \
-      "$scratch/flake.lock" > "$scratch/flake.lock.tmp"
-    mv "$scratch/flake.lock.tmp" "$scratch/flake.lock"
+      '.nodes.nixling.locked = $node[0].nodes.nixling.locked | .nodes.nixling.original = $node[0].nodes.nixling.original' \
+      "$scratch/flake.lock" > "$scratch/flake.lock.tmp" || {
+        log "  example flake check: $name  preserving scratch after lock rewrite failure: $scratch"
+        return 1
+      }
+    mv "$scratch/flake.lock.tmp" "$scratch/flake.lock" || {
+      log "  example flake check: $name  preserving scratch after lock replace failure: $scratch"
+      return 1
+    }
   fi
   (
-    cd "$scratch"
+    cd "$scratch" || exit 1
     nix flake check --no-build --all-systems --no-write-lock-file \
       --override-input nixling "git+file://$ROOT"
   )
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    rm -rf -- "$scratch"
+  else
+    log "  example flake check: $name  preserving scratch after failure: $scratch"
+  fi
+  return "$rc"
 }
 
 if [ -d "$ROOT/examples/with-entra-id" ] && [ -f "$ROOT/examples/with-entra-id/flake.lock" ] && [ -z "${NL_SKIP_WITH_ENTRA_ID:-}" ]; then
