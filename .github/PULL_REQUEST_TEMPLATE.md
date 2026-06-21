@@ -1,6 +1,5 @@
-<!-- nixling PR template. The checklist below is MANDATORY (plan §7.5 of the
-     test rearchitecture). The pr-checklist gate validates these items; live PR
-     body wiring lands in a later CI wave. -->
+<!-- nixling PR template. The checklist below is MANDATORY and validated by
+     tests/unit/meta/pr-checklist-gate.sh. -->
 
 ## Summary
 
@@ -8,16 +7,17 @@
 
 ## Testing checklist (mandatory)
 
-- [ ] **`make check` passes locally** (paste the summary). This remains the
-      real CI gate during W0; `make check-ci` adds only a safe
-      `test-integration` placeholder until the runNixOSTest CI job lands W4.
+- [ ] **`make check` passes locally** (paste the summary).
+- [ ] **`make test-integration` passes on the host before PR creation**
+      (paste the summary).
+- [ ] **`make test-host-integration` passes on the host before PR creation**
+      (paste the summary).
 - [ ] **Manual `make test-hardware` run** on a NixOS host **with the real
       devices** (GPU / YubiKey / hardware-TPM), if this change touches
       graphics/GPU, video decode, USBIP/YubiKey, hardware-TPM, or a full
       nixling-microVM boot. Paste results, **or** state
       `N/A: no device/passthrough or full-microVM-boot surface touched`
-      with a one-line justification. *(This is the only tier CI cannot run —
-      hosted runners have KVM but no physical devices.)*
+      with a one-line justification. *(This tier requires physical devices.)*
 - [ ] **New/changed tests are wired into a `make` target** and have rows in
       `tests/migration-ledger.toml` (`make check-inventory` green — it fails
       closed on any unclassified test; use `make ledger-regen` to update).
@@ -27,4 +27,4 @@
 
 ## Notes
 
-<!-- Migration ledger rows / successor ids touched, panel sign-off refs, etc. -->
+<!-- Migration ledger rows, successor ids touched, release notes, deferrals, etc. -->

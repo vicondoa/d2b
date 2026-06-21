@@ -238,8 +238,8 @@ broker_stream_fakebackends() {
 }
 broker_streams=(default layer1 fakebackends)
 declare -A broker_pid broker_log
-broker_parallel=1
-[ "${NL_NO_PARALLEL_BROKER:-0}" = 1 ] && broker_parallel=0
+broker_parallel=0
+[ "${NL_PARALLEL_BROKER:-0}" = 1 ] && broker_parallel=1
 
 log "--> cargo fmt --check"
 cargo fmt --manifest-path "$manifest" --all --check
@@ -322,9 +322,10 @@ CARGO_TARGET_DIR="$workspace_target_dir" \
 ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
 
 # Broker workspace: run the three feature passes (default, layer1-bootstrap,
-# fake-backends) — each on its own target dir — CONCURRENTLY among themselves,
-# here AFTER the main-workspace section so they don't contend with the main
-# tests. The fail-closed `fake-backends` stream runs the broker's hermetic
+# fake-backends) — each on its own target dir — serially by default because
+# the broker's SIGCHLD reaper tests manipulate process-global signal/reap state.
+# Set NL_PARALLEL_BROKER=1 only for local timing experiments. The fail-closed
+# `fake-backends` stream runs the broker's hermetic
 # integration tests (e.g. tests/pidfd_handoff_scm_rights.rs,
 # #![cfg(feature = "fake-backends")], pinned in
 # tests/golden/pinned/pidfd-handoff.txt) that neither the default nor the

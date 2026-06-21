@@ -39,8 +39,8 @@ files: **drift gates** (`tests/unit/gates/` — `xtask gen-* + git diff`) and
 
 | # | Type | What it is | Lives in | Runs **where** |
 |---|------|------------|----------|----------------|
-| 9 | **container** | Nix-OCI image under rootless podman; proves a static binary runs on a foreign non-Nix userland | `tests/integration/containers/*.sh` + `containerImages.<sys>.*` | `make test-integration` — **ubuntu CI + local** |
-| 10 | **VM (runNixOSTest)** | boots a real NixOS VM; asserts live daemon/broker/socket-activation/host-posture/kernel behaviour | `tests/host-integration/*.nix` + `vmChecks.<sys>.*` | `make test-host-integration` — **local NixOS host w/ KVM (manual)** |
+| 9 | **container** | Nix-OCI image under rootless podman; proves a static binary runs on a foreign non-Nix userland | `tests/integration/containers/*.sh` + `containerImages.<sys>.*` | `make test-integration` — **local host/manual pre-PR; not the PR pipeline** |
+| 10 | **VM (runNixOSTest)** | boots a real NixOS VM; asserts live daemon/broker/socket-activation/host-posture/kernel behaviour | `tests/host-integration/*.nix` + `vmChecks.<sys>.*` | `make test-host-integration` — **local NixOS host w/ KVM, manual pre-PR; not the PR pipeline** |
 | 11 | **live-host** | runs against a **real deployed** nixling host; destructive/stateful | `tests/integration/live/*.sh` | `NL_LIVE=1` / sudo — **manual, never CI** |
 | 12 | **hardware** | real GPU / YubiKey / hardware-TPM passthrough | `tests/host-integration/hardware/*.sh` | **manual on a host with the devices** |
 
@@ -95,11 +95,11 @@ tests/
 │   ├── meta/                                                       meta gates (closed set)
 │   └── gates/                                                      drift/perf gates (closed set)
 ├── integration/
-│   ├── containers/                                                 type 9 podman (make test-integration)
+│   ├── containers/                                                 type 9 podman (make test-integration; host/manual pre-PR)
 │   ├── distro-matrix/                                              distro pins/fixtures
 │   └── live/                                                        type 11 NL_LIVE (manual)
 └── host-integration/
-    ├── *.nix                                                       type 10 runNixOSTest (make test-host-integration)
+    ├── *.nix                                                       type 10 runNixOSTest (make test-host-integration; host/manual pre-PR)
     └── hardware/                                                   type 12 device tests (manual)
 ```
 

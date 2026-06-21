@@ -275,10 +275,21 @@
         nixlingModule = import ./nixos-modules { inherit inputs; };
         mkEval = modules: nixpkgs.lib.nixosSystem {
           inherit system;
-          modules = [ nixlingModule ] ++ modules;
+          modules = [
+            nixlingModule
+            ({ lib, ... }: {
+              # Cross-system eval cannot use x86-only release prebuilts.
+              # Native x86 eval keeps the consumer default to avoid forcing
+              # source host-tool derivations through every lightweight check.
+              nixling.site.usePrebuiltHostTools = lib.mkDefault (system == "x86_64-linux");
+            })
+          ] ++ modules;
         };
         mkCheck = name: cfg: pkgs.runCommand "nixling-check-${name}" { } ''
           echo ${builtins.unsafeDiscardStringContext cfg.config.system.build.toplevel.drvPath} > $out
+        '';
+        mkEvalOnlyCheck = name: value: pkgs.runCommand "nixling-check-${name}" { } ''
+          echo ${builtins.unsafeDiscardStringContext (builtins.toJSON value)} > $out
         '';
         smokeConfigModule = { lib, ... }: {
           boot.loader.grub.enable = false;
@@ -732,8 +743,26 @@
             })
           ]);
 
-        eval-with-observability = mkCheck "eval-with-observability"
-          (mkEval [ (import ./examples/with-observability/configuration.nix) ]);
+        eval-with-observability =
+          let
+            cfg = mkEval [ (import ./examples/with-observability/configuration.nix) ];
+            observed = {
+              assertionsGreen = pkgs.lib.all (a: a.assertion) cfg.config.assertions;
+              observabilityEnabled =
+                (builtins.fromJSON cfg.config.nixling._manifestPkg.text)._observability.enabled;
+              stackVmDeclared = builtins.hasAttr "sys-obs" cfg.config.nixling.vms;
+              workloadAgentDeclared =
+                cfg.config.nixling.vms.work-app.observability.enable;
+            };
+          in
+          mkEvalOnlyCheck "eval-with-observability" (
+            if observed.assertionsGreen
+              && observed.observabilityEnabled
+              && observed.stackVmDeclared
+              && observed.workloadAgentDeclared
+            then observed
+            else throw "eval-with-observability failed: ${builtins.toJSON observed}"
+          );
 
         rust-build = rustWorkspace {
           pname = "nixling-rust-build";

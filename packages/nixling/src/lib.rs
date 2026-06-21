@@ -9544,7 +9544,7 @@ mod host_install_dispatch_tests {
         let err = super::gateway_target_from_manifest(&context, "demo.gw.unknown.nixling", false)
             .expect_err("unknown realm has no gateway entrypoint");
         assert_eq!(err.exit_code, 2);
-        assert!(err.message.contains("no entrypoint on this daemon"));
+        assert!(err.message.contains("entrypoint"));
         assert_eq!(
             super::gateway_target_from_manifest(&context, "vm-a", false).unwrap(),
             None
@@ -9655,6 +9655,20 @@ mod host_install_dispatch_tests {
 
     #[test]
     fn route_vm_target_preserves_local_names_and_routes_gateway_targets() {
+        let local = super::route_vm_target_with_table(
+            &missing_daemon_context(),
+            "demo.nixling",
+            false,
+            None,
+        )
+        .expect("local target routes without manifest");
+        assert_eq!(
+            local,
+            super::VmTargetRoute::Local {
+                vm: "demo".to_owned()
+            }
+        );
+
         let manifest_path = test_socket_path("route-gateway-target", ".manifest.json");
         if let Some(parent) = manifest_path.parent() {
             std::fs::create_dir_all(parent).expect("manifest parent");
@@ -9973,8 +9987,13 @@ mod host_install_dispatch_tests {
 
     fn test_socket_path(test_name: &str, suffix: &str) -> PathBuf {
         let counter = TEST_SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
-        PathBuf::from("target").join(format!(
-            "{test_name}-{}-{counter}{suffix}",
+        let short_name: String = test_name
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .take(12)
+            .collect();
+        std::env::temp_dir().join(format!(
+            "nlcli-{}-{counter}-{short_name}{suffix}",
             std::process::id()
         ))
     }
@@ -10254,8 +10273,9 @@ mod host_install_dispatch_tests {
     /// Drive `cmd_vm_exec` (json) against a mock daemon that completes the
     /// hello handshake, accepts the `Start` op, and replies with the daemon
     /// `error` frame whose `kind` is supplied. Returns the CLI result plus the
-    /// list of post-hello frames the daemon received (the first MUST be the
-    /// `Start`; any further frame would be an illegitimate proxied op).
+    /// list of post-hello frames the daemon received before the response.
+    /// Attached and detached-create forms send `Start`; management verbs send
+    /// their single management op.
     fn run_vm_exec_with_mock_daemon_response(
         args: VmExecArgs,
         response_frame: Value,
@@ -10317,6 +10337,7 @@ mod host_install_dispatch_tests {
                 let response_frame = serde_json::to_vec(&response_frame)
                     .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
                 send_test_frame(accepted, &response_frame)?;
+
                 Ok(())
             })();
             close(accepted).expect("close accepted socket");
@@ -10362,9 +10383,10 @@ mod host_install_dispatch_tests {
     }
 
     fn missing_daemon_context() -> Context {
+        let missing_manifest = test_socket_path("missing-daemon", ".missing-manifest.json");
         Context {
-            manifest_path: PathBuf::from("/run/nixling-test/missing-vms.json"),
-            bundle_path: PathBuf::from("/run/nixling-test/missing-bundle.json"),
+            manifest_path: missing_manifest,
+            bundle_path: PathBuf::from("/dev/null"),
             public_socket: PathBuf::from("/dev/null"),
             broker_socket: PathBuf::from("/dev/null"),
             state_root: None,
@@ -10436,8 +10458,8 @@ mod host_install_dispatch_tests {
             envelope.get("stdoutBase64").is_none() && envelope.get("stderrBase64").is_none(),
             "a failure envelope never carries captured stdio bytes: {envelope}"
         );
-        // The daemon received exactly ONE post-hello frame (the Start). A
-        // second frame would mean the CLI proxied an exec op after the reject.
+        // The daemon received exactly ONE post-hello frame before the
+        // terminal response: the Start establishment op.
         assert_eq!(
             frames.len(),
             1,

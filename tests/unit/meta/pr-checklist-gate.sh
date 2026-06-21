@@ -50,6 +50,8 @@ check_item() {
 }
 
 check_item 'make check checkbox' '^- \[[ xX]\] \*\*`make check` passes locally\*\*'
+check_item 'make test-integration checkbox' '^- \[[ xX]\] \*\*`make test-integration` passes on the host before PR creation\*\*'
+check_item 'make test-host-integration checkbox' '^- \[[ xX]\] \*\*`make test-host-integration` passes on the host before PR creation\*\*'
 check_item 'manual test-hardware checkbox' '^- \[[ xX]\] \*\*Manual `make test-hardware` run\*\*'
 check_item 'make-target wiring checkbox' '^- \[[ xX]\] \*\*New/changed tests are wired into a `make` target\*\*'
 check_item 'docs and CI lockstep checkbox' '^- \[[ xX]\] \*\*Docs \+ CI updated in lockstep\*\*'

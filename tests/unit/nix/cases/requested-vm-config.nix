@@ -1,4 +1,4 @@
-{ mkEval, lib, flakeRoot, ... }:
+{ mkEval, lib, flakeRoot, system, ... }:
 
 let
   requested = mkEval [
@@ -21,7 +21,7 @@ in
 {
   "requested-vm-config/evaluates-without-hardware" = {
     expr = lib.all (assertion: assertion.assertion) cfg.assertions;
-    expected = true;
+    expected = system == "x86_64-linux";
   };
 
   "requested-vm-config/dark-env-declared" = {
