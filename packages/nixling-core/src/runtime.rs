@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeMetadata {
+    #[serde(default, skip_serializing_if = "RuntimeAutostartPolicy::is_default")]
+    pub autostart_policy: RuntimeAutostartPolicy,
     pub capabilities: RuntimeCapabilities,
     pub kind: RuntimeKind,
     #[serde(
@@ -15,8 +17,6 @@ pub struct RuntimeMetadata {
     )]
     pub operation_capabilities: RuntimeOperationCapabilities,
     pub provider: RuntimeProvider,
-    #[serde(default, skip_serializing_if = "RuntimeAutostartPolicy::is_default")]
-    pub autostart_policy: RuntimeAutostartPolicy,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub services: Vec<RuntimeServiceSummary>,
 }
@@ -24,6 +24,7 @@ pub struct RuntimeMetadata {
 impl RuntimeMetadata {
     pub fn local_nixos() -> Self {
         Self {
+            autostart_policy: RuntimeAutostartPolicy::HostBootEligible,
             capabilities: RuntimeCapabilities {
                 config_sync: true,
                 display: true,
@@ -43,7 +44,6 @@ impl RuntimeMetadata {
                 id: "local-cloud-hypervisor".to_owned(),
                 provider_type: RuntimeProviderType::Local,
             },
-            autostart_policy: RuntimeAutostartPolicy::HostBootEligible,
             services: vec![
                 RuntimeServiceSummary::from_process_role(
                     "host-reconcile",
@@ -81,6 +81,7 @@ impl RuntimeMetadata {
 
     pub fn local_qemu_media() -> Self {
         Self {
+            autostart_policy: RuntimeAutostartPolicy::ManualOnly,
             capabilities: RuntimeCapabilities {
                 config_sync: false,
                 display: true,
@@ -100,7 +101,6 @@ impl RuntimeMetadata {
                 id: "local-qemu-media".to_owned(),
                 provider_type: RuntimeProviderType::Local,
             },
-            autostart_policy: RuntimeAutostartPolicy::ManualOnly,
             services: vec![
                 RuntimeServiceSummary::from_process_role(
                     "host-reconcile",
@@ -173,10 +173,10 @@ pub struct RuntimeCapabilities {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeOperationCapabilities {
-    pub lifecycle: RuntimeLifecycleCapabilities,
-    pub media: RuntimeMediaCapabilities,
     pub display: RuntimeDisplayCapabilities,
     pub guest: RuntimeGuestCapabilities,
+    pub lifecycle: RuntimeLifecycleCapabilities,
+    pub media: RuntimeMediaCapabilities,
     pub storage: RuntimeStorageCapabilities,
 }
 
@@ -187,18 +187,6 @@ impl RuntimeOperationCapabilities {
 
     pub fn local_nixos() -> Self {
         Self {
-            lifecycle: RuntimeLifecycleCapabilities {
-                start: true,
-                stop: true,
-                restart: true,
-                switch: true,
-                host_prepare: true,
-            },
-            media: RuntimeMediaCapabilities {
-                usb_hotplug: true,
-                removable_media: false,
-                qemu_media: false,
-            },
             display: RuntimeDisplayCapabilities {
                 display: true,
                 graphics: true,
@@ -206,12 +194,24 @@ impl RuntimeOperationCapabilities {
                 wayland_proxy: true,
             },
             guest: RuntimeGuestCapabilities {
-                guest_control: true,
-                exec: true,
                 config_sync: true,
-                ssh: true,
-                keys: true,
+                exec: true,
+                guest_control: true,
                 in_guest_observability: true,
+                keys: true,
+                ssh: true,
+            },
+            lifecycle: RuntimeLifecycleCapabilities {
+                host_prepare: true,
+                restart: true,
+                start: true,
+                stop: true,
+                switch: true,
+            },
+            media: RuntimeMediaCapabilities {
+                qemu_media: false,
+                removable_media: false,
+                usb_hotplug: true,
             },
             storage: RuntimeStorageCapabilities {
                 store_sync: true,
@@ -223,18 +223,6 @@ impl RuntimeOperationCapabilities {
 
     pub fn local_qemu_media() -> Self {
         Self {
-            lifecycle: RuntimeLifecycleCapabilities {
-                start: true,
-                stop: true,
-                restart: true,
-                switch: false,
-                host_prepare: true,
-            },
-            media: RuntimeMediaCapabilities {
-                usb_hotplug: true,
-                removable_media: true,
-                qemu_media: true,
-            },
             display: RuntimeDisplayCapabilities {
                 display: true,
                 graphics: false,
@@ -242,6 +230,18 @@ impl RuntimeOperationCapabilities {
                 wayland_proxy: false,
             },
             guest: RuntimeGuestCapabilities::default(),
+            lifecycle: RuntimeLifecycleCapabilities {
+                host_prepare: true,
+                restart: true,
+                start: true,
+                stop: true,
+                switch: false,
+            },
+            media: RuntimeMediaCapabilities {
+                qemu_media: true,
+                removable_media: true,
+                usb_hotplug: true,
+            },
             storage: RuntimeStorageCapabilities::default(),
         }
     }
@@ -251,20 +251,20 @@ impl RuntimeOperationCapabilities {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeLifecycleCapabilities {
+    pub host_prepare: bool,
+    pub restart: bool,
     pub start: bool,
     pub stop: bool,
-    pub restart: bool,
     pub switch: bool,
-    pub host_prepare: bool,
 }
 
 /// Media and hotplug operations exposed by a runtime provider.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeMediaCapabilities {
-    pub usb_hotplug: bool,
-    pub removable_media: bool,
     pub qemu_media: bool,
+    pub removable_media: bool,
+    pub usb_hotplug: bool,
 }
 
 /// Display-side operations exposed by a runtime provider.
@@ -281,12 +281,12 @@ pub struct RuntimeDisplayCapabilities {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeGuestCapabilities {
-    pub guest_control: bool,
-    pub exec: bool,
     pub config_sync: bool,
-    pub ssh: bool,
-    pub keys: bool,
+    pub exec: bool,
+    pub guest_control: bool,
     pub in_guest_observability: bool,
+    pub keys: bool,
+    pub ssh: bool,
 }
 
 /// Storage operations exposed by a runtime provider.
@@ -357,11 +357,11 @@ impl From<&ProcessRole> for RuntimeServiceRole {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeServiceSummary {
     pub id: String,
-    pub role: RuntimeServiceRole,
+    #[serde(default)]
+    pub optional: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_role: Option<ProcessRole>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub optional: bool,
+    pub role: RuntimeServiceRole,
 }
 
 impl RuntimeServiceSummary {
@@ -377,13 +377,9 @@ impl RuntimeServiceSummary {
         let role = RuntimeServiceRole::from(&process_role);
         Self {
             id: id.into(),
-            role,
-            process_role: Some(process_role),
             optional,
+            process_role: Some(process_role),
+            role,
         }
     }
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }
