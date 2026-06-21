@@ -9105,6 +9105,8 @@ fn all_known_subcommands() -> Vec<String> {
         "op inspect",
         "realm list",
         "realm inspect",
+        "realm enter",
+        "realm run",
         "up",
         "down",
         "restart",
