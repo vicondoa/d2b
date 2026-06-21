@@ -2,6 +2,9 @@
 
 Reference for the bundled native SigNoz observability component.
 
+For constellation-wide inspection and `nixling op inspect`, see
+[`constellation-observability.md`](./constellation-observability.md).
+
 Option sources:
 
 - [`nixos-modules/options-observability.nix`](../../nixos-modules/options-observability.nix)

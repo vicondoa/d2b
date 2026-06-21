@@ -250,6 +250,51 @@ pub struct RealmInspectOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpInspectOutputV1 {
+    pub command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace: Option<OpInspectTraceOutputV1>,
+    pub local: OpInspectLocalOutputV1,
+    pub realms: Vec<OpInspectRealmOutputV1>,
+    pub degraded: Vec<OpInspectDegradedOutputV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpInspectTraceOutputV1 {
+    pub trace_id: String,
+    pub span_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpInspectLocalOutputV1 {
+    pub vm_count: u32,
+    pub gateway_count: u32,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpInspectRealmOutputV1 {
+    pub realm: String,
+    pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_vm: Option<String>,
+    pub state: String,
+    pub cross_realm_policy: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpInspectDegradedOutputV1 {
+    pub scope: String,
+    pub reason: String,
+    pub remediation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RealmPolicyOutputV1 {
     pub realm: String,
     pub mode: String,
@@ -625,6 +670,8 @@ enum NativeCommand {
     Auth(AuthArgs),
     /// Low-level realm gateway helpers.
     Realm(RealmArgs),
+    /// Inspect current constellation operation and trace state.
+    Op(OpArgs),
     /// Per-VM lifecycle verbs (start / stop / restart / list / status) plus the
     /// admin-only guest-control sub-verb `exec`, which runs commands or an
     /// interactive session inside a VM over the authenticated
@@ -929,6 +976,32 @@ struct AuthArgs {
 struct RealmArgs {
     #[command(subcommand)]
     command: RealmCommand,
+}
+
+#[derive(Debug, Args)]
+struct OpArgs {
+    #[command(subcommand)]
+    command: OpCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum OpCommand {
+    /// Inspect current operation/trace state with bounded partial results.
+    Inspect(OpInspectArgs),
+}
+
+#[derive(Debug, Args)]
+struct OpInspectArgs {
+    /// Optional trace id to include in the inspection envelope.
+    #[arg(long, requires = "span_id")]
+    trace_id: Option<String>,
+    /// Optional span id to include in the inspection envelope.
+    #[arg(long, requires = "trace_id")]
+    span_id: Option<String>,
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -2083,6 +2156,9 @@ fn dispatch(
             RealmCommand::Inspect(args) => cmd_realm_inspect(context, args),
             RealmCommand::Enter(args) => cmd_realm_enter(context, args),
             RealmCommand::Run(args) => cmd_realm_run(context, args),
+        },
+        NativeCommand::Op(args) => match &args.command {
+            OpCommand::Inspect(args) => cmd_op_inspect(context, args),
         },
         NativeCommand::Vm(args) => match &args.command {
             VmCommand::Start(args) => cmd_vm_start(context, args),
@@ -4407,10 +4483,10 @@ fn load_realm_entrypoint_document_from_path(
             ));
         }
     };
-    let mut raw = String::new();
+    let mut raw = Vec::new();
     let read = io::Read::by_ref(&mut file)
         .take(MAX_REALM_ENTRYPOINTS_BYTES + 1)
-        .read_to_string(&mut raw)
+        .read_to_end(&mut raw)
         .map_err(|err| CliFailure::new(1, format!("failed to read {}: {err}", path.display())))?;
     if read as u64 > MAX_REALM_ENTRYPOINTS_BYTES {
         return Err(CliFailure::new(
@@ -4421,6 +4497,12 @@ fn load_realm_entrypoint_document_from_path(
             ),
         ));
     }
+    let raw = String::from_utf8(raw).map_err(|err| {
+        CliFailure::new(
+            1,
+            format!("failed to parse {} as UTF-8: {err}", path.display()),
+        )
+    })?;
     let doc: RealmEntrypointDocument = serde_json::from_str(&raw)
         .map_err(|err| CliFailure::new(1, format!("failed to parse {}: {err}", path.display())))?;
     Ok(Some(doc))
@@ -4438,8 +4520,9 @@ fn load_realm_entrypoint_table_from_path(
             CliFailure::new(
                 1,
                 format!(
-                    "realm entrypoint `{}` is invalid: {err}",
-                    safe_error_snippet(&realm_raw)
+                    "realm entrypoint `{}` is invalid: {}",
+                    safe_error_snippet(&realm_raw),
+                    safe_error_snippet(&err.to_string())
                 ),
             )
         })?;
@@ -4460,9 +4543,10 @@ fn load_realm_entrypoint_table_from_path(
                         CliFailure::new(
                             1,
                             format!(
-                                "realm `{}` gateway target `{}` is invalid: {err}",
+                                "realm `{}` gateway target `{}` is invalid: {}",
                                 safe_error_snippet(&realm_raw),
-                                safe_error_snippet(&gateway)
+                                safe_error_snippet(&gateway),
+                                safe_error_snippet(&err.to_string())
                             ),
                         )
                     })?;
@@ -4496,8 +4580,9 @@ fn configured_realm_gateways(json: bool) -> Result<Vec<ResolvedRealmGateway>, Cl
             CliFailure::new(
                 1,
                 format!(
-                    "realm entrypoint `{}` is invalid: {err}",
-                    safe_error_snippet(&realm_raw)
+                    "realm entrypoint `{}` is invalid: {}",
+                    safe_error_snippet(&realm_raw),
+                    safe_error_snippet(&err.to_string())
                 ),
             )
         })?;
@@ -4705,7 +4790,11 @@ fn resolve_realm_gateway(
 ) -> Result<ResolvedRealmGateway, CliFailure> {
     let realm = target_routing::parse_realm_arg(realm_raw).map_err(|err| {
         emit_realm_usage_error(
-            &format!("invalid realm `{}`: {err}", safe_error_snippet(realm_raw)),
+            &format!(
+                "invalid realm `{}`: {}",
+                safe_error_snippet(realm_raw),
+                safe_error_snippet(&err.to_string())
+            ),
             "realm argument did not parse as a bounded lowercase realm path",
             "Use a DNS-shaped realm path such as `work` or `payments.work`.",
             json,
@@ -4857,6 +4946,29 @@ fn realm_policy_rows(
     context: &Context,
     json: bool,
 ) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
+    match realm_policy_rows_raw(context) {
+        Ok(rows) => Ok(rows),
+        Err(err) => {
+            if json {
+                let _ = emit_host_error(
+                    &host_error_envelope(
+                        &err.message,
+                        "realm-policy-invalid",
+                        err.exit_code,
+                        "Rendered realm entrypoint policy.",
+                        "realm policy could not be inspected",
+                        "Fix the rendered realm entrypoints and rebuild the host.",
+                        "docs/reference/realm-policy.md",
+                    ),
+                    true,
+                )?;
+            }
+            Err(err)
+        }
+    }
+}
+
+fn realm_policy_rows_raw(context: &Context) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
     let entries =
         if let Some(doc) = load_realm_entrypoint_document_from_path(&realm_entrypoints_path())? {
             doc.entries
@@ -4865,13 +4977,12 @@ fn realm_policy_rows(
             entries.insert("local".to_owned(), local_realm_entrypoint_config());
             entries
         };
-    realm_policy_rows_from_entries(context, normalize_realm_entrypoint_entries(entries)?, json)
+    realm_policy_rows_from_entries(context, normalize_realm_entrypoint_entries(entries)?)
 }
 
 fn realm_policy_rows_from_entries(
     context: &Context,
     entries: BTreeMap<String, RealmEntrypointConfig>,
-    json: bool,
 ) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
     let gateway_states = gateway_lifecycle_states(context)?;
     let mut rows = Vec::new();
@@ -4880,8 +4991,9 @@ fn realm_policy_rows_from_entries(
             CliFailure::new(
                 1,
                 format!(
-                    "realm entrypoint `{}` is invalid: {err}",
-                    safe_error_snippet(&realm_raw)
+                    "realm entrypoint `{}` is invalid: {}",
+                    safe_error_snippet(&realm_raw),
+                    safe_error_snippet(&err.to_string())
                 ),
             )
         })?;
@@ -4908,7 +5020,16 @@ fn realm_policy_rows_from_entries(
                     )
                 })?;
                 let gateway_vm = gateway_vm_from_target_text(&realm_target, &gateway_target)
-                    .map_err(|err| emit_route_error(err, json).unwrap_or_else(|failure| failure))?;
+                    .map_err(|err| {
+                        CliFailure::new(
+                            1,
+                            format!(
+                                "realm `{}` gateway target is invalid: {}",
+                                safe_error_snippet(&realm_target),
+                                safe_error_snippet(&err.to_string())
+                            ),
+                        )
+                    })?;
                 let gateway_state = gateway_states
                     .get(&gateway_vm)
                     .map(String::as_str)
@@ -5011,7 +5132,11 @@ fn realm_inspect_output(
 ) -> Result<RealmInspectOutputV1, CliFailure> {
     let realm = target_routing::parse_realm_arg(raw_realm).map_err(|err| {
         emit_realm_usage_error(
-            &format!("invalid realm `{}`: {err}", safe_error_snippet(raw_realm)),
+            &format!(
+                "invalid realm `{}`: {}",
+                safe_error_snippet(raw_realm),
+                safe_error_snippet(&err.to_string())
+            ),
             "realm argument did not parse as a bounded lowercase realm path",
             "Use a DNS-shaped realm path such as `work` or `payments.work`.",
             json,
@@ -5031,6 +5156,133 @@ fn realm_inspect_output(
         command: "realm inspect".to_owned(),
         realm: row,
     })
+}
+
+fn op_inspect_trace(args: &OpInspectArgs) -> Result<Option<OpInspectTraceOutputV1>, CliFailure> {
+    let (Some(trace_id), Some(span_id)) = (&args.trace_id, &args.span_id) else {
+        return Ok(None);
+    };
+    let trace = nixling_constellation_core::TraceContext::new(trace_id, span_id).ok_or_else(|| {
+        CliFailure::new(
+            2,
+            "op inspect: trace context fields must be non-empty, bounded, and contain no whitespace",
+        )
+    })?;
+    Ok(Some(OpInspectTraceOutputV1 {
+        trace_id: trace.trace_id().to_owned(),
+        span_id: trace.span_id().to_owned(),
+    }))
+}
+
+fn op_inspect_output(
+    context: &Context,
+    args: &OpInspectArgs,
+) -> Result<OpInspectOutputV1, CliFailure> {
+    let trace = op_inspect_trace(args)?;
+    let mut degraded = Vec::new();
+    let vm_count = match context.load_manifest() {
+        Ok(manifest) => u32::try_from(manifest.vms().len()).unwrap_or(u32::MAX),
+        Err(_) => {
+            degraded.push(OpInspectDegradedOutputV1 {
+                scope: "local-manifest".to_owned(),
+                reason: "manifest-unavailable".to_owned(),
+                remediation: "verify the nixling manifest path and rebuild the host".to_owned(),
+            });
+            0
+        }
+    };
+    let realms = match realm_policy_rows_raw(context) {
+        Ok(realms) => realms,
+        Err(_) => {
+            degraded.push(OpInspectDegradedOutputV1 {
+                scope: "realm-entrypoints".to_owned(),
+                reason: "realm-entrypoints-unavailable".to_owned(),
+                remediation: "verify realm-entrypoints.json and rebuild the host".to_owned(),
+            });
+            Vec::new()
+        }
+    };
+    Ok(op_inspect_output_from_parts(
+        vm_count, trace, realms, degraded,
+    ))
+}
+
+fn op_inspect_output_from_parts(
+    vm_count: u32,
+    trace: Option<OpInspectTraceOutputV1>,
+    realms: Vec<RealmPolicyOutputV1>,
+    mut degraded: Vec<OpInspectDegradedOutputV1>,
+) -> OpInspectOutputV1 {
+    let gateway_count = realms
+        .iter()
+        .filter(|realm| realm.mode == "gateway-backed")
+        .filter_map(|realm| realm.gateway_vm.as_deref())
+        .collect::<BTreeSet<_>>()
+        .len();
+    let gateway_count = u32::try_from(gateway_count).unwrap_or(u32::MAX);
+    if realms.iter().any(|realm| {
+        realm.mode == "gateway-backed"
+            && !matches!(realm.gateway_state.as_str(), "running" | "booted")
+    }) {
+        degraded.push(OpInspectDegradedOutputV1 {
+            scope: "gateway".to_owned(),
+            reason: "gateway-not-running".to_owned(),
+            remediation: "start the realm gateway with `nixling vm start <gateway-vm> --apply`"
+                .to_owned(),
+        });
+    }
+    let realm_outputs = realms
+        .into_iter()
+        .map(|realm| OpInspectRealmOutputV1 {
+            realm: realm.realm,
+            mode: realm.mode,
+            gateway_vm: realm.gateway_vm,
+            state: realm.gateway_state,
+            cross_realm_policy: realm.cross_realm_policy,
+        })
+        .collect();
+    OpInspectOutputV1 {
+        command: "op inspect".to_owned(),
+        trace,
+        local: OpInspectLocalOutputV1 {
+            vm_count,
+            gateway_count,
+            source: "local-entrypoints".to_owned(),
+        },
+        realms: realm_outputs,
+        degraded,
+    }
+}
+
+fn cmd_op_inspect(context: &Context, args: &OpInspectArgs) -> Result<i32, CliFailure> {
+    let output = op_inspect_output(context, args)?;
+    if args.json {
+        print_json(&output)?;
+    } else {
+        print_stdout(&format!(
+            "local: vms={} gateways={} source={}\n",
+            output.local.vm_count, output.local.gateway_count, output.local.source
+        ));
+        if let Some(trace) = &output.trace {
+            print_stdout(&format!(
+                "trace: traceId={} spanId={}\n",
+                trace.trace_id, trace.span_id
+            ));
+        }
+        for realm in &output.realms {
+            print_stdout(&format!(
+                "realm: {} mode={} state={} crossRealm={}\n",
+                realm.realm, realm.mode, realm.state, realm.cross_realm_policy
+            ));
+        }
+        for degraded in &output.degraded {
+            print_stdout(&format!(
+                "degraded: {} reason={} remediation={}\n",
+                degraded.scope, degraded.reason, degraded.remediation
+            ));
+        }
+    }
+    Ok(0)
 }
 
 fn cmd_realm_enter(context: &Context, args: &RealmEnterArgs) -> Result<i32, CliFailure> {
@@ -8868,6 +9120,11 @@ fn all_known_subcommands() -> Vec<String> {
         "audit",
         "host check",
         "auth status",
+        "op inspect",
+        "realm list",
+        "realm inspect",
+        "realm enter",
+        "realm run",
         "up",
         "down",
         "restart",
@@ -8897,10 +9154,18 @@ fn allowed_subcommands(role: AuthRoleV2) -> BTreeSet<String> {
             .into_iter()
             .filter(|command| command != "audit")
             .collect(),
-        AuthRoleV2::None => ["list", "status", "host check", "auth status"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
+        AuthRoleV2::None => [
+            "list",
+            "status",
+            "host check",
+            "auth status",
+            "op inspect",
+            "realm list",
+            "realm inspect",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
     }
 }
 
@@ -10714,8 +10979,8 @@ mod host_install_dispatch_tests {
             },
         );
 
-        let rows = super::realm_policy_rows_from_entries(&context, entries, true)
-            .expect("realm rows render");
+        let rows =
+            super::realm_policy_rows_from_entries(&context, entries).expect("realm rows render");
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].realm, "local");
         assert_eq!(rows[0].mode, "host-resident");
@@ -10755,7 +11020,6 @@ mod host_install_dispatch_tests {
         let rows = super::realm_policy_rows_from_entries(
             &context,
             super::normalize_realm_entrypoint_entries(entries).unwrap(),
-            true,
         )
         .expect("realm rows render");
         assert_eq!(rows[0].realm, "local");
@@ -10796,7 +11060,7 @@ mod host_install_dispatch_tests {
                 gateway: None,
             },
         );
-        let err = super::realm_policy_rows_from_entries(&context, unknown_mode, true)
+        let err = super::realm_policy_rows_from_entries(&context, unknown_mode)
             .expect_err("unknown mode fails closed");
         assert!(err.message.contains("unknown entrypoint mode"));
 
@@ -10808,7 +11072,7 @@ mod host_install_dispatch_tests {
                 gateway: None,
             },
         );
-        let err = super::realm_policy_rows_from_entries(&context, missing_gateway, true)
+        let err = super::realm_policy_rows_from_entries(&context, missing_gateway)
             .expect_err("missing gateway fails closed");
         assert!(err.message.contains("no gateway target"));
         let _ = std::fs::remove_file(&manifest_path);
@@ -10847,6 +11111,112 @@ mod host_install_dispatch_tests {
         assert_eq!(
             envelope.get("code").and_then(Value::as_str),
             Some("missing-realm-entrypoint")
+        );
+    }
+
+    #[test]
+    fn op_inspect_includes_trace_and_degraded_gateway_summary() {
+        let manifest_path = test_socket_path("op-inspect", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("manifest parent");
+        }
+        write_test_manifest(&manifest_path, "sys-work-gateway");
+        let context = test_context(manifest_path.clone());
+        let args = super::OpInspectArgs {
+            trace_id: Some("trace-1".to_owned()),
+            span_id: Some("span-1".to_owned()),
+            json: true,
+            human: false,
+        };
+        let output = super::op_inspect_output(&context, &args).expect("op inspect renders");
+        assert_eq!(output.command, "op inspect");
+        assert_eq!(output.trace.as_ref().unwrap().trace_id, "trace-1");
+        assert_eq!(output.local.vm_count, 1);
+        assert!(
+            usize::try_from(output.local.gateway_count).unwrap_or(usize::MAX)
+                <= output.realms.len()
+        );
+        assert!(output.realms.iter().any(|realm| realm.realm == "local"));
+        let rendered = serde_json::to_string(&output).expect("op inspect serializes");
+        for forbidden in ["SharedAccessKey", "Bearer ", "/home/", "stdout", "stderr"] {
+            assert!(
+                !rendered.contains(forbidden),
+                "op inspect output leaked {forbidden}: {rendered}"
+            );
+        }
+        let _ = std::fs::remove_file(&manifest_path);
+    }
+
+    #[test]
+    fn op_inspect_rejects_malformed_trace_context() {
+        let args = super::OpInspectArgs {
+            trace_id: Some("trace with spaces".to_owned()),
+            span_id: Some("span-1".to_owned()),
+            json: true,
+            human: false,
+        };
+        let err = super::op_inspect_trace(&args).expect_err("bad trace fails");
+        assert_eq!(err.exit_code, 2);
+        assert!(err.message.contains("trace context"));
+
+        let missing_pair = super::OpInspectArgs {
+            trace_id: Some("trace-1".to_owned()),
+            span_id: None,
+            json: true,
+            human: false,
+        };
+        assert!(super::op_inspect_trace(&missing_pair).unwrap().is_none());
+    }
+
+    #[test]
+    fn op_inspect_parse_requires_trace_pair() {
+        let err =
+            super::NativeCli::try_parse_from(["nixling", "op", "inspect", "--trace-id", "trace-1"])
+                .expect_err("clap requires --span-id with --trace-id");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn op_inspect_reports_degraded_gateway_without_failing() {
+        let realms = vec![super::RealmPolicyOutputV1 {
+            realm: "work".to_owned(),
+            mode: "gateway-backed".to_owned(),
+            gateway_vm: Some("sys-work-gateway".to_owned()),
+            gateway_target: Some("sys-work-gateway.nixling".to_owned()),
+            gateway_state: "stopped".to_owned(),
+            cross_realm_policy: "default-deny".to_owned(),
+            credential_boundary: "gateway-owned".to_owned(),
+        }];
+        let output = super::op_inspect_output_from_parts(1, None, realms, Vec::new());
+        assert_eq!(output.local.gateway_count, 1);
+        assert_eq!(output.degraded.len(), 1);
+        assert_eq!(output.degraded[0].scope, "gateway");
+        assert_eq!(output.degraded[0].reason, "gateway-not-running");
+        assert!(
+            output.degraded[0]
+                .remediation
+                .contains("nixling vm start <gateway-vm> --apply")
+        );
+    }
+
+    #[test]
+    fn op_inspect_reports_missing_manifest_as_degraded_partial_result() {
+        let manifest_path = test_socket_path("op-inspect-missing-manifest", ".manifest.json");
+        let context = test_context(manifest_path);
+        let args = super::OpInspectArgs {
+            trace_id: None,
+            span_id: None,
+            json: true,
+            human: false,
+        };
+        let output = super::op_inspect_output(&context, &args)
+            .expect("missing manifest should degrade instead of failing");
+        assert_eq!(output.local.vm_count, 0);
+        assert!(
+            output
+                .degraded
+                .iter()
+                .any(|entry| entry.reason == "manifest-unavailable")
         );
     }
 

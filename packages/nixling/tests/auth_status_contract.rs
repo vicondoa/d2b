@@ -126,7 +126,15 @@ fn auth_status_roles_match_schema_and_authz() {
     none_allowed.sort();
     assert_eq!(
         none_allowed,
-        vec!["auth status", "host check", "list", "status"],
+        vec![
+            "auth status",
+            "host check",
+            "list",
+            "op inspect",
+            "realm inspect",
+            "realm list",
+            "status",
+        ],
         "none role stays read-only"
     );
 

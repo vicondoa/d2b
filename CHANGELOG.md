@@ -12,6 +12,11 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Constellation observability: added `nixling op inspect` for bounded current
+  operation and realm-state inspection, with optional TraceContext fields,
+  degraded partial results, generated CLI schema coverage, and reference docs
+  for redaction/cardinality constraints.
+
 - Realm policy: added `nixling realm list` and `nixling realm inspect` to make
   host-resident vs gateway-backed realms discoverable, documented the
   default-deny cross-realm policy, and added migration guidance for explicit

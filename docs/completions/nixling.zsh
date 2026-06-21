@@ -527,6 +527,58 @@ esac
     ;;
 esac
 ;;
+(op)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_nixling__subcmd__op_commands" \
+"*::: :->op" \
+&& ret=0
+
+    case $state in
+    (op)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:nixling-op-command-$line[1]:"
+        case $line[1] in
+            (inspect)
+_arguments "${_arguments_options[@]}" : \
+'--trace-id=[Optional trace id to include in the inspection envelope]:TRACE_ID:_default' \
+'--span-id=[Optional span id to include in the inspection envelope]:SPAN_ID:_default' \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_nixling__subcmd__op__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:nixling-op-help-command-$line[1]:"
+        case $line[1] in
+            (inspect)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (vm)
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
@@ -1311,6 +1363,26 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(op)
+_arguments "${_arguments_options[@]}" : \
+":: :_nixling__subcmd__help__subcmd__op_commands" \
+"*::: :->op" \
+&& ret=0
+
+    case $state in
+    (op)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:nixling-help-op-command-$line[1]:"
+        case $line[1] in
+            (inspect)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (vm)
 _arguments "${_arguments_options[@]}" : \
 ":: :_nixling__subcmd__help__subcmd__vm_commands" \
@@ -1536,6 +1608,7 @@ _nixling_commands() {
 'host:Host-side preflight, install, doctor, and reconcile verbs' \
 'auth:Authorisation introspection' \
 'realm:Low-level realm gateway helpers' \
+'op:Inspect current constellation operation and trace state' \
 'vm:Per-VM lifecycle verbs (start / stop / restart / list / status) plus the admin-only guest-control sub-verb \`exec\`, which runs commands or an interactive session inside a VM over the authenticated guest-control transport (no SSH)' \
 'up:Alias for \`vm start <vm>\`' \
 'down:Alias for \`vm stop <vm>\`' \
@@ -1781,6 +1854,7 @@ _nixling__subcmd__help_commands() {
 'host:Host-side preflight, install, doctor, and reconcile verbs' \
 'auth:Authorisation introspection' \
 'realm:Low-level realm gateway helpers' \
+'op:Inspect current constellation operation and trace state' \
 'vm:Per-VM lifecycle verbs (start / stop / restart / list / status) plus the admin-only guest-control sub-verb \`exec\`, which runs commands or an interactive session inside a VM over the authenticated guest-control transport (no SSH)' \
 'up:Alias for \`vm start <vm>\`' \
 'down:Alias for \`vm stop <vm>\`' \
@@ -2007,6 +2081,18 @@ _nixling__subcmd__help__subcmd__list_commands() {
 _nixling__subcmd__help__subcmd__migrate_commands() {
     local commands; commands=()
     _describe -t commands 'nixling help migrate commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__op_commands] )) ||
+_nixling__subcmd__help__subcmd__op_commands() {
+    local commands; commands=(
+'inspect:Inspect current operation/trace state with bounded partial results' \
+    )
+    _describe -t commands 'nixling help op commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__op__subcmd__inspect_commands] )) ||
+_nixling__subcmd__help__subcmd__op__subcmd__inspect_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help op inspect commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__help__subcmd__realm_commands] )) ||
 _nixling__subcmd__help__subcmd__realm_commands() {
@@ -2354,6 +2440,37 @@ _nixling__subcmd__list_commands() {
 _nixling__subcmd__migrate_commands() {
     local commands; commands=()
     _describe -t commands 'nixling migrate commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__op_commands] )) ||
+_nixling__subcmd__op_commands() {
+    local commands; commands=(
+'inspect:Inspect current operation/trace state with bounded partial results' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'nixling op commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__op__subcmd__help_commands] )) ||
+_nixling__subcmd__op__subcmd__help_commands() {
+    local commands; commands=(
+'inspect:Inspect current operation/trace state with bounded partial results' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'nixling op help commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__op__subcmd__help__subcmd__help_commands] )) ||
+_nixling__subcmd__op__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling op help help commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__op__subcmd__help__subcmd__inspect_commands] )) ||
+_nixling__subcmd__op__subcmd__help__subcmd__inspect_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling op help inspect commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__op__subcmd__inspect_commands] )) ||
+_nixling__subcmd__op__subcmd__inspect_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling op inspect commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__realm_commands] )) ||
 _nixling__subcmd__realm_commands() {
