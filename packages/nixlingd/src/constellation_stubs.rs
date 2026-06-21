@@ -26,11 +26,14 @@
 
 use std::sync::{Arc, Mutex};
 
-use nixling_constellation_core::{CapabilitySet, OperationRequest, PrincipalId, TargetName};
+use nixling_constellation_core::{
+    CapabilitySet, OperationRequest, PrincipalId, ProtocolToken, TargetName,
+};
 use nixling_constellation_provider::error::ProviderResult;
 use nixling_constellation_provider::provider::{ProtocolCodec, WorkloadProvider};
 use nixling_constellation_router::{
-    DispatchTarget, OperationRouter, RealmEntrypointTable, ResolveError, RouteDecision,
+    DispatchTarget, OperationRouter, RealmEntrypointTable, RemoteDispatchOutcome,
+    RemoteFullHostAdapter, RemoteNodeRegistry, RemotePeerClient, ResolveError, RouteDecision,
 };
 
 /// A node/gateway-scoped [`OperationRouter`] shared across peer sessions.
@@ -182,13 +185,57 @@ impl Default for LocalExecutor {
     }
 }
 
-/// A remote-node peer session (future gateway work). Carries the seam only.
-pub struct PeerDaemon;
+/// Gateway-side remote full-host peer coordinator. It composes the pure remote
+/// node registry, the shared operation router, and a semantic peer-client seam.
+/// It still carries no transport endpoints, broker handles, guest-control
+/// clients, pidfds, file descriptors, or host paths.
+pub struct PeerDaemon {
+    remote_full_hosts: RemoteFullHostAdapter,
+}
 
 impl PeerDaemon {
-    /// Build the peer-daemon skeleton.
+    /// Build with a fixed preview gateway principal and no negotiated
+    /// capabilities. Tests/gateway-mode wiring should prefer
+    /// [`Self::with_gateway_principal`].
     pub fn new() -> Self {
-        Self
+        Self::with_gateway_principal(
+            PrincipalId::parse("gateway").expect("gateway is a valid principal token"),
+            CapabilitySet::empty(),
+        )
+    }
+
+    /// Build a peer daemon with an authenticated gateway principal and the
+    /// negotiated capability set for remote operations.
+    pub fn with_gateway_principal(
+        gateway_principal: PrincipalId,
+        capabilities: CapabilitySet,
+    ) -> Self {
+        Self {
+            remote_full_hosts: RemoteFullHostAdapter::new(gateway_principal, capabilities),
+        }
+    }
+
+    /// Borrow the remote full-host registry.
+    pub fn remote_nodes(&self) -> &RemoteNodeRegistry {
+        self.remote_full_hosts.registry()
+    }
+
+    /// Mutable access to the remote full-host registry for registration and
+    /// heartbeat paths.
+    pub fn remote_nodes_mut(&mut self) -> &mut RemoteNodeRegistry {
+        self.remote_full_hosts.registry_mut()
+    }
+
+    /// Route one already-authenticated semantic operation to a remote full
+    /// host. The adapter gates by principal, capability, generation, and
+    /// idempotency before the peer client sees the request.
+    pub fn dispatch_remote(
+        &mut self,
+        req: &OperationRequest,
+        generation: &ProtocolToken,
+        client: &mut dyn RemotePeerClient,
+    ) -> Result<RemoteDispatchOutcome, nixling_constellation_router::RemoteNodeError> {
+        self.remote_full_hosts.dispatch(req, generation, client)
     }
 }
 
@@ -294,8 +341,10 @@ impl DaemonModeConfig {
 mod tests {
     use super::*;
     use nixling_constellation_core::{
-        IdempotencyKey, NodeId, OpaquePayload, OperationId, OperationKind, RealmPath,
+        Capability, IdempotencyKey, NodeId, NodeKind, NodeSummary, OpaquePayload, OperationId,
+        OperationKind, ProviderId, RealmPath, WorkloadId,
     };
+    use nixling_constellation_router::{RemoteNodeError, RemoteNodeRegistration};
 
     fn list_req(principal: &PrincipalId) -> OperationRequest {
         OperationRequest {
@@ -322,6 +371,60 @@ mod tests {
             kind: OperationKind::WorkloadStart,
             trace: None,
             body: OpaquePayload::new(b"start".to_vec()).unwrap(),
+        }
+    }
+
+    fn remote_start_req(principal: &PrincipalId, op_id: &str, key: &str) -> OperationRequest {
+        OperationRequest {
+            operation_id: OperationId::parse(op_id).unwrap(),
+            idempotency_key: Some(IdempotencyKey::parse(key).unwrap()),
+            realm: RealmPath::local(),
+            node: NodeId::parse("remote-host").unwrap(),
+            workload: Some(WorkloadId::parse("vm-a").unwrap()),
+            principal: principal.clone(),
+            kind: OperationKind::WorkloadStart,
+            trace: None,
+            body: OpaquePayload::new(b"remote-start".to_vec()).unwrap(),
+        }
+    }
+
+    fn remote_registration(principal: &PrincipalId) -> RemoteNodeRegistration {
+        let caps = CapabilitySet::empty().with(Capability::Lifecycle);
+        RemoteNodeRegistration {
+            summary: NodeSummary {
+                id: NodeId::parse("remote-host").unwrap(),
+                realm: RealmPath::local(),
+                kind: NodeKind::FullHost,
+                capabilities: caps,
+            },
+            gateway_principal: principal.clone(),
+            gateway_node: NodeId::parse("gateway").unwrap(),
+            substrate_adapter: ProviderId::parse("nixos-host-substrate").unwrap(),
+            generation: ProtocolToken::parse("gen-1").unwrap(),
+        }
+    }
+
+    #[derive(Default)]
+    struct FakePeerClient {
+        sends: usize,
+    }
+
+    impl RemotePeerClient for FakePeerClient {
+        fn send_operation(
+            &mut self,
+            _route: &nixling_constellation_router::RemoteRoute,
+            _req: &OperationRequest,
+        ) -> Result<OpaquePayload, RemoteNodeError> {
+            self.sends += 1;
+            Ok(OpaquePayload::new(b"remote-ok".to_vec()).unwrap())
+        }
+
+        fn query_operation(
+            &mut self,
+            _route: &nixling_constellation_router::RemoteRoute,
+            _req: &OperationRequest,
+        ) -> Result<nixling_constellation_router::RemotePeerStatus, RemoteNodeError> {
+            Ok(nixling_constellation_router::RemotePeerStatus::InProgress)
         }
     }
 
@@ -434,5 +537,65 @@ mod tests {
             cross_wired.validate(),
             Err(DaemonModeError::GatewayCarriesHostLifecycle)
         );
+    }
+
+    #[test]
+    fn peer_daemon_composes_remote_full_host_registry_and_router() {
+        let principal = PrincipalId::parse("gateway-principal").unwrap();
+        let mut daemon = PeerDaemon::with_gateway_principal(
+            principal.clone(),
+            CapabilitySet::empty().with(Capability::Lifecycle),
+        );
+        daemon
+            .remote_nodes_mut()
+            .register(remote_registration(&principal), std::time::Instant::now())
+            .unwrap();
+        assert_eq!(daemon.remote_nodes().len(), 1);
+
+        let mut peer = FakePeerClient::default();
+        let request = remote_start_req(&principal, "op-remote-1", "idem-remote-1");
+        let outcome = daemon
+            .dispatch_remote(&request, &ProtocolToken::parse("gen-1").unwrap(), &mut peer)
+            .unwrap();
+        assert!(matches!(outcome, RemoteDispatchOutcome::Sent { .. }));
+        assert_eq!(peer.sends, 1);
+    }
+
+    #[test]
+    fn peer_daemon_remote_path_does_not_change_local_default_resolver() {
+        let principal = PrincipalId::parse("gateway-principal").unwrap();
+        let _daemon = PeerDaemon::with_gateway_principal(
+            principal,
+            CapabilitySet::empty().with(Capability::Lifecycle),
+        );
+        let resolver = TargetResolver::local_only();
+        let target = TargetName::parse("demo.nixling").unwrap();
+        assert!(matches!(
+            resolver.resolve(&target),
+            Ok(DispatchTarget::HostResident { .. })
+        ));
+    }
+
+    #[test]
+    fn constellation_seam_imports_no_broker_guest_control_or_provider_credentials() {
+        let src = include_str!("constellation_stubs.rs");
+        let imports = src
+            .lines()
+            .filter(|line| line.trim_start().starts_with("use "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for forbidden in [
+            ["nixling", "_ipc"].concat(),
+            ["guest", "_control"].concat(),
+            ["priv", "_broker"].concat(),
+            ["provider", "_relay"].concat(),
+            ["provider", "_aca"].concat(),
+            ["gateway", "_runtime"].concat(),
+        ] {
+            assert!(
+                !imports.contains(&forbidden),
+                "constellation seam import leaked forbidden dependency {forbidden}: {imports}"
+            );
+        }
     }
 }

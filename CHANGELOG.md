@@ -12,6 +12,27 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Constellation: added a preview remote full-host node adapter. A gateway
+  guest can now register a remote nixling host as a named node in a realm,
+  route typed lifecycle and exec/logs operations to it, and receive typed
+  responses through the remote host's own `nixlingd`/broker/guest-control
+  stack. The adapter validates registration (node id, realm path, schema
+  shape, capability set, authenticated gateway principal), tracks heartbeat/liveness,
+  gates every routed operation against the node's declared capabilities, and
+  enforces the non-tunneling boundary (no raw broker frames, no guest-control
+  frame forwarding, no fd/pidfd transfer, no host path or credential
+  exposure across the transport session). Remote-side idempotency deduplication
+  is layered on top of the gateway-level dedup so reconnect recovery queries
+  remote state before retrying side effects. Peer disconnect marks the node
+  unavailable immediately, and new-generation re-registration makes
+  old-generation operations fail stale. Relay identity remains reachability only
+  and is never mapped to a local or realm principal. This adapter is
+  **experimental/preview**: it is validated with mock and loopback peer clients
+  only. Production transports (Azure Relay over a live WAN, QUIC, SSH),
+  remote host install, remote host prepare, and network mutation are not yet
+  supported. See `docs/reference/remote-full-host-nodes.md` for the full
+  reference.
+
 - Bundle: the private manifest bundle now emits `storage.json` and
   `sync.json` contracts for managed paths, process restart/adoption
   policies, degraded-state taxonomy, and lock/lease synchronization
