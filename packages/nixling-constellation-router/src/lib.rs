@@ -44,6 +44,7 @@ use nixling_constellation_core::{
 pub mod display_transport;
 pub mod execution;
 pub mod mux_session;
+pub mod remote_node;
 pub mod secure_session;
 pub mod session;
 pub mod session_lifecycle;
@@ -55,6 +56,13 @@ pub use display_transport::{
 };
 pub use execution::{DEFAULT_MAX_EXECUTIONS, DurableExecTable};
 pub use mux_session::MuxSession;
+pub use remote_node::{
+    DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_MAX_REMOTE_NODES, RemoteDispatchOutcome,
+    RemoteFullHostAdapter, RemoteNodeAuditLabels, RemoteNodeAvailability, RemoteNodeEntry,
+    RemoteNodeError, RemoteNodeErrorKind, RemoteNodeRegistration, RemoteNodeRegistry,
+    RemotePeerClient, RemotePeerStatus, RemoteRetryAction, RemoteRoute,
+    ensure_remote_execution_generation, retry_action_after_disconnect,
+};
 pub use secure_session::{
     NonceReplayGuard, SecurePeerIdentity, SecurePeerSession, SecureSessionKey,
 };

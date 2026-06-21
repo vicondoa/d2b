@@ -1649,6 +1649,7 @@ dependencies = [
  "sha2",
  "subtle",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
