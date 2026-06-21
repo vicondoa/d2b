@@ -8941,16 +8941,37 @@ fn broker_error_envelope(
 fn emit_daemon_mutating_outcome(outcome: DaemonVerbOutcome, json: bool) -> Result<i32, CliFailure> {
     match outcome {
         DaemonVerbOutcome::Applied { summary } => {
-            print_stdout(&format!("{summary}\n"));
+            if json {
+                print_json(&serde_json::json!({
+                    "outcome": "applied",
+                    "summary": summary,
+                }))?;
+            } else {
+                print_stdout(&format!("{summary}\n"));
+            }
             Ok(0)
         }
         DaemonVerbOutcome::DryRunPlanned { summary } => {
-            print_stdout(&format!("{summary}\n"));
+            if json {
+                print_json(&serde_json::json!({
+                    "outcome": "dry-run",
+                    "summary": summary,
+                }))?;
+            } else {
+                print_stdout(&format!("{summary}\n"));
+            }
             Ok(0)
         }
         DaemonVerbOutcome::ApiReadyTimeout { summary } => {
             let msg = summary.unwrap_or_else(|| "vm start: api-ready timeout".to_owned());
-            print_stdout(&format!("{msg}\n"));
+            if json {
+                print_json(&serde_json::json!({
+                    "outcome": "api-ready-timeout",
+                    "summary": msg,
+                }))?;
+            } else {
+                print_stdout(&format!("{msg}\n"));
+            }
             Ok(EXIT_API_TIMEOUT)
         }
         DaemonVerbOutcome::InvalidRequest { remediation } => {
@@ -12041,6 +12062,45 @@ mod host_install_dispatch_tests {
         assert!(!rendered.contains("1-2.3"));
         assert!(!rendered.contains("usb-Vendor_SecretSerial"));
         assert!(!rendered.contains("usbip attach"));
+    }
+
+    #[test]
+    fn qemu_media_usb_attach_apply_json_renders_json_envelope() {
+        let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
+        let vm = "media";
+        let args = UsbAttachArgs {
+            vm: vm.to_owned(),
+            busid: "1-2.3".to_owned(),
+            dry_run: false,
+            apply: true,
+            json: true,
+            human: false,
+        };
+        let (result, _request, stdout) = run_public_command_with_manifest(
+            "qemu-media-usb-attach-json",
+            vm,
+            json!({
+                "type": "mutatingVerbResponse",
+                "verb": "usb attach",
+                "outcome": "applied",
+                "summary": "nixling usb attach --apply: qemu-media attached ref 'installer-usb' in slot 'cdrom' for vm 'media' via QMP (commands=add-fd,blockdev-add:file,blockdev-add:raw,device_add)"
+            }),
+            write_qemu_media_manifest,
+            |context| super::cmd_usb_attach(context, &args),
+        );
+
+        assert_eq!(result.expect("qemu media attach json"), 0);
+        let rendered: Value = serde_json::from_slice(&stdout).expect("json stdout");
+        assert_eq!(
+            rendered.get("outcome").and_then(Value::as_str),
+            Some("applied")
+        );
+        assert!(
+            rendered
+                .get("summary")
+                .and_then(Value::as_str)
+                .is_some_and(|summary| summary.contains("qemu-media attached ref"))
+        );
     }
 
     #[test]
