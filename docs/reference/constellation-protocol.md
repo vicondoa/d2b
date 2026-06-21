@@ -37,6 +37,8 @@ shutdown behavior. The reusable checks are listed in the
 [transport conformance matrix](./transport-conformance-matrix.md).
 The Azure Relay adapter is documented in
 [transport-azure-relay](./transport-azure-relay.md).
+Supported transport policy, including the no-implicit-SSH-fallback rule,
+is documented in [transport-support-policy](./transport-support-policy.md).
 
 The protobuf codec maps bytes to the codec-neutral `ConstellationFrame`.
 The router consumes only semantic frames; it never depends on protobuf

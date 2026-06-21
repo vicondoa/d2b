@@ -10,6 +10,8 @@
 //! broker/daemon internals (enforced by the constellation
 //! dependency-direction CI gate).
 
+mod local_tcp;
+
 use async_trait::async_trait;
 use nixling_constellation_core::ErrorKind;
 use nixling_constellation_core::{NodeId, ProviderId};
@@ -23,6 +25,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use tokio::sync::{Mutex, mpsc, mpsc::error::TrySendError};
+
+pub use local_tcp::LocalTcpTransport;
 
 /// Default in-memory duplex buffer size for a loopback session.
 const LOOPBACK_BUF: usize = 64 * 1024;
@@ -187,9 +191,18 @@ pub mod conformance {
 
     /// Accept/connect one session and prove bytes are bidirectional.
     pub async fn accepts_and_round_trips(provider: &dyn TransportProvider) -> ProviderResult<()> {
+        accepts_and_round_trips_with_target(provider, target()).await
+    }
+
+    /// Accept/connect one session against an explicit target and prove bytes
+    /// are bidirectional.
+    pub async fn accepts_and_round_trips_with_target(
+        provider: &dyn TransportProvider,
+        target: TransportTarget,
+    ) -> ProviderResult<()> {
         let listener = provider.listen(registration()).await?;
         let (mut sender, mut accepted) =
-            tokio::try_join!(provider.connect(target()), listener.accept())?;
+            tokio::try_join!(provider.connect(target), listener.accept())?;
         sender
             .stream_mut()
             .write_all(b"hello")
@@ -240,11 +253,21 @@ pub mod conformance {
         provider: &dyn TransportProvider,
         count: usize,
     ) -> ProviderResult<()> {
+        concurrent_sessions_are_isolated_with_target(provider, target(), count).await
+    }
+
+    /// Open several sessions to an explicit target and prove they do not
+    /// cross-talk while all are alive concurrently.
+    pub async fn concurrent_sessions_are_isolated_with_target(
+        provider: &dyn TransportProvider,
+        target: TransportTarget,
+        count: usize,
+    ) -> ProviderResult<()> {
         let listener = provider.listen(registration()).await?;
         let mut sessions = Vec::with_capacity(count);
         for index in 0..count {
             let (sender, accepted) =
-                tokio::try_join!(provider.connect(target()), listener.accept())?;
+                tokio::try_join!(provider.connect(target.clone()), listener.accept())?;
             sessions.push((index, sender, accepted));
         }
         let mut tasks = Vec::with_capacity(count);
