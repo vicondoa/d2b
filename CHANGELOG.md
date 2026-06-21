@@ -103,6 +103,9 @@ deprecations ship one minor release before removal.
 - Azure Relay now has a constellation `TransportProvider` adapter that
   wraps Relay WebSocket rendezvous into bounded transport sessions for
   gateway-owned listeners and sandbox senders.
+- Local TCP test transport support now proves the transport interface is
+  not Azure-specific, with loopback-only binds, explicit URI targets, and
+  redacted typed errors for negative network cases.
 
 ### Changed
 
