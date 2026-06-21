@@ -225,6 +225,94 @@ let
     };
   };
 
+  runtimeOperationCapabilitiesType = lib.types.submodule {
+    freeformType = null;
+    options = {
+      lifecycle = lib.mkOption {
+        type = lib.types.submodule {
+          freeformType = null;
+          options = {
+            start = lib.mkOption { type = lib.types.bool; };
+            stop = lib.mkOption { type = lib.types.bool; };
+            restart = lib.mkOption { type = lib.types.bool; };
+            switch = lib.mkOption { type = lib.types.bool; };
+            hostPrepare = lib.mkOption { type = lib.types.bool; };
+          };
+        };
+      };
+      media = lib.mkOption {
+        type = lib.types.submodule {
+          freeformType = null;
+          options = {
+            usbHotplug = lib.mkOption { type = lib.types.bool; };
+            removableMedia = lib.mkOption { type = lib.types.bool; };
+            qemuMedia = lib.mkOption { type = lib.types.bool; };
+          };
+        };
+      };
+      display = lib.mkOption {
+        type = lib.types.submodule {
+          freeformType = null;
+          options = {
+            display = lib.mkOption { type = lib.types.bool; };
+            graphics = lib.mkOption { type = lib.types.bool; };
+            video = lib.mkOption { type = lib.types.bool; };
+            waylandProxy = lib.mkOption { type = lib.types.bool; };
+          };
+        };
+      };
+      guest = lib.mkOption {
+        type = lib.types.submodule {
+          freeformType = null;
+          options = {
+            guestControl = lib.mkOption { type = lib.types.bool; };
+            exec = lib.mkOption { type = lib.types.bool; };
+            configSync = lib.mkOption { type = lib.types.bool; };
+            ssh = lib.mkOption { type = lib.types.bool; };
+            keys = lib.mkOption { type = lib.types.bool; };
+            inGuestObservability = lib.mkOption { type = lib.types.bool; };
+          };
+        };
+      };
+      storage = lib.mkOption {
+        type = lib.types.submodule {
+          freeformType = null;
+          options = {
+            storeSync = lib.mkOption { type = lib.types.bool; };
+            virtiofs = lib.mkOption { type = lib.types.bool; };
+            volumes = lib.mkOption { type = lib.types.bool; };
+          };
+        };
+      };
+    };
+  };
+
+  runtimeServiceSummaryType = lib.types.submodule {
+    freeformType = null;
+    options = {
+      id = lib.mkOption { type = lib.types.str; };
+      role = lib.mkOption {
+        type = lib.types.enum [
+          "host"
+          "hypervisor"
+          "storage"
+          "tpm"
+          "display"
+          "audio"
+          "video"
+          "network"
+          "guest-control"
+          "usb"
+          "observability"
+        ];
+      };
+      optional = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+      };
+    };
+  };
+
   runtimeMetadataType = lib.types.submodule {
     freeformType = null;
     options = {
@@ -245,6 +333,23 @@ let
           provider supports a capability, not whether a per-VM option currently
           enables that feature.
         '';
+      };
+
+      operationCapabilities = lib.mkOption {
+        type = runtimeOperationCapabilitiesType;
+        description = "Positive operation support grouped by public feature axis.";
+      };
+
+      autostartPolicy = lib.mkOption {
+        type = lib.types.enum [ "unknown" "host-boot-eligible" "manual-only" "disabled" ];
+        default = "unknown";
+        description = "Runtime-level autostart policy.";
+      };
+
+      services = lib.mkOption {
+        type = lib.types.listOf runtimeServiceSummaryType;
+        default = [ ];
+        description = "Provider-neutral runtime service summaries.";
       };
     };
   };

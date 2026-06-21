@@ -871,6 +871,12 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       inherit planOps;
     };
 
+  hypervisorRunnerNode = name: service: args:
+    node name ({
+      id = service.nodeId;
+      role = service.runnerRole;
+    } // args);
+
   edge = from: to: reason: { inherit from to reason; };
   edgesFromNodes = fromNodes: to: reason:
     builtins.map (from: edge from to reason) fromNodes;
@@ -881,6 +887,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     let
       manifest = cfg.manifest.${name};
       microvm = nl.vmRunner config name;
+      hypervisorService = nl.runtimeHypervisorService "nixos";
       # The guest-control authenticated Health probe is the framework
       # readiness gate on guest-control-capable VMs. Per-VM sshd/host-keys are
       # retained for the SSH-compat window but are no longer the framework
@@ -993,9 +1000,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         readiness = [ (unixSocketExists "/run/nixling/vms/${name}/snd.sock") ];
       } // audioRunner name))
       ++ [
-        (node name {
-          id = "cloud-hypervisor";
-          role = "cloud-hypervisor-runner";
+        (hypervisorRunnerNode name hypervisorService {
           unit = if vm.graphics.enable then "nixling-${name}-gpu.service" else "microvm@${name}.service";
           binaryPath = cloudHypervisorBinaryPath microvm;
           argv = cloudHypervisorArgv name vm manifest;
@@ -1100,6 +1105,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
   qemuMediaDag = name: vm:
     let
       emitWaylandProxy = cfg.site.waylandUser != null;
+      hypervisorService = nl.runtimeHypervisorService "qemu-media";
     in
     {
       vm = name;
@@ -1117,9 +1123,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         ];
       } // waylandProxyRunner name vm))
       ++ [
-        (node name {
-          id = "qemu-media";
-          role = "qemu-media-runner";
+        (hypervisorRunnerNode name hypervisorService {
           binaryPath = qemuMediaBinaryPath;
           argv = qemuMediaArgv name;
           env = qemuMediaEnv name;

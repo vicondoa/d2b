@@ -3,9 +3,8 @@
 {
   # Safe, eval-only qemu-media example for the requested `dark` env and
   # `dark-live` VM. Physical USB devices are referenced only by opaque
-  # media refs; enroll live hardware at runtime with `nixling usb probe`
-  # followed by `nixling usb enroll dark-live <ref> ... --apply`, keeping
-  # the transient probe selector on the CLI and never in this file.
+  # media refs; discover live hardware at runtime with `nixling usb probe`,
+  # keeping the transient probe selector on the CLI and never in this file.
   boot.loader.grub.enable = false;
   boot.loader.systemd-boot.enable = false;
   boot.initrd.includeDefaultModules = false;
@@ -50,6 +49,7 @@
         ref = "boot";
         format = "raw";
         readOnly = true;
+        usbSelector.byIdName = "usb-Example_Dark_Live_0001-0:0";
       };
 
       removableSlots.backup.source = {

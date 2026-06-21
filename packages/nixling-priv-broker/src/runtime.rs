@@ -2317,6 +2317,10 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     media_ref: outcome.response.media_ref.as_str().to_owned(),
                     slot: outcome.response.slot.clone(),
                     read_only: outcome.response.read_only,
+                    registry_record_written: outcome.registry_record_written,
+                    redacted_index_written: outcome.redacted_index_written,
+                    udev_rule_written: outcome.udev_rule_written,
+                    udev_reloaded: outcome.udev_reloaded,
                     qmp_commands: outcome.response.qmp_commands.clone(),
                 },
             )?;

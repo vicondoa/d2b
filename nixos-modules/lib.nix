@@ -111,49 +111,198 @@ rec {
     driver = "qemu";
   };
 
-  nixosRuntimeCapabilities = {
-    lifecycle = true;
-    display = true;
-    usbHotplug = true;
-    guestControl = true;
-    exec = true;
-    configSync = true;
-    ssh = true;
-    storeSync = true;
-    keys = true;
-    inGuestObservability = true;
+  mkServiceCapability =
+    { supported
+    , nodeId ? null
+    , runnerRole ? null
+    , driver ? null
+    , readiness ? null
+    , contract ? null
+    , transport ? null
+    , unitStrategy ? null
+    }:
+    {
+      inherit supported;
+    }
+    // lib.optionalAttrs (nodeId != null) { inherit nodeId; }
+    // lib.optionalAttrs (runnerRole != null) { inherit runnerRole; }
+    // lib.optionalAttrs (driver != null) { inherit driver; }
+    // lib.optionalAttrs (readiness != null) { inherit readiness; }
+    // lib.optionalAttrs (contract != null) { inherit contract; }
+    // lib.optionalAttrs (transport != null) { inherit transport; }
+    // lib.optionalAttrs (unitStrategy != null) { inherit unitStrategy; };
+
+  mkRuntimeCapabilities =
+    { legacy }:
+    legacy;
+
+  runtimeServiceSummary = { id, role, optional ? false }: {
+    inherit id role optional;
   };
 
-  qemuMediaRuntimeCapabilities = {
-    lifecycle = true;
-    display = true;
-    usbHotplug = true;
-    guestControl = false;
-    exec = false;
-    configSync = false;
-    ssh = false;
-    storeSync = false;
-    keys = false;
-    inGuestObservability = false;
+  nixosRuntimeCapabilities = mkRuntimeCapabilities {
+    legacy = {
+      lifecycle = true;
+      display = true;
+      usbHotplug = true;
+      guestControl = true;
+      exec = true;
+      configSync = true;
+      ssh = true;
+      storeSync = true;
+      keys = true;
+      inGuestObservability = true;
+    };
   };
+
+  nixosRuntimeOperationCapabilities = {
+    lifecycle = {
+      start = true;
+      stop = true;
+      restart = true;
+      switch = true;
+      hostPrepare = true;
+    };
+    media = {
+      usbHotplug = true;
+      removableMedia = false;
+      qemuMedia = false;
+    };
+    display = {
+      display = true;
+      graphics = true;
+      video = true;
+      waylandProxy = true;
+    };
+    guest = {
+      guestControl = true;
+      exec = true;
+      configSync = true;
+      ssh = true;
+      keys = true;
+      inGuestObservability = true;
+    };
+    storage = {
+      storeSync = true;
+      virtiofs = true;
+      volumes = true;
+    };
+  };
+
+  qemuMediaRuntimeCapabilities = mkRuntimeCapabilities {
+    legacy = {
+      lifecycle = true;
+      display = true;
+      usbHotplug = true;
+      guestControl = false;
+      exec = false;
+      configSync = false;
+      ssh = false;
+      storeSync = false;
+      keys = false;
+      inGuestObservability = false;
+    };
+  };
+
+  qemuMediaRuntimeOperationCapabilities = {
+    lifecycle = {
+      start = true;
+      stop = true;
+      restart = true;
+      switch = false;
+      hostPrepare = true;
+    };
+    media = {
+      usbHotplug = true;
+      removableMedia = true;
+      qemuMedia = true;
+    };
+    display = {
+      display = true;
+      graphics = false;
+      video = false;
+      waylandProxy = false;
+    };
+    guest = {
+      guestControl = false;
+      exec = false;
+      configSync = false;
+      ssh = false;
+      keys = false;
+      inGuestObservability = false;
+    };
+    storage = {
+      storeSync = false;
+      virtiofs = false;
+      volumes = false;
+    };
+  };
+
+  nixosHypervisorService = mkServiceCapability {
+    supported = true;
+    nodeId = "cloud-hypervisor";
+    runnerRole = "cloud-hypervisor-runner";
+    driver = "cloud-hypervisor";
+    readiness = "api-socket";
+    contract = "spawn-runner";
+    unitStrategy = "microvm-or-graphics-sidecar";
+  };
+
+  qemuMediaHypervisorService = mkServiceCapability {
+    supported = true;
+    nodeId = "qemu-media";
+    runnerRole = "qemu-media-runner";
+    driver = "qemu";
+    readiness = "qmp-socket";
+    contract = "spawn-runner";
+    unitStrategy = "daemon-supervised-runner";
+  };
+
+  runtimeHypervisorService = kind: (runtimeProviderCatalog.${kind}
+    or (throw "nixling: unsupported runtime kind '${kind}'"))._hypervisorService;
 
   runtimeProviderCatalog = {
     nixos = {
       kind = "nixos";
       provider = nixosRuntimeProvider;
       capabilities = nixosRuntimeCapabilities;
+      operationCapabilities = nixosRuntimeOperationCapabilities;
+      autostartPolicy = "host-boot-eligible";
+      services = [
+        (runtimeServiceSummary { id = "host-reconcile"; role = "host"; })
+        (runtimeServiceSummary { id = "store-virtiofs-preflight"; role = "storage"; })
+        (runtimeServiceSummary { id = "virtiofsd"; role = "storage"; })
+        (runtimeServiceSummary { id = "cloud-hypervisor"; role = "hypervisor"; })
+        (runtimeServiceSummary { id = "guest-control-health"; role = "guest-control"; })
+        (runtimeServiceSummary { id = "swtpm"; role = "tpm"; optional = true; })
+        (runtimeServiceSummary { id = "gpu"; role = "display"; optional = true; })
+        (runtimeServiceSummary { id = "audio"; role = "audio"; optional = true; })
+        (runtimeServiceSummary { id = "video"; role = "video"; optional = true; })
+        (runtimeServiceSummary { id = "usbip"; role = "usb"; optional = true; })
+      ];
+      _hypervisorService = nixosHypervisorService;
     };
     qemu-media = {
       kind = "qemu-media";
       provider = qemuMediaRuntimeProvider;
       capabilities = qemuMediaRuntimeCapabilities;
+      operationCapabilities = qemuMediaRuntimeOperationCapabilities;
+      autostartPolicy = "manual-only";
+      services = [
+        (runtimeServiceSummary { id = "host-reconcile"; role = "host"; })
+        (runtimeServiceSummary { id = "qemu-media"; role = "hypervisor"; })
+        (runtimeServiceSummary { id = "usbip"; role = "usb"; optional = true; })
+      ];
+      _hypervisorService = qemuMediaHypervisorService;
     };
   };
 
   vmRuntimeMetadata = _name: vm:
-    let kind = vmRuntimeKind vm;
-    in runtimeProviderCatalog.${kind}
-      or (throw "nixling: unsupported runtime kind '${kind}'");
+    let
+      kind = vmRuntimeKind vm;
+      runtime = runtimeProviderCatalog.${kind}
+        or (throw "nixling: unsupported runtime kind '${kind}'");
+    in builtins.removeAttrs runtime [ "_hypervisorService" ];
 
   # Shared helper extracted from minijail-profiles.nix and
   # host-users.nix to eliminate the 4-line duplicate that was a

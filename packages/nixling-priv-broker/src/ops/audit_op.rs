@@ -259,6 +259,10 @@ pub enum OperationFields {
         media_ref: String,
         slot: String,
         read_only: bool,
+        registry_record_written: bool,
+        redacted_index_written: bool,
+        udev_rule_written: bool,
+        udev_reloaded: bool,
         qmp_commands: Vec<String>,
     },
     QemuMediaDetach {
@@ -564,6 +568,10 @@ impl OperationFields {
                 media_ref: String,
                 slot: String,
                 read_only: bool,
+                registry_record_written: bool,
+                redacted_index_written: bool,
+                udev_rule_written: bool,
+                udev_reloaded: bool,
                 qmp_commands: Vec<String>,
             }),
             "QemuMediaDetach" => parse_fields!(value => QemuMediaDetach {
@@ -904,6 +912,10 @@ mod tests {
             media_ref: "installer-usb".to_owned(),
             slot: "boot".to_owned(),
             read_only: true,
+            registry_record_written: true,
+            redacted_index_written: true,
+            udev_rule_written: true,
+            udev_reloaded: true,
             qmp_commands: vec![
                 "add-fd".to_owned(),
                 "blockdev-add:file".to_owned(),

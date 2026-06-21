@@ -1724,13 +1724,12 @@ const QEMU_MEDIA_MEMLOCK_HEADROOM_RATIO_DIVISOR: u64 = 4;
 const QEMU_MEDIA_MEMLOCK_PREFLIGHT_OVERHEAD_BYTES: u64 = 1024 * 1024 * 1024;
 
 fn qemu_media_memlock_limit_bytes(plan: &SpawnRunnerPlan) -> Result<Option<u64>, LiveHandlerError> {
-    Ok(qemu_media_memlock_guest_bytes(plan)?
-        .map(|guest_bytes| guest_bytes.saturating_add(qemu_media_memlock_headroom_bytes(guest_bytes))))
+    Ok(qemu_media_memlock_guest_bytes(plan)?.map(|guest_bytes| {
+        guest_bytes.saturating_add(qemu_media_memlock_headroom_bytes(guest_bytes))
+    }))
 }
 
-fn qemu_media_memlock_guest_bytes(
-    plan: &SpawnRunnerPlan,
-) -> Result<Option<u64>, LiveHandlerError> {
+fn qemu_media_memlock_guest_bytes(plan: &SpawnRunnerPlan) -> Result<Option<u64>, LiveHandlerError> {
     if !is_qemu_media_runner(plan) || !qemu_media_argv_has_mem_lock(&plan.argv) {
         return Ok(None);
     }
@@ -1751,16 +1750,16 @@ fn qemu_media_memlock_preflight_required_bytes(guest_bytes: u64) -> u64 {
 }
 
 fn qemu_media_preflight_memlock_budget(required_bytes: u64) -> Result<(), LiveHandlerError> {
-    let meminfo = fs::read_to_string("/proc/meminfo").map_err(|err| {
-        LiveHandlerError::SpawnFailed {
-            detail: format!("qemu-media mem-lock preflight could not read host memory availability: {err}"),
-        }
-    })?;
-    let available = parse_meminfo_available_bytes(&meminfo).ok_or_else(|| {
-        LiveHandlerError::SpawnFailed {
+    let meminfo =
+        fs::read_to_string("/proc/meminfo").map_err(|err| LiveHandlerError::SpawnFailed {
+            detail: format!(
+                "qemu-media mem-lock preflight could not read host memory availability: {err}"
+            ),
+        })?;
+    let available =
+        parse_meminfo_available_bytes(&meminfo).ok_or_else(|| LiveHandlerError::SpawnFailed {
             detail: "qemu-media mem-lock preflight could not parse host MemAvailable".to_owned(),
-        }
-    })?;
+        })?;
     if let Some(shortfall) = qemu_media_memlock_budget_shortfall(required_bytes, available) {
         return Err(LiveHandlerError::SpawnFailed {
             detail: format!(

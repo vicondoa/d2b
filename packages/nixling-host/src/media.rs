@@ -256,7 +256,7 @@ pub fn qemu_read_only_required(access: MediaAccessMode) -> bool {
 
 pub fn redacted_enrollment_summary(vm: &str, media_ref: &str, read_only: bool) -> String {
     format!(
-        "nixling usb enroll --apply: enrolled media ref '{}' for vm '{}' (access={})",
+        "qemu-media registry: recorded media ref '{}' for vm '{}' (access={})",
         media_ref,
         vm,
         if read_only { "read-only" } else { "read-write" }

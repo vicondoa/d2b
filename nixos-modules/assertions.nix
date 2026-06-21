@@ -646,6 +646,9 @@ let
           lib.unique (lib.filter
             (ref: lib.length (lib.filter (other: other == ref) declaredMediaRefs) > 1)
             declaredMediaRefs);
+        bootDriveSource =
+          if vm.qemuMedia.bootDrive.slot == "boot" then vm.qemuMedia.source
+          else (vm.qemuMedia.removableSlots.${vm.qemuMedia.bootDrive.slot}.source or null);
         sourceAssertions = lib.flatten (map
           (entry:
             let
@@ -658,17 +661,16 @@ let
                 assertion = (!isPhysical) || source.ref != null;
                 message = ''
                   ${sourceName}: kind = "physical-usb" requires an opaque `ref`.
-                  Enroll the live device identity at runtime with
-                  `nixling usb enroll`; do not place bus IDs, serials, or paths
-                  in Nix config.
+                  Discover live runtime selectors with `nixling usb probe`;
+                  do not place bus IDs or device paths in Nix config.
                 '';
               }
               {
                 assertion = (!isPhysical) || source.path == null;
                 message = ''
                   ${sourceName}: kind = "physical-usb" must not set `path`.
-                  Physical USB remains ref/enrollment based so raw device
-                  identity stays out of Nix-store-backed artifacts.
+                  Physical USB remains opaque-ref based so raw device identity
+                  and paths stay out of Nix-store-backed artifacts.
                 '';
               }
               {
@@ -723,8 +725,28 @@ let
           message = ''
             nixling.vms.${name}: runtime.kind = "qemu-media" requires
             `qemuMedia.source` in this implementation. Declare either a
-            physical-usb opaque ref enrolled with `nixling usb enroll`, or
-            a direct image-file source configured in Nix.
+            physical-usb opaque ref discovered with `nixling usb probe`, or a
+            direct image-file source configured in Nix.
+          '';
+        }
+        {
+          assertion = bootDriveSource != null;
+          message = ''
+            nixling.vms.${name}: qemuMedia.bootDrive.slot =
+            "${vm.qemuMedia.bootDrive.slot}" must select `qemuMedia.source` (`boot`)
+            or a removable slot with a declared source.
+          '';
+        }
+        {
+          assertion =
+            bootDriveSource == null
+            || bootDriveSource.kind != "physical-usb"
+            || bootDriveSource.usbSelector != null;
+          message = ''
+            nixling.vms.${name}: physical USB boot drive
+            `${vm.qemuMedia.bootDrive.slot}` requires
+            `usbSelector.byIdName`. Use `nixling usb probe` to identify the
+            candidate, then configure the stable `/dev/disk/by-id` basename.
           '';
         }
         {

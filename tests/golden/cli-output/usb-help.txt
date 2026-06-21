@@ -1,11 +1,10 @@
-USB enroll / attach / detach / probe
+USB attach / detach / probe
 
 Usage: nixling usb <COMMAND>
 
 Commands:
   attach  Bind a host USB busid to a VM via the native daemon path
   detach  Unbind a host USB busid from a VM via the native daemon path
-  enroll  Enroll a physical USB disk for an opaque qemu-media ref
   probe   List daemon-declared USBIP claims and qemu-media USB candidates
   help    Print this message or the help of the given subcommand(s)
 

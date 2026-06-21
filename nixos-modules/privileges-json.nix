@@ -59,6 +59,32 @@ let
     "auditMode": "deny-only"
   },
   {
+    "operation": "vm",
+    "subject": "VM command family",
+    "scope": "global-or-scoped",
+    "allowedGroups": [
+      "nixling-launcher",
+      "nixling-admin"
+    ],
+    "destructive": false,
+    "secretAccess": "none",
+    "brokerRequired": "no",
+    "auditMode": "errors"
+  },
+  {
+    "operation": "realm",
+    "subject": "realm command family",
+    "scope": "global-or-scoped",
+    "allowedGroups": [
+      "nixling-launcher",
+      "nixling-admin"
+    ],
+    "destructive": false,
+    "secretAccess": "none",
+    "brokerRequired": "no",
+    "auditMode": "errors"
+  },
+  {
     "operation": "list",
     "subject": "VM/env",
     "scope": "global-or-scoped",
@@ -594,18 +620,6 @@ let
     ],
     "destructive": true,
     "secretAccess": "none",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
-    "operation": "usb enroll",
-    "subject": "VM/USB media ref",
-    "scope": "per-VM/per-media-ref",
-    "allowedGroups": [
-      "nixling-admin"
-    ],
-    "destructive": true,
-    "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
   },

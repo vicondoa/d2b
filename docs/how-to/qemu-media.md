@@ -59,6 +59,7 @@ nixling.vms.dark-live.qemuMedia = {
   source = {
     kind = "physical-usb";
     ref = "boot";
+    usbSelector.byIdName = "usb-Example_Dark_Live_0001-0:0";
     format = "raw";
     readOnly = true;
   };
@@ -75,21 +76,29 @@ nixling.vms.dark-live.qemuMedia = {
 Rebuild the host and restart `nixlingd` so it reloads the updated
 bundle.
 
-## 2. Enroll physical USB media
+The `usbSelector.byIdName` value is the basename of a stable
+`/dev/disk/by-id/*` symlink for the physical USB block device, not a
+path and not a transient busid. For example, if the host has
+`/dev/disk/by-id/usb-Example_Dark_Live_0001-0:0`, configure
+`usbSelector.byIdName = "usb-Example_Dark_Live_0001-0:0";`. Do not
+commit real serial numbers or host-specific device identifiers to shared
+examples or issue text.
+
+## 2. Probe physical USB media
 
 Skip this section for `image-file` sources.
 
 ```bash
 nixling usb probe
-nixling usb enroll dark-live boot --busid 1-2.3 --dry-run
-nixling usb enroll dark-live boot --busid 1-2.3 --apply
 ```
 
-The dry-run and success output are redacted: they do not echo by-id
-names, serials, block paths, or the registry path. Re-run
-`nixling usb probe` after enrollment; the slot should move from
-`enrollable` to `enrolled`. If it reports `stale`, reconnect the same
-device or enroll the ref again against the current selector.
+Probe output is redacted: it shows the transient busid selector without
+by-id names, serials, block paths, or registry paths. If the boot-drive
+slot shows `enrollable` rather than `enrolled`, verify that the
+qemu-media source has the intended `usbSelector.byIdName` and re-run
+`nixling usb probe`; `nixling status <vm>` shows the registry state when
+you need to distinguish `missing`, `present`, and `stale`. There is no
+public enrollment verb.
 
 ## 3. Start and inspect
 
@@ -107,7 +116,7 @@ window is routed through the nixling Wayland filter proxy, so the niri
 border rule matches the proxy-rewritten app-id prefix
 `nixling.dark-live.`.
 
-## 4. Hotplug enrolled media
+## 4. Hotplug configured media
 
 For physical USB removable slots:
 
@@ -129,9 +138,9 @@ Record:
 - `nixling vm start dark-live --apply`
 - `nixling status dark-live`
 - `nixling usb probe`
-- any `usb enroll`, `usb attach`, and `usb detach` dry-run/apply output
-- broker audit rows for `QemuMediaEnroll`, `QemuMediaBoot`,
-  `QemuMediaAttach`, and `QemuMediaDetach`
+- any `usb attach` and `usb detach` dry-run/apply output
+- broker audit rows for `QemuMediaBoot`, `QemuMediaAttach`, and
+  `QemuMediaDetach`
 
 Do not copy raw physical identifiers into issue comments or PR text.
 Use the redacted CLI summaries and audit fields.

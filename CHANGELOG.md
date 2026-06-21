@@ -70,7 +70,10 @@ deprecations ship one minor release before removal.
   `nixling.<vm>.*`.
 - `qemuMedia` image-file sources can now be declared directly with an
   absolute `path` and `format = "raw"`; physical USB sources continue to
-  use opaque refs plus `nixling usb enroll`.
+  use opaque refs plus config/probe-driven runtime selection.
+- `nixling.vms.<vm>.qemuMedia.bootDrive.slot` adds boot-drive selector
+  metadata for future qemu-media runtime planning without changing the
+  current QEMU argv shape.
 - ADR 0032 realm entrypoints now publish a host-visible
   `realm-entrypoints.json` table, allow separate gateway guests for
   separate realm/env segments, and add `nixling realm enter/run` plus
@@ -90,6 +93,9 @@ deprecations ship one minor release before removal.
 - Remote execution groundwork now supports reliable reconnects, bounded
   retained-log reads, and safe repeated cancellation for future durable
   remote exec sessions.
+- Documentation: ADR 0036 records the current qemu-media runtime contract,
+  and ADR 0037 defines the shared local hypervisor runtime/service seam for
+  qemu-media and Cloud Hypervisor/crosvm workloads.
 - Capability negotiation now rejects operations and streams when a
   session lacks the required capability, with typed missing-capability
   errors.
@@ -150,9 +156,26 @@ deprecations ship one minor release before removal.
 - `qemu-media` VMs now emit a typed QMP-only QEMU runner process node
   instead of being absent from `processes.json`; they still do not emit
   Cloud Hypervisor, store/virtiofs, or guest-control runner data.
+- Daemon and CLI list/status output now include positive
+  `runtimeCapabilities` and `serviceCapabilities` alongside unsupported
+  capability summaries.
+- Runtime/provider capability metadata now carries shared `operations`
+  and `services` summaries for both Cloud Hypervisor-backed NixOS VMs and
+  qemu-media VMs while keeping the legacy flat capability booleans.
+
+### Removed
+
+- Removed the public `nixling usb enroll` CLI and daemon/public-wire verb.
+  QEMU-media USB boot-drive remediation now points operators to
+  `qemuMedia.source.usbSelector.byIdName` and `nixling usb probe`, while
+  running qemu-media VMs still use QMP-backed `nixling usb attach` /
+  `detach` hotplug.
 
 ### Fixed
 
+- Proof tests: the Cloud Hypervisor connect proof now binds fixture
+  sockets under a short relative target path so long worktree paths do
+  not exceed Unix domain socket pathname limits.
 - NixOS: all host-tool selectors, including the activation helper and
   Wayland filter process descriptor, now honor
   `nixling.site.usePrebuiltHostTools = false`. Cross-system flake eval

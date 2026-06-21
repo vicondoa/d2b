@@ -27,6 +27,17 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(250);
 
 static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
 
+async fn next_socket_path(prefix: &str) -> io::Result<PathBuf> {
+    let socket_dir = PathBuf::from("target").join("ps");
+    tokio::fs::create_dir_all(&socket_dir).await?;
+    Ok(socket_dir.join(format!(
+        "{}-{}-{}.sock",
+        prefix,
+        std::process::id(),
+        NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)
+    )))
+}
+
 #[derive(Clone, Copy)]
 enum FakeChMode {
     Ttrpc,
@@ -150,13 +161,7 @@ async fn spawn_fake_ch(
     Option<Server>,
     tokio::task::JoinHandle<io::Result<()>>,
 )> {
-    let socket_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/proof-sockets");
-    tokio::fs::create_dir_all(&socket_dir).await?;
-    let socket_path = socket_dir.join(format!(
-        "ch-{}-{}.sock",
-        std::process::id(),
-        NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)
-    ));
+    let socket_path = next_socket_path("ch").await?;
     let _ = tokio::fs::remove_file(&socket_path).await;
 
     let listener = UnixListener::bind(&socket_path)?;
@@ -286,13 +291,7 @@ async fn ok_local_port_is_not_used_as_a_buffer_limit() {
 
 #[tokio::test]
 async fn post_ok_host_write_eof_still_allows_guest_output() {
-    let socket_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/proof-sockets");
-    tokio::fs::create_dir_all(&socket_dir).await.unwrap();
-    let socket_path = socket_dir.join(format!(
-        "h-{}-{}.sock",
-        std::process::id(),
-        NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)
-    ));
+    let socket_path = next_socket_path("h").await.unwrap();
     let _ = tokio::fs::remove_file(&socket_path).await;
 
     let listener = UnixListener::bind(&socket_path).unwrap();

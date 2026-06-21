@@ -163,7 +163,8 @@ let
   derivedIfNameList = map (row: row.derivedIfname) allIfNameMappings;
 
   runtimeProviders = lib.sortOn (provider: provider.provider.id)
-    (lib.attrValues nl.runtimeProviderCatalog);
+    (map (provider: builtins.removeAttrs provider [ "_hypervisorService" ])
+      (lib.attrValues nl.runtimeProviderCatalog));
 
   qemuMediaSourceId = vmName: slotName: source:
     if source.kind == "physical-usb"
@@ -183,6 +184,8 @@ let
       else "root-only-runtime-state";
   } // lib.optionalAttrs (source.kind == "image-file") {
     imagePath = source.path;
+  } // lib.optionalAttrs (source.kind == "physical-usb" && source.usbSelector != null) {
+    usbSelector = source.usbSelector;
   });
 
   qemuMediaSourceRowsForVm = vmName: vm:
@@ -398,7 +401,7 @@ let
       if qemuMediaSources == [ ] then null else {
         registryDir = "/var/lib/nixling/media-registry";
         runtimeRulesPath = "/run/udev/rules.d/99-nixling-media-ignore.rules";
-        reloadBehavior = "Broker writes root-only runtime udev rules with UDISKS_IGNORE=1 and reloads udev rules after physical USB enrollment; direct image-file paths do not use enrollment.";
+        reloadBehavior = "Broker writes root-only runtime udev rules with UDISKS_IGNORE=1 and reloads udev rules after physical USB resolution; direct image-file paths do not use runtime USB rules.";
         sources = qemuMediaSources;
       };
     cloudHypervisorCapabilities = [

@@ -35,6 +35,7 @@ let
         runtime.kind = "qemu-media";
         env = "work";
         qemuMedia = {
+          bootDrive.slot = "cdrom";
           source = {
             ref = "installer-usb";
             format = "iso";
@@ -42,6 +43,7 @@ let
           removableSlots.cdrom.source = {
             ref = "tools-usb";
             format = "iso";
+            usbSelector.byIdName = "usb-Test_Tools_0001-0:0";
           };
         };
       } // lib.optionalAttrs includeIndex {
@@ -65,6 +67,79 @@ let
   positiveQemuWaylandProxy =
     if positiveQemuProcess == null then null else lib.findFirst (node: node.id == "wayland-proxy") null positiveQemuProcess.nodes;
   positiveProfileNames = lib.attrNames positiveCfg.nixling._bundle.minijailProfiles;
+  expectedNixosRuntime = {
+    kind = "nixos";
+    provider = {
+      id = "local-cloud-hypervisor";
+      type = "local";
+      driver = "cloud-hypervisor";
+    };
+    capabilities = {
+      lifecycle = true;
+      display = true;
+      usbHotplug = true;
+      guestControl = true;
+      exec = true;
+      configSync = true;
+      ssh = true;
+      storeSync = true;
+      keys = true;
+      inGuestObservability = true;
+    };
+    operationCapabilities = {
+      lifecycle = { start = true; stop = true; restart = true; switch = true; hostPrepare = true; };
+      media = { usbHotplug = true; removableMedia = false; qemuMedia = false; };
+      display = { display = true; graphics = true; video = true; waylandProxy = true; };
+      guest = { guestControl = true; exec = true; configSync = true; ssh = true; keys = true; inGuestObservability = true; };
+      storage = { storeSync = true; virtiofs = true; volumes = true; };
+    };
+    autostartPolicy = "host-boot-eligible";
+    services = [
+      { id = "host-reconcile"; role = "host"; optional = false; }
+      { id = "store-virtiofs-preflight"; role = "storage"; optional = false; }
+      { id = "virtiofsd"; role = "storage"; optional = false; }
+      { id = "cloud-hypervisor"; role = "hypervisor"; optional = false; }
+      { id = "guest-control-health"; role = "guest-control"; optional = false; }
+      { id = "swtpm"; role = "tpm"; optional = true; }
+      { id = "gpu"; role = "display"; optional = true; }
+      { id = "audio"; role = "audio"; optional = true; }
+      { id = "video"; role = "video"; optional = true; }
+      { id = "usbip"; role = "usb"; optional = true; }
+    ];
+  };
+  expectedQemuRuntime = {
+    kind = "qemu-media";
+    provider = {
+      id = "local-qemu-media";
+      type = "local";
+      driver = "qemu";
+    };
+    capabilities = {
+      lifecycle = true;
+      display = true;
+      usbHotplug = true;
+      guestControl = false;
+      exec = false;
+      configSync = false;
+      ssh = false;
+      storeSync = false;
+      keys = false;
+      inGuestObservability = false;
+    };
+    operationCapabilities = {
+      lifecycle = { start = true; stop = true; restart = true; switch = false; hostPrepare = true; };
+      media = { usbHotplug = true; removableMedia = true; qemuMedia = true; };
+      display = { display = true; graphics = false; video = false; waylandProxy = false; };
+      guest = { guestControl = false; exec = false; configSync = false; ssh = false; keys = false; inGuestObservability = false; };
+      storage = { storeSync = false; virtiofs = false; volumes = false; };
+    };
+    autostartPolicy = "manual-only";
+    services = [
+      { id = "host-reconcile"; role = "host"; optional = false; }
+      { id = "qemu-media"; role = "hypervisor"; optional = false; }
+      { id = "usbip"; role = "usb"; optional = true; }
+    ];
+  };
 
   failingMessages = args:
     let cfg = (mkEval [ (mkHost args) ]).config;
@@ -147,6 +222,19 @@ let
       removableSlots = { };
     };
   };
+  imageMissingPathEval = mkEval [ (mkHost {
+    vmAttrs.qemuMedia = {
+      source = {
+        kind = "image-file";
+        format = "raw";
+      };
+      removableSlots = { };
+    };
+  }) ];
+  imageMissingPathHostSource = lib.findFirst
+    (source: source.vm == "media" && source.slot == "boot")
+    null
+    imageMissingPathEval.config.nixling._bundle.hostJson.data.qemuMedia.sources;
 
   imageQcow2Messages = failingMessages {
     vmAttrs.qemuMedia = {
@@ -166,6 +254,44 @@ let
       path = "/var/lib/nixling/images/not-usb.img";
     };
   };
+
+  missingBootUsbSelectorMessages = failingMessages {
+    vmAttrs.qemuMedia = {
+      bootDrive.slot = "boot";
+      source = {
+        ref = "installer-usb";
+        format = "iso";
+      };
+      removableSlots = { };
+    };
+  };
+
+  physicalMissingRefEval = mkEval [ (mkHost {
+    vmAttrs.qemuMedia.source = {
+      kind = "physical-usb";
+      format = "raw";
+      usbSelector.byIdName = "usb-Test_Installer_0001-0:0";
+    };
+  }) ];
+  physicalMissingRefCfg = physicalMissingRefEval.config;
+  physicalMissingRefMessages =
+    map (a: a.message) (builtins.filter (a: !a.assertion) physicalMissingRefCfg.assertions);
+  physicalMissingRefHostSource = lib.findFirst
+    (source: source.vm == "media" && source.slot == "boot")
+    null
+    physicalMissingRefCfg.nixling._bundle.hostJson.data.qemuMedia.sources;
+
+  badBootUsbSelector = mkEval [ (mkHost {
+    vmAttrs.qemuMedia = {
+      bootDrive.slot = "boot";
+      source = {
+        ref = "installer-usb";
+        format = "iso";
+        usbSelector.byIdName = "/dev/disk/by-id/usb-Test_Installer_0001-0:0";
+      };
+      removableSlots = { };
+    };
+  }) ];
 
   badImageRelativePath = mkEval [ (mkHost {
     vmAttrs.qemuMedia = {
@@ -197,8 +323,9 @@ in
   "external-vm-kind/qemu-media-source-schema" = {
     expr = {
       inherit (positiveVm.qemuMedia.source) kind ref path format readOnly;
+      bootDriveSlot = positiveVm.qemuMedia.bootDrive.slot;
       slot = {
-        inherit (positiveVm.qemuMedia.removableSlots.cdrom.source) ref path format readOnly;
+        inherit (positiveVm.qemuMedia.removableSlots.cdrom.source) ref path format readOnly usbSelector;
       };
     };
     expected = {
@@ -207,11 +334,15 @@ in
       path = null;
       format = "iso";
       readOnly = true;
+      bootDriveSlot = "cdrom";
       slot = {
         ref = "tools-usb";
         path = null;
         format = "iso";
         readOnly = true;
+        usbSelector = {
+          byIdName = "usb-Test_Tools_0001-0:0";
+        };
       };
     };
   };
@@ -253,26 +384,7 @@ in
 
   "external-vm-kind/qemu-media-manifest-runtime" = {
     expr = positiveManifest.runtime;
-    expected = {
-      kind = "qemu-media";
-      provider = {
-        id = "local-qemu-media";
-        type = "local";
-        driver = "qemu";
-      };
-      capabilities = {
-        lifecycle = true;
-        display = true;
-        usbHotplug = true;
-        guestControl = false;
-        exec = false;
-        configSync = false;
-        ssh = false;
-        storeSync = false;
-        keys = false;
-        inGuestObservability = false;
-      };
-    };
+    expected = expectedQemuRuntime;
   };
 
   "external-vm-kind/qemu-media-manifest-provider-neutral" = {
@@ -320,8 +432,8 @@ in
   "external-vm-kind/host-json-runtime-provider-catalog" = {
     expr = positiveHostJson.runtimeProviders;
     expected = [
-      positiveCfg.nixling.manifest."sys-work-net".runtime
-      positiveManifest.runtime
+      expectedNixosRuntime
+      expectedQemuRuntime
     ];
   };
 
@@ -344,7 +456,7 @@ in
     expected = {
       registryDir = "/var/lib/nixling/media-registry";
       runtimeRulesPath = "/run/udev/rules.d/99-nixling-media-ignore.rules";
-      reloadBehavior = "Broker writes root-only runtime udev rules with UDISKS_IGNORE=1 and reloads udev rules after physical USB enrollment; direct image-file paths do not use enrollment.";
+      reloadBehavior = "Broker writes root-only runtime udev rules with UDISKS_IGNORE=1 and reloads udev rules after physical USB resolution; direct image-file paths do not use runtime USB rules.";
       sources = [
         {
           vm = "media";
@@ -363,6 +475,9 @@ in
           format = "iso";
           readOnly = true;
           registryScope = "root-only-runtime-state";
+          usbSelector = {
+            byIdName = "usb-Test_Tools_0001-0:0";
+          };
         }
       ];
     };
@@ -656,6 +771,23 @@ in
     expected = true;
   };
 
+  "external-vm-kind/host-json-masks-image-file-without-path" = {
+    expr = {
+      assertionMessage = lib.any
+        (message: lib.hasInfix "kind = \"image-file\" requires an absolute" message)
+        (map (a: a.message) (builtins.filter (a: !a.assertion) imageMissingPathEval.config.assertions));
+      hostJsonEvaluates = imageMissingPathHostSource != null;
+      mediaRefIsGenerated = lib.hasPrefix "image-" imageMissingPathHostSource.mediaRef;
+      imagePath = imageMissingPathHostSource.imagePath;
+    };
+    expected = {
+      assertionMessage = true;
+      hostJsonEvaluates = true;
+      mediaRefIsGenerated = true;
+      imagePath = null;
+    };
+  };
+
   "external-vm-kind/rejects-image-file-non-raw-format" = {
     expr = lib.any (message: lib.hasInfix "supports only" message) imageQcow2Messages;
     expected = true;
@@ -664,6 +796,35 @@ in
   "external-vm-kind/rejects-physical-usb-path" = {
     expr = lib.any (message: lib.hasInfix "kind = \"physical-usb\" must not set `path`" message) physicalPathMessages;
     expected = true;
+  };
+
+  "external-vm-kind/requires-boot-drive-usb-selector" = {
+    expr = lib.any
+      (message:
+        lib.hasInfix "physical USB boot drive" message
+        && lib.hasInfix "usbSelector.byIdName" message)
+      missingBootUsbSelectorMessages;
+    expected = true;
+  };
+
+  "external-vm-kind/host-json-masks-physical-usb-without-ref" = {
+    expr = {
+      assertionMessage = lib.any
+        (message: lib.hasInfix "kind = \"physical-usb\" requires an opaque `ref`" message)
+        physicalMissingRefMessages;
+      hostJsonEvaluates = physicalMissingRefHostSource != null;
+      mediaRef = physicalMissingRefHostSource.mediaRef;
+    };
+    expected = {
+      assertionMessage = true;
+      hostJsonEvaluates = true;
+      mediaRef = "invalid-missing-ref";
+    };
+  };
+
+  "external-vm-kind/rejects-absolute-path-boot-usb-selector" = {
+    expr = badBootUsbSelector.config.nixling.vms.media.qemuMedia.source.usbSelector.byIdName;
+    expectedError = { };
   };
 
   "external-vm-kind/source-rejects-relative-image-path" = {

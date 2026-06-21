@@ -90,13 +90,14 @@ nixling.vms.dark-live.qemuMedia.source = {
 
 ### Physical USB
 
-Physical USB sources use opaque refs in Nix and are enrolled at runtime:
+Physical USB sources use opaque refs in Nix and are selected at runtime:
 
 ```nix
 nixling.vms.dark-live.qemuMedia = {
   source = {
     kind = "physical-usb";
     ref = "boot";
+    usbSelector.byIdName = "usb-Example_Dark_Live_0001-0:0";
     format = "raw";
     readOnly = true;
   };
@@ -110,14 +111,21 @@ nixling.vms.dark-live.qemuMedia = {
 };
 ```
 
-Use `nixling usb probe` to find the current selector, then enroll:
+`usbSelector.byIdName` is the basename of a stable
+`/dev/disk/by-id/*` symlink for the physical USB block device. It is
+configured only as a selector; public status, CLI success output, and
+broker audit summaries must not echo it. Use a local shell such as
+`ls /dev/disk/by-id/` to choose the basename, and use `nixling usb probe`
+to verify the currently attached transient busid. Running qemu-media VMs
+can hotplug that busid selector through QMP:
 
 ```bash
-nixling usb enroll dark-live boot --busid 1-2.3 --apply
+nixling usb probe
+nixling usb attach dark-live 1-2.3 --apply
 ```
 
 The busid is a transient selector only. It is not stored in Nix-backed
-artifacts and is not echoed by successful enroll/attach/detach output.
+artifacts and is not echoed by successful attach/detach output.
 
 ## CLI behavior
 
@@ -126,18 +134,16 @@ artifacts and is not echoed by successful enroll/attach/detach output.
 | `nixling vm start <vm> --dry-run` | Reports the 2-node qemu-media DAG. |
 | `nixling vm start <vm> --apply` | Spawns the QEMU runner, waits for QMP readiness, runs `QemuMediaBoot`, and continues QEMU after boot media is attached. |
 | `nixling vm stop <vm> --apply` | Stops the daemon-supervised qemu-media runner through the same pidfd/broker path as other runners. |
-| `nixling list` / `nixling vm list` | Marks qemu-media rows as `manual-only` and includes QMP readiness when available. JSON may include `runtimeKind`, `autostart`, `unsupportedCapabilities`, and `qemuMedia`. |
+| `nixling list` / `nixling vm list` | Marks qemu-media rows as `manual-only` and includes QMP readiness when available. JSON may include `runtimeKind`, `autostart`, `runtimeCapabilities`, `serviceCapabilities`, `unsupportedCapabilities`, and `qemuMedia`. |
 | `nixling status <vm>` | Shows qemu-media runner state, QMP readiness, source refs, source kind, format, read-only policy, and registry state. |
-| `nixling usb enroll <vm> <ref> --busid <busid> --apply` | Physical USB only. Writes the root-only registry record and udev ignore rule through the broker. |
-| `nixling usb attach <vm> <busid> --apply` | Resolves the current USB identity against enrolled refs, preflights that the block device is unused, opens the fd in the broker, sends it to QEMU over QMP, and returns only after QMP accepts the fd/block/device commands. |
-| `nixling usb detach <vm> <busid> --apply` | Resolves the enrolled source, with a fail-closed same-device fallback for a uniquely attached same-vendor/product ref when the runtime selector moved, then removes or reconciles the QMP device/block/fd nodes idempotently. |
-| `nixling usb probe` | Shows qemu-media slots as `unbound`, `enrollable`, `enrolled`, `stale`, or `direct-config`; direct image-file rows have no enrollment command. |
+| `nixling usb attach <vm> <busid> --apply` | Resolves the current USB identity against configured physical refs, preflights that the block device is unused, opens the fd in the broker, sends it to QEMU over QMP, and returns only after QMP accepts the fd/block/device commands. |
+| `nixling usb detach <vm> <busid> --apply` | Resolves the configured source, with a fail-closed same-device fallback for a uniquely attached same-vendor/product ref when the runtime selector moved, then removes or reconciles the QMP device/block/fd nodes idempotently. |
+| `nixling usb probe` | Shows qemu-media slots as `unbound`, `enrollable`, `enrolled`, `stale`, or `direct-config`; follow-up text points to config/probe or QMP hotplug, never to a public enrollment verb. |
 
-Dry-run JSON for enroll and hotplug includes `busIdProvided: true`, but
-not the busid value. Successful broker audit records include VM/ref,
-slot, read-only policy, QMP plan labels, and udev flags only; they omit
-busid, by-id names, serials, block paths, image paths, and registry
-paths.
+Dry-run JSON for hotplug includes `busIdProvided: true`, but not the
+busid value. Successful broker audit records include VM/ref, slot,
+read-only policy, and QMP plan labels only; they omit busid, by-id names,
+serials, block paths, image paths, and registry paths.
 
 ## Security contract
 

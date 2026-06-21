@@ -4954,6 +4954,18 @@
         "runtime": {
           "$ref": "#/definitions/RuntimeSummary"
         },
+        "runtimeCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "serviceCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "services": {
           "$ref": "#/definitions/PublicVmServices"
         },
@@ -5753,24 +5765,6 @@
             },
             "payload": {
               "$ref": "#/definitions/UsbipUnbindCliRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "usb enroll"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/UsbEnrollRequest"
             }
           }
         },
@@ -7183,6 +7177,202 @@
         "quit"
       ]
     },
+    "RuntimeDisplayCapabilities": {
+      "description": "Display-side operations exposed by a runtime provider.",
+      "type": "object",
+      "required": [
+        "display",
+        "graphics",
+        "video",
+        "waylandProxy"
+      ],
+      "properties": {
+        "display": {
+          "type": "boolean"
+        },
+        "graphics": {
+          "type": "boolean"
+        },
+        "video": {
+          "type": "boolean"
+        },
+        "waylandProxy": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeGuestCapabilities": {
+      "description": "Guest-facing operations exposed by a runtime provider.",
+      "type": "object",
+      "required": [
+        "configSync",
+        "exec",
+        "guestControl",
+        "inGuestObservability",
+        "keys",
+        "ssh"
+      ],
+      "properties": {
+        "configSync": {
+          "type": "boolean"
+        },
+        "exec": {
+          "type": "boolean"
+        },
+        "guestControl": {
+          "type": "boolean"
+        },
+        "inGuestObservability": {
+          "type": "boolean"
+        },
+        "keys": {
+          "type": "boolean"
+        },
+        "ssh": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeLifecycleCapabilities": {
+      "description": "Lifecycle operations exposed by a runtime provider.",
+      "type": "object",
+      "required": [
+        "hostPrepare",
+        "restart",
+        "start",
+        "stop",
+        "switch"
+      ],
+      "properties": {
+        "hostPrepare": {
+          "type": "boolean"
+        },
+        "restart": {
+          "type": "boolean"
+        },
+        "start": {
+          "type": "boolean"
+        },
+        "stop": {
+          "type": "boolean"
+        },
+        "switch": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeMediaCapabilities": {
+      "description": "Media and hotplug operations exposed by a runtime provider.",
+      "type": "object",
+      "required": [
+        "qemuMedia",
+        "removableMedia",
+        "usbHotplug"
+      ],
+      "properties": {
+        "qemuMedia": {
+          "type": "boolean"
+        },
+        "removableMedia": {
+          "type": "boolean"
+        },
+        "usbHotplug": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeOperationCapabilities": {
+      "description": "Runtime/provider operation support grouped by public feature axis.",
+      "type": "object",
+      "required": [
+        "display",
+        "guest",
+        "lifecycle",
+        "media",
+        "storage"
+      ],
+      "properties": {
+        "display": {
+          "$ref": "#/definitions/RuntimeDisplayCapabilities"
+        },
+        "guest": {
+          "$ref": "#/definitions/RuntimeGuestCapabilities"
+        },
+        "lifecycle": {
+          "$ref": "#/definitions/RuntimeLifecycleCapabilities"
+        },
+        "media": {
+          "$ref": "#/definitions/RuntimeMediaCapabilities"
+        },
+        "storage": {
+          "$ref": "#/definitions/RuntimeStorageCapabilities"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeServiceRole": {
+      "description": "Normalized public role for a runtime service, derived from process roles.",
+      "type": "string",
+      "enum": [
+        "host",
+        "hypervisor",
+        "storage",
+        "tpm",
+        "display",
+        "audio",
+        "video",
+        "network",
+        "guest-control",
+        "usb",
+        "observability"
+      ]
+    },
+    "RuntimeServiceSummary": {
+      "description": "Public service summary that can be derived from the private process DAG.",
+      "type": "object",
+      "required": [
+        "id",
+        "role"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "optional": {
+          "default": false,
+          "type": "boolean"
+        },
+        "role": {
+          "$ref": "#/definitions/RuntimeServiceRole"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeStorageCapabilities": {
+      "description": "Storage operations exposed by a runtime provider.",
+      "type": "object",
+      "required": [
+        "storeSync",
+        "virtiofs",
+        "volumes"
+      ],
+      "properties": {
+        "storeSync": {
+          "type": "boolean"
+        },
+        "virtiofs": {
+          "type": "boolean"
+        },
+        "volumes": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "RuntimeSummary": {
       "type": "object",
       "required": [
@@ -7197,6 +7387,15 @@
             "string",
             "null"
           ]
+        },
+        "operationCapabilities": {
+          "$ref": "#/definitions/RuntimeOperationCapabilities"
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RuntimeServiceSummary"
+          }
         }
       },
       "additionalProperties": false
@@ -7851,40 +8050,6 @@
       },
       "additionalProperties": false
     },
-    "UsbEnrollRequest": {
-      "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
-      "type": "object",
-      "required": [
-        "busId",
-        "mediaRef",
-        "vm"
-      ],
-      "properties": {
-        "apply": {
-          "default": false,
-          "type": "boolean"
-        },
-        "busId": {
-          "description": "Transient sysfs USB busid used only for privileged enrollment. Success responses intentionally do not echo it.",
-          "type": "string"
-        },
-        "dryRun": {
-          "default": false,
-          "type": "boolean"
-        },
-        "json": {
-          "default": false,
-          "type": "boolean"
-        },
-        "mediaRef": {
-          "type": "string"
-        },
-        "vm": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
     "UsbProbeEntryKind": {
       "type": "string",
       "enum": [
@@ -8308,6 +8473,18 @@
         },
         "runtime": {
           "$ref": "#/definitions/RuntimeSummary"
+        },
+        "runtimeCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "serviceCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "services": {
           "$ref": "#/definitions/PublicVmServices"
