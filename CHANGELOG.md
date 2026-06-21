@@ -267,6 +267,9 @@ deprecations ship one minor release before removal.
 - Tests: narrowed the host realm-relay dependency policy to actual relay/runtime
   crates so the neutral constellation provider trait crate can remain in
   host-side runtime-provider code.
+- Documentation: updated the public manifest schema to include the runtime
+  operation capability, autostart policy, and service summary fields already
+  emitted by the manifest.
 - CLI/daemon: qemu-media USB attach/detach `--apply --json` now emits a
   JSON success envelope, and qemu-media list/status service capabilities no
   longer advertise `virtiofsd`.
