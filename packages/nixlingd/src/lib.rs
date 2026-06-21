@@ -12264,6 +12264,7 @@ mod public_status_tests {
                 vsock_host_socket: None,
             },
             runtime,
+            shell: None,
             ssh_user: None,
             state_dir: "/var/lib/nixling/vms/installer".to_owned(),
             static_ip: None,

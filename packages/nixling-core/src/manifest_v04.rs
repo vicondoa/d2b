@@ -244,10 +244,10 @@ pub struct VmObservability {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmShellMetadata {
-    pub enabled: bool,
     pub default_name: String,
-    pub max_sessions: u32,
+    pub enabled: bool,
     pub max_attached: u32,
+    pub max_sessions: u32,
 }
 
 fn vm_key_ok(value: &str) -> bool {
