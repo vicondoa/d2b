@@ -49,7 +49,9 @@ files: **drift gates** (`tests/unit/gates/` — `xtask gen-* + git diff`) and
 1. **Asserting a Nix module value / option / eval-rejection?** → type 1, a
    nix-unit case in `tests/unit/nix/cases/`. Add a case file (it is
    auto-discovered; do not edit `default.nix`), then regenerate the pin list
-   (`tests/tools/gen-nix-unit-pins.sh`).
+   (`tests/tools/gen-nix-unit-pins.sh`). CI evaluates the corpus through
+   sharded `nix-unit-<shard>` flake checks; add new cases to the existing
+   topical file whose shard already owns that behavior.
 2. **Asserting Rust logic?** → type 2, a `#[test]` in that crate's `src`.
 3. **Asserting the real binary's wire/CLI behaviour?** → type 3, a test in
    `packages/<crate>/tests/*.rs` against `CARGO_BIN_EXE_*`. Spawn hermetically —

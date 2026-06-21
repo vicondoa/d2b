@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# tests/test-nix-unit.sh — `make test-nix-unit`: build the nix-unit corpus check
-# (flake.checks.<system>.nix-unit) for the native system.
+# tests/test-nix-unit.sh — `make test-nix-unit`: build the nix-unit corpus checks
+# (`flake.checks.<system>.nix-unit*`) for the native system.
 #
 # This is a FOCUSED convenience target for iterating on the declarative
 # value/throw corpus under tests/unit/nix/. It is NOT part of `make test-unit`,
@@ -21,12 +21,29 @@ export NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}"
 cd "$ROOT"
 
 system=$(nix eval --raw --impure --expr builtins.currentSystem)
-log "--> nix build .#checks.$system.nix-unit"
-if nix build --no-link --print-out-paths ".#checks.$system.nix-unit"; then
-  ok "nix-unit corpus ($system)"
-else
-  fail "nix-unit corpus ($system)"
+mapfile -t checks < <(
+  nix eval --raw ".#checks.$system" --apply '
+    cs:
+      builtins.concatStringsSep "\n"
+        (builtins.filter
+          (name: name == "nix-unit" || builtins.substring 0 9 name == "nix-unit-")
+          (builtins.sort builtins.lessThan (builtins.attrNames cs)))
+  '
+)
+
+if [ "${#checks[@]}" -eq 0 ]; then
+  fail "nix-unit corpus ($system): no nix-unit* checks found"
   exit 1
 fi
+
+for check in "${checks[@]}"; do
+  log "--> nix build .#checks.$system.$check"
+  if nix build --no-link --print-out-paths ".#checks.$system.$check"; then
+    ok "nix-unit check $check ($system)"
+  else
+    fail "nix-unit check $check ($system)"
+    exit 1
+  fi
+done
 
 log "test-nix-unit OK"
