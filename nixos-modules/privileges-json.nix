@@ -59,6 +59,19 @@ let
     "auditMode": "deny-only"
   },
   {
+    "operation": "op",
+    "subject": "operation/realm state",
+    "scope": "global-or-scoped",
+    "allowedGroups": [
+      "nixling-launcher",
+      "nixling-admin"
+    ],
+    "destructive": false,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "no",
+    "auditMode": "yes"
+  },
+  {
     "operation": "vm",
     "subject": "VM command family",
     "scope": "global-or-scoped",
