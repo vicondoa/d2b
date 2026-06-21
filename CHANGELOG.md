@@ -159,9 +159,10 @@ deprecations ship one minor release before removal.
 ### Removed
 
 - Removed the public `nixling usb enroll` CLI and daemon/public-wire verb.
-  QEMU-media USB boot-drive remediation now points operators to config and
-  `nixling usb probe`, while running qemu-media VMs still use QMP-backed
-  `nixling usb attach` / `detach` hotplug.
+  QEMU-media USB boot-drive remediation now points operators to
+  `qemuMedia.source.usbSelector.byIdName` and `nixling usb probe`, while
+  running qemu-media VMs still use QMP-backed `nixling usb attach` /
+  `detach` hotplug.
 
 ### Fixed
 

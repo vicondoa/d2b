@@ -3053,7 +3053,9 @@ fn output_service_capabilities(services: &StatusServicesOutputV2) -> Vec<String>
     if services.qemu_media.is_some() {
         capabilities.push("qemu-media".to_owned());
     }
-    capabilities.push("virtiofsd".to_owned());
+    if services.virtiofsd != "unsupported" {
+        capabilities.push("virtiofsd".to_owned());
+    }
     if services.gpu.is_some() {
         capabilities.push("gpu".to_owned());
     }
@@ -9452,11 +9454,12 @@ mod host_install_dispatch_tests {
     use super::{
         AddressFamily, ApiReadySimple, ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk,
         IpcUsbProbeEntryKind, IpcUsbipProbeEntry, IpcUsbipProbeStatus, MAX_FRAME_BYTES,
-        ManifestDocument, ManifestVm, MediaRef, MsgFlags, NativeCli, SockFlag, SockType, UnixAddr,
-        UsbAttachArgs, UsbDetachArgs, VmExecArgs, VmStartArgs, broker_error_envelope,
-        build_storage_migration_plan, cmd_host_install, cmd_vm_exec, cmd_vm_start,
-        daemon_supported_features, encode_type_tagged_message, nix_err_to_io, parse_vm_exec_action,
-        public_wire, render_usb_probe_human, send, socket, storage_migration_checkpoint_id,
+        ManifestDocument, ManifestVm, MediaRef, MsgFlags, NativeCli, SockFlag, SockType,
+        StatusServicesOutputV2, UnixAddr, UsbAttachArgs, UsbDetachArgs, VmExecArgs, VmStartArgs,
+        broker_error_envelope, build_storage_migration_plan, cmd_host_install, cmd_vm_exec,
+        cmd_vm_start, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
+        output_service_capabilities, parse_vm_exec_action, public_wire, render_usb_probe_human,
+        send, socket, storage_migration_checkpoint_id,
     };
     use nixling_ipc::Version;
 
@@ -12942,6 +12945,25 @@ mod host_install_dispatch_tests {
                 .and_then(Value::as_array)
                 .is_some_and(|items| items.iter().any(|item| item == "qemu-media"))
         );
+    }
+
+    #[test]
+    fn service_capabilities_do_not_advertise_unsupported_virtiofsd() {
+        let services = StatusServicesOutputV2 {
+            nixling: "active".to_owned(),
+            microvm: "unsupported".to_owned(),
+            virtiofsd: "unsupported".to_owned(),
+            qemu_media: Some("running".to_owned()),
+            gpu: None,
+            video: None,
+            snd: None,
+            swtpm: None,
+        };
+
+        let capabilities = output_service_capabilities(&services);
+        assert!(capabilities.contains(&"qemu-media".to_owned()));
+        assert!(!capabilities.contains(&"virtiofsd".to_owned()));
+        assert!(!capabilities.contains(&"microvm".to_owned()));
     }
 
     #[test]

@@ -94,9 +94,11 @@ nixling usb probe
 
 Probe output is redacted: it shows the transient busid selector without
 by-id names, serials, block paths, or registry paths. If the boot-drive
-registry state is `missing`, verify that the qemu-media source has the
-intended `usbSelector.byIdName` and re-run `nixling usb probe`; there is
-no public enrollment verb.
+slot shows `enrollable` rather than `enrolled`, verify that the
+qemu-media source has the intended `usbSelector.byIdName` and re-run
+`nixling usb probe`; `nixling status <vm>` shows the registry state when
+you need to distinguish `missing`, `present`, and `stale`. There is no
+public enrollment verb.
 
 ## 3. Start and inspect
 
