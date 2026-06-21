@@ -102,6 +102,10 @@ deprecations ship one minor release before removal.
 - Gateway credentials can now be enrolled and rotated inside the gateway
   guest as a sealed runtime envelope, while host-side gateway credential
   reads and Relay Send bearer minting are rejected.
+- Transport conformance now covers loopback session capacity, byte-exact
+  concurrent sessions, shutdown, frame-cap rejection, truncated frames,
+  capability intersection, stream backpressure, and retry-safe stream
+  cancellation.
 
 ### Changed
 
