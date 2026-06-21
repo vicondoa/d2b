@@ -176,6 +176,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- CLI/daemon: qemu-media USB attach/detach `--apply --json` now emits a
+  JSON success envelope, and qemu-media list/status service capabilities no
+  longer advertise `virtiofsd`.
 - Proof tests: the Cloud Hypervisor connect proof now binds fixture
   sockets under a short relative target path so long worktree paths do
   not exceed Unix domain socket pathname limits.

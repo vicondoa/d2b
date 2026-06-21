@@ -11160,7 +11160,11 @@ fn public_service_states(
         },
         "qemuMedia": public_is_qemu_media(manifest_entry)
             .then(|| public_pidfd_role_state(state, vm, RunnerRole::QemuMedia.as_str())),
-        "virtiofsd": public_pidfd_role_prefix_state(state, vm, "virtiofsd"),
+        "virtiofsd": if public_is_qemu_media(manifest_entry) {
+            "unsupported".to_owned()
+        } else {
+            public_pidfd_role_prefix_state(state, vm, "virtiofsd")
+        },
         "gpu": gpu_role_id.map(|role| public_pidfd_role_state(state, vm, role)),
         "video": has_role(ProcessRole::Video).then(|| public_pidfd_role_state(state, vm, "video")),
         "snd": (has_role(ProcessRole::Audio)
@@ -12003,6 +12007,14 @@ mod public_status_tests {
         assert_eq!(
             services.get("qemuMedia").and_then(Value::as_str),
             Some("running")
+        );
+        assert_eq!(
+            services.get("virtiofsd").and_then(Value::as_str),
+            Some("unsupported")
+        );
+        assert_eq!(
+            public_service_capabilities(&services),
+            vec!["nixling".to_owned(), "qemu-media".to_owned()]
         );
     }
 
