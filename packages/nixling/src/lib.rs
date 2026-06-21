@@ -5119,26 +5119,19 @@ fn realm_inspect_output(
 }
 
 fn op_inspect_trace(args: &OpInspectArgs) -> Result<Option<OpInspectTraceOutputV1>, CliFailure> {
-    match (&args.trace_id, &args.span_id) {
-        (None, None) => Ok(None),
-        (Some(_), None) | (None, Some(_)) => Err(CliFailure::new(
+    let (Some(trace_id), Some(span_id)) = (&args.trace_id, &args.span_id) else {
+        return Ok(None);
+    };
+    let trace = nixling_constellation_core::TraceContext::new(trace_id, span_id).ok_or_else(|| {
+        CliFailure::new(
             2,
-            "op inspect: --trace-id and --span-id must be supplied together",
-        )),
-        (Some(trace_id), Some(span_id)) => {
-            let trace = nixling_constellation_core::TraceContext::new(trace_id, span_id)
-                .ok_or_else(|| {
-                    CliFailure::new(
-                        2,
-                        "op inspect: trace context fields must be non-empty, bounded, and contain no whitespace",
-                    )
-                })?;
-            Ok(Some(OpInspectTraceOutputV1 {
-                trace_id: trace.trace_id().to_owned(),
-                span_id: trace.span_id().to_owned(),
-            }))
-        }
-    }
+            "op inspect: trace context fields must be non-empty, bounded, and contain no whitespace",
+        )
+    })?;
+    Ok(Some(OpInspectTraceOutputV1 {
+        trace_id: trace.trace_id().to_owned(),
+        span_id: trace.span_id().to_owned(),
+    }))
 }
 
 fn op_inspect_output(
@@ -9089,6 +9082,8 @@ fn all_known_subcommands() -> Vec<String> {
         "host check",
         "auth status",
         "op inspect",
+        "realm list",
+        "realm inspect",
         "up",
         "down",
         "restart",
@@ -11122,9 +11117,15 @@ mod host_install_dispatch_tests {
             json: true,
             human: false,
         };
-        let err = super::op_inspect_trace(&missing_pair).expect_err("partial trace fails");
-        assert_eq!(err.exit_code, 2);
-        assert!(err.message.contains("together"));
+        assert!(super::op_inspect_trace(&missing_pair).unwrap().is_none());
+    }
+
+    #[test]
+    fn op_inspect_parse_requires_trace_pair() {
+        let err =
+            super::NativeCli::try_parse_from(["nixling", "op", "inspect", "--trace-id", "trace-1"])
+                .expect_err("clap requires --span-id with --trace-id");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
 
     #[test]
