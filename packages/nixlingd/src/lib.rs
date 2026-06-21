@@ -500,6 +500,7 @@ impl std::fmt::Debug for GatewayDisplayRuntime {
 #[derive(Debug, Clone)]
 struct GatewayDisplaySession {
     target: String,
+    principal: String,
     open: OpenSession,
     opened_at: Instant,
 }
@@ -2631,6 +2632,7 @@ fn dispatch_gateway_display(
                 node: target.node,
                 workload: target.workload,
             };
+            let owner_principal = seed.principal.to_string();
             gateway_display_gc(state);
             let open = block_on_future(state.gateway_display.orchestrator.open(
                 target_key,
@@ -2654,6 +2656,7 @@ fn dispatch_gateway_display(
                 Entry::Vacant(slot) => {
                     slot.insert(GatewayDisplaySession {
                         target: target_text,
+                        principal: owner_principal,
                         open,
                         opened_at: Instant::now(),
                     });
@@ -2667,43 +2670,24 @@ fn dispatch_gateway_display(
         public_wire::GatewayDisplayOp::Close(args) => {
             gateway_display_gc(state);
             let peer_principal = gateway_display_peer_principal_string(peer);
-            let session_known = state
-                .gateway_display
-                .sessions
-                .lock()
-                .map_err(|_| TypedError::InternalIo {
-                    context: "lock gateway display sessions".to_owned(),
-                    detail: "mutex poisoned".to_owned(),
-                })?
-                .contains_key(&args.session_id);
-            let owner = state
-                .gateway_display
-                .orchestrator
-                .list_sessions()
-                .map_err(gateway_error_to_typed)?
-                .into_iter()
-                .find(|summary| summary.session_id.as_str() == args.session_id)
-                .map(|summary| summary.peer_principal.to_string());
-            if !matches!(peer.role, PeerRole::Admin) {
-                match owner.as_deref() {
-                    Some(owner) if owner == peer_principal.as_str() => {}
-                    None if !session_known => {}
-                    _ => {
+            let session =
+                {
+                    let mut sessions = state.gateway_display.sessions.lock().map_err(|_| {
+                        TypedError::InternalIo {
+                            context: "lock gateway display sessions".to_owned(),
+                            detail: "mutex poisoned".to_owned(),
+                        }
+                    })?;
+                    if let Some(session) = sessions.get(&args.session_id)
+                        && !matches!(peer.role, PeerRole::Admin)
+                        && session.principal != peer_principal
+                    {
                         return Err(TypedError::AuthzNotAdmin {
                             verb: "gatewayDisplay close".to_owned(),
                         });
                     }
-                }
-            }
-            let session = state
-                .gateway_display
-                .sessions
-                .lock()
-                .map_err(|_| TypedError::InternalIo {
-                    context: "lock gateway display sessions".to_owned(),
-                    detail: "mutex poisoned".to_owned(),
-                })?
-                .remove(&args.session_id);
+                    sessions.remove(&args.session_id)
+                };
             let closed = if let Some(session) = session {
                 if let Err(err) =
                     block_on_future(state.gateway_display.orchestrator.close(&session.open))
@@ -11705,6 +11689,58 @@ mod public_status_tests {
                 .and_then(|r| r.get("closed"))
                 .and_then(Value::as_bool),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn gateway_display_launcher_can_close_owned_terminal_tracked_session() {
+        let (state, _dir) = test_state();
+        let first = dispatch_request(
+            &state,
+            &launcher_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
+                public_wire::GatewayDisplayOpenArgs {
+                    target: "nl://demo.gw.work.nixling".to_owned(),
+                    operation_id: "gw-exec-terminal".to_owned(),
+                    principal: "ignored".to_owned(),
+                    app_argv: vec!["foot".to_owned()],
+                    request_hash: 47,
+                },
+            )),
+        )
+        .expect("launcher open dispatches");
+        let session_id = first
+            .get("result")
+            .and_then(|r| r.get("sessionId"))
+            .and_then(Value::as_str)
+            .expect("open response has session id")
+            .to_owned();
+        let open = state
+            .gateway_display
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&session_id)
+            .expect("session still tracked")
+            .open
+            .clone();
+        block_on_future(state.gateway_display.orchestrator.close(&open))
+            .expect("orchestrator can mark session terminal");
+
+        let closed = dispatch_request(
+            &state,
+            &launcher_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
+                public_wire::GatewayDisplayCloseArgs { session_id },
+            )),
+        )
+        .expect("owner close dispatches for terminal tracked session");
+        assert_eq!(
+            closed
+                .get("result")
+                .and_then(|r| r.get("closed"))
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 
