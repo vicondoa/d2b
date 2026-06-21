@@ -1,10 +1,9 @@
 //! `nixling-provider-relay`: the Azure Relay transport auth/credential core
-//! for the realm gateway (ADR 0032, P0).
+//! for the realm gateway (ADR 0032).
 //!
-//! This productionizes the relay leg of the P0 vertical. The POC's
-//! `nixling-relay-bridge` proved the byte path; this crate is the
-//! nixling-native home for the **credential model + connect contract** that
-//! the gateway's relay transport and the in-sandbox sender are built on.
+//! This crate is the nixling-native home for the **credential model +
+//! connect contract** that the gateway's relay transport and the in-sandbox
+//! sender are built on.
 //!
 //! ## Three-plane mapping
 //! - The **gateway** (host side) holds the relay **Listen** credential and
@@ -13,7 +12,7 @@
 //!   Entra **Listener** role.
 //! - The **container** (sandbox sender) authenticates with either an **Entra
 //!   bearer token from its managed identity** or a **gateway-minted,
-//!   short-lived Send SAS bearer**. The live P0 path uses the latter because
+//!   short-lived Send SAS bearer**. The ACA display path uses the latter because
 //!   ACA Relay Entra substreams closed during Waypipe forwarding; the long-lived
 //!   SAS rule key still never enters the sandbox.
 //!
@@ -28,10 +27,18 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use async_trait::async_trait;
 use base64::Engine;
 use hmac::{Hmac, Mac};
+use nixling_constellation_core::{ErrorKind, NodeId, ProviderId};
+use nixling_constellation_provider::error::{ProviderError, ProviderResult};
+use nixling_constellation_provider::provider::{TransportListener, TransportProvider};
+use nixling_constellation_provider::types::{
+    NodeRegistration, SafeLabel, TransportSession, TransportTarget,
+};
 use rustls_pki_types::{CertificateDer, pem::PemObject};
 use sha2::Sha256;
+use tokio::sync::{Mutex, mpsc};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -133,7 +140,7 @@ impl fmt::Debug for RelayConnect {
     }
 }
 
-/// The maximum minted-SAS lifetime (seconds) accepted for the P0 relay path.
+/// The maximum minted-SAS lifetime (seconds) accepted for relay sessions.
 pub const MAX_SAS_TTL_SECS: u64 = 15 * 60;
 
 /// The default minted-SAS lifetime (seconds). The gateway mints short-lived
@@ -180,7 +187,7 @@ pub fn mint_sas(
 /// SAS authentication mints a token into the `sb-hc-token` query parameter;
 /// Entra authentication leaves the URL token-free and returns the
 /// `ServiceBusAuthorization: Bearer <jwt>` header. A pre-minted SAS bearer is
-/// also accepted for the P0 ACA path; it is already scoped/expiring, so this
+/// also accepted for the ACA path; it is already scoped/expiring, so this
 /// function only URL-encodes it into `sb-hc-token`.
 pub fn build_connect(
     endpoint: &RelayEndpoint,
@@ -225,7 +232,7 @@ pub enum RelayError {
     Clock,
     /// The SAS key was not valid HMAC key material.
     Key,
-    /// The requested SAS TTL exceeded the P0 short-lived bearer bound.
+    /// The requested SAS TTL exceeded the short-lived bearer bound.
     TtlTooLong { requested: u64, max: u64 },
 }
 
@@ -377,6 +384,244 @@ impl fmt::Display for RelayConnectError {
 }
 
 impl std::error::Error for RelayConnectError {}
+
+/// A constellation [`TransportProvider`] backed by Azure Relay Hybrid
+/// Connections. It converts each Relay WebSocket rendezvous into a
+/// bidirectional [`TransportSession`] and leaves authentication/authorization
+/// to the peer-session layer above it.
+pub struct AzureRelayTransportProvider {
+    id: ProviderId,
+    endpoint: RelayEndpoint,
+    credential: RelayCredential,
+    ttl_secs: u64,
+    ca_pem: Option<Vec<u8>>,
+    accept_queue: usize,
+}
+
+impl AzureRelayTransportProvider {
+    /// Build a Relay transport provider with default short-lived SAS TTL and
+    /// a bounded accept queue.
+    pub fn new(endpoint: RelayEndpoint, credential: RelayCredential) -> Self {
+        Self {
+            id: ProviderId::parse("azure-relay").expect("valid provider id"),
+            endpoint,
+            credential,
+            ttl_secs: DEFAULT_SAS_TTL_SECS,
+            ca_pem: None,
+            accept_queue: 16,
+        }
+    }
+
+    /// Override the TTL used when a SAS rule key must mint a connect token.
+    pub fn with_ttl_secs(mut self, ttl_secs: u64) -> Self {
+        self.ttl_secs = ttl_secs;
+        self
+    }
+
+    /// Trust an additional PEM CA bundle (used by sandbox egress proxies).
+    pub fn with_ca_pem(mut self, ca_pem: Option<Vec<u8>>) -> Self {
+        self.ca_pem = ca_pem;
+        self
+    }
+
+    /// Override the listener accept queue size. Zero is rounded up to one.
+    pub fn with_accept_queue(mut self, accept_queue: usize) -> Self {
+        self.accept_queue = accept_queue.max(1);
+        self
+    }
+}
+
+impl fmt::Debug for AzureRelayTransportProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AzureRelayTransportProvider")
+            .field("id", &self.id)
+            .field("endpoint", &self.endpoint)
+            .field("credential", &self.credential)
+            .field("ttl_secs", &self.ttl_secs)
+            .field("ca_pem", &self.ca_pem.as_ref().map(|_| "<configured>"))
+            .field("accept_queue", &self.accept_queue)
+            .finish()
+    }
+}
+
+#[async_trait]
+impl TransportProvider for AzureRelayTransportProvider {
+    fn transport_id(&self) -> ProviderId {
+        self.id.clone()
+    }
+
+    async fn connect(&self, _target: TransportTarget) -> ProviderResult<TransportSession> {
+        let ws = connect_with_ca(
+            &self.endpoint,
+            RelayRole::Sender,
+            &self.credential,
+            self.ttl_secs,
+            self.ca_pem.as_deref(),
+        )
+        .await
+        .map_err(relay_provider_error)?;
+        Ok(transport_session_from_relay("azure-relay-connect", ws))
+    }
+
+    async fn listen(
+        &self,
+        registration: NodeRegistration,
+    ) -> ProviderResult<Box<dyn TransportListener>> {
+        let (tx, rx) = mpsc::channel(self.accept_queue);
+        let endpoint = self.endpoint.clone();
+        let credential = self.credential.clone();
+        let ttl_secs = self.ttl_secs;
+        let ca_pem = self.ca_pem.clone();
+        tokio::spawn(async move {
+            relay_transport_listener_task(endpoint, credential, ttl_secs, ca_pem, tx).await;
+        });
+        Ok(Box::new(AzureRelayTransportListener {
+            node: registration.node,
+            rx: Mutex::new(rx),
+        }))
+    }
+}
+
+struct AzureRelayTransportListener {
+    node: NodeId,
+    rx: Mutex<mpsc::Receiver<TransportSession>>,
+}
+
+#[async_trait]
+impl TransportListener for AzureRelayTransportListener {
+    fn node(&self) -> NodeId {
+        self.node.clone()
+    }
+
+    async fn accept(&self) -> ProviderResult<TransportSession> {
+        self.rx
+            .lock()
+            .await
+            .recv()
+            .await
+            .ok_or_else(|| ProviderError::new(ErrorKind::RelayUnavailable, "relay listener closed"))
+    }
+}
+
+async fn relay_transport_listener_task(
+    endpoint: RelayEndpoint,
+    credential: RelayCredential,
+    ttl_secs: u64,
+    ca_pem: Option<Vec<u8>>,
+    tx: mpsc::Sender<TransportSession>,
+) {
+    let mut backoff_secs = 1_u64;
+    while !tx.is_closed() {
+        let connected_at = std::time::Instant::now();
+        match relay_transport_accept_loop(
+            endpoint.clone(),
+            credential.clone(),
+            ttl_secs,
+            ca_pem.clone(),
+            tx.clone(),
+        )
+        .await
+        {
+            Ok(()) if tx.is_closed() => break,
+            Ok(()) => tracing::warn!("azure relay transport control channel closed; reconnecting"),
+            Err(err) => tracing::warn!(error = %err, "azure relay transport listener reconnecting"),
+        }
+        if connected_at.elapsed() >= std::time::Duration::from_secs(30) {
+            backoff_secs = 1;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+        backoff_secs = (backoff_secs.saturating_mul(2)).min(30);
+    }
+}
+
+async fn relay_transport_accept_loop(
+    endpoint: RelayEndpoint,
+    credential: RelayCredential,
+    ttl_secs: u64,
+    ca_pem: Option<Vec<u8>>,
+    tx: mpsc::Sender<TransportSession>,
+) -> Result<(), RelayConnectError> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let control = connect_with_ca(
+        &endpoint,
+        RelayRole::Listener,
+        &credential,
+        ttl_secs,
+        ca_pem.as_deref(),
+    )
+    .await?;
+    let (mut sink, mut stream) = control.split();
+    loop {
+        let msg = tokio::select! {
+            _ = tx.closed() => return Ok(()),
+            msg = stream.next() => match msg {
+                Some(msg) => msg,
+                None => return Ok(()),
+            },
+        };
+        let msg =
+            msg.map_err(|err| RelayConnectError::Handshake(format!("control channel: {err}")))?;
+        match msg {
+            Message::Text(text) => {
+                let v: serde_json::Value = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if let Some(addr) = v
+                    .get("accept")
+                    .and_then(|a| a.get("address"))
+                    .and_then(|s| s.as_str())
+                {
+                    let address = addr.to_owned();
+                    let ca = ca_pem.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let ws = match connect_raw(&address, ca.as_deref()).await {
+                            Ok(ws) => ws,
+                            Err(err) => {
+                                tracing::warn!(error = %err, "azure relay rendezvous dial failed");
+                                return;
+                            }
+                        };
+                        match tx.try_send(transport_session_from_relay("azure-relay-accept", ws)) {
+                            Ok(()) => {}
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                tracing::warn!("azure relay transport accept queue is full");
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
+                        }
+                    });
+                }
+            }
+            Message::Ping(p) => {
+                let _ = sink.send(Message::Pong(p)).await;
+            }
+            Message::Close(_) => return Ok(()),
+            _ => {}
+        }
+    }
+}
+
+fn transport_session_from_relay(label: &str, ws: RelayStream) -> TransportSession {
+    let (local, relay_io) = tokio::io::duplex(64 * 1024);
+    tokio::spawn(async move {
+        if let Err(err) = pump(ws, relay_io).await {
+            tracing::warn!(error = %err, "relay transport byte pump ended");
+        }
+    });
+    TransportSession::new(SafeLabel::new(label), Box::new(local))
+}
+
+fn relay_provider_error(err: RelayConnectError) -> ProviderError {
+    let kind = match err {
+        RelayConnectError::Auth(_)
+        | RelayConnectError::BadRequest
+        | RelayConnectError::Handshake(_) => ErrorKind::RelayUnavailable,
+    };
+    ProviderError::new(kind, err.to_string())
+}
 
 /// A local byte endpoint to bridge a relay stream to/from.
 #[derive(Debug, Clone)]
@@ -614,7 +859,8 @@ pub async fn run_listener(
         connect_with_ca(endpoint, RelayRole::Listener, credential, ttl_secs, ca_pem).await?;
     let (mut sink, mut stream) = control.split();
     while let Some(msg) = stream.next().await {
-        let msg = msg.map_err(|_| RelayConnectError::Handshake("control channel".into()))?;
+        let msg =
+            msg.map_err(|err| RelayConnectError::Handshake(format!("control channel: {err}")))?;
         match msg {
             Message::Text(text) => {
                 let v: serde_json::Value = match serde_json::from_str(&text) {
@@ -734,7 +980,8 @@ pub async fn run_listener_verified(
         connect_with_ca(endpoint, RelayRole::Listener, credential, ttl_secs, ca_pem).await?;
     let (mut sink, mut stream) = control.split();
     while let Some(msg) = stream.next().await {
-        let msg = msg.map_err(|_| RelayConnectError::Handshake("control channel".into()))?;
+        let msg =
+            msg.map_err(|err| RelayConnectError::Handshake(format!("control channel: {err}")))?;
         match msg {
             Message::Text(text) => {
                 let v: serde_json::Value = match serde_json::from_str(&text) {
@@ -1036,6 +1283,47 @@ mod tests {
         assert!(!d.contains("jwt.abc.def"));
         assert!(!d.contains("Bearer"));
         assert!(d.contains("<redacted>"));
+    }
+
+    #[test]
+    fn azure_relay_transport_debug_redacts_credentials() {
+        let provider = AzureRelayTransportProvider::new(
+            endpoint(),
+            RelayCredential::SasToken("SharedAccessSignature sr=x&sig=secret".into()),
+        )
+        .with_accept_queue(0)
+        .with_ca_pem(Some(b"ca".to_vec()));
+        assert_eq!(provider.transport_id().as_str(), "azure-relay");
+        let rendered = format!("{provider:?}");
+        assert!(rendered.contains("azure-relay"));
+        assert!(!rendered.contains("SharedAccessSignature"));
+        assert!(!rendered.contains("secret"));
+        assert!(rendered.contains("<configured>"));
+    }
+
+    #[tokio::test]
+    async fn azure_relay_transport_maps_auth_failures_to_typed_error() {
+        let provider = AzureRelayTransportProvider::new(
+            endpoint(),
+            RelayCredential::Sas {
+                key_name: "gateway-send".into(),
+                key: "c2VjcmV0a2V5".into(),
+            },
+        )
+        .with_ttl_secs(MAX_SAS_TTL_SECS + 1);
+        let err = provider
+            .connect(TransportTarget {
+                endpoint: "ignored".to_owned(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::RelayUnavailable);
+    }
+
+    #[test]
+    fn relay_provider_bad_request_is_transport_unavailable() {
+        let err = relay_provider_error(RelayConnectError::BadRequest);
+        assert_eq!(err.kind(), ErrorKind::RelayUnavailable);
     }
 
     #[test]

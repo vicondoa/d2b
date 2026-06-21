@@ -35,6 +35,8 @@ Transport adapters must preserve byte-exact delivery, bounded pending
 session queues, typed unavailable/backpressure errors, and explicit
 shutdown behavior. The reusable checks are listed in the
 [transport conformance matrix](./transport-conformance-matrix.md).
+The Azure Relay adapter is documented in
+[transport-azure-relay](./transport-azure-relay.md).
 
 The protobuf codec maps bytes to the codec-neutral `ConstellationFrame`.
 The router consumes only semantic frames; it never depends on protobuf

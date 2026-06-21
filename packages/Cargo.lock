@@ -1831,10 +1831,13 @@ dependencies = [
 name = "nixling-provider-relay"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "base64",
  "futures-util",
  "hmac",
  "libc",
+ "nixling-constellation-core",
+ "nixling-constellation-provider",
  "rustls",
  "rustls-pki-types",
  "serde_json",
