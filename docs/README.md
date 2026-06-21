@@ -135,7 +135,9 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
   the `nixpkgs` follow policy and eval-only test pattern.
 - [`how-to/configure-work-gateway.md`](./how-to/configure-work-gateway.md) —
   declare a work/provider realm gateway and verify default-deny isolation.
-- [`how-to/migrate-to-realm-gateways.md`](./how-to/migrate-to-realm-gateways.md) —
+- [`how-to/realm-gateway.md`](./how-to/realm-gateway.md) —
+  configure, enter, and recover realm gateway guests.
+- [`how-to/migrate-nixling-v1-2-to-v2.md`](./how-to/migrate-nixling-v1-2-to-v2.md) —
   migrate from local-only or implicit realm metadata to explicit gateway-backed
   realm policy.
 

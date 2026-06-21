@@ -4687,6 +4687,21 @@ fn gateway_lifecycle_state(
     }
 }
 
+fn gateway_lifecycle_states(context: &Context) -> Result<BTreeMap<String, String>, CliFailure> {
+    match try_list_via_socket(context)? {
+        ListSocketOutcome::Entries(entries) => {
+            let mut states = BTreeMap::new();
+            for entry in entries {
+                let label = gateway_state_label(entry.lifecycle.state).to_owned();
+                states.insert(entry.vm, label.clone());
+                states.insert(entry.name, label);
+            }
+            Ok(states)
+        }
+        ListSocketOutcome::Unavailable => Ok(BTreeMap::new()),
+    }
+}
+
 fn gateway_state_allows_exec(state: IpcVmLifecycleState) -> bool {
     matches!(
         state,
@@ -4788,6 +4803,7 @@ fn realm_policy_rows_from_entries(
     entries: BTreeMap<String, RealmEntrypointConfig>,
     json: bool,
 ) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
+    let gateway_states = gateway_lifecycle_states(context)?;
     let mut rows = Vec::new();
     for (realm_raw, entry) in entries {
         let realm = target_routing::parse_realm_arg(&realm_raw).map_err(|err| {
@@ -4796,10 +4812,12 @@ fn realm_policy_rows_from_entries(
                 format!("realm entrypoint `{realm_raw}` is invalid: {err}"),
             )
         })?;
-        match entry.mode.as_str() {
+        let realm_target = realm.target_form();
+        let mode = entry.mode;
+        match mode.as_str() {
             "host-resident" => rows.push(RealmPolicyOutputV1 {
-                realm: realm.target_form(),
-                mode: "host-resident".to_owned(),
+                realm: realm_target,
+                mode,
                 gateway_vm: None,
                 gateway_target: None,
                 gateway_state: "local-only".to_owned(),
@@ -4813,15 +4831,16 @@ fn realm_policy_rows_from_entries(
                         format!("gateway-backed realm `{realm_raw}` has no gateway target"),
                     )
                 })?;
-                let gateway_vm = gateway_vm_from_target_text(&realm.target_form(), &gateway_target)
+                let gateway_vm = gateway_vm_from_target_text(&realm_target, &gateway_target)
                     .map_err(|err| emit_route_error(err, json).unwrap_or_else(|failure| failure))?;
-                let gateway_state = gateway_lifecycle_state(context, &gateway_vm)?
-                    .map(gateway_state_label)
+                let gateway_state = gateway_states
+                    .get(&gateway_vm)
+                    .map(String::as_str)
                     .unwrap_or("not reported by nixlingd")
                     .to_owned();
                 rows.push(RealmPolicyOutputV1 {
-                    realm: realm.target_form(),
-                    mode: "gateway-backed".to_owned(),
+                    realm: realm_target,
+                    mode,
                     gateway_vm: Some(gateway_vm),
                     gateway_target: Some(gateway_target),
                     gateway_state,
@@ -4843,16 +4862,17 @@ fn realm_policy_rows_from_entries(
 
 fn print_realm_rows_human(rows: &[RealmPolicyOutputV1]) {
     print_stdout(&format!(
-        "{:<24} {:<16} {:<24} {:<22} {}\n",
-        "REALM", "MODE", "GATEWAY", "STATE", "CROSS_REALM"
+        "{:<24} {:<16} {:<24} {:<22} {:<26} {}\n",
+        "REALM", "MODE", "GATEWAY", "STATE", "CREDENTIAL_BOUNDARY", "CROSS_REALM"
     ));
     for row in rows {
         print_stdout(&format!(
-            "{:<24} {:<16} {:<24} {:<22} {}\n",
+            "{:<24} {:<16} {:<24} {:<22} {:<26} {}\n",
             row.realm,
             row.mode,
             row.gateway_vm.as_deref().unwrap_or("-"),
             row.gateway_state,
+            row.credential_boundary,
             row.cross_realm_policy
         ));
     }

@@ -47,10 +47,10 @@ stores credential material.
 
 ```bash
 nixling realm enter work
-sudo -u nixlingd NIXLING_GATEWAY_STATE_DIR=/var/lib/nixling/gateways/work \
+sudo -u nixlingd NIXLING_GATEWAY_STATE_DIR=<gateway-state-dir> \
   nixling-gateway-enroll enroll \
-  /var/lib/nixling/gateways/work/credential.sealed.json \
-  /var/lib/nixling/gateways/work/seal.key < enrollment.json
+  <gateway-state-dir>/credential.sealed.json \
+  <gateway-state-dir>/seal.key < enrollment.json
 ```
 
 Use placeholder or test credentials only in examples and fixtures. Do not

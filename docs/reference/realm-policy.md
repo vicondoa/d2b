@@ -24,8 +24,9 @@ policy storage and evaluation live in the owning gateway guest.
 - Work, personal, and provider realms never share a gateway guest or L2 bridge.
 - Gateway-backed realms do not get wildcard routes such as `0.0.0.0/0` or
   `::/0`.
-- Host L3 forwarding between realm bridges must be blocked by explicit
-  firewall/nftables drops or equivalent namespace/routing isolation.
+- Deployments must validate that host L3 forwarding cannot transit between
+  realm bridges. Use explicit firewall/nftables drops or equivalent
+  namespace/routing isolation before treating realms as isolated at L3.
 - Cross-realm operations and streams are denied unless a future reviewed typed
   policy explicitly allows a named operation or stream. There are no enabled
   default allow rules.

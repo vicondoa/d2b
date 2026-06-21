@@ -2,9 +2,8 @@
 
 **Diataxis category:** how-to.
 
-This guide is version-neutral until the release boundary for the realm rollout
-is finalized. If the release introduces a versioned migration guide, this file
-should be renamed to the repository's version-bound migration convention.
+This guide covers the realm-gateway policy transition planned for the v2
+control-plane rollout.
 
 ## What changes
 

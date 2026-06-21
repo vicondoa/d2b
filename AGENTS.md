@@ -1041,9 +1041,9 @@ contract:
   **no** realm relay/provider credentials, remote node registries,
   or realm audit (those live inside a per-realm gateway guest); and
   **relay identity is not local auth** — relay credentials
-  authenticate relay/transport access only, are never mapped to
-  `nixling-launcher`/`nixling-admin`, and `SO_PEERCRED` + `nixling`
-  group membership remains the sole local lifecycle authz surface.
+  authenticate relay/transport access only, are never mapped to a local
+  lifecycle role, and `SO_PEERCRED` + `nixling` group membership remains
+  the sole local lifecycle authz surface.
 - [docs/adr/0034-storage-lifecycle-restart-and-synchronization.md](./docs/adr/0034-storage-lifecycle-restart-and-synchronization.md)
   — selected design for generated storage, restart/adoption, and
   synchronization contracts. **Load-bearing invariant:** normal daemon
@@ -1069,6 +1069,13 @@ contract:
 - [docs/reference/cli-contract.md](./docs/reference/cli-contract.md) —
   CLI lifecycle FSM, signal semantics, exit codes, JSON vs human
   output.
+- [docs/reference/realm-policy.md](./docs/reference/realm-policy.md) —
+  host-resident vs gateway-backed realm policy, default-deny
+  cross-realm behavior, and `nixling realm list` / `inspect`
+  inspection surfaces.
+- [docs/how-to/configure-work-gateway.md](./docs/how-to/configure-work-gateway.md)
+  — configure a dedicated work/provider realm gateway and verify the
+  default-deny boundary.
 - [docs/how-to/migrate-nixling-v0-to-v1.md](./docs/how-to/migrate-nixling-v0-to-v1.md)
   — consumer migration guide for v0.x → v1.0.
 - [docs/how-to/migrate-nixling-v1-0-to-v1-1.md](./docs/how-to/migrate-nixling-v1-0-to-v1-1.md)
