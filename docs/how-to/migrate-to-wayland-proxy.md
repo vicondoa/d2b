@@ -1,15 +1,15 @@
 # Migrate to the host-side Wayland filter proxy
 
 This guide covers the changes you need to make when a graphics VM
-switches from the legacy in-guest `wayland-proxy-virtwl` path to the
-new host-side Wayland filter proxy.
+switches from the legacy in-guest-only proxy path to the host-side
+Wayland filter proxy.
 
 ## What changes
 
 ### Guest proxy is replaced
 
-The in-guest `wayland-proxy-virtwl` systemd user service is replaced
-by `wl-cross-domain-proxy`.  The new proxy only bridges the
+The old in-guest proxy service is replaced by `wl-cross-domain-proxy`.
+The new proxy only bridges the
 virtio-gpu cross-domain transport to the guest's Wayland socket; it
 does not perform security filtering or app-id rewriting.  Those
 responsibilities move to the host-side filter proxy, which runs as a
@@ -82,7 +82,7 @@ nixling.vms.work.graphics.waylandFilter.enable = true;
 ```
 
 Leave it enabled unless you intentionally want the GPU sidecar to use the
-legacy direct compositor socket path.
+unfiltered direct compositor socket path.
 
 ### 4. Update niri window rules (niri users)
 
@@ -183,7 +183,10 @@ the migration:
 2. Run `sudo nixos-rebuild switch`.
 3. Restart the VM: `nixling down <vm> --apply && nixling up <vm> --apply`.
 
-The guest will revert to the previous proxy path.
+The VM will stop using the filtered cross-domain Wayland path until
+`crossDomainTrusted` is enabled again. Standard virtio-gpu display
+continues to work, but host-side app-id rewriting and filter policy no
+longer apply.
 
 ## Known limitations at migration time
 

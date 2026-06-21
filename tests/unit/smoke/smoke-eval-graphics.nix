@@ -13,7 +13,7 @@
 # readOnly path and would re-surface a regression of #29 immediately.
 #
 # Also asserts the Wave 2 wiring:
-#   - guest proxy service uses wl-cross-domain-proxy (not wayland-proxy-virtwl)
+#   - guest proxy service uses wl-cross-domain-proxy
 #   - no DISPLAY session variable is set (xwayland is unsupported)
 #   - host wayland-proxy DAG node is emitted when crossDomainTrusted = true
 #   - GPU runner --wayland-sock targets the filter socket, not the real compositor
@@ -157,11 +157,9 @@ in
   # Guest proxy: default VM should have no wayland-proxy service (crossDomainTrusted=false)
   assert lib.assertMsg (!(guestServices ? wayland-proxy))
     "default graphics VM (crossDomainTrusted=false) should not have a wayland-proxy guest service";
-  # Guest proxy: trusted VM should use wl-cross-domain-proxy (not wayland-proxy-virtwl)
+  # Guest proxy: trusted VM should use wl-cross-domain-proxy
   assert lib.assertMsg (lib.hasInfix "wl-cross-domain-proxy" trustedProxyExec)
     "crossDomainTrusted=true should use wl-cross-domain-proxy in guest proxy service";
-  assert lib.assertMsg (!(lib.hasInfix "wayland-proxy-virtwl" trustedProxyExec))
-    "crossDomainTrusted=true should NOT use wayland-proxy-virtwl";
   # No Xwayland args in the proxy (xwayland is unsupported)
   assert lib.assertMsg (!(lib.hasInfix "--x-display" trustedProxyExec))
     "proxy service should not include --x-display";
