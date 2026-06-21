@@ -97,6 +97,7 @@ nixling.vms.dark-live.qemuMedia = {
   source = {
     kind = "physical-usb";
     ref = "boot";
+    usbSelector.byIdName = "usb-Example_Dark_Live_0001-0:0";
     format = "raw";
     readOnly = true;
   };
@@ -110,8 +111,13 @@ nixling.vms.dark-live.qemuMedia = {
 };
 ```
 
-Use `nixling usb probe` to find the current selector. Running qemu-media
-VMs can hotplug that selector through QMP:
+`usbSelector.byIdName` is the basename of a stable
+`/dev/disk/by-id/*` symlink for the physical USB block device. It is
+configured only as a selector; public status, CLI success output, and
+broker audit summaries must not echo it. Use a local shell such as
+`ls /dev/disk/by-id/` to choose the basename, and use `nixling usb probe`
+to verify the currently attached transient busid. Running qemu-media VMs
+can hotplug that busid selector through QMP:
 
 ```bash
 nixling usb probe
