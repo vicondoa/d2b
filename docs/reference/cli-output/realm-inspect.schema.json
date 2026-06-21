@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RealmInspectOutputV1",
+  "type": "object",
+  "required": [
+    "command",
+    "credentialBoundary",
+    "crossRealmPolicy",
+    "gatewayState",
+    "mode",
+    "realm"
+  ],
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "credentialBoundary": {
+      "type": "string"
+    },
+    "crossRealmPolicy": {
+      "type": "string"
+    },
+    "gatewayState": {
+      "type": "string"
+    },
+    "gatewayTarget": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "gatewayVm": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mode": {
+      "type": "string"
+    },
+    "realm": {
+      "type": "string"
+    }
+  }
+}

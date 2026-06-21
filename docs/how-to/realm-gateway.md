@@ -70,6 +70,10 @@ If the gateway is missing, stopped, or not reported by the daemon, the
 CLI fails closed with a typed remediation instead of falling back to host
 credentials or SSH.
 
+Use `nixling realm list` and `nixling realm inspect <realm>` to inspect the
+rendered host-resident vs gateway-backed policy and the gateway's local
+lifecycle state.
+
 ## Credential boundary
 
 The host declaration carries non-secret coordinates and state paths only.
@@ -87,10 +91,10 @@ keys never appear in argv:
 
 ```bash
 nixling realm enter work
-sudo -u nixlingd NIXLING_GATEWAY_STATE_DIR=/var/lib/nixling/gateways/work \
+sudo -u nixlingd NIXLING_GATEWAY_STATE_DIR=<gateway-state-dir> \
   nixling-gateway-enroll enroll \
-  /var/lib/nixling/gateways/work/credential.sealed.json \
-  /var/lib/nixling/gateways/work/seal.key <<'JSON'
+  <gateway-state-dir>/credential.sealed.json \
+  <gateway-state-dir>/seal.key <<'JSON'
 {
   "relayListen": { "keyName": "gateway-listen", "key": "<listen-rule-key>" },
   "relaySend": { "keyName": "gateway-send", "key": "<send-rule-key>" }
@@ -109,10 +113,10 @@ Rotate by passing the replacement JSON through the same in-guest helper:
 
 ```bash
 nixling realm enter work
-sudo -u nixlingd NIXLING_GATEWAY_STATE_DIR=/var/lib/nixling/gateways/work \
+sudo -u nixlingd NIXLING_GATEWAY_STATE_DIR=<gateway-state-dir> \
   nixling-gateway-enroll rotate \
-  /var/lib/nixling/gateways/work/credential.sealed.json \
-  /var/lib/nixling/gateways/work/seal.key <<'JSON'
+  <gateway-state-dir>/credential.sealed.json \
+  <gateway-state-dir>/seal.key <<'JSON'
 {
   "relayListen": { "keyName": "gateway-listen", "key": "<new-listen-rule-key>" },
   "relaySend": { "keyName": "gateway-send", "key": "<new-send-rule-key>" }

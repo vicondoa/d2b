@@ -12,6 +12,11 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Realm policy: added `nixling realm list` and `nixling realm inspect` to make
+  host-resident vs gateway-backed realms discoverable, documented the
+  default-deny cross-realm policy, and added migration guidance for explicit
+  realm gateways.
+
 - Display and virtual I/O: added explicit display capability helpers and a
   `nixling vm display list|close` gateway display-session surface that returns
   only bounded non-secret session metadata, including the authorizing
