@@ -143,6 +143,9 @@ dependencies, no dynamic PAM/dlopen dependency path, and no accidental
 `pam-sys`, `dlopen2`, or libpam closure. Build-time native inputs such as
 bindgen/libclang may be allowed only through a narrow documented policy; the
 runtime binary remains static.
+If libshpool's `libproc` dependency pulls in procps, the static package uses a
+procps build without systemd support so libsystemd and dlopen paths cannot enter
+the static helper closure.
 
 The helper modes are shpool-shaped but nixling-owned:
 
@@ -204,8 +207,10 @@ environment. Workload or terminal environment values such as `HOME`, `USER`,
 locale, target cwd, correlation ids, and the explicit shpool socket path are sent
 through a root-created pipe/socket or equivalent trusted side channel and are
 applied by the helper only after the privilege-drop prelude verifies it is
-non-root. The payload must contain concrete `HOME`, `USER`, and `LOGNAME`
-values, not placeholders.
+non-root. Host `TERMINFO_DIRS` is not forwarded into the guest; the guest uses
+its own terminfo search path, or a guest-local `TERMINFO_DIRS` such as
+`/run/current-system/sw/share/terminfo` if one must be set explicitly. The payload must contain concrete `HOME`, `USER`, and
+`LOGNAME` values, not placeholders.
 
 The same-UID socket model is an explicit trust boundary. Code already running as
 the workload user may be able to reach the shpool socket. Nixling provides
@@ -273,8 +278,11 @@ order is strict: perform process-group/session isolation (`setpgid(0, 0)` for
 non-interactive helpers or `setsid()` for interactive PTY helpers), clear the
 capability bounding set and inheritable/ambient capabilities while `CAP_SETPCAP`
 is still available, apply the precomputed supplementary groups or an empty list,
-`setresgid(gid, gid, gid)`, and `setresuid(uid, uid, uid)`. Target uid 0 is
-invalid. Non-daemon helpers set
+then use libc's process-wide credential wrappers directly, or a safe crate such
+as `nix::unistd` that delegates to libc, for `setresgid(gid, gid, gid)` and
+`setresuid(uid, uid, uid)`. Do not use rustix raw thread-level credential
+syscalls for the process privilege boundary. Target uid 0 is invalid.
+Non-daemon helpers set
 `PR_SET_NO_NEW_PRIVS`; the long-lived shpool daemon remains exempt so persistent
 shells can use `sudo` and other setuid/fcap tools. The helper verifies real,
 effective, and saved uid/gid, supplementary groups, no-new-privs where required,
