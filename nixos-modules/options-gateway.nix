@@ -88,12 +88,12 @@ in
           type = lib.types.str;
           default = "/var/lib/nixling/gateways/${name}";
           description = ''
-            Gateway guest state directory on the host. Must live under
+            Gateway guest runtime state directory. Must live under
             `nixling.site.stateDir`, outside the per-VM state root; assertions
             reject `/nix/store`, `..` path components, trailing slashes, or
-            secret-looking inline values. The host creates this directory as
-            `root:nixlingd`, while the gateway guest creates its internal copy
-            as `nixlingd:nixlingd`.
+            secret-looking inline values. The host does not manage gateway
+            credential files or their sealing key; the gateway guest creates
+            and owns that runtime state as `nixlingd:nixlingd`.
           '';
         };
 

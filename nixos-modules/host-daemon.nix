@@ -184,6 +184,22 @@ EOF
     text = builtins.toJSON realmEntrypointData;
     destination = "/share/nixling/realm-entrypoints.json";
   };
+  hostRealmRelayEgressPolicyData = {
+    schemaVersion = 1;
+    mode = "host-realm-relay-deny";
+    owner = "nixling-host";
+    gatewayInterfaces = map
+      (gateway: "${gateway.gw.env}-l${toString gateway.gw.index}")
+      enabledGateways;
+    forbiddenHostEnvPrefixes = [ "NIXLING_RELAY_" ];
+    diagnostics = {
+      redacted = true;
+      rateLimited = true;
+      fields = [ "event" "protocol" "reason" "gatewayInterfaceClass" ];
+      omitted = [ "payload" "headers" "token" "endpoint" "credential" ];
+    };
+    remediation = "enroll credentials inside the gateway guest and route realm traffic through the gateway VM";
+  };
 in
 {
   options.nixling.host.usbip.allowlist = lib.mkOption {
@@ -261,9 +277,14 @@ in
       nixlingActivationHelperPackage
       realmEntrypointsPkg
     ];
+    environment.etc."nixling/host-realm-relay-egress-policy.json".text =
+      builtins.toJSON hostRealmRelayEgressPolicyData;
 
     nixling._computed.realmEntrypoints = realmEntrypointData // {
       path = realmEntrypointPath;
+    };
+    nixling._computed.hostRealmRelayEgressPolicy = hostRealmRelayEgressPolicyData // {
+      path = "/etc/nixling/host-realm-relay-egress-policy.json";
     };
 
     environment.etc = {
