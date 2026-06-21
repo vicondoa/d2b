@@ -100,6 +100,9 @@ deprecations ship one minor release before removal.
   concurrent sessions, shutdown, frame-cap rejection, truncated frames,
   capability intersection, stream backpressure, and retry-safe stream
   cancellation.
+- Azure Relay now has a constellation `TransportProvider` adapter that
+  wraps Relay WebSocket rendezvous into bounded transport sessions for
+  gateway-owned listeners and sandbox senders.
 
 ### Changed
 
