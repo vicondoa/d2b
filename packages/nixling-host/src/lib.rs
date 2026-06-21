@@ -97,6 +97,10 @@ pub mod media;
 // swtpm_argv, usbip_argv, video_argv, vsock_relay_argv,
 // otel_host_bridge_argv). See ADR 0018.
 pub mod runner_argv_regenerator;
+// Host-side runtime provider adapters. The concrete Cloud Hypervisor
+// adapter wraps typed CH argv input without serializing argv/paths into
+// provider DTOs.
+pub mod runtime_provider;
 
 // v1.1.1 RenderDnsmasqEnvConf daemon-host-prep DAG op support.
 // Per ADR 0018. Pure-Rust dnsmasq config

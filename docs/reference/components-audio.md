@@ -13,6 +13,10 @@ session. On the host the sidecar appears as a PipeWire client named
 `nixling-<vm>` (visible in `wpctl status`, plasma-pa, pavucontrol);
 inside the guest, normal PipeWire + ALSA + PulseAudio compat stacks
 work on top of the virtio-snd card.
+Audio-capable VMs use the Cloud Hypervisor runtime provider plus the
+broker-spawned sound sidecar; see
+[runtime provider selection](./runtime-provider-selection.md) for runtime
+provider capability boundaries.
 
 Each VM has independent **mic** and **speaker** grants. The
 host-side state file is `/var/lib/nixling/vms/<vm>/state/audio-state.json`.
