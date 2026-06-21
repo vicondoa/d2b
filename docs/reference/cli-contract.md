@@ -148,6 +148,16 @@ Inspects one realm entrypoint using the same bounded fields as `realm list`.
 Unknown realms fail closed with the same actionable missing-entrypoint envelope
 used by routed VM targets.
 
+### `op inspect`
+
+**Synopsis:** `nixling op inspect [--trace-id <id> --span-id <id>] [--human | --json]`
+
+Inspects current local constellation operation state without making the host a
+global telemetry owner. The command reports bounded local VM/gateway counts,
+configured realm states, optional trace context, and degraded partial results
+for unavailable gateways or sinks. It never falls back to SSH, host-held realm
+credentials, or generic tunnels.
+
 ### `realm run`
 
 **Synopsis:** `nixling realm run <realm> -- <argv...> [--human | --json]`

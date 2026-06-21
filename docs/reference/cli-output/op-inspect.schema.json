@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpInspectOutputV1",
+  "type": "object",
+  "required": [
+    "command",
+    "degraded",
+    "local",
+    "realms"
+  ],
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "degraded": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/OpInspectDegradedOutputV1"
+      }
+    },
+    "local": {
+      "$ref": "#/definitions/OpInspectLocalOutputV1"
+    },
+    "realms": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/OpInspectRealmOutputV1"
+      }
+    },
+    "trace": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/OpInspectTraceOutputV1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "OpInspectDegradedOutputV1": {
+      "type": "object",
+      "required": [
+        "reason",
+        "remediation",
+        "scope"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "remediation": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpInspectLocalOutputV1": {
+      "type": "object",
+      "required": [
+        "gatewayCount",
+        "source",
+        "vmCount"
+      ],
+      "properties": {
+        "gatewayCount": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "source": {
+          "type": "string"
+        },
+        "vmCount": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpInspectRealmOutputV1": {
+      "type": "object",
+      "required": [
+        "crossRealmPolicy",
+        "mode",
+        "realm",
+        "state"
+      ],
+      "properties": {
+        "crossRealmPolicy": {
+          "type": "string"
+        },
+        "gatewayVm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "type": "string"
+        },
+        "realm": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpInspectTraceOutputV1": {
+      "type": "object",
+      "required": [
+        "spanId",
+        "traceId"
+      ],
+      "properties": {
+        "spanId": {
+          "type": "string"
+        },
+        "traceId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

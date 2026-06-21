@@ -1,5 +1,8 @@
 # Enable observability
 
+For constellation-wide inspection and `nixling op inspect`, see
+[`../reference/constellation-observability.md`](../reference/constellation-observability.md).
+
 > How-to: add OTel-native SigNoz telemetry to an existing `nixling`
 > deployment without changing the network layout or introducing
 > cross-VM SSH credentials.

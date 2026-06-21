@@ -74,6 +74,9 @@ The contracts. Stable interfaces a consumer can depend on.
 - [`reference/realm-policy.md`](./reference/realm-policy.md) —
   host-resident vs gateway-backed realm policy, default-deny cross-realm
   behavior, authorization, audit, and network isolation boundaries.
+- [`reference/constellation-observability.md`](./reference/constellation-observability.md) —
+  bounded `nixling op inspect`, TraceContext propagation, degraded partial
+  results, and telemetry redaction/cardinality constraints.
 - [`reference/remote-full-host-nodes.md`](./reference/remote-full-host-nodes.md) —
   gateway-managed remote nixling hosts: registration, capability gating,
   operation routing, idempotency, and the non-tunneling boundary.
