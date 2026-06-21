@@ -199,6 +199,7 @@ impl RuntimeOperationCapabilities {
                 guest_control: true,
                 in_guest_observability: true,
                 keys: true,
+                shell: true,
                 ssh: true,
             },
             lifecycle: RuntimeLifecycleCapabilities {
@@ -286,6 +287,8 @@ pub struct RuntimeGuestCapabilities {
     pub guest_control: bool,
     pub in_guest_observability: bool,
     pub keys: bool,
+    #[serde(default)]
+    pub shell: bool,
     pub ssh: bool,
 }
 

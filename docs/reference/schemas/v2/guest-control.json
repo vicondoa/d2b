@@ -34,6 +34,19 @@
     "readGuestFileResult",
     "readOutput",
     "schemaVersion",
+    "shellAttach",
+    "shellAttached",
+    "shellCloseAttach",
+    "shellDetach",
+    "shellDetached",
+    "shellKill",
+    "shellKilled",
+    "shellList",
+    "shellListed",
+    "terminalCloseStdin",
+    "terminalReadOutput",
+    "terminalTtyWinResize",
+    "terminalWriteStdin",
     "transport",
     "ttyWinResize",
     "usbipImport",
@@ -136,6 +149,45 @@
     },
     "schemaVersion": {
       "$ref": "#/definitions/GuestSchemaVersion"
+    },
+    "shellAttach": {
+      "$ref": "#/definitions/ShellAttachRequest"
+    },
+    "shellAttached": {
+      "$ref": "#/definitions/ShellAttachResponse"
+    },
+    "shellCloseAttach": {
+      "$ref": "#/definitions/ShellCloseAttachRequest"
+    },
+    "shellDetach": {
+      "$ref": "#/definitions/ShellDetachRequest"
+    },
+    "shellDetached": {
+      "$ref": "#/definitions/ShellDetachResponse"
+    },
+    "shellKill": {
+      "$ref": "#/definitions/ShellKillRequest"
+    },
+    "shellKilled": {
+      "$ref": "#/definitions/ShellKillResponse"
+    },
+    "shellList": {
+      "$ref": "#/definitions/ShellListRequest"
+    },
+    "shellListed": {
+      "$ref": "#/definitions/ShellListResponse"
+    },
+    "terminalCloseStdin": {
+      "$ref": "#/definitions/TerminalCloseStdinRequest"
+    },
+    "terminalReadOutput": {
+      "$ref": "#/definitions/TerminalReadOutputRequest"
+    },
+    "terminalTtyWinResize": {
+      "$ref": "#/definitions/TerminalTtyWinResizeRequest"
+    },
+    "terminalWriteStdin": {
+      "$ref": "#/definitions/TerminalWriteStdinRequest"
     },
     "transport": {
       "$ref": "#/definitions/GuestTransportSchema"
@@ -1026,7 +1078,10 @@
         "tty-resize",
         "signals",
         "read-guest-file",
-        "usbip-import"
+        "usbip-import",
+        "shell-attached",
+        "shell-management",
+        "shell-force-attach"
       ]
     },
     "GuestConnectAckLine": {
@@ -1117,7 +1172,16 @@
         "usbip-unavailable",
         "usbip-command-failed",
         "usbip-invalid-bus-id",
-        "usbip-invalid-host"
+        "usbip-invalid-host",
+        "guest-shell-disabled",
+        "shell-invalid-name",
+        "shell-capacity-exceeded",
+        "shell-attach-capacity-exceeded",
+        "shell-not-found",
+        "shell-already-attached",
+        "shell-pool-unavailable",
+        "shell-daemon-epoch-mismatch",
+        "shell-output-gap"
       ]
     },
     "GuestCwd": {
@@ -1140,6 +1204,8 @@
         "pendingReadOutputWaitsPerStream",
         "rpcRatePerConnectionPerSecond",
         "rpcRatePerVmBurst",
+        "shellAttachedSessionsPerVm",
+        "shellSessionsPerVm",
         "slowConsumerGraceMs",
         "stderrLiveBufferBytes",
         "stdinQueueChunksPerExec",
@@ -1217,6 +1283,18 @@
           "type": "integer",
           "format": "uint32",
           "maximum": 1000.0,
+          "minimum": 0.0
+        },
+        "shellAttachedSessionsPerVm": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 64.0,
+          "minimum": 0.0
+        },
+        "shellSessionsPerVm": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 256.0,
           "minimum": 0.0
         },
         "slowConsumerGraceMs": {
@@ -1405,8 +1483,34 @@
         "log-storage",
         "token",
         "vsock",
-        "usbip"
+        "usbip",
+        "shell",
+        "shpool"
       ]
+    },
+    "GuestTerminalRequestMetadata": {
+      "type": "object",
+      "required": [
+        "common",
+        "guestBootId",
+        "kind",
+        "sessionId"
+      ],
+      "properties": {
+        "common": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        },
+        "guestBootId": {
+          "$ref": "#/definitions/GuestBootId"
+        },
+        "kind": {
+          "$ref": "#/definitions/TerminalKind"
+        },
+        "sessionId": {
+          "$ref": "#/definitions/TerminalSessionId"
+        }
+      },
+      "additionalProperties": false
     },
     "GuestTransportKind": {
       "type": "string",
@@ -1860,6 +1964,301 @@
       "maxLength": 128,
       "minLength": 1
     },
+    "ShellAttachRequest": {
+      "type": "object",
+      "required": [
+        "force",
+        "metadata"
+      ],
+      "properties": {
+        "force": {
+          "type": "boolean"
+        },
+        "initialTerminalSize": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TerminalSize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShellName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellAttachResponse": {
+      "type": "object",
+      "required": [
+        "controlSeq",
+        "effectiveLimits",
+        "forceEvicted",
+        "outputCursor",
+        "resolvedName",
+        "state"
+      ],
+      "properties": {
+        "controlSeq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "effectiveLimits": {
+          "$ref": "#/definitions/GuestEffectiveLimits"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "forceEvicted": {
+          "type": "boolean"
+        },
+        "outputCursor": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "resolvedName": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "sessionId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TerminalSessionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/definitions/ShellState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellCloseAttachRequest": {
+      "type": "object",
+      "required": [
+        "metadata"
+      ],
+      "properties": {
+        "metadata": {
+          "$ref": "#/definitions/GuestTerminalRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellCloseCause": {
+      "type": "string",
+      "enum": [
+        "client-detach",
+        "evicted-by-force",
+        "evicted-by-admin-detach",
+        "killed-by-admin",
+        "pool-unavailable",
+        "output-gap"
+      ]
+    },
+    "ShellDetachRequest": {
+      "type": "object",
+      "required": [
+        "metadata"
+      ],
+      "properties": {
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShellName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellDetachResponse": {
+      "type": "object",
+      "required": [
+        "cause",
+        "detached",
+        "resolvedName"
+      ],
+      "properties": {
+        "cause": {
+          "$ref": "#/definitions/ShellCloseCause"
+        },
+        "detached": {
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolvedName": {
+          "$ref": "#/definitions/ShellName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellKillRequest": {
+      "type": "object",
+      "required": [
+        "metadata",
+        "name"
+      ],
+      "properties": {
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        },
+        "name": {
+          "$ref": "#/definitions/ShellName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellKillResponse": {
+      "type": "object",
+      "required": [
+        "killed",
+        "name",
+        "state"
+      ],
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "killed": {
+          "type": "boolean"
+        },
+        "name": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "state": {
+          "$ref": "#/definitions/ShellState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellListEntry": {
+      "type": "object",
+      "required": [
+        "attached",
+        "isDefault",
+        "name",
+        "state"
+      ],
+      "properties": {
+        "attached": {
+          "type": "boolean"
+        },
+        "isDefault": {
+          "type": "boolean"
+        },
+        "name": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "state": {
+          "$ref": "#/definitions/ShellState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellListRequest": {
+      "type": "object",
+      "required": [
+        "metadata"
+      ],
+      "properties": {
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellListResponse": {
+      "type": "object",
+      "required": [
+        "defaultName",
+        "sessions"
+      ],
+      "properties": {
+        "defaultName": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ShellListEntry"
+          },
+          "maxItems": 256
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellName": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1
+    },
+    "ShellState": {
+      "type": "string",
+      "enum": [
+        "attached",
+        "detached",
+        "killed",
+        "pool-unavailable",
+        "feature-disabled",
+        "output-gap"
+      ]
+    },
     "SignalTarget": {
       "type": "string",
       "enum": [
@@ -1876,6 +2275,75 @@
         "closed-by-process",
         "rejected-not-interactive"
       ]
+    },
+    "TerminalCloseStdinRequest": {
+      "type": "object",
+      "required": [
+        "metadata",
+        "offset"
+      ],
+      "properties": {
+        "metadata": {
+          "$ref": "#/definitions/GuestTerminalRequestMetadata"
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalKind": {
+      "type": "string",
+      "enum": [
+        "exec",
+        "shell"
+      ]
+    },
+    "TerminalReadOutputRequest": {
+      "type": "object",
+      "required": [
+        "maxLen",
+        "metadata",
+        "offset",
+        "stream",
+        "timeoutMs",
+        "wait"
+      ],
+      "properties": {
+        "maxLen": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 1048576.0,
+          "minimum": 1.0
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestTerminalRequestMetadata"
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stream": {
+          "$ref": "#/definitions/OutputStream"
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "wait": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalSessionId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
     },
     "TerminalSize": {
       "type": "object",
@@ -1982,6 +2450,72 @@
           "additionalProperties": false
         }
       ]
+    },
+    "TerminalTtyWinResizeRequest": {
+      "type": "object",
+      "required": [
+        "cols",
+        "controlSeq",
+        "metadata",
+        "rows"
+      ],
+      "properties": {
+        "cols": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 65535.0,
+          "minimum": 1.0
+        },
+        "controlSeq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestTerminalRequestMetadata"
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 65535.0,
+          "minimum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalWriteStdinRequest": {
+      "type": "object",
+      "required": [
+        "closeAfter",
+        "data",
+        "metadata",
+        "offset"
+      ],
+      "properties": {
+        "clientDeadlineMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "closeAfter": {
+          "type": "boolean"
+        },
+        "data": {
+          "$ref": "#/definitions/GuestStdinBytes"
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestTerminalRequestMetadata"
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
     },
     "TtyWinResizeRequest": {
       "type": "object",

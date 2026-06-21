@@ -117,6 +117,60 @@ impl GuestControlClient {
         Ok(cres)
     }
 
+    pub fn shell_attach(&self, ctx: ttrpc::context::Context, req: &super::guest_control::ShellAttachRequest) -> ::ttrpc::Result<super::guest_control::ShellAttachResponse> {
+        let mut cres = super::guest_control::ShellAttachResponse::new();
+        ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "ShellAttach", cres);
+        Ok(cres)
+    }
+
+    pub fn shell_list(&self, ctx: ttrpc::context::Context, req: &super::guest_control::ShellListRequest) -> ::ttrpc::Result<super::guest_control::ShellListResponse> {
+        let mut cres = super::guest_control::ShellListResponse::new();
+        ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "ShellList", cres);
+        Ok(cres)
+    }
+
+    pub fn shell_detach(&self, ctx: ttrpc::context::Context, req: &super::guest_control::ShellDetachRequest) -> ::ttrpc::Result<super::guest_control::ShellDetachResponse> {
+        let mut cres = super::guest_control::ShellDetachResponse::new();
+        ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "ShellDetach", cres);
+        Ok(cres)
+    }
+
+    pub fn shell_kill(&self, ctx: ttrpc::context::Context, req: &super::guest_control::ShellKillRequest) -> ::ttrpc::Result<super::guest_control::ShellKillResponse> {
+        let mut cres = super::guest_control::ShellKillResponse::new();
+        ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "ShellKill", cres);
+        Ok(cres)
+    }
+
+    pub fn shell_close_attach(&self, ctx: ttrpc::context::Context, req: &super::guest_control::ShellCloseAttachRequest) -> ::ttrpc::Result<super::guest_control::ShellDetachResponse> {
+        let mut cres = super::guest_control::ShellDetachResponse::new();
+        ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "ShellCloseAttach", cres);
+        Ok(cres)
+    }
+
+    pub fn terminal_write_stdin(&self, ctx: ttrpc::context::Context, req: &super::guest_control::TerminalWriteStdinRequest) -> ::ttrpc::Result<super::guest_control::WriteStdinResponse> {
+        let mut cres = super::guest_control::WriteStdinResponse::new();
+        ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "TerminalWriteStdin", cres);
+        Ok(cres)
+    }
+
+    pub fn terminal_read_output(&self, ctx: ttrpc::context::Context, req: &super::guest_control::TerminalReadOutputRequest) -> ::ttrpc::Result<super::guest_control::ReadOutputResponse> {
+        let mut cres = super::guest_control::ReadOutputResponse::new();
+        ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "TerminalReadOutput", cres);
+        Ok(cres)
+    }
+
+    pub fn terminal_close_stdin(&self, ctx: ttrpc::context::Context, req: &super::guest_control::TerminalCloseStdinRequest) -> ::ttrpc::Result<super::guest_control::CloseStdinResponse> {
+        let mut cres = super::guest_control::CloseStdinResponse::new();
+        ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "TerminalCloseStdin", cres);
+        Ok(cres)
+    }
+
+    pub fn terminal_tty_win_resize(&self, ctx: ttrpc::context::Context, req: &super::guest_control::TerminalTtyWinResizeRequest) -> ::ttrpc::Result<super::guest_control::ControlAck> {
+        let mut cres = super::guest_control::ControlAck::new();
+        ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "TerminalTtyWinResize", cres);
+        Ok(cres)
+    }
+
     pub fn read_guest_file(&self, ctx: ttrpc::context::Context, req: &super::guest_control::ReadGuestFileRequest) -> ::ttrpc::Result<super::guest_control::ReadGuestFileResponse> {
         let mut cres = super::guest_control::ReadGuestFileResponse::new();
         ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "ReadGuestFile", cres);
@@ -295,6 +349,105 @@ impl ::ttrpc::r#async::MethodHandler for ExecCancelMethod {
     }
 }
 
+struct ShellAttachMethod {
+    service: Arc<dyn GuestControl + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for ShellAttachMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest_control, ShellAttachRequest, shell_attach);
+    }
+}
+
+struct ShellListMethod {
+    service: Arc<dyn GuestControl + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for ShellListMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest_control, ShellListRequest, shell_list);
+    }
+}
+
+struct ShellDetachMethod {
+    service: Arc<dyn GuestControl + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for ShellDetachMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest_control, ShellDetachRequest, shell_detach);
+    }
+}
+
+struct ShellKillMethod {
+    service: Arc<dyn GuestControl + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for ShellKillMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest_control, ShellKillRequest, shell_kill);
+    }
+}
+
+struct ShellCloseAttachMethod {
+    service: Arc<dyn GuestControl + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for ShellCloseAttachMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest_control, ShellCloseAttachRequest, shell_close_attach);
+    }
+}
+
+struct TerminalWriteStdinMethod {
+    service: Arc<dyn GuestControl + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for TerminalWriteStdinMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest_control, TerminalWriteStdinRequest, terminal_write_stdin);
+    }
+}
+
+struct TerminalReadOutputMethod {
+    service: Arc<dyn GuestControl + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for TerminalReadOutputMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest_control, TerminalReadOutputRequest, terminal_read_output);
+    }
+}
+
+struct TerminalCloseStdinMethod {
+    service: Arc<dyn GuestControl + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for TerminalCloseStdinMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest_control, TerminalCloseStdinRequest, terminal_close_stdin);
+    }
+}
+
+struct TerminalTtyWinResizeMethod {
+    service: Arc<dyn GuestControl + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for TerminalTtyWinResizeMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest_control, TerminalTtyWinResizeRequest, terminal_tty_win_resize);
+    }
+}
+
 struct ReadGuestFileMethod {
     service: Arc<dyn GuestControl + Send + Sync>,
 }
@@ -364,6 +517,33 @@ pub trait GuestControl: Sync {
     async fn exec_cancel(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::ExecCancelRequest) -> ::ttrpc::Result<super::guest_control::ControlAck> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/ExecCancel is not supported".to_string())))
     }
+    async fn shell_attach(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::ShellAttachRequest) -> ::ttrpc::Result<super::guest_control::ShellAttachResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/ShellAttach is not supported".to_string())))
+    }
+    async fn shell_list(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::ShellListRequest) -> ::ttrpc::Result<super::guest_control::ShellListResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/ShellList is not supported".to_string())))
+    }
+    async fn shell_detach(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::ShellDetachRequest) -> ::ttrpc::Result<super::guest_control::ShellDetachResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/ShellDetach is not supported".to_string())))
+    }
+    async fn shell_kill(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::ShellKillRequest) -> ::ttrpc::Result<super::guest_control::ShellKillResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/ShellKill is not supported".to_string())))
+    }
+    async fn shell_close_attach(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::ShellCloseAttachRequest) -> ::ttrpc::Result<super::guest_control::ShellDetachResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/ShellCloseAttach is not supported".to_string())))
+    }
+    async fn terminal_write_stdin(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::TerminalWriteStdinRequest) -> ::ttrpc::Result<super::guest_control::WriteStdinResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/TerminalWriteStdin is not supported".to_string())))
+    }
+    async fn terminal_read_output(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::TerminalReadOutputRequest) -> ::ttrpc::Result<super::guest_control::ReadOutputResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/TerminalReadOutput is not supported".to_string())))
+    }
+    async fn terminal_close_stdin(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::TerminalCloseStdinRequest) -> ::ttrpc::Result<super::guest_control::CloseStdinResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/TerminalCloseStdin is not supported".to_string())))
+    }
+    async fn terminal_tty_win_resize(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::TerminalTtyWinResizeRequest) -> ::ttrpc::Result<super::guest_control::ControlAck> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/TerminalTtyWinResize is not supported".to_string())))
+    }
     async fn read_guest_file(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::ReadGuestFileRequest) -> ::ttrpc::Result<super::guest_control::ReadGuestFileResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/ReadGuestFile is not supported".to_string())))
     }
@@ -421,6 +601,33 @@ pub fn create_guest_control(service: Arc<dyn GuestControl + Send + Sync>) -> Has
 
     methods.insert("ExecCancel".to_string(),
                     Box::new(ExecCancelMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("ShellAttach".to_string(),
+                    Box::new(ShellAttachMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("ShellList".to_string(),
+                    Box::new(ShellListMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("ShellDetach".to_string(),
+                    Box::new(ShellDetachMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("ShellKill".to_string(),
+                    Box::new(ShellKillMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("ShellCloseAttach".to_string(),
+                    Box::new(ShellCloseAttachMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("TerminalWriteStdin".to_string(),
+                    Box::new(TerminalWriteStdinMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("TerminalReadOutput".to_string(),
+                    Box::new(TerminalReadOutputMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("TerminalCloseStdin".to_string(),
+                    Box::new(TerminalCloseStdinMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("TerminalTtyWinResize".to_string(),
+                    Box::new(TerminalTtyWinResizeMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
 
     methods.insert("ReadGuestFile".to_string(),
                     Box::new(ReadGuestFileMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);

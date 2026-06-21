@@ -5,7 +5,11 @@ use nixling_core::{
     host::IfName,
     runtime::{RuntimeOperationCapabilities, RuntimeServiceSummary},
 };
-use schemars::JsonSchema;
+use schemars::{
+    JsonSchema,
+    r#gen::SchemaGenerator,
+    schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec, StringValidation},
+};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -100,6 +104,11 @@ pub enum PublicRequest {
     /// it never crosses SSH.
     #[serde(rename = "exec")]
     Exec(ExecOp),
+    /// Persistent named guest-shell operation. Wave 2 exposes only the staged
+    /// contract DTOs; runtime handlers fail closed until the later shell runtime
+    /// waves wire guestd and nixlingd implementations.
+    #[serde(rename = "shell")]
+    Shell(ShellOp),
     /// Gateway-mode display-session operation. Host-mode daemons reject this
     /// with a typed gateway-unavailable error; gateway-mode nixlingd handles it
     /// through the ADR 0032 orchestrator.
@@ -136,6 +145,8 @@ pub enum PublicResponse {
     ReadGuestConfig(ReadGuestConfigResponse),
     #[serde(rename = "exec")]
     Exec(ExecOpResponse),
+    #[serde(rename = "shell")]
+    Shell(ShellOpResponse),
     #[serde(rename = "gateway display")]
     GatewayDisplay(GatewayDisplayOpResponse),
     #[serde(rename = "error")]
@@ -1071,6 +1082,303 @@ pub enum ExecOpResponse {
     Kill(ExecDetachedKillResult),
 }
 
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct ShellName(String);
+
+impl ShellName {
+    pub fn new(value: impl Into<String>) -> Result<Self, ShellNameError> {
+        let value = value.into();
+        if shell_name_valid(&value) {
+            Ok(Self(value))
+        } else {
+            Err(ShellNameError)
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShellNameError;
+
+impl fmt::Debug for ShellName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ShellName(<redacted>)")
+    }
+}
+
+impl<'de> Deserialize<'de> for ShellName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(|_| {
+            serde::de::Error::custom("shell name must match ^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$")
+        })
+    }
+}
+
+impl JsonSchema for ShellName {
+    fn schema_name() -> String {
+        "ShellName".to_owned()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        let mut object = SchemaObject {
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::String))),
+            string: Some(Box::new(StringValidation {
+                min_length: Some(1),
+                max_length: Some(64),
+                pattern: Some("^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$".to_owned()),
+            })),
+            ..Default::default()
+        };
+        object.metadata = Some(Box::new(Metadata {
+            description: Some("Persistent shell session name.".to_owned()),
+            ..Default::default()
+        }));
+        Schema::Object(object)
+    }
+}
+
+fn shell_name_valid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > 64 {
+        return false;
+    }
+    (bytes[0].is_ascii_alphanumeric() || bytes[0] == b'_')
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellAttachArgs {
+    pub vm: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<ShellName>,
+    #[serde(default)]
+    pub force: bool,
+    pub initial_terminal_size: crate::terminal_wire::TerminalSize,
+}
+
+impl fmt::Debug for ShellAttachArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShellAttachArgs")
+            .field("vm", &self.vm)
+            .field("has_name", &self.name.is_some())
+            .field("force", &self.force)
+            .field("initial_terminal_size", &self.initial_terminal_size)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellListArgs {
+    pub vm: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellDetachArgs {
+    pub vm: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<ShellName>,
+}
+
+impl fmt::Debug for ShellDetachArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShellDetachArgs")
+            .field("vm", &self.vm)
+            .field("has_name", &self.name.is_some())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellKillArgs {
+    pub vm: String,
+    pub name: ShellName,
+}
+
+impl fmt::Debug for ShellKillArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShellKillArgs")
+            .field("vm", &self.vm)
+            .field("name", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellCloseAttachArgs {
+    pub session: String,
+}
+
+impl fmt::Debug for ShellCloseAttachArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShellCloseAttachArgs")
+            .field("session", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", content = "args", rename_all = "camelCase")]
+pub enum ShellOp {
+    Attach(ShellAttachArgs),
+    WriteStdin(crate::terminal_wire::TerminalWriteStdin),
+    ReadOutput(crate::terminal_wire::TerminalReadOutput),
+    Resize(crate::terminal_wire::TerminalResize),
+    Wait(crate::terminal_wire::TerminalWait),
+    CloseStdin(crate::terminal_wire::TerminalClose),
+    CloseAttach(ShellCloseAttachArgs),
+    List(ShellListArgs),
+    Detach(ShellDetachArgs),
+    Kill(ShellKillArgs),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellSessionState {
+    Attached,
+    Detached,
+    Killed,
+    PoolUnavailable,
+    FeatureDisabled,
+    OutputGap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellCloseCause {
+    ClientDetach,
+    EvictedByForce,
+    EvictedByAdminDetach,
+    KilledByAdmin,
+    PoolUnavailable,
+    OutputGap,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellAttachResult {
+    pub session: String,
+    pub resolved_name: ShellName,
+    pub state: ShellSessionState,
+    #[serde(default)]
+    pub force_evicted: bool,
+}
+
+impl fmt::Debug for ShellAttachResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShellAttachResult")
+            .field("session", &"<redacted>")
+            .field("resolved_name", &"<redacted>")
+            .field("state", &self.state)
+            .field("force_evicted", &self.force_evicted)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellListEntry {
+    pub name: ShellName,
+    pub state: ShellSessionState,
+    #[serde(default)]
+    pub attached: bool,
+    #[serde(default)]
+    pub is_default: bool,
+}
+
+impl fmt::Debug for ShellListEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShellListEntry")
+            .field("name", &"<redacted>")
+            .field("state", &self.state)
+            .field("attached", &self.attached)
+            .field("is_default", &self.is_default)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellListResult {
+    pub default_name: ShellName,
+    pub sessions: Vec<ShellListEntry>,
+}
+
+impl fmt::Debug for ShellListResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShellListResult")
+            .field("default_name", &"<redacted>")
+            .field("sessions_len", &self.sessions.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellDetachResult {
+    pub resolved_name: ShellName,
+    pub detached: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<ShellCloseCause>,
+}
+
+impl fmt::Debug for ShellDetachResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShellDetachResult")
+            .field("resolved_name", &"<redacted>")
+            .field("detached", &self.detached)
+            .field("cause", &self.cause)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellKillResult {
+    pub name: ShellName,
+    pub killed: bool,
+    pub state: ShellSessionState,
+}
+
+impl fmt::Debug for ShellKillResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShellKillResult")
+            .field("name", &"<redacted>")
+            .field("killed", &self.killed)
+            .field("state", &self.state)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", content = "result", rename_all = "camelCase")]
+pub enum ShellOpResponse {
+    Attach(ShellAttachResult),
+    WriteStdin(crate::terminal_wire::TerminalWriteStdinResult),
+    ReadOutput(crate::terminal_wire::TerminalReadOutputChunk),
+    Resize(crate::terminal_wire::TerminalControlResult),
+    Wait(crate::terminal_wire::TerminalWaitResult),
+    CloseStdin(crate::terminal_wire::TerminalCloseResult),
+    CloseAttach(ShellDetachResult),
+    List(ShellListResult),
+    Detach(ShellDetachResult),
+    Kill(ShellKillResult),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MigrateRequest {
@@ -1912,5 +2220,117 @@ mod tests {
             &format!("{:?}", ExecOpResponse::Kill(detached_kill_result)),
             "ExecOpResponse::Kill",
         );
+    }
+
+    #[test]
+    fn shell_name_enforces_adr_shape() {
+        use super::ShellName;
+
+        for name in ["default", "dev_1", "A.B-c_9", "_scratch"] {
+            assert!(ShellName::new(name).is_ok(), "{name} should be valid");
+            let json = serde_json::json!(name);
+            let decoded: ShellName = serde_json::from_value(json).expect("valid name decodes");
+            assert_eq!(decoded.as_str(), name);
+        }
+
+        let too_long = "a".repeat(65);
+        for name in [
+            "",
+            ".",
+            "..",
+            "-default",
+            "bad/name",
+            "bad name",
+            "bad{name}",
+            "bad\nname",
+            too_long.as_str(),
+        ] {
+            assert!(ShellName::new(name).is_err(), "{name:?} should be invalid");
+            let json = serde_json::json!(name);
+            serde_json::from_value::<ShellName>(json).expect_err("invalid name rejects");
+        }
+    }
+
+    #[test]
+    fn shell_dto_debug_redacts_names_handles_and_output() {
+        use super::{
+            ShellAttachArgs, ShellAttachResult, ShellCloseAttachArgs, ShellDetachArgs,
+            ShellDetachResult, ShellKillArgs, ShellKillResult, ShellListEntry, ShellListResult,
+            ShellName, ShellSessionState,
+        };
+
+        const SECRET_NAME: &str = "SENTINEL_NAME_cafe";
+        const SECRET_HANDLE: &str = "SENTINEL_HANDLE_feed";
+
+        let name = ShellName::new(SECRET_NAME).expect("valid sentinel name");
+        let assert_clean = |rendered: &str, label: &str| {
+            for secret in [SECRET_NAME, SECRET_HANDLE] {
+                assert!(
+                    !rendered.contains(secret),
+                    "{label} Debug leaked sentinel {secret}: {rendered}"
+                );
+            }
+        };
+
+        let attach = ShellAttachArgs {
+            vm: "corp-vm".to_owned(),
+            name: Some(name.clone()),
+            force: true,
+            initial_terminal_size: crate::terminal_wire::TerminalSize { rows: 24, cols: 80 },
+        };
+        assert_clean(&format!("{attach:?}"), "ShellAttachArgs");
+
+        let attach_result = ShellAttachResult {
+            session: SECRET_HANDLE.to_owned(),
+            resolved_name: name.clone(),
+            state: ShellSessionState::Attached,
+            force_evicted: true,
+        };
+        assert_clean(&format!("{attach_result:?}"), "ShellAttachResult");
+
+        let detach = ShellDetachArgs {
+            vm: "corp-vm".to_owned(),
+            name: Some(name.clone()),
+        };
+        assert_clean(&format!("{detach:?}"), "ShellDetachArgs");
+
+        let kill = ShellKillArgs {
+            vm: "corp-vm".to_owned(),
+            name: name.clone(),
+        };
+        assert_clean(&format!("{kill:?}"), "ShellKillArgs");
+
+        let close = ShellCloseAttachArgs {
+            session: SECRET_HANDLE.to_owned(),
+        };
+        assert_clean(&format!("{close:?}"), "ShellCloseAttachArgs");
+
+        let entry = ShellListEntry {
+            name: name.clone(),
+            state: ShellSessionState::Detached,
+            attached: false,
+            is_default: true,
+        };
+        assert_clean(&format!("{entry:?}"), "ShellListEntry");
+
+        let list = ShellListResult {
+            default_name: name.clone(),
+            sessions: vec![entry],
+        };
+        assert_clean(&format!("{list:?}"), "ShellListResult");
+
+        let detached = ShellDetachResult {
+            resolved_name: name.clone(),
+            detached: true,
+            cause: None,
+        };
+        assert_clean(&format!("{detached:?}"), "ShellDetachResult");
+
+        let killed = ShellKillResult {
+            name,
+            killed: true,
+            state: ShellSessionState::Killed,
+        };
+        assert_clean(&format!("{killed:?}"), "ShellKillResult");
     }
 }

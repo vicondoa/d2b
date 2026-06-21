@@ -245,6 +245,7 @@
             "restart",
             "rollback",
             "rotate-known-host",
+            "shell",
             "status",
             "status --check-bridges",
             "store verify",

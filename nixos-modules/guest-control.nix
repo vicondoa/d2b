@@ -94,6 +94,36 @@ in
         '';
       };
     };
+
+    shell = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        internal = true;
+        readOnly = true;
+        description = "Host-owned persistent shell policy enable bit.";
+      };
+
+      defaultName = lib.mkOption {
+        type = lib.types.strMatching "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$";
+        internal = true;
+        readOnly = true;
+        description = "Host-owned default persistent shell session name.";
+      };
+
+      maxSessions = lib.mkOption {
+        type = lib.types.ints.between 1 256;
+        internal = true;
+        readOnly = true;
+        description = "Host-owned maximum persistent shell sessions per VM.";
+      };
+
+      maxAttached = lib.mkOption {
+        type = lib.types.ints.between 1 64;
+        internal = true;
+        readOnly = true;
+        description = "Host-owned maximum attached persistent shell clients per VM.";
+      };
+    };
   };
 
   config = {
@@ -159,6 +189,28 @@ in
           a non-zero uid.
         '';
       }
+      {
+        assertion = !cfg.shell.enable || cfg.enable;
+        message = ''
+          nixling.guestControl.shell.enable requires nixling.guestControl.enable.
+          Set nixling.vms.<vm>.guest.control.enable = true on the host-side VM
+          option before enabling persistent shell policy.
+        '';
+      }
+      {
+        assertion = !cfg.shell.enable || cfg.exec.enable;
+        message = ''
+          nixling.guestControl.shell.enable requires nixling.guestControl.exec.enable
+          because persistent shells reuse the guest-control exec terminal substrate.
+        '';
+      }
+      {
+        assertion = cfg.shell.maxAttached <= cfg.shell.maxSessions;
+        message = ''
+          nixling.guestControl.shell.maxAttached must be less than or equal to
+          nixling.guestControl.shell.maxSessions.
+        '';
+      }
     ];
 
     environment.systemPackages = [
@@ -203,8 +255,15 @@ in
               usbipFlags =
                 lib.optionalString (cfg.usbipPath != null)
                   " --usbip-path ${lib.escapeShellArg cfg.usbipPath}";
+              shellFlags =
+                lib.optionalString cfg.shell.enable (
+                  " --shell-enable"
+                  + " --shell-default-name ${lib.escapeShellArg cfg.shell.defaultName}"
+                  + " --shell-max-sessions ${toString cfg.shell.maxSessions}"
+                  + " --shell-max-attached ${toString cfg.shell.maxAttached}"
+                );
             in
-            "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}${usbipFlags}";
+            "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}${usbipFlags}${shellFlags}";
           LoadCredential = [
             "guest_control_token:/run/nixling-guest-control-host/token"
           ];

@@ -24,6 +24,16 @@ service GuestControl {
   rpc ExecSignal(ExecSignalRequest) returns (ControlAck);
   rpc ExecCancel(ExecCancelRequest) returns (ControlAck);
 
+  rpc ShellAttach(ShellAttachRequest) returns (ShellAttachResponse);
+  rpc ShellList(ShellListRequest) returns (ShellListResponse);
+  rpc ShellDetach(ShellDetachRequest) returns (ShellDetachResponse);
+  rpc ShellKill(ShellKillRequest) returns (ShellKillResponse);
+  rpc ShellCloseAttach(ShellCloseAttachRequest) returns (ShellDetachResponse);
+  rpc TerminalWriteStdin(TerminalWriteStdinRequest) returns (WriteStdinResponse);
+  rpc TerminalReadOutput(TerminalReadOutputRequest) returns (ReadOutputResponse);
+  rpc TerminalCloseStdin(TerminalCloseStdinRequest) returns (CloseStdinResponse);
+  rpc TerminalTtyWinResize(TerminalTtyWinResizeRequest) returns (ControlAck);
+
   // Framework op (W15): read a host-declared, enum-keyed guest file in a
   // single bounded shot. Auth-gated like the exec RPCs; available whenever
   // guest-control is enabled (not gated on exec.enable). The request carries a
@@ -46,6 +56,13 @@ message ExecRequestMetadata {
   RequestMetadata common = 1;
   string exec_id = 2;
   string guest_boot_id = 3;
+}
+
+message TerminalRequestMetadata {
+  RequestMetadata common = 1;
+  string session_id = 2;
+  string guest_boot_id = 3;
+  TerminalKind kind = 4;
 }
 
 message HelloRequest {
@@ -121,6 +138,8 @@ message GuestEffectiveLimits {
   uint32 pending_exec_waits_per_vm = 15;
   uint32 rpc_rate_per_connection_per_second = 16;
   uint32 rpc_rate_per_vm_burst = 17;
+  uint32 shell_sessions_per_vm = 18;
+  uint32 shell_attached_sessions_per_vm = 19;
 }
 
 message ExecCreateRequest {
@@ -356,6 +375,98 @@ message UsbipImportResponse {
   GuestControlError error = 4;
 }
 
+message ShellAttachRequest {
+  RequestMetadata metadata = 1;
+  optional string name = 2;
+  bool force = 3;
+  TerminalSize initial_terminal_size = 4;
+}
+
+message ShellAttachResponse {
+  optional string session_id = 1;
+  string resolved_name = 2;
+  ShellState state = 3;
+  bool force_evicted = 4;
+  uint64 control_seq = 5;
+  uint64 output_cursor = 6;
+  GuestEffectiveLimits effective_limits = 7;
+  GuestControlError error = 8;
+}
+
+message ShellListRequest {
+  RequestMetadata metadata = 1;
+}
+
+message ShellListResponse {
+  string default_name = 1;
+  repeated ShellListEntry sessions = 2;
+  GuestControlError error = 3;
+}
+
+message ShellListEntry {
+  string name = 1;
+  ShellState state = 2;
+  bool attached = 3;
+  bool is_default = 4;
+}
+
+message ShellDetachRequest {
+  RequestMetadata metadata = 1;
+  optional string name = 2;
+}
+
+message ShellKillRequest {
+  RequestMetadata metadata = 1;
+  string name = 2;
+}
+
+message ShellCloseAttachRequest {
+  TerminalRequestMetadata metadata = 1;
+}
+
+message ShellDetachResponse {
+  string resolved_name = 1;
+  bool detached = 2;
+  ShellCloseCause cause = 3;
+  GuestControlError error = 4;
+}
+
+message ShellKillResponse {
+  string name = 1;
+  bool killed = 2;
+  ShellState state = 3;
+  GuestControlError error = 4;
+}
+
+message TerminalWriteStdinRequest {
+  TerminalRequestMetadata metadata = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+  bool close_after = 4;
+  optional uint64 client_deadline_ms = 5;
+}
+
+message TerminalReadOutputRequest {
+  TerminalRequestMetadata metadata = 1;
+  OutputStream stream = 2;
+  uint64 offset = 3;
+  uint64 max_len = 4;
+  bool wait = 5;
+  uint64 timeout_ms = 6;
+}
+
+message TerminalCloseStdinRequest {
+  TerminalRequestMetadata metadata = 1;
+  uint64 offset = 2;
+}
+
+message TerminalTtyWinResizeRequest {
+  TerminalRequestMetadata metadata = 1;
+  uint64 control_seq = 2;
+  uint32 rows = 3;
+  uint32 cols = 4;
+}
+
 message TerminalStatus {
   oneof outcome {
     int32 exit_code = 1;
@@ -383,6 +494,9 @@ enum GuestCapability {
   GUEST_CAPABILITY_SIGNALS = 8;
   GUEST_CAPABILITY_READ_GUEST_FILE = 9;
   GUEST_CAPABILITY_USBIP_IMPORT = 10;
+  GUEST_CAPABILITY_SHELL_ATTACHED = 11;
+  GUEST_CAPABILITY_SHELL_MANAGEMENT = 12;
+  GUEST_CAPABILITY_SHELL_FORCE_ATTACH = 13;
 }
 
 enum GuestSubsystem {
@@ -394,6 +508,34 @@ enum GuestSubsystem {
   GUEST_SUBSYSTEM_TOKEN = 5;
   GUEST_SUBSYSTEM_VSOCK = 6;
   GUEST_SUBSYSTEM_USBIP = 7;
+  GUEST_SUBSYSTEM_SHELL = 8;
+  GUEST_SUBSYSTEM_SHPOOL = 9;
+}
+
+enum TerminalKind {
+  TERMINAL_KIND_UNSPECIFIED = 0;
+  TERMINAL_KIND_EXEC = 1;
+  TERMINAL_KIND_SHELL = 2;
+}
+
+enum ShellState {
+  SHELL_STATE_UNSPECIFIED = 0;
+  SHELL_STATE_ATTACHED = 1;
+  SHELL_STATE_DETACHED = 2;
+  SHELL_STATE_KILLED = 3;
+  SHELL_STATE_POOL_UNAVAILABLE = 4;
+  SHELL_STATE_FEATURE_DISABLED = 5;
+  SHELL_STATE_OUTPUT_GAP = 6;
+}
+
+enum ShellCloseCause {
+  SHELL_CLOSE_CAUSE_UNSPECIFIED = 0;
+  SHELL_CLOSE_CAUSE_CLIENT_DETACH = 1;
+  SHELL_CLOSE_CAUSE_EVICTED_BY_FORCE = 2;
+  SHELL_CLOSE_CAUSE_EVICTED_BY_ADMIN_DETACH = 3;
+  SHELL_CLOSE_CAUSE_KILLED_BY_ADMIN = 4;
+  SHELL_CLOSE_CAUSE_POOL_UNAVAILABLE = 5;
+  SHELL_CLOSE_CAUSE_OUTPUT_GAP = 6;
 }
 
 // Closed set of host-declared guest files readable via ReadGuestFile.
@@ -557,4 +699,13 @@ enum GuestControlErrorKind {
   GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED = 44;
   GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID = 45;
   GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST = 46;
+  GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED = 47;
+  GUEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME = 48;
+  GUEST_CONTROL_ERROR_KIND_SHELL_CAPACITY_EXCEEDED = 49;
+  GUEST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED = 50;
+  GUEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND = 51;
+  GUEST_CONTROL_ERROR_KIND_SHELL_ALREADY_ATTACHED = 52;
+  GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE = 53;
+  GUEST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMATCH = 54;
+  GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP = 55;
 }

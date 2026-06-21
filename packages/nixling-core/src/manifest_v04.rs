@@ -213,6 +213,8 @@ pub struct VmEntry {
     pub net_vm: Option<String>,
     pub observability: VmObservability,
     pub runtime: RuntimeMetadata,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<VmShellMetadata>,
     pub ssh_user: Option<String>,
     pub state_dir: String,
     pub static_ip: Option<String>,
@@ -237,6 +239,15 @@ pub struct VmObservability {
     pub enabled: bool,
     pub vsock_cid: Option<u32>,
     pub vsock_host_socket: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmShellMetadata {
+    pub enabled: bool,
+    pub default_name: String,
+    pub max_sessions: u32,
+    pub max_attached: u32,
 }
 
 fn vm_key_ok(value: &str) -> bool {

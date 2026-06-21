@@ -191,6 +191,10 @@
         "keys": {
           "type": "boolean"
         },
+        "shell": {
+          "default": false,
+          "type": "boolean"
+        },
         "ssh": {
           "type": "boolean"
         }
@@ -514,6 +518,16 @@
         "runtime": {
           "$ref": "#/definitions/RuntimeMetadata"
         },
+        "shell": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/VmShellMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "sshUser": {
           "type": [
             "string",
@@ -597,6 +611,34 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmShellMetadata": {
+      "type": "object",
+      "required": [
+        "defaultName",
+        "enabled",
+        "maxAttached",
+        "maxSessions"
+      ],
+      "properties": {
+        "defaultName": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "maxAttached": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "maxSessions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
         }
       },
       "additionalProperties": false

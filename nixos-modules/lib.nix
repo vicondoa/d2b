@@ -177,6 +177,7 @@ rec {
     guest = {
       guestControl = true;
       exec = true;
+      shell = true;
       configSync = true;
       ssh = true;
       keys = true;
@@ -226,6 +227,7 @@ rec {
     guest = {
       guestControl = false;
       exec = false;
+      shell = false;
       configSync = false;
       ssh = false;
       keys = false;

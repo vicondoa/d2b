@@ -82,6 +82,53 @@ in
       ${usernamePattern} and must not be root. Guest exec never runs as root;
       users elevate with sudo inside the session.
     '';
+  }) cfg.vms
+  ++ lib.mapAttrsToList (name: vm: {
+    assertion =
+      !vm.guest.shell.enable
+      || vm.guest.control.enable;
+    message = ''
+      nixling.vms.${name}.guest.shell.enable requires
+      nixling.vms.${name}.guest.control.enable because persistent shell policy
+      is enforced by the authenticated guest-control plane.
+    '';
+  }) cfg.vms
+  ++ lib.mapAttrsToList (name: vm: {
+    assertion =
+      !vm.guest.shell.enable
+      || vm.guest.exec.enable;
+    message = ''
+      nixling.vms.${name}.guest.shell.enable requires
+      nixling.vms.${name}.guest.exec.enable because persistent shells reuse the
+      guest-control exec terminal substrate and workload-user policy.
+    '';
+  }) cfg.vms
+  ++ lib.mapAttrsToList (name: vm: {
+    assertion =
+      !vm.guest.shell.enable
+      || vm.ssh.user != null;
+    message = ''
+      nixling.vms.${name}.guest.shell.enable is true, but no workload user is
+      configured. Persistent shells run as the VM's workload user (never root);
+      set nixling.vms.${name}.ssh.user.
+    '';
+  }) cfg.vms
+  ++ lib.mapAttrsToList (name: vm: {
+    assertion =
+      !vm.guest.shell.enable
+      || vm.ssh.user == null
+      || (usernameValid vm.ssh.user && vm.ssh.user != "root");
+    message = ''
+      nixling.vms.${name}.ssh.user (the persistent shell workload user) must
+      match ${usernamePattern} and must not be root.
+    '';
+  }) cfg.vms
+  ++ lib.mapAttrsToList (name: vm: {
+    assertion = vm.guest.shell.maxAttached <= vm.guest.shell.maxSessions;
+    message = ''
+      nixling.vms.${name}.guest.shell.maxAttached must be less than or equal to
+      guest.shell.maxSessions.
+    '';
   }) cfg.vms;
 
   system.activationScripts.nixlingGuestControlTokens =

@@ -1,7 +1,7 @@
 use std::{env, ffi::OsString, path::PathBuf, process};
 
 use nixling_guestd::exec::ExecPolicy;
-use nixling_guestd::service::DetachedRuntimeConfig;
+use nixling_guestd::service::{DetachedRuntimeConfig, ShellPolicy};
 
 fn main() {
     if let Err(error) = run(env::args_os().skip(1).collect()) {
@@ -34,6 +34,9 @@ fn run(args: Vec<OsString>) -> Result<(), nixling_guestd::service::GuestdService
             if let Some(usbip_path) = parsed.usbip_path {
                 config = config.with_usbip_path(usbip_path);
             }
+            if let Some(shell_policy) = parsed.shell_policy {
+                config = config.with_shell_policy(shell_policy);
+            }
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -52,6 +55,7 @@ struct ServeArgs {
     interactive_max_runtime_sec: u64,
     guest_config_path: Option<PathBuf>,
     usbip_path: Option<PathBuf>,
+    shell_policy: Option<ShellPolicy>,
 }
 
 /// Parse `--serve` arguments: the required `--vm-id <name>` plus the optional
@@ -70,6 +74,10 @@ fn parse_serve_args(
     let mut interactive_max_runtime_sec: u64 = 0;
     let mut guest_config_path: Option<PathBuf> = None;
     let mut usbip_path: Option<PathBuf> = None;
+    let mut shell_enabled = false;
+    let mut shell_default_name = String::from("default");
+    let mut shell_max_sessions: u32 = 8;
+    let mut shell_max_attached: u32 = 1;
     while let Some(arg) = iter.next() {
         match arg.to_str() {
             Some("--vm-id") => {
@@ -99,6 +107,31 @@ fn parse_serve_args(
             }
             Some("--usbip-path") => {
                 usbip_path = Some(parse_abs_path(iter.next())?);
+            }
+            Some("--shell-enable") => shell_enabled = true,
+            Some("--shell-default-name") => {
+                shell_default_name = iter
+                    .next()
+                    .and_then(|value| value.to_str())
+                    .map(str::to_owned)
+                    .filter(|value| is_valid_shell_name(value))
+                    .ok_or(nixling_guestd::service::GuestdServiceError::Ttrpc)?;
+            }
+            Some("--shell-max-sessions") => {
+                shell_max_sessions = iter
+                    .next()
+                    .and_then(|value| value.to_str())
+                    .and_then(|value| value.parse::<u32>().ok())
+                    .filter(|value| (1..=256).contains(value))
+                    .ok_or(nixling_guestd::service::GuestdServiceError::Ttrpc)?;
+            }
+            Some("--shell-max-attached") => {
+                shell_max_attached = iter
+                    .next()
+                    .and_then(|value| value.to_str())
+                    .and_then(|value| value.parse::<u32>().ok())
+                    .filter(|value| (1..=64).contains(value))
+                    .ok_or(nixling_guestd::service::GuestdServiceError::Ttrpc)?;
             }
             Some("--detached-max-runtime-sec") => {
                 detached_max_runtime_sec = iter
@@ -136,6 +169,19 @@ fn parse_serve_args(
         // A half-configured detached path is fail-closed (both or neither).
         _ => return Err(nixling_guestd::service::GuestdServiceError::Ttrpc),
     };
+    let shell_policy = if shell_enabled {
+        if shell_max_attached > shell_max_sessions {
+            return Err(nixling_guestd::service::GuestdServiceError::Ttrpc);
+        }
+        Some(ShellPolicy {
+            enabled: true,
+            default_name: shell_default_name,
+            max_sessions: shell_max_sessions,
+            max_attached: shell_max_attached,
+        })
+    } else {
+        None
+    };
 
     Ok(ServeArgs {
         vm_id,
@@ -144,6 +190,7 @@ fn parse_serve_args(
         interactive_max_runtime_sec,
         guest_config_path,
         usbip_path,
+        shell_policy,
     })
 }
 
@@ -175,4 +222,16 @@ fn is_valid_workload_user(value: &str) -> bool {
             .bytes()
             .next()
             .is_some_and(|byte| byte.is_ascii_lowercase() || byte == b'_')
+}
+
+fn is_valid_shell_name(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > 64 {
+        return false;
+    }
+    let first = bytes[0];
+    (first.is_ascii_alphanumeric() || first == b'_')
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }

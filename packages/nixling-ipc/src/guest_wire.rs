@@ -212,6 +212,16 @@ bounded_string! {
 }
 
 bounded_string! {
+    /// Guest-control terminal session id.
+    TerminalSessionId, 128
+}
+
+bounded_string! {
+    /// Persistent shell session name.
+    ShellName, 64
+}
+
+bounded_string! {
     /// Hex-encoded SHA-256 of a detached exec's argv (never the raw argv).
     ArgvSha256, 64
 }
@@ -284,6 +294,9 @@ pub enum GuestCapability {
     Signals,
     ReadGuestFile,
     UsbipImport,
+    ShellAttached,
+    ShellManagement,
+    ShellForceAttach,
 }
 
 /// Closed set of host-declared guest files readable via `ReadGuestFile`.
@@ -304,6 +317,37 @@ pub enum GuestSubsystem {
     Token,
     Vsock,
     Usbip,
+    Shell,
+    Shpool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum TerminalKind {
+    Exec,
+    Shell,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellState {
+    Attached,
+    Detached,
+    Killed,
+    PoolUnavailable,
+    FeatureDisabled,
+    OutputGap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellCloseCause {
+    ClientDetach,
+    EvictedByForce,
+    EvictedByAdminDetach,
+    KilledByAdmin,
+    PoolUnavailable,
+    OutputGap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -360,6 +404,19 @@ pub struct GuestControlSchema {
     pub exec_signal: ExecSignalRequest,
     pub exec_cancel: ExecCancelRequest,
     pub control_ack: ControlAck,
+    pub shell_attach: ShellAttachRequest,
+    pub shell_attached: ShellAttachResponse,
+    pub shell_list: ShellListRequest,
+    pub shell_listed: ShellListResponse,
+    pub shell_detach: ShellDetachRequest,
+    pub shell_detached: ShellDetachResponse,
+    pub shell_kill: ShellKillRequest,
+    pub shell_killed: ShellKillResponse,
+    pub shell_close_attach: ShellCloseAttachRequest,
+    pub terminal_write_stdin: TerminalWriteStdinRequest,
+    pub terminal_read_output: TerminalReadOutputRequest,
+    pub terminal_close_stdin: TerminalCloseStdinRequest,
+    pub terminal_tty_win_resize: TerminalTtyWinResizeRequest,
     pub read_guest_file: ReadGuestFileRequest,
     pub read_guest_file_result: ReadGuestFileResponse,
     pub usbip_import: UsbipImportRequest,
@@ -423,6 +480,15 @@ pub struct GuestExecRequestMetadata {
     pub common: GuestRequestMetadata,
     pub exec_id: ExecId,
     pub guest_boot_id: GuestBootId,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GuestTerminalRequestMetadata {
+    pub common: GuestRequestMetadata,
+    pub session_id: TerminalSessionId,
+    pub guest_boot_id: GuestBootId,
+    pub kind: TerminalKind,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -648,6 +714,10 @@ pub struct GuestEffectiveLimits {
     pub rpc_rate_per_connection_per_second: u32,
     #[schemars(range(max = 1000))]
     pub rpc_rate_per_vm_burst: u32,
+    #[schemars(range(max = 256))]
+    pub shell_sessions_per_vm: u32,
+    #[schemars(range(max = 64))]
+    pub shell_attached_sessions_per_vm: u32,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -915,6 +985,130 @@ pub struct ControlAck {
     pub error: Option<GuestControlError>,
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellAttachRequest {
+    pub metadata: GuestRequestMetadata,
+    pub name: Option<ShellName>,
+    pub force: bool,
+    pub initial_terminal_size: Option<TerminalSize>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellAttachResponse {
+    pub session_id: Option<TerminalSessionId>,
+    pub resolved_name: ShellName,
+    pub state: ShellState,
+    pub force_evicted: bool,
+    pub control_seq: u64,
+    pub output_cursor: u64,
+    pub effective_limits: GuestEffectiveLimits,
+    pub error: Option<GuestControlError>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellListRequest {
+    pub metadata: GuestRequestMetadata,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellListResponse {
+    pub default_name: ShellName,
+    #[schemars(length(max = 256))]
+    pub sessions: Vec<ShellListEntry>,
+    pub error: Option<GuestControlError>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellListEntry {
+    pub name: ShellName,
+    pub state: ShellState,
+    pub attached: bool,
+    pub is_default: bool,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellDetachRequest {
+    pub metadata: GuestRequestMetadata,
+    pub name: Option<ShellName>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellKillRequest {
+    pub metadata: GuestRequestMetadata,
+    pub name: ShellName,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellCloseAttachRequest {
+    pub metadata: GuestTerminalRequestMetadata,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellDetachResponse {
+    pub resolved_name: ShellName,
+    pub detached: bool,
+    pub cause: ShellCloseCause,
+    pub error: Option<GuestControlError>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellKillResponse {
+    pub name: ShellName,
+    pub killed: bool,
+    pub state: ShellState,
+    pub error: Option<GuestControlError>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalWriteStdinRequest {
+    pub metadata: GuestTerminalRequestMetadata,
+    pub offset: u64,
+    pub data: GuestStdinBytes,
+    pub close_after: bool,
+    pub client_deadline_ms: Option<u64>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalReadOutputRequest {
+    pub metadata: GuestTerminalRequestMetadata,
+    pub stream: OutputStream,
+    pub offset: u64,
+    #[schemars(range(min = 1, max = 1048576))]
+    pub max_len: u64,
+    pub wait: bool,
+    pub timeout_ms: u64,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalCloseStdinRequest {
+    pub metadata: GuestTerminalRequestMetadata,
+    pub offset: u64,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalTtyWinResizeRequest {
+    pub metadata: GuestTerminalRequestMetadata,
+    pub control_seq: u64,
+    #[schemars(range(min = 1, max = 65535))]
+    pub rows: u32,
+    #[schemars(range(min = 1, max = 65535))]
+    pub cols: u32,
+}
+
 /// Framework read of a host-declared guest file, keyed by a closed enum
 /// (NOT a free-form path). guestd maps the key to the host-declared target.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1103,6 +1297,15 @@ pub enum GuestControlErrorKind {
     UsbipCommandFailed,
     UsbipInvalidBusId,
     UsbipInvalidHost,
+    GuestShellDisabled,
+    ShellInvalidName,
+    ShellCapacityExceeded,
+    ShellAttachCapacityExceeded,
+    ShellNotFound,
+    ShellAlreadyAttached,
+    ShellPoolUnavailable,
+    ShellDaemonEpochMismatch,
+    ShellOutputGap,
 }
 
 #[cfg(test)]

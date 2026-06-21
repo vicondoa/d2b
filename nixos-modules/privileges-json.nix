@@ -414,6 +414,18 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "shell",
+    "subject": "VM/persistent shell",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixling-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "no",
+    "auditMode": "yes"
+  },
+  {
     "operation": "switch",
     "subject": "VM",
     "scope": "per-VM",

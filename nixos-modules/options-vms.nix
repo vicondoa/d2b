@@ -9,6 +9,7 @@
 let
   qemuMediaRefType = lib.types.strMatching "^[a-z][a-z0-9-]{0,62}$";
   qemuMediaByIdNameType = lib.types.strMatching "^[A-Za-z0-9._:+-]{1,255}$";
+  shellNameType = lib.types.strMatching "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$";
 
   qemuMediaSourceType = lib.types.submodule {
     freeformType = null;
@@ -1023,6 +1024,55 @@ in
               This ceiling applies only to interactive `tty = true`,
               non-detached execs. Non-interactive attached execs keep their
               fixed built-in runtime ceiling regardless of this value.
+            '';
+          };
+        };
+
+        guest.shell = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              Enable the staged persistent guest-shell contract for this VM.
+
+              Persistent shells use the authenticated guest-control plane and the
+              same workload-user terminal substrate as guest exec. The option is
+              default-off and requires `guest.control.enable = true`,
+              `guest.exec.enable = true`, and a non-root workload user
+              (`ssh.user`). Runtime shpool attachment is staged separately; this
+              option currently carries the host/guest policy and manifest
+              contract used by later runtime waves.
+            '';
+          };
+
+          defaultName = lib.mkOption {
+            type = shellNameType;
+            default = "default";
+            example = "default";
+            description = ''
+              Default persistent shell session name used when an attach/detach
+              request omits `--name`. The identifier is 1–64 ASCII bytes, starts
+              with `[A-Za-z0-9_]`, and then allows `[A-Za-z0-9._-]`.
+            '';
+          };
+
+          maxSessions = lib.mkOption {
+            type = lib.types.ints.between 1 256;
+            default = 8;
+            example = 16;
+            description = ''
+              Maximum number of persistent shell sessions tracked for this VM,
+              including detached and attached sessions.
+            '';
+          };
+
+          maxAttached = lib.mkOption {
+            type = lib.types.ints.between 1 64;
+            default = 1;
+            example = 2;
+            description = ''
+              Maximum number of concurrently attached persistent shell clients
+              for this VM. This is bounded independently from `maxSessions`.
             '';
           };
         };
