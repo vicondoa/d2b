@@ -216,6 +216,10 @@ The same-UID socket model is an explicit trust boundary. Code already running as
 the workload user may be able to reach the shpool socket. Nixling provides
 admin-visible reconciliation and typed control, not cryptographic prevention
 against same-UID clients.
+All filesystem-backed UNIX socket paths used by this feature, including test
+socket paths, are preflighted against the platform `sockaddr_un.sun_path` limit
+before bind or connect. Tests use deliberately short XDG runtime paths so CI temp
+directory nesting cannot produce false `ENAMETOOLONG` failures.
 
 ### Async, filesystem, and process-safety rules
 
@@ -228,6 +232,11 @@ pidfd in `AsyncFd` for readiness. Guestd does not depend on
 uses nonblocking pipes or framed AF_UNIX streams; `tokio::fs`,
 `tokio::task::spawn_blocking`, or equivalent blocking pools are reserved for
 filesystem probes, short bounded file reads, and cleanup.
+The helper binary uses a synchronous `fn main()` and explicitly does not use
+`#[tokio::main]`. The single-threaded prelude performs environment
+sanitization/mutation, including applying the trusted post-drop environment,
+before any Tokio runtime, background thread, async logger, libshpool
+initialization, shpool socket access, or child process spawn occurs.
 
 Helper-private diagnostics use bounded pipes or framed sockets with
 application-level byte accounting and truncation. Regular log files, if kept for
@@ -270,17 +279,20 @@ unsafe `CommandExt::pre_exec` closure; the unsafe/syscall privilege setup for
 guestd-spawned helpers lives in the excluded `nixling-guest-shell-runner` crate
 before libshpool is initialized. In that
 single-threaded helper prelude, the helper immediately re-applies `FD_CLOEXEC` to
-inherited control/liveness fds, closes all unintended fds, starts from a safe cwd
-such as `/`, reads only fixed-size identity data needed for the drop (uid, gid,
+inherited control/liveness fds, redirects unused standard streams to `/dev/null`,
+closes all other unintended fds rather than only marking them close-on-exec,
+starts from a safe cwd such as `/`, reads only fixed-size identity data needed for the drop (uid, gid,
 length-prefixed supplementary gid list bounded by `NGROUPS_MAX`, and mode flags),
 waits for the isolation-ready byte, and only then drops privileges. The drop
 order is strict: perform process-group/session isolation (`setpgid(0, 0)` for
 non-interactive helpers or `setsid()` for interactive PTY helpers), clear the
 capability bounding set and inheritable/ambient capabilities while `CAP_SETPCAP`
 is still available, apply the precomputed supplementary groups or an empty list,
-then use libc's process-wide credential wrappers directly, or a safe crate such
+reset `oom_score_adj` to the workload/default policy while
+it is still writable, then use libc's process-wide credential wrappers directly, or a safe crate such
 as `nix::unistd` that delegates to libc, for `setresgid(gid, gid, gid)` and
-`setresuid(uid, uid, uid)`. Do not use rustix raw thread-level credential
+`setresuid(uid, uid, uid)`, and then set `PR_SET_DUMPABLE = 0` after the uid
+change so the kernel cannot reset it during `setresuid`. Do not use rustix raw thread-level credential
 syscalls for the process privilege boundary. Target uid 0 is invalid.
 Non-daemon helpers set
 `PR_SET_NO_NEW_PRIVS`; the long-lived shpool daemon remains exempt so persistent
@@ -406,7 +418,8 @@ PTY, using a Rust PTY harness, against a mock daemon socket so raw-mode guards,
 stdin/stdout handling, and SIGWINCH source are covered in PR CI. The standalone
 excluded helper workspace is documented in root `AGENTS.md` and `tests/AGENTS.md`
 when it is introduced, including its test paths, so future agents do not assume
-one unified workspace. The initial implementation
+one unified workspace. The contributor guide is also updated with local
+multi-workspace validation instructions for humans. The initial implementation
 phase also includes a justified Type 10 VM test (`runNixOSTest`) under
 `tests/host-integration/*.nix` for the load-bearing Linux boundaries that
 Layer 1 cannot prove: guest shpool daemon PAM/logind session creation/adoption,
