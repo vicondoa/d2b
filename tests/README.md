@@ -55,7 +55,7 @@ Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
 | `make test-proofs` | standalone proofs/ crates | local + CI |
 | `make test-flake` | `nix flake check --no-build` (native system); `NL_FLAKE_CHECK=<name>` instantiates one check, `NL_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
 | `make test-flake-list` | emit native-system flake check names as JSON (CI matrix plumbing) | CI (dynamic matrix) |
-| `make test-nix-unit` | nix-unit corpus (already covered by test-flake; focused convenience target) | local |
+| `make test-nix-unit` | sharded nix-unit corpus checks (already covered by test-flake; focused convenience target) | local |
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
 | `make test-policy` | meta gates (ci-coverage, ci-uses-make, adr-index, etc.) | local + CI |
 | `make test-integration` | type-9 podman container tests | **local host/manual pre-PR** (podman; not the PR pipeline) |

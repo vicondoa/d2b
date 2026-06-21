@@ -105,8 +105,8 @@ test-flake:
 test-flake-list:
 	@bash tests/test-flake-list.sh
 
-## test-nix-unit — build the nix-unit corpus check (focused convenience target;
-## already covered by test-flake, so NOT in test-unit to avoid double work).
+## test-nix-unit — build all sharded nix-unit corpus checks (focused convenience
+## target; already covered by test-flake, so NOT in test-unit to avoid double work).
 test-nix-unit:
 	bash tests/test-nix-unit.sh
 
