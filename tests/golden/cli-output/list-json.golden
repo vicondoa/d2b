@@ -8,6 +8,23 @@
     "staticIp": "10.20.0.10",
     "status": "stopped",
     "isNetVm": false,
+    "runtimeCapabilities": [
+      "config-sync",
+      "display",
+      "exec",
+      "guest-control",
+      "in-guest-observability",
+      "keys",
+      "lifecycle",
+      "ssh",
+      "store-sync",
+      "usb-hotplug"
+    ],
+    "serviceCapabilities": [
+      "microvm",
+      "nixling",
+      "virtiofsd"
+    ],
     "runnerParityOk": true
   },
   {
@@ -19,6 +36,23 @@
     "staticIp": "192.0.2.2",
     "status": "running",
     "isNetVm": true,
+    "runtimeCapabilities": [
+      "config-sync",
+      "display",
+      "exec",
+      "guest-control",
+      "in-guest-observability",
+      "keys",
+      "lifecycle",
+      "ssh",
+      "store-sync",
+      "usb-hotplug"
+    ],
+    "serviceCapabilities": [
+      "microvm",
+      "nixling",
+      "virtiofsd"
+    ],
     "runnerParityOk": true
   }
 ]
