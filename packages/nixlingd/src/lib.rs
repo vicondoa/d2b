@@ -3126,6 +3126,7 @@ fn aca_provider_from_gateway_config(
         sandbox_group: required_gateway_field(&aca.sandbox_group)?,
         region: required_gateway_field(&aca.region)?,
         endpoint: aca.endpoint.clone(),
+        managed_identity_client_id: aca.managed_identity_client_id.clone(),
     };
     let disk_image = if let Some(id) = aca.disk_image_id.as_ref().filter(|s| !s.trim().is_empty()) {
         AcaDiskImageSource::ExistingDiskId(id.clone())

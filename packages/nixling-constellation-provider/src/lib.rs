@@ -18,16 +18,18 @@ pub mod credential;
 pub mod error;
 pub mod mock;
 pub mod provider;
+pub mod rate_limit;
 pub mod types;
 
 pub use credential::{
     AzureControlPlaneRef, CredentialPlane, ManagedIdentityRef, OpaqueAzureRef,
     SessionCredentialBinding,
 };
-pub use error::ProviderError;
+pub use error::{ProviderDiagnostic, ProviderError, RetryHint};
 pub use provider::{
     CredentialProvider, CredentialStatus, DaemonAccessApi, DaemonAccessTransport, DisplayProvider,
     DurableExecutionProvider, HostSubstrateProvider, InfrastructureProvider, NodeProvider,
     ObservabilitySinkProvider, ProtocolCodec, RelayProvider, RuntimeProvider, StreamMux,
     TransportListener, TransportProvider, WorkloadProvider,
 };
+pub use rate_limit::{CircuitBreakerConfig, CircuitBreakerSnapshot, ProviderCircuitBreaker};

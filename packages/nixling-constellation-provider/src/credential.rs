@@ -6,14 +6,11 @@
 //! credential:
 //!
 //! 1. [`CredentialPlane::AzureControlPlane`] — allocating/managing ACA, ACR,
-//!    and the Relay namespace authenticates with the **operator's ambient
-//!    Entra ID identity via the `az` CLI** (`DefaultAzureCredential` /
-//!    `AzureCliCredential`), invoked locally. The Entra token cache is owned
-//!    by `az` (`~/.azure`); it is never placed in the nixling store, bundle,
-//!    manifest, daemon state, argv, env, or journal. Azure RBAC on the
-//!    operator's identity governs what may be provisioned. This module only
-//!    ever holds an [`AzureControlPlaneRef`] of **opaque, non-secret**
-//!    tenant/subscription/region references.
+//!    and the Relay namespace uses an external Azure identity selected by the
+//!    caller. Production gateway providers use explicitly configured
+//!    managed/workload identity and do not fall back to ambient developer-tool
+//!    credentials. This module only ever holds an [`AzureControlPlaneRef`] of
+//!    **opaque, non-secret** tenant/subscription/region references.
 //! 2. [`CredentialPlane::ContainerManagedIdentity`] — the ACA sandbox's
 //!    **Managed Identity** mints its own short-lived tokens from IMDS for
 //!    Relay/ACR. nixling never mints or hands a Relay SAS token to the
@@ -43,7 +40,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum CredentialPlane {
-    /// Operator's ambient Entra identity via the `az` CLI (control-plane).
+    /// External Azure control-plane identity reference.
     AzureControlPlane,
     /// ACA sandbox Managed Identity (container → Azure).
     ContainerManagedIdentity,

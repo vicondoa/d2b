@@ -60,6 +60,13 @@ The contracts. Stable interfaces a consumer can depend on.
 - [`reference/error-envelope-guidance.md`](./reference/error-envelope-guidance.md) —
   daemon/broker/CLI envelope alignment, including broker-error
   remediation rules.
+- [`reference/provider-managed-sandboxes.md`](./reference/provider-managed-sandboxes.md) —
+  capability matrix, absent capabilities, rate-limit/backoff/circuit
+  behavior, credential boundary, diagnostics redaction, and error shapes
+  for provider-managed sandbox nodes (ACA adapter).
+- [`reference/remote-full-host-nodes.md`](./reference/remote-full-host-nodes.md) —
+  gateway-managed remote nixling hosts: registration, capability gating,
+  operation routing, idempotency, and the non-tunneling boundary.
 - **Per-component references** — one file per
   `nixos-modules/components/*.nix` toggle. Options, host-side
   resources created, runtime invariants, hardening notes, and the

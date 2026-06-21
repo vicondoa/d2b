@@ -24,6 +24,7 @@ schemars.workspace = true
 # loopback and later relay sessions implement AsyncRead/AsyncWrite). Only
 # the io traits are needed here; no runtime/network features.
 tokio = { version = "1", default-features = false, features = ["io-util"] }
+tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "io-util"] }
