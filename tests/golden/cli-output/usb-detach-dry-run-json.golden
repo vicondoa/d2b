@@ -3,8 +3,9 @@
   "busId": "1-2",
   "command": "usb detach",
   "mode": "dry-run",
-  "notes": "USBIP dry-run reports the daemon → broker unbind and reconcile plan without mutating host state.",
+  "notes": "USBIP dry-run reports authenticated guestd import cleanup plus the daemon → broker unbind/reconcile plan without mutating host or guest state.",
   "planned": [
+    "GuestdUsbipImport(detach)",
     "UsbipUnbind",
     "UsbipProxyReconcile"
   ],
