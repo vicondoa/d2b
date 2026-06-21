@@ -35,62 +35,10 @@ use nixling_ipc::public_wire::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-/// Output stream selector handed to the transport client.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OutputStreamSel {
-    Stdout,
-    Stderr,
-}
-
-/// Outcome of a `WriteStdin` transport call.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WriteStdinOutcome {
-    pub accepted_len: u64,
-    pub next_offset: u64,
-    pub backpressured: bool,
-    pub stdin_closed: bool,
-}
-
-/// Outcome of a `ReadOutput` transport call. `Debug` is redacted so a stray
-/// `{:?}` can never leak the guest output bytes; only the length and the
-/// framing flags are observable.
-#[derive(Clone, PartialEq, Eq)]
-pub struct ReadOutputOutcome {
-    pub data: Vec<u8>,
-    pub next_offset: u64,
-    pub eof: bool,
-    pub dropped_bytes: u64,
-    pub truncated: bool,
-    pub timed_out: bool,
-}
-
-impl std::fmt::Debug for ReadOutputOutcome {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ReadOutputOutcome")
-            .field("data_len", &self.data.len())
-            .field("next_offset", &self.next_offset)
-            .field("eof", &self.eof)
-            .field("dropped_bytes", &self.dropped_bytes)
-            .field("truncated", &self.truncated)
-            .field("timed_out", &self.timed_out)
-            .finish()
-    }
-}
-
-/// Terminal disposition of the guest command.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TerminalKind {
-    Exited(i32),
-    Signaled(u32),
-    Error(&'static str),
-}
-
-/// Outcome of a `Wait` transport call.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WaitOutcome {
-    pub running: bool,
-    pub terminal: Option<TerminalKind>,
-}
+pub use crate::terminal_session::{
+    OutputStreamSel, ReadOutputOutcome, TerminalBackend, TerminalKind, WaitOutcome,
+    WriteStdinOutcome,
+};
 
 /// Closed enum of per-op proxy failures. Each maps to a redaction-safe slug;
 /// the daemon never attaches argv, env, output bytes, or a guest-supplied
@@ -320,47 +268,12 @@ pub struct Established {
     pub caps: NegotiatedCaps,
 }
 
-/// Transport seam: the authenticated guest-control client, one per session.
-/// Production implementation wraps a ttRPC client; tests inject a fake.
+/// Exec adapter over the shared terminal backend seam. Production implementation
+/// wraps a ttRPC client; tests inject a fake.
 #[async_trait]
-pub trait ExecGuestClient: Send + Sync {
-    async fn write_stdin(
-        &self,
-        offset: u64,
-        data: Vec<u8>,
-        eof: bool,
-        timeout: Duration,
-    ) -> Result<WriteStdinOutcome, ExecOpError>;
+pub trait ExecGuestClient: TerminalBackend<Error = ExecOpError> {}
 
-    async fn read_output(
-        &self,
-        stream: OutputStreamSel,
-        offset: u64,
-        max_len: u64,
-        wait: bool,
-        timeout_ms: u64,
-        timeout: Duration,
-    ) -> Result<ReadOutputOutcome, ExecOpError>;
-
-    async fn signal(
-        &self,
-        control_seq: u64,
-        signo: u32,
-        timeout: Duration,
-    ) -> Result<(), ExecOpError>;
-
-    async fn resize(
-        &self,
-        control_seq: u64,
-        rows: u32,
-        cols: u32,
-        timeout: Duration,
-    ) -> Result<(), ExecOpError>;
-
-    async fn wait(&self, timeout_ms: u64, timeout: Duration) -> Result<WaitOutcome, ExecOpError>;
-
-    async fn close_stdin(&self, offset: u64, timeout: Duration) -> Result<(), ExecOpError>;
-}
+impl<T> ExecGuestClient for T where T: TerminalBackend<Error = ExecOpError> {}
 
 /// Establishment seam: connect + authenticate + cap-gate + `ExecCreate`.
 #[async_trait]
@@ -1231,7 +1144,9 @@ mod tests {
     }
 
     #[async_trait]
-    impl ExecGuestClient for FakeClient {
+    impl TerminalBackend for FakeClient {
+        type Error = ExecOpError;
+
         async fn write_stdin(
             &self,
             _offset: u64,

@@ -2038,9 +2038,16 @@ mod tests {
         .expect("by-id symlink");
     }
 
+    fn qmp_tempdir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("qmp-")
+            .tempdir()
+            .expect("qmp tempdir")
+    }
+
     #[test]
     fn qmp_attach_sends_fd_and_device_commands() {
-        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
+        let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
         let server = std::thread::spawn(move || {
@@ -2101,7 +2108,7 @@ mod tests {
 
     #[test]
     fn qmp_detach_removes_device_blocks_and_fdset() {
-        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
+        let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
         let server = std::thread::spawn(move || {
@@ -2146,7 +2153,7 @@ mod tests {
 
     #[test]
     fn qmp_detach_reconciles_missed_device_deleted_event() {
-        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
+        let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
         let server = std::thread::spawn(move || {
@@ -2193,7 +2200,7 @@ mod tests {
 
     #[test]
     fn qmp_detach_is_idempotent_when_media_nodes_are_already_absent() {
-        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
+        let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
         let server = std::thread::spawn(move || {
@@ -2234,7 +2241,7 @@ mod tests {
 
     #[test]
     fn qmp_detach_fails_closed_when_block_node_remains_after_error() {
-        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
+        let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
         let server = std::thread::spawn(move || {
@@ -2274,7 +2281,7 @@ mod tests {
 
     #[test]
     fn qmp_attached_media_refs_ignore_non_nixling_and_invalid_opaque_values() {
-        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
+        let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
         let server = std::thread::spawn(move || {
@@ -2304,7 +2311,7 @@ mod tests {
 
     #[test]
     fn qmp_boot_path_attaches_media_and_continues_vm() {
-        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("qmp tempdir");
+        let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
         let listener = UnixListener::bind(&socket).expect("bind qmp");
         let server = std::thread::spawn(move || {

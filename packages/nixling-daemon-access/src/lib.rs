@@ -1841,9 +1841,7 @@ mod tests {
 
     fn test_socket_path(prefix: &str) -> PathBuf {
         let counter = TEST_SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join(".t")
-            .join(format!("{prefix}-{}-{counter}.s", std::process::id()))
+        std::env::temp_dir().join(format!("{prefix}-{}-{counter}.s", std::process::id()))
     }
 
     fn recv_test_frame(fd: RawFd) -> io::Result<Vec<u8>> {

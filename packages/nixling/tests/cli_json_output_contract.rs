@@ -157,6 +157,13 @@ fn target_tempdir(prefix: &str) -> tempfile::TempDir {
         .expect("tempdir in cargo target")
 }
 
+fn short_socket_tempdir(prefix: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir()
+        .expect("short socket tempdir")
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -366,7 +373,7 @@ fn status_goldens_preserve_v04_bash_subset() {
 
 #[test]
 fn audit_output_matches_cli_json_drift_goldens() {
-    let scratch = target_tempdir("cjaudit");
+    let scratch = short_socket_tempdir("cjaudit");
     let home = scratch.path().join("home");
     let runtime = scratch.path().join("runtime");
     fs::create_dir_all(&home).expect("mk HOME fixture");

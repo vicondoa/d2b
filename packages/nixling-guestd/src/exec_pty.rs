@@ -27,203 +27,20 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::exec::{ExecError, ProcessWaiter, ValidatedCommand};
+pub use crate::terminal_io::{
+    ControlSeqState, StdinLogic, StdinWriteOk, TerminalIoError, TerminalSize, TtyPhase, TtySignal,
+    VEOF,
+};
 
-/// Default terminal geometry applied when a TTY create omits an
-/// `initial_terminal_size`. A present size must validate (1..=65535); only an
-/// absent size defaults.
-pub const DEFAULT_TERMINAL_ROWS: u16 = 24;
-pub const DEFAULT_TERMINAL_COLS: u16 = 80;
-/// Inclusive bounds for a terminal dimension. Matches the existing wire
-/// contract (no new schema bound), so a 0 or out-of-range dimension is rejected
-/// rather than silently clamped.
-pub const MIN_TERMINAL_DIM: u32 = 1;
-pub const MAX_TERMINAL_DIM: u32 = 65535;
-
-/// `VEOF` control byte (Ctrl-D). Injected on `CloseStdin` / `WriteStdin`
-/// `close_after` to signal end-of-input to the foreground reader while the PTY
-/// master stays open (half-close is modelled as VEOF, never a master close).
-pub const VEOF: u8 = 0x04;
-
-/// Validated terminal geometry. Both dimensions are within 1..=65535.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TerminalSize {
-    pub rows: u16,
-    pub cols: u16,
-}
-
-impl TerminalSize {
-    /// The default geometry (24x80) used only when an initial size is absent.
-    pub const fn defaulted() -> Self {
-        Self {
-            rows: DEFAULT_TERMINAL_ROWS,
-            cols: DEFAULT_TERMINAL_COLS,
+impl From<TerminalIoError> for ExecError {
+    fn from(value: TerminalIoError) -> Self {
+        match value {
+            TerminalIoError::InvalidTerminalSize => Self::InvalidTerminalSize,
+            TerminalIoError::StdinClosed => Self::StdinClosed,
+            TerminalIoError::StdinOffsetMismatch => Self::StdinOffsetMismatch,
+            TerminalIoError::ControlSeqMismatch => Self::ControlSeqMismatch,
         }
     }
-
-    /// Validate a wire-supplied geometry against the existing 1..=65535 bound.
-    pub fn checked(rows: u32, cols: u32) -> Result<Self, ExecError> {
-        let valid = |d: u32| (MIN_TERMINAL_DIM..=MAX_TERMINAL_DIM).contains(&d);
-        if !valid(rows) || !valid(cols) {
-            return Err(ExecError::InvalidTerminalSize);
-        }
-        Ok(Self {
-            rows: rows as u16,
-            cols: cols as u16,
-        })
-    }
-
-    /// Resolve an optional initial size: absent defaults to 24x80, present must
-    /// validate (a present 0/out-of-range geometry is rejected, never
-    /// defaulted).
-    pub fn resolve_initial(initial: Option<(u32, u32)>) -> Result<Self, ExecError> {
-        match initial {
-            None => Ok(Self::defaulted()),
-            Some((rows, cols)) => Self::checked(rows, cols),
-        }
-    }
-}
-
-/// Frozen signal allowlist for `ExecSignal` against a TTY foreground process
-/// group. Any signal outside this set is rejected before delivery.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TtySignal {
-    Int,
-    Term,
-    Hup,
-    Quit,
-    Winch,
-    Usr1,
-    Usr2,
-    Kill,
-    Tstp,
-    Cont,
-}
-
-impl TtySignal {
-    /// Map a wire signal number to the allowlist, rejecting any other value.
-    pub fn from_raw(signal: u32) -> Option<Self> {
-        // Standard Linux signal numbers; the allowlist is frozen in the
-        // guest-control exec reference.
-        Some(match signal {
-            1 => Self::Hup,
-            2 => Self::Int,
-            3 => Self::Quit,
-            9 => Self::Kill,
-            10 => Self::Usr1,
-            12 => Self::Usr2,
-            15 => Self::Term,
-            18 => Self::Cont,
-            20 => Self::Tstp,
-            28 => Self::Winch,
-            _ => return None,
-        })
-    }
-
-    /// The raw Linux signal number for this allowlisted signal.
-    pub fn raw(self) -> i32 {
-        match self {
-            Self::Hup => 1,
-            Self::Int => 2,
-            Self::Quit => 3,
-            Self::Kill => 9,
-            Self::Usr1 => 10,
-            Self::Usr2 => 12,
-            Self::Term => 15,
-            Self::Cont => 18,
-            Self::Tstp => 20,
-            Self::Winch => 28,
-        }
-    }
-}
-
-/// Pure stdin offset machine for a TTY session. WriteStdin must arrive in
-/// monotonic, gap-free offset order; a duplicate/out-of-order offset is
-/// rejected, and any write after a close (VEOF) is rejected. Mutated only under
-/// the per-session writer lock so accept→write→advance is atomic per exec.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct StdinLogic {
-    next_offset: u64,
-    closed: bool,
-}
-
-impl StdinLogic {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn next_offset(&self) -> u64 {
-        self.next_offset
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.closed
-    }
-
-    /// Validate a WriteStdin at `offset`. Rejects writes after close and any
-    /// non-contiguous offset. Does NOT advance — call [`advance`](Self::advance)
-    /// only after the bytes are durably written to the master.
-    pub fn admit(&self, offset: u64) -> Result<(), ExecError> {
-        if self.closed {
-            return Err(ExecError::StdinClosed);
-        }
-        if offset != self.next_offset {
-            return Err(ExecError::StdinOffsetMismatch);
-        }
-        Ok(())
-    }
-
-    /// Advance the offset cursor after `len` bytes were written.
-    pub fn advance(&mut self, len: u64) {
-        self.next_offset = self.next_offset.saturating_add(len);
-    }
-
-    /// Mark stdin closed (idempotent). Returns true if this call performed the
-    /// transition (false if it was already closed).
-    pub fn close(&mut self) -> bool {
-        if self.closed {
-            return false;
-        }
-        self.closed = true;
-        true
-    }
-}
-
-/// Pure control-seq dispatcher shared by resize AND signal. Control messages
-/// carry a strictly-increasing `control_seq`; a stale, duplicate, or
-/// out-of-order seq is rejected with `ControlSeqMismatch`. Gaps are allowed
-/// (the client owns seq allocation).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct ControlSeqState {
-    last_seq: u64,
-}
-
-impl ControlSeqState {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn last_seq(&self) -> u64 {
-        self.last_seq
-    }
-
-    /// Admit a control message at `seq`, requiring strict monotonic increase.
-    pub fn admit(&mut self, seq: u64) -> Result<(), ExecError> {
-        if seq <= self.last_seq {
-            return Err(ExecError::ControlSeqMismatch);
-        }
-        self.last_seq = seq;
-        Ok(())
-    }
-}
-
-/// Teardown lifecycle for a TTY session: `Running → Closing → Terminal`.
-/// Entering `Closing` atomically rejects new stdin/control RPCs (typed no-op)
-/// and is the single-shot gate that drives master release + session reap.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TtyPhase {
-    Running,
-    Closing,
-    Terminal,
 }
 
 /// Control surface for a live PTY master, fakeable for tests.
@@ -266,19 +83,6 @@ pub struct SpawnedPtyProcess {
     pub waiter: Box<dyn ProcessWaiter>,
     /// SIGKILLs every process remaining in the TTY session on teardown.
     pub reaper: Arc<dyn SessionReaper>,
-}
-
-/// Outcome of an accepted `WriteStdin`. `accepted_len` is the number of the
-/// requested bytes that actually reached the PTY master (a partial write
-/// advances the offset by exactly that count — see [`write_counting`]), so a
-/// client retry at `next_offset` never re-delivers bytes already written. A
-/// `close_after` write reports `closed = true` only once both the payload and
-/// the trailing `VEOF` byte landed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StdinWriteOk {
-    pub accepted_len: u64,
-    pub next_offset: u64,
-    pub closed: bool,
 }
 
 /// Bounded depth of the per-session writer task request queue. Kept small: the
@@ -1268,71 +1072,6 @@ pub mod linux {
 mod tests {
     use super::*;
 
-    #[test]
-    fn terminal_size_defaults_when_absent() {
-        assert_eq!(
-            TerminalSize::resolve_initial(None).unwrap(),
-            TerminalSize::defaulted()
-        );
-        assert_eq!(TerminalSize::defaulted().rows, 24);
-        assert_eq!(TerminalSize::defaulted().cols, 80);
-    }
-
-    #[test]
-    fn terminal_size_present_must_validate() {
-        assert!(TerminalSize::resolve_initial(Some((0, 80))).is_err());
-        assert!(TerminalSize::resolve_initial(Some((24, 0))).is_err());
-        assert!(TerminalSize::resolve_initial(Some((70000, 80))).is_err());
-        let ok = TerminalSize::resolve_initial(Some((40, 120))).unwrap();
-        assert_eq!((ok.rows, ok.cols), (40, 120));
-    }
-
-    #[test]
-    fn stdin_logic_rejects_dup_and_out_of_order() {
-        let mut logic = StdinLogic::new();
-        assert!(logic.admit(0).is_ok());
-        logic.advance(5);
-        assert_eq!(logic.next_offset(), 5);
-        // Replay of an old offset.
-        assert_eq!(logic.admit(0), Err(ExecError::StdinOffsetMismatch));
-        // Gap / out-of-order future offset.
-        assert_eq!(logic.admit(7), Err(ExecError::StdinOffsetMismatch));
-        assert!(logic.admit(5).is_ok());
-    }
-
-    #[test]
-    fn stdin_logic_close_is_idempotent_and_rejects_later_writes() {
-        let mut logic = StdinLogic::new();
-        logic.advance(3);
-        assert!(logic.close());
-        assert!(!logic.close());
-        assert_eq!(logic.admit(3), Err(ExecError::StdinClosed));
-    }
-
-    #[test]
-    fn control_seq_requires_strict_increase() {
-        let mut seq = ControlSeqState::new();
-        assert!(seq.admit(1).is_ok());
-        assert!(seq.admit(2).is_ok());
-        // Duplicate.
-        assert_eq!(seq.admit(2), Err(ExecError::ControlSeqMismatch));
-        // Stale.
-        assert_eq!(seq.admit(1), Err(ExecError::ControlSeqMismatch));
-        // Gaps are allowed.
-        assert!(seq.admit(10).is_ok());
-    }
-
-    #[test]
-    fn tty_signal_allowlist_round_trips() {
-        for raw in [1, 2, 3, 9, 10, 12, 15, 18, 20, 28] {
-            let sig = TtySignal::from_raw(raw).expect("allowlisted");
-            assert_eq!(sig.raw(), raw as i32);
-        }
-        // Outside the allowlist.
-        assert!(TtySignal::from_raw(11).is_none());
-        assert!(TtySignal::from_raw(0).is_none());
-    }
-
     // ---- TtyState writer-task coverage -------------------------
 
     use std::io;
@@ -1619,22 +1358,6 @@ mod tests {
 
     #[test]
     fn w14_types_do_not_leak_payload_in_debug() {
-        // Leakage canary: the result/error/control types carry only counts
-        // and enum discriminants — never keystrokes, PTY output, argv, env,
-        // exec-ids, or tokens. Formatting them must not surface caller bytes.
-        // This is a regression guard: if a future change adds a byte-carrying
-        // payload to any of these, this test fails.
-        let secret = "S3CR3T-keystrokes-/bin/secret-arg-TOKEN";
-        // StdinWriteOk only reports lengths/flags.
-        let ok = StdinWriteOk {
-            accepted_len: secret.len() as u64,
-            next_offset: secret.len() as u64,
-            closed: true,
-        };
-        let dbg = format!("{ok:?}");
-        assert!(!dbg.contains("S3CR3T"));
-        assert!(!dbg.contains("secret"));
-
         // Every ExecError variant is a unit variant: Debug is just the name.
         for (err, name) in [
             (ExecError::InvalidTerminalSize, "InvalidTerminalSize"),
@@ -1653,11 +1376,5 @@ mod tests {
         ] {
             assert_eq!(format!("{err:?}"), name);
         }
-
-        // TerminalSize / TtySignal carry only geometry / a signal discriminant.
-        let size_dbg = format!("{:?}", TerminalSize { rows: 24, cols: 80 });
-        assert!(!size_dbg.contains("S3CR3T"));
-        let sig_dbg = format!("{:?}", TtySignal::from_raw(2).unwrap());
-        assert!(!sig_dbg.contains("S3CR3T"));
     }
 }

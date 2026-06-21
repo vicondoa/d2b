@@ -240,6 +240,7 @@
             "keys show",
             "list",
             "migrate",
+            "op",
             "realm",
             "restart",
             "rollback",

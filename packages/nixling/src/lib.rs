@@ -49,8 +49,9 @@ mod doctor;
 mod exec_client;
 mod host_validate;
 mod target_routing;
+mod terminal_client;
 
-use exec_client::ExecOwnerTransport as _;
+use terminal_client::TerminalTransport as _;
 
 const DEFAULT_MANIFEST_PATH: &str = "/run/current-system/sw/share/nixling/vms.json";
 const DEFAULT_REALM_ENTRYPOINTS_PATH: &str =
@@ -5961,7 +5962,11 @@ struct OwnerSocketTransport {
     next_op_id: u64,
 }
 
-impl exec_client::ExecOwnerTransport for OwnerSocketTransport {
+impl terminal_client::TerminalTransport for OwnerSocketTransport {
+    type Op = nixling_ipc::public_wire::ExecOp;
+    type Response = nixling_ipc::public_wire::ExecOpResponse;
+    type Error = exec_client::ExecClientError;
+
     fn round_trip(
         &mut self,
         op: &nixling_ipc::public_wire::ExecOp,

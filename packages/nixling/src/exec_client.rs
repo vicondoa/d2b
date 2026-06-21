@@ -21,6 +21,8 @@ use nixling_ipc::public_wire::{
 };
 use serde_json::Value;
 
+use crate::terminal_client::{TerminalHostIo, TerminalSignalSource, TerminalTransport};
+
 // Reserved exec CLI exit codes. Guest WIFEXITED 0-255 codes pass through
 // and CAN collide with these reserved numbers (e.g. a guest that exits 70 vs.
 // the old-generation transport class); `--json` disambiguates via
@@ -239,26 +241,26 @@ pub fn guest_signo(signal: ExecSignal) -> u32 {
     }
 }
 
-/// Transport seam: one owner-connection round trip (one op, one response).
-pub trait ExecOwnerTransport {
-    fn round_trip(&mut self, op: &ExecOp) -> Result<ExecOpResponse, ExecClientError>;
+/// Exec adapter over the shared terminal transport seam.
+pub trait ExecOwnerTransport:
+    TerminalTransport<Op = ExecOp, Response = ExecOpResponse, Error = ExecClientError>
+{
 }
 
-/// Host I/O seam: non-blocking stdin, blocking stdout/stderr, window size.
-pub trait ExecHostIo {
-    /// Read available stdin bytes. MUST be non-blocking: return an
-    /// `io::ErrorKind::WouldBlock` error when no data is ready, `Ok(0)` on EOF.
-    fn read_stdin(&mut self, buf: &mut [u8]) -> io::Result<usize>;
-    fn write_stdout(&mut self, data: &[u8]) -> io::Result<()>;
-    fn write_stderr(&mut self, data: &[u8]) -> io::Result<()>;
-    /// Current terminal window size as `(rows, cols)`, if a terminal.
-    fn window_size(&self) -> Option<(u32, u32)>;
+impl<T> ExecOwnerTransport for T where
+    T: TerminalTransport<Op = ExecOp, Response = ExecOpResponse, Error = ExecClientError>
+{
 }
 
-/// Signal seam: drain the events enqueued since the last poll.
-pub trait ExecSignalSource {
-    fn drain(&mut self) -> Vec<ExecSignal>;
-}
+/// Exec adapter over the shared host terminal I/O seam.
+pub trait ExecHostIo: TerminalHostIo {}
+
+impl<T> ExecHostIo for T where T: TerminalHostIo {}
+
+/// Exec adapter over the shared terminal signal/event seam.
+pub trait ExecSignalSource: TerminalSignalSource<Signal = ExecSignal> {}
+
+impl<T> ExecSignalSource for T where T: TerminalSignalSource<Signal = ExecSignal> {}
 
 /// FSM configuration resolved from the parsed CLI args + the `Start` response.
 #[derive(Debug, Clone, Copy)]
@@ -909,7 +911,7 @@ fn read_stdin_nonblocking(buf: &mut [u8]) -> io::Result<usize> {
 /// via the std locked handles, window size from the controlling terminal.
 pub struct RealHostIo;
 
-impl ExecHostIo for RealHostIo {
+impl TerminalHostIo for RealHostIo {
     fn read_stdin(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         read_stdin_nonblocking(buf)
     }
@@ -992,7 +994,7 @@ impl CapturingHostIo {
     }
 }
 
-impl ExecHostIo for CapturingHostIo {
+impl TerminalHostIo for CapturingHostIo {
     fn read_stdin(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if self.interactive {
             read_stdin_nonblocking(buf)
@@ -1028,7 +1030,9 @@ pub struct InstalledSignals {
     pending: Arc<Mutex<VecDeque<ExecSignal>>>,
 }
 
-impl ExecSignalSource for InstalledSignals {
+impl TerminalSignalSource for InstalledSignals {
+    type Signal = ExecSignal;
+
     fn drain(&mut self) -> Vec<ExecSignal> {
         let mut queue = self
             .pending
@@ -1180,7 +1184,11 @@ mod tests {
         }
     }
 
-    impl ExecOwnerTransport for FakeTransport {
+    impl TerminalTransport for FakeTransport {
+        type Op = ExecOp;
+        type Response = ExecOpResponse;
+        type Error = ExecClientError;
+
         fn round_trip(&mut self, op: &ExecOp) -> Result<ExecOpResponse, ExecClientError> {
             self.ops.push(op.clone());
             match op {
@@ -1283,7 +1291,7 @@ mod tests {
         window: Option<(u32, u32)>,
     }
 
-    impl ExecHostIo for FakeHostIo {
+    impl TerminalHostIo for FakeHostIo {
         fn read_stdin(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             if let Some(chunk) = self.stdin.pop_front() {
                 let n = chunk.len().min(buf.len());
@@ -1322,7 +1330,9 @@ mod tests {
         }
     }
 
-    impl ExecSignalSource for FakeSignals {
+    impl TerminalSignalSource for FakeSignals {
+        type Signal = ExecSignal;
+
         fn drain(&mut self) -> Vec<ExecSignal> {
             self.pending.pop_front().unwrap_or_default()
         }

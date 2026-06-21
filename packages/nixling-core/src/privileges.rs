@@ -171,6 +171,16 @@ pub const PUBLIC_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::DenyOnly,
     ),
     row(
+        "op",
+        "operation/realm state",
+        "global-or-scoped",
+        &["nixling-launcher", "nixling-admin"],
+        false,
+        SecretAccess::MetadataOnly,
+        BrokerRequirement::No,
+        AuditMode::Yes,
+    ),
+    row(
         "vm",
         "VM command family",
         "global-or-scoped",
