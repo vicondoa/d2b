@@ -5180,17 +5180,16 @@ fn op_inspect_output_from_parts(
         .collect::<BTreeSet<_>>()
         .len();
     let gateway_count = u32::try_from(gateway_count).unwrap_or(u32::MAX);
-    for realm in &realms {
-        if realm.mode == "gateway-backed"
+    if realms.iter().any(|realm| {
+        realm.mode == "gateway-backed"
             && !matches!(realm.gateway_state.as_str(), "running" | "booted")
-        {
-            degraded.push(OpInspectDegradedOutputV1 {
-                scope: "realm".to_owned(),
-                reason: "gateway-not-running".to_owned(),
-                remediation: "start the realm gateway with `nixling vm start <gateway-vm> --apply`"
-                    .to_owned(),
-            });
-        }
+    }) {
+        degraded.push(OpInspectDegradedOutputV1 {
+            scope: "gateway".to_owned(),
+            reason: "gateway-not-running".to_owned(),
+            remediation: "start the realm gateway with `nixling vm start <gateway-vm> --apply`"
+                .to_owned(),
+        });
     }
     let realm_outputs = realms
         .into_iter()
@@ -11142,7 +11141,7 @@ mod host_install_dispatch_tests {
         let output = super::op_inspect_output_from_parts(1, None, realms, Vec::new());
         assert_eq!(output.local.gateway_count, 1);
         assert_eq!(output.degraded.len(), 1);
-        assert_eq!(output.degraded[0].scope, "realm");
+        assert_eq!(output.degraded[0].scope, "gateway");
         assert_eq!(output.degraded[0].reason, "gateway-not-running");
         assert!(
             output.degraded[0]

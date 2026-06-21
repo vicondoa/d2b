@@ -12886,13 +12886,23 @@ fn dispatch_auth_status(state: &ServerState, peer: &PeerIdentity) -> Value {
                 "host check",
                 "auth status",
                 "op inspect",
+                "realm list",
+                "realm inspect",
             ],
             Vec::new(),
         )
     } else {
         (
             AuthRole::Launcher,
-            vec!["list", "status", "host check", "auth status", "op inspect"],
+            vec![
+                "list",
+                "status",
+                "host check",
+                "auth status",
+                "op inspect",
+                "realm list",
+                "realm inspect",
+            ],
             vec![DeniedCommandHint {
                 command: "audit".to_owned(),
                 reason: "audit requires admin role in nixling.site.adminUsers".to_owned(),
