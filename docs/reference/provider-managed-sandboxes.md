@@ -78,6 +78,9 @@ table is not supported; operations requiring it receive
 | `ephemeral-sessions` | ✗ | Azure Container Apps sandboxes are selected by workload labels, not ephemeral session slots in this adapter. |
 | `provider-managed-isolation` | ✓ | Advertised so callers can distinguish Azure Container Apps from a full nixling host. |
 
+For the cross-provider display and virtual I/O capability split, see
+[display and virtual I/O capabilities](./display-io-capabilities.md).
+
 ---
 
 ## Supported operations

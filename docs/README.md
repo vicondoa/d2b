@@ -68,6 +68,9 @@ The contracts. Stable interfaces a consumer can depend on.
   capability matrix, absent capabilities, rate-limit/backoff/circuit
   behavior, credential boundary, diagnostics redaction, and error shapes
   for provider-managed sandbox nodes (ACA adapter).
+- [`reference/display-io-capabilities.md`](./reference/display-io-capabilities.md) —
+  display, clipboard, audio, USB/HID, GPU, video, and provider display
+  lifecycle capability boundaries.
 - [`reference/remote-full-host-nodes.md`](./reference/remote-full-host-nodes.md) —
   gateway-managed remote nixling hosts: registration, capability gating,
   operation routing, idempotency, and the non-tunneling boundary.

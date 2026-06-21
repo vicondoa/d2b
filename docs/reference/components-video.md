@@ -48,6 +48,8 @@ Linux hardware decode path is VA-API; the experimental switch for that is
 [`components-graphics.md`](./components-graphics.md). Keep the distinction
 clear: `videoSidecar` is the daemon-spawned vhost-user media device, while
 `virglVideo` advertises VA-API video through the GPU/virglrenderer path.
+Video decode is distinct from display streaming and GPU acceleration; see
+[display and virtual I/O capabilities](./display-io-capabilities.md).
 
 ## Host-side resources
 

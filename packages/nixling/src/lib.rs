@@ -207,6 +207,30 @@ pub struct VmExecKillOutputV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmDisplayListOutputV1 {
+    pub command: String,
+    pub target: Option<String>,
+    pub sessions: Vec<VmDisplaySessionOutputV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmDisplaySessionOutputV1 {
+    pub session_id: String,
+    pub target: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmDisplayCloseOutputV1 {
+    pub command: String,
+    pub session_id: String,
+    pub closed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum StatusOutputV2 {
     Vm(Box<StatusVmOutputV2>),
@@ -928,6 +952,43 @@ enum VmCommand {
     /// a detached command, and `nixling vm exec <vm> {list|logs|status|kill}`
     /// to manage detached execs.
     Exec(VmExecArgs),
+    /// Manage gateway display sessions for provider-backed targets.
+    Display(VmDisplayArgs),
+}
+
+#[derive(Debug, Args)]
+struct VmDisplayArgs {
+    #[command(subcommand)]
+    command: VmDisplayCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum VmDisplayCommand {
+    /// List active gateway display sessions.
+    List(VmDisplayListArgs),
+    /// Close a gateway display session by id.
+    Close(VmDisplayCloseArgs),
+}
+
+#[derive(Debug, Args)]
+struct VmDisplayListArgs {
+    /// Optional realm target to filter, for example `nl://demo.gw.work.nixling`.
+    #[arg(long)]
+    target: Option<String>,
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
+#[derive(Debug, Args)]
+struct VmDisplayCloseArgs {
+    /// Display session id from `nixling vm display list`.
+    session_id: String,
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
 }
 
 /// `nixling vm exec [-d] [-it] [-i] [-t] <vm> [--env K=V]... [--cwd DIR] -- <cmd...>`
@@ -1662,6 +1723,15 @@ struct ReadGuestConfigResponseFrame {
     content_base64: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GatewayDisplayResponseFrame {
+    #[serde(rename = "type")]
+    _type_name: String,
+    #[serde(flatten)]
+    payload: public_wire::GatewayDisplayOpResponse,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StoreVerifyOutputV2 {
@@ -1965,6 +2035,7 @@ fn dispatch(
             VmCommand::List(args) => cmd_vm_list(context, args),
             VmCommand::Status(args) => cmd_vm_status(context, args),
             VmCommand::Exec(args) => cmd_vm_exec(context, args),
+            VmCommand::Display(args) => cmd_vm_display(context, args),
         },
         NativeCommand::Up(args) => cmd_vm_start(context, args),
         NativeCommand::Down(args) => cmd_vm_stop(context, args),
@@ -4770,9 +4841,16 @@ fn dispatch_gateway_display(
     context: &Context,
     op: public_wire::GatewayDisplayOp,
 ) -> Result<i32, CliFailure> {
+    send_gateway_display(context, op).map(|_| 0)
+}
+
+fn send_gateway_display(
+    context: &Context,
+    op: public_wire::GatewayDisplayOp,
+) -> Result<public_wire::GatewayDisplayOpResponse, CliFailure> {
     let frame = gateway_display_frame(&op)?;
     match try_public_socket_request(context, &frame, "gatewayDisplay")? {
-        PublicSocketOutcome::Reply(_) => Ok(0),
+        PublicSocketOutcome::Reply(response) => parse_gateway_display_reply(&response),
         PublicSocketOutcome::Unavailable => Err(CliFailure::new(
             70,
             "gatewayDisplay requires nixlingd's public socket; start the realm gateway daemon and retry",
@@ -4828,6 +4906,90 @@ fn cmd_gateway_vm_exec(
             app_argv: argv,
         }),
     )
+}
+
+fn cmd_vm_display(context: &Context, args: &VmDisplayArgs) -> Result<i32, CliFailure> {
+    match &args.command {
+        VmDisplayCommand::List(args) => cmd_vm_display_list(context, args),
+        VmDisplayCommand::Close(args) => cmd_vm_display_close(context, args),
+    }
+}
+
+fn cmd_vm_display_list(context: &Context, args: &VmDisplayListArgs) -> Result<i32, CliFailure> {
+    let response = send_gateway_display(
+        context,
+        public_wire::GatewayDisplayOp::List(public_wire::GatewayDisplayListArgs {
+            target: args.target.clone(),
+        }),
+    )?;
+    let public_wire::GatewayDisplayOpResponse::List(result) = response else {
+        return Err(CliFailure::new(
+            1,
+            "daemon returned an unexpected gatewayDisplay list reply",
+        ));
+    };
+    let output = VmDisplayListOutputV1 {
+        command: "vm display list".to_owned(),
+        target: args.target.clone(),
+        sessions: result
+            .sessions
+            .into_iter()
+            .map(|session| VmDisplaySessionOutputV1 {
+                session_id: session.session_id,
+                target: session.target,
+                state: session.state,
+            })
+            .collect(),
+    };
+    if args.json {
+        print_json(&output)?;
+    } else {
+        if output.sessions.is_empty() {
+            print_stdout("No active gateway display sessions\n");
+        } else {
+            for session in &output.sessions {
+                print_stdout(&format!(
+                    "{}\t{}\t{}\n",
+                    session.session_id, session.target, session.state
+                ));
+            }
+        }
+    }
+    Ok(0)
+}
+
+fn cmd_vm_display_close(context: &Context, args: &VmDisplayCloseArgs) -> Result<i32, CliFailure> {
+    let response = send_gateway_display(
+        context,
+        public_wire::GatewayDisplayOp::Close(public_wire::GatewayDisplayCloseArgs {
+            session_id: args.session_id.clone(),
+        }),
+    )?;
+    let public_wire::GatewayDisplayOpResponse::Close(result) = response else {
+        return Err(CliFailure::new(
+            1,
+            "daemon returned an unexpected gatewayDisplay close reply",
+        ));
+    };
+    let output = VmDisplayCloseOutputV1 {
+        command: "vm display close".to_owned(),
+        session_id: args.session_id.clone(),
+        closed: result.closed,
+    };
+    if args.json {
+        print_json(&output)?;
+    } else if output.closed {
+        print_stdout(&format!(
+            "Closed gateway display session {}\n",
+            output.session_id
+        ));
+    } else {
+        print_stdout(&format!(
+            "Gateway display session {} was not active\n",
+            output.session_id
+        ));
+    }
+    Ok(0)
 }
 
 fn vm_is_qemu_media_runtime(context: &Context, vm: &str) -> Result<bool, CliFailure> {
@@ -9377,6 +9539,23 @@ fn parse_store_verify_reply(bytes: &[u8]) -> Result<IpcStoreVerifyResponse, CliF
     }
 }
 
+fn parse_gateway_display_reply(
+    bytes: &[u8],
+) -> Result<public_wire::GatewayDisplayOpResponse, CliFailure> {
+    let value: Value = serde_json::from_slice(bytes).map_err(|err| {
+        CliFailure::new(1, format!("failed to parse gatewayDisplay reply: {err}"))
+    })?;
+    if value.get("type").and_then(Value::as_str) != Some("gatewayDisplayResponse") {
+        return Err(CliFailure::new(
+            1,
+            "daemon returned an unexpected reply to gatewayDisplay".to_owned(),
+        ));
+    }
+    serde_json::from_value::<GatewayDisplayResponseFrame>(value)
+        .map(|frame| frame.payload)
+        .map_err(|err| CliFailure::new(1, format!("failed to decode gatewayDisplay reply: {err}")))
+}
+
 struct SeqpacketUnixSocket {
     fd: OwnedFd,
 }
@@ -9885,7 +10064,7 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
-    fn gateway_display_frame_serializes_lifecycle_and_open_requests() {
+    fn gateway_display_frame_serializes_lifecycle_open_list_and_close_requests() {
         let start = super::gateway_display_frame(&public_wire::GatewayDisplayOp::Start(
             public_wire::GatewayDisplayStartArgs {
                 target: "nl://demo.gw.work.nixling".to_owned(),
@@ -9943,6 +10122,60 @@ mod host_install_dispatch_tests {
                 .and_then(Value::as_str),
             Some("foot")
         );
+
+        let list = super::gateway_display_frame(&public_wire::GatewayDisplayOp::List(
+            public_wire::GatewayDisplayListArgs {
+                target: Some("nl://demo.gw.work.nixling".to_owned()),
+            },
+        ))
+        .unwrap();
+        let list_v: Value = serde_json::from_slice(&list).unwrap();
+        assert_eq!(
+            list_v.get("type").and_then(Value::as_str),
+            Some("gatewayDisplay")
+        );
+        assert_eq!(list_v.get("op").and_then(Value::as_str), Some("list"));
+
+        let close = super::gateway_display_frame(&public_wire::GatewayDisplayOp::Close(
+            public_wire::GatewayDisplayCloseArgs {
+                session_id: "s0".to_owned(),
+            },
+        ))
+        .unwrap();
+        let close_v: Value = serde_json::from_slice(&close).unwrap();
+        assert_eq!(
+            close_v.get("type").and_then(Value::as_str),
+            Some("gatewayDisplay")
+        );
+        assert_eq!(close_v.get("op").and_then(Value::as_str), Some("close"));
+    }
+
+    #[test]
+    fn gateway_display_reply_parser_accepts_bounded_list_response() {
+        let response = serde_json::json!({
+            "type": "gatewayDisplayResponse",
+            "op": "list",
+            "result": {
+                "sessions": [{
+                    "sessionId": "s0",
+                    "target": "nl://demo.gw.work.nixling",
+                    "state": "running"
+                }]
+            }
+        });
+        let parsed = super::parse_gateway_display_reply(&serde_json::to_vec(&response).unwrap())
+            .expect("gateway display list response parses");
+        let public_wire::GatewayDisplayOpResponse::List(result) = parsed else {
+            panic!("expected list response");
+        };
+        assert_eq!(result.sessions.len(), 1);
+        let rendered = format!("{result:?}");
+        for forbidden in ["foot", "SharedAccessKey", "/run/", "waypipe"] {
+            assert!(
+                !rendered.contains(forbidden),
+                "gateway display reply leaked {forbidden}: {rendered}"
+            );
+        }
     }
 
     /// Per-thread guard that overrides the config-staging base for a test and

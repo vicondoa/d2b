@@ -587,6 +587,70 @@ _arguments "${_arguments_options[@]}" : \
 '*::management -- Optional detached exec management form\: `list`, `logs <id> \[--stdout-offset N|--stdout-offset=N\] \[--stderr-offset N|--stderr-offset=N\] \[--max-len N|--max-len=N\]`, `status <id>`, or `kill <id>`. Command execs never use this position\: pass a command after `--` instead:_default' \
 && ret=0
 ;;
+(display)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_nixling__subcmd__vm__subcmd__display_commands" \
+"*::: :->display" \
+&& ret=0
+
+    case $state in
+    (display)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:nixling-vm-display-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+'--target=[Optional realm target to filter, for example \`nl\://demo.gw.work.nixling\`]:TARGET:_default' \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(close)
+_arguments "${_arguments_options[@]}" : \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':session_id -- Display session id from `nixling vm display list`:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_nixling__subcmd__vm__subcmd__display__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:nixling-vm-display-help-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(close)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_nixling__subcmd__vm__subcmd__help_commands" \
@@ -622,6 +686,30 @@ _arguments "${_arguments_options[@]}" : \
 (exec)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
+;;
+(display)
+_arguments "${_arguments_options[@]}" : \
+":: :_nixling__subcmd__vm__subcmd__help__subcmd__display_commands" \
+"*::: :->display" \
+&& ret=0
+
+    case $state in
+    (display)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:nixling-vm-help-display-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(close)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
@@ -1225,6 +1313,30 @@ _arguments "${_arguments_options[@]}" : \
 (exec)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
+;;
+(display)
+_arguments "${_arguments_options[@]}" : \
+":: :_nixling__subcmd__help__subcmd__vm__subcmd__display_commands" \
+"*::: :->display" \
+&& ret=0
+
+    case $state in
+    (display)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:nixling-help-vm-display-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(close)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
 ;;
         esac
     ;;
@@ -1966,8 +2078,27 @@ _nixling__subcmd__help__subcmd__vm_commands() {
 'list:Daemon-side runtime inventory from nixlingd'\''s public socket' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
 'exec:Run or manage commands inside a running VM. Use \`nixling vm exec <vm> -- <cmd...>\` for a non-interactive command, \`nixling vm exec -it <vm> -- bash\` for an interactive shell, \`-d\` for a detached command, and \`nixling vm exec <vm> {list|logs|status|kill}\` to manage detached execs' \
+'display:Manage gateway display sessions for provider-backed targets' \
     )
     _describe -t commands 'nixling help vm commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__vm__subcmd__display_commands] )) ||
+_nixling__subcmd__help__subcmd__vm__subcmd__display_commands() {
+    local commands; commands=(
+'list:List active gateway display sessions' \
+'close:Close a gateway display session by id' \
+    )
+    _describe -t commands 'nixling help vm display commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__vm__subcmd__display__subcmd__close_commands] )) ||
+_nixling__subcmd__help__subcmd__vm__subcmd__display__subcmd__close_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help vm display close commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__vm__subcmd__display__subcmd__list_commands] )) ||
+_nixling__subcmd__help__subcmd__vm__subcmd__display__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help vm display list commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__help__subcmd__vm__subcmd__exec_commands] )) ||
 _nixling__subcmd__help__subcmd__vm__subcmd__exec_commands() {
@@ -2357,9 +2488,53 @@ _nixling__subcmd__vm_commands() {
 'list:Daemon-side runtime inventory from nixlingd'\''s public socket' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
 'exec:Run or manage commands inside a running VM. Use \`nixling vm exec <vm> -- <cmd...>\` for a non-interactive command, \`nixling vm exec -it <vm> -- bash\` for an interactive shell, \`-d\` for a detached command, and \`nixling vm exec <vm> {list|logs|status|kill}\` to manage detached execs' \
+'display:Manage gateway display sessions for provider-backed targets' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling vm commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__vm__subcmd__display_commands] )) ||
+_nixling__subcmd__vm__subcmd__display_commands() {
+    local commands; commands=(
+'list:List active gateway display sessions' \
+'close:Close a gateway display session by id' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'nixling vm display commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__vm__subcmd__display__subcmd__close_commands] )) ||
+_nixling__subcmd__vm__subcmd__display__subcmd__close_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling vm display close commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__vm__subcmd__display__subcmd__help_commands] )) ||
+_nixling__subcmd__vm__subcmd__display__subcmd__help_commands() {
+    local commands; commands=(
+'list:List active gateway display sessions' \
+'close:Close a gateway display session by id' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'nixling vm display help commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__vm__subcmd__display__subcmd__help__subcmd__close_commands] )) ||
+_nixling__subcmd__vm__subcmd__display__subcmd__help__subcmd__close_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling vm display help close commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__vm__subcmd__display__subcmd__help__subcmd__help_commands] )) ||
+_nixling__subcmd__vm__subcmd__display__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling vm display help help commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__vm__subcmd__display__subcmd__help__subcmd__list_commands] )) ||
+_nixling__subcmd__vm__subcmd__display__subcmd__help__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling vm display help list commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__vm__subcmd__display__subcmd__list_commands] )) ||
+_nixling__subcmd__vm__subcmd__display__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling vm display list commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__vm__subcmd__exec_commands] )) ||
 _nixling__subcmd__vm__subcmd__exec_commands() {
@@ -2375,9 +2550,28 @@ _nixling__subcmd__vm__subcmd__help_commands() {
 'list:Daemon-side runtime inventory from nixlingd'\''s public socket' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
 'exec:Run or manage commands inside a running VM. Use \`nixling vm exec <vm> -- <cmd...>\` for a non-interactive command, \`nixling vm exec -it <vm> -- bash\` for an interactive shell, \`-d\` for a detached command, and \`nixling vm exec <vm> {list|logs|status|kill}\` to manage detached execs' \
+'display:Manage gateway display sessions for provider-backed targets' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling vm help commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__vm__subcmd__help__subcmd__display_commands] )) ||
+_nixling__subcmd__vm__subcmd__help__subcmd__display_commands() {
+    local commands; commands=(
+'list:List active gateway display sessions' \
+'close:Close a gateway display session by id' \
+    )
+    _describe -t commands 'nixling vm help display commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__vm__subcmd__help__subcmd__display__subcmd__close_commands] )) ||
+_nixling__subcmd__vm__subcmd__help__subcmd__display__subcmd__close_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling vm help display close commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__vm__subcmd__help__subcmd__display__subcmd__list_commands] )) ||
+_nixling__subcmd__vm__subcmd__help__subcmd__display__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling vm help display list commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__vm__subcmd__help__subcmd__exec_commands] )) ||
 _nixling__subcmd__vm__subcmd__help__subcmd__exec_commands() {

@@ -86,3 +86,54 @@ caps_accessor!(RuntimeCapabilitySet);
 caps_accessor!(WorkloadCapabilitySet);
 caps_accessor!(DisplayCapabilitySet);
 caps_accessor!(NodeCapabilitySet);
+
+impl DisplayCapabilitySet {
+    /// Local Wayland/window-forwarding provider shape. Clipboard, audio, HID,
+    /// USB, GPU acceleration, and video are separate capabilities and are not
+    /// implied by display.
+    pub fn local_wayland() -> Self {
+        Self {
+            caps: CapabilitySet::from_caps([Capability::WindowForwarding]),
+            shm_buffers: true,
+            dmabuf: true,
+            reconnect: false,
+        }
+    }
+
+    /// Provider-managed display-streaming shape. Used when display bytes cross
+    /// an authorized provider/relay stream instead of a local Wayland socket.
+    pub fn provider_streaming(reconnect: bool) -> Self {
+        Self {
+            caps: CapabilitySet::from_caps([Capability::DisplayStreaming]),
+            shm_buffers: false,
+            dmabuf: false,
+            reconnect,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_capabilities_do_not_imply_adjacent_io() {
+        let local = DisplayCapabilitySet::local_wayland();
+        assert!(local.has(Capability::WindowForwarding));
+        assert!(!local.has(Capability::Clipboard));
+        assert!(!local.has(Capability::AudioPlayback));
+        assert!(!local.has(Capability::Usb));
+        assert!(!local.has(Capability::Hid));
+        assert!(!local.has(Capability::GpuAccel));
+        assert!(local.shm_buffers);
+        assert!(local.dmabuf);
+        assert!(!local.reconnect);
+
+        let provider = DisplayCapabilitySet::provider_streaming(true);
+        assert!(provider.has(Capability::DisplayStreaming));
+        assert!(!provider.has(Capability::WindowForwarding));
+        assert!(!provider.shm_buffers);
+        assert!(!provider.dmabuf);
+        assert!(provider.reconnect);
+    }
+}

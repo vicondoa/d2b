@@ -256,6 +256,18 @@ impl SessionLedger {
             .collect()
     }
 
+    /// Cloned non-terminal records in deterministic order for session listing.
+    pub fn active_records(&self) -> Vec<SessionRecord> {
+        let mut records = self
+            .records
+            .values()
+            .filter(|r| !r.state.is_terminal())
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+        records
+    }
+
     /// Drop terminal records to bound memory.
     pub fn gc_terminal(&mut self) {
         self.records.retain(|_, r| !r.state.is_terminal());

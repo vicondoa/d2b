@@ -14,6 +14,8 @@ Graphics-capable VMs use the Cloud Hypervisor runtime provider plus a
 crosvm GPU sidecar; see
 [runtime provider selection](./runtime-provider-selection.md) for the
 runtime capability boundary.
+Display capability boundaries are documented in
+[display and virtual I/O capabilities](./display-io-capabilities.md).
 
 When `graphics.crossDomainTrusted = true` and
 `graphics.waylandFilter.enable = true`, the guest-side

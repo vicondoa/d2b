@@ -337,6 +337,9 @@ _nixling() {
             nixling__subcmd__help__subcmd__usb,probe)
                 cmd="nixling__subcmd__help__subcmd__usb__subcmd__probe"
                 ;;
+            nixling__subcmd__help__subcmd__vm,display)
+                cmd="nixling__subcmd__help__subcmd__vm__subcmd__display"
+                ;;
             nixling__subcmd__help__subcmd__vm,exec)
                 cmd="nixling__subcmd__help__subcmd__vm__subcmd__exec"
                 ;;
@@ -354,6 +357,12 @@ _nixling() {
                 ;;
             nixling__subcmd__help__subcmd__vm,stop)
                 cmd="nixling__subcmd__help__subcmd__vm__subcmd__stop"
+                ;;
+            nixling__subcmd__help__subcmd__vm__subcmd__display,close)
+                cmd="nixling__subcmd__help__subcmd__vm__subcmd__display__subcmd__close"
+                ;;
+            nixling__subcmd__help__subcmd__vm__subcmd__display,list)
+                cmd="nixling__subcmd__help__subcmd__vm__subcmd__display__subcmd__list"
                 ;;
             nixling__subcmd__host,check)
                 cmd="nixling__subcmd__host__subcmd__check"
@@ -487,6 +496,9 @@ _nixling() {
             nixling__subcmd__usb__subcmd__help,probe)
                 cmd="nixling__subcmd__usb__subcmd__help__subcmd__probe"
                 ;;
+            nixling__subcmd__vm,display)
+                cmd="nixling__subcmd__vm__subcmd__display"
+                ;;
             nixling__subcmd__vm,exec)
                 cmd="nixling__subcmd__vm__subcmd__exec"
                 ;;
@@ -508,6 +520,27 @@ _nixling() {
             nixling__subcmd__vm,stop)
                 cmd="nixling__subcmd__vm__subcmd__stop"
                 ;;
+            nixling__subcmd__vm__subcmd__display,close)
+                cmd="nixling__subcmd__vm__subcmd__display__subcmd__close"
+                ;;
+            nixling__subcmd__vm__subcmd__display,help)
+                cmd="nixling__subcmd__vm__subcmd__display__subcmd__help"
+                ;;
+            nixling__subcmd__vm__subcmd__display,list)
+                cmd="nixling__subcmd__vm__subcmd__display__subcmd__list"
+                ;;
+            nixling__subcmd__vm__subcmd__display__subcmd__help,close)
+                cmd="nixling__subcmd__vm__subcmd__display__subcmd__help__subcmd__close"
+                ;;
+            nixling__subcmd__vm__subcmd__display__subcmd__help,help)
+                cmd="nixling__subcmd__vm__subcmd__display__subcmd__help__subcmd__help"
+                ;;
+            nixling__subcmd__vm__subcmd__display__subcmd__help,list)
+                cmd="nixling__subcmd__vm__subcmd__display__subcmd__help__subcmd__list"
+                ;;
+            nixling__subcmd__vm__subcmd__help,display)
+                cmd="nixling__subcmd__vm__subcmd__help__subcmd__display"
+                ;;
             nixling__subcmd__vm__subcmd__help,exec)
                 cmd="nixling__subcmd__vm__subcmd__help__subcmd__exec"
                 ;;
@@ -528,6 +561,12 @@ _nixling() {
                 ;;
             nixling__subcmd__vm__subcmd__help,stop)
                 cmd="nixling__subcmd__vm__subcmd__help__subcmd__stop"
+                ;;
+            nixling__subcmd__vm__subcmd__help__subcmd__display,close)
+                cmd="nixling__subcmd__vm__subcmd__help__subcmd__display__subcmd__close"
+                ;;
+            nixling__subcmd__vm__subcmd__help__subcmd__display,list)
+                cmd="nixling__subcmd__vm__subcmd__help__subcmd__display__subcmd__list"
                 ;;
             *)
                 ;;
@@ -1842,8 +1881,50 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__help__subcmd__vm)
-            opts="start stop restart list status exec"
+            opts="start stop restart list status exec display"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__help__subcmd__vm__subcmd__display)
+            opts="list close"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__help__subcmd__vm__subcmd__display__subcmd__close)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__help__subcmd__vm__subcmd__display__subcmd__list)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -2790,12 +2871,114 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__vm)
-            opts="-h --help start stop restart list status exec help"
+            opts="-h --help start stop restart list status exec display help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__vm__subcmd__display)
+            opts="-h --help list close help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__vm__subcmd__display__subcmd__close)
+            opts="-h --json --human --help <SESSION_ID>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__vm__subcmd__display__subcmd__help)
+            opts="list close help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__vm__subcmd__display__subcmd__help__subcmd__close)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__vm__subcmd__display__subcmd__help__subcmd__help)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__vm__subcmd__display__subcmd__help__subcmd__list)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__vm__subcmd__display__subcmd__list)
+            opts="-h --target --json --human --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --target)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2833,8 +3016,50 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__vm__subcmd__help)
-            opts="start stop restart list status exec help"
+            opts="start stop restart list status exec display help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__vm__subcmd__help__subcmd__display)
+            opts="list close"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__vm__subcmd__help__subcmd__display__subcmd__close)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__vm__subcmd__help__subcmd__display__subcmd__list)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
