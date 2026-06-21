@@ -297,6 +297,8 @@ deprecations ship one minor release before removal.
 - CLI/docs: added the missing `op inspect` authorization-matrix row so the
   declared operation-inspection command is covered by the generated privileges
   contract.
+- Tests: updated the auth-status CLI golden to include the current launcher
+  realm/op inspection commands from the authorization matrix.
 - Tests: the broker reap-health zombie canary now accepts the transient
   uninterruptible-sleep proc state seen on busy CI runners before child teardown.
 - CLI/daemon: qemu-media USB attach/detach `--apply --json` now emits a
