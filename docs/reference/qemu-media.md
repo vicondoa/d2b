@@ -7,6 +7,10 @@ for external media workflows. It uses nixling's daemon/broker control
 plane, but not the per-VM NixOS evaluator, Cloud Hypervisor, store
 sync, guest-control, SSH, or in-guest observability paths.
 
+For the general VM runtime selection policy, including why qemu-media is
+not selected as a full VM runtime, see
+[runtime provider selection](./runtime-provider-selection.md).
+
 ## Runtime shape
 
 | Surface | Contract |

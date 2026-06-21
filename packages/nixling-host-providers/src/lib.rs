@@ -7,26 +7,25 @@
 use async_trait::async_trait;
 use nixling_constellation_core::{Capability, CapabilitySet, ErrorKind, ProviderId};
 use nixling_constellation_provider::{
-    DisplayProvider, HostSubstrateProvider, RuntimeProvider,
-    capabilities::{
-        DisplayCapabilitySet, HostSubstrateKind, NodeCapabilitySet, RuntimeCapabilitySet,
-    },
+    DisplayProvider, HostSubstrateProvider,
+    capabilities::{DisplayCapabilitySet, HostSubstrateKind, NodeCapabilitySet},
     error::{ProviderError, ProviderResult},
-    types::{
-        DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest, RuntimeHandle, RuntimePlan,
-        RuntimeStatus, WorkloadSpec,
-    },
+    types::{DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest},
 };
 use nixling_core::host::HostJson;
 use nixling_core::host_check::{self, HostCheckReport, HostCheckSeverity};
-use nixling_host::{
-    ch_argv::{ChArgvError, generate_ch_argv},
-    wayland_proxy_argv::{WaylandProxyArgvError, generate_wayland_proxy_argv},
+use nixling_host::wayland_proxy_argv::{WaylandProxyArgvError, generate_wayland_proxy_argv};
+
+pub use nixling_host::{
+    ch_argv::ChArgvInput,
+    runtime_provider::{
+        CLOUD_HYPERVISOR_RUNTIME_PROVIDER_ID,
+        CloudHypervisorRuntimeProvider as LocalMicroVmProvider, RuntimeWorkloadRequirements,
+        validate_runtime_profile,
+    },
+    wayland_proxy_argv::WaylandProxyArgvInput,
 };
 
-pub use nixling_host::{ch_argv::ChArgvInput, wayland_proxy_argv::WaylandProxyArgvInput};
-
-const LOCAL_MICROVM_PROVIDER_ID: &str = "local-microvm";
 const LOCAL_CROSS_DOMAIN_WAYLAND_PROVIDER_ID: &str = "local-cross-domain-wayland";
 const NIXOS_HOST_SUBSTRATE_PROVIDER_ID: &str = "nixos-host-substrate";
 const GENERIC_LINUX_HOST_SUBSTRATE_PROVIDER_ID: &str = "generic-linux-host-substrate";
@@ -220,97 +219,6 @@ pub fn detect_os_release(contents: &str) -> DetectedHostSubstrate {
     DetectedHostSubstrate { kind, version }
 }
 
-/// RuntimeProvider adapter for the local Cloud Hypervisor microVM path.
-#[derive(Clone)]
-pub struct LocalMicroVmProvider {
-    provider_id: ProviderId,
-    ch_input: ChArgvInput,
-}
-
-impl std::fmt::Debug for LocalMicroVmProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LocalMicroVmProvider")
-            .field("provider_id", &self.provider_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl LocalMicroVmProvider {
-    /// Construct a local microVM provider using the canonical provider id.
-    pub fn new(ch_input: ChArgvInput) -> Self {
-        Self::with_provider_id(static_provider_id(LOCAL_MICROVM_PROVIDER_ID), ch_input)
-    }
-
-    /// Construct a local microVM provider with an explicit provider id.
-    pub fn with_provider_id(provider_id: ProviderId, ch_input: ChArgvInput) -> Self {
-        Self {
-            provider_id,
-            ch_input,
-        }
-    }
-
-    /// Borrow the Cloud Hypervisor argv generator input this adapter wraps.
-    pub fn ch_input(&self) -> &ChArgvInput {
-        &self.ch_input
-    }
-
-    /// Generate Cloud Hypervisor argv through the existing nixling-host generator.
-    pub async fn cloud_hypervisor_argv(&self) -> ProviderResult<Vec<String>> {
-        render_ch_argv(self.ch_input.clone()).await
-    }
-
-    fn ensure_workload_matches(&self, spec: &WorkloadSpec) -> ProviderResult<()> {
-        if spec.alias.as_str() == self.ch_input.vm_name.as_str() {
-            Ok(())
-        } else {
-            Err(ProviderError::new(
-                ErrorKind::InvalidTarget,
-                "workload alias does not match the local microVM argv input",
-            ))
-        }
-    }
-}
-
-#[async_trait]
-impl RuntimeProvider for LocalMicroVmProvider {
-    fn provider_id(&self) -> ProviderId {
-        self.provider_id.clone()
-    }
-
-    fn capabilities(&self) -> RuntimeCapabilitySet {
-        RuntimeCapabilitySet {
-            caps: CapabilitySet::from_caps([Capability::Vsock, Capability::Virtiofs]),
-        }
-    }
-
-    async fn plan_workload(&self, spec: WorkloadSpec) -> ProviderResult<RuntimePlan> {
-        self.ensure_workload_matches(&spec)?;
-        self.cloud_hypervisor_argv().await?;
-        Ok(RuntimePlan {
-            provider: self.provider_id(),
-            workload: spec.alias,
-        })
-    }
-
-    async fn start(&self, _plan: RuntimePlan) -> ProviderResult<RuntimeHandle> {
-        Err(ProviderError::unsupported(
-            "local microVM start is not wired in this provider adapter",
-        ))
-    }
-
-    async fn stop(&self, _handle: RuntimeHandle) -> ProviderResult<()> {
-        Err(ProviderError::unsupported(
-            "local microVM stop is not wired in this provider adapter",
-        ))
-    }
-
-    async fn inspect(&self, _handle: RuntimeHandle) -> ProviderResult<RuntimeStatus> {
-        Err(ProviderError::unsupported(
-            "local microVM inspect is not wired in this provider adapter",
-        ))
-    }
-}
-
 /// DisplayProvider adapter for the local cross-domain Wayland proxy path.
 #[derive(Clone)]
 pub struct LocalCrossDomainWaylandProvider {
@@ -408,18 +316,6 @@ impl DisplayProvider for LocalCrossDomainWaylandProvider {
     }
 }
 
-async fn render_ch_argv(input: ChArgvInput) -> ProviderResult<Vec<String>> {
-    tokio::task::spawn_blocking(move || generate_ch_argv(&input))
-        .await
-        .map_err(|_| {
-            ProviderError::new(
-                ErrorKind::ProviderAllocationFailed,
-                "blocking task failed while rendering Cloud Hypervisor argv",
-            )
-        })?
-        .map_err(ch_argv_error)
-}
-
 async fn render_wayland_proxy_argv(input: WaylandProxyArgvInput) -> ProviderResult<Vec<String>> {
     tokio::task::spawn_blocking(move || generate_wayland_proxy_argv(&input))
         .await
@@ -430,24 +326,6 @@ async fn render_wayland_proxy_argv(input: WaylandProxyArgvInput) -> ProviderResu
             )
         })?
         .map_err(wayland_proxy_argv_error)
-}
-
-fn ch_argv_error(err: ChArgvError) -> ProviderError {
-    let message = match err {
-        ChArgvError::EmptyVmName => "invalid Cloud Hypervisor argv input: empty VM name",
-        ChArgvError::InvalidChBinaryPath { .. } => {
-            "invalid Cloud Hypervisor argv input: invalid binary path"
-        }
-        ChArgvError::ZeroCpus => "invalid Cloud Hypervisor argv input: zero CPUs",
-        ChArgvError::EmptyKernelPath => "invalid Cloud Hypervisor argv input: empty kernel path",
-        ChArgvError::TapFdMissing { .. } => {
-            "invalid Cloud Hypervisor argv input: missing TAP file descriptor"
-        }
-        ChArgvError::TapIfnameMissing { .. } => {
-            "invalid Cloud Hypervisor argv input: missing TAP interface name"
-        }
-    };
-    ProviderError::new(ErrorKind::ProviderAllocationFailed, message)
 }
 
 fn wayland_proxy_argv_error(err: WaylandProxyArgvError) -> ProviderError {
@@ -468,6 +346,7 @@ fn static_provider_id(id: &'static str) -> ProviderId {
 mod tests {
     use super::*;
     use nixling_constellation_core::{ErrorKind, WorkloadId};
+    use nixling_constellation_provider::RuntimeProvider;
     use nixling_constellation_provider::types::{DisplaySessionRequest, WorkloadSpec};
     use nixling_core::host_check::{
         HostCheckFinding, HostCheckReport, HostCheckSeverity, HostCheckSummary,
@@ -651,7 +530,6 @@ mod tests {
         let adapter = LocalMicroVmProvider::new(input);
         let from_adapter = adapter
             .cloud_hypervisor_argv()
-            .await
             .expect("adapter delegates to CH generator");
 
         assert_eq!(direct, expected_ch_argv());
@@ -690,8 +568,8 @@ mod tests {
         });
 
         let runtime_debug = format!("{:?}", LocalMicroVmProvider::new(ch_input));
-        assert!(runtime_debug.contains("LocalMicroVmProvider"));
-        assert!(runtime_debug.contains(LOCAL_MICROVM_PROVIDER_ID));
+        assert!(runtime_debug.contains("CloudHypervisorRuntimeProvider"));
+        assert!(runtime_debug.contains(CLOUD_HYPERVISOR_RUNTIME_PROVIDER_ID));
         for forbidden in [
             "debug-redact-ch-bin",
             "debug-redact-kernel",

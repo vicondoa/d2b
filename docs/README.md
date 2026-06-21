@@ -54,6 +54,10 @@ The contracts. Stable interfaces a consumer can depend on.
   framework-managed SSH identity, trust-state, and audit behavior.
 - [`reference/qemu-media.md`](./reference/qemu-media.md) —
   qemu-media runtime, media-source, CLI, and security contract.
+- [`reference/runtime-provider-selection.md`](./reference/runtime-provider-selection.md) —
+  Cloud Hypervisor default runtime selection, reserved provider ids,
+  capability gating, and why crosvm/QEMU/Firecracker do not silently
+  replace the default VM runtime.
 - [`reference/security-runbook.md`](./reference/security-runbook.md) —
   operator incident-response, USBIP emergency containment, and
   compromise-recovery steps.

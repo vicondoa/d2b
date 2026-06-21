@@ -10,6 +10,10 @@ Exposes a virtio-gpu device to the guest and forwards Wayland clients
 running inside the VM to the host compositor over the virtio-gpu
 cross-domain channel. The guest sees a normal Wayland session
 (`WAYLAND_DISPLAY=wayland-1`, `GDK_BACKEND=wayland`, etc.).
+Graphics-capable VMs use the Cloud Hypervisor runtime provider plus a
+crosvm GPU sidecar; see
+[runtime provider selection](./runtime-provider-selection.md) for the
+runtime capability boundary.
 
 When `graphics.crossDomainTrusted = true` and
 `graphics.waylandFilter.enable = true`, the guest-side

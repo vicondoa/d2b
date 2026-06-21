@@ -1768,9 +1768,12 @@ dependencies = [
 name = "nixling-host"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "libc",
  "miniz_oxide",
  "nix 0.29.0",
+ "nixling-constellation-core",
+ "nixling-constellation-provider",
  "nixling-core",
  "nixling-ipc",
  "rustix 0.38.44",

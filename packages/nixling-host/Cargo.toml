@@ -25,8 +25,11 @@ default = []
 fake-backends = []
 
 [dependencies]
+nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
+nixling-constellation-provider = { path = "../nixling-constellation-provider", version = "0.0.0-bootstrap" }
 nixling-core = { path = "../nixling-core", version = "0.0.0-bootstrap" }
 nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
+async-trait = "0.1"
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true

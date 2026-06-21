@@ -12,6 +12,15 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Runtime providers: added the host-side Cloud Hypervisor runtime provider
+  adapter and explicit provider-selection policy. `local-cloud-hypervisor`
+  remains the default VM runtime, plans carry only bounded provider/workload
+  metadata, and crosvm, QEMU, Firecracker, and qemu-media ids fail closed
+  rather than silently falling back. Firecracker-shaped selections refuse
+  desktop, guest-control, virtiofs/store, graphics, audio, and USB workloads
+  before side effects. Added reference documentation for runtime provider
+  selection and cross-links from component/runtime docs.
+
 - Constellation: added a preview remote full-host node adapter. A gateway
   guest can now register a remote nixling host as a named node in a realm,
   route typed lifecycle and exec/logs operations to it, and receive typed
