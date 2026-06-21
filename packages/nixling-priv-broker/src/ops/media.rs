@@ -734,15 +734,13 @@ impl QmpAttachCleanup {
                 None,
             );
         }
-        if self.fdset_added {
-            if let Some((fdset_id, fd)) = self
+        if self.fdset_added
+            && let Some((fdset_id, fd)) = self
                 .fdset_id
                 .zip(self.fd)
                 .or_else(|| client.query_fdset_entry(&self.media_ref).ok().flatten())
-            {
-                let _ =
-                    client.execute("remove-fd", json!({ "fdset-id": fdset_id, "fd": fd }), None);
-            }
+        {
+            let _ = client.execute("remove-fd", json!({ "fdset-id": fdset_id, "fd": fd }), None);
         }
     }
 }
@@ -1525,7 +1523,7 @@ fn open_block_device(block_device: &str, access: MediaAccessMode) -> Result<Owne
     if FileType::from_raw_mode(stat.st_mode) != FileType::BlockDevice {
         return Err(MediaOpError::Open("not-block-device".to_owned()));
     }
-    Ok(fd.into())
+    Ok(fd)
 }
 
 fn open_image_file(
