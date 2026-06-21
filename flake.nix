@@ -275,10 +275,21 @@
         nixlingModule = import ./nixos-modules { inherit inputs; };
         mkEval = modules: nixpkgs.lib.nixosSystem {
           inherit system;
-          modules = [ nixlingModule ] ++ modules;
+          modules = [
+            nixlingModule
+            ({ lib, ... }: {
+              # Cross-system eval cannot use x86-only release prebuilts.
+              # Native x86 eval keeps the consumer default to avoid forcing
+              # source host-tool derivations through every lightweight check.
+              nixling.site.usePrebuiltHostTools = lib.mkDefault (system == "x86_64-linux");
+            })
+          ] ++ modules;
         };
         mkCheck = name: cfg: pkgs.runCommand "nixling-check-${name}" { } ''
           echo ${builtins.unsafeDiscardStringContext cfg.config.system.build.toplevel.drvPath} > $out
+        '';
+        mkEvalOnlyCheck = name: value: pkgs.runCommand "nixling-check-${name}" { } ''
+          echo ${builtins.unsafeDiscardStringContext (builtins.toJSON value)} > $out
         '';
         smokeConfigModule = { lib, ... }: {
           boot.loader.grub.enable = false;
@@ -564,7 +575,75 @@
         # NO recursive-nix / IFD: each case is compared at flake-eval time
         # and the verdict baked into a tiny runCommand. The same corpus is
         # CLI-compatible with upstream `nix-unit` for local iteration.
-        nixUnitCases = import ./tests/unit/nix {
+        nixUnitShardCaseFiles = {
+          nix-unit-daemon = [
+            "broker-bundle-path.nix"
+            "broker-caps.nix"
+            "broker-socket-activation.nix"
+            "daemon-autostart.nix"
+            "daemon-default-compat.nix"
+            "gateway-vm.nix"
+            "nixlingd-startup-smoke.nix"
+          ];
+          nix-unit-guest = [
+            "guest-config-containment.nix"
+            "guest-control-auth.nix"
+            "guest-control-vsock.nix"
+            "guest-exec-policy.nix"
+          ];
+          nix-unit-misc = [
+            "assertions.nix"
+            "autostart-wiring.nix"
+            "examples-with-observability.nix"
+            "ifname-nix-rust-parity.nix"
+            "observability.nix"
+            "readiness-waves.nix"
+            "restart-policy.nix"
+            "vm-eval-overlays.nix"
+          ];
+          nix-unit-network = [
+            "bridge-ipv6-boot-sysctl.nix"
+            "multi-env-daemon-backed.nix"
+            "net-vm-network.nix"
+            "usbip-gating.nix"
+          ];
+          nix-unit-runtime = [
+            "external-vm-kind.nix"
+            "niri-vm-borders.nix"
+            "requested-vm-config.nix"
+            "video-contract.nix"
+          ];
+          nix-unit-state = [
+            "per-vm-state-ownership.nix"
+            "principal-uid-collision.nix"
+            "store-overlay-emit.nix"
+            "umask-roundtrip.nix"
+            "volume-mounts.nix"
+          ];
+        };
+        nixUnitCaseFileNames =
+          pkgs.lib.filter (n: pkgs.lib.hasSuffix ".nix" n)
+            (pkgs.lib.attrNames (builtins.readDir ./tests/unit/nix/cases));
+        nixUnitShardFiles = pkgs.lib.concatLists (pkgs.lib.attrValues nixUnitShardCaseFiles);
+        nixUnitShardMissingFiles =
+          pkgs.lib.filter (n: !(builtins.elem n nixUnitShardFiles)) nixUnitCaseFileNames;
+        nixUnitShardUnknownFiles =
+          pkgs.lib.filter (n: !(builtins.elem n nixUnitCaseFileNames)) nixUnitShardFiles;
+        nixUnitShardDuplicateFiles =
+          let
+            count = needle: pkgs.lib.length (pkgs.lib.filter (n: n == needle) nixUnitShardFiles);
+          in
+          pkgs.lib.filter (n: count n > 1) (pkgs.lib.unique nixUnitShardFiles);
+        nixUnitShardCoverageOk =
+          nixUnitShardMissingFiles == [ ]
+          && nixUnitShardUnknownFiles == [ ]
+          && nixUnitShardDuplicateFiles == [ ];
+        nixUnitShardCoverageReport = builtins.toJSON {
+          missing = nixUnitShardMissingFiles;
+          unknown = nixUnitShardUnknownFiles;
+          duplicate = nixUnitShardDuplicateFiles;
+        };
+        nixUnitCasesFor = caseFileNames: import ./tests/unit/nix {
           lib = pkgs.lib;
           inherit pkgs system;
           flakeRoot = ./.;
@@ -576,7 +655,9 @@
           # (which would resolve to a non-git store path inside the flake).
           nixpkgsFlake = nixpkgs;
           inherit nixlingModule;
+          inherit caseFileNames;
         };
+        nixUnitCases = nixUnitCasesFor null;
         nixUnitEval = name: case:
           let
             r = builtins.tryEval (let v = case.expr; in builtins.deepSeq v v);
@@ -611,11 +692,29 @@
                 if !r.success then "eval threw; expected a value"
                 else "got=${builtins.toJSON r.value} expected=${builtins.toJSON case.expected}";
             };
-        nixUnitResults = pkgs.lib.mapAttrsToList nixUnitEval nixUnitCases;
-        nixUnitFailures = pkgs.lib.filter (x: !x.ok) nixUnitResults;
-        nixUnitReport = pkgs.lib.concatMapStringsSep "\n"
-          (x: "FAIL ${x.name}: ${x.detail}") nixUnitFailures;
-        nixUnitTotal = pkgs.lib.length nixUnitResults;
+        nixUnitResultsFor = cases: pkgs.lib.mapAttrsToList nixUnitEval cases;
+        nixUnitShardCheck = checkName: caseFileNames:
+          let
+            cases = nixUnitCasesFor caseFileNames;
+            results = nixUnitResultsFor cases;
+            failures = pkgs.lib.filter (x: !x.ok) results;
+            report = pkgs.lib.concatMapStringsSep "\n"
+              (x: "FAIL ${x.name}: ${x.detail}") failures;
+            total = pkgs.lib.length results;
+          in
+          if failures != [ ] then
+            throw ''
+              ${checkName} gate FAILED (${toString (pkgs.lib.length failures)}/${toString total} cases failed) for ${system}:
+              ${report}
+            ''
+          else
+            pkgs.runCommand "nixling-${checkName}" { } ''
+              echo "${checkName}: ${toString total} cases passed"
+              mkdir -p "$out"
+              echo ok > "$out/${checkName}"
+            '';
+        nixUnitShardChecks =
+          pkgs.lib.mapAttrs nixUnitShardCheck nixUnitShardCaseFiles;
 
         # Fail-closed case-PRESENCE gate (mirrors tests/tools/assert-pinned-tests.sh
         # for the Rust layer): every pinned case name MUST still exist in the
@@ -686,14 +785,14 @@
         # Throwing here forces the gate to fail during `--no-build`
         # evaluation, on BOTH systems (aarch64 included on an x86 runner).
         nix-unit =
-          if nixUnitFailures != [ ] || nixUnitMissingPins != [ ] then
+          if !nixUnitShardCoverageOk || nixUnitMissingPins != [ ] then
             throw ''
-              nix-unit gate FAILED (${toString (pkgs.lib.length nixUnitFailures)}/${toString nixUnitTotal} cases failed, ${toString (pkgs.lib.length nixUnitMissingPins)} pinned cases missing) for ${system}:
-              ${nixUnitReport}${pkgs.lib.optionalString (nixUnitMissingPins != [ ]) "\n${nixUnitMissingReport}"}
+              nix-unit presence gate FAILED (${toString (pkgs.lib.length nixUnitMissingPins)} pinned cases missing) for ${system}:
+              shardCoverage=${nixUnitShardCoverageReport}${pkgs.lib.optionalString (nixUnitMissingPins != [ ]) "\n${nixUnitMissingReport}"}
             ''
           else
             pkgs.runCommand "nixling-nix-unit" { } ''
-              echo "nix-unit: ${toString nixUnitTotal} cases passed (${toString (pkgs.lib.length nixUnitPinned)} pinned present)"
+              echo "nix-unit: ${toString (pkgs.lib.length nixUnitCaseNames)} pinned case names present; ${toString (pkgs.lib.length (pkgs.lib.attrNames nixUnitShardCaseFiles))} shards cover ${toString (pkgs.lib.length nixUnitCaseFileNames)} case files"
               mkdir -p "$out"
               echo ok > "$out/nix-unit"
             '';
@@ -732,8 +831,26 @@
             })
           ]);
 
-        eval-with-observability = mkCheck "eval-with-observability"
-          (mkEval [ (import ./examples/with-observability/configuration.nix) ]);
+        eval-with-observability =
+          let
+            cfg = mkEval [ (import ./examples/with-observability/configuration.nix) ];
+            observed = {
+              assertionsGreen = pkgs.lib.all (a: a.assertion) cfg.config.assertions;
+              observabilityEnabled =
+                (builtins.fromJSON cfg.config.nixling._manifestPkg.text)._observability.enabled;
+              stackVmDeclared = builtins.hasAttr "sys-obs" cfg.config.nixling.vms;
+              workloadAgentDeclared =
+                cfg.config.nixling.vms.work-app.observability.enable;
+            };
+          in
+          mkEvalOnlyCheck "eval-with-observability" (
+            if observed.assertionsGreen
+              && observed.observabilityEnabled
+              && observed.stackVmDeclared
+              && observed.workloadAgentDeclared
+            then observed
+            else throw "eval-with-observability failed: ${builtins.toJSON observed}"
+          );
 
         rust-build = rustWorkspace {
           pname = "nixling-rust-build";
@@ -1003,7 +1120,7 @@
             };
           })
         ]);
-      } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+      } // nixUnitShardChecks // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
         # graphics-workstation transitively depends on x86_64-only
         # packages (spectrum-ch, crosvm-patched, vhost-device-sound)
         # and the framework's `checkVmPlatform` gate refuses to

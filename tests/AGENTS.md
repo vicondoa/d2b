@@ -39,8 +39,8 @@ files: **drift gates** (`tests/unit/gates/` — `xtask gen-* + git diff`) and
 
 | # | Type | What it is | Lives in | Runs **where** |
 |---|------|------------|----------|----------------|
-| 9 | **container** | Nix-OCI image under rootless podman; proves a static binary runs on a foreign non-Nix userland | `tests/integration/containers/*.sh` + `containerImages.<sys>.*` | `make test-integration` — **ubuntu CI + local** |
-| 10 | **VM (runNixOSTest)** | boots a real NixOS VM; asserts live daemon/broker/socket-activation/host-posture/kernel behaviour | `tests/host-integration/*.nix` + `vmChecks.<sys>.*` | `make test-host-integration` — **local NixOS host w/ KVM (manual)** |
+| 9 | **container** | Nix-OCI image under rootless podman; proves a static binary runs on a foreign non-Nix userland | `tests/integration/containers/*.sh` + `containerImages.<sys>.*` | `make test-integration` — **local host/manual pre-PR; not the PR pipeline** |
+| 10 | **VM (runNixOSTest)** | boots a real NixOS VM; asserts live daemon/broker/socket-activation/host-posture/kernel behaviour | `tests/host-integration/*.nix` + `vmChecks.<sys>.*` | `make test-host-integration` — **local NixOS host w/ KVM, manual pre-PR; not the PR pipeline** |
 | 11 | **live-host** | runs against a **real deployed** nixling host; destructive/stateful | `tests/integration/live/*.sh` | `NL_LIVE=1` / sudo — **manual, never CI** |
 | 12 | **hardware** | real GPU / YubiKey / hardware-TPM passthrough | `tests/host-integration/hardware/*.sh` | **manual on a host with the devices** |
 
@@ -49,7 +49,9 @@ files: **drift gates** (`tests/unit/gates/` — `xtask gen-* + git diff`) and
 1. **Asserting a Nix module value / option / eval-rejection?** → type 1, a
    nix-unit case in `tests/unit/nix/cases/`. Add a case file (it is
    auto-discovered; do not edit `default.nix`), then regenerate the pin list
-   (`tests/tools/gen-nix-unit-pins.sh`).
+   (`tests/tools/gen-nix-unit-pins.sh`). CI evaluates the corpus through
+   sharded `nix-unit-<shard>` flake checks; add new cases to the existing
+   topical file whose shard already owns that behavior.
 2. **Asserting Rust logic?** → type 2, a `#[test]` in that crate's `src`.
 3. **Asserting the real binary's wire/CLI behaviour?** → type 3, a test in
    `packages/<crate>/tests/*.rs` against `CARGO_BIN_EXE_*`. Spawn hermetically —
@@ -95,11 +97,11 @@ tests/
 │   ├── meta/                                                       meta gates (closed set)
 │   └── gates/                                                      drift/perf gates (closed set)
 ├── integration/
-│   ├── containers/                                                 type 9 podman (make test-integration)
+│   ├── containers/                                                 type 9 podman (make test-integration; host/manual pre-PR)
 │   ├── distro-matrix/                                              distro pins/fixtures
 │   └── live/                                                        type 11 NL_LIVE (manual)
 └── host-integration/
-    ├── *.nix                                                       type 10 runNixOSTest (make test-host-integration)
+    ├── *.nix                                                       type 10 runNixOSTest (make test-host-integration; host/manual pre-PR)
     └── hardware/                                                   type 12 device tests (manual)
 ```
 

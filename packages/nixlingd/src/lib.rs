@@ -6562,7 +6562,15 @@ fn dispatch_broker_ack_request(
 }
 
 fn load_bundle_resolver(state: &ServerState) -> Result<BundleResolver, TypedError> {
-    BundleResolver::load(&state.config.artifacts.bundle_path).map_err(|err| match err {
+    #[cfg(test)]
+    let loaded = BundleResolver::load_with_policy(
+        &state.config.artifacts.bundle_path,
+        &nixling_core::bundle_resolver::BundleVerifyPolicy::for_tests(),
+    );
+    #[cfg(not(test))]
+    let loaded = BundleResolver::load(&state.config.artifacts.bundle_path);
+
+    loaded.map_err(|err| match err {
         nixling_core::error::Error::Bundle(BundleError::Tampered { path, reason }) => {
             TypedError::BundleTampered { path, reason }
         }
@@ -11653,6 +11661,8 @@ mod public_status_tests {
         let public_manifest_path = root.join("vms.json");
         let bundle_path = root.join("bundle.json");
         let processes_path = root.join("processes.json");
+        let host_path = root.join("host.json");
+        let privileges_path = root.join("privileges.json");
         let closures_dir = root.join("closures");
         fs::create_dir_all(&closures_dir).expect("closures dir");
         let vm_a_state_dir = vm_a_state_dir
@@ -11741,15 +11751,31 @@ mod public_status_tests {
         )
         .expect("write processes");
 
+        fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/fixtures/deny-unknown/host-valid.json"),
+            &host_path,
+        )
+        .expect("copy host fixture");
+        fs::write(
+            &privileges_path,
+            serde_json::to_vec_pretty(&json!({
+                "schemaVersion": "v2",
+                "operations": []
+            }))
+            .expect("privileges json"),
+        )
+        .expect("write privileges");
+
         fs::write(
             &bundle_path,
             serde_json::to_vec_pretty(&json!({
                 "bundleVersion": 4,
                 "schemaVersion": "v2",
                 "publicManifestPath": public_manifest_path.display().to_string(),
-                "hostPath": root.join("host.json").display().to_string(),
+                "hostPath": host_path.display().to_string(),
                 "processesPath": processes_path.display().to_string(),
-                "privilegesPath": root.join("privileges.json").display().to_string(),
+                "privilegesPath": privileges_path.display().to_string(),
                 "closures": [],
                 "minijailProfiles": [],
                 "managedKeys": {},
@@ -11763,12 +11789,23 @@ mod public_status_tests {
         )
         .expect("write bundle");
 
+        for path in [
+            &bundle_path,
+            &host_path,
+            &privileges_path,
+            &processes_path,
+            &public_manifest_path,
+        ] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o640))
+                .expect("chmod public status test artifact");
+        }
+
         ArtifactPaths {
             public_manifest_path,
             bundle_path,
+            host_path,
             processes_path,
             closures_dir,
-            ..ArtifactPaths::default()
         }
     }
 

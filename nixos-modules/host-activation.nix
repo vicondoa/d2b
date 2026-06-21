@@ -37,7 +37,10 @@ let
   normalNixosVms = nl.normalNixosVms cfg.vms;
   qemuMediaVms = nl.qemuMediaVms cfg.vms;
   roleAclVms = normalNixosVms // qemuMediaVms;
-  prebuilt = import ./prebuilt-packages.nix { inherit pkgs lib; };
+  prebuilt =
+    if cfg.site.usePrebuiltHostTools
+    then import ./prebuilt-packages.nix { inherit pkgs lib; }
+    else { };
 
   # Build the nixling-activation-helper binary (defined in
   # packages/nixling-host/src/bin/nixling-activation-helper.rs)

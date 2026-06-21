@@ -98,7 +98,6 @@ fn nix_package_source_filters_are_path_segment_based() {
         "nixos-modules/host-broker.nix",
         "nixos-modules/host-activation.nix",
         "nixos-modules/processes-json.nix",
-        "nixos-modules/gateway-vm.nix",
     ];
 
     for rel in files {
@@ -119,6 +118,13 @@ fn nix_package_source_filters_are_path_segment_based() {
     assert!(
         helper.contains(r#"type == "directory" && baseNameOf path == "target""#),
         "nixos-modules/lib.nix: cleanRustPackagesSource must exclude only a directory segment named `target`"
+    );
+
+    let gateway_vm = read_repo_file("nixos-modules/gateway-vm.nix");
+    assert!(
+        !gateway_vm.contains("cleanSourceWith") && !gateway_vm.contains("filterSource"),
+        "nixos-modules/gateway-vm.nix: gateway VMs must consume _hostToolPackages, \
+         not define an ad-hoc Rust source filter"
     );
 }
 

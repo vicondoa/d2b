@@ -116,6 +116,7 @@ fn cloud_hypervisor_runner_shape_matches_rendered_snapshot() {
             "socket=/run/nixling/vms/corp-full/nl-meta.sock,tag=nl-meta",
             "socket=/run/nixling/vms/corp-full/nl-hkeys.sock,tag=nl-hkeys",
             "socket=/run/nixling/vms/corp-full/nl-ssh-host.sock,tag=nl-ssh-host",
+            "socket=/run/nixling/vms/corp-full/guest-control/nl-gctl.sock,tag=nl-gctl",
             "--api-socket",
             "/var/lib/nixling/vms/corp-full/corp-full.sock",
             "--net",

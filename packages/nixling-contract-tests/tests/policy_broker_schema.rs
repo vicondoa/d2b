@@ -182,6 +182,9 @@ fn record_cli(parts: &[String], version_re: &Regex, found: &mut BTreeSet<String>
     if version_re.is_match(first) {
         return;
     }
+    if first == "realm" || (parts.len() == 1 && first == "vm") {
+        return;
+    }
     if first.contains('/') {
         for item in first.split('/') {
             let mut next = vec![item.to_string()];
