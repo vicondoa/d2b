@@ -112,6 +112,9 @@ deprecations ship one minor release before removal.
 - Local TCP test transport support now proves the transport interface is
   not Azure-specific, with loopback-only binds, explicit URI targets, and
   redacted typed errors for negative network cases.
+- Host substrate provider adapters now wrap the existing host-check report
+  for NixOS and generic Linux/Ubuntu capability discovery, returning typed
+  remediation when prerequisites fail.
 - Host-to-realm isolation is now documented and checked with a redacted
   host egress policy artifact, so host daemon/broker/CLI surfaces remain
   free of realm relay credentials and sessions.

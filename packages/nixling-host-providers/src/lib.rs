@@ -7,14 +7,18 @@
 use async_trait::async_trait;
 use nixling_constellation_core::{Capability, CapabilitySet, ErrorKind, ProviderId};
 use nixling_constellation_provider::{
-    DisplayProvider, RuntimeProvider,
-    capabilities::{DisplayCapabilitySet, RuntimeCapabilitySet},
+    DisplayProvider, HostSubstrateProvider, RuntimeProvider,
+    capabilities::{
+        DisplayCapabilitySet, HostSubstrateKind, NodeCapabilitySet, RuntimeCapabilitySet,
+    },
     error::{ProviderError, ProviderResult},
     types::{
         DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest, RuntimeHandle, RuntimePlan,
         RuntimeStatus, WorkloadSpec,
     },
 };
+use nixling_core::host::HostJson;
+use nixling_core::host_check::{self, HostCheckReport, HostCheckSeverity};
 use nixling_host::{
     ch_argv::{ChArgvError, generate_ch_argv},
     wayland_proxy_argv::{WaylandProxyArgvError, generate_wayland_proxy_argv},
@@ -24,6 +28,197 @@ pub use nixling_host::{ch_argv::ChArgvInput, wayland_proxy_argv::WaylandProxyArg
 
 const LOCAL_MICROVM_PROVIDER_ID: &str = "local-microvm";
 const LOCAL_CROSS_DOMAIN_WAYLAND_PROVIDER_ID: &str = "local-cross-domain-wayland";
+const NIXOS_HOST_SUBSTRATE_PROVIDER_ID: &str = "nixos-host-substrate";
+const GENERIC_LINUX_HOST_SUBSTRATE_PROVIDER_ID: &str = "generic-linux-host-substrate";
+
+/// Host substrate check adapter backed by the existing `host_check` report.
+#[derive(Clone)]
+pub struct HostCheckSubstrateProvider {
+    provider_id: ProviderId,
+    host: HostJson,
+    strict: bool,
+    substrate: HostSubstrateKind,
+    substrate_version: Option<String>,
+}
+
+impl std::fmt::Debug for HostCheckSubstrateProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostCheckSubstrateProvider")
+            .field("provider_id", &self.provider_id)
+            .field("strict", &self.strict)
+            .field("substrate", &self.substrate)
+            .field("substrate_version", &self.substrate_version)
+            .finish_non_exhaustive()
+    }
+}
+
+impl HostCheckSubstrateProvider {
+    /// NixOS host-substrate provider.
+    pub fn nixos(host: HostJson) -> Self {
+        Self::with_provider_id_and_substrate(
+            static_provider_id(NIXOS_HOST_SUBSTRATE_PROVIDER_ID),
+            host,
+            HostSubstrateKind::NixOs,
+            None,
+        )
+    }
+
+    /// Generic Linux host-substrate provider.
+    pub fn generic_linux(host: HostJson) -> Self {
+        Self::with_provider_id_and_substrate(
+            static_provider_id(GENERIC_LINUX_HOST_SUBSTRATE_PROVIDER_ID),
+            host,
+            HostSubstrateKind::GenericLinux,
+            None,
+        )
+    }
+
+    /// Generic Linux host-substrate provider with `os-release` detection.
+    pub fn generic_linux_from_os_release(host: HostJson, os_release: &str) -> Self {
+        let detected = detect_os_release(os_release);
+        Self::with_provider_id_and_substrate(
+            static_provider_id(GENERIC_LINUX_HOST_SUBSTRATE_PROVIDER_ID),
+            host,
+            detected.kind,
+            detected.version,
+        )
+    }
+
+    /// Construct with an explicit provider id.
+    pub fn with_provider_id(provider_id: ProviderId, host: HostJson) -> Self {
+        Self::with_provider_id_and_substrate(
+            provider_id,
+            host,
+            HostSubstrateKind::GenericLinux,
+            None,
+        )
+    }
+
+    /// Construct with an explicit provider id and substrate metadata.
+    pub fn with_provider_id_and_substrate(
+        provider_id: ProviderId,
+        host: HostJson,
+        substrate: HostSubstrateKind,
+        substrate_version: Option<String>,
+    ) -> Self {
+        Self {
+            provider_id,
+            host,
+            strict: true,
+            substrate,
+            substrate_version,
+        }
+    }
+
+    /// Override strict host-check behavior.
+    pub fn with_strict(mut self, strict: bool) -> Self {
+        self.strict = strict;
+        self
+    }
+
+    /// Run the existing host-check report without changing host state.
+    pub async fn check_report(&self) -> ProviderResult<HostCheckReport> {
+        let host = self.host.clone();
+        let strict = self.strict;
+        tokio::task::spawn_blocking(move || host_check::run(&host, std::iter::empty(), strict))
+            .await
+            .map_err(|_| {
+                ProviderError::new(
+                    ErrorKind::ProviderAllocationFailed,
+                    "blocking task failed while checking host substrate",
+                )
+            })?
+            .map_err(|_| {
+                ProviderError::new(
+                    ErrorKind::ProviderAllocationFailed,
+                    "host substrate probe failed",
+                )
+            })
+    }
+}
+
+#[async_trait]
+impl HostSubstrateProvider for HostCheckSubstrateProvider {
+    fn provider_id(&self) -> ProviderId {
+        self.provider_id.clone()
+    }
+
+    async fn check(&self) -> ProviderResult<NodeCapabilitySet> {
+        let report = self.check_report().await?;
+        if report.summary.fail > 0 {
+            return Err(host_check_failed(report));
+        }
+        Ok(self.host_check_capabilities(&report))
+    }
+}
+
+impl HostCheckSubstrateProvider {
+    fn host_check_capabilities(&self, report: &HostCheckReport) -> NodeCapabilitySet {
+        let mut caps = CapabilitySet::empty();
+        if report.summary.fail == 0 {
+            caps = caps
+                .with(Capability::Lifecycle)
+                .with(Capability::Vsock)
+                .with(Capability::Virtiofs);
+        }
+        NodeCapabilitySet {
+            caps,
+            substrate: Some(self.substrate),
+            substrate_version: self.substrate_version.clone(),
+            userns_available: report.summary.fail == 0,
+            vhost_acceleration: report.summary.fail == 0,
+            lsm: Some("unknown".to_owned()),
+        }
+    }
+}
+
+fn host_check_failed(report: HostCheckReport) -> ProviderError {
+    let first = report
+        .findings
+        .iter()
+        .find(|finding| finding.severity == HostCheckSeverity::Fail);
+    let message = first
+        .map(|finding| {
+            format!(
+                "host substrate check failed: {}; remediation: {}",
+                finding.id, finding.remediation
+            )
+        })
+        .unwrap_or_else(|| "host substrate check failed".to_owned());
+    ProviderError::new(ErrorKind::ProviderAllocationFailed, message)
+}
+
+/// Result of parsing `/etc/os-release`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetectedHostSubstrate {
+    /// Detected substrate family.
+    pub kind: HostSubstrateKind,
+    /// Detected VERSION_ID when present.
+    pub version: Option<String>,
+}
+
+/// Parse `/etc/os-release` contents into a low-cardinality substrate family.
+pub fn detect_os_release(contents: &str) -> DetectedHostSubstrate {
+    let mut id = None;
+    let mut version = None;
+    for line in contents.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = value.trim_matches('"').to_owned();
+        match key {
+            "ID" => id = Some(value),
+            "VERSION_ID" => version = Some(value),
+            _ => {}
+        }
+    }
+    let kind = match id.as_deref() {
+        Some("nixos") => HostSubstrateKind::NixOs,
+        Some("ubuntu") => HostSubstrateKind::Ubuntu,
+        _ => HostSubstrateKind::GenericLinux,
+    };
+    DetectedHostSubstrate { kind, version }
+}
 
 /// RuntimeProvider adapter for the local Cloud Hypervisor microVM path.
 #[derive(Clone)]
@@ -274,6 +469,9 @@ mod tests {
     use super::*;
     use nixling_constellation_core::{ErrorKind, WorkloadId};
     use nixling_constellation_provider::types::{DisplaySessionRequest, WorkloadSpec};
+    use nixling_core::host_check::{
+        HostCheckFinding, HostCheckReport, HostCheckSeverity, HostCheckSummary,
+    };
     use nixling_host::{
         ch_argv::{ChFsShare, ChNetHandoff, ChNetIface, ChVsock, generate_ch_argv},
         wayland_proxy_argv::generate_wayland_proxy_argv,
@@ -281,6 +479,45 @@ mod tests {
 
     fn workload_id(raw: &str) -> WorkloadId {
         WorkloadId::parse(raw).expect("test workload id must be valid")
+    }
+
+    fn host_fixture() -> HostJson {
+        serde_json::from_str(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host-valid fixture must deserialize")
+    }
+
+    fn report_with_failures(fail: u32) -> HostCheckReport {
+        HostCheckReport {
+            strict: true,
+            summary: HostCheckSummary {
+                pass: 1,
+                warn: 0,
+                fail,
+            },
+            findings: if fail == 0 {
+                vec![HostCheckFinding {
+                    id: "kernel-version".to_owned(),
+                    severity: HostCheckSeverity::Pass,
+                    message: "kernel ok".to_owned(),
+                    remediation: "No action required.".to_owned(),
+                    vm: None,
+                    detail: None,
+                    details: Default::default(),
+                }]
+            } else {
+                vec![HostCheckFinding {
+                    id: "cgroup-v2".to_owned(),
+                    severity: HostCheckSeverity::Fail,
+                    message: "missing cgroup v2".to_owned(),
+                    remediation: "Boot with unified cgroup-v2 enabled.".to_owned(),
+                    vm: None,
+                    detail: None,
+                    details: Default::default(),
+                }]
+            },
+        }
     }
 
     fn representative_ch_input() -> ChArgvInput {
@@ -551,5 +788,90 @@ mod tests {
         assert!(!display.shm_buffers);
         assert!(!display.dmabuf);
         assert!(!display.reconnect);
+    }
+
+    #[test]
+    fn host_substrate_provider_ids_and_debug_are_bounded() {
+        let provider = HostCheckSubstrateProvider::nixos(host_fixture()).with_strict(false);
+        assert_eq!(
+            provider.provider_id().as_str(),
+            NIXOS_HOST_SUBSTRATE_PROVIDER_ID
+        );
+        let rendered = format!("{provider:?}");
+        assert!(rendered.contains("HostCheckSubstrateProvider"));
+        assert!(rendered.contains(NIXOS_HOST_SUBSTRATE_PROVIDER_ID));
+        assert!(!rendered.contains("nftables"));
+        assert!(!rendered.contains("networkManager"));
+
+        let generic = HostCheckSubstrateProvider::generic_linux(host_fixture());
+        assert_eq!(
+            generic.provider_id().as_str(),
+            GENERIC_LINUX_HOST_SUBSTRATE_PROVIDER_ID
+        );
+    }
+
+    #[test]
+    fn host_substrate_capabilities_require_zero_failures() {
+        let provider = HostCheckSubstrateProvider::nixos(host_fixture());
+        let caps = provider.host_check_capabilities(&report_with_failures(0));
+        assert!(caps.has(Capability::Lifecycle));
+        assert!(caps.has(Capability::Vsock));
+        assert!(caps.has(Capability::Virtiofs));
+        assert_eq!(caps.substrate, Some(HostSubstrateKind::NixOs));
+        assert!(caps.userns_available);
+        assert!(caps.vhost_acceleration);
+
+        let caps = provider.host_check_capabilities(&report_with_failures(1));
+        assert!(!caps.has(Capability::Lifecycle));
+        assert!(!caps.has(Capability::Vsock));
+        assert!(!caps.has(Capability::Virtiofs));
+        assert_eq!(caps.substrate, Some(HostSubstrateKind::NixOs));
+        assert!(!caps.userns_available);
+        assert!(!caps.vhost_acceleration);
+    }
+
+    #[test]
+    fn host_substrate_failure_mentions_id_and_remediation() {
+        let err = host_check_failed(report_with_failures(1));
+        assert_eq!(err.kind(), ErrorKind::ProviderAllocationFailed);
+        let rendered = err.to_string();
+        assert!(rendered.contains("cgroup-v2"));
+        assert!(rendered.contains("unified cgroup-v2"));
+    }
+
+    #[test]
+    fn os_release_detection_classifies_nixos_ubuntu_and_generic() {
+        assert_eq!(
+            detect_os_release("ID=nixos\nVERSION_ID=\"26.05\"\n"),
+            DetectedHostSubstrate {
+                kind: HostSubstrateKind::NixOs,
+                version: Some("26.05".to_owned())
+            }
+        );
+        assert_eq!(
+            detect_os_release("ID=ubuntu\nVERSION_ID=\"24.04\"\n"),
+            DetectedHostSubstrate {
+                kind: HostSubstrateKind::Ubuntu,
+                version: Some("24.04".to_owned())
+            }
+        );
+        assert_eq!(
+            detect_os_release("ID=debian\n"),
+            DetectedHostSubstrate {
+                kind: HostSubstrateKind::GenericLinux,
+                version: None
+            }
+        );
+    }
+
+    #[test]
+    fn generic_linux_provider_uses_os_release_metadata() {
+        let provider = HostCheckSubstrateProvider::generic_linux_from_os_release(
+            host_fixture(),
+            "ID=ubuntu\nVERSION_ID=\"24.04\"\n",
+        );
+        let caps = provider.host_check_capabilities(&report_with_failures(0));
+        assert_eq!(caps.substrate, Some(HostSubstrateKind::Ubuntu));
+        assert_eq!(caps.substrate_version.as_deref(), Some("24.04"));
     }
 }
