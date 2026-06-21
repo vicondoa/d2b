@@ -459,7 +459,7 @@ cargo_audit_check "main workspace" "$lock_file"
 cargo_audit_check "broker workspace" "$broker_lock_file"
 # libshpool 0.11.0 pulls notify 7 -> notify-types -> instant 0.1.13.
 # The helper pins and tracks that transitive unmaintained advisory explicitly
-# while Wave 0 evaluates libshpool feasibility.
+# while evaluating libshpool feasibility.
 cargo_audit_check "guest shell runner workspace" "$guest_shell_runner_lock_file" --ignore RUSTSEC-2024-0384
 
 log "--> tests/tools/stub-no-socket.sh"

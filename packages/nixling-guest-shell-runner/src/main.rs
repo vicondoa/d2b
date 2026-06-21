@@ -25,8 +25,8 @@ fn run() -> Result<()> {
         Command::Daemon(args) => {
             validate_socket_path(&args.socket)?;
             bail!(
-                "persistent shell daemon mode is not enabled in this helper build: home={}",
-                args.home.display()
+                "persistent shell daemon mode is not enabled in this helper build: home={:?}",
+                args.home
             );
         }
         Command::Attach(args) => {

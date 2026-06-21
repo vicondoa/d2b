@@ -122,18 +122,19 @@
             doCheck = false;
             RUSTC_WRAPPER = "";
             SCCACHE_DIR = "";
-            nativeBuildInputs = [ pkgs.binutils ];
+            nativeBuildInputs = [ pkgs.pkgsStatic.binutils ];
             postInstall = ''
+              readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
               bin="$out/bin/${binName}"
               test -x "$bin"
-              readelf -h "$bin" >/dev/null
-              readelf -l "$bin" > "$TMPDIR/${binName}.program-headers"
+              "$readelf" -h "$bin" >/dev/null
+              "$readelf" -l "$bin" > "$TMPDIR/${binName}.program-headers"
               if grep -q 'Requesting program interpreter' "$TMPDIR/${binName}.program-headers"; then
                 echo "${binName}: unexpected ELF interpreter" >&2
                 cat "$TMPDIR/${binName}.program-headers" >&2
                 exit 1
               fi
-              if readelf -d "$bin" > "$TMPDIR/${binName}.dynamic" 2> "$TMPDIR/${binName}.dynamic.err"; then
+              if "$readelf" -d "$bin" > "$TMPDIR/${binName}.dynamic" 2> "$TMPDIR/${binName}.dynamic.err"; then
                 if grep -q '(NEEDED)' "$TMPDIR/${binName}.dynamic"; then
                   echo "${binName}: unexpected dynamic dependency" >&2
                   cat "$TMPDIR/${binName}.dynamic" >&2
@@ -942,8 +943,9 @@
         };
 
         guest-static-elf = pkgs.runCommand "nixling-guest-static-elf" {
-          nativeBuildInputs = [ pkgs.binutils ];
+          nativeBuildInputs = [ pkgs.pkgsStatic.binutils ];
         } ''
+          readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
           for bin in \
             ${self.packages.${system}.nixling-guestd-static}/bin/nixling-guestd \
             ${self.packages.${system}.nixling-userd-static}/bin/nixling-userd \
@@ -952,14 +954,14 @@
           do
             test -x "$bin"
             name="$(basename "$bin")"
-            readelf -h "$bin" >/dev/null
-            readelf -l "$bin" > "$TMPDIR/$name.program-headers"
+            "$readelf" -h "$bin" >/dev/null
+            "$readelf" -l "$bin" > "$TMPDIR/$name.program-headers"
             if grep -q 'Requesting program interpreter' "$TMPDIR/$name.program-headers"; then
               echo "$bin: unexpected ELF interpreter" >&2
               cat "$TMPDIR/$name.program-headers" >&2
               exit 1
             fi
-            if readelf -d "$bin" > "$TMPDIR/$name.dynamic" 2> "$TMPDIR/$name.dynamic.err"; then
+            if "$readelf" -d "$bin" > "$TMPDIR/$name.dynamic" 2> "$TMPDIR/$name.dynamic.err"; then
               if grep -q '(NEEDED)' "$TMPDIR/$name.dynamic"; then
                 echo "$bin: unexpected dynamic dependency" >&2
                 cat "$TMPDIR/$name.dynamic" >&2

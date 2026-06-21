@@ -7,13 +7,10 @@ pub fn validate_socket_path(path: &Path) -> Result<()> {
         bail!("socket path must not be empty");
     }
     if !path.is_absolute() {
-        bail!("socket path must be absolute: {}", path.display());
+        bail!("socket path must be absolute: {path:?}");
     }
     if path.as_os_str().as_encoded_bytes().len() >= 108 {
-        bail!(
-            "socket path is too long for sockaddr_un: {}",
-            path.display()
-        );
+        bail!("socket path is too long for sockaddr_un: {path:?}");
     }
     Ok(())
 }
