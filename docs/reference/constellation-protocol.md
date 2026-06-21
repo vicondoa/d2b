@@ -31,6 +31,11 @@ The session layer carries a 4-byte little-endian length followed by one
 codec frame. The frame cap is 1 MiB and is enforced before payload
 allocation or protobuf decode.
 
+Transport adapters must preserve byte-exact delivery, bounded pending
+session queues, typed unavailable/backpressure errors, and explicit
+shutdown behavior. The reusable checks are listed in the
+[transport conformance matrix](./transport-conformance-matrix.md).
+
 The protobuf codec maps bytes to the codec-neutral `ConstellationFrame`.
 The router consumes only semantic frames; it never depends on protobuf
 types. The schema fingerprint for the current protobuf shape is exposed by

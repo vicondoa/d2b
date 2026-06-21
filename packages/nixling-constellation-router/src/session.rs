@@ -289,6 +289,7 @@ mod tests {
     use nixling_constellation_provider::types::{NodeRegistration, TransportTarget};
     use nixling_constellation_transport::LoopbackTransport;
     use std::sync::Arc;
+    use tokio::io::AsyncWriteExt;
 
     async fn connected_pair() -> (TransportSession, TransportSession) {
         let transport = Arc::new(LoopbackTransport::new());
@@ -364,6 +365,42 @@ mod tests {
         assert!(selected.has(Capability::Exec));
         assert!(!selected.has(Capability::WindowForwarding));
         assert_eq!(server.await.unwrap(), selected.clone());
+    }
+
+    #[tokio::test]
+    async fn handshake_negotiates_empty_capability_intersection() {
+        let (client_s, server_s) = connected_pair().await;
+        let server = tokio::spawn(async move {
+            PeerSession::accept_with_capabilities(
+                server_s,
+                ProtobufCodec::new(),
+                CapabilitySet::empty(),
+            )
+            .await
+            .unwrap()
+            .negotiated()
+            .capabilities
+            .capabilities
+            .clone()
+        });
+        let client = PeerSession::connect_with_capabilities(
+            client_s,
+            ProtobufCodec::new(),
+            CapabilitySet::empty().with(Capability::Exec),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !client
+                .negotiated()
+                .capabilities
+                .capabilities
+                .has(Capability::Exec)
+        );
+        assert_eq!(
+            server.await.unwrap(),
+            client.negotiated().capabilities.capabilities
+        );
     }
 
     #[tokio::test]
@@ -558,6 +595,37 @@ mod tests {
         let bytes = codec.encode_frame(&frame).unwrap();
         write_frame(client_s.stream_mut(), &bytes).await.unwrap();
         let err = server.await.unwrap().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::MalformedFrame);
+    }
+
+    #[tokio::test]
+    async fn write_frame_rejects_payload_above_cap() {
+        let (mut a, _b) = tokio::io::duplex(64);
+        let payload = vec![0_u8; MAX_FRAME_BYTES + 1];
+        let err = write_frame(&mut a, &payload).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FrameTooLarge);
+    }
+
+    #[tokio::test]
+    async fn read_frame_rejects_declared_length_above_cap() {
+        let (mut writer, mut reader) = tokio::io::duplex(8);
+        writer
+            .write_all(&((MAX_FRAME_BYTES as u32) + 1).to_le_bytes())
+            .await
+            .unwrap();
+        let err = read_frame(&mut reader).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FrameTooLarge);
+    }
+
+    #[tokio::test]
+    async fn read_frame_rejects_truncated_payload() {
+        let (mut writer, mut reader) = tokio::io::duplex(16);
+        let writer = tokio::spawn(async move {
+            writer.write_all(&5_u32.to_le_bytes()).await.unwrap();
+            writer.write_all(b"ab").await.unwrap();
+        });
+        let err = read_frame(&mut reader).await.unwrap_err();
+        writer.await.unwrap();
         assert_eq!(err.kind(), ErrorKind::MalformedFrame);
     }
 }
