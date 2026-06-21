@@ -158,6 +158,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Proof tests: the Cloud Hypervisor connect proof now binds fixture
+  sockets under a short relative target path so long worktree paths do
+  not exceed Unix domain socket pathname limits.
 - ADR 0032 ACA display: the daemon-owned verified Relay listener now
   survives the synchronous `gatewayDisplay` request runtime, so Waypipe
   sessions remain connected after `nixling vm exec <aca target>` returns
