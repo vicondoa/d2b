@@ -12888,6 +12888,8 @@ fn dispatch_auth_status(state: &ServerState, peer: &PeerIdentity) -> Value {
                 "op inspect",
                 "realm list",
                 "realm inspect",
+                "realm enter",
+                "realm run",
             ],
             Vec::new(),
         )
@@ -12902,6 +12904,8 @@ fn dispatch_auth_status(state: &ServerState, peer: &PeerIdentity) -> Value {
                 "op inspect",
                 "realm list",
                 "realm inspect",
+                "realm enter",
+                "realm run",
             ],
             vec![DeniedCommandHint {
                 command: "audit".to_owned(),

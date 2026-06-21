@@ -4483,10 +4483,10 @@ fn load_realm_entrypoint_document_from_path(
             ));
         }
     };
-    let mut raw = String::new();
+    let mut raw = Vec::new();
     let read = io::Read::by_ref(&mut file)
         .take(MAX_REALM_ENTRYPOINTS_BYTES + 1)
-        .read_to_string(&mut raw)
+        .read_to_end(&mut raw)
         .map_err(|err| CliFailure::new(1, format!("failed to read {}: {err}", path.display())))?;
     if read as u64 > MAX_REALM_ENTRYPOINTS_BYTES {
         return Err(CliFailure::new(
@@ -4497,6 +4497,12 @@ fn load_realm_entrypoint_document_from_path(
             ),
         ));
     }
+    let raw = String::from_utf8(raw).map_err(|err| {
+        CliFailure::new(
+            1,
+            format!("failed to parse {} as UTF-8: {err}", path.display()),
+        )
+    })?;
     let doc: RealmEntrypointDocument = serde_json::from_str(&raw)
         .map_err(|err| CliFailure::new(1, format!("failed to parse {}: {err}", path.display())))?;
     Ok(Some(doc))
@@ -4514,8 +4520,9 @@ fn load_realm_entrypoint_table_from_path(
             CliFailure::new(
                 1,
                 format!(
-                    "realm entrypoint `{}` is invalid: {err}",
-                    safe_error_snippet(&realm_raw)
+                    "realm entrypoint `{}` is invalid: {}",
+                    safe_error_snippet(&realm_raw),
+                    safe_error_snippet(&err.to_string())
                 ),
             )
         })?;
@@ -4572,8 +4579,9 @@ fn configured_realm_gateways(json: bool) -> Result<Vec<ResolvedRealmGateway>, Cl
             CliFailure::new(
                 1,
                 format!(
-                    "realm entrypoint `{}` is invalid: {err}",
-                    safe_error_snippet(&realm_raw)
+                    "realm entrypoint `{}` is invalid: {}",
+                    safe_error_snippet(&realm_raw),
+                    safe_error_snippet(&err.to_string())
                 ),
             )
         })?;
@@ -4781,7 +4789,11 @@ fn resolve_realm_gateway(
 ) -> Result<ResolvedRealmGateway, CliFailure> {
     let realm = target_routing::parse_realm_arg(realm_raw).map_err(|err| {
         emit_realm_usage_error(
-            &format!("invalid realm `{}`: {err}", safe_error_snippet(realm_raw)),
+            &format!(
+                "invalid realm `{}`: {}",
+                safe_error_snippet(realm_raw),
+                safe_error_snippet(&err.to_string())
+            ),
             "realm argument did not parse as a bounded lowercase realm path",
             "Use a DNS-shaped realm path such as `work` or `payments.work`.",
             json,
@@ -4978,8 +4990,9 @@ fn realm_policy_rows_from_entries(
             CliFailure::new(
                 1,
                 format!(
-                    "realm entrypoint `{}` is invalid: {err}",
-                    safe_error_snippet(&realm_raw)
+                    "realm entrypoint `{}` is invalid: {}",
+                    safe_error_snippet(&realm_raw),
+                    safe_error_snippet(&err.to_string())
                 ),
             )
         })?;
@@ -5118,7 +5131,11 @@ fn realm_inspect_output(
 ) -> Result<RealmInspectOutputV1, CliFailure> {
     let realm = target_routing::parse_realm_arg(raw_realm).map_err(|err| {
         emit_realm_usage_error(
-            &format!("invalid realm `{}`: {err}", safe_error_snippet(raw_realm)),
+            &format!(
+                "invalid realm `{}`: {}",
+                safe_error_snippet(raw_realm),
+                safe_error_snippet(&err.to_string())
+            ),
             "realm argument did not parse as a bounded lowercase realm path",
             "Use a DNS-shaped realm path such as `work` or `payments.work`.",
             json,
