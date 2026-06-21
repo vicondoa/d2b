@@ -4,7 +4,7 @@ use std::{
     ffi::OsString,
     fmt::Write as _,
     fs,
-    io::{self, IsTerminal as _, Write as _},
+    io::{self, IsTerminal as _, Read as _, Write as _},
     os::fd::{AsRawFd as _, OwnedFd},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -71,6 +71,7 @@ const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/nixling/daemon-state";
 /// Canonical Prometheus scrape URL the doctor probes for reachability.
 /// See `docs/reference/daemon-metrics.md`.
 const DEFAULT_METRICS_URL: &str = "http://127.0.0.1:9101/metrics";
+const MAX_REALM_ENTRYPOINTS_BYTES: u64 = 1024 * 1024;
 /// Exit code for api-ready timeout in strict mode.
 pub const EXIT_API_TIMEOUT: i32 = 33;
 /// Default in-guest path of the editable guest config working copy. Only the
@@ -4396,8 +4397,8 @@ fn load_realm_entrypoint_table()
 fn load_realm_entrypoint_document_from_path(
     path: &Path,
 ) -> Result<Option<RealmEntrypointDocument>, CliFailure> {
-    let raw = match fs::read_to_string(path) {
-        Ok(raw) => raw,
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
             return Err(CliFailure::new(
@@ -4406,6 +4407,20 @@ fn load_realm_entrypoint_document_from_path(
             ));
         }
     };
+    let mut raw = String::new();
+    let read = io::Read::by_ref(&mut file)
+        .take(MAX_REALM_ENTRYPOINTS_BYTES + 1)
+        .read_to_string(&mut raw)
+        .map_err(|err| CliFailure::new(1, format!("failed to read {}: {err}", path.display())))?;
+    if read as u64 > MAX_REALM_ENTRYPOINTS_BYTES {
+        return Err(CliFailure::new(
+            1,
+            format!(
+                "realm entrypoints file {} exceeds the 1 MiB limit",
+                path.display()
+            ),
+        ));
+    }
     let doc: RealmEntrypointDocument = serde_json::from_str(&raw)
         .map_err(|err| CliFailure::new(1, format!("failed to parse {}: {err}", path.display())))?;
     Ok(Some(doc))
@@ -4943,6 +4958,25 @@ fn print_realm_rows_human(rows: &[RealmPolicyOutputV1]) {
     }
 }
 
+fn print_realm_inspect_human(row: &RealmPolicyOutputV1) {
+    print_stdout(&format!("realm: {}\n", row.realm));
+    print_stdout(&format!("mode: {}\n", row.mode));
+    print_stdout(&format!(
+        "gatewayVm: {}\n",
+        row.gateway_vm.as_deref().unwrap_or("-")
+    ));
+    print_stdout(&format!(
+        "gatewayTarget: {}\n",
+        row.gateway_target.as_deref().unwrap_or("-")
+    ));
+    print_stdout(&format!("gatewayState: {}\n", row.gateway_state));
+    print_stdout(&format!(
+        "credentialBoundary: {}\n",
+        row.credential_boundary
+    ));
+    print_stdout(&format!("crossRealmPolicy: {}\n", row.cross_realm_policy));
+}
+
 fn cmd_realm_list(context: &Context, args: &RealmListArgs) -> Result<i32, CliFailure> {
     let rows = realm_policy_rows(context, args.json)?;
     let output = RealmListOutputV1 {
@@ -4965,7 +4999,7 @@ fn cmd_realm_inspect(context: &Context, args: &RealmInspectArgs) -> Result<i32, 
     if args.json {
         print_json(&output)?;
     } else {
-        print_realm_rows_human(std::slice::from_ref(&output.realm));
+        print_realm_inspect_human(&output.realm);
     }
     Ok(0)
 }
