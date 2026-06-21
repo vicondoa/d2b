@@ -27,7 +27,6 @@ fn host_cli_and_host_crates_do_not_depend_on_realm_relay_providers() {
     let forbidden = [
         ["nixling", "-provider", "-relay"].concat(),
         ["nixling", "-gateway", "-runtime"].concat(),
-        ["nixling", "-constellation", "-provider"].concat(),
     ];
     let mut violations = Vec::new();
     for rel in checked {

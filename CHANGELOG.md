@@ -264,6 +264,9 @@ deprecations ship one minor release before removal.
 - CLI/docs: added the missing `vm display` authorization-matrix row so the
   declared display-session management command is covered by the generated
   privileges contract.
+- Tests: narrowed the host realm-relay dependency policy to actual relay/runtime
+  crates so the neutral constellation provider trait crate can remain in
+  host-side runtime-provider code.
 - CLI/daemon: qemu-media USB attach/detach `--apply --json` now emits a
   JSON success envelope, and qemu-media list/status service capabilities no
   longer advertise `virtiofsd`.
