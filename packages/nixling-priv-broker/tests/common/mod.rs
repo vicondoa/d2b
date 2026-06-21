@@ -17,26 +17,15 @@ pub const NIXLINGD_UID: u32 = 4242;
 
 pub struct Scratch {
     inner: Option<TempDir>,
-    parent: PathBuf,
 }
 
 impl Scratch {
     pub fn new(prefix: &str) -> Self {
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let root = manifest_dir
-            .parent()
-            .and_then(Path::parent)
-            .expect("broker package lives under <root>/packages");
-        let parent = root.join(".t");
-        fs::create_dir_all(&parent).expect("create broker test scratch parent");
         let inner = Builder::new()
             .prefix(prefix)
-            .tempdir_in(&parent)
+            .tempdir()
             .expect("create broker test scratch dir");
-        Self {
-            inner: Some(inner),
-            parent,
-        }
+        Self { inner: Some(inner) }
     }
 
     pub fn path(&self) -> &Path {
@@ -49,7 +38,6 @@ impl Drop for Scratch {
         if let Some(inner) = self.inner.take() {
             drop(inner);
         }
-        let _ = fs::remove_dir(&self.parent);
     }
 }
 

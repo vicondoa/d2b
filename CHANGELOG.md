@@ -287,6 +287,13 @@ deprecations ship one minor release before removal.
   `nixling` lock target rewritten to the current `git+file` checkout,
   preserving each example's lock graph and external pins while avoiding mutable
   `path:../..` lock failures.
+- Tests: audit CLI-output and daemon-access contract sockets now bind under the
+  system temporary directory so long worktree paths cannot exceed Unix socket
+  pathname limits.
+- Tests: broker QMP media contract sockets now bind under the system temporary
+  directory so long worktree paths cannot exceed Unix socket pathname limits.
+- Tests: broker integration harness sockets now bind under the system temporary
+  directory so long worktree paths cannot exceed Unix socket pathname limits.
 - Tests: the broker reap-health zombie canary now accepts the transient
   uninterruptible-sleep proc state seen on busy CI runners before child teardown.
 - CLI/daemon: qemu-media USB attach/detach `--apply --json` now emits a
