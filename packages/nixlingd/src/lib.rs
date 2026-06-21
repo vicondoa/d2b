@@ -2571,11 +2571,10 @@ fn dispatch_gateway_display(
                     verb: "gatewayDisplay".to_owned(),
                 });
             }
-            let principal = gateway_display_peer_principal_string(peer);
             let target = parse_gateway_display_lifecycle_target(
                 &args.target,
                 &args.operation_id,
-                &principal,
+                &args.principal,
             )?;
             let lifecycle_state = block_on_future(state.gateway_display.lifecycle.start(&target))
                 .map_err(gateway_error_to_typed)?;
@@ -2590,11 +2589,10 @@ fn dispatch_gateway_display(
                     verb: "gatewayDisplay".to_owned(),
                 });
             }
-            let principal = gateway_display_peer_principal_string(peer);
             let target = parse_gateway_display_lifecycle_target(
                 &args.target,
                 &args.operation_id,
-                &principal,
+                &args.principal,
             )?;
             close_gateway_sessions_for_target(state, &args.target)?;
             let lifecycle_state = block_on_future(state.gateway_display.lifecycle.stop(&target))
@@ -2669,6 +2667,15 @@ fn dispatch_gateway_display(
         public_wire::GatewayDisplayOp::Close(args) => {
             gateway_display_gc(state);
             let peer_principal = gateway_display_peer_principal_string(peer);
+            let session_known = state
+                .gateway_display
+                .sessions
+                .lock()
+                .map_err(|_| TypedError::InternalIo {
+                    context: "lock gateway display sessions".to_owned(),
+                    detail: "mutex poisoned".to_owned(),
+                })?
+                .contains_key(&args.session_id);
             let owner = state
                 .gateway_display
                 .orchestrator
@@ -2677,12 +2684,16 @@ fn dispatch_gateway_display(
                 .into_iter()
                 .find(|summary| summary.session_id.as_str() == args.session_id)
                 .map(|summary| summary.peer_principal.to_string());
-            if !matches!(peer.role, PeerRole::Admin)
-                && owner.as_deref() != Some(peer_principal.as_str())
-            {
-                return Err(TypedError::AuthzNotAdmin {
-                    verb: "gatewayDisplay close".to_owned(),
-                });
+            if !matches!(peer.role, PeerRole::Admin) {
+                match owner.as_deref() {
+                    Some(owner) if owner == peer_principal.as_str() => {}
+                    None if !session_known => {}
+                    _ => {
+                        return Err(TypedError::AuthzNotAdmin {
+                            verb: "gatewayDisplay close".to_owned(),
+                        });
+                    }
+                }
             }
             let session = state
                 .gateway_display
@@ -11561,6 +11572,27 @@ mod public_status_tests {
     }
 
     #[test]
+    fn gateway_display_open_rejects_invalid_operation_id() {
+        let (state, _dir) = test_state();
+        let err = dispatch_request(
+            &state,
+            &launcher_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
+                public_wire::GatewayDisplayOpenArgs {
+                    target: "nl://demo.gw.work.nixling".to_owned(),
+                    operation_id: "not valid".to_owned(),
+                    principal: "uid-1001".to_owned(),
+                    app_argv: vec!["foot".to_owned()],
+                    request_hash: 46,
+                },
+            )),
+        )
+        .expect_err("invalid operation id is rejected before ledger insert");
+        assert!(matches!(err, TypedError::WireInvalidFrame { .. }));
+        assert!(state.gateway_display.sessions.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn gateway_display_list_and_close_are_owner_scoped_for_launchers() {
         let (state, _dir) = test_state();
         let other_peer = PeerIdentity {
@@ -11651,6 +11683,28 @@ mod public_status_tests {
                 .and_then(|r| r.get("closed"))
                 .and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn gateway_display_launcher_close_absent_session_is_idempotent() {
+        let (state, _dir) = test_state();
+        let close = dispatch_request(
+            &state,
+            &launcher_peer(),
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
+                public_wire::GatewayDisplayCloseArgs {
+                    session_id: "missing-session".to_owned(),
+                },
+            )),
+        )
+        .expect("absent close dispatches");
+        assert_eq!(
+            close
+                .get("result")
+                .and_then(|r| r.get("closed"))
+                .and_then(Value::as_bool),
+            Some(false)
         );
     }
 
