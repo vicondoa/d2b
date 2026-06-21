@@ -44,3 +44,12 @@ fn rejects_overlong_socket_paths() {
         .failure()
         .stderr(predicate::str::contains("sockaddr_un"));
 }
+
+#[test]
+fn rejects_relative_socket_paths() {
+    let mut cmd = Command::cargo_bin("nixling-guest-shell-runner").unwrap();
+    cmd.args(["list", "--socket", "relative.sock", "--json"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("socket path must be absolute"));
+}

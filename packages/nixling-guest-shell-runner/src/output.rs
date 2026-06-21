@@ -11,15 +11,15 @@ pub enum ManagementResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShellManagementOutput {
-    pub command: &'static str,
+    pub command: String,
     pub name: String,
     pub result: ManagementResult,
 }
 
 impl ShellManagementOutput {
-    pub fn unsupported(command: &'static str, name: String) -> Self {
+    pub fn unsupported(command: impl Into<String>, name: String) -> Self {
         Self {
-            command,
+            command: command.into(),
             name,
             result: ManagementResult::Unsupported,
         }
@@ -33,7 +33,7 @@ mod tests {
     #[test]
     fn management_result_uses_stable_kebab_case() {
         let output = ShellManagementOutput {
-            command: "detach",
+            command: "detach".to_owned(),
             name: "default".to_owned(),
             result: ManagementResult::AlreadyDetached,
         };

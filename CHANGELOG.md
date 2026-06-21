@@ -10,12 +10,13 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
-### Added
+### Internal
 
-- Persistent shell groundwork: added the standalone static
-  `nixling-guest-shell-runner` helper workspace, libshpool pin, initial name
-  validation/management-output scaffolding, and explicit Rust/static
-  supply-chain gate wiring for the future `nixling shell` feature.
+- Developer tooling: added a standalone static guest shell helper workspace,
+  libshpool pin, initial validation/management-output scaffolding, and explicit
+  Rust/static supply-chain gate wiring for upcoming guest-control terminal work.
+
+### Added
 
 - Display and virtual I/O: added explicit display capability helpers and a
   `nixling vm display list|close` gateway display-session surface that returns

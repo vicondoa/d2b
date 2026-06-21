@@ -159,20 +159,21 @@
             RUSTC_WRAPPER = "";
             SCCACHE_DIR = "";
             nativeBuildInputs = [
-              pkgs.binutils
-              pkgs.rustPlatform.bindgenHook
+              pkgs.pkgsStatic.binutils
+              pkgs.pkgsStatic.rustPlatform.bindgenHook
             ];
             postInstall = ''
+              readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
               bin="$out/bin/nixling-guest-shell-runner"
               test -x "$bin"
-              readelf -h "$bin" >/dev/null
-              readelf -l "$bin" > "$TMPDIR/nixling-guest-shell-runner.program-headers"
+              "$readelf" -h "$bin" >/dev/null
+              "$readelf" -l "$bin" > "$TMPDIR/nixling-guest-shell-runner.program-headers"
               if grep -q 'Requesting program interpreter' "$TMPDIR/nixling-guest-shell-runner.program-headers"; then
                 echo "nixling-guest-shell-runner: unexpected ELF interpreter" >&2
                 cat "$TMPDIR/nixling-guest-shell-runner.program-headers" >&2
                 exit 1
               fi
-              if readelf -d "$bin" > "$TMPDIR/nixling-guest-shell-runner.dynamic" 2> "$TMPDIR/nixling-guest-shell-runner.dynamic.err"; then
+              if "$readelf" -d "$bin" > "$TMPDIR/nixling-guest-shell-runner.dynamic" 2> "$TMPDIR/nixling-guest-shell-runner.dynamic.err"; then
                 if grep -q '(NEEDED)' "$TMPDIR/nixling-guest-shell-runner.dynamic"; then
                   echo "nixling-guest-shell-runner: unexpected dynamic dependency" >&2
                   cat "$TMPDIR/nixling-guest-shell-runner.dynamic" >&2
@@ -1020,6 +1021,9 @@
             lockFile = ./packages/Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
           };
+          brokerVendor = pkgs.rustPlatform.importCargoLock {
+            lockFile = ./packages/nixling-priv-broker/Cargo.lock;
+          };
           guestShellRunnerVendor = pkgs.rustPlatform.importCargoLock {
             lockFile = ./packages/nixling-guest-shell-runner/Cargo.lock;
           };
@@ -1064,7 +1068,7 @@
           run_deny "broker" \
             "${rustPackagesSrc}" \
             "nixling-priv-broker/Cargo.toml" \
-            '${cargoConfig mainVendor}' \
+            '${cargoConfig brokerVendor}' \
             "${rustPackagesSrc}/packages/nixling-priv-broker/deny.toml"
 
           run_deny "guest-shell-runner" \

@@ -6,6 +6,7 @@ use nixling_guest_shell_runner::{
     cli::{Cli, Command},
     name::validate_shell_name,
     output::ShellManagementOutput,
+    socket::validate_socket_path,
 };
 
 fn main() -> ExitCode {
@@ -24,7 +25,7 @@ fn run() -> Result<()> {
         Command::Daemon(args) => {
             validate_socket_path(&args.socket)?;
             bail!(
-                "real shpool daemon mode is gated behind later Wave 0 runtime plumbing: {}",
+                "persistent shell daemon mode is not enabled in this helper build: home={}",
                 args.home.display()
             );
         }
@@ -32,7 +33,7 @@ fn run() -> Result<()> {
             validate_socket_path(&args.socket)?;
             validate_shell_name(&args.name)?;
             bail!(
-                "real shpool attach mode is gated behind later Wave 0 runtime plumbing: force={}",
+                "persistent shell attach mode is not enabled in this helper build: force={}",
                 args.force
             );
         }
@@ -47,7 +48,7 @@ fn run() -> Result<()> {
                     ))?
                 );
             } else {
-                println!("shell session listing is not wired yet");
+                println!("shell session listing is not implemented in this helper build");
             }
         }
         Command::Detach(args) => {
@@ -64,28 +65,15 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn validate_socket_path(path: &std::path::Path) -> Result<()> {
-    if path.as_os_str().is_empty() {
-        bail!("socket path must not be empty");
-    }
-    if !path.is_absolute() {
-        bail!("socket path must be absolute: {}", path.display());
-    }
-    if path.as_os_str().as_encoded_bytes().len() >= 108 {
-        bail!(
-            "socket path is too long for sockaddr_un: {}",
-            path.display()
-        );
-    }
-    Ok(())
-}
-
 fn print_management(command: &'static str, name: String, json: bool) -> Result<()> {
     let output = ShellManagementOutput::unsupported(command, name);
     if json {
         println!("{}", serde_json::to_string(&output)?);
     } else {
-        println!("{} for '{}' is not wired yet", output.command, output.name);
+        println!(
+            "{} for '{}' is not implemented in this helper build",
+            output.command, output.name
+        );
     }
     std::io::Write::flush(&mut std::io::stdout()).context("flushing stdout")
 }
