@@ -404,8 +404,9 @@ Host-side terminal behavior that does not need a booted VM is Layer 1: add a
 Rust integration test (Type 3) that runs the host attach client or CLI in a real
 PTY, using a Rust PTY harness, against a mock daemon socket so raw-mode guards,
 stdin/stdout handling, and SIGWINCH source are covered in PR CI. The standalone
-excluded helper workspace is documented in AGENTS.md when it is introduced so
-future agents do not assume one unified workspace. The initial implementation
+excluded helper workspace is documented in root `AGENTS.md` and `tests/AGENTS.md`
+when it is introduced, including its test paths, so future agents do not assume
+one unified workspace. The initial implementation
 phase also includes a justified Type 10 VM test (`runNixOSTest`) under
 `tests/host-integration/*.nix` for the load-bearing Linux boundaries that
 Layer 1 cannot prove: guest shpool daemon PAM/logind session creation/adoption,
