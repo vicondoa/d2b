@@ -20,7 +20,16 @@
 # `ctx` carries everything any case might need; cases destructure only what
 # they use:
 #   { lib, pkgs, system, flakeRoot, nl, mkEval }
-{ lib, pkgs, system, flakeRoot, nl, mkEval ? null, nixpkgsFlake ? null, nixlingModule ? null }:
+{ lib
+, pkgs
+, system
+, flakeRoot
+, nl
+, mkEval ? null
+, nixpkgsFlake ? null
+, nixlingModule ? null
+, caseFileNames ? null
+}:
 
 let
   ctx = { inherit lib pkgs system flakeRoot nl mkEval nixpkgsFlake nixlingModule; };
@@ -31,9 +40,20 @@ let
   # its case file + its migration-state.d row + deletes its legacy `.sh`;
   # it never touches default.nix.
   casesDir = ./cases;
-  caseFiles = map (n: casesDir + "/${n}")
+  allCaseFileNames =
     (lib.filter (n: lib.hasSuffix ".nix" n)
       (lib.attrNames (builtins.readDir casesDir)));
+  selectedCaseFileNames =
+    if caseFileNames == null
+    then allCaseFileNames
+    else caseFileNames;
+  missingCaseFileNames =
+    lib.filter (n: !(builtins.elem n allCaseFileNames)) selectedCaseFileNames;
+  caseFiles =
+    if missingCaseFileNames != [ ] then
+      throw "nix-unit: requested missing case file(s): ${lib.concatStringsSep ", " missingCaseFileNames}"
+    else
+      map (n: casesDir + "/${n}") selectedCaseFileNames;
 
   merge = acc: f:
     let cases = import f ctx;

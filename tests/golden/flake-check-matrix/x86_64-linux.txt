@@ -18,6 +18,12 @@ guest-static-elf
 harness-ubuntu-skeleton
 module-helper-wiring
 nix-unit
+nix-unit-daemon
+nix-unit-guest
+nix-unit-misc
+nix-unit-network
+nix-unit-runtime
+nix-unit-state
 rust-audit
 rust-build
 rust-clippy

@@ -115,6 +115,10 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- CI: nix-unit eval coverage is now split into multiple
+  `nix-unit-<shard>` flake checks plus a cheap global `nix-unit`
+  presence/pin check, so PR flake evaluation can fan the slow corpus
+  out across the existing x86 matrix.
 - **Breaking:** VMs with `nixling.vms.<vm>.usbip.yubikey = true` must
   now also enable `nixling.vms.<vm>.guest.control.enable = true`. USBIP
   guest attach/detach is owned by guestd over authenticated
