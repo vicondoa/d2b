@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- Guest-control internals: started extracting the shared terminal substrate used
+  by interactive exec, with compatibility DTO conversions and redaction tests for
+  future shell reuse.
 - Developer tooling: added a standalone static guest shell helper workspace,
   libshpool pin, initial validation/management-output scaffolding, and explicit
   Rust/static supply-chain gate wiring for upcoming guest-control terminal work.

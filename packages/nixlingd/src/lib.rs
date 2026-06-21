@@ -101,6 +101,7 @@ pub mod guest_control_bridge;
 pub mod guest_control_health;
 pub mod guest_control_vsock;
 pub mod supervisor;
+pub mod terminal_session;
 pub mod typed_error;
 pub mod wire;
 // `[pending restart]` machinery. Pure module + filesystem reader trait

@@ -75,17 +75,17 @@ compatibility surface.
 
 | Type | Kind | Rust definition | Shape |
 | --- | --- | --- | --- |
-| `FeatureFlag` | struct | [`FeatureFlag`](../../packages/nixling-ipc/src/lib.rs#L96) | empty struct |
+| `FeatureFlag` | struct | [`FeatureFlag`](../../packages/nixling-ipc/src/lib.rs#L97) | empty struct |
 | `GuestCapability` | enum | [`GuestCapability`](../../packages/nixling-ipc/src/guest_wire.rs#L276) | `Health`; `Capabilities`; `ExecAttached`; `ExecDetached`; `ExecTty`; `ExecLogs`; `TtyResize`; `Signals`; `ReadGuestFile`; `UsbipImport` |
-| `Hello` | struct | [`Hello`](../../packages/nixling-ipc/src/lib.rs#L171) | struct { `client_version`: `SemverRange`; `supported_features`: `Vec<FeatureFlag>` } |
-| `HelloOk` | struct | [`HelloOk`](../../packages/nixling-ipc/src/lib.rs#L179) | struct { `server_version`: `Version`; `selected_version`: `Version`; `capabilities`: `Vec<FeatureFlag>` } |
-| `HelloRejected` | struct | [`HelloRejected`](../../packages/nixling-ipc/src/lib.rs#L187) | struct { `reason`: `HelloRejectedReason` } |
-| `HelloRejectedReason` | enum | [`HelloRejectedReason`](../../packages/nixling-ipc/src/lib.rs#L193) | `VersionMismatch`; `CapabilityNegotiationFailed`; `InternalError` |
+| `Hello` | struct | [`Hello`](../../packages/nixling-ipc/src/lib.rs#L172) | struct { `client_version`: `SemverRange`; `supported_features`: `Vec<FeatureFlag>` } |
+| `HelloOk` | struct | [`HelloOk`](../../packages/nixling-ipc/src/lib.rs#L180) | struct { `server_version`: `Version`; `selected_version`: `Version`; `capabilities`: `Vec<FeatureFlag>` } |
+| `HelloRejected` | struct | [`HelloRejected`](../../packages/nixling-ipc/src/lib.rs#L188) | struct { `reason`: `HelloRejectedReason` } |
+| `HelloRejectedReason` | enum | [`HelloRejectedReason`](../../packages/nixling-ipc/src/lib.rs#L194) | `VersionMismatch`; `CapabilityNegotiationFailed`; `InternalError` |
 | `HelloRequest` | struct | [`HelloRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L415) | struct { `client_version`: `String`; `supported_features`: `Vec<String>` } |
 | `HelloRequest` | struct | [`HelloRequest`](../../packages/nixling-ipc/src/guest_wire.rs#L430) | struct { `metadata`: `GuestRequestMetadata`; `host_nonce`: `GuestNonce`; `transcript_version`: `u32` } |
 | `HelloResponse` | struct | [`HelloResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L496) | struct { `server_version`: `String`; `selected_version`: `String`; `capabilities`: `Vec<String>` } |
 | `HelloResponse` | struct | [`HelloResponse`](../../packages/nixling-ipc/src/guest_wire.rs#L438) | struct { `guest_nonce`: `GuestNonce`; `guest_boot_id`: `GuestBootId`; `protocol_version`: `u32` } |
-| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/nixling-ipc/src/lib.rs#L147) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit` |
+| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/nixling-ipc/src/lib.rs#L148) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit` |
 <!-- END AUTO-GENERATED: handshake-types -->
 
 ## Public socket
@@ -340,7 +340,7 @@ state-machine node.
 | `TerminalStatus` | enum | [`TerminalStatus`](../../packages/nixling-ipc/src/guest_wire.rs#L1016) | `ExitCode` — struct { `exit_code`: `i32` }; `Signal` — struct { `signal`: `u32` }; `StatusCode` — struct { `status_code`: `i32` }; `Error` — struct { `error`: `GuestControlErrorKind` } |
 | `SignalTarget` | enum | [`SignalTarget`](../../packages/nixling-ipc/src/guest_wire.rs#L1035) | `ForegroundProcessGroup`; `ProcessTree` |
 | `ExecCancelReason` | enum | [`ExecCancelReason`](../../packages/nixling-ipc/src/guest_wire.rs#L1042) | `ClientDisconnect`; `UserRequested`; `SlowConsumer`; `ProtocolError` |
-| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/nixling-ipc/src/lib.rs#L147) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit` |
+| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/nixling-ipc/src/lib.rs#L148) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit` |
 | `GatewayDisplayOp` | enum | [`GatewayDisplayOp`](../../packages/nixling-ipc/src/public_wire.rs#L147) | `Start` — (GatewayDisplayStartArgs); `Stop` — (GatewayDisplayStopArgs); `Open` — (GatewayDisplayOpenArgs); `Close` — (GatewayDisplayCloseArgs); `List` — (GatewayDisplayListArgs); `ListDetailed` — (GatewayDisplayListArgs) |
 | `ExecStream` | enum | [`ExecStream`](../../packages/nixling-ipc/src/public_wire.rs#L433) | `Stdout`; `Stderr` |
 | `ExecOp` | enum | [`ExecOp`](../../packages/nixling-ipc/src/public_wire.rs#L724) | `Start` — (ExecStartArgs); `WriteStdin` — (ExecWriteStdinArgs); `ReadOutput` — (ExecReadOutputArgs); `Signal` — (ExecSignalArgs); `Resize` — (ExecResizeArgs); `Wait` — (ExecWaitArgs); `Close` — (ExecCloseArgs); `List` — (ExecDetachedListArgs); `Logs` — (ExecDetachedLogsArgs); `Status` — (ExecDetachedStatusArgs); `Kill` — (ExecDetachedKillArgs) |
@@ -352,6 +352,8 @@ state-machine node.
 | `AuditFormat` | enum | [`AuditFormat`](../../packages/nixling-ipc/src/public_wire.rs#L1309) | `Human`; `Json` |
 | `AuthRole` | enum | [`AuthRole`](../../packages/nixling-ipc/src/public_wire.rs#L1317) | `None`; `Launcher`; `Admin` |
 | `HostFindingSeverity` | enum | [`HostFindingSeverity`](../../packages/nixling-ipc/src/public_wire.rs#L1511) | `Pass`; `Warn`; `Fail` |
+| `TerminalStream` | enum | [`TerminalStream`](../../packages/nixling-ipc/src/terminal_wire.rs#L19) | `Stdout`; `Stderr` |
+| `TerminalStatus` | enum | [`TerminalStatus`](../../packages/nixling-ipc/src/terminal_wire.rs#L197) | `Exited` — struct { `code`: `i32` }; `Signaled` — struct { `signal`: `u32` }; `Error` — struct { `slug`: `String` } |
 | `PathClass` | enum | [`PathClass`](../../packages/nixling-ipc/src/types.rs#L171) | `Vm`; `Runtime` |
 <!-- END AUTO-GENERATED: enum-variants -->
 

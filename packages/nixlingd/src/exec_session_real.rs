@@ -16,8 +16,8 @@ use nixling_ipc::guest_proto as pb;
 use protobuf::{EnumOrUnknown, MessageField};
 
 use crate::exec_session::{
-    Established, ExecEstablishError, ExecGuestClient, ExecGuestConnector, ExecOpDeadlines,
-    ExecOpError, ExecSessionInfo, ExecStartSpec, GuestOpError, NegotiatedCaps, OutputStreamSel,
+    Established, ExecEstablishError, ExecGuestConnector, ExecOpDeadlines, ExecOpError,
+    ExecSessionInfo, ExecStartSpec, GuestOpError, NegotiatedCaps, OutputStreamSel,
     ReadOutputOutcome, TerminalKind, WaitOutcome, WriteStdinOutcome,
 };
 #[cfg(test)]
@@ -29,6 +29,7 @@ use crate::guest_control_bridge::{
 use crate::guest_control_health::{
     AttemptBudget, GuestControlHealthError, TtrpcGuestControlClient, probe_guest_control_health,
 };
+use crate::terminal_session::TerminalBackend;
 use nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
 
 /// Generous absolute deadline for the whole establish (connect + auth +
@@ -275,7 +276,9 @@ impl RealExecClient {
 }
 
 #[async_trait]
-impl ExecGuestClient for RealExecClient {
+impl TerminalBackend for RealExecClient {
+    type Error = ExecOpError;
+
     async fn write_stdin(
         &self,
         offset: u64,
