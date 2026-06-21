@@ -197,10 +197,15 @@ enough to run the helper's own privileged prelude; before touching the
 shpool socket or calling libshpool they must drop to the workload UID and become
 workload-UID shpool clients. guestd spawns the helper with a cleared root
 environment. Workload or terminal environment values such as `HOME`, `USER`,
-`PATH`, `XDG_RUNTIME_DIR=/run/user/<uid>`, `WAYLAND_DISPLAY` when configured,
-`TERM`, locale, and the explicit shpool socket path are sent through a
-root-created pipe/socket or equivalent trusted side channel and are applied by
-the helper only after the privilege-drop prelude verifies it is non-root.
+`LOGNAME`, `SHELL`, a NixOS-aware `PATH` (`/run/wrappers/bin`,
+`/run/current-system/sw/bin`, `/nix/var/nix/profiles/default/bin`,
+`/etc/profiles/per-user/$USER/bin`, and absolute `$HOME/.nix-profile/bin`),
+`XDG_RUNTIME_DIR=/run/user/<uid>`, `WAYLAND_DISPLAY` when configured, `TERM`,
+locale, target cwd, correlation ids, and the explicit shpool socket path are sent
+through a root-created pipe/socket or equivalent trusted side channel and are
+applied by the helper only after the privilege-drop prelude verifies it is
+non-root. The payload must contain concrete `HOME`, `USER`, and `LOGNAME`
+values, not placeholders.
 
 The same-UID socket model is an explicit trust boundary. Code already running as
 the workload user may be able to reach the shpool socket. Nixling provides
@@ -210,23 +215,21 @@ against same-UID clients.
 ### Async, filesystem, and process-safety rules
 
 Guestd must not call `libshpool` in-process and must not perform blocking file
-or process I/O on async executor paths. Helper process spawning and streaming I/O
-use `tokio::process` plus nonblocking `tokio::io` pipes. `tokio::fs`,
+or process I/O on async executor paths. Helper process spawning uses
+`std::process::Command` so guestd can hold the unreaped `Child`, acquire a
+race-free pidfd before any async reaper can release the numeric pid, and wrap the
+pidfd in `AsyncFd` for readiness. Guestd does not depend on
+`tokio::process::Child` for helper lifecycle authority. Long-lived streaming I/O
+uses nonblocking pipes or framed AF_UNIX streams; `tokio::fs`,
 `tokio::task::spawn_blocking`, or equivalent blocking pools are reserved for
-filesystem probes, short bounded file reads, and cleanup; they are not used for
-long-lived terminal or helper process streaming.
+filesystem probes, short bounded file reads, and cleanup.
 
-Helper-private log files, when needed for error mapping, live in a root-owned
-non-workload-writable directory and are root-owned `0600`. guestd opens the
-write fd for the helper with `O_APPEND` before fork/exec and separately opens an
-independent read fd for itself; after the helper drops privileges it can still
-write the inherited fd, but other workload-UID processes cannot reopen or tamper
-with the file. Real-time helper stdout, stderr, JSON, and log streams use pipes
-or framed sockets, not regular-file tailing. Regular log files are
-post-exit/post-mortem inputs only, read through the independent guestd-owned file
-description. If a regular log file is used, guestd also sets `RLIMIT_FSIZE` for
-the helper before untrusted work so the kernel enforces the same byte cap even
-when guestd is not reading concurrently. guestd never follows workload-controlled
+Helper-private diagnostics use bounded pipes or framed sockets with
+application-level byte accounting and truncation. Regular log files, if kept for
+post-mortem debugging, are written by guestd from bounded streams or by
+guestd-owned rotation/truncation logic; the helper does not rely on
+process-wide `RLIMIT_FSIZE` for log bounding because such limits can leak into
+daemon or workload-shell execution. guestd never follows workload-controlled
 symlinks as root. Cleanup is an explicit awaited
 `cleanup().await`/`shutdown().await` step. Any `Drop` fallback is best-effort
 only, cannot spawn detached blocking cleanup that races resource reuse, and is
@@ -234,41 +237,53 @@ not authoritative.
 
 When a helper stdout, stderr, log, or framed JSON stream exceeds its byte cap,
 guestd immediately cancels or aborts the concurrent stream read futures and
-closes its pipe read ends or shuts down/closes the AF_UNIX stream. Authoritative
-teardown uses PID-reuse-safe authority: guestd opens a pidfd for the direct
-helper child atomically at process creation (`CLONE_PIDFD` /
-`create_pidfd(true)`) or while holding an unreaped `std::process::Child` before
-converting it to Tokio. It places each helper in a dedicated cgroup or systemd
-scope before untrusted work begins. The helper prelude blocks on a trusted
-root-created "isolation ready" byte before dropping privileges, applying the
-post-drop environment, connecting to shpool, or spawning descendants. On cap
-exceedance or owner teardown, guestd kills the helper cgroup/scope for
-descendants, sends a pidfd-backed kill to the direct child if needed, and awaits
-`wait()` so the direct child is reaped. Process-group signals may still be used
-after the helper's trusted post-prelude readiness message, but they are a
-secondary mechanism rather than the only authority. Dropping a Tokio `Child`
+closes pipe read ends or shuts down/closes AF_UNIX streams. Authoritative teardown
+uses PID-reuse-safe authority: guestd holds the unreaped `std::process::Child`,
+prefers atomic `CLONE_PIDFD` through a stable crate/syscall path, or immediately
+calls `pidfd_open(child.id())` while no other waiter can reap the child. guestd
+does not convert the held child into `tokio::process::Child`; process readiness
+and reaping are driven by the pidfd plus the held standard-library child. An
+`ESRCH` from pidfd acquisition is an invariant violation because unreaped zombies
+should still have pidfds. The pidfd is put in nonblocking mode before wrapping in
+`AsyncFd`. The reaper uses a double-check pattern around readiness clearing:
+after readiness, call `try_wait()`; if it returns `None`, clear readiness and
+call `try_wait()` again before awaiting another event. Each helper is placed in a
+dedicated cgroup or systemd scope before untrusted work begins. The helper
+prelude blocks on a trusted root-created isolation-ready byte before dropping
+privileges, applying the post-drop environment, connecting to shpool, or spawning
+descendants. On cap exceedance, owner teardown, or prelude timeout, guestd kills
+the helper cgroup/scope for descendants, sends a pidfd-backed kill to the direct
+child if needed, and reaps through the pidfd readiness path. It never
+synchronously waits on a helper that may be stuck in D-state. Dropping a child
 handle or abandoning a full pipe is not cleanup.
 
 Attach/list/detach/kill helpers run with the workload UID before touching the
-shpool socket. guestd does not use an unsafe `CommandExt::pre_exec` closure; the
-unsafe/syscall privilege setup lives in the excluded
-`nixling-guest-shell-runner` crate before libshpool is initialized. In that
-single-threaded helper prelude, the helper applies a precomputed supplementary
-group list supplied by guestd, or deliberately drops supplementary groups if a
-narrower policy is selected; helpers never inherit root's supplementary groups.
-The prelude performs only audited raw syscalls, in an implementation-reviewed
-order that retains just the privileges needed until each step is complete:
-process-group/session isolation (`setpgid(0, 0)` for non-interactive helpers, or
-`setsid()` for interactive PTY helpers), capability bounding-set policy while
-`CAP_SETPCAP` is still available, inheritable/ambient capability clearing,
-supplementary group and `setresgid(gid, gid, gid)` /
-`setresuid(uid, uid, uid)` setup, remaining permitted/effective capability
-clearing, and final verification that the process is non-root and
-capability-free before connecting to the shpool socket. `PR_SET_NO_NEW_PRIVS` is
-used for non-daemon attach/management helpers where it cannot affect the
-persistent shell's ability to run `sudo` or other setuid/fcap tools. It is not
-set on the long-lived shpool daemon unless a future UX decision explicitly makes
-no-new-privs part of the persistent shell contract. Interactive attach
+shpool socket. The long-lived shpool daemon is different: systemd starts it
+directly as the workload user with the PAM/logind session above, and it does not
+run the guestd-spawned helper capability-bounding prelude. guestd does not use an
+unsafe `CommandExt::pre_exec` closure; the unsafe/syscall privilege setup for
+guestd-spawned helpers lives in the excluded `nixling-guest-shell-runner` crate
+before libshpool is initialized. In that
+single-threaded helper prelude, the helper immediately re-applies `FD_CLOEXEC` to
+inherited control/liveness fds, closes all unintended fds, starts from a safe cwd
+such as `/`, reads only fixed-size identity data needed for the drop (uid, gid,
+length-prefixed supplementary gid list bounded by `NGROUPS_MAX`, and mode flags),
+waits for the isolation-ready byte, and only then drops privileges. The drop
+order is strict: perform process-group/session isolation (`setpgid(0, 0)` for
+non-interactive helpers or `setsid()` for interactive PTY helpers), clear the
+capability bounding set and inheritable/ambient capabilities while `CAP_SETPCAP`
+is still available, apply the precomputed supplementary groups or an empty list,
+`setresgid(gid, gid, gid)`, and `setresuid(uid, uid, uid)`. Target uid 0 is
+invalid. Non-daemon helpers set
+`PR_SET_NO_NEW_PRIVS`; the long-lived shpool daemon remains exempt so persistent
+shells can use `sudo` and other setuid/fcap tools. The helper verifies real,
+effective, and saved uid/gid, supplementary groups, no-new-privs where required,
+and all capability sets before reading complex/string side-channel frames. It
+then applies the trusted post-drop environment, `chdir()`s to the absolute target
+cwd, and reports success only after `chdir()` succeeds. If `chdir()` fails, the
+helper reports the error and aborts; it never continues from `/`. After the
+prelude, an active liveness watcher terminates the helper on supervisor-channel
+EOF. Interactive attach
 helpers acquire the PTY slave as their controlling terminal (`TIOCSCTTY`) and
 configure the foreground process group so kernel terminal signals such as
 `SIGWINCH` route to the helper/shpool side. Interactive attach mode uses the
@@ -347,8 +362,10 @@ that increment when the bounded guestd event queue drops events.
 
 Shell management RPCs propagate trace context across the host/guest boundary
 using the repository's OpenTelemetry/W3C trace-context conventions so host
-`nixlingd` spans and guestd spans share one trace root. Trace attributes follow
-the same redaction and cardinality rules as logs and metrics.
+`nixlingd` spans and guestd spans share one trace root. Metric labels remain
+strictly low-cardinality. Structured logs and trace spans may carry
+high-cardinality opaque ids or validated session names when needed for debugging,
+subject to the same redaction rules above.
 
 ### Test and delivery process
 
@@ -366,6 +383,15 @@ dependencies, are Type 6 flake checks or existing static derivation checks wired
 into the flake; no new top-level shell gate is added for them. The guest helper's
 shpool-to-JSON translation, helper CLI parsing, and error mapping get Type 2 unit
 tests and/or Type 3 binary integration tests under the helper workspace.
+Implementation tests also cover oversized, malformed, fragmented, and partial
+control frames; supervisor-channel EOF; inherited nonblocking fds; control-fd
+CLOEXEC leakage to descendants; `env_clear`, cwd, and chdir-failure behavior;
+prelude timeout kill and pidfd reaping; pidfd nonblocking setup; injected pidfd
+fallbacks where applicable; stderr capture for early prelude panics; concurrent
+helper caps under stalled helpers; and capability/group verification. Tests that
+exercise real uid/gid/capability syscalls use isolated child-process test
+binaries and either skip without required root/capabilities, use a user namespace
+where appropriate, or run as Type 10 VM tests.
 Host-side terminal behavior that does not need a booted VM is Layer 1: add a
 Rust integration test (Type 3) that runs the host attach client or CLI in a real
 PTY, using a Rust PTY harness, against a mock daemon socket so raw-mode guards,
