@@ -306,28 +306,6 @@ let
           "observability"
         ];
       };
-      processRole = lib.mkOption {
-        type = lib.types.nullOr (lib.types.enum [
-          "host-reconcile"
-          "store-virtiofs-preflight"
-          "swtpm-pre-start-flush"
-          "swtpm"
-          "virtiofsd"
-          "video"
-          "gpu"
-          "gpu-render-node"
-          "audio"
-          "cloud-hypervisor-runner"
-          "qemu-media-runner"
-          "vsock-relay"
-          "otel-host-bridge"
-          "guest-ssh-readiness"
-          "guest-control-health"
-          "usbip"
-          "wayland-proxy"
-        ]);
-        default = null;
-      };
       optional = lib.mkOption {
         type = lib.types.bool;
         default = false;

@@ -30,10 +30,13 @@ fn local_nixos_advertises_positive_operation_axes() {
         runtime.provider.provider_type,
         RuntimeProviderType::Local
     ));
-    assert!(runtime.services.iter().any(|service| {
-        service.role == RuntimeServiceRole::Hypervisor
-            && service.process_role == Some(ProcessRole::CloudHypervisorRunner)
-    }));
+    assert!(
+        runtime
+            .services
+            .iter()
+            .any(|service| service.id == "cloud-hypervisor"
+                && service.role == RuntimeServiceRole::Hypervisor)
+    );
     assert!(runtime.services.iter().any(|service| service.optional));
 
     let value = serde_json::to_value(runtime).expect("serializes");
@@ -41,10 +44,7 @@ fn local_nixos_advertises_positive_operation_axes() {
         value.pointer("/operationCapabilities/guest/guestControl"),
         Some(&json!(true))
     );
-    assert_eq!(
-        value.pointer("/services/3/processRole"),
-        Some(&json!("cloud-hypervisor-runner"))
-    );
+    assert!(value.pointer("/services/3/processRole").is_none());
     assert_eq!(
         value.pointer("/autostartPolicy"),
         Some(&json!("host-boot-eligible"))
@@ -67,10 +67,9 @@ fn local_qemu_media_uses_same_axes_without_guest_control() {
         runtime.provider.driver,
         RuntimeProviderDriver::Qemu
     ));
-    assert!(runtime.services.iter().any(|service| {
-        service.role == RuntimeServiceRole::Hypervisor
-            && service.process_role == Some(ProcessRole::QemuMediaRunner)
-    }));
+    assert!(runtime.services.iter().any(
+        |service| service.id == "qemu-media" && service.role == RuntimeServiceRole::Hypervisor
+    ));
 }
 
 #[test]
@@ -116,8 +115,10 @@ fn service_summary_derives_public_role_from_process_role() {
     assert_eq!(qemu.role, RuntimeServiceRole::Hypervisor);
     assert!(!qemu.optional);
     assert_eq!(gpu.role, RuntimeServiceRole::Display);
-    assert_eq!(gpu.process_role, Some(ProcessRole::GpuRenderNode));
     assert!(gpu.optional);
+
+    let value = serde_json::to_value(qemu).expect("serializes");
+    assert!(value.get("processRole").is_none());
 }
 
 #[test]

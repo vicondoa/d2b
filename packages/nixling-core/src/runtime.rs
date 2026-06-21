@@ -359,8 +359,6 @@ pub struct RuntimeServiceSummary {
     pub id: String,
     #[serde(default)]
     pub optional: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub process_role: Option<ProcessRole>,
     pub role: RuntimeServiceRole,
 }
 
@@ -378,7 +376,6 @@ impl RuntimeServiceSummary {
         Self {
             id: id.into(),
             optional,
-            process_role: Some(process_role),
             role,
         }
     }

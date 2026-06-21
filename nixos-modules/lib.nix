@@ -136,10 +136,8 @@ rec {
     { legacy }:
     legacy;
 
-  runtimeServiceSummary = { id, role, processRole ? null, optional ? false }: {
+  runtimeServiceSummary = { id, role, optional ? false }: {
     inherit id role optional;
-  } // lib.optionalAttrs (processRole != null) {
-    processRole = processRole;
   };
 
   nixosRuntimeCapabilities = mkRuntimeCapabilities {
@@ -271,16 +269,16 @@ rec {
       operationCapabilities = nixosRuntimeOperationCapabilities;
       autostartPolicy = "host-boot-eligible";
       services = [
-        (runtimeServiceSummary { id = "host-reconcile"; role = "host"; processRole = "host-reconcile"; })
-        (runtimeServiceSummary { id = "store-virtiofs-preflight"; role = "storage"; processRole = "store-virtiofs-preflight"; })
-        (runtimeServiceSummary { id = "virtiofsd"; role = "storage"; processRole = "virtiofsd"; })
-        (runtimeServiceSummary { id = "cloud-hypervisor"; role = "hypervisor"; processRole = "cloud-hypervisor-runner"; })
-        (runtimeServiceSummary { id = "guest-control-health"; role = "guest-control"; processRole = "guest-control-health"; })
-        (runtimeServiceSummary { id = "swtpm"; role = "tpm"; processRole = "swtpm"; optional = true; })
-        (runtimeServiceSummary { id = "gpu"; role = "display"; processRole = "gpu"; optional = true; })
-        (runtimeServiceSummary { id = "audio"; role = "audio"; processRole = "audio"; optional = true; })
-        (runtimeServiceSummary { id = "video"; role = "video"; processRole = "video"; optional = true; })
-        (runtimeServiceSummary { id = "usbip"; role = "usb"; processRole = "usbip"; optional = true; })
+        (runtimeServiceSummary { id = "host-reconcile"; role = "host"; })
+        (runtimeServiceSummary { id = "store-virtiofs-preflight"; role = "storage"; })
+        (runtimeServiceSummary { id = "virtiofsd"; role = "storage"; })
+        (runtimeServiceSummary { id = "cloud-hypervisor"; role = "hypervisor"; })
+        (runtimeServiceSummary { id = "guest-control-health"; role = "guest-control"; })
+        (runtimeServiceSummary { id = "swtpm"; role = "tpm"; optional = true; })
+        (runtimeServiceSummary { id = "gpu"; role = "display"; optional = true; })
+        (runtimeServiceSummary { id = "audio"; role = "audio"; optional = true; })
+        (runtimeServiceSummary { id = "video"; role = "video"; optional = true; })
+        (runtimeServiceSummary { id = "usbip"; role = "usb"; optional = true; })
       ];
       _hypervisorService = nixosHypervisorService;
     };
@@ -291,9 +289,9 @@ rec {
       operationCapabilities = qemuMediaRuntimeOperationCapabilities;
       autostartPolicy = "manual-only";
       services = [
-        (runtimeServiceSummary { id = "host-reconcile"; role = "host"; processRole = "host-reconcile"; })
-        (runtimeServiceSummary { id = "qemu-media"; role = "hypervisor"; processRole = "qemu-media-runner"; })
-        (runtimeServiceSummary { id = "usbip"; role = "usb"; processRole = "usbip"; optional = true; })
+        (runtimeServiceSummary { id = "host-reconcile"; role = "host"; })
+        (runtimeServiceSummary { id = "qemu-media"; role = "hypervisor"; })
+        (runtimeServiceSummary { id = "usbip"; role = "usb"; optional = true; })
       ];
       _hypervisorService = qemuMediaHypervisorService;
     };

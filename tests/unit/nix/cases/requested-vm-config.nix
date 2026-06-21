@@ -65,13 +65,11 @@ in
       qemuHypervisorService = {
         id = "qemu-media";
         role = "hypervisor";
-        processRole = "qemu-media-runner";
         optional = false;
       };
       cloudHypervisorService = {
         id = "cloud-hypervisor";
         role = "hypervisor";
-        processRole = "cloud-hypervisor-runner";
         optional = false;
       };
       processNodes = {
@@ -139,6 +137,30 @@ in
         };
       }
     ];
+  };
+
+  "requested-vm-config/boot-selector-and-hotplug-source-coexist" = {
+    expr =
+      let
+        boot = lib.findFirst
+          (source: source.vm == "dark-live" && source.slot == "boot")
+          null
+          hostJson.qemuMedia.sources;
+        backup = lib.findFirst
+          (source: source.vm == "dark-live" && source.slot == "backup")
+          null
+          hostJson.qemuMedia.sources;
+      in {
+        bootHasStartSelector = boot.usbSelector.byIdName != null;
+        backupHotplugSourcePresent = backup != null && backup.sourceKind == "physical-usb";
+        qemuRuntimeUsbHotplug =
+          cfg.nixling.manifest."dark-live".runtime.operationCapabilities.media.usbHotplug;
+      };
+    expected = {
+      bootHasStartSelector = true;
+      backupHotplugSourcePresent = true;
+      qemuRuntimeUsbHotplug = true;
+    };
   };
 
   "requested-vm-config/no-raw-usb-identities-in-artifacts" = {

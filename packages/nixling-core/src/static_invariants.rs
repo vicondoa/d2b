@@ -82,7 +82,6 @@ pub const PUBLIC_MANIFEST_FIELDS: &[&str] = &[
     "operationCapabilities",
     "services",
     "role",
-    "processRole",
     "optional",
     "configSync",
     "display",

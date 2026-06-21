@@ -1571,10 +1571,7 @@ mod tests {
             value.pointer("/services/0/role"),
             Some(&serde_json::json!("hypervisor"))
         );
-        assert_eq!(
-            value.pointer("/services/0/processRole"),
-            Some(&serde_json::json!("qemu-media-runner"))
-        );
+        assert!(value.pointer("/services/0/processRole").is_none());
         let service: RuntimeServiceSummary =
             serde_json::from_value(value["services"][0].clone()).expect("service deserializes");
         assert_eq!(service.role, RuntimeServiceRole::Hypervisor);

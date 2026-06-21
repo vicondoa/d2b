@@ -1892,6 +1892,10 @@ where
         return 0;
     }
 
+    if let Some(failure) = removed_usb_enroll_failure(&raw_args) {
+        return report_failure(failure);
+    }
+
     let cli = match NativeCli::try_parse_from(raw_args.clone()) {
         Ok(cli) => cli,
         Err(err) => {
@@ -6576,6 +6580,40 @@ fn cmd_usb_detach(context: &Context, args: &UsbDetachArgs) -> Result<i32, CliFai
         args.json,
         args.human,
     )
+}
+
+fn removed_usb_enroll_failure(raw_args: &[OsString]) -> Option<CliFailure> {
+    let is_removed_enroll = raw_args.get(1).and_then(|arg| arg.to_str()) == Some("usb")
+        && raw_args.get(2).and_then(|arg| arg.to_str()) == Some("enroll");
+    if !is_removed_enroll {
+        return None;
+    }
+
+    let vm = raw_args
+        .get(3)
+        .and_then(|arg| arg.to_str())
+        .unwrap_or("<vm>");
+    let media_ref = raw_args
+        .get(4)
+        .and_then(|arg| arg.to_str())
+        .unwrap_or("<ref>");
+    let selector_hint = if raw_args.iter().any(|arg| arg == "--busid") {
+        " Runtime busids are transient; use a stable `/dev/disk/by-id/` basename for `usbSelector.byIdName` instead."
+    } else {
+        ""
+    };
+    let apply_hint = if raw_args.iter().any(|arg| arg == "--apply") {
+        " `--apply` no longer mutates host state for this removed verb."
+    } else {
+        ""
+    };
+    Some(CliFailure::new(
+        2,
+        format!(
+            "nixling usb enroll was removed. Declare the qemu-media boot-drive physical USB source for VM `{}` and ref `{}` in config with `qemuMedia.source.usbSelector.byIdName`, rebuild/restart nixlingd, then run `nixling usb probe` to verify the runtime selector before `nixling vm start <vm> --apply`.{}{apply_hint}",
+            vm, media_ref, selector_hint
+        ),
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -12110,8 +12148,8 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
-    fn usb_enroll_is_not_a_public_cli_subcommand() {
-        let parsed = NativeCli::try_parse_from([
+    fn usb_enroll_hidden_subcommand_reports_config_migration() {
+        let args = [
             "nixling",
             "usb",
             "enroll",
@@ -12120,8 +12158,26 @@ mod host_install_dispatch_tests {
             "--busid",
             "1-2.3",
             "--apply",
-        ]);
-        assert!(parsed.is_err(), "usb enroll must not remain parseable");
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+        let err = super::removed_usb_enroll_failure(&args).expect("enroll is removed");
+        assert_eq!(err.exit_code, 2);
+        assert!(err.message.contains("nixling usb enroll was removed"));
+        assert!(
+            err.message
+                .contains("qemuMedia.source.usbSelector.byIdName")
+        );
+        assert!(err.message.contains("nixling usb probe"));
+        assert!(err.message.contains("/dev/disk/by-id/"));
+
+        let parsed =
+            NativeCli::try_parse_from(["nixling", "usb", "enroll", "media", "installer-usb"]);
+        assert!(
+            parsed.is_err(),
+            "usb enroll must not be public clap surface"
+        );
     }
 
     #[test]
