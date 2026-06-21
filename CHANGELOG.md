@@ -270,6 +270,9 @@ deprecations ship one minor release before removal.
 - Documentation: updated the public manifest schema to include the runtime
   operation capability, autostart policy, and service summary fields already
   emitted by the manifest.
+- Tests: the per-example flake gate now evaluates scratch copies with the
+  `nixling` lock node rewritten to the current `git+file` checkout, preserving
+  external pins while avoiding mutable `path:../..` lock failures.
 - CLI/daemon: qemu-media USB attach/detach `--apply --json` now emits a
   JSON success envelope, and qemu-media list/status service capabilities no
   longer advertise `virtiofsd`.
