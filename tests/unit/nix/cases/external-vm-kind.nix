@@ -90,7 +90,7 @@ let
       lifecycle = { start = true; stop = true; restart = true; switch = true; hostPrepare = true; };
       media = { usbHotplug = true; removableMedia = false; qemuMedia = false; };
       display = { display = true; graphics = true; video = true; waylandProxy = true; };
-      guest = { guestControl = true; exec = true; configSync = true; ssh = true; keys = true; inGuestObservability = true; };
+      guest = { guestControl = true; exec = true; shell = true; configSync = true; ssh = true; keys = true; inGuestObservability = true; };
       storage = { storeSync = true; virtiofs = true; volumes = true; };
     };
     autostartPolicy = "host-boot-eligible";
@@ -130,7 +130,7 @@ let
       lifecycle = { start = true; stop = true; restart = true; switch = false; hostPrepare = true; };
       media = { usbHotplug = true; removableMedia = true; qemuMedia = true; };
       display = { display = true; graphics = false; video = false; waylandProxy = false; };
-      guest = { guestControl = false; exec = false; configSync = false; ssh = false; keys = false; inGuestObservability = false; };
+      guest = { guestControl = false; exec = false; shell = false; configSync = false; ssh = false; keys = false; inGuestObservability = false; };
       storage = { storeSync = false; virtiofs = false; volumes = false; };
     };
     autostartPolicy = "manual-only";
@@ -853,7 +853,7 @@ in
   };
 
   "external-vm-kind/rejects-guest-control" = {
-    expr = hasFailure { vmAttrs.guest.control.enable = true; } "guest-control and guest exec";
+    expr = hasFailure { vmAttrs.guest.control.enable = true; } "guest-control, guest exec, and persistent shell";
     expected = true;
   };
 

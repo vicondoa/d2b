@@ -634,6 +634,7 @@
             "guest-control-auth.nix"
             "guest-control-vsock.nix"
             "guest-exec-policy.nix"
+            "guest-shell-policy.nix"
           ];
           nix-unit-misc = [
             "assertions.nix"
