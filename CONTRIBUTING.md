@@ -63,11 +63,23 @@ repo-local `.cargo/config.toml` files:
 
 - `packages/.cargo/config.toml` → `/home/paydro/.cache/nixling-cargo-target/workspace`
 - `packages/nixling-priv-broker/.cargo/config.toml` → `/home/paydro/.cache/nixling-cargo-target/broker`
+- `packages/nixling-guest-shell-runner/.cargo/config.toml` → the helper workspace target dir
 - `packages/nixling-core/fuzz/.cargo/config.toml` → `/home/paydro/.cache/nixling-cargo-target/fuzz`
 
 Cargo's internal locking makes concurrent worktree builds safe, but a
 very old checkout may pay one slower rebuild while incremental state is
 refreshed in the shared cache.
+
+The persistent-shell feasibility helper is a standalone excluded workspace. Run
+it explicitly when iterating on that crate:
+
+```bash
+cargo --manifest-path packages/nixling-guest-shell-runner/Cargo.toml fmt --check
+cargo --manifest-path packages/nixling-guest-shell-runner/Cargo.toml clippy --workspace --all-targets --features real-libshpool -- -D warnings
+cargo --manifest-path packages/nixling-guest-shell-runner/Cargo.toml test --workspace --features real-libshpool
+cargo deny --manifest-path packages/nixling-guest-shell-runner/Cargo.toml check --config packages/nixling-guest-shell-runner/deny.toml
+cargo audit --file packages/nixling-guest-shell-runner/Cargo.lock --ignore RUSTSEC-2024-0384
+```
 
 `bash tests/static.sh` also has a fast path for Rust-heavy gates:
 
@@ -190,4 +202,3 @@ explicitly targets those tiers.
 ## License
 
 nixling is licensed under [Apache-2.0](./LICENSE). By contributing, you agree to license your contributions under the same terms.
-

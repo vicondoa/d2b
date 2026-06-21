@@ -75,6 +75,7 @@ nl_cargo_config_path() {
   case "${1:-workspace}" in
     workspace) printf '%s\n' "$(nl_repo_root)/packages/.cargo/config.toml" ;;
     broker) printf '%s\n' "$(nl_repo_root)/packages/nixling-priv-broker/.cargo/config.toml" ;;
+    guest-shell-runner) printf '%s\n' "$(nl_repo_root)/packages/nixling-guest-shell-runner/.cargo/config.toml" ;;
     fuzz) printf '%s\n' "$(nl_repo_root)/packages/nixling-core/fuzz/.cargo/config.toml" ;;
     *)
       fail "unknown cargo target scope: ${1:-<empty>}"
@@ -103,6 +104,7 @@ nl_cargo_target_dir() {
   case "$scope" in
     workspace) base="$(nl_repo_root)/packages/target" ;;
     broker) base="$(nl_repo_root)/packages/nixling-priv-broker/target" ;;
+    guest-shell-runner) base="$(nl_repo_root)/packages/nixling-guest-shell-runner/target" ;;
     fuzz) base="$(nl_repo_root)/packages/nixling-core/fuzz/target" ;;
     *)
       fail "unknown cargo target scope: $scope"

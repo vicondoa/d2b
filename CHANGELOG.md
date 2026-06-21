@@ -12,6 +12,11 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Persistent shell groundwork: added the standalone static
+  `nixling-guest-shell-runner` helper workspace, libshpool pin, initial name
+  validation/management-output scaffolding, and explicit Rust/static
+  supply-chain gate wiring for the future `nixling shell` feature.
+
 - Display and virtual I/O: added explicit display capability helpers and a
   `nixling vm display list|close` gateway display-session surface that returns
   only bounded non-secret session metadata, including the authorizing
