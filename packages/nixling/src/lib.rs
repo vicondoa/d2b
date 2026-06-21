@@ -4951,10 +4951,13 @@ fn cmd_vm_display_list(context: &Context, args: &VmDisplayListArgs) -> Result<i3
         if output.sessions.is_empty() {
             print_stdout("No active gateway display sessions\n");
         } else {
-            print_stdout("SESSION_ID\tTARGET\tSTATE\tOPERATION_ID\tPRINCIPAL\n");
+            print_stdout(&format!(
+                "{:<16} {:<40} {:<12} {:<24} {}\n",
+                "SESSION_ID", "TARGET", "STATE", "OPERATION_ID", "PRINCIPAL"
+            ));
             for session in &output.sessions {
                 print_stdout(&format!(
-                    "{}\t{}\t{}\t{}\t{}\n",
+                    "{:<16} {:<40} {:<12} {:<24} {}\n",
                     session.session_id,
                     session.target,
                     session.state,

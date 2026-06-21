@@ -2678,10 +2678,10 @@ fn dispatch_gateway_display(
                             detail: "mutex poisoned".to_owned(),
                         }
                     })?;
-                    if let Some(session) = sessions.get(&args.session_id)
-                        && !matches!(peer.role, PeerRole::Admin)
-                        && session.principal != peer_principal
-                    {
+                    let unauthorized = sessions.get(&args.session_id).is_some_and(|session| {
+                        !matches!(peer.role, PeerRole::Admin) && session.principal != peer_principal
+                    });
+                    if unauthorized {
                         return Err(TypedError::AuthzNotAdmin {
                             verb: "gatewayDisplay close".to_owned(),
                         });
