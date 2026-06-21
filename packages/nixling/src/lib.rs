@@ -9888,8 +9888,12 @@ mod host_install_dispatch_tests {
     }
 
     fn recv_test_frame(fd: RawFd) -> io::Result<Vec<u8>> {
+        recv_test_frame_with_flags(fd, MsgFlags::empty())
+    }
+
+    fn recv_test_frame_with_flags(fd: RawFd, flags: MsgFlags) -> io::Result<Vec<u8>> {
         let mut buffer = vec![0_u8; MAX_FRAME_BYTES + 4];
-        let received = super::recv(fd, &mut buffer, MsgFlags::empty()).map_err(nix_err_to_io)?;
+        let received = super::recv(fd, &mut buffer, flags).map_err(nix_err_to_io)?;
         if received < 4 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -10225,10 +10229,13 @@ mod host_install_dispatch_tests {
         response_frame: Value,
     ) -> (Result<i32, super::CliFailure>, Vec<Value>, Vec<u8>, Vec<u8>) {
         let socket_path = test_socket_path("vm-exec", ".sock");
+        let manifest_path = test_socket_path("vm-exec", ".manifest.json");
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent).expect("create test socket dir");
         }
         let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&manifest_path);
+        write_test_manifest(&manifest_path, &args.vm);
         let listener = socket(
             AddressFamily::Unix,
             SockType::SeqPacket,
@@ -10259,7 +10266,7 @@ mod host_install_dispatch_tests {
                 )
                 .expect("encode hello reply");
                 send_test_frame(accepted, &hello_reply)?;
-
+                // First post-hello frame: the Start op.
                 // First post-hello frame: the Start op.
                 let start_bytes = recv_test_frame(accepted)?;
                 let start: Value = serde_json::from_slice(&start_bytes)
@@ -10269,14 +10276,6 @@ mod host_install_dispatch_tests {
                 let response_frame = serde_json::to_vec(&response_frame)
                     .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
                 send_test_frame(accepted, &response_frame)?;
-
-                // Any further frame is an illegitimate proxied op; record it.
-                if let Ok(extra_bytes) = recv_test_frame(accepted)
-                    && !extra_bytes.is_empty()
-                    && let Ok(extra) = serde_json::from_slice::<Value>(&extra_bytes)
-                {
-                    frames_tx.send(extra).expect("send extra frame");
-                }
                 Ok(())
             })();
             close(accepted).expect("close accepted socket");
@@ -10284,7 +10283,7 @@ mod host_install_dispatch_tests {
         });
 
         let context = Context {
-            manifest_path: PathBuf::from("/dev/null"),
+            manifest_path: manifest_path.clone(),
             bundle_path: PathBuf::from("/dev/null"),
             public_socket: socket_path.clone(),
             broker_socket: PathBuf::from("/dev/null"),
@@ -10300,6 +10299,7 @@ mod host_install_dispatch_tests {
         server.join().expect("join mock daemon thread");
         let frames: Vec<Value> = frames_rx.try_iter().collect();
         let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&manifest_path);
         (result, frames, stdout, stderr)
     }
 
