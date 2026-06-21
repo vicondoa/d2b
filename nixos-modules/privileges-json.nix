@@ -597,6 +597,7 @@ let
     "brokerRequired": "yes",
     "auditMode": "yes"
   },
+  {
     "operation": "usb detach",
     "subject": "VM/USB busid",
     "scope": "per-VM/per-env/per-busid",
