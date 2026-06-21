@@ -12,9 +12,9 @@ doctest = false
 workspace = true
 
 # Azure Container Apps sandbox WorkloadProvider (ADR 0032, P0). Plane-1
-# control-plane auth is the operator's ambient Entra identity via the Azure
-# CLI, surfaced through azure_identity::AzureCliCredential; nixling stores no
-# Azure secret of its own. Data-plane REST calls go to the ADC endpoint.
+# control-plane auth uses explicitly configured managed/workload identity;
+# production code does not fall back to ambient developer credentials. Data-plane
+# REST calls go to the ADC endpoint.
 [dependencies]
 nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
 nixling-constellation-provider = { path = "../nixling-constellation-provider", version = "0.0.0-bootstrap" }

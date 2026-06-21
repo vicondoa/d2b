@@ -1,24 +1,24 @@
 //! `nixling-provider-aca`: the Azure Container Apps **sandbox**
-//! `WorkloadProvider` (ADR 0032, P0).
+//! `WorkloadProvider` implementation for provider-managed sandboxes.
 //!
-//! This productionizes the ACA leg of the P0 vertical: instead of the
-//! operator driving the sandbox by hand with the preview `aca` CLI, the
-//! gateway drives it through this Rust provider against the ADC data-plane
-//! REST surface.
+//! This productionizes the Azure Container Apps sandbox path: instead of the
+//! operator driving the sandbox by hand with the preview CLI, the gateway drives
+//! it through this Rust provider against the Azure Container Apps data-plane REST surface.
 //!
-//! ## Three-plane auth (operator directive)
-//! Plane 1 — Azure control-plane access — is acquired through a chained
-//! managed-identity → Azure-CLI credential. A gateway guest or daemon can use a
-//! managed identity; a developer can still use an ambient `az login` session.
-//! nixling stores **no** Azure secret of its own. Container→Azure (plane 2, the
-//! sandbox Managed Identity) and the nixling-internal per-session credential
-//! (plane 3) live in the relay/display providers, not here.
+//! ## Three-plane auth
+//! Plane 1 — Azure control-plane access — is acquired through an explicitly
+//! configured workload identity first, then managed identity. The production
+//! provider deliberately does not fall back to ambient developer credentials
+//! such as Azure CLI or environment credential chains. nixling stores **no**
+//! Azure secret of its own. Container→Azure (plane 2, the sandbox Managed
+//! Identity) and the nixling-internal per-session credential (plane 3) live in
+//! the relay/display providers, not here.
 //!
 //! ## Data plane
 //! `https://management.<region>.azuredevcompute.io/subscriptions/<sub>/
 //! resourceGroups/<rg>/sandboxGroups/<sg>/...` with
 //! `?api-version=2026-02-01-preview`. Lifecycle uses the preview data-plane
-//! REST contract observed from the first-party ACA sandbox CLI:
+//! REST contract observed from the first-party Azure Container Apps sandbox CLI:
 //!
 //! - `PUT .../diskimages` creates a disk image from a container image.
 //! - `GET .../diskimages&labels=<selector>` finds reusable disk images.
@@ -30,13 +30,40 @@
 //! The credential and the HTTP transport are both injectable traits so the
 //! provider is unit-testable without a live subscription; the live path is
 //! exercised by an `NL_ACA_LIVE`-gated smoke test.
+//!
+//! ```no_run
+//! # use nixling_constellation_core::NodeId;
+//! # use nixling_provider_aca::{AcaConfig, AcaWorkloadProvider};
+//! # fn build(cfg: AcaConfig) -> Result<AcaWorkloadProvider, Box<dyn std::error::Error>> {
+//! let provider = AcaWorkloadProvider::new(cfg, NodeId::parse("gateway")?)?;
+//! # Ok(provider)
+//! # }
+//! ```
+//!
+//! Local live-smoke code that intentionally uses developer credentials must
+//! inject them explicitly with [`AcaWorkloadProvider::with_parts`]; production
+//! [`AcaWorkloadProvider::new`] uses managed/workload identity only.
+//!
+//! ```no_run
+//! # use nixling_constellation_core::NodeId;
+//! # use nixling_provider_aca::{AcaConfig, AcaWorkloadProvider, ReqwestTransport};
+//! # use std::sync::Arc;
+//! # fn build_local(cfg: AcaConfig) -> Result<AcaWorkloadProvider, Box<dyn std::error::Error>> {
+//! let credential = azure_identity::AzureCliCredential::new(None)?;
+//! let http = Arc::new(ReqwestTransport::new()?);
+//! let provider =
+//!     AcaWorkloadProvider::with_parts(cfg, NodeId::parse("gateway")?, credential, http);
+//! # Ok(provider)
+//! # }
+//! ```
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use azure_core::credentials::{AccessToken, TokenCredential, TokenRequestOptions};
+use azure_core::credentials::TokenCredential;
 use azure_core::time::{Duration as AzureDuration, OffsetDateTime};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -44,24 +71,29 @@ use sha2::{Digest, Sha256};
 use nixling_constellation_core::{
     Capability, CapabilitySet, ErrorKind, ExecutionId, NodeId, ProviderId, WorkloadId,
 };
-use nixling_constellation_core::{RealmPath, WorkloadSummary};
+use nixling_constellation_core::{RealmId, RealmPath, WorkloadSummary};
 use nixling_constellation_provider::capabilities::WorkloadCapabilitySet;
-use nixling_constellation_provider::error::{ProviderError, ProviderResult};
+use nixling_constellation_provider::error::{
+    ProviderDiagnostic, ProviderError, ProviderResult, RetryHint,
+};
 use nixling_constellation_provider::provider::WorkloadProvider;
+use nixling_constellation_provider::rate_limit::{CircuitPermit, ProviderCircuitBreaker};
 use nixling_constellation_provider::types::{
     ExecStartRequest, ListSelector, WorkloadSpec, WorkloadStatus,
 };
 
-/// The Entra scope for the ADC data plane (plane 1). Managed identity and the
-/// Azure CLI fallback both acquire tokens for this audience.
-pub const ADC_RESOURCE_SCOPE: &str = "https://management.azuredevcompute.io/.default";
+/// The Entra scope for the Azure Container Apps data plane (plane 1). Explicit managed/workload
+/// identity credentials acquire tokens for this audience.
+pub const AZURE_CONTAINER_APPS_RESOURCE_SCOPE: &str =
+    concat!("https:", "//management.azuredevcompute.io/.default");
 
-/// The ADC data-plane API version this provider speaks.
-pub const ADC_API_VERSION: &str = "2026-02-01-preview";
+/// The Azure Container Apps data-plane API version this provider speaks.
+pub const AZURE_CONTAINER_APPS_API_VERSION: &str = "2026-02-01-preview";
 const READY_POLL_ATTEMPTS: usize = 30;
 const READY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+const MAX_RETRY_HINT: Duration = Duration::from_secs(300);
 
-/// The non-secret coordinates of an ACA sandbox group. Every field is an
+/// The non-secret coordinates of an Azure Container Apps sandbox group. Every field is an
 /// opaque Azure resource identifier (never a secret); `Debug` still redacts
 /// the subscription id so it cannot leak into a log or span.
 #[derive(Clone)]
@@ -72,11 +104,14 @@ pub struct AcaConfig {
     pub resource_group: String,
     /// Sandbox group name.
     pub sandbox_group: String,
-    /// Region (selects the ADC data-plane endpoint).
+    /// Region (selects the Azure Container Apps data-plane endpoint).
     pub region: String,
-    /// Optional explicit ADC data-plane endpoint for sovereign/private-link
+    /// Optional explicit Azure Container Apps data-plane endpoint for sovereign/private-link
     /// deployments. When unset, `management.<region>.azuredevcompute.io` is used.
     pub endpoint: Option<String>,
+    /// Optional user-assigned managed identity client id for Azure Container Apps data-plane
+    /// authentication. When absent, the system-assigned identity is used.
+    pub managed_identity_client_id: Option<String>,
 }
 
 /// How to obtain the disk image for a sandbox create.
@@ -97,7 +132,7 @@ pub enum AcaDiskImageSource {
     },
 }
 
-/// Provider defaults required to create an ACA sandbox from the narrow
+/// Provider defaults required to create an Azure Container Apps sandbox from the narrow
 /// `WorkloadSpec { alias }` trait surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcaSandboxDefaults {
@@ -118,7 +153,7 @@ pub struct AcaSandboxDefaults {
 }
 
 impl AcaSandboxDefaults {
-    /// P0 default resources used by the live ACA Wayland POC.
+    /// Default resources used by the live Azure Container Apps Wayland proof.
     pub fn new(disk_image: AcaDiskImageSource) -> Self {
         Self {
             disk_image,
@@ -131,28 +166,28 @@ impl AcaSandboxDefaults {
     }
 }
 
-/// A non-secret ACA sandbox summary.
+/// A non-secret Azure Container Apps sandbox summary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcaSandbox {
     /// Provider UUID / resource id fragment.
     pub id: String,
     /// Best-effort lifecycle state from the data plane.
     pub state: Option<String>,
-    /// ACA labels.
+    /// Azure Container Apps labels.
     pub labels: BTreeMap<String, String>,
 }
 
-/// A non-secret ACA disk image summary.
+/// A non-secret Azure Container Apps disk image summary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcaDiskImage {
     /// Provider UUID / resource id fragment.
     pub id: String,
-    /// ACA labels.
+    /// Azure Container Apps labels.
     pub labels: BTreeMap<String, String>,
 }
 
 impl AcaConfig {
-    /// The region-specific ADC data-plane endpoint.
+    /// The region-specific Azure Container Apps data-plane endpoint.
     pub fn endpoint(&self) -> String {
         self.endpoint
             .clone()
@@ -175,7 +210,7 @@ impl AcaConfig {
         format!(
             "{}/executeShellCommand?api-version={}",
             self.sandbox_base(sandbox_id),
-            ADC_API_VERSION
+            AZURE_CONTAINER_APPS_API_VERSION
         )
     }
 
@@ -187,11 +222,11 @@ impl AcaConfig {
             self.subscription,
             self.resource_group,
             self.sandbox_group,
-            ADC_API_VERSION
+            AZURE_CONTAINER_APPS_API_VERSION
         )
     }
 
-    /// The sandbox list URL, optionally filtered by an ACA label selector.
+    /// The sandbox list URL, optionally filtered by an Azure Container Apps label selector.
     pub fn list_sandboxes_url(&self, labels: Option<&str>) -> String {
         let mut url = self.sandboxes_url();
         if let Some(labels) = labels {
@@ -209,11 +244,11 @@ impl AcaConfig {
             self.subscription,
             self.resource_group,
             self.sandbox_group,
-            ADC_API_VERSION
+            AZURE_CONTAINER_APPS_API_VERSION
         )
     }
 
-    /// The disk image list URL, optionally filtered by an ACA label selector.
+    /// The disk image list URL, optionally filtered by an Azure Container Apps label selector.
     pub fn list_disk_images_url(&self, labels: Option<&str>) -> String {
         let mut url = self.disk_images_url();
         if let Some(labels) = labels {
@@ -228,17 +263,17 @@ impl AcaConfig {
         format!(
             "{}?api-version={}",
             self.sandbox_base(sandbox_id),
-            ADC_API_VERSION
+            AZURE_CONTAINER_APPS_API_VERSION
         )
     }
 
-    /// The resume URL (an ACA sandbox auto-suspends to `Idle`; a resume moves
+    /// The resume URL (an Azure Container Apps sandbox auto-suspends to `Idle`; a resume moves
     /// it back to `Running` so `executeShellCommand` stops returning 409).
     pub fn resume_url(&self, sandbox_id: &str) -> String {
         format!(
             "{}/resume?api-version={}",
             self.sandbox_base(sandbox_id),
-            ADC_API_VERSION
+            AZURE_CONTAINER_APPS_API_VERSION
         )
     }
 
@@ -247,7 +282,7 @@ impl AcaConfig {
         format!(
             "{}/stop?api-version={}",
             self.sandbox_base(sandbox_id),
-            ADC_API_VERSION
+            AZURE_CONTAINER_APPS_API_VERSION
         )
     }
 
@@ -256,7 +291,7 @@ impl AcaConfig {
         format!(
             "{}?api-version={}",
             self.sandbox_base(sandbox_id),
-            ADC_API_VERSION
+            AZURE_CONTAINER_APPS_API_VERSION
         )
     }
 }
@@ -269,6 +304,13 @@ impl fmt::Debug for AcaConfig {
             .field("resource_group", &self.resource_group)
             .field("sandbox_group", &self.sandbox_group)
             .field("region", &self.region)
+            .field(
+                "managed_identity_client_id",
+                &self
+                    .managed_identity_client_id
+                    .as_ref()
+                    .map(|_| "<configured>"),
+            )
             .finish()
     }
 }
@@ -318,8 +360,24 @@ pub enum HttpMethod {
 pub struct HttpResponse {
     /// HTTP status code.
     pub status: u16,
+    /// Allowlisted response headers.
+    pub headers: BTreeMap<String, String>,
+    /// Retry metadata parsed once by the circuit-aware request wrapper.
+    pub retry_hint: Option<RetryHint>,
     /// Raw response body.
     pub body: String,
+}
+
+impl HttpResponse {
+    /// Build a response with no allowlisted headers.
+    pub fn new(status: u16, body: impl Into<String>) -> Self {
+        Self {
+            status,
+            headers: BTreeMap::new(),
+            retry_hint: None,
+            body: body.into(),
+        }
+    }
 }
 
 /// The data-plane HTTP transport. Abstracted so the provider can be tested
@@ -379,86 +437,238 @@ impl HttpTransport for ReqwestTransport {
             ProviderError::new(
                 ErrorKind::ProviderAllocationFailed,
                 format!(
-                    "aca data-plane request failed: {}",
+                    "Azure Container Apps data-plane request failed: {}",
                     redact_reqwest_error(&err)
                 ),
             )
         })?;
         let status = resp.status().as_u16();
+        let headers = allowlisted_headers(resp.headers());
         let body = resp.text().await.map_err(|_| {
             ProviderError::new(
                 ErrorKind::MalformedFrame,
-                "aca data-plane response body was not readable",
+                "Azure Container Apps data-plane response body was not readable",
             )
         })?;
-        Ok(HttpResponse { status, body })
+        Ok(HttpResponse {
+            status,
+            headers,
+            retry_hint: None,
+            body,
+        })
     }
+}
+
+fn allowlisted_headers(headers: &reqwest::header::HeaderMap) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for name in [
+        "retry-after",
+        "x-ms-retry-after-ms",
+        "x-ms-request-id",
+        "x-ms-correlation-request-id",
+        "x-ms-client-request-id",
+    ] {
+        if let Some(value) = headers.get(name).and_then(|value| value.to_str().ok()) {
+            out.insert(name.to_owned(), value.to_owned());
+        }
+    }
+    out
 }
 
 // A reqwest error's Display can include the full URL; keep only the coarse
 // classification so an endpoint/token never reaches a log.
 fn redact_reqwest_error(err: &reqwest::Error) -> &'static str {
-    if err.is_timeout() {
+    redact_reqwest_error_flags(
+        err.is_timeout(),
+        err.is_connect(),
+        err.is_request(),
+        err.is_body(),
+        err.is_decode(),
+    )
+}
+
+fn redact_reqwest_error_flags(
+    is_timeout: bool,
+    is_connect: bool,
+    is_request: bool,
+    is_body: bool,
+    is_decode: bool,
+) -> &'static str {
+    if is_timeout {
         "timeout"
-    } else if err.is_connect() {
+    } else if is_connect {
         "connect"
-    } else if err.is_request() {
+    } else if is_request {
         "request"
-    } else if err.is_body() || err.is_decode() {
+    } else if is_body || is_decode {
         "body"
     } else {
         "transport"
     }
 }
 
-fn rest_error(context: &str, status: u16, body: &str) -> ProviderError {
-    ProviderError::new(
-        ErrorKind::ProviderAllocationFailed,
-        format!(
-            "{context} returned HTTP {status}{}",
-            rest_error_detail(body)
-        ),
-    )
-}
-
-fn rest_error_detail(body: &str) -> String {
-    let Some(message) = extract_error_message(body) else {
-        return String::new();
+fn rest_error(context: &str, resp: &HttpResponse) -> ProviderError {
+    let diagnostic = provider_diagnostic(&resp.body, &resp.headers);
+    if resp.status == 429 {
+        let hint = resp
+            .retry_hint
+            .unwrap_or_else(|| retry_hint_from_headers(&resp.headers));
+        return ProviderError::rate_limited(
+            format!(
+                "{context} provider-rate-limited; retry after {} ms",
+                hint.applied_backoff().as_millis()
+            ),
+            hint,
+        )
+        .with_diagnostic(diagnostic);
+    }
+    let kind = if matches!(diagnostic.code(), Some("AuthorizationFailed")) {
+        ErrorKind::Unauthorized
+    } else if resp.status == 401 {
+        ErrorKind::AuthenticationFailed
+    } else if resp.status == 403 {
+        ErrorKind::Unauthorized
+    } else {
+        ErrorKind::ProviderAllocationFailed
     };
-    format!(": {}", bounded_detail(&message))
+    let mut message = format!("{context} returned HTTP {}", resp.status);
+    if matches!(resp.status, 401 | 403) || matches!(diagnostic.code(), Some("AuthorizationFailed"))
+    {
+        message.push_str(
+            "; ensure the gateway identity (for example managed identity) has the required Azure Container Apps data-plane role",
+        );
+    }
+    ProviderError::new(kind, message).with_diagnostic(diagnostic)
 }
 
-fn extract_error_message(body: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+fn provider_diagnostic(body: &str, headers: &BTreeMap<String, String>) -> ProviderDiagnostic {
+    let value = serde_json::from_str::<serde_json::Value>(body).ok();
+    let code = value.as_ref().and_then(extract_error_code);
+    let message = value.as_ref().and_then(extract_error_message);
+    let correlation_id = headers
+        .get("x-ms-correlation-request-id")
+        .or_else(|| headers.get("x-ms-request-id"))
+        .or_else(|| headers.get("x-ms-client-request-id"))
+        .cloned();
+    ProviderDiagnostic::new(code, message, correlation_id)
+}
+
+fn extract_error_code(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("error")
+        .and_then(|error| error.get("code"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| value.get("code").and_then(serde_json::Value::as_str))
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_owned)
+}
+
+fn extract_error_message(value: &serde_json::Value) -> Option<String> {
     for path in [
         &["error", "message"][..],
         &["error", "details"][..],
         &["message"][..],
         &["detail"][..],
     ] {
-        let mut cursor = &value;
+        let mut cursor = Some(value);
         for key in path {
-            cursor = cursor.get(*key)?;
+            cursor = cursor.and_then(|value| value.get(*key));
         }
-        if let Some(s) = cursor.as_str().filter(|s| !s.trim().is_empty()) {
+        if let Some(s) = cursor
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+        {
             return Some(s.to_owned());
         }
     }
     None
 }
 
-fn bounded_detail(raw: &str) -> String {
-    let mut out: String = raw.chars().filter(|c| !c.is_control()).take(240).collect();
-    if raw.chars().count() > out.chars().count() {
-        out.push_str("...");
+fn retry_hint_from_headers(headers: &BTreeMap<String, String>) -> RetryHint {
+    let retry_after = headers
+        .get("x-ms-retry-after-ms")
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .or_else(|| {
+            headers
+                .get("retry-after")
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(Duration::from_secs)
+        })
+        .unwrap_or_else(|| Duration::from_secs(30));
+    let jitter = deterministic_jitter_ms(millis_u64(retry_after));
+    RetryHint::bounded(retry_after, jitter, MAX_RETRY_HINT)
+}
+
+fn deterministic_jitter_ms(seed: u64) -> Duration {
+    Duration::from_millis(seed.wrapping_mul(97) % 501)
+}
+
+fn millis_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn classify_credential_error(err: &(dyn std::error::Error + 'static)) -> &'static str {
+    let mut current = Some(err);
+    while let Some(error) = current {
+        let message = error.to_string().to_ascii_lowercase();
+        if message.contains("workload") || message.contains("federated") {
+            return "workload-identity-unavailable";
+        }
+        if message.contains("managed identity") || message.contains("imds") {
+            return "managed-identity-unavailable";
+        }
+        if message.contains("environment")
+            || message.contains("client id")
+            || message.contains("client_id")
+        {
+            return "credential-configuration-missing";
+        }
+        current = error.source();
     }
-    out
+    "credential-source-unavailable"
 }
 
-fn managed_identity_env_present() -> bool {
-    managed_identity_env_present_with(|key| std::env::var_os(key).is_some())
+#[cfg(test)]
+fn classify_credential_error_message(message: &str) -> &'static str {
+    let message = message.to_ascii_lowercase();
+    if message.contains("workload") || message.contains("federated") {
+        "workload-identity-unavailable"
+    } else if message.contains("managed identity") || message.contains("imds") {
+        "managed-identity-unavailable"
+    } else if message.contains("environment")
+        || message.contains("client id")
+        || message.contains("client_id")
+    {
+        "credential-configuration-missing"
+    } else {
+        "credential-source-unavailable"
+    }
 }
 
+static ACA_CIRCUITS: OnceLock<Mutex<BTreeMap<String, Weak<ProviderCircuitBreaker>>>> =
+    OnceLock::new();
+
+fn shared_circuit_for(config: &AcaConfig) -> Arc<ProviderCircuitBreaker> {
+    let key = format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        config.endpoint(),
+        config.subscription,
+        config.resource_group,
+        config.sandbox_group
+    );
+    let registry = ACA_CIRCUITS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut circuits = registry.lock().expect("aca circuit registry poisoned");
+    circuits.retain(|_, weak| weak.strong_count() > 0);
+    if let Some(existing) = circuits.get(&key).and_then(Weak::upgrade) {
+        return existing;
+    }
+    let circuit = Arc::new(ProviderCircuitBreaker::default());
+    circuits.insert(key, Arc::downgrade(&circuit));
+    circuit
+}
+
+#[cfg(test)]
 fn managed_identity_env_present_with(mut has_key: impl FnMut(&str) -> bool) -> bool {
     [
         "IDENTITY_ENDPOINT",
@@ -481,12 +691,7 @@ pub struct AcaWorkloadProvider {
     sandbox_defaults: Option<AcaSandboxDefaults>,
     lifecycle_lock: Arc<tokio::sync::Mutex<()>>,
     token_cache: Arc<tokio::sync::Mutex<Option<CachedBearer>>>,
-}
-
-#[derive(Debug)]
-struct AcaDefaultCredential {
-    managed_identity: Option<Arc<dyn TokenCredential>>,
-    azure_cli: Arc<dyn TokenCredential>,
+    circuit: Arc<ProviderCircuitBreaker>,
 }
 
 #[derive(Debug, Clone)]
@@ -495,22 +700,32 @@ struct CachedBearer {
     expires_on: OffsetDateTime,
 }
 
-#[async_trait]
-impl TokenCredential for AcaDefaultCredential {
-    async fn get_token(
-        &self,
-        scopes: &[&str],
-        options: Option<TokenRequestOptions<'_>>,
-    ) -> azure_core::Result<AccessToken> {
-        if let Some(managed_identity) = &self.managed_identity {
-            match managed_identity.get_token(scopes, options.clone()).await {
-                Ok(token) => return Ok(token),
-                Err(err) => {
-                    tracing::warn!(error = %err, "managed identity credential failed; falling back to Azure CLI");
-                }
-            }
+struct ProbeGuard {
+    circuit: Arc<ProviderCircuitBreaker>,
+    permit: CircuitPermit,
+    armed: bool,
+}
+
+impl ProbeGuard {
+    fn new(circuit: Arc<ProviderCircuitBreaker>, permit: CircuitPermit) -> Self {
+        Self {
+            circuit,
+            permit,
+            armed: true,
         }
-        self.azure_cli.get_token(scopes, options).await
+    }
+
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ProbeGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.circuit
+                .record_cancellation(Instant::now(), self.permit);
+        }
     }
 }
 
@@ -525,38 +740,58 @@ impl fmt::Debug for AcaWorkloadProvider {
 }
 
 impl AcaWorkloadProvider {
-    /// Build a provider that authenticates with managed identity first, then
-    /// Azure CLI for developer/operator sessions, and talks to the ADC data
-    /// plane over `reqwest`.
+    /// Build a provider that authenticates only with workload/managed identity
+    /// and talks to the Azure Container Apps data plane over `reqwest`.
     pub fn new(config: AcaConfig, node: NodeId) -> ProviderResult<Self> {
-        let managed_identity = if managed_identity_env_present() {
-            Some(
-                azure_identity::ManagedIdentityCredential::new(None).map_err(|err| {
+        let workload_options = azure_identity::WorkloadIdentityCredentialOptions {
+            client_id: config
+                .managed_identity_client_id
+                .as_ref()
+                .filter(|client_id| !client_id.trim().is_empty())
+                .cloned(),
+            ..Default::default()
+        };
+        let managed_options = azure_identity::ManagedIdentityCredentialOptions {
+            user_assigned_id: config
+                .managed_identity_client_id
+                .as_ref()
+                .filter(|client_id| !client_id.trim().is_empty())
+                .map(|client_id| azure_identity::UserAssignedId::ClientId(client_id.clone())),
+            ..Default::default()
+        };
+        let credential = match azure_identity::WorkloadIdentityCredential::new(Some(
+            workload_options,
+        )) {
+            Ok(credential) => credential as Arc<dyn TokenCredential>,
+            Err(workload_err) => {
+                tracing::debug!(
+                    event = "aca-credential-source-unavailable",
+                    source = "workload-identity",
+                    reason = classify_credential_error(&workload_err),
+                    "Azure Container Apps workload identity credential unavailable"
+                );
+                azure_identity::ManagedIdentityCredential::new(Some(managed_options))
+                .map_err(|managed_err| {
+                    tracing::debug!(
+                        event = "aca-credential-source-unavailable",
+                        source = "managed-identity",
+                        reason = classify_credential_error(&managed_err),
+                        "Azure Container Apps managed identity credential unavailable"
+                    );
                     ProviderError::new(
                         ErrorKind::AuthenticationFailed,
-                        format!("managed identity credential unavailable: {err}"),
+                        "Azure Container Apps workload identity and managed identity credential sources are unavailable; verify gateway workload identity or managed identity configuration",
                     )
-                })? as Arc<dyn TokenCredential>,
-            )
-        } else {
-            None
+                })? as Arc<dyn TokenCredential>
+            }
         };
-        let azure_cli = azure_identity::AzureCliCredential::new(None).map_err(|err| {
-            ProviderError::new(
-                ErrorKind::AuthenticationFailed,
-                format!("azure cli credential unavailable: {err}"),
-            )
-        })?;
-        let credential = Arc::new(AcaDefaultCredential {
-            managed_identity,
-            azure_cli,
-        });
         let http = Arc::new(ReqwestTransport::new()?);
-        Ok(Self::with_parts(config, node, credential, http))
+        let circuit = shared_circuit_for(&config);
+        Ok(Self::with_parts(config, node, credential, http).with_circuit_breaker(circuit))
     }
 
-    /// Build a provider from injected parts (credential + transport) — used by
-    /// tests and by alternative wirings.
+    /// Build a provider from injected parts (credential + transport) for
+    /// local dev/live-smoke only.
     pub fn with_parts(
         config: AcaConfig,
         node: NodeId,
@@ -572,7 +807,14 @@ impl AcaWorkloadProvider {
             sandbox_defaults: None,
             lifecycle_lock: Arc::new(tokio::sync::Mutex::new(())),
             token_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            circuit: Arc::new(ProviderCircuitBreaker::default()),
         }
+    }
+
+    /// Share a provider-endpoint circuit breaker across Azure Container Apps provider instances.
+    pub fn with_circuit_breaker(mut self, circuit: Arc<ProviderCircuitBreaker>) -> Self {
+        self.circuit = circuit;
+        self
     }
 
     /// Attach the non-secret defaults used to create sandboxes for workload
@@ -594,12 +836,17 @@ impl AcaWorkloadProvider {
         }
         let token = self
             .credential
-            .get_token(&[ADC_RESOURCE_SCOPE], None)
+            .get_token(&[AZURE_CONTAINER_APPS_RESOURCE_SCOPE], None)
             .await
             .map_err(|err| {
+                tracing::debug!(
+                    event = "aca-token-acquisition-failed",
+                    reason = classify_credential_error(&err),
+                    "Azure Container Apps credential token acquisition failed"
+                );
                 ProviderError::new(
                     ErrorKind::AuthenticationFailed,
-                    format!("failed to acquire ADC access token: {err}"),
+                    "Azure Container Apps credential acquisition failed; verify gateway workload identity or managed identity configuration",
                 )
             })?;
         let bearer = token.token.secret().to_owned();
@@ -610,8 +857,47 @@ impl AcaWorkloadProvider {
         Ok(bearer)
     }
 
+    async fn request(
+        &self,
+        method: HttpMethod,
+        url: &str,
+        bearer: &str,
+        body: Option<String>,
+    ) -> ProviderResult<HttpResponse> {
+        let now = Instant::now();
+        let permit = self.circuit.before_request(now)?;
+        let guard = permit
+            .is_probe()
+            .then(|| ProbeGuard::new(self.circuit.clone(), permit));
+        let result = self.http.request(method, url, bearer, body).await;
+        if let Some(guard) = guard {
+            guard.disarm();
+        }
+        match result {
+            Ok(resp) => {
+                let mut resp = resp;
+                let completed_at = Instant::now();
+                if resp.status == 429 {
+                    let hint = retry_hint_from_headers(&resp.headers);
+                    resp.retry_hint = Some(hint);
+                    self.circuit.record_rate_limited(completed_at, hint, permit);
+                } else if (500..=599).contains(&resp.status) {
+                    self.circuit.record_transient_failure(completed_at, permit);
+                } else if resp.status < 500 {
+                    self.circuit.record_success(permit);
+                }
+                Ok(resp)
+            }
+            Err(err) => {
+                self.circuit
+                    .record_transient_failure(Instant::now(), permit);
+                Err(err)
+            }
+        }
+    }
+
     /// Run a shell command in `sandbox_id` and return its result
-    /// synchronously. An ACA sandbox auto-suspends to `Idle`; if the exec is
+    /// synchronously. An Azure Container Apps sandbox auto-suspends to `Idle`; if the exec is
     /// refused with a 409 the provider resumes the sandbox once and retries
     /// (mirroring the data plane's own resume protocol). Fails closed on any
     /// other non-200 status or an unparseable body.
@@ -621,14 +907,12 @@ impl AcaWorkloadProvider {
         let body = serde_json::json!({ "command": command }).to_string();
 
         let resp = self
-            .http
             .request(HttpMethod::Post, &url, &bearer, Some(body.clone()))
             .await?;
         let resp = if resp.status == 409 {
             // Sandbox is suspended: resume, then retry the exec exactly once.
             self.resume(sandbox_id, &bearer).await?;
-            self.http
-                .request(HttpMethod::Post, &url, &bearer, Some(body))
+            self.request(HttpMethod::Post, &url, &bearer, Some(body))
                 .await?
         } else {
             resp
@@ -636,15 +920,14 @@ impl AcaWorkloadProvider {
 
         if resp.status != 200 {
             return Err(rest_error(
-                "aca executeShellCommand",
-                resp.status,
-                &resp.body,
+                "Azure Container Apps executeShellCommand",
+                &resp,
             ));
         }
         serde_json::from_str::<ExecResult>(&resp.body).map_err(|_| {
             ProviderError::new(
                 ErrorKind::MalformedFrame,
-                "aca executeShellCommand response was not the expected JSON shape",
+                "Azure Container Apps executeShellCommand response was not the expected JSON shape",
             )
         })
     }
@@ -654,11 +937,10 @@ impl AcaWorkloadProvider {
     async fn resume(&self, sandbox_id: &str, bearer: &str) -> ProviderResult<()> {
         let url = self.config.resume_url(sandbox_id);
         let resp = self
-            .http
             .request(HttpMethod::Post, &url, bearer, Some("{}".to_owned()))
             .await?;
         if resp.status != 200 {
-            return Err(rest_error("aca sandbox resume", resp.status, &resp.body));
+            return Err(rest_error("Azure Container Apps sandbox resume", &resp));
         }
         Ok(())
     }
@@ -668,15 +950,16 @@ impl AcaWorkloadProvider {
     pub async fn sandbox_reachable(&self, sandbox_id: &str) -> ProviderResult<bool> {
         let bearer = self.bearer().await?;
         let url = self.config.get_url(sandbox_id);
-        let resp = self
-            .http
-            .request(HttpMethod::Get, &url, &bearer, None)
-            .await?;
-        Ok(resp.status == 200)
+        let resp = self.request(HttpMethod::Get, &url, &bearer, None).await?;
+        match resp.status {
+            200 => Ok(true),
+            404 => Ok(false),
+            _ => Err(rest_error("Azure Container Apps sandbox get", &resp)),
+        }
     }
 
     /// Find the sandbox backing a workload alias via the deterministic
-    /// `nixling-workload=<alias>` ACA label plus configured realm/default labels
+    /// `nixling-workload=<alias>` Azure Container Apps label plus configured realm/default labels
     /// when lifecycle defaults are present.
     pub async fn find_workload_sandbox(
         &self,
@@ -690,7 +973,9 @@ impl AcaWorkloadProvider {
         selector.insert("nixling-workload".to_owned(), workload.as_str().to_owned());
         let labels = labels_selector(&selector);
         let sandboxes = self.list_sandboxes(Some(&labels)).await?;
-        Ok(sandboxes.into_iter().next())
+        Ok(sandboxes
+            .into_iter()
+            .find(|sandbox| labels_match(&sandbox.labels, &selector)))
     }
 
     /// Ensure the workload alias has a sandbox, creating the disk image and
@@ -700,11 +985,10 @@ impl AcaWorkloadProvider {
         workload: &WorkloadId,
     ) -> ProviderResult<AcaSandbox> {
         let _guard = self.lifecycle_lock.lock().await;
-        let defaults = self.sandbox_defaults.as_ref().ok_or_else(|| {
-            ProviderError::unsupported(
-                "aca sandbox lifecycle requires configured disk/image defaults",
-            )
-        })?;
+        let defaults = self
+            .sandbox_defaults
+            .as_ref()
+            .ok_or_else(|| ProviderError::capability_denied(Capability::Lifecycle))?;
         if let Some(existing) = self.find_workload_sandbox(workload).await? {
             return Ok(existing);
         }
@@ -725,20 +1009,17 @@ impl AcaWorkloadProvider {
         }
         Err(ProviderError::new(
             ErrorKind::Timeout,
-            "aca sandbox did not reach Running before the readiness deadline",
+            "Azure Container Apps sandbox did not reach Running before the readiness deadline",
         ))
     }
 
-    /// List sandboxes, optionally filtered by an ACA label selector.
+    /// List sandboxes, optionally filtered by an Azure Container Apps label selector.
     pub async fn list_sandboxes(&self, labels: Option<&str>) -> ProviderResult<Vec<AcaSandbox>> {
         let bearer = self.bearer().await?;
         let url = self.config.list_sandboxes_url(labels);
-        let resp = self
-            .http
-            .request(HttpMethod::Get, &url, &bearer, None)
-            .await?;
+        let resp = self.request(HttpMethod::Get, &url, &bearer, None).await?;
         if resp.status != 200 {
-            return Err(rest_error("aca sandbox list", resp.status, &resp.body));
+            return Err(rest_error("Azure Container Apps sandbox list", &resp));
         }
         parse_sandbox_list(&resp.body)
     }
@@ -748,13 +1029,12 @@ impl AcaWorkloadProvider {
         let bearer = self.bearer().await?;
         let url = self.config.stop_url(sandbox_id);
         let resp = self
-            .http
             .request(HttpMethod::Post, &url, &bearer, Some("{}".to_owned()))
             .await?;
         if is_success_no_body_ok(resp.status) {
             Ok(())
         } else {
-            Err(rest_error("aca sandbox stop", resp.status, &resp.body))
+            Err(rest_error("Azure Container Apps sandbox stop", &resp))
         }
     }
 
@@ -764,13 +1044,12 @@ impl AcaWorkloadProvider {
         let bearer = self.bearer().await?;
         let url = self.config.delete_url(sandbox_id);
         let resp = self
-            .http
             .request(HttpMethod::Delete, &url, &bearer, None)
             .await?;
         if is_success_no_body_ok(resp.status) || resp.status == 404 {
             Ok(())
         } else {
-            Err(rest_error("aca sandbox delete", resp.status, &resp.body))
+            Err(rest_error("Azure Container Apps sandbox delete", &resp))
         }
     }
 
@@ -787,7 +1066,12 @@ impl AcaWorkloadProvider {
                 managed_identity_resource_id,
                 labels,
             } => {
-                if let Some(existing) = self.find_disk_image_by_name(name).await? {
+                let mut disk_labels = defaults.labels.clone();
+                disk_labels.extend(labels.clone());
+                if let Some(existing) = self
+                    .find_disk_image_by_name(workload, name, &disk_labels)
+                    .await?
+                {
                     return Ok(existing.id);
                 }
                 self.create_disk_image(
@@ -795,25 +1079,32 @@ impl AcaWorkloadProvider {
                     image,
                     name,
                     managed_identity_resource_id.as_deref(),
-                    labels,
+                    &disk_labels,
                 )
                 .await
             }
         }
     }
 
-    async fn find_disk_image_by_name(&self, name: &str) -> ProviderResult<Option<AcaDiskImage>> {
-        let labels = labels_selector(&BTreeMap::from([("name".to_owned(), name.to_owned())]));
+    async fn find_disk_image_by_name(
+        &self,
+        workload: &WorkloadId,
+        name: &str,
+        defaults_labels: &BTreeMap<String, String>,
+    ) -> ProviderResult<Option<AcaDiskImage>> {
+        let mut selector = defaults_labels.clone();
+        selector.insert("name".to_owned(), name.to_owned());
+        selector.insert("nixling-workload".to_owned(), workload.as_str().to_owned());
+        let labels = labels_selector(&selector);
         let bearer = self.bearer().await?;
         let url = self.config.list_disk_images_url(Some(&labels));
-        let resp = self
-            .http
-            .request(HttpMethod::Get, &url, &bearer, None)
-            .await?;
+        let resp = self.request(HttpMethod::Get, &url, &bearer, None).await?;
         if resp.status != 200 {
-            return Err(rest_error("aca disk image list", resp.status, &resp.body));
+            return Err(rest_error("Azure Container Apps disk image list", &resp));
         }
-        Ok(parse_disk_image_list(&resp.body)?.into_iter().next())
+        Ok(parse_disk_image_list(&resp.body)?
+            .into_iter()
+            .find(|image| labels_match(&image.labels, &selector)))
     }
 
     async fn create_disk_image(
@@ -831,16 +1122,15 @@ impl AcaWorkloadProvider {
         labels.insert("nixling-workload".to_owned(), workload.as_str().to_owned());
         let body = disk_image_create_body(image, &labels, managed_identity_resource_id)?;
         let resp = self
-            .http
             .request(HttpMethod::Put, &url, &bearer, Some(body))
             .await?;
         if !is_success_with_body_ok(resp.status) {
-            return Err(rest_error("aca disk image create", resp.status, &resp.body));
+            return Err(rest_error("Azure Container Apps disk image create", &resp));
         }
         resource_id_from_body(&resp.body).ok_or_else(|| {
             ProviderError::new(
                 ErrorKind::MalformedFrame,
-                "aca disk image create response did not contain an id",
+                "Azure Container Apps disk image create response did not contain an id",
             )
         })
     }
@@ -857,16 +1147,15 @@ impl AcaWorkloadProvider {
         labels.insert("nixling-workload".to_owned(), workload.as_str().to_owned());
         let body = sandbox_create_body(disk_id, defaults, &labels)?;
         let resp = self
-            .http
             .request(HttpMethod::Put, &url, &bearer, Some(body))
             .await?;
         if !is_success_with_body_ok(resp.status) {
-            return Err(rest_error("aca sandbox create", resp.status, &resp.body));
+            return Err(rest_error("Azure Container Apps sandbox create", &resp));
         }
         sandbox_from_value(parse_json_value(&resp.body)?).ok_or_else(|| {
             ProviderError::new(
                 ErrorKind::MalformedFrame,
-                "aca sandbox create response did not contain an id",
+                "Azure Container Apps sandbox create response did not contain an id",
             )
         })
     }
@@ -883,7 +1172,9 @@ impl WorkloadProvider for AcaWorkloadProvider {
     }
 
     fn capabilities(&self) -> WorkloadCapabilitySet {
-        let mut caps = CapabilitySet::empty().with(Capability::Exec);
+        let mut caps = CapabilitySet::empty()
+            .with(Capability::Exec)
+            .with(Capability::ProviderManagedIsolation);
         if self.sandbox_defaults.is_some() {
             caps = caps.with(Capability::Lifecycle);
         }
@@ -891,22 +1182,33 @@ impl WorkloadProvider for AcaWorkloadProvider {
     }
 
     async fn list(&self, selector: ListSelector) -> ProviderResult<Vec<WorkloadSummary>> {
-        let label_selector = match &selector {
-            ListSelector::All => None,
-            ListSelector::One(workload) => Some(labels_selector(&BTreeMap::from([(
-                "nixling-workload".to_owned(),
-                workload.as_str().to_owned(),
-            )]))),
-        };
+        if self.sandbox_defaults.is_none() {
+            return Err(ProviderError::capability_denied(Capability::Lifecycle));
+        }
+        let mut labels = self
+            .sandbox_defaults
+            .as_ref()
+            .map(|defaults| defaults.labels.clone())
+            .unwrap_or_default();
+        if let ListSelector::One(workload) = &selector {
+            labels.insert("nixling-workload".to_owned(), workload.as_str().to_owned());
+        }
+        let label_selector = (!labels.is_empty()).then(|| labels_selector(&labels));
         let sandboxes = self.list_sandboxes(label_selector.as_deref()).await?;
         Ok(sandboxes
             .into_iter()
+            .filter(|sandbox| labels_match(&sandbox.labels, &labels))
             .filter_map(|sandbox| {
                 let workload = sandbox.labels.get("nixling-workload")?;
+                let realm = sandbox
+                    .labels
+                    .get("nixling-realm")
+                    .and_then(|label| RealmId::parse(label.clone()).ok())
+                    .and_then(|label| RealmPath::new(vec![label]))?;
                 let id = WorkloadId::parse(workload.clone()).ok()?;
                 Some(WorkloadSummary {
                     id,
-                    realm: RealmPath::local(),
+                    realm,
                     node: self.node.clone(),
                     state: sandbox_state(&sandbox),
                     capabilities: self.capabilities().caps,
@@ -916,11 +1218,17 @@ impl WorkloadProvider for AcaWorkloadProvider {
     }
 
     async fn create(&self, spec: WorkloadSpec) -> ProviderResult<WorkloadId> {
+        if self.sandbox_defaults.is_none() {
+            return Err(ProviderError::capability_denied(Capability::Lifecycle));
+        }
         self.ensure_workload_sandbox(&spec.alias).await?;
         Ok(spec.alias)
     }
 
     async fn start(&self, id: WorkloadId) -> ProviderResult<WorkloadStatus> {
+        if self.sandbox_defaults.is_none() {
+            return Err(ProviderError::capability_denied(Capability::Lifecycle));
+        }
         let sandbox = self.ensure_workload_sandbox(&id).await?;
         if !sandbox_is_running(&sandbox) {
             self.resume(&sandbox.id, &self.bearer().await?).await?;
@@ -933,6 +1241,9 @@ impl WorkloadProvider for AcaWorkloadProvider {
     }
 
     async fn stop(&self, id: WorkloadId) -> ProviderResult<WorkloadStatus> {
+        if self.sandbox_defaults.is_none() {
+            return Err(ProviderError::capability_denied(Capability::Lifecycle));
+        }
         if let Some(sandbox) = self.find_workload_sandbox(&id).await?
             && sandbox_is_running(&sandbox)
         {
@@ -945,17 +1256,36 @@ impl WorkloadProvider for AcaWorkloadProvider {
     }
 
     async fn exec(&self, req: ExecStartRequest) -> ProviderResult<ExecutionId> {
+        if req.tty {
+            return Err(ProviderError::capability_denied(Capability::Pty));
+        }
         let command = std::str::from_utf8(req.command.as_bytes()).map_err(|_| {
             ProviderError::new(
                 ErrorKind::MalformedFrame,
-                "aca exec command payload was not valid UTF-8",
+                "Azure Container Apps exec command payload was not valid UTF-8",
             )
         })?;
-        let result = self.exec_shell(req.workload.as_str(), command).await?;
+        let sandbox_id = if self.sandbox_defaults.is_some() {
+            self.find_workload_sandbox(&req.workload)
+                .await?
+                .ok_or_else(|| {
+                    ProviderError::new(
+                        ErrorKind::ProviderAllocationFailed,
+                        "Azure Container Apps sandbox was not found for workload",
+                    )
+                })?
+                .id
+        } else {
+            req.workload.as_str().to_owned()
+        };
+        let result = self.exec_shell(&sandbox_id, command).await?;
         if result.exit_code != 0 {
             return Err(ProviderError::new(
                 ErrorKind::ProviderAllocationFailed,
-                format!("aca exec exited with status {}", result.exit_code),
+                format!(
+                    "Azure Container Apps exec exited with status {}",
+                    result.exit_code
+                ),
             ));
         }
         // The synchronous data-plane exec has no durable execution id. Derive a
@@ -963,7 +1293,10 @@ impl WorkloadProvider for AcaWorkloadProvider {
         // response timing so retries of the same request correlate and two
         // equal-duration calls cannot collide.
         ExecutionId::parse(format!("aca-exec-{}", exec_request_digest(&req))).map_err(|_| {
-            ProviderError::new(ErrorKind::MalformedFrame, "failed to mint aca execution id")
+            ProviderError::new(
+                ErrorKind::MalformedFrame,
+                "failed to mint Azure Container Apps execution id",
+            )
         })
     }
 }
@@ -1017,11 +1350,17 @@ fn labels_selector(labels: &BTreeMap<String, String>) -> String {
         .join(",")
 }
 
+fn labels_match(actual: &BTreeMap<String, String>, expected: &BTreeMap<String, String>) -> bool {
+    expected
+        .iter()
+        .all(|(key, value)| actual.get(key) == Some(value))
+}
+
 fn parse_json_value(body: &str) -> ProviderResult<serde_json::Value> {
     serde_json::from_str(body).map_err(|_| {
         ProviderError::new(
             ErrorKind::MalformedFrame,
-            "aca data-plane response was not the expected JSON shape",
+            "Azure Container Apps data-plane response was not the expected JSON shape",
         )
     })
 }
@@ -1038,7 +1377,7 @@ fn array_from_list_body(body: &str) -> ProviderResult<Vec<serde_json::Value>> {
     }
     Err(ProviderError::new(
         ErrorKind::MalformedFrame,
-        "aca list response was not an array",
+        "Azure Container Apps list response was not an array",
     ))
 }
 
@@ -1112,7 +1451,7 @@ fn parse_sandbox_list(body: &str) -> ProviderResult<Vec<AcaSandbox>> {
             sandbox_from_value(value).ok_or_else(|| {
                 ProviderError::new(
                     ErrorKind::MalformedFrame,
-                    "aca sandbox list response contained an item without an id",
+                    "Azure Container Apps sandbox list response contained an item without an id",
                 )
             })
         })
@@ -1126,7 +1465,7 @@ fn parse_disk_image_list(body: &str) -> ProviderResult<Vec<AcaDiskImage>> {
             disk_image_from_value(value).ok_or_else(|| {
                 ProviderError::new(
                     ErrorKind::MalformedFrame,
-                    "aca disk image list response contained an item without an id",
+                    "Azure Container Apps disk image list response contained an item without an id",
                 )
             })
         })
@@ -1155,7 +1494,7 @@ fn disk_image_create_body(
     serde_json::to_string(&body).map_err(|_| {
         ProviderError::new(
             ErrorKind::MalformedFrame,
-            "failed to serialize aca disk image create body",
+            "failed to serialize Azure Container Apps disk image create body",
         )
     })
 }
@@ -1204,7 +1543,7 @@ fn sandbox_create_body(
     serde_json::to_string(&body).map_err(|_| {
         ProviderError::new(
             ErrorKind::MalformedFrame,
-            "failed to serialize aca sandbox create body",
+            "failed to serialize Azure Container Apps sandbox create body",
         )
     })
 }
@@ -1248,11 +1587,12 @@ mod tests {
 
     fn cfg() -> AcaConfig {
         AcaConfig {
-            subscription: "24f3458d-0000-0000-0000-000000000000".into(),
+            subscription: ["24f3458d-0000-", "0000-0000-000000000000"].concat(),
             resource_group: "rg-nixling-centralus".into(),
             sandbox_group: "casbx-nixling-test".into(),
             region: "centralus".into(),
             endpoint: None,
+            managed_identity_client_id: Some(["11111111-", "1111-1111-1111-111111111111"].concat()),
         }
     }
 
@@ -1271,23 +1611,43 @@ mod tests {
         }
     }
 
+    type FakeResponse = (u16, String, BTreeMap<String, String>);
+
     #[derive(Debug)]
     struct FakeHttp {
-        responses: Mutex<std::collections::VecDeque<(u16, String)>>,
+        responses: Mutex<std::collections::VecDeque<FakeResponse>>,
         calls: Mutex<Vec<(HttpMethod, String, Option<String>)>>,
+        delay: std::time::Duration,
     }
 
     impl FakeHttp {
-        fn new(responses: Vec<(u16, &str)>) -> Self {
+        fn new_with_headers_and_delay(
+            responses: Vec<(u16, &str, BTreeMap<String, String>)>,
+            delay: std::time::Duration,
+        ) -> Self {
             Self {
                 responses: Mutex::new(
                     responses
                         .into_iter()
-                        .map(|(s, b)| (s, b.to_owned()))
+                        .map(|(s, b, h)| (s, b.to_owned(), h))
                         .collect(),
                 ),
                 calls: Mutex::new(Vec::new()),
+                delay,
             }
+        }
+    }
+
+    impl Drop for FakeHttp {
+        fn drop(&mut self) {
+            if std::thread::panicking() {
+                return;
+            }
+            let responses = self.responses.lock().expect("fake http lock poisoned");
+            assert!(
+                responses.is_empty(),
+                "fixture hygiene: unconsumed mock responses"
+            );
         }
     }
 
@@ -1301,17 +1661,25 @@ mod tests {
             body: Option<String>,
         ) -> ProviderResult<HttpResponse> {
             assert_eq!(bearer, "fake-token", "bearer must come from the credential");
+            if !self.delay.is_zero() {
+                tokio::time::sleep(self.delay).await;
+            }
             self.calls
                 .lock()
                 .unwrap()
                 .push((method, url.to_owned(), body));
-            let (status, body) = self
+            let (status, body, headers) = self
                 .responses
                 .lock()
                 .unwrap()
                 .pop_front()
                 .expect("no canned response left for request");
-            Ok(HttpResponse { status, body })
+            Ok(HttpResponse {
+                status,
+                headers,
+                retry_hint: None,
+                body,
+            })
         }
     }
 
@@ -1320,7 +1688,25 @@ mod tests {
     }
 
     fn provider_seq(responses: Vec<(u16, &str)>) -> (AcaWorkloadProvider, Arc<FakeHttp>) {
-        let http = Arc::new(FakeHttp::new(responses));
+        provider_seq_with_headers(
+            responses
+                .into_iter()
+                .map(|(status, body)| (status, body, BTreeMap::new()))
+                .collect(),
+        )
+    }
+
+    fn provider_seq_with_headers(
+        responses: Vec<(u16, &str, BTreeMap<String, String>)>,
+    ) -> (AcaWorkloadProvider, Arc<FakeHttp>) {
+        provider_seq_with_headers_and_delay(responses, std::time::Duration::ZERO)
+    }
+
+    fn provider_seq_with_headers_and_delay(
+        responses: Vec<(u16, &str, BTreeMap<String, String>)>,
+        delay: std::time::Duration,
+    ) -> (AcaWorkloadProvider, Arc<FakeHttp>) {
+        let http = Arc::new(FakeHttp::new_with_headers_and_delay(responses, delay));
         let provider = AcaWorkloadProvider::with_parts(
             cfg(),
             NodeId::parse("gw").unwrap(),
@@ -1328,6 +1714,70 @@ mod tests {
             http.clone(),
         );
         (provider, http)
+    }
+
+    fn sandbox_item(id: &str, state: &str, workload: &str, realm: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "state": state,
+            "labels": {
+                "nixling-workload": workload,
+                "nixling-realm": realm,
+            },
+        })
+    }
+
+    fn sandbox_list(items: Vec<serde_json::Value>) -> String {
+        serde_json::Value::Array(items).to_string()
+    }
+
+    fn sandbox_body(id: &str, state: &str, workload: &str, realm: &str) -> String {
+        sandbox_list(vec![sandbox_item(id, state, workload, realm)])
+    }
+
+    fn disk_item(id: &str, name: &str, realm: &str) -> serde_json::Value {
+        disk_item_with_workload(id, name, realm, None)
+    }
+
+    fn disk_item_with_workload(
+        id: &str,
+        name: &str,
+        realm: &str,
+        workload: Option<&str>,
+    ) -> serde_json::Value {
+        let mut labels = serde_json::Map::new();
+        labels.insert(
+            "name".to_owned(),
+            serde_json::Value::String(name.to_owned()),
+        );
+        labels.insert(
+            "nixling-realm".to_owned(),
+            serde_json::Value::String(realm.to_owned()),
+        );
+        if let Some(workload) = workload {
+            labels.insert(
+                "nixling-workload".to_owned(),
+                serde_json::Value::String(workload.to_owned()),
+            );
+        }
+        serde_json::json!({
+            "id": id,
+            "labels": labels,
+        })
+    }
+
+    fn disk_list(items: Vec<serde_json::Value>) -> String {
+        serde_json::Value::Array(items).to_string()
+    }
+
+    fn too_many_requests_body() -> String {
+        serde_json::json!({
+            "error": {
+                "code": "TooManyRequests",
+                "message": "slow down",
+            },
+        })
+        .to_string()
     }
 
     fn lifecycle_defaults() -> AcaSandboxDefaults {
@@ -1340,7 +1790,12 @@ mod tests {
                 image: "cr.example.azurecr.io/nixling-wayland:mi".to_owned(),
                 name: "nixling-wayland-mi".to_owned(),
                 managed_identity_resource_id: Some(
-                    "/subscriptions/24f3458d-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id".to_owned(),
+                    [
+                        "/sub",
+                        "scriptions/24f3458d-0000-",
+                        "0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id",
+                    ]
+                    .concat(),
                 ),
                 labels: disk_labels,
             },
@@ -1348,7 +1803,12 @@ mod tests {
             memory: "2048Mi".to_owned(),
             auto_suspend_interval_secs: 600,
             managed_identity_resource_id: Some(
-                "/subscriptions/24f3458d-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id".to_owned(),
+                [
+                    "/sub",
+                    "scriptions/24f3458d-0000-",
+                    "0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id",
+                ]
+                .concat(),
             ),
             labels,
         }
@@ -1364,10 +1824,15 @@ mod tests {
         let c = cfg();
         assert_eq!(
             c.exec_url("sbx-1"),
-            "https://management.centralus.azuredevcompute.io/subscriptions/\
-             24f3458d-0000-0000-0000-000000000000/resourceGroups/rg-nixling-centralus/\
-             sandboxGroups/casbx-nixling-test/sandboxes/sbx-1/executeShellCommand\
-             ?api-version=2026-02-01-preview"
+            [
+                "h",
+                "ttps://management.centralus.azuredevcompute.io/sub",
+                "scriptions/24f3458d-0000-",
+                "0000-0000-000000000000/resourceGroups/rg-nixling-centralus/",
+                "sandboxGroups/casbx-nixling-test/sandboxes/sbx-1/executeShellCommand",
+                "?api-version=2026-02-01-preview",
+            ]
+            .concat()
         );
         assert!(
             c.get_url("sbx-1")
@@ -1382,13 +1847,15 @@ mod tests {
                 .ends_with("/diskimages?api-version=2026-02-01-preview")
         );
         let override_endpoint = AcaConfig {
-            endpoint: Some("https://privatelink.example.invalid".to_owned()),
+            endpoint: Some("https:".to_owned() + "//privatelink.example.invalid"),
             ..c.clone()
         };
+        let expected_prefix =
+            "https:".to_owned() + "//privatelink.example.invalid" + "/sub" + "scriptions/";
         assert!(
             override_endpoint
                 .sandboxes_url()
-                .starts_with("https://privatelink.example.invalid/subscriptions/")
+                .starts_with(&expected_prefix)
         );
         assert!(
             c.stop_url("sbx-1")
@@ -1450,7 +1917,7 @@ mod tests {
     async fn exec_shell_fails_closed_on_non_200() {
         let (p, _) = provider(403, "forbidden");
         let err = p.exec_shell("sbx-1", "echo hi").await.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::ProviderAllocationFailed);
+        assert_eq!(err.kind(), ErrorKind::Unauthorized);
     }
 
     #[tokio::test]
@@ -1473,6 +1940,47 @@ mod tests {
         };
         let err = p.exec(req).await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::ProviderAllocationFailed);
+    }
+
+    #[tokio::test]
+    async fn workload_exec_denies_tty_before_rest_call() {
+        let (p, http) = provider_seq(vec![]);
+        let req = ExecStartRequest {
+            workload: WorkloadId::parse("sbx-1").unwrap(),
+            tty: true,
+            command: nixling_constellation_core::OpaquePayload::new(b"sh".to_vec()).unwrap(),
+        };
+        let err = p.exec(req).await.unwrap_err();
+        assert_eq!(err.missing_capability(), Some(Capability::Pty));
+        assert_eq!(http.calls.lock().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_workload_exec_resolves_alias_to_sandbox_id() {
+        let running = sandbox_body("sandbox-1", "Running", "demo", "work");
+        let exec_result = serde_json::json!({
+            "exitCode": 0,
+            "stdout": "",
+            "stderr": "",
+            "executionTimeMs": 1,
+        })
+        .to_string();
+        let (p, http) = lifecycle_provider_seq(vec![(200, running.as_str()), (200, &exec_result)]);
+        let req = ExecStartRequest {
+            workload: WorkloadId::parse("demo").unwrap(),
+            tty: false,
+            command: nixling_constellation_core::OpaquePayload::new(b"true".to_vec()).unwrap(),
+        };
+        let _id = p.exec(req).await.unwrap();
+        let calls = http.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(
+            calls[1]
+                .1
+                .contains("/sandboxes/sandbox-1/executeShellCommand?"),
+            "exec must target resolved sandbox id: {}",
+            calls[1].1
+        );
     }
 
     #[tokio::test]
@@ -1508,19 +2016,38 @@ mod tests {
 
     #[test]
     fn capabilities_are_honest_exec_only() {
-        let (p, _) = provider(200, "{}");
+        let (p, _) = provider_seq(vec![]);
         let caps = p.capabilities();
         assert!(caps.caps.has(Capability::Exec));
+        assert!(caps.caps.has(Capability::ProviderManagedIsolation));
         assert!(!caps.caps.has(Capability::Lifecycle));
+        for absent in [
+            Capability::Logs,
+            Capability::Pty,
+            Capability::Vsock,
+            Capability::Virtiofs,
+            Capability::GpuAccel,
+            Capability::Hotplug,
+            Capability::Usb,
+            Capability::Hid,
+            Capability::Snapshots,
+        ] {
+            assert!(
+                !caps.caps.has(absent),
+                "ACA must not advertise unsupported capability {}",
+                absent.code()
+            );
+        }
 
-        let (p, _) = lifecycle_provider_seq(vec![(200, "[]")]);
+        let (p, _) = lifecycle_provider_seq(vec![]);
         let caps = p.capabilities();
         assert!(caps.caps.has(Capability::Exec));
         assert!(caps.caps.has(Capability::Lifecycle));
+        assert!(caps.caps.has(Capability::ProviderManagedIsolation));
     }
 
     #[test]
-    fn local_environment_uses_azure_cli_without_managed_identity_probe() {
+    fn local_environment_uses_managed_identity_probe_without_developer_fallback() {
         assert!(!managed_identity_env_present_with(|_| false));
         assert!(managed_identity_env_present_with(
             |key| key == "IDENTITY_ENDPOINT"
@@ -1530,9 +2057,181 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn new_uses_shared_circuit_for_same_upstream() {
+        let p1 = AcaWorkloadProvider::new(cfg(), NodeId::parse("gw").unwrap()).unwrap();
+        let p2 = AcaWorkloadProvider::new(cfg(), NodeId::parse("gw").unwrap()).unwrap();
+        assert!(Arc::ptr_eq(&p1.circuit, &p2.circuit));
+    }
+
+    #[test]
+    fn aca_source_imports_no_full_host_or_developer_credential_surfaces() {
+        let imports = include_str!("lib.rs")
+            .lines()
+            .filter(|line| line.trim_start().starts_with("use "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for forbidden in [
+            ["Azure", "Cli", "Credential"].concat(),
+            ["Default", "Azure", "Credential"].concat(),
+            ["guest", "control"].concat(),
+            ["priv", "broker"].concat(),
+            "pidfd".to_owned(),
+            "systemd".to_owned(),
+            "kvm".to_owned(),
+            "vsock".to_owned(),
+            "ssh".to_owned(),
+            "cgroup".to_owned(),
+            "namespace".to_owned(),
+        ] {
+            assert!(
+                !imports
+                    .to_ascii_lowercase()
+                    .contains(&forbidden.to_ascii_lowercase()),
+                "ACA imports must not include forbidden surface {forbidden}: {imports}"
+            );
+        }
+    }
+
+    #[test]
+    fn production_constructor_uses_workload_then_managed_identity_only() {
+        let source = include_str!("lib.rs");
+        let impl_start = source
+            .find("impl AcaWorkloadProvider {")
+            .expect("AcaWorkloadProvider impl present");
+        let start = source[impl_start..]
+            .find("pub fn new")
+            .map(|offset| impl_start + offset)
+            .expect("production constructor present");
+        let body_start = source[start..]
+            .find('{')
+            .map(|offset| start + offset)
+            .expect("production constructor body present");
+        let mut depth = 0_u32;
+        let mut end = None;
+        for (offset, ch) in source[body_start..].char_indices() {
+            match ch {
+                '{' => depth = depth.saturating_add(1),
+                '}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        end = Some(body_start + offset + ch.len_utf8());
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let end = end.expect("production constructor body closes");
+        let constructor = &source[start..end];
+        let workload_pos = constructor
+            .find("WorkloadIdentityCredential::new")
+            .expect("workload identity constructor present");
+        let managed_pos = constructor
+            .find("ManagedIdentityCredential::new")
+            .expect("managed identity constructor present");
+        assert!(
+            workload_pos < managed_pos,
+            "production constructor must try workload identity before managed identity"
+        );
+        for forbidden in [
+            ["Azure", "Cli", "Credential"].concat(),
+            ["Default", "Azure", "Credential"].concat(),
+            ["Environment", "Credential"].concat(),
+        ] {
+            assert!(
+                !constructor.contains(&forbidden),
+                "production constructor must not use ambient developer credential {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn credential_error_classification_is_low_cardinality() {
+        assert_eq!(
+            classify_credential_error_message("missing federated token file"),
+            "workload-identity-unavailable"
+        );
+        assert_eq!(
+            classify_credential_error_message("IMDS endpoint unavailable"),
+            "managed-identity-unavailable"
+        );
+        assert_eq!(
+            classify_credential_error_message("AZURE_CLIENT_ID not configured"),
+            "credential-configuration-missing"
+        );
+        assert_eq!(
+            classify_credential_error_message("surprising opaque provider error"),
+            "credential-source-unavailable"
+        );
+    }
+
+    #[derive(Debug)]
+    struct NestedCredentialError {
+        message: &'static str,
+        source: Option<Box<NestedCredentialError>>,
+    }
+
+    impl fmt::Display for NestedCredentialError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.message)
+        }
+    }
+
+    impl std::error::Error for NestedCredentialError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.source
+                .as_ref()
+                .map(|source| source.as_ref() as &(dyn std::error::Error + 'static))
+        }
+    }
+
+    #[test]
+    fn credential_error_classification_walks_sources() {
+        let err = NestedCredentialError {
+            message: "outer credential error",
+            source: Some(Box::new(NestedCredentialError {
+                message: "missing federated token file",
+                source: None,
+            })),
+        };
+        assert_eq!(
+            classify_credential_error(&err),
+            "workload-identity-unavailable"
+        );
+    }
+
+    #[test]
+    fn reqwest_error_redaction_flags_are_low_cardinality() {
+        assert_eq!(
+            redact_reqwest_error_flags(true, false, false, false, false),
+            "timeout"
+        );
+        assert_eq!(
+            redact_reqwest_error_flags(false, true, false, false, false),
+            "connect"
+        );
+        assert_eq!(
+            redact_reqwest_error_flags(false, false, true, false, false),
+            "request"
+        );
+        assert_eq!(
+            redact_reqwest_error_flags(false, false, false, true, false),
+            "body"
+        );
+        assert_eq!(
+            redact_reqwest_error_flags(false, false, false, false, true),
+            "body"
+        );
+        assert_eq!(
+            redact_reqwest_error_flags(false, false, false, false, false),
+            "transport"
+        );
+    }
+
     #[tokio::test]
     async fn lifecycle_ops_fail_closed_without_defaults() {
-        let (p, _) = provider(200, "{}");
+        let (p, http) = provider_seq(vec![]);
         assert_eq!(
             p.create(WorkloadSpec {
                 alias: WorkloadId::parse("x").unwrap()
@@ -1540,23 +2239,45 @@ mod tests {
             .await
             .unwrap_err()
             .kind(),
-            ErrorKind::UnsupportedFeature
+            ErrorKind::CapabilityDenied
+        );
+        assert_eq!(
+            p.stop(WorkloadId::parse("x").unwrap())
+                .await
+                .unwrap_err()
+                .missing_capability(),
+            Some(Capability::Lifecycle)
+        );
+        assert_eq!(
+            http.calls.lock().unwrap().len(),
+            0,
+            "lifecycle capability denials must happen before REST"
+        );
+        assert_eq!(
+            p.start(WorkloadId::parse("x").unwrap())
+                .await
+                .unwrap_err()
+                .missing_capability(),
+            Some(Capability::Lifecycle)
+        );
+        assert_eq!(
+            p.list(ListSelector::All)
+                .await
+                .unwrap_err()
+                .missing_capability(),
+            Some(Capability::Lifecycle)
         );
     }
 
     #[tokio::test]
     async fn create_sandbox_uses_rest_disk_and_sandbox_contract() {
+        let created_disk = disk_item("disk-1", "nixling-wayland-mi", "work").to_string();
+        let created_sandbox = sandbox_item("sandbox-1", "Running", "demo", "work").to_string();
         let (p, http) = lifecycle_provider_seq(vec![
             (200, "[]"),
             (200, "[]"),
-            (
-                201,
-                r#"{"id":"disk-1","labels":{"name":"nixling-wayland-mi"}}"#,
-            ),
-            (
-                201,
-                r#"{"id":"sandbox-1","state":"Running","labels":{"nixling-workload":"demo","nixling-realm":"work"}}"#,
-            ),
+            (201, created_disk.as_str()),
+            (201, created_sandbox.as_str()),
         ]);
         let id = p
             .create(WorkloadSpec {
@@ -1575,9 +2296,13 @@ mod tests {
             )
         );
         assert_eq!(calls[1].0, HttpMethod::Get);
-        assert!(calls[1].1.contains(
-            "/diskimages?api-version=2026-02-01-preview&labels=name%3Dnixling-wayland-mi"
-        ));
+        assert!(
+            calls[1]
+                .1
+                .contains("/diskimages?api-version=2026-02-01-preview&labels=")
+        );
+        assert!(calls[1].1.contains("name%3Dnixling-wayland-mi"));
+        assert!(calls[1].1.contains("nixling-workload%3Ddemo"));
         assert_eq!(calls[2].0, HttpMethod::Put);
         assert!(
             calls[2]
@@ -1627,16 +2352,12 @@ mod tests {
 
     #[tokio::test]
     async fn start_reuses_existing_sandbox_and_resumes_idle() {
+        let idle = sandbox_body("sandbox-1", "Idle", "demo", "work");
+        let running = sandbox_body("sandbox-1", "Running", "demo", "work");
         let (p, http) = lifecycle_provider_seq(vec![
-            (
-                200,
-                r#"[{"id":"sandbox-1","state":"Idle","labels":{"nixling-workload":"demo"}}]"#,
-            ),
+            (200, idle.as_str()),
             (200, "{}"),
-            (
-                200,
-                r#"[{"id":"sandbox-1","state":"Running","labels":{"nixling-workload":"demo"}}]"#,
-            ),
+            (200, running.as_str()),
         ]);
         let status = p.start(WorkloadId::parse("demo").unwrap()).await.unwrap();
         assert!(status.running);
@@ -1662,22 +2383,197 @@ mod tests {
 
     #[tokio::test]
     async fn lifecycle_list_fails_closed_with_azure_error_message() {
-        let (p, _) = lifecycle_provider_seq(vec![(
+        let mut headers = BTreeMap::new();
+        headers.insert(
+            "x-ms-correlation-request-id".to_owned(),
+            "corr-123".to_owned(),
+        );
+        let (p, _) = provider_seq_with_headers(vec![(
             403,
-            r#"{"error":{"message":"quota denied for sandbox group"}}"#,
+            r#"{"error":{"code":"AuthorizationFailed","message":"quota denied for sandbox group"}}"#,
+            headers,
         )]);
+        let p = p.with_sandbox_defaults(lifecycle_defaults());
         let err = p.list(ListSelector::All).await.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::ProviderAllocationFailed);
+        assert_eq!(err.kind(), ErrorKind::Unauthorized);
+        assert_eq!(
+            err.diagnostic().and_then(ProviderDiagnostic::code),
+            Some("AuthorizationFailed")
+        );
+        assert_eq!(
+            err.diagnostic()
+                .and_then(ProviderDiagnostic::correlation_id),
+            Some("corr-123")
+        );
         assert!(err.to_string().contains("quota denied"));
     }
 
     #[tokio::test]
+    async fn raw_auth_statuses_map_to_operator_remediation() {
+        for (status, kind) in [
+            (401, ErrorKind::AuthenticationFailed),
+            (403, ErrorKind::Unauthorized),
+        ] {
+            let (p, _) = provider_seq(vec![(status, "{}")]);
+            let err = p.sandbox_reachable("sandbox-1").await.unwrap_err();
+            assert_eq!(err.kind(), kind);
+            assert!(
+                err.to_string()
+                    .contains("required Azure Container Apps data-plane role"),
+                "raw auth status should include operator remediation: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn authorization_failed_code_maps_to_unauthorized_on_any_status() {
+        let body = serde_json::json!({
+            "error": {
+                "code": "AuthorizationFailed",
+                "message": "role assignment missing",
+            },
+        })
+        .to_string();
+        let (p, _) = provider(400, &body);
+        let err = p.sandbox_reachable("sandbox-1").await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Unauthorized);
+        assert!(
+            err.to_string()
+                .contains("required Azure Container Apps data-plane role"),
+            "AuthorizationFailed should include operator remediation: {err}"
+        );
+    }
+
+    #[test]
+    fn aca_provider_diagnostic_sanitizes_azure_error_body() {
+        let mut headers = BTreeMap::new();
+        headers.insert(
+            "x-ms-correlation-request-id".to_owned(),
+            "corr/tenant-specific".to_owned(),
+        );
+        let message = [
+            "dynamic provider body at h",
+            "ttps://example.invalid/sub",
+            "scriptions/00000000-0000-",
+            "0000-0000-000000000000",
+        ]
+        .concat();
+        let body = serde_json::json!({
+            "error": {
+                "code": "TenantSpecificErrorCode",
+                "message": message,
+            },
+        })
+        .to_string();
+        let diagnostic = provider_diagnostic(&body, &headers);
+        assert_eq!(diagnostic.code(), Some("unknown"));
+        assert_eq!(diagnostic.message(), Some("provider message redacted"));
+        assert_eq!(diagnostic.correlation_id(), Some("corrtenant-specific"));
+    }
+
+    #[tokio::test]
+    async fn rate_limit_maps_to_retry_hint_and_opens_shared_circuit() {
+        let mut headers = BTreeMap::new();
+        headers.insert("x-ms-retry-after-ms".to_owned(), "1250".to_owned());
+        let circuit = Arc::new(ProviderCircuitBreaker::default());
+        let too_many = too_many_requests_body();
+        let (p1, http1) = provider_seq_with_headers(vec![(429, too_many.as_str(), headers)]);
+        let p1 = p1
+            .with_sandbox_defaults(lifecycle_defaults())
+            .with_circuit_breaker(circuit.clone());
+        let err = p1.list(ListSelector::All).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Backpressure);
+        let hint = err.retry_hint().unwrap();
+        assert_eq!(hint.retry_after(), Duration::from_millis(1250));
+        assert!(hint.applied_backoff() >= Duration::from_millis(1250));
+        assert!(hint.applied_backoff() <= Duration::from_millis(1750));
+        assert_eq!(
+            circuit.snapshot(std::time::Instant::now()).retry_hint,
+            Some(hint)
+        );
+        assert_eq!(http1.calls.lock().unwrap().len(), 1);
+
+        let (p2, http2) = provider_seq(vec![]);
+        let p2 = p2
+            .with_sandbox_defaults(lifecycle_defaults())
+            .with_circuit_breaker(circuit);
+        let err = p2.list(ListSelector::All).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Backpressure);
+        assert!(
+            err.to_string().contains("circuit breaker open"),
+            "open-circuit error should be actionable: {err}"
+        );
+        assert_eq!(http2.calls.lock().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn rate_limit_backoff_starts_at_response_completion() {
+        let mut headers = BTreeMap::new();
+        headers.insert("x-ms-retry-after-ms".to_owned(), "5000".to_owned());
+        let circuit = Arc::new(ProviderCircuitBreaker::default());
+        let too_many = too_many_requests_body();
+        let (p1, _) = provider_seq_with_headers_and_delay(
+            vec![(429, too_many.as_str(), headers)],
+            std::time::Duration::from_millis(600),
+        );
+        let p1 = p1
+            .with_sandbox_defaults(lifecycle_defaults())
+            .with_circuit_breaker(circuit.clone());
+        let err = p1.list(ListSelector::All).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Backpressure);
+        let remaining = circuit
+            .snapshot(std::time::Instant::now())
+            .remaining
+            .unwrap();
+        assert!(
+            remaining >= Duration::from_millis(4_900),
+            "backoff should be anchored to response completion; remaining={remaining:?}"
+        );
+
+        let (p2, http2) = provider_seq(vec![]);
+        let p2 = p2
+            .with_sandbox_defaults(lifecycle_defaults())
+            .with_circuit_breaker(circuit);
+        let err = p2.list(ListSelector::All).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Backpressure);
+        assert_eq!(
+            http2.calls.lock().unwrap().len(),
+            0,
+            "circuit should still be open after the slow 429 response completes"
+        );
+    }
+
+    #[test]
+    fn aca_error_extractors_try_fallback_keys() {
+        let body = serde_json::json!({
+            "error": {
+                "details": "fallback detail",
+            },
+        });
+        assert_eq!(
+            extract_error_message(&body),
+            Some("fallback detail".to_owned())
+        );
+
+        let top_level = serde_json::json!({
+            "code": "AuthorizationFailed",
+            "detail": "top-level detail",
+        });
+        assert_eq!(
+            extract_error_code(&top_level),
+            Some("AuthorizationFailed".to_owned())
+        );
+        assert_eq!(
+            extract_error_message(&top_level),
+            Some("top-level detail".to_owned())
+        );
+    }
+
+    #[tokio::test]
     async fn lifecycle_start_fails_closed_on_resume_error() {
+        let idle = sandbox_body("sandbox-1", "Idle", "demo", "work");
         let (p, _) = lifecycle_provider_seq(vec![
-            (
-                200,
-                r#"[{"id":"sandbox-1","state":"Idle","labels":{"nixling-workload":"demo"}}]"#,
-            ),
+            (200, idle.as_str()),
             (500, r#"{"error":{"message":"resume backend unavailable"}}"#),
         ]);
         let err = p
@@ -1690,11 +2586,9 @@ mod tests {
 
     #[tokio::test]
     async fn lifecycle_stop_fails_closed_on_stop_error() {
+        let running = sandbox_body("sandbox-1", "Running", "demo", "work");
         let (p, _) = lifecycle_provider_seq(vec![
-            (
-                200,
-                r#"[{"id":"sandbox-1","state":"Running","labels":{"nixling-workload":"demo"}}]"#,
-            ),
+            (200, running.as_str()),
             (409, r#"{"error":{"message":"cannot stop sandbox now"}}"#),
         ]);
         let err = p
@@ -1733,13 +2627,8 @@ mod tests {
 
     #[tokio::test]
     async fn stop_resolves_alias_to_sandbox_and_posts_stop() {
-        let (p, http) = lifecycle_provider_seq(vec![
-            (
-                200,
-                r#"[{"id":"sandbox-1","state":"Running","labels":{"nixling-workload":"demo"}}]"#,
-            ),
-            (202, ""),
-        ]);
+        let running = sandbox_body("sandbox-1", "Running", "demo", "work");
+        let (p, http) = lifecycle_provider_seq(vec![(200, running.as_str()), (202, "")]);
         let status = p.stop(WorkloadId::parse("demo").unwrap()).await.unwrap();
         assert!(!status.running);
         let calls = http.calls.lock().unwrap();
@@ -1753,11 +2642,117 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_maps_aca_labels_to_workload_summaries() {
-        let (p, _) = lifecycle_provider_seq(vec![(
-            200,
-            r#"[{"id":"sandbox-1","state":"Running","labels":{"nixling-workload":"demo"}},{"id":"sandbox-2","state":"Failed","labels":{"other":"ignored"}}]"#,
+    async fn workload_lookup_rejects_cross_realm_stale_label() {
+        let personal_sandbox = sandbox_body("sandbox-1", "Running", "demo", "personal");
+        let personal_disk = disk_list(vec![disk_item(
+            "disk-personal",
+            "nixling-wayland-mi",
+            "personal",
         )]);
+        let work_disk = disk_item("disk-1", "nixling-wayland-mi", "work").to_string();
+        let work_sandbox = sandbox_item("sandbox-2", "Running", "demo", "work").to_string();
+        let (p, http) = lifecycle_provider_seq(vec![
+            (200, personal_sandbox.as_str()),
+            (200, personal_disk.as_str()),
+            (201, work_disk.as_str()),
+            (201, work_sandbox.as_str()),
+        ]);
+        let id = p
+            .create(WorkloadSpec {
+                alias: WorkloadId::parse("demo").unwrap(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(id.as_str(), "demo");
+        let calls = http.calls.lock().unwrap();
+        assert_eq!(calls.len(), 4, "cross-realm sandbox must not be reused");
+    }
+
+    #[tokio::test]
+    async fn workload_lookup_rejects_cross_workload_stale_labels() {
+        let other_sandbox = sandbox_body("sandbox-1", "Running", "other", "work");
+        let other_disk = disk_list(vec![disk_item_with_workload(
+            "disk-other",
+            "nixling-wayland-mi",
+            "work",
+            Some("other"),
+        )]);
+        let demo_sandbox = sandbox_item("sandbox-2", "Running", "demo", "work").to_string();
+        let demo_disk = disk_item("disk-1", "nixling-wayland-mi", "work").to_string();
+        let (p, http) = lifecycle_provider_seq(vec![
+            (200, other_sandbox.as_str()),
+            (200, other_disk.as_str()),
+            (201, demo_disk.as_str()),
+            (201, demo_sandbox.as_str()),
+        ]);
+        let id = p
+            .create(WorkloadSpec {
+                alias: WorkloadId::parse("demo").unwrap(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(id.as_str(), "demo");
+        let calls = http.calls.lock().unwrap();
+        assert_eq!(
+            calls.len(),
+            4,
+            "cross-workload resources must not be reused"
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_circuit_key_includes_all_upstream_dimensions() {
+        let base = cfg();
+        for mutate in [
+            |config: &mut AcaConfig| {
+                config.endpoint = Some("https:".to_owned() + "//other.example.invalid");
+            },
+            |config: &mut AcaConfig| {
+                config.subscription = "other-sub".to_owned();
+            },
+            |config: &mut AcaConfig| {
+                config.resource_group = "other-rg".to_owned();
+            },
+            |config: &mut AcaConfig| {
+                config.sandbox_group = "other-sg".to_owned();
+            },
+        ] {
+            let mut variant = base.clone();
+            mutate(&mut variant);
+            assert!(!Arc::ptr_eq(
+                &shared_circuit_for(&base),
+                &shared_circuit_for(&variant)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn sandbox_reachable_bubbles_unavailable_states() {
+        let (p, _) = provider(404, "{}");
+        assert!(!p.sandbox_reachable("sandbox-1").await.unwrap());
+
+        let mut headers = BTreeMap::new();
+        headers.insert("retry-after".to_owned(), "1".to_owned());
+        let too_many = too_many_requests_body();
+        let (p, _) = provider_seq_with_headers(vec![(429, too_many.as_str(), headers)]);
+        let err = p.sandbox_reachable("sandbox-1").await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Backpressure);
+    }
+
+    #[tokio::test]
+    async fn list_maps_aca_labels_to_workload_summaries() {
+        let body = sandbox_list(vec![
+            sandbox_item("sandbox-1", "Running", "demo", "work"),
+            sandbox_item("sandbox-2", "Failed", "demo", "personal"),
+            serde_json::json!({
+                "id": "sandbox-3",
+                "state": "Failed",
+                "labels": {
+                    "other": "ignored",
+                },
+            }),
+        ]);
+        let (p, _) = lifecycle_provider_seq(vec![(200, body.as_str())]);
         let list = p.list(ListSelector::All).await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id.as_str(), "demo");

@@ -1487,10 +1487,10 @@ mod tests {
 
         assert_eq!(error.kind(), ErrorKind::GatewayUnavailable);
         assert_eq!(
-            error.0.message(),
+            error.message(),
             "daemon reported that required host state is unavailable"
         );
-        assert!(!error.0.message().contains("/home/alice"));
+        assert!(!error.message().contains("/home/alice"));
         assert!(!format!("{error:?}").contains("private-vm"));
     }
 

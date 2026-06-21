@@ -22,6 +22,9 @@ schema, operation kinds, idempotency, stream authz) see
 substrate capabilities see [host substrate providers](./host-substrate-providers.md).
 The architectural rationale is in
 [ADR 0032](../adr/0032-nixling-v2-constellation-control-plane.md).
+For provider-managed sandboxes — nodes whose lifecycle is owned by a
+cloud provider API rather than by a locally managed `nixling-priv-broker`
+— see [provider-managed sandboxes](./provider-managed-sandboxes.md).
 
 ---
 
@@ -340,7 +343,8 @@ only. The following items are deferred to later work:
 - Live Internet reachability and WAN NAT traversal.
 - Remote host installation and remote `nixling host prepare`.
 - Remote display, audio, USB, and device streams to/from the remote host.
-- Provider-provisioned remote hosts (see the provider-managed sandbox
+- Provider-provisioned remote hosts (see the
+  [provider-managed sandbox](./provider-managed-sandboxes.md)
   model for provider-scoped work).
 - Automatic capability refresh without re-registration.
 - End-user principal delegation across a gateway; the preview binds the

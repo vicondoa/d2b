@@ -625,6 +625,7 @@ mod tests {
                 sandbox_group: "sg".into(),
                 region: "centralus".into(),
                 endpoint: None,
+                managed_identity_client_id: None,
             },
             nixling_constellation_core::NodeId::parse("gateway").unwrap(),
             Arc::new(FakeCredential),
