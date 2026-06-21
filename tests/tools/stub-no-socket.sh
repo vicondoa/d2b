@@ -103,7 +103,12 @@ assert_path_not_modified() {
   mtime_after=$(snapshot_mtime "$path")
   list_after=$(snapshot_listdir "$path")
 
-  if [ "$mtime_after" != "$mtime_before" ]; then
+  # A live developer host may have nixlingd refreshing existing runtime files
+  # under /run/nixling while this no-socket CLI smoke is compiling/running. A
+  # directory mtime alone is therefore not a reliable signal of CLI side
+  # effects; the direct entry list below still catches any path created or
+  # removed by the stub invocation itself.
+  if [ "$list_after" != "$list_before" ] && [ "$mtime_after" != "$mtime_before" ]; then
     fail "$label mtime changed" || true
     exit 1
   fi
