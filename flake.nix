@@ -122,18 +122,19 @@
             doCheck = false;
             RUSTC_WRAPPER = "";
             SCCACHE_DIR = "";
-            nativeBuildInputs = [ pkgs.binutils ];
+            nativeBuildInputs = [ pkgs.pkgsStatic.binutils ];
             postInstall = ''
+              readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
               bin="$out/bin/${binName}"
               test -x "$bin"
-              readelf -h "$bin" >/dev/null
-              readelf -l "$bin" > "$TMPDIR/${binName}.program-headers"
+              "$readelf" -h "$bin" >/dev/null
+              "$readelf" -l "$bin" > "$TMPDIR/${binName}.program-headers"
               if grep -q 'Requesting program interpreter' "$TMPDIR/${binName}.program-headers"; then
                 echo "${binName}: unexpected ELF interpreter" >&2
                 cat "$TMPDIR/${binName}.program-headers" >&2
                 exit 1
               fi
-              if readelf -d "$bin" > "$TMPDIR/${binName}.dynamic" 2> "$TMPDIR/${binName}.dynamic.err"; then
+              if "$readelf" -d "$bin" > "$TMPDIR/${binName}.dynamic" 2> "$TMPDIR/${binName}.dynamic.err"; then
                 if grep -q '(NEEDED)' "$TMPDIR/${binName}.dynamic"; then
                   echo "${binName}: unexpected dynamic dependency" >&2
                   cat "$TMPDIR/${binName}.dynamic" >&2
@@ -142,6 +143,46 @@
               elif ! grep -qi 'no dynamic section' "$TMPDIR/${binName}.dynamic.err"; then
                 echo "${binName}: readelf -d failed unexpectedly" >&2
                 cat "$TMPDIR/${binName}.dynamic.err" >&2
+                exit 1
+              fi
+            '';
+          };
+        guestShellRunnerStatic =
+          pkgs.pkgsStatic.rustPlatform.buildRustPackage {
+            pname = "nixling-guest-shell-runner-static";
+            version = "0.0.0-bootstrap";
+            src = ./packages/nixling-guest-shell-runner;
+            cargoLock = {
+              lockFile = ./packages/nixling-guest-shell-runner/Cargo.lock;
+            };
+            cargoBuildFlags = [ "--features" "real-libshpool" ];
+            doCheck = false;
+            RUSTC_WRAPPER = "";
+            SCCACHE_DIR = "";
+            nativeBuildInputs = [
+              pkgs.pkgsStatic.binutils
+              pkgs.pkgsStatic.rustPlatform.bindgenHook
+            ];
+            postInstall = ''
+              readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
+              bin="$out/bin/nixling-guest-shell-runner"
+              test -x "$bin"
+              "$readelf" -h "$bin" >/dev/null
+              "$readelf" -l "$bin" > "$TMPDIR/nixling-guest-shell-runner.program-headers"
+              if grep -q 'Requesting program interpreter' "$TMPDIR/nixling-guest-shell-runner.program-headers"; then
+                echo "nixling-guest-shell-runner: unexpected ELF interpreter" >&2
+                cat "$TMPDIR/nixling-guest-shell-runner.program-headers" >&2
+                exit 1
+              fi
+              if "$readelf" -d "$bin" > "$TMPDIR/nixling-guest-shell-runner.dynamic" 2> "$TMPDIR/nixling-guest-shell-runner.dynamic.err"; then
+                if grep -q '(NEEDED)' "$TMPDIR/nixling-guest-shell-runner.dynamic"; then
+                  echo "nixling-guest-shell-runner: unexpected dynamic dependency" >&2
+                  cat "$TMPDIR/nixling-guest-shell-runner.dynamic" >&2
+                  exit 1
+                fi
+              elif ! grep -qi 'no dynamic section' "$TMPDIR/nixling-guest-shell-runner.dynamic.err"; then
+                echo "nixling-guest-shell-runner: readelf -d failed unexpectedly" >&2
+                cat "$TMPDIR/nixling-guest-shell-runner.dynamic.err" >&2
                 exit 1
               fi
             '';
@@ -161,6 +202,7 @@
         nixling-userd-static = guestStaticPackage "nixling-userd" "nixling-userd";
         nixling-exec-runner-static =
           guestStaticPackage "nixling-exec-runner" "nixling-exec-runner";
+        nixling-guest-shell-runner-static = guestShellRunnerStatic;
 
         signoz = import ./pkgs/signoz { inherit pkgs; };
         signozOtelCollector = import ./pkgs/signoz-otel-collector { inherit pkgs; };
@@ -539,6 +581,8 @@
           test -f ${rustPackagesSrc}/packages/deny.toml
           test -f ${rustPackagesSrc}/packages/nixling-priv-broker/Cargo.lock
           test -f ${rustPackagesSrc}/packages/nixling-priv-broker/deny.toml
+          test -f ${rustPackagesSrc}/packages/nixling-guest-shell-runner/Cargo.lock
+          test -f ${rustPackagesSrc}/packages/nixling-guest-shell-runner/deny.toml
           printf '%s\n' '${builtins.toJSON mainManifestToml.workspace.members}' >/dev/null
           printf '%s\n' '${brokerManifestToml.package.name}' >/dev/null
           printf '%s\n' '${builtins.toJSON brokerManifestToml.workspace}' >/dev/null
@@ -899,23 +943,25 @@
         };
 
         guest-static-elf = pkgs.runCommand "nixling-guest-static-elf" {
-          nativeBuildInputs = [ pkgs.binutils ];
+          nativeBuildInputs = [ pkgs.pkgsStatic.binutils ];
         } ''
+          readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
           for bin in \
             ${self.packages.${system}.nixling-guestd-static}/bin/nixling-guestd \
             ${self.packages.${system}.nixling-userd-static}/bin/nixling-userd \
-            ${self.packages.${system}.nixling-exec-runner-static}/bin/nixling-exec-runner
+            ${self.packages.${system}.nixling-exec-runner-static}/bin/nixling-exec-runner \
+            ${self.packages.${system}.nixling-guest-shell-runner-static}/bin/nixling-guest-shell-runner
           do
             test -x "$bin"
             name="$(basename "$bin")"
-            readelf -h "$bin" >/dev/null
-            readelf -l "$bin" > "$TMPDIR/$name.program-headers"
+            "$readelf" -h "$bin" >/dev/null
+            "$readelf" -l "$bin" > "$TMPDIR/$name.program-headers"
             if grep -q 'Requesting program interpreter' "$TMPDIR/$name.program-headers"; then
               echo "$bin: unexpected ELF interpreter" >&2
               cat "$TMPDIR/$name.program-headers" >&2
               exit 1
             fi
-            if readelf -d "$bin" > "$TMPDIR/$name.dynamic" 2> "$TMPDIR/$name.dynamic.err"; then
+            if "$readelf" -d "$bin" > "$TMPDIR/$name.dynamic" 2> "$TMPDIR/$name.dynamic.err"; then
               if grep -q '(NEEDED)' "$TMPDIR/$name.dynamic"; then
                 echo "$bin: unexpected dynamic dependency" >&2
                 cat "$TMPDIR/$name.dynamic" >&2
@@ -980,6 +1026,9 @@
           brokerVendor = pkgs.rustPlatform.importCargoLock {
             lockFile = ./packages/nixling-priv-broker/Cargo.lock;
           };
+          guestShellRunnerVendor = pkgs.rustPlatform.importCargoLock {
+            lockFile = ./packages/nixling-guest-shell-runner/Cargo.lock;
+          };
           cargoConfig = vendorDir: ''
             [source.crates-io]
             replace-with = "vendored-sources"
@@ -1024,6 +1073,12 @@
             '${cargoConfig brokerVendor}' \
             "${rustPackagesSrc}/packages/nixling-priv-broker/deny.toml"
 
+          run_deny "guest-shell-runner" \
+            "${rustPackagesSrc}" \
+            "nixling-guest-shell-runner/Cargo.toml" \
+            '${cargoConfig guestShellRunnerVendor}' \
+            "${rustPackagesSrc}/packages/nixling-guest-shell-runner/deny.toml"
+
           echo ok > $out
         '';
 
@@ -1058,14 +1113,21 @@
           nativeBuildInputs = [ pkgs.cargo-audit ];
         } ''
           export HOME="$TMPDIR"
-          for lock in \
-            ${rustPackagesSrc}/packages/Cargo.lock \
-            ${rustPackagesSrc}/packages/Cargo.guest.lock \
-            ${rustPackagesSrc}/packages/nixling-priv-broker/Cargo.lock; do
+          run_audit() {
+            local lock=$1
+            shift
             echo "==> cargo audit ($(basename "$(dirname "$lock")"))"
             cargo-audit audit --file "$lock" \
-              --db ${advisoryDbGit} --no-fetch
-          done
+              --db ${advisoryDbGit} --no-fetch "$@"
+          }
+          run_audit ${rustPackagesSrc}/packages/Cargo.lock
+          run_audit ${rustPackagesSrc}/packages/Cargo.guest.lock
+          run_audit ${rustPackagesSrc}/packages/nixling-priv-broker/Cargo.lock
+          # libshpool 0.11.0 pulls notify 7 -> notify-types -> instant 0.1.13.
+          # Track that feasibility-spike warning explicitly while the helper
+          # evaluates the pinned shpool dependency.
+          run_audit ${rustPackagesSrc}/packages/nixling-guest-shell-runner/Cargo.lock \
+            --ignore RUSTSEC-2024-0384
           echo ok > $out
         '';
 
@@ -1074,6 +1136,20 @@
             lock=${./packages/Cargo.guest.lock}
             if grep -E 'name = "(cc|cmake|pkg-config|openssl|openssl-sys|native-tls|libsystemd|systemd)"' "$lock"; then
               echo "guest static lock contains a native-link/build-script dependency" >&2
+              exit 1
+            fi
+            echo ok > "$out"
+          '';
+
+        guest-shell-runner-static-dependency-policy =
+          pkgs.runCommand "nixling-guest-shell-runner-static-dependency-policy" { } ''
+            lock=${./packages/nixling-guest-shell-runner/Cargo.lock}
+            if grep -E 'name = "(openssl|openssl-sys|native-tls|libsystemd|systemd|pam-sys|dlopen2)"' "$lock"; then
+              echo "guest shell runner lock contains a forbidden dynamic/PAM/systemd dependency" >&2
+              exit 1
+            fi
+            if ! grep -A6 'name = "motd"' "$lock" | grep -F 'version = "0.2.2"' >/dev/null; then
+              echo "guest shell runner lock must pin the expected PAM-free motd dependency posture" >&2
               exit 1
             fi
             echo ok > "$out"

@@ -107,3 +107,17 @@ tests/
 
 Types 2–5 (unit/integration/contract/policy-lint) are Rust and live under
 `packages/`, not here.
+
+### Standalone Rust workspaces
+
+Most Rust crates are members of `packages/Cargo.toml`, but some crates are
+intentionally excluded because they require a distinct safety or dependency
+policy. The privileged broker lives at `packages/nixling-priv-broker/`; the
+persistent-shell feasibility helper lives at
+`packages/nixling-guest-shell-runner/`.
+
+Tests for those excluded workspaces still follow the same taxonomy: Type 2 unit
+tests live under `src/**`, Type 3 binary/integration tests live under
+`packages/<crate>/tests/*.rs`, and Type 6 static/supply-chain assertions live in
+existing `flake.checks.<system>.*` entries. Do not add a new top-level
+`tests/*.sh`; extend the existing Rust/static orchestrators by manifest path.

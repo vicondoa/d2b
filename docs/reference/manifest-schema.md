@@ -53,7 +53,44 @@ inventory. Private bundle artifacts live beside it and are documented in
         "storeSync": true,
         "keys": true,
         "inGuestObservability": true
-      }
+      },
+      "operationCapabilities": {
+         "lifecycle": {
+           "start": true,
+           "stop": true,
+           "restart": true,
+           "switch": true,
+           "hostPrepare": true
+         },
+         "media": {
+           "usbHotplug": true,
+           "removableMedia": false,
+           "qemuMedia": false
+         },
+         "display": {
+           "display": true,
+           "graphics": true,
+           "video": false,
+           "waylandProxy": true
+         },
+         "guest": {
+           "guestControl": true,
+           "exec": true,
+           "configSync": true,
+           "ssh": true,
+           "keys": true,
+           "inGuestObservability": true
+         },
+         "storage": {
+           "storeSync": true,
+           "virtiofs": true,
+           "volumes": false
+         }
+      },
+      "autostartPolicy": "manual-only",
+      "services": [
+         { "id": "cloud-hypervisor", "role": "hypervisor", "optional": false }
+      ]
     },
     "graphics": false,
     "tpm": false,
@@ -97,7 +134,7 @@ Fields are listed in `nixos-modules/manifest.nix` declaration order.
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `name` | string | yes | VM name; matches the enclosing top-level key. Pattern `^[a-z][a-z0-9-]*$` (enforced by `nixos-modules/assertions.nix`). |
-| `runtime` | object | yes | Runtime/provider metadata and provider support matrix. Shape: `{ kind, provider: { id, type, driver }, capabilities }`. `qemu-media` uses provider `local-qemu-media`/driver `qemu`; its supported capabilities are lifecycle/display/USB hotplug, while guest-control, exec, config-sync, SSH, store-sync, keys, and in-guest observability are unsupported. |
+| `runtime` | object | yes | Runtime/provider metadata and provider support matrix. Shape: `{ kind, provider: { id, type, driver }, capabilities, operationCapabilities, autostartPolicy, services }`. `operationCapabilities` groups positive operation support by lifecycle/media/display/guest/storage axis; `services[]` contains bounded provider-neutral service summaries. `qemu-media` uses provider `local-qemu-media`/driver `qemu`; its supported capabilities are lifecycle/display/USB hotplug, while guest-control, exec, config-sync, SSH, store-sync, keys, and in-guest observability are unsupported. |
 | `graphics` | boolean | yes | Mirror of `nixling.vms.<name>.graphics.enable`. The CLI uses it to pick the launch path. |
 | `tpm` | boolean | yes | Mirror of `nixling.vms.<name>.tpm.enable`. |
 | `usbipYubikey` | boolean | yes | Mirror of `nixling.vms.<name>.usbip.yubikey`. `nixling usb attach\|detach\|probe` refuses to run when false. |

@@ -2166,9 +2166,15 @@ mod tests {
         // Read state; if it's already reaped by the OS before we get here
         // (proc entry gone), skip the assertion.
         if let Some(state_char) = read_proc_stat_state(pid) {
-            // May be 'Z' (zombie) or already gone ('X') on some kernels.
+            // May be zombie ('Z'), already gone/dead ('X'), or transiently
+            // still runnable ('R'), sleeping ('S'), or in uninterruptible
+            // sleep ('D') before the scheduler reaches process teardown.
             assert!(
-                state_char == 'Z' || state_char == 'X' || state_char == 'R' || state_char == 'S',
+                state_char == 'Z'
+                    || state_char == 'X'
+                    || state_char == 'R'
+                    || state_char == 'S'
+                    || state_char == 'D',
                 "unexpected state: {state_char}"
             );
         }

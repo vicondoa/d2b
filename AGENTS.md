@@ -60,6 +60,7 @@ full picture and threat model.
 │   ├── nixling/                   <- rust-native CLI
 │   ├── nixlingd/                  <- unprivileged public daemon / supervisor
 │   ├── nixling-priv-broker/       <- privileged broker for audited host mutations
+│   ├── nixling-guest-shell-runner/ <- standalone static guest helper for persistent shell feasibility
 │   └── xtask/                     <- schema / docs codegen helpers; see
 │                                      `docs/adr/0000` + `docs/adr/0009`
 ├── tests/                          <- see "Test layout" below
@@ -779,6 +780,11 @@ fields that request panel, agent, or model metadata.
   flake-eval gates (W2fu4 H8/H9).
 - Rust worktrees share `/home/paydro/.cache/nixling-cargo-target/`
   through the repo-local `.cargo/config.toml` files.
+- The persistent-shell helper is intentionally excluded from the main
+  Rust workspace at `packages/nixling-guest-shell-runner/`. Run it by
+  manifest path (and with `--features real-libshpool` when checking the
+  real shpool bridge); the top-level Rust/static/supply-chain gates wire
+  it explicitly like the broker workspace.
 - The integrator MUST run `nix-collect-garbage` after each wave merge.
 - For the operator host running heavy iteration: prune OLD
   NixOS system generations periodically:

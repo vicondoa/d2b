@@ -10,6 +10,12 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Internal
+
+- Developer tooling: added a standalone static guest shell helper workspace,
+  libshpool pin, initial validation/management-output scaffolding, and explicit
+  Rust/static supply-chain gate wiring for upcoming guest-control terminal work.
+
 ### Added
 
 - Constellation observability: added `nixling op inspect` for bounded current
@@ -265,6 +271,21 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- CLI/docs: added the missing `vm display` authorization-matrix row so the
+  declared display-session management command is covered by the generated
+  privileges contract.
+- Tests: narrowed the host realm-relay dependency policy to actual relay/runtime
+  crates so the neutral constellation provider trait crate can remain in
+  host-side runtime-provider code.
+- Documentation: updated the public manifest schema to include the runtime
+  operation capability, autostart policy, and service summary fields already
+  emitted by the manifest.
+- Tests: the per-example flake gate now evaluates scratch copies with the
+  `nixling` lock target rewritten to the current `git+file` checkout,
+  preserving each example's lock graph and external pins while avoiding mutable
+  `path:../..` lock failures.
+- Tests: the broker reap-health zombie canary now accepts the transient
+  uninterruptible-sleep proc state seen on busy CI runners before child teardown.
 - CLI/daemon: qemu-media USB attach/detach `--apply --json` now emits a
   JSON success envelope, and qemu-media list/status service capabilities no
   longer advertise `virtiofsd`.

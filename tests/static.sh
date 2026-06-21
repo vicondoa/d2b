@@ -1311,12 +1311,63 @@ nl_check_disk_budget "post-w3-gates" || fail "disk budget exhausted after W3 hos
 # files. Eval-only (`--no-build --all-systems`); a build-level gate
 # already lives in the root flake's `checks.<system>.*` (also 7b).
 # `--no-write-lock-file` keeps the gate read-only so validation never
-# rewrites an example's pinned lock. Adds templates/default/ to the
-# same check surface. Skips gracefully if examples/ or
-# templates/default/ don't exist (some downstream consumers may strip
-# them).
+# rewrites an example's pinned lock. Some historical example locks carry a
+# mutable `path:../..` nixling node; Lix rejects that when the example itself is
+# reached through the root git+file fetcher. The gate therefore evaluates a
+# scratch copy whose `nixling` lock node target is rewritten to the current
+# git+file checkout while preserving the example's lock graph and any external
+# sibling-flake pins. Adds
+# templates/default/ to the same check surface. Skips gracefully if examples/ or
+# templates/default/ don't exist (some downstream consumers may strip them).
 # -----------------------------------------------------------------------------
 nl_static_gate_begin "per-example/template flake check" "per-example/template flake check"
+example_nixling_lock_dir=$(mktemp -d "${TMPDIR:-/tmp}/nixling-example-lock.XXXXXX") \
+  || fail "example flake check: could not create temporary nixling lock directory"
+add_cleanup "rm -rf -- $(printf '%q' "$example_nixling_lock_dir")"
+cat > "$example_nixling_lock_dir/flake.nix" <<'NIX' || fail "example flake check: could not write temporary nixling lock flake"
+{
+  inputs.nixling.url = "path:../..";
+  outputs = { ... }: { };
+}
+NIX
+(
+  cd "$example_nixling_lock_dir" || exit 1
+  nix flake lock --override-input nixling "git+file://$ROOT" >/dev/null
+) || fail "example flake check: could not prepare temporary nixling git+file lock"
+
+nl_static_check_example_flake() {
+  local src="$1" name="$2" scratch rc
+  scratch=$(mktemp -d "${TMPDIR:-/tmp}/nixling-example-${name}.XXXXXX") || return 1
+  cp -a "$src"/. "$scratch"/ || {
+    log "  example flake check: $name  preserving scratch after copy failure: $scratch"
+    return 1
+  }
+  if [ -f "$scratch/flake.lock" ]; then
+    jq --slurpfile node "$example_nixling_lock_dir/flake.lock" \
+      '.nodes.nixling.locked = $node[0].nodes.nixling.locked | .nodes.nixling.original = $node[0].nodes.nixling.original' \
+      "$scratch/flake.lock" > "$scratch/flake.lock.tmp" || {
+        log "  example flake check: $name  preserving scratch after lock rewrite failure: $scratch"
+        return 1
+      }
+    mv "$scratch/flake.lock.tmp" "$scratch/flake.lock" || {
+      log "  example flake check: $name  preserving scratch after lock replace failure: $scratch"
+      return 1
+    }
+  fi
+  (
+    cd "$scratch" || exit 1
+    nix flake check --no-build --all-systems --no-write-lock-file \
+      --override-input nixling "git+file://$ROOT"
+  )
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    rm -rf -- "$scratch"
+  else
+    log "  example flake check: $name  preserving scratch after failure: $scratch"
+  fi
+  return "$rc"
+}
+
 if [ -d "$ROOT/examples/with-entra-id" ] && [ -f "$ROOT/examples/with-entra-id/flake.lock" ] && [ -z "${NL_SKIP_WITH_ENTRA_ID:-}" ]; then
   nl_time_begin "with-entra-id input prewarm"
   _WITH_ENTRA_ID_REF=$(jq -er '.nodes["entrablau"].locked | "github:\(.owner)/\(.repo)/\(.rev)"' "$ROOT/examples/with-entra-id/flake.lock")
@@ -1331,7 +1382,7 @@ if [ -d "$ROOT/examples" ]; then
     if [ "$name" = "with-entra-id" ]; then
       continue
     fi
-    nl_static_parallel_spawn "example flake check: $name" bash -lc "cd '$ex' && nix flake check --no-build --all-systems --no-write-lock-file --override-input nixling 'git+file://$ROOT'"
+    nl_static_parallel_spawn "example flake check: $name" nl_static_check_example_flake "$ex" "$name"
   done
   shopt -u nullglob
 else
@@ -1348,17 +1399,17 @@ if [ -f "$ROOT/examples/with-entra-id/flake.nix" ]; then
     log "  example flake check: with-entra-id  skipped via NL_SKIP_WITH_ENTRA_ID=1 (external dependency outage carve-out)"
   else
     nl_time_begin "example flake check: with-entra-id"
-    if (cd "$ROOT/examples/with-entra-id" && nix flake check --no-build --all-systems --no-write-lock-file) >/dev/null 2>&1; then
+    if nl_static_check_example_flake "$ROOT/examples/with-entra-id" "with-entra-id" >/dev/null 2>&1; then
       ok "example flake check: with-entra-id"
     else
       # One in-band retry for the documented transient crates.io 403
       # on libhimmelblau-0.8.18 / kanidm-hsm-crypto-0.3.6 before failing
       # the gate. Set NL_SKIP_WITH_ENTRA_ID=1 to bypass after retries.
       log "  example flake check: with-entra-id  first attempt failed; retrying once (W3 carve-out)"
-      if (cd "$ROOT/examples/with-entra-id" && nix flake check --no-build --all-systems --no-write-lock-file) >/dev/null 2>&1; then
+      if nl_static_check_example_flake "$ROOT/examples/with-entra-id" "with-entra-id" >/dev/null 2>&1; then
         ok "example flake check: with-entra-id (retry)"
       else
-        (cd "$ROOT/examples/with-entra-id" && nix flake check --no-build --all-systems --no-write-lock-file) 2>&1 | tail -20 >&2 || true
+        nl_static_check_example_flake "$ROOT/examples/with-entra-id" "with-entra-id" 2>&1 | tail -20 >&2 || true
         fail "example flake check: with-entra-id"
       fi
     fi

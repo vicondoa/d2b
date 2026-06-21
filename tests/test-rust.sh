@@ -22,7 +22,10 @@ deny_config="$ROOT/packages/deny.toml"
 broker_manifest="$ROOT/packages/nixling-priv-broker/Cargo.toml"
 broker_lock_file="$ROOT/packages/nixling-priv-broker/Cargo.lock"
 broker_deny_config="$ROOT/packages/nixling-priv-broker/deny.toml"
-for required in "$manifest" "$lock_file" "$deny_config" "$broker_manifest" "$broker_lock_file" "$broker_deny_config"; do
+guest_shell_runner_manifest="$ROOT/packages/nixling-guest-shell-runner/Cargo.toml"
+guest_shell_runner_lock_file="$ROOT/packages/nixling-guest-shell-runner/Cargo.lock"
+guest_shell_runner_deny_config="$ROOT/packages/nixling-guest-shell-runner/deny.toml"
+for required in "$manifest" "$lock_file" "$deny_config" "$broker_manifest" "$broker_lock_file" "$broker_deny_config" "$guest_shell_runner_manifest" "$guest_shell_runner_lock_file" "$guest_shell_runner_deny_config"; do
   if [ ! -f "$required" ]; then
     fail "missing Rust workspace input: $required"
     exit 1
@@ -49,6 +52,7 @@ workspace_target_dir=$(nl_cargo_target_dir workspace)
 broker_target_dir=$(nl_cargo_target_dir broker)
 broker_layer1_target_dir="${broker_target_dir%/}-layer1"
 broker_fakebackends_target_dir="${broker_target_dir%/}-fakebackends"
+guest_shell_runner_target_dir=$(nl_cargo_target_dir guest-shell-runner)
 
 # Keep fixture-dependent contract crates out of generic workspace tests.
 # Full NL_FIXTURES delivery to the sandbox/CI is a tracked W1 deliverable.
@@ -241,6 +245,13 @@ declare -A broker_pid broker_log
 broker_parallel=0
 [ "${NL_PARALLEL_BROKER:-0}" = 1 ] && broker_parallel=1
 
+guest_shell_runner_gate() {
+  cargo metadata --format-version 1 --manifest-path "$guest_shell_runner_manifest" >/dev/null
+  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo fmt --manifest-path "$guest_shell_runner_manifest" --all --check
+  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo clippy --manifest-path "$guest_shell_runner_manifest" --workspace --all-targets --features real-libshpool -- -D warnings
+  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo test --manifest-path "$guest_shell_runner_manifest" --workspace --features real-libshpool
+}
+
 log "--> cargo fmt --check"
 cargo fmt --manifest-path "$manifest" --all --check
 ok "cargo fmt --check"
@@ -358,10 +369,15 @@ else
   done
 fi
 
+log "--> guest shell runner cargo (standalone workspace, real-libshpool feature)"
+guest_shell_runner_gate
+ok "guest shell runner cargo"
+
 cleanup_cargo_special_files "workspace cargo test" "$workspace_target_dir"
 cleanup_cargo_special_files "broker cargo test" "$broker_target_dir"
 cleanup_cargo_special_files "broker layer1 cargo test" "$broker_layer1_target_dir"
 cleanup_cargo_special_files "broker fake-backends cargo test" "$broker_fakebackends_target_dir"
+cleanup_cargo_special_files "guest shell runner cargo test" "$guest_shell_runner_target_dir"
 cleanup_package_test_scratch "workspace cargo test" "$ROOT/packages/nixlingd/target"
 
 schema_out="$ROOT/packages/xtask/out"
@@ -419,14 +435,15 @@ cargo_deny_check() {
 
 cargo_audit_check() {
   local label="$1" lock_path="$2"
+  shift 2
   if command -v cargo-audit >/dev/null 2>&1; then
     log "--> cargo audit ($label)"
-    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path"
+    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path" "$@"
     ok "cargo audit ($label)"
   elif command -v nix >/dev/null 2>&1; then
     log "--> cargo audit ($label via nix shell)"
     nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-audit --command \
-      env RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path"
+      env RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path" "$@"
     ok "cargo audit ($label)"
   else
     fail "cargo audit cannot run for $label: cargo-audit and nix are unavailable; ADR 0009 does not authorize a waiver"
@@ -436,9 +453,14 @@ cargo_audit_check() {
 
 cargo_deny_check "main workspace" "$manifest" "$deny_config"
 cargo_deny_check "broker workspace" "$broker_manifest" "$broker_deny_config"
+cargo_deny_check "guest shell runner workspace" "$guest_shell_runner_manifest" "$guest_shell_runner_deny_config"
 
 cargo_audit_check "main workspace" "$lock_file"
 cargo_audit_check "broker workspace" "$broker_lock_file"
+# libshpool 0.11.0 pulls notify 7 -> notify-types -> instant 0.1.13.
+# The helper pins and tracks that transitive unmaintained advisory explicitly
+# while evaluating libshpool feasibility.
+cargo_audit_check "guest shell runner workspace" "$guest_shell_runner_lock_file" --ignore RUSTSEC-2024-0384
 
 log "--> tests/tools/stub-no-socket.sh"
 bash "$ROOT/tests/tools/stub-no-socket.sh"

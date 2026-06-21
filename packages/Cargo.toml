@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["nixling-priv-broker"]
+exclude = ["nixling-priv-broker", "nixling-guest-shell-runner"]
 members = [
     "nixling-host-activation-helper",
     "nixling-core",

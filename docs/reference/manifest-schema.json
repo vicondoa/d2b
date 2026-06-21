@@ -155,10 +155,95 @@
         "inGuestObservability": { "type": "boolean" }
       }
     },
+    "runtimeOperationCapabilities": {
+      "type": "object",
+      "description": "Positive runtime operation support grouped by public feature axis.",
+      "required": ["lifecycle", "media", "display", "guest", "storage"],
+      "additionalProperties": false,
+      "properties": {
+        "lifecycle": {
+          "type": "object",
+          "required": ["start", "stop", "restart", "switch", "hostPrepare"],
+          "additionalProperties": false,
+          "properties": {
+            "start": { "type": "boolean" },
+            "stop": { "type": "boolean" },
+            "restart": { "type": "boolean" },
+            "switch": { "type": "boolean" },
+            "hostPrepare": { "type": "boolean" }
+          }
+        },
+        "media": {
+          "type": "object",
+          "required": ["usbHotplug", "removableMedia", "qemuMedia"],
+          "additionalProperties": false,
+          "properties": {
+            "usbHotplug": { "type": "boolean" },
+            "removableMedia": { "type": "boolean" },
+            "qemuMedia": { "type": "boolean" }
+          }
+        },
+        "display": {
+          "type": "object",
+          "required": ["display", "graphics", "video", "waylandProxy"],
+          "additionalProperties": false,
+          "properties": {
+            "display": { "type": "boolean" },
+            "graphics": { "type": "boolean" },
+            "video": { "type": "boolean" },
+            "waylandProxy": { "type": "boolean" }
+          }
+        },
+        "guest": {
+          "type": "object",
+          "required": ["guestControl", "exec", "configSync", "ssh", "keys", "inGuestObservability"],
+          "additionalProperties": false,
+          "properties": {
+            "guestControl": { "type": "boolean" },
+            "exec": { "type": "boolean" },
+            "configSync": { "type": "boolean" },
+            "ssh": { "type": "boolean" },
+            "keys": { "type": "boolean" },
+            "inGuestObservability": { "type": "boolean" }
+          }
+        },
+        "storage": {
+          "type": "object",
+          "required": ["storeSync", "virtiofs", "volumes"],
+          "additionalProperties": false,
+          "properties": {
+            "storeSync": { "type": "boolean" },
+            "virtiofs": { "type": "boolean" },
+            "volumes": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "runtimeServiceSummary": {
+      "type": "object",
+      "description": "Provider-neutral runtime service summary.",
+      "required": ["id", "role", "optional"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable service identifier."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["host", "hypervisor", "storage", "tpm", "display", "audio", "video", "network", "guest-control", "usb", "observability"],
+          "description": "Low-cardinality service role."
+        },
+        "optional": {
+          "type": "boolean",
+          "description": "Whether absence of the service is acceptable for this runtime."
+        }
+      }
+    },
     "runtimeMetadata": {
       "type": "object",
       "description": "Runtime/provider metadata and capability summary for one VM.",
-      "required": ["kind", "provider", "capabilities"],
+      "required": ["kind", "provider", "capabilities", "operationCapabilities", "autostartPolicy", "services"],
       "additionalProperties": false,
       "properties": {
         "kind": {
@@ -171,6 +256,21 @@
         },
         "capabilities": {
           "$ref": "#/$defs/runtimeCapabilities"
+        },
+        "operationCapabilities": {
+          "$ref": "#/$defs/runtimeOperationCapabilities"
+        },
+        "autostartPolicy": {
+          "type": "string",
+          "enum": ["unknown", "host-boot-eligible", "manual-only", "disabled"],
+          "description": "Runtime-level autostart policy."
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/runtimeServiceSummary"
+          },
+          "description": "Provider-neutral runtime service summaries."
         }
       }
     },

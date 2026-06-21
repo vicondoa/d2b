@@ -24,6 +24,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "async-trait"
+version = "0.1.89"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -43,6 +54,12 @@ checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
 ]
+
+[[package]]
+name = "bytes"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
 
 [[package]]
 name = "cfg-if"
@@ -291,6 +308,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "nixling-constellation-core"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "schemars",
+ "serde",
+]
+
+[[package]]
+name = "nixling-constellation-provider"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "nixling-constellation-core",
+ "schemars",
+ "serde",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "nixling-core"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -306,9 +343,12 @@ dependencies = [
 name = "nixling-host"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "libc",
  "miniz_oxide",
  "nix",
+ "nixling-constellation-core",
+ "nixling-constellation-provider",
  "nixling-core",
  "nixling-ipc",
  "rustix 0.38.44",
@@ -652,6 +692,7 @@ version = "1.52.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
 dependencies = [
+ "bytes",
  "libc",
  "mio",
  "pin-project-lite",
