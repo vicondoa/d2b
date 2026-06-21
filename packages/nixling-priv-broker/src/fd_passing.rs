@@ -141,13 +141,25 @@ mod tests {
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
-    use nix::unistd::{dup, pipe, read, write};
+    use nix::unistd::{pipe, read, write};
 
     fn fd_test_lock() -> MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
             .expect("fd test lock")
+    }
+
+    fn dup_high(fd: RawFd) -> RawFd {
+        // Avoid false negatives from unrelated concurrently-running tests that
+        // may reuse a freshly closed low fd number before this test can assert
+        // the lease/registry closed it.
+        for min_fd in [512, 256, 128, 64] {
+            if let Ok(duplicated) = fcntl(fd, FcntlArg::F_DUPFD_CLOEXEC(min_fd)) {
+                return duplicated;
+            }
+        }
+        fcntl(fd, FcntlArg::F_DUPFD_CLOEXEC(0)).expect("F_DUPFD_CLOEXEC")
     }
 
     #[test]
@@ -207,7 +219,7 @@ mod tests {
         )
         .expect("socketpair");
         let (read_end, _write_end) = pipe().expect("pipe");
-        let broker_copy = dup(read_end.as_raw_fd()).expect("dup broker copy");
+        let broker_copy = dup_high(read_end.as_raw_fd());
 
         {
             let lease = FdLease::new(broker_copy);
@@ -226,7 +238,7 @@ mod tests {
     fn scm_rights_fd_lifecycle_cleans_up_on_broker_restart() {
         let _guard = fd_test_lock();
         let (read_end, _write_end) = pipe().expect("pipe");
-        let tracked = dup(read_end.as_raw_fd()).expect("dup tracked fd");
+        let tracked = dup_high(read_end.as_raw_fd());
         let mut registry = FdRegistry::default();
         registry.register(tracked);
         registry.clear();
