@@ -41,6 +41,5 @@
     "realm": {
       "type": "string"
     }
-  },
-  "additionalProperties": false
+  }
 }

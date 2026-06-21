@@ -240,7 +240,7 @@ pub struct RealmListOutputV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct RealmInspectOutputV1 {
     pub command: String,
     #[serde(flatten)]
@@ -4328,6 +4328,24 @@ struct RealmEntrypointConfig {
     gateway: Option<String>,
 }
 
+fn safe_error_snippet(raw: &str) -> String {
+    const MAX: usize = 64;
+    let secret_shaped = raw.contains("SharedAccessKey")
+        || raw.contains("Bearer ")
+        || raw.contains("Endpoint=sb://")
+        || raw.contains("AccountKey=")
+        || raw.contains("PRIVATE KEY")
+        || raw.contains("/home/");
+    if secret_shaped {
+        return "<redacted>".to_owned();
+    }
+    let mut snippet = raw.chars().take(MAX).collect::<String>();
+    if raw.chars().count() > MAX {
+        snippet.push_str("...");
+    }
+    snippet
+}
+
 fn local_realm_entrypoint_config() -> RealmEntrypointConfig {
     RealmEntrypointConfig {
         mode: "host-resident".to_owned(),
@@ -4404,7 +4422,10 @@ fn load_realm_entrypoint_table_from_path(
         let realm = target_routing::parse_realm_arg(&realm_raw).map_err(|err| {
             CliFailure::new(
                 1,
-                format!("realm entrypoint `{realm_raw}` is invalid: {err}"),
+                format!(
+                    "realm entrypoint `{}` is invalid: {err}",
+                    safe_error_snippet(&realm_raw)
+                ),
             )
         })?;
         match entry.mode.as_str() {
@@ -4413,7 +4434,10 @@ fn load_realm_entrypoint_table_from_path(
                 let gateway = entry.gateway.ok_or_else(|| {
                     CliFailure::new(
                         1,
-                        format!("gateway-backed realm `{realm_raw}` has no gateway target"),
+                        format!(
+                            "gateway-backed realm `{}` has no gateway target",
+                            safe_error_snippet(&realm_raw)
+                        ),
                     )
                 })?;
                 let gateway_target = nixling_constellation_core::TargetName::parse(&gateway)
@@ -4421,7 +4445,9 @@ fn load_realm_entrypoint_table_from_path(
                         CliFailure::new(
                             1,
                             format!(
-                                "realm `{realm_raw}` gateway target `{gateway}` is invalid: {err}"
+                                "realm `{}` gateway target `{}` is invalid: {err}",
+                                safe_error_snippet(&realm_raw),
+                                safe_error_snippet(&gateway)
                             ),
                         )
                     })?;
@@ -4430,7 +4456,11 @@ fn load_realm_entrypoint_table_from_path(
             other => {
                 return Err(CliFailure::new(
                     1,
-                    format!("realm `{realm_raw}` has unknown entrypoint mode `{other}`"),
+                    format!(
+                        "realm `{}` has unknown entrypoint mode `{}`",
+                        safe_error_snippet(&realm_raw),
+                        safe_error_snippet(other)
+                    ),
                 ));
             }
         }
@@ -4450,13 +4480,19 @@ fn configured_realm_gateways(json: bool) -> Result<Vec<ResolvedRealmGateway>, Cl
         let realm = target_routing::parse_realm_arg(&realm_raw).map_err(|err| {
             CliFailure::new(
                 1,
-                format!("realm entrypoint `{realm_raw}` is invalid: {err}"),
+                format!(
+                    "realm entrypoint `{}` is invalid: {err}",
+                    safe_error_snippet(&realm_raw)
+                ),
             )
         })?;
         let gateway_target = entry.gateway.ok_or_else(|| {
             CliFailure::new(
                 1,
-                format!("gateway-backed realm `{realm_raw}` has no gateway target"),
+                format!(
+                    "gateway-backed realm `{}` has no gateway target",
+                    safe_error_snippet(&realm_raw)
+                ),
             )
         })?;
         gateways.push(ResolvedRealmGateway {
@@ -4478,7 +4514,7 @@ fn gateway_vm_from_target_text(
         .map(|target| target.workload.as_str().to_owned())
         .map_err(|err| target_routing::RouteError::InvalidGatewayTarget {
             realm: realm.to_owned(),
-            gateway: target.to_owned(),
+            gateway: safe_error_snippet(target),
             reason: err.to_string(),
         })
 }
@@ -4654,7 +4690,7 @@ fn resolve_realm_gateway(
 ) -> Result<ResolvedRealmGateway, CliFailure> {
     let realm = target_routing::parse_realm_arg(realm_raw).map_err(|err| {
         emit_realm_usage_error(
-            &format!("invalid realm `{realm_raw}`: {err}"),
+            &format!("invalid realm `{}`: {err}", safe_error_snippet(realm_raw)),
             "realm argument did not parse as a bounded lowercase realm path",
             "Use a DNS-shaped realm path such as `work` or `payments.work`.",
             json,
@@ -4828,7 +4864,10 @@ fn realm_policy_rows_from_entries(
         let realm = target_routing::parse_realm_arg(&realm_raw).map_err(|err| {
             CliFailure::new(
                 1,
-                format!("realm entrypoint `{realm_raw}` is invalid: {err}"),
+                format!(
+                    "realm entrypoint `{}` is invalid: {err}",
+                    safe_error_snippet(&realm_raw)
+                ),
             )
         })?;
         let realm_target = realm.target_form();
@@ -4847,7 +4886,10 @@ fn realm_policy_rows_from_entries(
                 let gateway_target = entry.gateway.ok_or_else(|| {
                     CliFailure::new(
                         1,
-                        format!("gateway-backed realm `{realm_raw}` has no gateway target"),
+                        format!(
+                            "gateway-backed realm `{}` has no gateway target",
+                            safe_error_snippet(&realm_raw)
+                        ),
                     )
                 })?;
                 let gateway_vm = gateway_vm_from_target_text(&realm_target, &gateway_target)
@@ -4870,7 +4912,11 @@ fn realm_policy_rows_from_entries(
             other => {
                 return Err(CliFailure::new(
                     1,
-                    format!("realm `{realm_raw}` has unknown entrypoint mode `{other}`"),
+                    format!(
+                        "realm `{}` has unknown entrypoint mode `{}`",
+                        safe_error_snippet(&realm_raw),
+                        safe_error_snippet(other)
+                    ),
                 ));
             }
         }
@@ -4914,35 +4960,43 @@ fn cmd_realm_list(context: &Context, args: &RealmListArgs) -> Result<i32, CliFai
 }
 
 fn cmd_realm_inspect(context: &Context, args: &RealmInspectArgs) -> Result<i32, CliFailure> {
-    let realm = target_routing::parse_realm_arg(&args.realm).map_err(|err| {
-        emit_realm_usage_error(
-            &format!("invalid realm `{}`: {err}", args.realm),
-            "realm argument did not parse as a bounded lowercase realm path",
-            "Use a DNS-shaped realm path such as `work` or `payments.work`.",
-            args.json,
-        )
-        .unwrap_or_else(|failure| failure)
-    })?;
-    let realm_key = realm.target_form();
     let rows = realm_policy_rows(context, args.json)?;
-    let Some(row) = rows.into_iter().find(|row| row.realm == realm_key) else {
-        return Err(emit_missing_realm_entrypoint(
-            &realm_key,
-            &target_routing::gateway_vm_name(&realm),
-            None,
-            args.json,
-        )?);
-    };
-    let output = RealmInspectOutputV1 {
-        command: "realm inspect".to_owned(),
-        realm: row,
-    };
+    let output = realm_inspect_output(&args.realm, args.json, rows)?;
     if args.json {
         print_json(&output)?;
     } else {
         print_realm_rows_human(std::slice::from_ref(&output.realm));
     }
     Ok(0)
+}
+
+fn realm_inspect_output(
+    raw_realm: &str,
+    json: bool,
+    rows: Vec<RealmPolicyOutputV1>,
+) -> Result<RealmInspectOutputV1, CliFailure> {
+    let realm = target_routing::parse_realm_arg(raw_realm).map_err(|err| {
+        emit_realm_usage_error(
+            &format!("invalid realm `{}`: {err}", safe_error_snippet(raw_realm)),
+            "realm argument did not parse as a bounded lowercase realm path",
+            "Use a DNS-shaped realm path such as `work` or `payments.work`.",
+            json,
+        )
+        .unwrap_or_else(|failure| failure)
+    })?;
+    let realm_key = realm.target_form();
+    let Some(row) = rows.into_iter().find(|row| row.realm == realm_key) else {
+        return Err(emit_missing_realm_entrypoint(
+            &realm_key,
+            &target_routing::gateway_vm_name(&realm),
+            None,
+            json,
+        )?);
+    };
+    Ok(RealmInspectOutputV1 {
+        command: "realm inspect".to_owned(),
+        realm: row,
+    })
 }
 
 fn cmd_realm_enter(context: &Context, args: &RealmEnterArgs) -> Result<i32, CliFailure> {
@@ -10689,6 +10743,77 @@ mod host_install_dispatch_tests {
             .expect_err("local gateway-backed entrypoint must fail closed");
         assert!(err.message.contains("local"));
         assert!(err.message.contains("host-resident"));
+    }
+
+    #[test]
+    fn realm_policy_rows_reject_unknown_mode_and_missing_gateway() {
+        let manifest_path = test_socket_path("realm-policy-bad-entries", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("manifest parent");
+        }
+        write_test_manifest(&manifest_path, "sys-work-gateway");
+        let context = test_context(manifest_path.clone());
+
+        let mut unknown_mode = std::collections::BTreeMap::new();
+        unknown_mode.insert(
+            "work".to_owned(),
+            super::RealmEntrypointConfig {
+                mode: "surprise".to_owned(),
+                gateway: None,
+            },
+        );
+        let err = super::realm_policy_rows_from_entries(&context, unknown_mode, true)
+            .expect_err("unknown mode fails closed");
+        assert!(err.message.contains("unknown entrypoint mode"));
+
+        let mut missing_gateway = std::collections::BTreeMap::new();
+        missing_gateway.insert(
+            "work".to_owned(),
+            super::RealmEntrypointConfig {
+                mode: "gateway-backed".to_owned(),
+                gateway: None,
+            },
+        );
+        let err = super::realm_policy_rows_from_entries(&context, missing_gateway, true)
+            .expect_err("missing gateway fails closed");
+        assert!(err.message.contains("no gateway target"));
+        let _ = std::fs::remove_file(&manifest_path);
+    }
+
+    #[test]
+    fn realm_inspect_invalid_and_unknown_realms_fail_closed() {
+        let rows = vec![super::RealmPolicyOutputV1 {
+            realm: "local".to_owned(),
+            mode: "host-resident".to_owned(),
+            gateway_vm: None,
+            gateway_target: None,
+            gateway_state: "local-only".to_owned(),
+            cross_realm_policy: "default-deny".to_owned(),
+            credential_boundary: "host-resident-local-only".to_owned(),
+        }];
+
+        let (invalid, invalid_stdout) = super::with_test_stdout_capture(|| {
+            super::realm_inspect_output("Bad Realm", true, rows.clone())
+        });
+        let err = invalid.expect_err("invalid realm fails");
+        assert_eq!(err.exit_code, 2);
+        let envelope: Value =
+            serde_json::from_slice(&invalid_stdout).expect("invalid realm json envelope");
+        assert_eq!(
+            envelope.get("code").and_then(Value::as_str),
+            Some("realm-target-usage")
+        );
+
+        let (unknown, unknown_stdout) =
+            super::with_test_stdout_capture(|| super::realm_inspect_output("work", true, rows));
+        let err = unknown.expect_err("unknown realm fails");
+        assert_eq!(err.exit_code, 2);
+        let envelope: Value =
+            serde_json::from_slice(&unknown_stdout).expect("unknown realm json envelope");
+        assert_eq!(
+            envelope.get("code").and_then(Value::as_str),
+            Some("missing-realm-entrypoint")
+        );
     }
 
     fn write_qemu_media_manifest(path: &PathBuf, vm: &str) {

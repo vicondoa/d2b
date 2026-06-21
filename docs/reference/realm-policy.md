@@ -22,11 +22,14 @@ policy storage and evaluation live in the owning gateway guest.
 
 - `local` is always host-resident and cannot be declared as gateway-backed.
 - Work, personal, and provider realms never share a gateway guest or L2 bridge.
-- Gateway-backed realms do not get wildcard routes such as `0.0.0.0/0` or
+- Gateway-backed realms do not get default routes such as `0.0.0.0/0` or
   `::/0`.
 - Deployments must validate that host L3 forwarding cannot transit between
   realm bridges. Use explicit firewall/nftables drops or equivalent
-  namespace/routing isolation before treating realms as isolated at L3.
+  namespace/routing isolation before treating realms as isolated at L3. This
+  reference page describes the policy contract; it does not claim code-level L3
+  enforcement for hosts that have not installed those drops or isolation
+  controls.
 - Cross-realm operations and streams are denied unless a future reviewed typed
   policy explicitly allows a named operation or stream. There are no enabled
   default allow rules.

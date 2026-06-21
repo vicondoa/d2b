@@ -91,10 +91,10 @@ keys never appear in argv:
 
 ```bash
 nixling realm enter work
-sudo -u nixlingd NIXLING_GATEWAY_STATE_DIR=/var/lib/nixling/gateways/work \
+sudo -u nixlingd NIXLING_GATEWAY_STATE_DIR=<gateway-state-dir> \
   nixling-gateway-enroll enroll \
-  /var/lib/nixling/gateways/work/credential.sealed.json \
-  /var/lib/nixling/gateways/work/seal.key <<'JSON'
+  <gateway-state-dir>/credential.sealed.json \
+  <gateway-state-dir>/seal.key <<'JSON'
 {
   "relayListen": { "keyName": "gateway-listen", "key": "<listen-rule-key>" },
   "relaySend": { "keyName": "gateway-send", "key": "<send-rule-key>" }
@@ -113,10 +113,10 @@ Rotate by passing the replacement JSON through the same in-guest helper:
 
 ```bash
 nixling realm enter work
-sudo -u nixlingd NIXLING_GATEWAY_STATE_DIR=/var/lib/nixling/gateways/work \
+sudo -u nixlingd NIXLING_GATEWAY_STATE_DIR=<gateway-state-dir> \
   nixling-gateway-enroll rotate \
-  /var/lib/nixling/gateways/work/credential.sealed.json \
-  /var/lib/nixling/gateways/work/seal.key <<'JSON'
+  <gateway-state-dir>/credential.sealed.json \
+  <gateway-state-dir>/seal.key <<'JSON'
 {
   "relayListen": { "keyName": "gateway-listen", "key": "<new-listen-rule-key>" },
   "relaySend": { "keyName": "gateway-send", "key": "<new-send-rule-key>" }
