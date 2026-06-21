@@ -437,6 +437,16 @@ pub const PUBLIC_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
+        "vm display",
+        "VM/display",
+        "per-VM/per-realm",
+        &["nixling-launcher", "nixling-admin"],
+        true,
+        SecretAccess::MetadataOnly,
+        BrokerRequirement::No,
+        AuditMode::Yes,
+    ),
+    row(
         "switch",
         "VM",
         "per-VM",

@@ -261,6 +261,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- CLI/docs: added the missing `vm display` authorization-matrix row so the
+  declared display-session management command is covered by the generated
+  privileges contract.
 - CLI/daemon: qemu-media USB attach/detach `--apply --json` now emits a
   JSON success envelope, and qemu-media list/status service capabilities no
   longer advertise `virtiofsd`.

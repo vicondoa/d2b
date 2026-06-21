@@ -255,7 +255,8 @@
             "usb attach",
             "usb detach",
             "usb probe",
-            "vm"
+            "vm",
+            "vm display"
           ]
         },
         "scope": {
