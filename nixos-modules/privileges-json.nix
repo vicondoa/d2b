@@ -72,6 +72,19 @@ let
     "auditMode": "errors"
   },
   {
+    "operation": "vm display",
+    "subject": "VM/display",
+    "scope": "per-VM/per-realm",
+    "allowedGroups": [
+      "nixling-launcher",
+      "nixling-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "no",
+    "auditMode": "yes"
+  },
+  {
     "operation": "realm",
     "subject": "realm command family",
     "scope": "global-or-scoped",
