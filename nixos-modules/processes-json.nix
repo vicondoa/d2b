@@ -4,7 +4,10 @@ let
   clean = builtins.unsafeDiscardStringContext;
 
   cfg = config.nixling;
-  prebuilt = import ./prebuilt-packages.nix { inherit pkgs lib; };
+  prebuilt =
+    if cfg.site.usePrebuiltHostTools
+    then import ./prebuilt-packages.nix { inherit pkgs lib; }
+    else { };
   # nixling-owned access helpers (see lib.nix).
   nl = import ./lib.nix { inherit lib pkgs; };
   normalNixosVms = nl.normalNixosVms cfg.vms;

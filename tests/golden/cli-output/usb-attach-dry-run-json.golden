@@ -3,14 +3,14 @@
   "busId": "1-2",
   "command": "usb attach",
   "mode": "dry-run",
-  "notes": "USBIP dry-run reports the daemon → broker bind/lock, firewall, backend/proxy ensurement, reconcile plan, and guest import without mutating host or guest state.",
+  "notes": "USBIP dry-run reports the daemon → broker bind/lock, firewall, backend/proxy ensurement, reconcile plan, and authenticated guestd import without mutating host or guest state.",
   "planned": [
     "UsbipBind",
     "UsbipBindFirewallRule",
     "SpawnRunner(sys-<env>-usbipd/backend)",
     "SpawnRunner(sys-<env>-usbipd/proxy)",
     "UsbipProxyReconcile",
-    "GuestUsbipAttach(ssh sudo -n usbip attach)"
+    "GuestdUsbipImport(attach)"
   ],
   "vm": "corp-vm"
 }

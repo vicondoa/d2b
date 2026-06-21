@@ -1032,6 +1032,21 @@ mod tests {
         StatusRecord::decode(&bytes).unwrap().phase
     }
 
+    fn read_stream_until_eof(
+        paths: &RunnerPaths,
+        stream: Stream,
+    ) -> nixling_exec_runner::filering::RingChunk {
+        let reader = FileRingReader::open(&paths.data(stream), &paths.sidecar(stream)).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        loop {
+            let chunk = reader.read(0, 1024).unwrap();
+            if chunk.eof || std::time::Instant::now() >= deadline {
+                return chunk;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     #[test]
     fn runner_never_root_guard_re_resolves_exact_uid_arg() {
         let good = spec("id", 0);
@@ -1474,17 +1489,12 @@ ControlGroup=/nixling.slice/nixling-exec.slice/nixling-exec-03.service
         assert_eq!(result, RunnerResult::Done);
         assert_eq!(read_phase(&paths), StatusPhase::Exited(7));
 
-        let out = FileRingReader::open(&paths.data(Stream::Stdout), &paths.sidecar(Stream::Stdout))
-            .unwrap()
-            .read(0, 1024)
-            .unwrap();
+        let out = read_stream_until_eof(&paths, Stream::Stdout);
         assert_eq!(out.data, b"hello stdout");
         assert!(out.eof);
-        let err = FileRingReader::open(&paths.data(Stream::Stderr), &paths.sidecar(Stream::Stderr))
-            .unwrap()
-            .read(0, 1024)
-            .unwrap();
+        let err = read_stream_until_eof(&paths, Stream::Stderr);
         assert_eq!(err.data, b"hello stderr");
+        assert!(err.eof);
         assert!(proc.signals().is_empty(), "no signals on a natural exit");
         std::fs::remove_dir_all(&dir).ok();
     }

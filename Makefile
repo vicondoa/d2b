@@ -23,11 +23,11 @@ NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 # static.sh; per-layer targets route through tests/migration-ledger.toml.
 #
 #   make check          L1 PR gate (A-F,H) — Ubuntu+Nix, any runner. Done-gate.
-#   make check-ci       W0: check, then the test-integration placeholder.
+#   make check-ci       check + test-integration for local/manual compatibility.
 #   make check-all      check-ci + test-hardware + perf — full local NixOS gate.
 #   make test-<layer>   focused per-layer run (ledger-driven).
-#   make test-integration  W0 placeholder: legacy G-ci only on NixOS+KVM;
-#                          runNixOSTest CI harness lands W4.
+#   make test-integration  type-9 container integration; local host/manual pre-PR.
+#   make test-host-integration  type-10 runNixOSTest; local NixOS/KVM pre-PR.
 #   make test-hardware     G-hw real GPU/YubiKey/TPM passthrough — NixOS host only.
 # ===========================================================================
 

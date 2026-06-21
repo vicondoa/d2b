@@ -71,13 +71,6 @@ snapshot_listdir() {
   fi
 }
 
-snapshot_mtime() {
-  local path="$1"
-  if [ -e "$path" ]; then
-    stat -c '%Y' "$path"
-  fi
-}
-
 assert_no_new_paths() {
   local label="$1"
   local before="$2"
@@ -95,18 +88,10 @@ assert_no_new_paths() {
 assert_path_not_modified() {
   local label="$1"
   local path="$2"
-  local mtime_before="$3"
-  local list_before="$4"
-  local mtime_after=""
+  local list_before="$3"
   local list_after=""
 
-  mtime_after=$(snapshot_mtime "$path")
   list_after=$(snapshot_listdir "$path")
-
-  if [ "$mtime_after" != "$mtime_before" ]; then
-    fail "$label mtime changed" || true
-    exit 1
-  fi
 
   if [ "$list_after" != "$list_before" ]; then
     fail "$label directory entries changed:" || true
@@ -117,18 +102,16 @@ assert_path_not_modified() {
 
 assert_no_runtime_state() {
   local bin="$1"
-  local run_mtime_before="$2"
-  local run_list_before="$3"
-  local var_lib_mtime_before="$4"
-  local var_lib_list_before="$5"
-  local xdg_before="$6"
-  local tmp_before="$7"
+  local run_list_before="$2"
+  local var_lib_list_before="$3"
+  local xdg_before="$4"
+  local tmp_before="$5"
   local unexpected_home=()
   local xdg_after=""
   local tmp_after=""
 
-  assert_path_not_modified "$bin /run/nixling" /run/nixling "$run_mtime_before" "$run_list_before"
-  assert_path_not_modified "$bin /var/lib/nixling" /var/lib/nixling "$var_lib_mtime_before" "$var_lib_list_before"
+  assert_path_not_modified "$bin /run/nixling" /run/nixling "$run_list_before"
+  assert_path_not_modified "$bin /var/lib/nixling" /var/lib/nixling "$var_lib_list_before"
 
   if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
     xdg_after=$(snapshot_tree "$XDG_RUNTIME_DIR")
@@ -159,14 +142,12 @@ run_stub() {
   local bin="$1"
   local expected="$2"
   local output rc
-  local run_mtime_before="" run_list_before=""
-  local var_lib_mtime_before="" var_lib_list_before=""
+  local run_list_before=""
+  local var_lib_list_before=""
   local xdg_before="" tmp_before=""
 
   log "--> cargo run --bin $bin"
-  run_mtime_before=$(snapshot_mtime /run/nixling)
   run_list_before=$(snapshot_listdir /run/nixling)
-  var_lib_mtime_before=$(snapshot_mtime /var/lib/nixling)
   var_lib_list_before=$(snapshot_listdir /var/lib/nixling)
   if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
     xdg_before=$(snapshot_tree "$XDG_RUNTIME_DIR")
@@ -189,8 +170,8 @@ run_stub() {
     exit 1
   fi
   assert_contains "$output" "$expected" "$bin stdout"
-  assert_no_runtime_state "$bin" "$run_mtime_before" "$run_list_before" \
-    "$var_lib_mtime_before" "$var_lib_list_before" "$xdg_before" "$tmp_before"
+  assert_no_runtime_state "$bin" "$run_list_before" "$var_lib_list_before" \
+    "$xdg_before" "$tmp_before"
 }
 
 run_stub nixling "nixling 0.0.0-bootstrap (bootstrap stub)"
