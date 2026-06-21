@@ -1,4 +1,4 @@
-//! `nixling-gateway-relay` — the handshake-gated relay endpoint (ADR 0032 P0).
+//! `nixling-gateway-relay` — the handshake-gated relay endpoint (ADR 0032).
 //!
 //! Unlike the plain `nixling-relay` byte tunnel, this endpoint carries the
 //! per-session credential as the relay prologue:
@@ -24,7 +24,7 @@
 //!   NL_SESSION_NOT_AFTER    unix-seconds expiry (u64)
 //!
 //!   NIXLING_RELAY_NAMESPACE / NIXLING_RELAY_ENTITY / NIXLING_RELAY_TARGET
-//!   NIXLING_RELAY_SAS_TOKEN    short-lived Send bearer, preferred for P0
+//!   NIXLING_RELAY_SAS_TOKEN    short-lived Send bearer
 //!   NIXLING_RELAY_ENTRA_TOKEN  Entra bearer, or key envs for tools/tests
 //!   NIXLING_RELAY_KEY_NAME / NIXLING_RELAY_KEY
 //!   NIXLING_RELAY_CA_FILE      (optional, sandbox egress-proxy CA)

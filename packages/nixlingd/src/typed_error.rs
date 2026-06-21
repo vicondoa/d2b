@@ -676,8 +676,8 @@ impl TypedError {
             }
             Self::GatewayDisplayUnavailable { detail } => {
                 let redacted = redact_path_like_tokens(detail);
-                if detail.contains("allowHostRelayCredentials") {
-                    "set allowHostRelayCredentials=true only on an explicit transition/dev host, or move relay credentials into the gateway guest before retrying".to_owned()
+                if detail.contains("host-held gateway credentials") {
+                    "enroll inside gateway then retry".to_owned()
                 } else if detail.contains("mode 0600") {
                     format!("repair the operator Waypipe receiver socket permissions and retry: {redacted}")
                 } else if detail.contains("waypipeSocket") {

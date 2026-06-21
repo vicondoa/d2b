@@ -164,6 +164,7 @@ let
           paths = {
             stateDir = gw.stateDir;
             credentialPath = gw.credentialPath;
+            sealKeyPath = gw.sealKeyPath;
           };
         in
         lib.mapAttrsToList
@@ -184,13 +185,28 @@ let
       (lib.filterAttrs (_: gw: gw.enable) cfg.gateways));
 
   gatewayCredentialPathAssertions =
+    lib.flatten (lib.mapAttrsToList
+      (name: gw:
+        map
+          (field: {
+            assertion = absoluteRuntimePathUnder gw.stateDir gw.${field};
+            message = ''
+              nixling.gateways.${name}.${field} must live under
+              nixling.gateways.${name}.stateDir so the gateway credential
+              store stays inside the gateway runtime-state boundary.
+            '';
+          })
+          [ "credentialPath" "sealKeyPath" ])
+      (lib.filterAttrs (_: gw: gw.enable) cfg.gateways));
+
+  gatewayHostRelayCredentialAssertions =
     lib.mapAttrsToList
       (name: gw: {
-        assertion = absoluteRuntimePathUnder gw.stateDir gw.credentialPath;
+        assertion = !gw.allowHostRelayCredentials;
         message = ''
-          nixling.gateways.${name}.credentialPath must live under
-          nixling.gateways.${name}.stateDir so the gateway credential envelope
-          stays inside the gateway runtime-state boundary.
+          nixling.gateways.${name}.allowHostRelayCredentials has been retired.
+          Host-side gateway credential reads and Relay Send bearer minting are
+          rejected; enroll credentials inside the gateway guest instead.
         '';
       })
       (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
@@ -1117,6 +1133,7 @@ in
     ++ guestConfigContainmentAssertions
     ++ gatewayPathAssertions
     ++ gatewayCredentialPathAssertions
+    ++ gatewayHostRelayCredentialAssertions
     ++ gatewayStateBoundaryAssertions
     ++ gatewayCoordinateAssertions
     ++ gatewayEntrypointAssertions

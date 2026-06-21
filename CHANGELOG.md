@@ -99,6 +99,9 @@ deprecations ship one minor release before removal.
 - Capability negotiation now rejects operations and streams when a
   session lacks the required capability, with typed missing-capability
   errors.
+- Gateway credentials can now be enrolled and rotated inside the gateway
+  guest as a sealed runtime envelope, while host-side gateway credential
+  reads and Relay Send bearer minting are rejected.
 
 ### Changed
 

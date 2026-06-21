@@ -97,6 +97,32 @@ EOF
   };
   nixlingActivationHelperPackage = if prebuilt ? "nixling-activation-helper" then prebuilt."nixling-activation-helper" else nixlingActivationHelperSourcePackage;
 
+  nixlingGatewayRuntimeSourcePackage = pkgs.rustPlatform.buildRustPackage {
+    pname = "nixling-gateway-runtime";
+    version = "0.0.0-bootstrap";
+    src = packagesSrc;
+    inherit cargoLock;
+    cargoBuildFlags = [ "--package" "nixling-gateway-runtime" ];
+    doCheck = false;
+    postPatch = ''
+      mkdir -p .cargo
+      cat > .cargo/config.toml <<EOF
+[build]
+rustc-wrapper = ""
+EOF
+      rm -f .cargo/rustc-wrapper.sh
+    '';
+    installPhase = ''
+      runHook preInstall
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/nixling-gateway-enroll $out/bin/nixling-gateway-enroll 2>/dev/null \
+        || install -Dm755 target/release/nixling-gateway-enroll $out/bin/nixling-gateway-enroll
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/nixling-gateway-relay $out/bin/nixling-gateway-relay 2>/dev/null \
+        || install -Dm755 target/release/nixling-gateway-relay $out/bin/nixling-gateway-relay
+      runHook postInstall
+    '';
+  };
+  nixlingGatewayRuntimePackage = if prebuilt ? "nixling-gateway-runtime" then prebuilt."nixling-gateway-runtime" else nixlingGatewayRuntimeSourcePackage;
+
   nixlingCliShellArtifactsPackage = pkgs.runCommand "nixling-cli-shell-artifacts" { } ''
     install -Dm644 ${../docs/manpages/nixling.1} "$out/share/man/man1/nixling.1"
     ${pkgs.gzip}/bin/gzip -n -c ${../docs/manpages/nixling.1} > "$out/share/man/man1/nixling.1.gz"
@@ -225,6 +251,7 @@ in
     nixling._hostToolPackages = {
       nixling = nixlingCliPackage;
       nixlingd = nixlingdPackage;
+      nixlingGatewayRuntime = nixlingGatewayRuntimePackage;
     };
 
     environment.systemPackages = [
