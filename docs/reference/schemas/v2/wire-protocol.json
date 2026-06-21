@@ -7467,6 +7467,7 @@
           "type": "string"
         },
         "optional": {
+          "default": false,
           "type": "boolean"
         },
         "processRole": {

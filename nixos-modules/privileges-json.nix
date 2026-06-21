@@ -59,6 +59,32 @@ let
     "auditMode": "deny-only"
   },
   {
+    "operation": "vm",
+    "subject": "VM command family",
+    "scope": "global-or-scoped",
+    "allowedGroups": [
+      "nixling-launcher",
+      "nixling-admin"
+    ],
+    "destructive": false,
+    "secretAccess": "none",
+    "brokerRequired": "no",
+    "auditMode": "errors"
+  },
+  {
+    "operation": "realm",
+    "subject": "realm command family",
+    "scope": "global-or-scoped",
+    "allowedGroups": [
+      "nixling-launcher",
+      "nixling-admin"
+    ],
+    "destructive": false,
+    "secretAccess": "none",
+    "brokerRequired": "no",
+    "auditMode": "errors"
+  },
+  {
     "operation": "list",
     "subject": "VM/env",
     "scope": "global-or-scoped",

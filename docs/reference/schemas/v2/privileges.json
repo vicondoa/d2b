@@ -240,6 +240,7 @@
             "keys show",
             "list",
             "migrate",
+            "realm",
             "restart",
             "rollback",
             "rotate-known-host",
@@ -253,7 +254,8 @@
             "usb",
             "usb attach",
             "usb detach",
-            "usb probe"
+            "usb probe",
+            "vm"
           ]
         },
         "scope": {
