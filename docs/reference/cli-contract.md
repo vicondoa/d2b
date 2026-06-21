@@ -132,6 +132,22 @@ the realm through the generated realm entrypoint table and verifies the
 gateway VM is declared and running before attempting the exec. Realm
 relay/provider credentials remain inside the gateway guest.
 
+### `realm list`
+
+**Synopsis:** `nixling realm list [--human | --json]`
+
+Lists rendered local realm entrypoints. The output reports each realm's mode
+(`host-resident` or `gateway-backed`), gateway VM when present, local gateway
+lifecycle state, credential boundary, and default-deny cross-realm policy.
+
+### `realm inspect`
+
+**Synopsis:** `nixling realm inspect <realm> [--human | --json]`
+
+Inspects one realm entrypoint using the same bounded fields as `realm list`.
+Unknown realms fail closed with the same actionable missing-entrypoint envelope
+used by routed VM targets.
+
 ### `realm run`
 
 **Synopsis:** `nixling realm run <realm> -- <argv...> [--human | --json]`

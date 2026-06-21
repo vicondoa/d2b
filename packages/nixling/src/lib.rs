@@ -233,6 +233,35 @@ pub struct VmDisplayCloseOutputV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmListOutputV1 {
+    pub command: String,
+    pub realms: Vec<RealmPolicyOutputV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmInspectOutputV1 {
+    pub command: String,
+    #[serde(flatten)]
+    pub realm: RealmPolicyOutputV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmPolicyOutputV1 {
+    pub realm: String,
+    pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_vm: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_target: Option<String>,
+    pub gateway_state: String,
+    pub cross_realm_policy: String,
+    pub credential_boundary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum StatusOutputV2 {
     Vm(Box<StatusVmOutputV2>),
@@ -903,10 +932,32 @@ struct RealmArgs {
 
 #[derive(Debug, Subcommand)]
 enum RealmCommand {
+    /// List local realm policy entrypoints.
+    List(RealmListArgs),
+    /// Inspect one local realm policy entrypoint.
+    Inspect(RealmInspectArgs),
     /// Open an interactive shell inside the realm gateway VM.
     Enter(RealmEnterArgs),
     /// Run a one-shot command inside the realm gateway VM.
     Run(RealmRunArgs),
+}
+
+#[derive(Debug, Args)]
+struct RealmListArgs {
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
+#[derive(Debug, Args)]
+struct RealmInspectArgs {
+    /// Realm path, e.g. `work` or `payments.work`.
+    realm: String,
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
 }
 
 #[derive(Debug, Args)]
@@ -2027,6 +2078,8 @@ fn dispatch(
             AuthCommand::Status(args) => cmd_auth_status(context, args),
         },
         NativeCommand::Realm(args) => match &args.command {
+            RealmCommand::List(args) => cmd_realm_list(context, args),
+            RealmCommand::Inspect(args) => cmd_realm_inspect(context, args),
             RealmCommand::Enter(args) => cmd_realm_enter(context, args),
             RealmCommand::Run(args) => cmd_realm_run(context, args),
         },
@@ -4707,6 +4760,150 @@ fn realm_gateway_exec_args(
         management: Vec::new(),
         command: argv,
     }
+}
+
+fn realm_policy_rows(
+    context: &Context,
+    json: bool,
+) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
+    let entries =
+        if let Some(doc) = load_realm_entrypoint_document_from_path(&realm_entrypoints_path())? {
+            doc.entries
+        } else {
+            let mut entries = std::collections::BTreeMap::new();
+            entries.insert(
+                "local".to_owned(),
+                RealmEntrypointConfig {
+                    mode: "host-resident".to_owned(),
+                    gateway: None,
+                },
+            );
+            entries
+        };
+    realm_policy_rows_from_entries(context, entries, json)
+}
+
+fn realm_policy_rows_from_entries(
+    context: &Context,
+    entries: BTreeMap<String, RealmEntrypointConfig>,
+    json: bool,
+) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
+    let mut rows = Vec::new();
+    for (realm_raw, entry) in entries {
+        let realm = target_routing::parse_realm_arg(&realm_raw).map_err(|err| {
+            CliFailure::new(
+                1,
+                format!("realm entrypoint `{realm_raw}` is invalid: {err}"),
+            )
+        })?;
+        match entry.mode.as_str() {
+            "host-resident" => rows.push(RealmPolicyOutputV1 {
+                realm: realm.target_form(),
+                mode: "host-resident".to_owned(),
+                gateway_vm: None,
+                gateway_target: None,
+                gateway_state: "local-only".to_owned(),
+                cross_realm_policy: "default-deny".to_owned(),
+                credential_boundary: "host-resident-local-only".to_owned(),
+            }),
+            "gateway-backed" => {
+                let gateway_target = entry.gateway.ok_or_else(|| {
+                    CliFailure::new(
+                        1,
+                        format!("gateway-backed realm `{realm_raw}` has no gateway target"),
+                    )
+                })?;
+                let gateway_vm = gateway_vm_from_target_text(&realm.target_form(), &gateway_target)
+                    .map_err(|err| emit_route_error(err, json).unwrap_or_else(|failure| failure))?;
+                let gateway_state = gateway_lifecycle_state(context, &gateway_vm)?
+                    .map(gateway_state_label)
+                    .unwrap_or("not reported by nixlingd")
+                    .to_owned();
+                rows.push(RealmPolicyOutputV1 {
+                    realm: realm.target_form(),
+                    mode: "gateway-backed".to_owned(),
+                    gateway_vm: Some(gateway_vm),
+                    gateway_target: Some(gateway_target),
+                    gateway_state,
+                    cross_realm_policy: "default-deny".to_owned(),
+                    credential_boundary: "gateway-owned".to_owned(),
+                });
+            }
+            other => {
+                return Err(CliFailure::new(
+                    1,
+                    format!("realm `{realm_raw}` has unknown entrypoint mode `{other}`"),
+                ));
+            }
+        }
+    }
+    rows.sort_by(|a, b| a.realm.cmp(&b.realm));
+    Ok(rows)
+}
+
+fn print_realm_rows_human(rows: &[RealmPolicyOutputV1]) {
+    print_stdout(&format!(
+        "{:<24} {:<16} {:<24} {:<22} {}\n",
+        "REALM", "MODE", "GATEWAY", "STATE", "CROSS_REALM"
+    ));
+    for row in rows {
+        print_stdout(&format!(
+            "{:<24} {:<16} {:<24} {:<22} {}\n",
+            row.realm,
+            row.mode,
+            row.gateway_vm.as_deref().unwrap_or("-"),
+            row.gateway_state,
+            row.cross_realm_policy
+        ));
+    }
+}
+
+fn cmd_realm_list(context: &Context, args: &RealmListArgs) -> Result<i32, CliFailure> {
+    let rows = realm_policy_rows(context, args.json)?;
+    let output = RealmListOutputV1 {
+        command: "realm list".to_owned(),
+        realms: rows,
+    };
+    if args.json {
+        print_json(&output)?;
+    } else if output.realms.is_empty() {
+        print_stdout("No realm entrypoints configured\n");
+    } else {
+        print_realm_rows_human(&output.realms);
+    }
+    Ok(0)
+}
+
+fn cmd_realm_inspect(context: &Context, args: &RealmInspectArgs) -> Result<i32, CliFailure> {
+    let realm = target_routing::parse_realm_arg(&args.realm).map_err(|err| {
+        emit_realm_usage_error(
+            &format!("invalid realm `{}`: {err}", args.realm),
+            "realm argument did not parse as a bounded lowercase realm path",
+            "Use a DNS-shaped realm path such as `work` or `payments.work`.",
+            args.json,
+        )
+        .unwrap_or_else(|failure| failure)
+    })?;
+    let realm_key = realm.target_form();
+    let rows = realm_policy_rows(context, args.json)?;
+    let Some(row) = rows.into_iter().find(|row| row.realm == realm_key) else {
+        return Err(emit_missing_realm_entrypoint(
+            &realm_key,
+            &target_routing::gateway_vm_name(&realm),
+            None,
+            args.json,
+        )?);
+    };
+    let output = RealmInspectOutputV1 {
+        command: "realm inspect".to_owned(),
+        realm: row,
+    };
+    if args.json {
+        print_json(&output)?;
+    } else {
+        print_realm_rows_human(std::slice::from_ref(&output.realm));
+    }
+    Ok(0)
 }
 
 fn cmd_realm_enter(context: &Context, args: &RealmEnterArgs) -> Result<i32, CliFailure> {
@@ -10349,6 +10546,67 @@ mod host_install_dispatch_tests {
             serde_json::to_vec(&manifest).expect("serialize manifest"),
         )
         .expect("write manifest");
+    }
+
+    fn test_context(manifest_path: PathBuf) -> Context {
+        Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("bundle.json"),
+            public_socket: manifest_path.with_extension("sock"),
+            broker_socket: manifest_path.with_extension("broker.sock"),
+            state_root: None,
+            host_runtime_path: manifest_path.with_extension("host-runtime.json"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: manifest_path.with_extension("daemon-state"),
+            metrics_url: "http://127.0.0.1:9101/metrics".to_owned(),
+        }
+    }
+
+    #[test]
+    fn realm_policy_rows_surface_default_deny_boundaries() {
+        let manifest_path = test_socket_path("realm-policy-rows", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("manifest parent");
+        }
+        write_test_manifest(&manifest_path, "sys-work-gateway");
+        let context = test_context(manifest_path.clone());
+        let mut entries = std::collections::BTreeMap::new();
+        entries.insert(
+            "local".to_owned(),
+            super::RealmEntrypointConfig {
+                mode: "host-resident".to_owned(),
+                gateway: None,
+            },
+        );
+        entries.insert(
+            "work".to_owned(),
+            super::RealmEntrypointConfig {
+                mode: "gateway-backed".to_owned(),
+                gateway: Some("sys-work-gateway.nixling".to_owned()),
+            },
+        );
+
+        let rows = super::realm_policy_rows_from_entries(&context, entries, true)
+            .expect("realm rows render");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].realm, "local");
+        assert_eq!(rows[0].mode, "host-resident");
+        assert_eq!(rows[0].cross_realm_policy, "default-deny");
+        assert_eq!(rows[0].credential_boundary, "host-resident-local-only");
+        assert_eq!(rows[1].realm, "work");
+        assert_eq!(rows[1].mode, "gateway-backed");
+        assert_eq!(rows[1].gateway_vm.as_deref(), Some("sys-work-gateway"));
+        assert_eq!(rows[1].cross_realm_policy, "default-deny");
+        assert_eq!(rows[1].credential_boundary, "gateway-owned");
+        let rendered = serde_json::to_string(&rows).expect("rows serialize");
+        for forbidden in ["SharedAccessKey", "Bearer ", "/home/", "stdout", "stderr"] {
+            assert!(
+                !rendered.contains(forbidden),
+                "realm policy output leaked {forbidden}: {rendered}"
+            );
+        }
+        let _ = std::fs::remove_file(&manifest_path);
     }
 
     fn write_qemu_media_manifest(path: &PathBuf, vm: &str) {

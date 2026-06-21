@@ -180,14 +180,24 @@ complete -c nixling -n "__fish_nixling_using_subcommand auth; and __fish_seen_su
 complete -c nixling -n "__fish_nixling_using_subcommand auth; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
 complete -c nixling -n "__fish_nixling_using_subcommand auth; and __fish_seen_subcommand_from help" -f -a "status"
 complete -c nixling -n "__fish_nixling_using_subcommand auth; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c nixling -n "__fish_nixling_using_subcommand realm; and not __fish_seen_subcommand_from enter run help" -s h -l help -d 'Print help'
-complete -c nixling -n "__fish_nixling_using_subcommand realm; and not __fish_seen_subcommand_from enter run help" -f -a "enter" -d 'Open an interactive shell inside the realm gateway VM'
-complete -c nixling -n "__fish_nixling_using_subcommand realm; and not __fish_seen_subcommand_from enter run help" -f -a "run" -d 'Run a one-shot command inside the realm gateway VM'
-complete -c nixling -n "__fish_nixling_using_subcommand realm; and not __fish_seen_subcommand_from enter run help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c nixling -n "__fish_nixling_using_subcommand realm; and not __fish_seen_subcommand_from list inspect enter run help" -s h -l help -d 'Print help'
+complete -c nixling -n "__fish_nixling_using_subcommand realm; and not __fish_seen_subcommand_from list inspect enter run help" -f -a "list" -d 'List local realm policy entrypoints'
+complete -c nixling -n "__fish_nixling_using_subcommand realm; and not __fish_seen_subcommand_from list inspect enter run help" -f -a "inspect" -d 'Inspect one local realm policy entrypoint'
+complete -c nixling -n "__fish_nixling_using_subcommand realm; and not __fish_seen_subcommand_from list inspect enter run help" -f -a "enter" -d 'Open an interactive shell inside the realm gateway VM'
+complete -c nixling -n "__fish_nixling_using_subcommand realm; and not __fish_seen_subcommand_from list inspect enter run help" -f -a "run" -d 'Run a one-shot command inside the realm gateway VM'
+complete -c nixling -n "__fish_nixling_using_subcommand realm; and not __fish_seen_subcommand_from list inspect enter run help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from list" -l json
+complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from list" -l human
+complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from list" -s h -l help -d 'Print help'
+complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from inspect" -l json
+complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from inspect" -l human
+complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from inspect" -s h -l help -d 'Print help'
 complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from enter" -s h -l help -d 'Print help'
 complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from run" -l json -d 'Emit the outer `vm exec` result as JSON'
 complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from run" -l human -d 'Force human output'
 complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from run" -s h -l help -d 'Print help'
+complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "list" -d 'List local realm policy entrypoints'
+complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "inspect" -d 'Inspect one local realm policy entrypoint'
 complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "enter" -d 'Open an interactive shell inside the realm gateway VM'
 complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "run" -d 'Run a one-shot command inside the realm gateway VM'
 complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
@@ -413,6 +423,8 @@ complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_su
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "reconcile" -d 'Recover host network state after the daemon engaged operator-only mode'
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "validate" -d 'Run the host-side validator suite and write evidence records'
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from auth" -f -a "status"
+complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from realm" -f -a "list" -d 'List local realm policy entrypoints'
+complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from realm" -f -a "inspect" -d 'Inspect one local realm policy entrypoint'
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from realm" -f -a "enter" -d 'Open an interactive shell inside the realm gateway VM'
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from realm" -f -a "run" -d 'Run a one-shot command inside the realm gateway VM'
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from vm" -f -a "start" -d 'Start the per-VM DAG (virtiofsd → CH → readiness probes)'

@@ -71,6 +71,9 @@ The contracts. Stable interfaces a consumer can depend on.
 - [`reference/display-io-capabilities.md`](./reference/display-io-capabilities.md) —
   display, clipboard, audio, USB/HID, GPU, video, and provider display
   lifecycle capability boundaries.
+- [`reference/realm-policy.md`](./reference/realm-policy.md) —
+  host-resident vs gateway-backed realm policy, default-deny cross-realm
+  behavior, authorization, audit, and network isolation boundaries.
 - [`reference/remote-full-host-nodes.md`](./reference/remote-full-host-nodes.md) —
   gateway-managed remote nixling hosts: registration, capability gating,
   operation routing, idempotency, and the non-tunneling boundary.
@@ -130,6 +133,11 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
 - [`how-to/write-a-nixling-addon.md`](./how-to/write-a-nixling-addon.md) —
   write a sibling flake that composes with `nixling` per VM, including
   the `nixpkgs` follow policy and eval-only test pattern.
+- [`how-to/configure-work-gateway.md`](./how-to/configure-work-gateway.md) —
+  declare a work/provider realm gateway and verify default-deny isolation.
+- [`how-to/migrate-to-realm-gateways.md`](./how-to/migrate-to-realm-gateways.md) —
+  migrate from local-only or implicit realm metadata to explicit gateway-backed
+  realm policy.
 
 ## Explanation
 

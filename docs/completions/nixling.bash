@@ -322,6 +322,12 @@ _nixling() {
             nixling__subcmd__help__subcmd__realm,enter)
                 cmd="nixling__subcmd__help__subcmd__realm__subcmd__enter"
                 ;;
+            nixling__subcmd__help__subcmd__realm,inspect)
+                cmd="nixling__subcmd__help__subcmd__realm__subcmd__inspect"
+                ;;
+            nixling__subcmd__help__subcmd__realm,list)
+                cmd="nixling__subcmd__help__subcmd__realm__subcmd__list"
+                ;;
             nixling__subcmd__help__subcmd__realm,run)
                 cmd="nixling__subcmd__help__subcmd__realm__subcmd__run"
                 ;;
@@ -448,6 +454,12 @@ _nixling() {
             nixling__subcmd__realm,help)
                 cmd="nixling__subcmd__realm__subcmd__help"
                 ;;
+            nixling__subcmd__realm,inspect)
+                cmd="nixling__subcmd__realm__subcmd__inspect"
+                ;;
+            nixling__subcmd__realm,list)
+                cmd="nixling__subcmd__realm__subcmd__list"
+                ;;
             nixling__subcmd__realm,run)
                 cmd="nixling__subcmd__realm__subcmd__run"
                 ;;
@@ -456,6 +468,12 @@ _nixling() {
                 ;;
             nixling__subcmd__realm__subcmd__help,help)
                 cmd="nixling__subcmd__realm__subcmd__help__subcmd__help"
+                ;;
+            nixling__subcmd__realm__subcmd__help,inspect)
+                cmd="nixling__subcmd__realm__subcmd__help__subcmd__inspect"
+                ;;
+            nixling__subcmd__realm__subcmd__help,list)
+                cmd="nixling__subcmd__realm__subcmd__help__subcmd__list"
                 ;;
             nixling__subcmd__realm__subcmd__help,run)
                 cmd="nixling__subcmd__realm__subcmd__help__subcmd__run"
@@ -1643,7 +1661,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__help__subcmd__realm)
-            opts="enter run"
+            opts="list inspect enter run"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1657,6 +1675,34 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__help__subcmd__realm__subcmd__enter)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__help__subcmd__realm__subcmd__inspect)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__help__subcmd__realm__subcmd__list)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2461,7 +2507,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__realm)
-            opts="-h --help enter run help"
+            opts="-h --help list inspect enter run help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2489,7 +2535,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__realm__subcmd__help)
-            opts="enter run help"
+            opts="list inspect enter run help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2530,9 +2576,65 @@ _nixling() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        nixling__subcmd__realm__subcmd__help__subcmd__inspect)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__realm__subcmd__help__subcmd__list)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         nixling__subcmd__realm__subcmd__help__subcmd__run)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__realm__subcmd__inspect)
+            opts="-h --json --human --help <REALM>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__realm__subcmd__list)
+            opts="-h --json --human --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

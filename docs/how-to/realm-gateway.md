@@ -70,6 +70,10 @@ If the gateway is missing, stopped, or not reported by the daemon, the
 CLI fails closed with a typed remediation instead of falling back to host
 credentials or SSH.
 
+Use `nixling realm list` and `nixling realm inspect <realm>` to inspect the
+rendered host-resident vs gateway-backed policy and the gateway's local
+lifecycle state.
+
 ## Credential boundary
 
 The host declaration carries non-secret coordinates and state paths only.

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RealmListOutputV1",
+  "type": "object",
+  "required": [
+    "command",
+    "realms"
+  ],
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "realms": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/RealmPolicyOutputV1"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "RealmPolicyOutputV1": {
+      "type": "object",
+      "required": [
+        "credentialBoundary",
+        "crossRealmPolicy",
+        "gatewayState",
+        "mode",
+        "realm"
+      ],
+      "properties": {
+        "credentialBoundary": {
+          "type": "string"
+        },
+        "crossRealmPolicy": {
+          "type": "string"
+        },
+        "gatewayState": {
+          "type": "string"
+        },
+        "gatewayTarget": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gatewayVm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "type": "string"
+        },
+        "realm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

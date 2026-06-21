@@ -453,7 +453,24 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:nixling-realm-command-$line[1]:"
         case $line[1] in
-            (enter)
+            (list)
+_arguments "${_arguments_options[@]}" : \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(inspect)
+_arguments "${_arguments_options[@]}" : \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':realm -- Realm path, e.g. `work` or `payments.work`:_default' \
+&& ret=0
+;;
+(enter)
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
 '--help[Print help]' \
@@ -482,7 +499,15 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:nixling-realm-help-command-$line[1]:"
         case $line[1] in
-            (enter)
+            (list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(inspect)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(enter)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1266,7 +1291,15 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:nixling-help-realm-command-$line[1]:"
         case $line[1] in
-            (enter)
+            (list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(inspect)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(enter)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1978,6 +2011,8 @@ _nixling__subcmd__help__subcmd__migrate_commands() {
 (( $+functions[_nixling__subcmd__help__subcmd__realm_commands] )) ||
 _nixling__subcmd__help__subcmd__realm_commands() {
     local commands; commands=(
+'list:List local realm policy entrypoints' \
+'inspect:Inspect one local realm policy entrypoint' \
 'enter:Open an interactive shell inside the realm gateway VM' \
 'run:Run a one-shot command inside the realm gateway VM' \
     )
@@ -1987,6 +2022,16 @@ _nixling__subcmd__help__subcmd__realm_commands() {
 _nixling__subcmd__help__subcmd__realm__subcmd__enter_commands() {
     local commands; commands=()
     _describe -t commands 'nixling help realm enter commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__realm__subcmd__inspect_commands] )) ||
+_nixling__subcmd__help__subcmd__realm__subcmd__inspect_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help realm inspect commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__realm__subcmd__list_commands] )) ||
+_nixling__subcmd__help__subcmd__realm__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help realm list commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__help__subcmd__realm__subcmd__run_commands] )) ||
 _nixling__subcmd__help__subcmd__realm__subcmd__run_commands() {
@@ -2313,6 +2358,8 @@ _nixling__subcmd__migrate_commands() {
 (( $+functions[_nixling__subcmd__realm_commands] )) ||
 _nixling__subcmd__realm_commands() {
     local commands; commands=(
+'list:List local realm policy entrypoints' \
+'inspect:Inspect one local realm policy entrypoint' \
 'enter:Open an interactive shell inside the realm gateway VM' \
 'run:Run a one-shot command inside the realm gateway VM' \
 'help:Print this message or the help of the given subcommand(s)' \
@@ -2327,6 +2374,8 @@ _nixling__subcmd__realm__subcmd__enter_commands() {
 (( $+functions[_nixling__subcmd__realm__subcmd__help_commands] )) ||
 _nixling__subcmd__realm__subcmd__help_commands() {
     local commands; commands=(
+'list:List local realm policy entrypoints' \
+'inspect:Inspect one local realm policy entrypoint' \
 'enter:Open an interactive shell inside the realm gateway VM' \
 'run:Run a one-shot command inside the realm gateway VM' \
 'help:Print this message or the help of the given subcommand(s)' \
@@ -2343,10 +2392,30 @@ _nixling__subcmd__realm__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'nixling realm help help commands' commands "$@"
 }
+(( $+functions[_nixling__subcmd__realm__subcmd__help__subcmd__inspect_commands] )) ||
+_nixling__subcmd__realm__subcmd__help__subcmd__inspect_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling realm help inspect commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__realm__subcmd__help__subcmd__list_commands] )) ||
+_nixling__subcmd__realm__subcmd__help__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling realm help list commands' commands "$@"
+}
 (( $+functions[_nixling__subcmd__realm__subcmd__help__subcmd__run_commands] )) ||
 _nixling__subcmd__realm__subcmd__help__subcmd__run_commands() {
     local commands; commands=()
     _describe -t commands 'nixling realm help run commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__realm__subcmd__inspect_commands] )) ||
+_nixling__subcmd__realm__subcmd__inspect_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling realm inspect commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__realm__subcmd__list_commands] )) ||
+_nixling__subcmd__realm__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling realm list commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__realm__subcmd__run_commands] )) ||
 _nixling__subcmd__realm__subcmd__run_commands() {
