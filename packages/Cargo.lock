@@ -1795,7 +1795,9 @@ dependencies = [
  "async-trait",
  "nixling-constellation-core",
  "nixling-constellation-provider",
+ "nixling-core",
  "nixling-host",
+ "serde_json",
  "tokio",
 ]
 

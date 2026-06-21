@@ -40,6 +40,35 @@ pub struct DisplayCapabilitySet {
 pub struct NodeCapabilitySet {
     /// The underlying capability set.
     pub caps: CapabilitySet,
+    /// Host substrate family, when this descriptor comes from a host substrate
+    /// provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub substrate: Option<HostSubstrateKind>,
+    /// Non-secret substrate version (for example Ubuntu `24.04`), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub substrate_version: Option<String>,
+    /// Whether unprivileged user namespaces appear usable for the substrate.
+    #[serde(default)]
+    pub userns_available: bool,
+    /// Whether vhost acceleration appears available for the substrate.
+    #[serde(default)]
+    pub vhost_acceleration: bool,
+    /// Low-cardinality LSM label (`landlock`, `apparmor`, `selinux`, `none`,
+    /// or `unknown`), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lsm: Option<String>,
+}
+
+/// Host substrate family advertised by a [`crate::HostSubstrateProvider`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HostSubstrateKind {
+    /// NixOS module-managed host.
+    NixOs,
+    /// Ubuntu or Ubuntu-derived generic Linux host.
+    Ubuntu,
+    /// Generic Linux host without a more specific adapter.
+    GenericLinux,
 }
 
 macro_rules! caps_accessor {
