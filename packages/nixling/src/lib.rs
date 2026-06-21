@@ -269,8 +269,8 @@ pub struct OpInspectTraceOutputV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpInspectLocalOutputV1 {
-    pub vm_count: usize,
-    pub gateway_count: usize,
+    pub vm_count: u32,
+    pub gateway_count: u32,
     pub source: String,
 }
 
@@ -5139,7 +5139,7 @@ fn op_inspect_output(
     let trace = op_inspect_trace(args)?;
     let mut degraded = Vec::new();
     let vm_count = match context.load_manifest() {
-        Ok(manifest) => manifest.vms().len(),
+        Ok(manifest) => u32::try_from(manifest.vms().len()).unwrap_or(u32::MAX),
         Err(_) => {
             degraded.push(OpInspectDegradedOutputV1 {
                 scope: "local-manifest".to_owned(),
@@ -5166,7 +5166,7 @@ fn op_inspect_output(
 }
 
 fn op_inspect_output_from_parts(
-    vm_count: usize,
+    vm_count: u32,
     trace: Option<OpInspectTraceOutputV1>,
     realms: Vec<RealmPolicyOutputV1>,
     mut degraded: Vec<OpInspectDegradedOutputV1>,
@@ -5174,19 +5174,19 @@ fn op_inspect_output_from_parts(
     let gateway_count = realms
         .iter()
         .filter(|realm| realm.mode == "gateway-backed")
-        .count();
+        .filter_map(|realm| realm.gateway_vm.as_deref())
+        .collect::<BTreeSet<_>>()
+        .len();
+    let gateway_count = u32::try_from(gateway_count).unwrap_or(u32::MAX);
     for realm in &realms {
         if realm.mode == "gateway-backed"
             && !matches!(realm.gateway_state.as_str(), "running" | "booted")
         {
             degraded.push(OpInspectDegradedOutputV1 {
-                scope: format!("realm:{}", realm.realm),
+                scope: "realm".to_owned(),
                 reason: "gateway-not-running".to_owned(),
-                remediation: realm
-                    .gateway_vm
-                    .as_ref()
-                    .map(|vm| format!("start `{vm}` with `nixling vm start {vm} --apply`"))
-                    .unwrap_or_else(|| "declare and start the realm gateway".to_owned()),
+                remediation: "start the realm gateway with `nixling vm start <gateway-vm> --apply`"
+                    .to_owned(),
             });
         }
     }
@@ -9079,6 +9079,7 @@ fn all_known_subcommands() -> Vec<String> {
         "audit",
         "host check",
         "auth status",
+        "op inspect",
         "up",
         "down",
         "restart",
@@ -11079,7 +11080,10 @@ mod host_install_dispatch_tests {
         assert_eq!(output.command, "op inspect");
         assert_eq!(output.trace.as_ref().unwrap().trace_id, "trace-1");
         assert_eq!(output.local.vm_count, 1);
-        assert!(output.local.gateway_count <= output.realms.len());
+        assert!(
+            usize::try_from(output.local.gateway_count).unwrap_or(usize::MAX)
+                <= output.realms.len()
+        );
         assert!(output.realms.iter().any(|realm| realm.realm == "local"));
         let rendered = serde_json::to_string(&output).expect("op inspect serializes");
         for forbidden in ["SharedAccessKey", "Bearer ", "/home/", "stdout", "stderr"] {
@@ -11128,12 +11132,12 @@ mod host_install_dispatch_tests {
         let output = super::op_inspect_output_from_parts(1, None, realms, Vec::new());
         assert_eq!(output.local.gateway_count, 1);
         assert_eq!(output.degraded.len(), 1);
-        assert_eq!(output.degraded[0].scope, "realm:work");
+        assert_eq!(output.degraded[0].scope, "realm");
         assert_eq!(output.degraded[0].reason, "gateway-not-running");
         assert!(
             output.degraded[0]
                 .remediation
-                .contains("nixling vm start sys-work-gateway --apply")
+                .contains("nixling vm start <gateway-vm> --apply")
         );
     }
 
