@@ -139,6 +139,11 @@ impl ProviderError {
         self.error.kind()
     }
 
+    /// The bounded, operator-safe underlying constellation error message.
+    pub fn message(&self) -> &str {
+        self.error.message()
+    }
+
     /// The structured missing capability, if this is a capability denial.
     pub fn missing_capability(&self) -> Option<Capability> {
         self.error.missing_capability()
