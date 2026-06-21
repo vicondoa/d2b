@@ -140,33 +140,39 @@ deprecations ship one minor release before removal.
 - Host-to-realm isolation is now documented and checked with a redacted
   host egress policy artifact, so host daemon/broker/CLI surfaces remain
   free of realm relay credentials and sessions.
-- ADR 0032 provider-managed sandboxes: the ACA adapter now handles
+- Provider-managed sandboxes: the Azure Container Apps adapter now handles
   provider-layer 429/rate-limit responses with `Retry-After`-aware
   backoff metadata and a shared circuit breaker. When the circuit is open,
-  `Backpressure` errors include the remaining open duration.
-  Circuit state is shared across provider instances targeting the same
-  ACA subscription/resource-group pair so load is not shed onto a
-  sibling instance pointing at the same upstream. Retry hint metadata
-  remains internal to the provider layer; no change to the public
+  `Backpressure` errors include the remaining open duration. Probe attempts
+  have a bounded timeout, stale probes reopen the circuit, and repeated
+  transient failures use bounded exponential backoff with jitter. Concurrent
+  429 responses from the same request batch can extend an already-open circuit.
+  Circuit state is shared across provider instances targeting the same Azure Container Apps
+  endpoint, subscription, resource group, and sandbox group so sibling
+  instances cannot bypass the breaker for the same upstream. Retry hint
+  metadata remains internal to the provider layer; no change to the public
   `ConstellationError` schema.
-- ADR 0032 provider-managed sandboxes: ACA adapter authentication now
-  enforces a strict managed/workload identity boundary in production.
+- Provider-managed sandboxes: Azure Container Apps adapter authentication now
+  enforces workload identity first, then managed identity, in production.
   Ambient developer credential chains (Azure CLI tokens, environment
   variable secrets, developer-toolchain fallbacks) are not present in the
   production resolution order. Non-production local-validation contexts
   inject test credentials explicitly and are not a runtime fallback.
-- ADR 0032 provider-managed sandboxes: Azure REST error diagnostics are
-  now gated by an allowlist. Only the allowlisted `error.code` values,
-  a length-bounded sanitized `error.message`, the HTTP status code, and
-  the opaque `x-ms-correlation-request-id` header appear in
-  provider errors, structured log spans, and audit records.
-  Full response bodies, endpoint URLs, resource IDs, tokens, payload
-  content, and workload output are never forwarded.
+- Provider-managed sandboxes: Azure REST error diagnostics are
+  now gated by an allowlist. Only case-stable allowlisted `error.code`
+  values (or `unknown`), a length-bounded sanitized `error.message`, the
+  HTTP status code, and the opaque `x-ms-correlation-request-id` header
+  appear in provider errors, structured log spans, and audit records.
+  Full response bodies, endpoint URLs, subscription IDs, internal diagnostic
+  details, resource IDs, tokens, payload content, and workload output are never
+  forwarded.
 - Documentation: added `docs/reference/provider-managed-sandboxes.md`
-  covering the ACA adapter capability matrix, absent capabilities,
+  covering the Azure Container Apps adapter capability matrix, absent capabilities,
   rate-limit/backoff/circuit behavior, credential boundary, diagnostics
-  redaction rules, error shapes, and scope limitations. Cross-referenced
-  from `docs/reference/remote-full-host-nodes.md`.
+  redaction rules, error shapes, `provider-managed-isolation`, and scope
+  limitations including the absence of guestd, systemd, broker, KVM, vsock,
+  cgroup, namespace, SSH, and full-host lifecycle. Cross-referenced from
+  `docs/reference/remote-full-host-nodes.md`.
 
 ### Removed
 

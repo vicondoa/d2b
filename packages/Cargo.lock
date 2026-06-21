@@ -1821,7 +1821,6 @@ dependencies = [
  "async-trait",
  "azure_core",
  "azure_identity",
- "fastrand",
  "nixling-constellation-core",
  "nixling-constellation-provider",
  "reqwest 0.12.28",

@@ -55,9 +55,13 @@ impl ProviderDiagnostic {
         correlation_id: Option<impl Into<String>>,
     ) -> Self {
         Self {
-            code: code.map(|s| bound_provider_field(s.into())),
-            message: message.map(|s| bound_provider_message(s.into())),
-            correlation_id: correlation_id.map(|s| bound_provider_field(s.into())),
+            code: code.map(|s| allowlisted_provider_code(s.into())),
+            message: message
+                .map(|s| bound_provider_message(s.into()))
+                .filter(|s| !s.trim().is_empty()),
+            correlation_id: correlation_id
+                .map(|s| bound_provider_field(s.into()))
+                .filter(|s| !s.trim().is_empty()),
         }
     }
 
@@ -191,6 +195,24 @@ fn bound_provider_field(raw: String) -> String {
         .collect()
 }
 
+fn allowlisted_provider_code(raw: String) -> String {
+    let bounded = bound_provider_field(raw);
+    match bounded.as_str() {
+        code if code.eq_ignore_ascii_case("AuthorizationFailed") => {
+            "AuthorizationFailed".to_owned()
+        }
+        code if code.eq_ignore_ascii_case("RevisionProvisioningFailed") => {
+            "RevisionProvisioningFailed".to_owned()
+        }
+        code if code.eq_ignore_ascii_case("QuotaExceeded") => "QuotaExceeded".to_owned(),
+        code if code.eq_ignore_ascii_case("TooManyRequests") => "TooManyRequests".to_owned(),
+        code if code.eq_ignore_ascii_case("ContainerAppNotFound") => {
+            "ContainerAppNotFound".to_owned()
+        }
+        _ => "unknown".to_owned(),
+    }
+}
+
 fn bound_provider_message(raw: String) -> String {
     if contains_sensitive_shape(&raw) {
         return "provider message redacted".to_owned();
@@ -212,6 +234,13 @@ fn contains_sensitive_shape(raw: &str) -> bool {
     lower.contains("http://")
         || lower.contains("https://")
         || lower.contains("/subscriptions/")
+        || lower.contains("provider-code=")
+        || lower.contains("provider_code=")
+        || lower.contains("provider-message=")
+        || lower.contains("provider_message=")
+        || lower.contains("correlation_id=")
+        || raw.contains('{')
+        || raw.contains('}')
         || raw
             .split(|c: char| !(c.is_ascii_hexdigit() || c == '-'))
             .any(looks_like_uuid)
@@ -253,6 +282,14 @@ mod tests {
         );
         assert_eq!(hint.retry_after(), Duration::from_secs(60));
         assert_eq!(hint.applied_backoff(), Duration::from_secs(60));
+
+        let jitter_capped = RetryHint::bounded(
+            Duration::from_secs(50),
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+        );
+        assert_eq!(jitter_capped.retry_after(), Duration::from_secs(50));
+        assert_eq!(jitter_capped.applied_backoff(), Duration::from_secs(60));
     }
 
     #[test]
@@ -274,6 +311,68 @@ mod tests {
         assert_eq!(d.message(), Some("provider message redacted"));
         assert!(!d.message().unwrap().contains('\n'));
         assert!(!d.correlation_id().unwrap().contains('/'));
+    }
+
+    #[test]
+    fn provider_diagnostic_unknown_code_is_low_cardinality() {
+        let d = ProviderDiagnostic::new(
+            Some("UnexpectedPerTenantCode"),
+            None::<String>,
+            None::<String>,
+        );
+        assert_eq!(d.code(), Some("unknown"));
+    }
+
+    #[test]
+    fn provider_diagnostic_codes_are_case_stable() {
+        let d = ProviderDiagnostic::new(
+            Some("authorizationfailed"),
+            Some("bounded message"),
+            None::<String>,
+        );
+        assert_eq!(d.code(), Some("AuthorizationFailed"));
+        assert_eq!(d.message(), Some("bounded message"));
+    }
+
+    #[test]
+    fn provider_diagnostic_code_allowlist_is_bounded() {
+        let quota = ProviderDiagnostic::new(Some("quotaexceeded"), None::<String>, None::<String>);
+        assert_eq!(quota.code(), Some("QuotaExceeded"));
+
+        let too_many =
+            ProviderDiagnostic::new(Some("toomanyrequests"), None::<String>, None::<String>);
+        assert_eq!(too_many.code(), Some("TooManyRequests"));
+
+        let unknown = ProviderDiagnostic::new(
+            Some("TenantSpecificDynamicCode"),
+            None::<String>,
+            None::<String>,
+        );
+        assert_eq!(unknown.code(), Some("unknown"));
+    }
+
+    #[test]
+    fn provider_diagnostic_redacts_json_objects() {
+        let message = serde_json::json!({
+            "error": "dynamic provider payload",
+        })
+        .to_string();
+        let d = ProviderDiagnostic::new(
+            Some("RevisionProvisioningFailed"),
+            Some(message),
+            None::<String>,
+        );
+        assert_eq!(d.message(), Some("provider message redacted"));
+    }
+
+    #[test]
+    fn provider_diagnostic_redacts_internal_diagnostic_details() {
+        let d = ProviderDiagnostic::new(
+            Some("RevisionProvisioningFailed"),
+            Some("provider_message=dynamic evidence"),
+            None::<String>,
+        );
+        assert_eq!(d.message(), Some("provider message redacted"));
     }
 
     #[test]
