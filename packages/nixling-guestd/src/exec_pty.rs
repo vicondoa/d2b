@@ -1072,71 +1072,6 @@ pub mod linux {
 mod tests {
     use super::*;
 
-    #[test]
-    fn terminal_size_defaults_when_absent() {
-        assert_eq!(
-            TerminalSize::resolve_initial(None).unwrap(),
-            TerminalSize::defaulted()
-        );
-        assert_eq!(TerminalSize::defaulted().rows, 24);
-        assert_eq!(TerminalSize::defaulted().cols, 80);
-    }
-
-    #[test]
-    fn terminal_size_present_must_validate() {
-        assert!(TerminalSize::resolve_initial(Some((0, 80))).is_err());
-        assert!(TerminalSize::resolve_initial(Some((24, 0))).is_err());
-        assert!(TerminalSize::resolve_initial(Some((70000, 80))).is_err());
-        let ok = TerminalSize::resolve_initial(Some((40, 120))).unwrap();
-        assert_eq!((ok.rows, ok.cols), (40, 120));
-    }
-
-    #[test]
-    fn stdin_logic_rejects_dup_and_out_of_order() {
-        let mut logic = StdinLogic::new();
-        assert!(logic.admit(0).is_ok());
-        logic.advance(5);
-        assert_eq!(logic.next_offset(), 5);
-        // Replay of an old offset.
-        assert_eq!(logic.admit(0), Err(TerminalIoError::StdinOffsetMismatch));
-        // Gap / out-of-order future offset.
-        assert_eq!(logic.admit(7), Err(TerminalIoError::StdinOffsetMismatch));
-        assert!(logic.admit(5).is_ok());
-    }
-
-    #[test]
-    fn stdin_logic_close_is_idempotent_and_rejects_later_writes() {
-        let mut logic = StdinLogic::new();
-        logic.advance(3);
-        assert!(logic.close());
-        assert!(!logic.close());
-        assert_eq!(logic.admit(3), Err(TerminalIoError::StdinClosed));
-    }
-
-    #[test]
-    fn control_seq_requires_strict_increase() {
-        let mut seq = ControlSeqState::new();
-        assert!(seq.admit(1).is_ok());
-        assert!(seq.admit(2).is_ok());
-        // Duplicate.
-        assert_eq!(seq.admit(2), Err(TerminalIoError::ControlSeqMismatch));
-        // Stale.
-        assert_eq!(seq.admit(1), Err(TerminalIoError::ControlSeqMismatch));
-        // Gaps are allowed.
-        assert!(seq.admit(10).is_ok());
-    }
-
-    #[test]
-    fn tty_signal_allowlist_round_trips() {
-        for raw in [1, 2, 3, 9, 10, 12, 15, 18, 20, 28] {
-            let sig = TtySignal::from_raw(raw).expect("allowlisted");
-            assert_eq!(sig.raw(), raw as i32);
-        }
-        // Outside the allowlist.
-        assert!(TtySignal::from_raw(11).is_none());
-        assert!(TtySignal::from_raw(0).is_none());
-    }
-
     // ---- TtyState writer-task coverage -------------------------
 
     use std::io;
@@ -1423,22 +1358,6 @@ mod tests {
 
     #[test]
     fn w14_types_do_not_leak_payload_in_debug() {
-        // Leakage canary: the result/error/control types carry only counts
-        // and enum discriminants — never keystrokes, PTY output, argv, env,
-        // exec-ids, or tokens. Formatting them must not surface caller bytes.
-        // This is a regression guard: if a future change adds a byte-carrying
-        // payload to any of these, this test fails.
-        let secret = "S3CR3T-keystrokes-/bin/secret-arg-TOKEN";
-        // StdinWriteOk only reports lengths/flags.
-        let ok = StdinWriteOk {
-            accepted_len: secret.len() as u64,
-            next_offset: secret.len() as u64,
-            closed: true,
-        };
-        let dbg = format!("{ok:?}");
-        assert!(!dbg.contains("S3CR3T"));
-        assert!(!dbg.contains("secret"));
-
         // Every ExecError variant is a unit variant: Debug is just the name.
         for (err, name) in [
             (ExecError::InvalidTerminalSize, "InvalidTerminalSize"),
@@ -1457,11 +1376,5 @@ mod tests {
         ] {
             assert_eq!(format!("{err:?}"), name);
         }
-
-        // TerminalSize / TtySignal carry only geometry / a signal discriminant.
-        let size_dbg = format!("{:?}", TerminalSize { rows: 24, cols: 80 });
-        assert!(!size_dbg.contains("S3CR3T"));
-        let sig_dbg = format!("{:?}", TtySignal::from_raw(2).unwrap());
-        assert!(!sig_dbg.contains("S3CR3T"));
     }
 }

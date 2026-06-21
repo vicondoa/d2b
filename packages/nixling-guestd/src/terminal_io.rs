@@ -226,9 +226,18 @@ mod tests {
         );
         assert_eq!(TerminalSize::defaulted().rows, 24);
         assert_eq!(TerminalSize::defaulted().cols, 80);
-        assert!(TerminalSize::resolve_initial(Some((0, 80))).is_err());
-        assert!(TerminalSize::resolve_initial(Some((24, 0))).is_err());
-        assert!(TerminalSize::resolve_initial(Some((70000, 80))).is_err());
+        assert_eq!(
+            TerminalSize::resolve_initial(Some((0, 80))),
+            Err(super::TerminalIoError::InvalidTerminalSize)
+        );
+        assert_eq!(
+            TerminalSize::resolve_initial(Some((24, 0))),
+            Err(super::TerminalIoError::InvalidTerminalSize)
+        );
+        assert_eq!(
+            TerminalSize::resolve_initial(Some((70000, 80))),
+            Err(super::TerminalIoError::InvalidTerminalSize)
+        );
         let ok = TerminalSize::resolve_initial(Some((40, 120))).unwrap();
         assert_eq!((ok.rows, ok.cols), (40, 120));
     }
@@ -238,12 +247,18 @@ mod tests {
         let mut logic = StdinLogic::new();
         logic.admit(0).unwrap();
         logic.advance(5);
-        assert!(logic.admit(0).is_err());
-        assert!(logic.admit(6).is_err());
+        assert_eq!(
+            logic.admit(0),
+            Err(super::TerminalIoError::StdinOffsetMismatch)
+        );
+        assert_eq!(
+            logic.admit(6),
+            Err(super::TerminalIoError::StdinOffsetMismatch)
+        );
         logic.admit(5).unwrap();
         assert!(logic.close());
         assert!(!logic.close());
-        assert!(logic.admit(5).is_err());
+        assert_eq!(logic.admit(5), Err(super::TerminalIoError::StdinClosed));
     }
 
     #[test]
@@ -252,8 +267,14 @@ mod tests {
         assert_eq!(seq.last_seq(), 0);
         seq.admit(1).unwrap();
         assert_eq!(seq.last_seq(), 1);
-        assert!(seq.admit(1).is_err());
-        assert!(seq.admit(0).is_err());
+        assert_eq!(
+            seq.admit(1),
+            Err(super::TerminalIoError::ControlSeqMismatch)
+        );
+        assert_eq!(
+            seq.admit(0),
+            Err(super::TerminalIoError::ControlSeqMismatch)
+        );
         seq.admit(3).unwrap();
         assert_eq!(seq.last_seq(), 3);
     }
@@ -270,13 +291,38 @@ mod tests {
 
     #[test]
     fn debug_output_contains_no_terminal_payload() {
+        let secret = "S3CR3T-keystrokes-/bin/secret-arg-TOKEN";
         let ok = super::StdinWriteOk {
-            accepted_len: 1,
-            next_offset: 1,
-            closed: false,
+            accepted_len: secret.len() as u64,
+            next_offset: secret.len() as u64,
+            closed: true,
         };
         let rendered = format!("{ok:?}");
         assert!(rendered.contains("accepted_len"));
+        assert!(!rendered.contains("S3CR3T"));
         assert!(!rendered.contains("secret"));
+
+        for (err, name) in [
+            (
+                super::TerminalIoError::InvalidTerminalSize,
+                "InvalidTerminalSize",
+            ),
+            (super::TerminalIoError::StdinClosed, "StdinClosed"),
+            (
+                super::TerminalIoError::StdinOffsetMismatch,
+                "StdinOffsetMismatch",
+            ),
+            (
+                super::TerminalIoError::ControlSeqMismatch,
+                "ControlSeqMismatch",
+            ),
+        ] {
+            assert_eq!(format!("{err:?}"), name);
+        }
+
+        let size_dbg = format!("{:?}", TerminalSize { rows: 24, cols: 80 });
+        assert!(!size_dbg.contains("S3CR3T"));
+        let sig_dbg = format!("{:?}", TtySignal::from_raw(2).unwrap());
+        assert!(!sig_dbg.contains("S3CR3T"));
     }
 }
