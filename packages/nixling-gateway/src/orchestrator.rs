@@ -20,7 +20,7 @@ use crate::handshake::{DisplaySessionId, SessionBinding, SessionSecret};
 use crate::ledger::{LedgerLimits, OpOutcome, SessionLedger, SessionState, TargetKey};
 use crate::types::{AppCommand, DisplaySessionContext};
 use nixling_constellation_core::{
-    AuthzDecision, NodeId, OperationId, PrincipalId, RealmId, RealmPath, WorkloadId,
+    AuthzDecision, OperationId, PrincipalId, RealmId, RealmPath, WorkloadId,
 };
 
 /// How long a minted session credential is valid (seconds) before
@@ -166,15 +166,10 @@ pub struct DisplaySessionSummary {
     pub operation_id: OperationId,
     /// Authorizing principal.
     pub peer_principal: PrincipalId,
-    /// Gateway node handling the session, when known to this process.
-    pub node: Option<NodeId>,
 }
 
 impl DisplaySessionSummary {
-    fn from_record(
-        record: crate::ledger::SessionRecord,
-        node: Option<NodeId>,
-    ) -> Result<Self, GatewayError> {
+    fn from_record(record: crate::ledger::SessionRecord) -> Result<Self, GatewayError> {
         let realm = parse_target_realm(&record.target.realm)?;
         let workload =
             WorkloadId::parse(record.target.workload).map_err(|_| GatewayError::Internal)?;
@@ -190,7 +185,6 @@ impl DisplaySessionSummary {
             workload,
             operation_id,
             peer_principal,
-            node,
         })
     }
 }
@@ -235,7 +229,7 @@ impl GatewayOrchestrator {
         self.ledger()?
             .active_records()
             .into_iter()
-            .map(|record| DisplaySessionSummary::from_record(record, None))
+            .map(DisplaySessionSummary::from_record)
             .collect()
     }
 

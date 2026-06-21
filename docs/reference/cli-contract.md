@@ -165,9 +165,10 @@ make the host persist a remote node/workload registry.
 `vm display` manages active gateway display sessions. It requires the
 gateway daemon's public socket and does not fall back to SSH or host-side
 Wayland setup. `list` returns only bounded non-secret session metadata:
-session id, realm target, and lifecycle state. `close` tears down the
-gateway listener plus the provider-side display agent when the session is
-still active, and reports `closed = false` for an already-absent session.
+session id, realm target, lifecycle state, authorizing operation id, and
+principal. `close` asks the gateway daemon to tear down the listener plus the
+provider-side display agent when the session is still active, and reports
+`closed = false` for an already-absent session.
 
 `--json` for `list` emits:
 
@@ -179,7 +180,9 @@ still active, and reports `closed = false` for an already-absent session.
     {
       "sessionId": "s0",
       "target": "nl://demo.gw.work.nixling",
-      "state": "running"
+      "state": "running",
+      "operationId": "gw-exec-1",
+      "principal": "uid-1000"
     }
   ]
 }

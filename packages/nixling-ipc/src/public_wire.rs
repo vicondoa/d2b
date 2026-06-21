@@ -242,6 +242,8 @@ pub struct GatewayDisplaySessionSummary {
     pub session_id: String,
     pub target: String,
     pub state: String,
+    pub operation_id: String,
+    pub principal: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

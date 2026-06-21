@@ -2669,7 +2669,7 @@ fn dispatch_gateway_display(
         }
         public_wire::GatewayDisplayOp::List(args) => {
             gateway_display_gc(state);
-            let session_rows: Vec<(String, String)> = state
+            let target_by_id: HashMap<String, String> = state
                 .gateway_display
                 .sessions
                 .lock()
@@ -2678,28 +2678,28 @@ fn dispatch_gateway_display(
                     detail: "mutex poisoned".to_owned(),
                 })?
                 .values()
-                .filter(|session| {
-                    args.target
-                        .as_ref()
-                        .is_none_or(|target| target == &session.target)
-                })
                 .map(|session| (session.open.session_id.to_string(), session.target.clone()))
                 .collect();
-            let sessions = session_rows
+            let sessions = state
+                .gateway_display
+                .orchestrator
+                .list_sessions()
+                .map_err(gateway_error_to_typed)?
                 .into_iter()
-                .map(|(session_id, target)| {
-                    let display_id = nixling_gateway::DisplaySessionId::new(session_id.clone());
-                    let state = state
-                        .gateway_display
-                        .orchestrator
-                        .state(&display_id)
-                        .map(|s| format!("{s:?}").to_ascii_lowercase())
-                        .unwrap_or_else(|| "unknown".to_owned());
-                    public_wire::GatewayDisplaySessionSummary {
+                .filter_map(|summary| {
+                    let session_id = summary.session_id.to_string();
+                    let target = target_by_id.get(&session_id)?.clone();
+                    if args.target.as_ref().is_some_and(|wanted| wanted != &target) {
+                        return None;
+                    }
+                    let state = format!("{:?}", summary.state).to_ascii_lowercase();
+                    Some(public_wire::GatewayDisplaySessionSummary {
                         session_id,
                         target,
                         state,
-                    }
+                        operation_id: summary.operation_id.to_string(),
+                        principal: summary.peer_principal.to_string(),
+                    })
                 })
                 .collect();
             public_wire::GatewayDisplayOpResponse::List(public_wire::GatewayDisplayListResult {

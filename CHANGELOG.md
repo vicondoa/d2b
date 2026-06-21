@@ -13,8 +13,9 @@ deprecations ship one minor release before removal.
 ### Added
 
 - Display and virtual I/O: added explicit display capability helpers and a
-  gateway display-session listing surface that returns only bounded
-  non-secret session metadata. Added reference documentation that keeps
+  `nixling vm display list|close` gateway display-session surface that returns
+  only bounded non-secret session metadata, including the authorizing
+  operation id and principal. Added reference documentation that keeps
   display, clipboard, audio, USB/HID, GPU, video, and provider display
   streaming as separate opt-in capabilities.
 

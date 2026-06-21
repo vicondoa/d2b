@@ -49,7 +49,8 @@ process output. Closed and failed sessions are removed from active listings.
 The current gateway orchestrator already owns open and close sequencing:
 it mints a one-shot display credential, arms the listener before the sandbox
 sender connects, spawns the provider agent, waits for the verified handshake,
-and performs best-effort cleanup on close or failed open.
+and invokes the configured listener/provider cleanup hooks for tracked
+sessions on close, failed open, and daemon-side stale-session collection.
 
 ## Related references
 

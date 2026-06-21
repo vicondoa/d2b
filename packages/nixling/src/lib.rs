@@ -220,6 +220,8 @@ pub struct VmDisplaySessionOutputV1 {
     pub session_id: String,
     pub target: String,
     pub state: String,
+    pub operation_id: String,
+    pub principal: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -4938,6 +4940,8 @@ fn cmd_vm_display_list(context: &Context, args: &VmDisplayListArgs) -> Result<i3
                 session_id: session.session_id,
                 target: session.target,
                 state: session.state,
+                operation_id: session.operation_id,
+                principal: session.principal,
             })
             .collect(),
     };
@@ -4947,10 +4951,15 @@ fn cmd_vm_display_list(context: &Context, args: &VmDisplayListArgs) -> Result<i3
         if output.sessions.is_empty() {
             print_stdout("No active gateway display sessions\n");
         } else {
+            print_stdout("SESSION_ID\tTARGET\tSTATE\tOPERATION_ID\tPRINCIPAL\n");
             for session in &output.sessions {
                 print_stdout(&format!(
-                    "{}\t{}\t{}\n",
-                    session.session_id, session.target, session.state
+                    "{}\t{}\t{}\t{}\t{}\n",
+                    session.session_id,
+                    session.target,
+                    session.state,
+                    session.operation_id,
+                    session.principal
                 ));
             }
         }
@@ -10159,7 +10168,9 @@ mod host_install_dispatch_tests {
                 "sessions": [{
                     "sessionId": "s0",
                     "target": "nl://demo.gw.work.nixling",
-                    "state": "running"
+                    "state": "running",
+                    "operationId": "op-1",
+                    "principal": "uid-1000"
                 }]
             }
         });
@@ -10169,6 +10180,8 @@ mod host_install_dispatch_tests {
             panic!("expected list response");
         };
         assert_eq!(result.sessions.len(), 1);
+        assert_eq!(result.sessions[0].operation_id, "op-1");
+        assert_eq!(result.sessions[0].principal, "uid-1000");
         let rendered = format!("{result:?}");
         for forbidden in ["foot", "SharedAccessKey", "/run/", "waypipe"] {
             assert!(
@@ -10176,6 +10189,23 @@ mod host_install_dispatch_tests {
                 "gateway display reply leaked {forbidden}: {rendered}"
             );
         }
+    }
+
+    #[test]
+    fn gateway_display_reply_parser_accepts_close_response() {
+        let response = serde_json::json!({
+            "type": "gatewayDisplayResponse",
+            "op": "close",
+            "result": {
+                "closed": true
+            }
+        });
+        let parsed = super::parse_gateway_display_reply(&serde_json::to_vec(&response).unwrap())
+            .expect("gateway display close response parses");
+        let public_wire::GatewayDisplayOpResponse::Close(result) = parsed else {
+            panic!("expected close response");
+        };
+        assert!(result.closed);
     }
 
     /// Per-thread guard that overrides the config-staging base for a test and

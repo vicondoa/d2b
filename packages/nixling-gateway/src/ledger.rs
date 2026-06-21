@@ -351,6 +351,22 @@ mod tests {
     }
 
     #[test]
+    fn active_records_are_deterministically_sorted_by_session_id() {
+        let mut l = SessionLedger::new(1, LedgerLimits::default());
+        l.open(key("work", "b"), "alice", "op-2", 2, id("s2"))
+            .unwrap();
+        l.open(key("work", "a"), "alice", "op-1", 1, id("s1"))
+            .unwrap();
+
+        let ids = l
+            .active_records()
+            .into_iter()
+            .map(|record| record.id.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["s1".to_owned(), "s2".to_owned()]);
+    }
+
+    #[test]
     fn per_realm_quota_fails_closed() {
         let limits = LedgerLimits {
             max_sessions_per_realm: 1,

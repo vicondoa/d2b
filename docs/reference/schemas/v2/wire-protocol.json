@@ -4192,11 +4192,19 @@
     "GatewayDisplaySessionSummary": {
       "type": "object",
       "required": [
+        "operationId",
+        "principal",
         "sessionId",
         "state",
         "target"
       ],
       "properties": {
+        "operationId": {
+          "type": "string"
+        },
+        "principal": {
+          "type": "string"
+        },
         "sessionId": {
           "type": "string"
         },
