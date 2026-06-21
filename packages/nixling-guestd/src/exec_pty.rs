@@ -28,8 +28,20 @@ use tokio::task::JoinHandle;
 
 use crate::exec::{ExecError, ProcessWaiter, ValidatedCommand};
 pub use crate::terminal_io::{
-    ControlSeqState, StdinLogic, StdinWriteOk, TerminalSize, TtyPhase, TtySignal, VEOF,
+    ControlSeqState, StdinLogic, StdinWriteOk, TerminalIoError, TerminalSize, TtyPhase, TtySignal,
+    VEOF,
 };
+
+impl From<TerminalIoError> for ExecError {
+    fn from(value: TerminalIoError) -> Self {
+        match value {
+            TerminalIoError::InvalidTerminalSize => Self::InvalidTerminalSize,
+            TerminalIoError::StdinClosed => Self::StdinClosed,
+            TerminalIoError::StdinOffsetMismatch => Self::StdinOffsetMismatch,
+            TerminalIoError::ControlSeqMismatch => Self::ControlSeqMismatch,
+        }
+    }
+}
 
 /// Control surface for a live PTY master, fakeable for tests.
 pub trait PtyControl: Send + Sync {
@@ -1086,9 +1098,9 @@ mod tests {
         logic.advance(5);
         assert_eq!(logic.next_offset(), 5);
         // Replay of an old offset.
-        assert_eq!(logic.admit(0), Err(ExecError::StdinOffsetMismatch));
+        assert_eq!(logic.admit(0), Err(TerminalIoError::StdinOffsetMismatch));
         // Gap / out-of-order future offset.
-        assert_eq!(logic.admit(7), Err(ExecError::StdinOffsetMismatch));
+        assert_eq!(logic.admit(7), Err(TerminalIoError::StdinOffsetMismatch));
         assert!(logic.admit(5).is_ok());
     }
 
@@ -1098,7 +1110,7 @@ mod tests {
         logic.advance(3);
         assert!(logic.close());
         assert!(!logic.close());
-        assert_eq!(logic.admit(3), Err(ExecError::StdinClosed));
+        assert_eq!(logic.admit(3), Err(TerminalIoError::StdinClosed));
     }
 
     #[test]
@@ -1107,9 +1119,9 @@ mod tests {
         assert!(seq.admit(1).is_ok());
         assert!(seq.admit(2).is_ok());
         // Duplicate.
-        assert_eq!(seq.admit(2), Err(ExecError::ControlSeqMismatch));
+        assert_eq!(seq.admit(2), Err(TerminalIoError::ControlSeqMismatch));
         // Stale.
-        assert_eq!(seq.admit(1), Err(ExecError::ControlSeqMismatch));
+        assert_eq!(seq.admit(1), Err(TerminalIoError::ControlSeqMismatch));
         // Gaps are allowed.
         assert!(seq.admit(10).is_ok());
     }

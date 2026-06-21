@@ -3,7 +3,16 @@
 //! This module is pure Rust state and validation logic. PTY allocation,
 //! fd ownership, process spawning, and teardown remain in `exec_pty`.
 
-use crate::exec::ExecError;
+/// Terminal-domain validation and state-machine errors. Exec maps these to
+/// `ExecError` at its adapter boundary; future interactive consumers should do
+/// the same instead of depending on exec-specific errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalIoError {
+    InvalidTerminalSize,
+    StdinClosed,
+    StdinOffsetMismatch,
+    ControlSeqMismatch,
+}
 
 /// Default terminal geometry applied when a TTY create omits an
 /// `initial_terminal_size`. A present size must validate (1..=65535); only an
@@ -38,10 +47,10 @@ impl TerminalSize {
     }
 
     /// Validate a wire-supplied geometry against the existing 1..=65535 bound.
-    pub fn checked(rows: u32, cols: u32) -> Result<Self, ExecError> {
+    pub fn checked(rows: u32, cols: u32) -> Result<Self, TerminalIoError> {
         let valid = |d: u32| (MIN_TERMINAL_DIM..=MAX_TERMINAL_DIM).contains(&d);
         if !valid(rows) || !valid(cols) {
-            return Err(ExecError::InvalidTerminalSize);
+            return Err(TerminalIoError::InvalidTerminalSize);
         }
         Ok(Self {
             rows: rows as u16,
@@ -52,7 +61,7 @@ impl TerminalSize {
     /// Resolve an optional initial size: absent defaults to 24x80, present must
     /// validate (a present 0/out-of-range geometry is rejected, never
     /// defaulted).
-    pub fn resolve_initial(initial: Option<(u32, u32)>) -> Result<Self, ExecError> {
+    pub fn resolve_initial(initial: Option<(u32, u32)>) -> Result<Self, TerminalIoError> {
         match initial {
             None => Ok(Self::defaulted()),
             Some((rows, cols)) => Self::checked(rows, cols),
@@ -137,12 +146,12 @@ impl StdinLogic {
     /// Validate a WriteStdin at `offset`. Rejects writes after close and any
     /// non-contiguous offset. Does NOT advance — call [`advance`](Self::advance)
     /// only after the bytes are durably written to the master.
-    pub fn admit(&self, offset: u64) -> Result<(), ExecError> {
+    pub fn admit(&self, offset: u64) -> Result<(), TerminalIoError> {
         if self.closed {
-            return Err(ExecError::StdinClosed);
+            return Err(TerminalIoError::StdinClosed);
         }
         if offset != self.next_offset {
-            return Err(ExecError::StdinOffsetMismatch);
+            return Err(TerminalIoError::StdinOffsetMismatch);
         }
         Ok(())
     }
@@ -179,9 +188,9 @@ impl ControlSeqState {
     }
 
     /// Admit a control message at `seq`, requiring strict monotonic increase.
-    pub fn admit(&mut self, seq: u64) -> Result<(), ExecError> {
+    pub fn admit(&mut self, seq: u64) -> Result<(), TerminalIoError> {
         if seq <= self.last_seq {
-            return Err(ExecError::ControlSeqMismatch);
+            return Err(TerminalIoError::ControlSeqMismatch);
         }
         self.last_seq = seq;
         Ok(())

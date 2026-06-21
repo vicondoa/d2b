@@ -1,8 +1,8 @@
 //! Shared daemon-side terminal session DTOs and backend seams.
 //!
-//! Exec remains the only backend in this wave. These types isolate terminal
-//! output, stdin, and wait semantics from exec-specific public wire envelopes so
-//! later shell work can reuse the same worker vocabulary.
+//! Exec is currently the only backend. These types isolate terminal output,
+//! stdin, and wait semantics from exec-specific public wire envelopes so future
+//! interactive backends can reuse the same worker vocabulary.
 
 use std::time::Duration;
 

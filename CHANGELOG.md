@@ -14,7 +14,11 @@ deprecations ship one minor release before removal.
 
 - Guest-control internals: started extracting the shared terminal substrate used
   by interactive exec, with compatibility DTO conversions and redaction tests for
-  future shell reuse.
+  future interactive-terminal reuse.
+- Test and contract hygiene: synced the existing operation-inspection
+  authorization/golden contracts and shortened Unix-socket paths in CLI,
+  daemon-access, broker QMP, and broker integration tests so long worktree paths
+  do not exceed platform socket limits.
 - Developer tooling: added a standalone static guest shell helper workspace,
   libshpool pin, initial validation/management-output scaffolding, and explicit
   Rust/static supply-chain gate wiring for upcoming guest-control terminal work.
@@ -287,18 +291,6 @@ deprecations ship one minor release before removal.
   `nixling` lock target rewritten to the current `git+file` checkout,
   preserving each example's lock graph and external pins while avoiding mutable
   `path:../..` lock failures.
-- Tests: audit CLI-output and daemon-access contract sockets now bind under the
-  system temporary directory so long worktree paths cannot exceed Unix socket
-  pathname limits.
-- Tests: broker QMP media contract sockets now bind under the system temporary
-  directory so long worktree paths cannot exceed Unix socket pathname limits.
-- Tests: broker integration harness sockets now bind under the system temporary
-  directory so long worktree paths cannot exceed Unix socket pathname limits.
-- CLI/docs: added the missing `op inspect` authorization-matrix row so the
-  declared operation-inspection command is covered by the generated privileges
-  contract.
-- Tests: updated the auth-status CLI golden to include the current launcher
-  realm/op inspection commands from the authorization matrix.
 - Tests: the broker reap-health zombie canary now accepts the transient
   uninterruptible-sleep proc state seen on busy CI runners before child teardown.
 - CLI/daemon: qemu-media USB attach/detach `--apply --json` now emits a

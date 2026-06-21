@@ -1,8 +1,8 @@
 //! Shared CLI-side terminal seams.
 //!
-//! The exec client remains the only consumer in this wave. These traits split
-//! the terminal FSM from exec-specific public wire envelopes so a later shell
-//! adapter can drive the same host terminal machinery without copying it.
+//! The exec client is currently the only consumer. These traits split the
+//! terminal FSM from exec-specific public wire envelopes so future interactive
+//! adapters can drive the same host terminal machinery without copying it.
 
 use std::io;
 

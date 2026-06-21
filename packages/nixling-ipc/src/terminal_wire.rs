@@ -1,9 +1,9 @@
-//! Shared terminal DTOs used by exec today and shell adapters later.
+//! Shared terminal DTOs used by exec today and future interactive adapters.
 //!
 //! These are semantic DTOs, not a replacement for the existing public exec wire.
 //! `Exec*` request/response structs in `public_wire` keep their current serde
-//! shape; conversions here are explicit so future shell adapters can reuse the
-//! same terminal vocabulary without changing existing exec JSON.
+//! shape; conversions here are explicit so future interactive adapters can
+//! reuse the same terminal vocabulary without changing existing exec JSON.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
