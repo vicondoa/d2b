@@ -4933,6 +4933,29 @@ fn realm_policy_rows(
     context: &Context,
     json: bool,
 ) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
+    match realm_policy_rows_raw(context) {
+        Ok(rows) => Ok(rows),
+        Err(err) => {
+            if json {
+                let _ = emit_host_error(
+                    &host_error_envelope(
+                        &err.message,
+                        "realm-policy-invalid",
+                        err.exit_code,
+                        "Rendered realm entrypoint policy.",
+                        "realm policy could not be inspected",
+                        "Fix the rendered realm entrypoints and rebuild the host.",
+                        "docs/reference/realm-policy.md",
+                    ),
+                    true,
+                )?;
+            }
+            Err(err)
+        }
+    }
+}
+
+fn realm_policy_rows_raw(context: &Context) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
     let entries =
         if let Some(doc) = load_realm_entrypoint_document_from_path(&realm_entrypoints_path())? {
             doc.entries
@@ -4941,13 +4964,12 @@ fn realm_policy_rows(
             entries.insert("local".to_owned(), local_realm_entrypoint_config());
             entries
         };
-    realm_policy_rows_from_entries(context, normalize_realm_entrypoint_entries(entries)?, json)
+    realm_policy_rows_from_entries(context, normalize_realm_entrypoint_entries(entries)?)
 }
 
 fn realm_policy_rows_from_entries(
     context: &Context,
     entries: BTreeMap<String, RealmEntrypointConfig>,
-    _json: bool,
 ) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
     let gateway_states = gateway_lifecycle_states(context)?;
     let mut rows = Vec::new();
@@ -5151,7 +5173,7 @@ fn op_inspect_output(
             0
         }
     };
-    let realms = match realm_policy_rows(context, args.json) {
+    let realms = match realm_policy_rows_raw(context) {
         Ok(realms) => realms,
         Err(_) => {
             degraded.push(OpInspectDegradedOutputV1 {
@@ -10929,8 +10951,8 @@ mod host_install_dispatch_tests {
             },
         );
 
-        let rows = super::realm_policy_rows_from_entries(&context, entries, true)
-            .expect("realm rows render");
+        let rows =
+            super::realm_policy_rows_from_entries(&context, entries).expect("realm rows render");
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].realm, "local");
         assert_eq!(rows[0].mode, "host-resident");
@@ -10970,7 +10992,6 @@ mod host_install_dispatch_tests {
         let rows = super::realm_policy_rows_from_entries(
             &context,
             super::normalize_realm_entrypoint_entries(entries).unwrap(),
-            true,
         )
         .expect("realm rows render");
         assert_eq!(rows[0].realm, "local");
@@ -11011,7 +11032,7 @@ mod host_install_dispatch_tests {
                 gateway: None,
             },
         );
-        let err = super::realm_policy_rows_from_entries(&context, unknown_mode, true)
+        let err = super::realm_policy_rows_from_entries(&context, unknown_mode)
             .expect_err("unknown mode fails closed");
         assert!(err.message.contains("unknown entrypoint mode"));
 
@@ -11023,7 +11044,7 @@ mod host_install_dispatch_tests {
                 gateway: None,
             },
         );
-        let err = super::realm_policy_rows_from_entries(&context, missing_gateway, true)
+        let err = super::realm_policy_rows_from_entries(&context, missing_gateway)
             .expect_err("missing gateway fails closed");
         assert!(err.message.contains("no gateway target"));
         let _ = std::fs::remove_file(&manifest_path);
