@@ -1073,6 +1073,9 @@ contract:
   host-resident vs gateway-backed realm policy, default-deny
   cross-realm behavior, and `nixling realm list` / `inspect`
   inspection surfaces.
+- [docs/reference/constellation-observability.md](./docs/reference/constellation-observability.md)
+  — bounded `nixling op inspect`, TraceContext handling, degraded partial
+  results, and telemetry redaction/cardinality constraints.
 - [docs/how-to/configure-work-gateway.md](./docs/how-to/configure-work-gateway.md)
   — configure a dedicated work/provider realm gateway and verify the
   default-deny boundary.

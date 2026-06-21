@@ -21,6 +21,7 @@ JSON envelopes.
 | `host check` | `host-check.schema.json` | [host-check.md](./host-check.md) |
 | `host doctor` | `host-doctor.schema.json` | [host-doctor.md](./host-doctor.md) |
 | `auth status` | `auth-status.schema.json` | [auth-status.md](./auth-status.md) |
+| `op inspect` | `op-inspect.schema.json` | [constellation-observability.md](../constellation-observability.md) |
 | `store verify` | `store-verify.schema.json` | [store-verify.md](./store-verify.md) |
 | `vm exec -d` | `vm-exec-create.schema.json` | [cli-contract.md § `vm exec`](../cli-contract.md#vm-exec) |
 | `vm exec <vm> list` | `vm-exec-list.schema.json` | [cli-contract.md § `vm exec`](../cli-contract.md#vm-exec) |

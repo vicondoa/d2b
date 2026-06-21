@@ -993,10 +993,10 @@ enum OpCommand {
 #[derive(Debug, Args)]
 struct OpInspectArgs {
     /// Optional trace id to include in the inspection envelope.
-    #[arg(long)]
+    #[arg(long, requires = "span_id")]
     trace_id: Option<String>,
     /// Optional span id to include in the inspection envelope.
-    #[arg(long)]
+    #[arg(long, requires = "trace_id")]
     span_id: Option<String>,
     #[arg(long, conflicts_with = "human")]
     json: bool,
@@ -5137,12 +5137,31 @@ fn op_inspect_output(
     args: &OpInspectArgs,
 ) -> Result<OpInspectOutputV1, CliFailure> {
     let trace = op_inspect_trace(args)?;
-    let manifest = context.load_manifest()?;
-    let realms = realm_policy_rows(context, args.json)?;
+    let mut degraded = Vec::new();
+    let vm_count = match context.load_manifest() {
+        Ok(manifest) => manifest.vms().len(),
+        Err(_) => {
+            degraded.push(OpInspectDegradedOutputV1 {
+                scope: "local-manifest".to_owned(),
+                reason: "manifest-unavailable".to_owned(),
+                remediation: "verify the nixling manifest path and rebuild the host".to_owned(),
+            });
+            0
+        }
+    };
+    let realms = match realm_policy_rows(context, args.json) {
+        Ok(realms) => realms,
+        Err(_) => {
+            degraded.push(OpInspectDegradedOutputV1 {
+                scope: "realm-entrypoints".to_owned(),
+                reason: "realm-entrypoints-unavailable".to_owned(),
+                remediation: "verify realm-entrypoints.json and rebuild the host".to_owned(),
+            });
+            Vec::new()
+        }
+    };
     Ok(op_inspect_output_from_parts(
-        manifest.vms().len(),
-        trace,
-        realms,
+        vm_count, trace, realms, degraded,
     ))
 }
 
@@ -5150,12 +5169,12 @@ fn op_inspect_output_from_parts(
     vm_count: usize,
     trace: Option<OpInspectTraceOutputV1>,
     realms: Vec<RealmPolicyOutputV1>,
+    mut degraded: Vec<OpInspectDegradedOutputV1>,
 ) -> OpInspectOutputV1 {
     let gateway_count = realms
         .iter()
         .filter(|realm| realm.mode == "gateway-backed")
         .count();
-    let mut degraded = Vec::new();
     for realm in &realms {
         if realm.mode == "gateway-backed"
             && !matches!(realm.gateway_state.as_str(), "running" | "booted")
@@ -11106,7 +11125,7 @@ mod host_install_dispatch_tests {
             cross_realm_policy: "default-deny".to_owned(),
             credential_boundary: "gateway-owned".to_owned(),
         }];
-        let output = super::op_inspect_output_from_parts(1, None, realms);
+        let output = super::op_inspect_output_from_parts(1, None, realms, Vec::new());
         assert_eq!(output.local.gateway_count, 1);
         assert_eq!(output.degraded.len(), 1);
         assert_eq!(output.degraded[0].scope, "realm:work");
@@ -11115,6 +11134,27 @@ mod host_install_dispatch_tests {
             output.degraded[0]
                 .remediation
                 .contains("nixling vm start sys-work-gateway --apply")
+        );
+    }
+
+    #[test]
+    fn op_inspect_reports_missing_manifest_as_degraded_partial_result() {
+        let manifest_path = test_socket_path("op-inspect-missing-manifest", ".manifest.json");
+        let context = test_context(manifest_path);
+        let args = super::OpInspectArgs {
+            trace_id: None,
+            span_id: None,
+            json: true,
+            human: false,
+        };
+        let output = super::op_inspect_output(&context, &args)
+            .expect("missing manifest should degrade instead of failing");
+        assert_eq!(output.local.vm_count, 0);
+        assert!(
+            output
+                .degraded
+                .iter()
+                .any(|entry| entry.reason == "manifest-unavailable")
         );
     }
 
