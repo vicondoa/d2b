@@ -55,6 +55,24 @@ let
   hostDaemonJson = builtins.fromJSON goodCfg.environment.etc."nixling/daemon-config.json".text;
   hostGatewayJsonPresent = builtins.hasAttr "nixling/gateway.json" goodCfg.environment.etc;
   hostRealmEntrypoints = goodCfg.nixling._computed.realmEntrypoints;
+  hostRealmRelayEgressPolicy = goodCfg.nixling._computed.hostRealmRelayEgressPolicy;
+  renderText = value:
+    if builtins.isString value then value
+    else if builtins.isList value then lib.concatStringsSep "\n" (map renderText value)
+    else if builtins.isPath value then toString value
+    else if builtins.isAttrs value && value ? outPath then toString value
+    else "";
+  hostActivationText = lib.concatStringsSep "\n"
+    (map (script: renderText (script.text or "")) (builtins.attrValues goodCfg.system.activationScripts));
+  hostServiceText = lib.concatStringsSep "\n" (lib.mapAttrsToList
+    (name: service:
+      let serviceConfig = service.serviceConfig or { };
+      in lib.concatStringsSep "\n" [
+        name
+        (renderText (serviceConfig.ExecStart or ""))
+        (renderText (serviceConfig.Environment or ""))
+      ])
+    goodCfg.systemd.services);
   hostPackageRefs = map (pkg: {
     name = pkg.pname or (pkg.name or (lib.getName pkg));
     path = toString pkg;
@@ -76,6 +94,12 @@ let
     "11111111-1111-1111-1111-111111111111"
     "/var/lib/nixling/gateways/work/credential.sealed.json"
     "/var/lib/nixling/gateways/work/seal.key"
+    "NIXLING_RELAY_NAMESPACE"
+    "NIXLING_RELAY_ENTITY"
+    "NIXLING_RELAY_SAS_TOKEN"
+    "NIXLING_RELAY_ENTRA_TOKEN"
+    "NIXLING_RELAY_KEY_NAME"
+    "NIXLING_RELAY_KEY"
   ];
   forbiddenRemoteRegistryMarkers = [
     "\"remoteNodes\""
@@ -402,6 +426,20 @@ in
     };
   };
 
+  "gateway-vm/host-activation-and-services-exclude-realm-provider-material" = {
+    expr = {
+      activationCarriesRelayOrAcaMaterial = containsForbiddenRealmMaterial hostActivationText;
+      servicesCarryRelayOrAcaMaterial = containsForbiddenRealmMaterial hostServiceText;
+      servicesCarryGatewayRuntime = lib.hasInfix "nixling-gateway-relay" hostServiceText
+        || lib.hasInfix "nixling-gateway-enroll" hostServiceText;
+    };
+    expected = {
+      activationCarriesRelayOrAcaMaterial = false;
+      servicesCarryRelayOrAcaMaterial = false;
+      servicesCarryGatewayRuntime = false;
+    };
+  };
+
   "gateway-vm/host-daemon-stays-credential-free-facade" = {
     expr = {
       daemonConfigCarriesGateway = hostDaemonJson ? gateway;
@@ -444,6 +482,31 @@ in
       carriesRemoteNodeRegistry = false;
       hasGatewayRelayPackage = false;
       hasGatewayRuntimePackage = false;
+    };
+  };
+
+  "gateway-vm/host-realm-relay-egress-policy-is-redacted-and-gateway-scoped" = {
+    expr = {
+      path = hostRealmRelayEgressPolicy.path;
+      mode = hostRealmRelayEgressPolicy.mode;
+      gatewayInterfaces = hostRealmRelayEgressPolicy.gatewayInterfaces;
+      forbiddenHostEnvPrefixes = hostRealmRelayEgressPolicy.forbiddenHostEnvPrefixes;
+      diagnostics = hostRealmRelayEgressPolicy.diagnostics;
+      carriesRelayOrAcaMaterial =
+        containsForbiddenRealmMaterial (removeAttrs hostRealmRelayEgressPolicy [ "forbiddenHostEnvPrefixes" ]);
+    };
+    expected = {
+      path = "/etc/nixling/host-realm-relay-egress-policy.json";
+      mode = "host-realm-relay-deny";
+      gatewayInterfaces = [ "work-l20" ];
+      forbiddenHostEnvPrefixes = [ "NIXLING_RELAY_" ];
+      diagnostics = {
+        redacted = true;
+        rateLimited = true;
+        fields = [ "event" "protocol" "reason" "gatewayInterfaceClass" ];
+        omitted = [ "payload" "headers" "token" "endpoint" "credential" ];
+      };
+      carriesRelayOrAcaMaterial = false;
     };
   };
 
@@ -588,17 +651,17 @@ in
       inherit hostGatewayJsonPresent;
       guest = gatewayJson.allowHostRelayCredentials;
     };
-
-    "gateway-vm/rejects-retired-host-relay-credential-escape-hatch" = {
-      expr = lib.any
-        (m: lib.hasInfix "allowHostRelayCredentials has been retired" m)
-        retiredHostRelayCredentialMessages;
-      expected = true;
-    };
     expected = {
       hostGatewayJsonPresent = false;
       guest = false;
     };
+  };
+
+  "gateway-vm/rejects-retired-host-relay-credential-escape-hatch" = {
+    expr = lib.any
+      (m: lib.hasInfix "allowHostRelayCredentials has been retired" m)
+      retiredHostRelayCredentialMessages;
+    expected = true;
   };
 
   "gateway-vm/accepts-multiple-gateways-with-separate-realms-and-envs" = {
