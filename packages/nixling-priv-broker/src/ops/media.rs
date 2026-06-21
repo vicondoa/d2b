@@ -601,7 +601,10 @@ fn resolve_declared_runtime_selector<'a>(
     identity: &UsbPhysicalIdentity,
 ) -> Result<(MediaRegistryRecord, &'a QemuMediaSourceIntent), MediaOpError> {
     let source = select_unique_declared_physical_source(resolver, vm, identity, None)?;
-    Ok((MediaRegistryRecord::from_identity(source, identity.clone()), source))
+    Ok((
+        MediaRegistryRecord::from_identity(source, identity.clone()),
+        source,
+    ))
 }
 
 fn resolve_declared_attached_runtime_selector<'a>(
@@ -610,8 +613,12 @@ fn resolve_declared_attached_runtime_selector<'a>(
     identity: &UsbPhysicalIdentity,
     attached_refs: &BTreeSet<String>,
 ) -> Result<(MediaRegistryRecord, &'a QemuMediaSourceIntent), MediaOpError> {
-    let source = select_unique_declared_physical_source(resolver, vm, identity, Some(attached_refs))?;
-    Ok((MediaRegistryRecord::from_identity(source, identity.clone()), source))
+    let source =
+        select_unique_declared_physical_source(resolver, vm, identity, Some(attached_refs))?;
+    Ok((
+        MediaRegistryRecord::from_identity(source, identity.clone()),
+        source,
+    ))
 }
 
 fn select_unique_declared_physical_source<'a>(
@@ -849,11 +856,7 @@ fn qmp_remove_fdset_entry(
         commands.push("remove-fd:absent".to_owned());
         return;
     };
-    match client.execute(
-        "remove-fd",
-        json!({ "fdset-id": fdset_id, "fd": fd }),
-        None,
-    ) {
+    match client.execute("remove-fd", json!({ "fdset-id": fdset_id, "fd": fd }), None) {
         Ok(_) => commands.push("remove-fd".to_owned()),
         Err(error) => match client.query_fdset_entry(media_ref) {
             Ok(None) => {
@@ -1225,8 +1228,15 @@ fn resolve_detach_runtime_selector<'a>(
                     let source = resolve_physical_source(resolver, vm, &record.media_ref)?;
                     Ok((record, source))
                 }
-                Err(fallback_error) if runtime_selector_allows_declared_fallback(&fallback_error) => {
-                    resolve_declared_attached_runtime_selector(resolver, vm, identity, &attached_refs)
+                Err(fallback_error)
+                    if runtime_selector_allows_declared_fallback(&fallback_error) =>
+                {
+                    resolve_declared_attached_runtime_selector(
+                        resolver,
+                        vm,
+                        identity,
+                        &attached_refs,
+                    )
                 }
                 Err(fallback_error) => Err(fallback_error),
             }
@@ -1851,7 +1861,9 @@ fn read_all_registry_records(
     read_all_registry_records_at_root(&root)
 }
 
-fn read_all_registry_records_at_root(root: &Path) -> Result<Vec<MediaRegistryRecord>, MediaOpError> {
+fn read_all_registry_records_at_root(
+    root: &Path,
+) -> Result<Vec<MediaRegistryRecord>, MediaOpError> {
     let mut records = Vec::new();
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
@@ -2014,8 +2026,7 @@ mod tests {
         by_id_name: &str,
     ) {
         let usb_dir = sysfs_root.join("bus/usb/devices").join(bus_id);
-        std::fs::create_dir_all(usb_dir.join("block").join(block_device))
-            .expect("usb block dir");
+        std::fs::create_dir_all(usb_dir.join("block").join(block_device)).expect("usb block dir");
         std::fs::write(usb_dir.join("devnum"), b"7\n").expect("devnum");
         std::fs::write(usb_dir.join("idVendor"), b"abcd\n").expect("idVendor");
         std::fs::write(usb_dir.join("idProduct"), b"1234\n").expect("idProduct");
@@ -2257,9 +2268,7 @@ mod tests {
         let scaffold = qmp_scaffold("installer-usb", "boot", QemuMediaHotplugAction::Detach)
             .expect("scaffold");
         let err = qmp_detach(&mut client, &scaffold).expect_err("qmp detach must fail closed");
-        assert!(
-            matches!(err, MediaOpError::Qmp(reason) if reason == "device_del:DeviceNotFound")
-        );
+        assert!(matches!(err, MediaOpError::Qmp(reason) if reason == "device_del:DeviceNotFound"));
         server.join().expect("fake qmp server joins");
     }
 
@@ -2683,12 +2692,8 @@ mod tests {
             by_id_name: "usb-Vendor_SecretSerial".to_owned(),
         };
 
-        let identity = read_usb_identity_for_selector_at_roots(
-            &sysfs_root,
-            &by_id_root,
-            &selector,
-        )
-        .expect("selector identity");
+        let identity = read_usb_identity_for_selector_at_roots(&sysfs_root, &by_id_root, &selector)
+            .expect("selector identity");
         assert_eq!(identity.bus_id, "1-2.3");
         assert_eq!(identity.block_device, "null");
         assert_eq!(identity.by_id_names, vec!["usb-Vendor_SecretSerial"]);
@@ -2719,7 +2724,9 @@ mod tests {
     fn declared_selector_artifacts_write_registry_index_and_udev_rules() {
         let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("boot artifacts tempdir");
         let registry_root = dir.path().join("registry");
-        let redacted_index = dir.path().join("run/nixling/qemu-media-registry-index.json");
+        let redacted_index = dir
+            .path()
+            .join("run/nixling/qemu-media-registry-index.json");
         let rules_path = dir
             .path()
             .join("run/udev/rules.d/99-nixling-media-ignore.rules");
