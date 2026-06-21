@@ -4920,11 +4920,11 @@ fn cmd_vm_display(context: &Context, args: &VmDisplayArgs) -> Result<i32, CliFai
 fn cmd_vm_display_list(context: &Context, args: &VmDisplayListArgs) -> Result<i32, CliFailure> {
     let response = send_gateway_display(
         context,
-        public_wire::GatewayDisplayOp::List(public_wire::GatewayDisplayListArgs {
+        public_wire::GatewayDisplayOp::ListDetailed(public_wire::GatewayDisplayListArgs {
             target: args.target.clone(),
         }),
     )?;
-    let public_wire::GatewayDisplayOpResponse::List(result) = response else {
+    let public_wire::GatewayDisplayOpResponse::ListDetailed(result) = response else {
         return Err(CliFailure::new(
             1,
             "daemon returned an unexpected gatewayDisplay list reply",
@@ -10145,6 +10145,22 @@ mod host_install_dispatch_tests {
         );
         assert_eq!(list_v.get("op").and_then(Value::as_str), Some("list"));
 
+        let list_detailed = super::gateway_display_frame(
+            &public_wire::GatewayDisplayOp::ListDetailed(public_wire::GatewayDisplayListArgs {
+                target: Some("nl://demo.gw.work.nixling".to_owned()),
+            }),
+        )
+        .unwrap();
+        let list_detailed_v: Value = serde_json::from_slice(&list_detailed).unwrap();
+        assert_eq!(
+            list_detailed_v.get("type").and_then(Value::as_str),
+            Some("gatewayDisplay")
+        );
+        assert_eq!(
+            list_detailed_v.get("op").and_then(Value::as_str),
+            Some("list-detailed")
+        );
+
         let close = super::gateway_display_frame(&public_wire::GatewayDisplayOp::Close(
             public_wire::GatewayDisplayCloseArgs {
                 session_id: "s0".to_owned(),
@@ -10163,7 +10179,7 @@ mod host_install_dispatch_tests {
     fn gateway_display_reply_parser_accepts_bounded_list_response() {
         let response = serde_json::json!({
             "type": "gatewayDisplayResponse",
-            "op": "list",
+            "op": "list-detailed",
             "result": {
                 "sessions": [{
                     "sessionId": "s0",
@@ -10176,8 +10192,8 @@ mod host_install_dispatch_tests {
         });
         let parsed = super::parse_gateway_display_reply(&serde_json::to_vec(&response).unwrap())
             .expect("gateway display list response parses");
-        let public_wire::GatewayDisplayOpResponse::List(result) = parsed else {
-            panic!("expected list response");
+        let public_wire::GatewayDisplayOpResponse::ListDetailed(result) = parsed else {
+            panic!("expected detailed list response");
         };
         assert_eq!(result.sessions.len(), 1);
         assert_eq!(result.sessions[0].operation_id, "op-1");

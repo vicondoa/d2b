@@ -2738,14 +2738,57 @@ fn dispatch_gateway_display(
                         session_id,
                         target,
                         state,
-                        operation_id: summary.operation_id.to_string(),
-                        principal: summary.peer_principal.to_string(),
                     })
                 })
                 .collect();
             public_wire::GatewayDisplayOpResponse::List(public_wire::GatewayDisplayListResult {
                 sessions,
             })
+        }
+        public_wire::GatewayDisplayOp::ListDetailed(args) => {
+            gateway_display_gc(state);
+            let peer_principal = gateway_display_peer_principal_string(peer);
+            let target_by_id: HashMap<String, String> = state
+                .gateway_display
+                .sessions
+                .lock()
+                .map_err(|_| TypedError::InternalIo {
+                    context: "lock gateway display sessions".to_owned(),
+                    detail: "mutex poisoned".to_owned(),
+                })?
+                .values()
+                .map(|session| (session.open.session_id.to_string(), session.target.clone()))
+                .collect();
+            let sessions = state
+                .gateway_display
+                .orchestrator
+                .list_sessions()
+                .map_err(gateway_error_to_typed)?
+                .into_iter()
+                .filter_map(|summary| {
+                    let session_id = summary.session_id.to_string();
+                    let target = target_by_id.get(&session_id)?.clone();
+                    if args.target.as_ref().is_some_and(|wanted| wanted != &target) {
+                        return None;
+                    }
+                    if !matches!(peer.role, PeerRole::Admin)
+                        && summary.peer_principal.as_str() != peer_principal.as_str()
+                    {
+                        return None;
+                    }
+                    let state = format!("{:?}", summary.state).to_ascii_lowercase();
+                    Some(public_wire::GatewayDisplaySessionDetail {
+                        session_id,
+                        target,
+                        state,
+                        operation_id: summary.operation_id.to_string(),
+                        principal: summary.peer_principal.to_string(),
+                    })
+                })
+                .collect();
+            public_wire::GatewayDisplayOpResponse::ListDetailed(
+                public_wire::GatewayDisplayListDetailedResult { sessions },
+            )
         }
     };
     let mut value = serde_json::to_value(response).map_err(|err| TypedError::InternalIo {
@@ -11457,7 +11500,7 @@ mod public_status_tests {
         let list = dispatch_request(
             &state,
             &admin_peer(),
-            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::ListDetailed(
                 public_wire::GatewayDisplayListArgs { target: None },
             )),
         )
@@ -11502,7 +11545,7 @@ mod public_status_tests {
         let empty = dispatch_request(
             &state,
             &admin_peer(),
-            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::ListDetailed(
                 public_wire::GatewayDisplayListArgs { target: None },
             )),
         )
@@ -11538,7 +11581,7 @@ mod public_status_tests {
         let list = dispatch_request(
             &state,
             &launcher_peer(),
-            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::ListDetailed(
                 public_wire::GatewayDisplayListArgs { target: None },
             )),
         )
@@ -11623,7 +11666,7 @@ mod public_status_tests {
         let list = dispatch_request(
             &state,
             &launcher_peer(),
-            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+            wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::ListDetailed(
                 public_wire::GatewayDisplayListArgs { target: None },
             )),
         )
