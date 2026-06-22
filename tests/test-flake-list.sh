@@ -27,5 +27,7 @@ native=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || ec
 echo "test-flake-list: enumerating checks.$native.*" >&2
 
 # attrNames forces only the keys of the checks attrset (cheap) — it does not
-# evaluate each check's derivation. Pure JSON array on stdout.
+# evaluate each check's derivation. Keep every check in the dynamic matrix; if
+# an evaluator segfaults, tests/test-flake.sh emits grouped diagnostics and a
+# gdb backtrace for the failing evaluator command.
 nix eval --json "${flake_ref}#checks.${native}" --apply builtins.attrNames

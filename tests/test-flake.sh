@@ -37,38 +37,58 @@ dump_flake_eval_segfault() {
   shift
 
   log "  SEGFAULT diagnostics for $label"
+  printf '::group::%s\n' "flake evaluator segfault diagnostics: $label" >&2
   {
     echo "=== command ==="
     printf '%q ' "$@"
     echo
+    echo "=== selected environment ==="
+    env | LC_ALL=C sort | grep -E '^(CI=|GITHUB_|RUNNER_|TMPDIR=|NIX|NL_)' || true
     echo "=== system ==="
     uname -a || true
+    lsb_release -a 2>/dev/null || true
     nix --version || true
     nix-instantiate --version || true
+    command -v nix || true
+    command -v nix-instantiate || true
+    command -v gdb || true
     echo "=== limits ==="
     ulimit -a || true
     echo "=== memory ==="
     free -h || true
+    sed -n '1,80p' /proc/meminfo || true
     echo "=== disk ==="
     df -h || true
+    echo "=== core dumps ==="
+    printf 'core_pattern='
+    cat /proc/sys/kernel/core_pattern 2>/dev/null || true
+    printf 'core_uses_pid='
+    cat /proc/sys/kernel/core_uses_pid 2>/dev/null || true
+    echo "=== recent kernel messages ==="
+    dmesg | tail -80 2>/dev/null || true
     echo "=== process status ==="
     grep -E '^(Name|State|Threads|VmPeak|VmSize|VmRSS|VmStk|Sig)' /proc/$$/status || true
   } >&2
 
   if command -v gdb >/dev/null 2>&1; then
     log "  SEGFAULT gdb backtrace for $label"
-    gdb --batch --quiet \
-      -ex 'set pagination off' \
-      -ex 'set print frame-arguments all' \
-      -ex 'set print elements 64' \
-      -ex run \
-      -ex 'thread apply all bt full' \
-      -ex 'info registers' \
-      -ex quit \
-      --args "$@" >&2 || true
+    {
+      echo "=== gdb backtrace ==="
+      gdb --batch --quiet \
+        -ex 'set pagination off' \
+        -ex 'set confirm off' \
+        -ex 'set print frame-arguments all' \
+        -ex 'set print elements 64' \
+        -ex run \
+        -ex 'thread apply all bt full' \
+        -ex 'info registers' \
+        -ex quit \
+        --args "$@" || true
+    } >&2
   else
     log "  SEGFAULT gdb backtrace skipped for $label (gdb not found)"
   fi
+  printf '::endgroup::\n' >&2
 }
 
 # Local all-shards mode: mirror CI's x86 flake fan-out on one host instead of
