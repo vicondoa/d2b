@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vicondoa.github.io/nixling/schemas/ui-colors-v1.json",
+  "title": "nixling UI colors",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "host", "states", "envs", "vms"],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accent"],
+      "properties": {
+        "accent": { "$ref": "#/$defs/hexColor" }
+      }
+    },
+    "states": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "running",
+        "transitioning",
+        "pendingRestart",
+        "error",
+        "denied",
+        "unknown"
+      ],
+      "properties": {
+        "running": { "$ref": "#/$defs/hexColor" },
+        "transitioning": { "$ref": "#/$defs/hexColor" },
+        "pendingRestart": { "$ref": "#/$defs/hexColor" },
+        "error": { "$ref": "#/$defs/hexColor" },
+        "denied": { "$ref": "#/$defs/hexColor" },
+        "unknown": { "$ref": "#/$defs/hexColor" }
+      }
+    },
+    "envs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["accent"],
+        "properties": {
+          "accent": { "$ref": "#/$defs/hexColor" }
+        }
+      }
+    },
+    "vms": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["env", "border"],
+        "properties": {
+          "env": {
+            "type": ["string", "null"]
+          },
+          "border": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["active", "inactive", "urgent"],
+            "properties": {
+              "active": { "$ref": "#/$defs/hexColor" },
+              "inactive": { "$ref": "#/$defs/hexColor" },
+              "urgent": { "$ref": "#/$defs/hexColor" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "hexColor": {
+      "type": "string",
+      "pattern": "^#[0-9a-f]{6}$"
+    }
+  }
+}

@@ -1,12 +1,9 @@
 # nix-unit cases migrated from tests/niri-vm-borders-eval.sh (group D).
 #
-# Opt-in niri window-rule include generation: disabled by default; when
-# enabled, the KDL at config.environment.etc."nixling/niri-vm-borders.kdl"
-# carries a per-graphics-VM border rule (and none for headless VMs), the
-# qemu-media host-window border rule, the crosvm scanout-window hide rule,
-# and the include-path comment; per-VM color overrides appear verbatim; the
-# default palette color is the stable deterministic derivation; a custom
-# outputPath relocates the file.
+# Opt-in niri window-rule include generation plus the generic UI color
+# artifacts: disabled by default; enabling the generic UI artifacts emits
+# JSON/CSS but not KDL; enabling the niri backend (or legacy
+# niriVmBorders) emits KDL rendered from the generic resolved color model.
 #
 # Uses `mkEval` (== nixosSystem with the nixling module set) to render the
 # real host-level `environment.etc`, then asserts with lib.hasInfix
@@ -69,15 +66,27 @@ let
 
   etcOf = overrides: (mkEval ([ base ] ++ overrides)).config.environment.etc;
   kdlKey = "nixling/niri-vm-borders.kdl";
+  jsonKey = "nixling/ui-colors.json";
+  cssKey = "nixling/ui-colors.css";
   kdlText = etc: if builtins.hasAttr kdlKey etc then etc.${kdlKey}.text else "";
+  jsonText = etc: if builtins.hasAttr jsonKey etc then etc.${jsonKey}.text else "";
+  cssText = etc: if builtins.hasAttr cssKey etc then etc.${cssKey}.text else "";
 
   disabledEtc = etcOf [ ];
+  uiEtc = etcOf [ ({ ... }: { nixling.site.ui.enable = true; }) ];
+  uiJson = builtins.fromJSON (jsonText uiEtc);
+  uiCss = cssText uiEtc;
+  newNiriEtc = etcOf [ ({ ... }: { nixling.site.ui.compositors.niri.enable = true; }) ];
+  newNiriKdl = kdlText newNiriEtc;
   enabledEtc = etcOf [ ({ ... }: { nixling.site.niriVmBorders.enable = true; }) ];
   enabledKdl = kdlText enabledEtc;
   colorKdl = kdlText (etcOf [
     ({ ... }: {
-      nixling.site.niriVmBorders.enable = true;
-      nixling.vms.work.graphics.niriBorderColor = "#aabbcc";
+      nixling.site.ui.compositors.niri.enable = true;
+      nixling.vms.work.ui.border = {
+        activeColor = "#AABBCC";
+        urgentColor = "#112233";
+      };
     })
   ]);
   qemuMediaColorKdl = kdlText (etcOf [
@@ -97,6 +106,72 @@ in
   "niri-vm-borders/disabled-no-kdl" = {
     expr = builtins.hasAttr kdlKey disabledEtc;
     expected = false;
+  };
+  "niri-vm-borders/disabled-no-ui-json" = {
+    expr = builtins.hasAttr jsonKey disabledEtc;
+    expected = false;
+  };
+  "niri-vm-borders/disabled-no-ui-css" = {
+    expr = builtins.hasAttr cssKey disabledEtc;
+    expected = false;
+  };
+  "niri-vm-borders/ui-enable-has-json" = {
+    expr = builtins.hasAttr jsonKey uiEtc;
+    expected = true;
+  };
+  "niri-vm-borders/ui-enable-has-css" = {
+    expr = builtins.hasAttr cssKey uiEtc;
+    expected = true;
+  };
+  "niri-vm-borders/ui-enable-no-kdl" = {
+    expr = builtins.hasAttr kdlKey uiEtc;
+    expected = false;
+  };
+  "niri-vm-borders/ui-json-version" = {
+    expr = uiJson.version;
+    expected = 1;
+  };
+  "niri-vm-borders/ui-json-default-vm-border" = {
+    expr = uiJson.vms.work.border;
+    expected = {
+      active = "#ffa07a";
+      inactive = "#ffa07a";
+      urgent = "#ffa07a";
+    };
+  };
+  "niri-vm-borders/ui-json-env-accent-present" = {
+    expr = builtins.hasAttr "accent" uiJson.envs.work;
+    expected = true;
+  };
+  "niri-vm-borders/ui-css-host-var" = {
+    expr = lib.hasInfix "--nixling-host-accent: #89b4fa;" uiCss;
+    expected = true;
+  };
+  "niri-vm-borders/ui-css-vm-var" = {
+    expr = lib.hasInfix "--nixling-vm-work-border-active: #ffa07a;" uiCss;
+    expected = true;
+  };
+  "niri-vm-borders/ui-json-mode" = {
+    expr = uiEtc.${jsonKey}.mode;
+    expected = "0644";
+  };
+  "niri-vm-borders/ui-css-mode" = {
+    expr = uiEtc.${cssKey}.mode;
+    expected = "0644";
+  };
+  "niri-vm-borders/new-backend-has-kdl" = {
+    expr = builtins.hasAttr kdlKey newNiriEtc;
+    expected = true;
+  };
+  "niri-vm-borders/new-backend-has-json" = {
+    expr = builtins.hasAttr jsonKey newNiriEtc;
+    expected = true;
+  };
+  "niri-vm-borders/new-backend-renders-inactive-and-urgent" = {
+    expr =
+      lib.hasInfix ''inactive-color "#ffa07a"'' newNiriKdl
+      && lib.hasInfix ''urgent-color "#ffa07a"'' newNiriKdl;
+    expected = true;
   };
   "niri-vm-borders/enabled-has-kdl" = {
     expr = builtins.hasAttr kdlKey enabledEtc;
@@ -131,7 +206,10 @@ in
     expected = true;
   };
   "niri-vm-borders/color-override-verbatim" = {
-    expr = lib.hasInfix ''"#aabbcc"'' colorKdl;
+    expr =
+      lib.hasInfix ''active-color "#aabbcc"'' colorKdl
+      && lib.hasInfix ''inactive-color "#aabbcc"'' colorKdl
+      && lib.hasInfix ''urgent-color "#112233"'' colorKdl;
     expected = true;
   };
   "niri-vm-borders/qemu-media-color-override-verbatim" = {
@@ -147,6 +225,14 @@ in
     # (vacuous under pure single-eval).
     expr = lib.hasInfix ''active-color "#ffa07a"'' enabledKdl;
     expected = true;
+  };
+  "niri-vm-borders/default-inactive-color-is-identity" = {
+    expr = lib.hasInfix ''inactive-color "#ffa07a"'' enabledKdl;
+    expected = true;
+  };
+  "niri-vm-borders/kdl-mode" = {
+    expr = enabledEtc.${kdlKey}.mode;
+    expected = "0644";
   };
   "niri-vm-borders/custom-output-path-present" = {
     expr = builtins.hasAttr "nixling/custom-borders.kdl" customEtc;

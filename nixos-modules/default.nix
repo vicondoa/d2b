@@ -59,6 +59,7 @@
     ./privileges-json.nix
     ./closures-json.nix
     ./minijail-profiles.nix
+    ./ui-colors.nix
     # Both cli.nix (bash CLI package) and host-ch-exporter.nix (host
     # singleton scraper folded into daemon /metrics) are now retired.
     # See tests/cli-nix-consumers-eval.sh + tests/legacy-unit-denylist-eval.sh
