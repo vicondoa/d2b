@@ -21,9 +21,6 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
-- Persistent shell CLI: added staged top-level shell parsing, management JSON
-  rendering, and terminal attach transport wiring for the daemon shell control
-  plane.
 - Persistent shell daemon: started nixlingd-side shell control-plane routing with
   admin-gated management operations, guest-control capability checks, shell
   response framing, and attached-owner terminal proxying scaffolding.
@@ -49,6 +46,9 @@ deprecations ship one minor release before removal.
   Rust/static supply-chain gate wiring for upcoming guest-control terminal work.
 
 ### Added
+
+- Persistent shell CLI: added top-level `nixling shell <vm>` attach and
+  management forms for persistent named guest shell sessions.
 
 - UI colors: added a compositor-agnostic nixling color contract under
   `nixling.site.ui`, `nixling.envs.<env>.ui`, and
