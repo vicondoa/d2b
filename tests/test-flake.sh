@@ -32,17 +32,12 @@ cd "$ROOT"
 # contract — see tests/lib.sh nl_flake_ref).
 flake_ref=$(nl_flake_ref "$ROOT")
 
-# Single-check shard mode (CI dynamic matrix): NL_FLAKE_CHECK=<name> dry-runs
+# Single-check shard mode (CI dynamic matrix): NL_FLAKE_CHECK=<name> instantiates
 # just that one flake check's derivation for the native system, matching the
 # `--no-build` semantics of the full sweep (evaluate + instantiate, do not
-# build). Use `nix build --dry-run --no-link` instead of forcing `.drvPath` via
-# `nix eval`: on hosted runners, the heavy `fixture-smoke-full` nixosSystem
-# shard has hit Nix evaluator segfaults in the `.drvPath` path even though the
-# derivation dry-run evaluates cleanly.
-#
-# Sharding lets CI fan the checks out across parallel runners so no single
-# evaluator process holds every nixosSystem toplevel at once — the OOM/swap-spill
-# the monolithic `nix flake check` hit on a 16 GB hosted runner.
+# build). Sharding lets CI fan the checks out across parallel runners so no
+# single evaluator process holds every nixosSystem toplevel at once — the
+# OOM/swap-spill the monolithic `nix flake check` hit on a 16 GB hosted runner.
 # The complementary `test-flake-aarch64` job runs only the dedicated
 # smoke-eval-aarch64 expression. `NL_FLAKE_OUTPUTS=1` (below) sweeps x86
 # non-`checks` outputs.
@@ -58,21 +53,22 @@ if [ -n "${NL_FLAKE_CHECK:-}" ]; then
       ;;
   esac
   native=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "native")
-  if [ "$NL_FLAKE_CHECK" = "fixture-smoke-full" ]; then
-    # This feature-rich fixture is the heaviest nixosSystem graph in flake
-    # checks. On GitHub-hosted runners, every instantiate-only path tried here
-    # (`nix eval .drvPath`, `nix-instantiate`, and `nix build --dry-run`) has
-    # segfaulted in Nix before it can report a typed eval error. The real build
-    # path is the validation path already used by `test-rust` for rendered
-    # contract tests and avoids that evaluator crash mode.
-    log "--> flake check shard: checks.$native.${NL_FLAKE_CHECK} (realise heavy fixture)"
-    build_args=(--no-link --print-out-paths)
-  else
-    log "--> flake check shard: checks.$native.${NL_FLAKE_CHECK} (dry-run instantiate-only)"
-    build_args=(--dry-run --no-link)
-  fi
-  if nix build "${build_args[@]}" "${flake_ref}#checks.${native}.${NL_FLAKE_CHECK}" >/dev/null; then
+  log "--> flake check shard: checks.$native.${NL_FLAKE_CHECK} (instantiate-only)"
+  set +e
+  nix eval --raw "${flake_ref}#checks.${native}.${NL_FLAKE_CHECK}.drvPath" >/dev/null
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
     ok "flake check shard: ${NL_FLAKE_CHECK}"
+  elif [ "$rc" -eq 139 ]; then
+    log "  WARN: nix eval segfaulted for shard ${NL_FLAKE_CHECK}; retrying via nix-instantiate"
+    if nix-instantiate --eval --strict -E \
+      "let f = builtins.getFlake \"${flake_ref}\"; in f.checks.${native}.${NL_FLAKE_CHECK}.drvPath" >/dev/null; then
+      ok "flake check shard: ${NL_FLAKE_CHECK} (nix-instantiate fallback)"
+    else
+      fail "flake check shard: ${NL_FLAKE_CHECK}"
+      exit 1
+    fi
   else
     fail "flake check shard: ${NL_FLAKE_CHECK}"
     exit 1
