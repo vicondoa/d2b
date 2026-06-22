@@ -234,18 +234,10 @@ pub struct VmEntry {
     pub usbipd_host_ip: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmLifecycle {
     pub graceful_shutdown: VmGracefulShutdown,
-}
-
-impl Default for VmLifecycle {
-    fn default() -> Self {
-        Self {
-            graceful_shutdown: VmGracefulShutdown::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
