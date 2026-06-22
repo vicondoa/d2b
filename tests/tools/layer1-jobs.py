@@ -132,6 +132,12 @@ def rust_job(job: dict[str, Any]) -> str:
         with:
           fetch-depth: 0
 {nix_setup_step()}
+      - name: Free runner disk for Rust gate
+        run: |
+          df -h
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          docker system prune -af || true
+          df -h
       - name: Install pinned Rust toolchain + ripgrep + acl
         # MUST run BEFORE Swatinem/rust-cache: the cache action reads
         # `rustc --version` to compute its key hash, so the pinned
