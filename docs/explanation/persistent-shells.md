@@ -11,7 +11,7 @@ nixling shell <target> [ACTION]
 
 where `ACTION` is `attach`, `list`, `detach`, or `kill`. Omitting `ACTION`
 attaches to the target's configured default session. Current local-only
-generations accept local VM names as targets; ADR 0039 reserves gateway,
+generations accept local VM names as targets; ADR 0039 defines gateway,
 remote-node, and provider target routing for a future generation.
 
 ## Persistence boundary
@@ -40,8 +40,8 @@ local-shell-only generations reject gateway-backed realm targets locally;
 operators manage those guests by entering the realm gateway and running the
 command there, for example `nixling realm enter work` followed by
 `nixling shell <target>`. That rejection is current-generation behavior, not a
-permanent contract: ADR 0039 reserves future constellation routing for gateway,
-remote, and provider target addresses.
+permanent contract: ADR 0039 defines constellation routing for gateway, remote,
+and provider target addresses.
 
 Persistent shells do not add TCP or UDP listeners, network ports, or
 network-bound debug/metrics surfaces. The host-to-guest path reuses the existing

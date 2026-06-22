@@ -27,7 +27,7 @@ Schema: [`shell-list.schema.json`](./shell-list.schema.json).
 | Field | Meaning |
 | --- | --- |
 | `command` | Stable command discriminator, always `shell list`. |
-| `vm` | Current local routed VM name. Local-shell-only generations resolve only declared local VM targets and reject gateway/remote/provider targets before daemon dispatch; ADR 0039 reserves future target routing. |
+| `vm` | Current local routed VM name. Local-shell-only generations resolve only declared local VM targets and reject gateway/remote/provider targets before daemon dispatch; ADR 0039 defines the target-routing contract. |
 | `default_name` | Configured default shell session name for the target workload. Present even when `sessions` is empty. |
 | `sessions[]` | Bounded session rows reported by guestd. |
 | `sessions[].name` | Validated shell session name. |

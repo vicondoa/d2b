@@ -25,8 +25,11 @@ nixling-owned guest audit semantics. Treating that provider API as a special
 persistent-shell channel would create a second shell contract and would bypass
 ADR 0032 capability and stream authorization.
 
-Wave 0 for this ADR is documentation and contract reservation only. It does not
-ship runtime code, generated schemas, new top-level tests, or provider behavior.
+The initial ADR wave was documentation and contract reservation only. The
+generated constellation core schema now includes the shell capability,
+operation, stream, and bounded DTO roots; router, provider, daemon, guestd, and
+provider-agent runtime behavior remains staged behind later implementation
+waves.
 
 ## Decision
 
@@ -40,10 +43,9 @@ terminal streams only.
 
 ### Capability and operation reservation
 
-A future generated constellation schema will reserve a `persistent-shell`
-capability. Until that schema and implementation land, references to the
-capability are contract-reserved and must not be treated as live generated
-artifacts.
+The generated constellation schema includes a `persistent-shell` capability.
+Runtime support still depends on the target node or provider agent advertising
+that capability and implementing the corresponding shell operation family.
 
 The shell operation family is:
 
@@ -144,18 +146,16 @@ labels.
 
 ### Documentation and implementation boundary
 
-This ADR reserves the cross-constellation contract. Follow-on implementation
-must update generated schemas through the normal `xtask` path, add capability
-and operation DTOs in the owning crates, update reference docs from generated
-artifacts where applicable, and add tests in the locations required by
+This ADR defines the cross-constellation contract. Implementation updates
+generated schemas through the normal `xtask` path, adds capability and
+operation DTOs in the owning crates, updates reference docs from generated
+artifacts where applicable, and adds tests in the locations required by
 `tests/AGENTS.md`. The required test strategy is: Type 2 tests for
 constellation core, router, and guestd logic; Type 3 tests for CLI, daemon, and
 guestd integration with mocks or loopback where possible; Type 6 drift and
 generator checks for schema, CLI, proto, and docs artifacts; and Type 10 tests
 only for real PAM, systemd, and PTY boundaries that Layer 1 cannot prove. No
-generated JSON or top-level `tests/*.sh` file is added by this Wave 0
-documentation work, and follow-on work must not add new top-level `tests/*.sh`
-gates.
+top-level `tests/*.sh` gates are added for this feature.
 
 ## Consequences
 

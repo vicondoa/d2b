@@ -261,7 +261,7 @@ shell_opaque_id!(
 pub struct ShellGeneration {
     pub guest_boot_id: ProtocolToken,
     pub guestd_instance_id: ProtocolToken,
-    pub shpool_daemon_instance_id: ProtocolToken,
+    pub shell_daemon_instance_id: ProtocolToken,
 }
 
 /// Coarse persistent-shell lifecycle state.
@@ -315,6 +315,7 @@ pub struct ShellListRequest {
 pub struct ShellAttachRequest {
     pub name: ShellName,
     pub generation: ShellGeneration,
+    pub attach_id: ShellAttachId,
     pub force: bool,
 }
 
@@ -406,7 +407,7 @@ mod tests {
         ShellGeneration {
             guest_boot_id: ProtocolToken::parse("boot-1").unwrap(),
             guestd_instance_id: ProtocolToken::parse("guestd-1").unwrap(),
-            shpool_daemon_instance_id: ProtocolToken::parse("shpool-1").unwrap(),
+            shell_daemon_instance_id: ProtocolToken::parse("shell-daemon-1").unwrap(),
         }
     }
 
@@ -439,7 +440,8 @@ mod tests {
     fn shell_request_decode_rejects_unknown_fields() {
         let json = "{\"name\":\"default\",\"generation\":{\"guest_boot_id\":\"boot-1\",\
                     \"guestd_instance_id\":\"guestd-1\",\
-                    \"shpool_daemon_instance_id\":\"shpool-1\"},\
+                    \"shell_daemon_instance_id\":\"shell-daemon-1\"},\
+                    \"attach_id\":\"attach-1\",\
                     \"force\":false,\"argv\":[\"sh\"]}";
         assert!(serde_json::from_str::<ShellAttachRequest>(json).is_err());
     }
@@ -463,6 +465,7 @@ mod tests {
             "TOKEN=",
             "provider_endpoint",
             "credential",
+            "attach-1",
             "terminal bytes",
             "/nix/store",
         ] {
@@ -488,12 +491,12 @@ mod tests {
         let one = "{\"name\":\"default\",\"state\":\"detached\",\
                    \"generation\":{\"guest_boot_id\":\"boot-1\",\
                    \"guestd_instance_id\":\"guestd-1\",\
-                   \"shpool_daemon_instance_id\":\"shpool-1\"},\
+                   \"shell_daemon_instance_id\":\"shell-daemon-1\"},\
                    \"attached\":false,\"is_default\":true}";
         let too_many = format!(
             "{{\"generation\":{{\"guest_boot_id\":\"boot-1\",\
              \"guestd_instance_id\":\"guestd-1\",\
-             \"shpool_daemon_instance_id\":\"shpool-1\"}},\"summaries\":[{}]}}",
+             \"shell_daemon_instance_id\":\"shell-daemon-1\"}},\"summaries\":[{}]}}",
             std::iter::repeat_n(one, MAX_SHELL_SUMMARIES + 1)
                 .collect::<Vec<_>>()
                 .join(",")

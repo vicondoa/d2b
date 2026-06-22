@@ -27,7 +27,7 @@ capability set derived from what that provider API or provider-side nixling
 agent supports. The daemon never provisions, registers, or expects a full
 host `nixlingd`, `nixling-priv-broker`, KVM subsystem, vsock channel, cgroup
 subtree, namespace hierarchy, full-host lifecycle, or device-hotplug surface
-on a provider-managed node. ADR 0039 reserves one exception to the old
+on a provider-managed node. ADR 0039 defines one exception to the old
 exec-only model: a provider-managed sandbox may advertise persistent shell
 only when it runs a guestd-compatible nixling agent that exposes shell
 control and terminal-v1 streams over the constellation peer transport.
@@ -64,7 +64,7 @@ table is not supported; operations requiring it receive
 | --- | --- | --- |
 | `lifecycle` | Conditional | Advertised only when sandbox defaults are configured; create/start/stop/list map to the Azure Container Apps sandbox data plane. |
 | `exec` | ✓ | Synchronous Azure Container Apps `executeShellCommand`; returns a derived execution id, not a durable guest-control session. |
-| `persistent-shell` | No | Contract-reserved by ADR 0039. The executeShellCommand-only adapter must not advertise persistent shell; future support requires a guestd-compatible in-sandbox agent over the constellation peer transport. |
+| `persistent-shell` | No | Live ADR 0039 capability. The executeShellCommand-only adapter must not advertise persistent shell; support requires a guestd-compatible in-sandbox agent over the constellation peer transport. |
 | `logs` | ✗ | No retained-log stream in this adapter. |
 | `pty` | ✗ | No interactive TTY or stdio attachment. |
 | `file-copy` | ✗ | No bounded file-copy API. |
@@ -296,7 +296,7 @@ The following items are deferred and not currently supported by the Azure Contai
 adapter:
 
 - Interactive exec sessions or attached TTY to running containers.
-- Persistent named shell sessions; ADR 0039 reserves this for a future
+- Persistent named shell sessions; ADR 0039 defines this for a
   guestd-compatible in-sandbox agent and explicitly excludes mapping it to
   `executeShellCommand`.
 - Live stdio streaming (current support is polling-based log read only).
@@ -315,7 +315,7 @@ the capability matrix above.
 
 ## Cross-references
 
-- [ADR 0039 - constellation persistent shell routing](../adr/0039-constellation-persistent-shell-routing.md) - the reserved contract for persistent shells on remote/provider targets.
+- [ADR 0039 - constellation persistent shell routing](../adr/0039-constellation-persistent-shell-routing.md) - the live core contract for persistent shells on remote/provider targets.
 - [Remote full-host nodes](./remote-full-host-nodes.md) — the model
   for nodes that run their own `nixlingd`/broker/guest-control stack.
 - [Azure Relay transport](./transport-azure-relay.md) — the Relay

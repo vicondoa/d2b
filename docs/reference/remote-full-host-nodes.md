@@ -121,10 +121,10 @@ Capabilities are positive assertions. A node that has not advertised
 `lifecycle` cannot receive workload list/start/stop requests. A node that
 has not advertised `exec` cannot receive exec start/attach/cancel requests.
 A node that has not advertised `logs` cannot receive retained-log requests.
-[ADR 0039](../adr/0039-constellation-persistent-shell-routing.md) reserves
-`persistent-shell`; until implementation lands, remote full-host nodes do not
-advertise it. Once implemented, shell routing reaches the remote daemon as
-semantic `Shell*` operations and the remote daemon re-originates local
+[ADR 0039](../adr/0039-constellation-persistent-shell-routing.md) defines
+`persistent-shell`. Remote full-host nodes advertise it only after their daemon
+implements the shell operation family. Shell routing reaches the remote daemon
+as semantic `Shell*` operations and the remote daemon re-originates local
 guest-control shell RPCs near the guest.
 
 Capability sets are fixed at registration time for a given transport

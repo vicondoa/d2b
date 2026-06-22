@@ -21,7 +21,7 @@ Schema: [`shell-kill.schema.json`](./shell-kill.schema.json).
 | Field | Meaning |
 | --- | --- |
 | `command` | Stable command discriminator, always `shell kill`. |
-| `vm` | Current local routed VM name. Local-shell-only generations resolve only declared local VM targets and reject gateway/remote/provider targets before daemon dispatch; ADR 0039 reserves future target routing. |
+| `vm` | Current local routed VM name. Local-shell-only generations resolve only declared local VM targets and reject gateway/remote/provider targets before daemon dispatch; ADR 0039 defines the target-routing contract. |
 | `name` | Explicit shell session name supplied with `--name`. Kill never defaults to `default`. |
 | `result` | `killed` when the session was terminated; otherwise `already-absent`. |
 | `state` | Terminal shell state reported by the daemon, normally `killed` for this command. |

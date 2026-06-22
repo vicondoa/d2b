@@ -2511,11 +2511,10 @@ guest-control terminal transport. Current local-shell-only generations reject
 gateway-backed realm targets at the host daemon. Until ADR 0039 routing lands,
 use `nixling realm enter <realm>` to access the gateway interactively, then run
 `nixling shell <target>` inside the gateway boundary.
-[ADR 0039](../adr/0039-constellation-persistent-shell-routing.md) reserves the
-future constellation route: once the generated shell capability and routing
-land, the same command forwards gateway-backed targets through the selected
-gateway and requires the remote node or provider agent to advertise
-`persistent-shell`.
+[ADR 0039](../adr/0039-constellation-persistent-shell-routing.md) defines the
+constellation route: once gateway shell routing lands, the same command forwards
+gateway-backed targets through the selected gateway and requires the remote node
+or provider agent to advertise `persistent-shell`.
 
 **Flags**
 
@@ -2584,8 +2583,8 @@ default detached  false     true
 ```
 
 The JSON field remains named `vm` for the current schema. In local-shell-only
-generations it contains the resolved local routed VM name; ADR 0039 reserves
-future gateway, remote-node, and provider target routing for this command family.
+generations it contains the resolved local routed VM name; ADR 0039 defines
+gateway, remote-node, and provider target routing for this command family.
 
 **Exit codes**
 

@@ -2437,11 +2437,15 @@
       "description": "Request body for `ShellAttach`.",
       "type": "object",
       "required": [
+        "attach_id",
         "force",
         "generation",
         "name"
       ],
       "properties": {
+        "attach_id": {
+          "$ref": "#/definitions/ShellAttachId"
+        },
         "force": {
           "type": "boolean"
         },
@@ -2539,7 +2543,7 @@
       "required": [
         "guest_boot_id",
         "guestd_instance_id",
-        "shpool_daemon_instance_id"
+        "shell_daemon_instance_id"
       ],
       "properties": {
         "guest_boot_id": {
@@ -2548,7 +2552,7 @@
         "guestd_instance_id": {
           "$ref": "#/definitions/ProtocolToken"
         },
-        "shpool_daemon_instance_id": {
+        "shell_daemon_instance_id": {
           "$ref": "#/definitions/ProtocolToken"
         }
       },

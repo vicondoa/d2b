@@ -666,6 +666,8 @@ mod tests {
         let shell_attach_no_key = "{\"operation_id\":\"op1\",\"realm\":[\"work\"],\"node\":\"n1\",\
                                   \"principal\":\"p1\",\"kind\":\"shell-attach\",\"body\":[]}";
         assert!(serde_json::from_str::<OperationRequest>(shell_attach_no_key).is_err());
+        // Envelope decoding owns idempotency. Runtime routing separately
+        // requires a workload for shell operations before dispatch.
         let shell_attach_with_key = "{\"operation_id\":\"op1\",\"idempotency_key\":\"k1\",\
                                     \"realm\":[\"work\"],\"node\":\"n1\",\
                                     \"principal\":\"p1\",\"kind\":\"shell-attach\",\"body\":[]}";
