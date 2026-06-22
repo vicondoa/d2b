@@ -2489,26 +2489,33 @@ never perturb a `--json` stdout envelope.
 
 ### `shell`
 
-**Synopsis:** `nixling shell <vm> [ACTION] [--name NAME] [--force] [--json|--human]`
+**Synopsis:** `nixling shell <target> [ACTION] [--name NAME] [--force] [--json|--human]`
 
 `ACTION` is one of:
 
-- omitted or `attach` — attach to the VM's configured default shell session, or
-  to `--name NAME`;
+- omitted or `attach` — attach to the target's configured default shell session,
+  or to `--name NAME`;
 - `list` — list persistent shell sessions;
 - `detach` — detach a live/stale client without killing the shell;
 - `kill` — terminate a named shell session.
 
-The first positional after `shell` is always the VM name. A VM named `list`,
-`attach`, `detach`, or `kill` attaches by default; use
-`nixling shell <vm> <ACTION>` for management. Command-like trailing words such as
+The first positional after `shell` is always a nixling target address. Current
+local-shell-only generations accept declared local VM names as target addresses.
+A local VM named `list`, `attach`, `detach`, or `kill` attaches by default; use
+`nixling shell <target> <ACTION>` for management. Command-like trailing words such as
 `nixling shell work htop` are rejected with a hint to use
-`nixling vm exec <vm> -- <cmd>` for one-off commands.
+`nixling vm exec <target> -- <cmd>` for one-off commands.
 
-`shell` uses the local daemon public socket and the authenticated guest-control
-terminal transport. The host daemon does not proxy shell operations into
-gateway-backed realm targets; gateway-backed shells must be managed by running
-the command against the realm gateway's `nixlingd`.
+`shell` currently uses the local daemon public socket and the authenticated
+guest-control terminal transport. Current local-shell-only generations reject
+gateway-backed realm targets at the host daemon. Until ADR 0039 routing lands,
+use `nixling realm enter <realm>` to access the gateway interactively, then run
+`nixling shell <target>` inside the gateway boundary.
+[ADR 0039](../adr/0039-constellation-persistent-shell-routing.md) reserves the
+future constellation route: once the generated shell capability and routing
+land, the same command forwards gateway-backed targets through the selected
+gateway and requires the remote node or provider agent to advertise
+`persistent-shell`.
 
 **Flags**
 
@@ -2576,13 +2583,17 @@ default detached  false     true
 }
 ```
 
+The JSON field remains named `vm` for the current schema. In local-shell-only
+generations it contains the resolved local routed VM name; ADR 0039 reserves
+future gateway, remote-node, and provider target routing for this command family.
+
 **Exit codes**
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Success, including idempotent detach/kill no-op results. |
 | `1` | Unexpected daemon reply or local protocol/serialization failure. |
-| `2` | Usage error, invalid flag combination, missing required `--name` for kill, invalid shell name, non-TTY attach, or gateway-backed target on the host daemon. |
+| `2` | Usage error, invalid flag combination, missing required `--name` for kill, invalid shell name, non-TTY attach, or gateway-backed target on a local-shell-only daemon generation. |
 | `69` | Local daemon public socket unavailable for shell dispatch. |
 | `70` | Daemon generation does not support persistent shell operations. |
 | `75` | Daemon admin authorization failed before guest contact. |

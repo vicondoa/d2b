@@ -27,6 +27,10 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- Constellation persistent shell routing: added ADR 0039 and reference stubs
+  reserving the provider/remote contract for ADR 0038 shells, including the
+  guestd-compatible provider-agent requirement and the rule that
+  `executeShellCommand` is not a persistent-shell channel.
 - Persistent shell daemon: started nixlingd-side shell control-plane routing with
   admin-gated management operations, guest-control capability checks, shell
   response framing, and attached-owner terminal proxying scaffolding.

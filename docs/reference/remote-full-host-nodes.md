@@ -121,6 +121,11 @@ Capabilities are positive assertions. A node that has not advertised
 `lifecycle` cannot receive workload list/start/stop requests. A node that
 has not advertised `exec` cannot receive exec start/attach/cancel requests.
 A node that has not advertised `logs` cannot receive retained-log requests.
+[ADR 0039](../adr/0039-constellation-persistent-shell-routing.md) reserves
+`persistent-shell`; until implementation lands, remote full-host nodes do not
+advertise it. Once implemented, shell routing reaches the remote daemon as
+semantic `Shell*` operations and the remote daemon re-originates local
+guest-control shell RPCs near the guest.
 
 Capability sets are fixed at registration time for a given transport
 session. A node that gains or loses a substrate capability must
@@ -322,7 +327,7 @@ does not implement fallbacks or workarounds.
 | Surface | Boundary |
 | --- | --- |
 | Raw broker operation forwarding | The gateway never forwards raw `nixling-priv-broker` frames. All broker work stays on the remote host. |
-| Guest-control frame tunneling | Guest-control (vsock) frames are not proxied through the gateway. The remote `nixlingd` opens its own guest-control sessions. |
+| Guest-control frame tunneling | Guest-control (vsock) frames are not proxied through the gateway. Persistent shell routes as [ADR 0039](../adr/0039-constellation-persistent-shell-routing.md) semantic `Shell*` operations; the remote `nixlingd` opens its own guest-control sessions near the guest. |
 | Pidfd / fd forwarding | File descriptors, pidfds, and socket handles are never sent across the transport session. |
 | Host path and endpoint exposure | Host-local paths, socket addresses, runner argv, and endpoint strings are not visible in the operation envelope or in gateway audit records. |
 | Provider/relay credential forwarding | Transport and realm credentials remain in the layer that owns them and are never placed in operation payloads. |
@@ -346,6 +351,7 @@ only. The following items are deferred to later work:
 - Provider-provisioned remote hosts (see the
   [provider-managed sandbox](./provider-managed-sandboxes.md)
   model for provider-scoped work).
+- Persistent shell routing for remote full-host and provider targets ([ADR 0039](../adr/0039-constellation-persistent-shell-routing.md)).
 - Automatic capability refresh without re-registration.
 - End-user principal delegation across a gateway; the preview binds the
   authenticated gateway principal only.

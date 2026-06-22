@@ -1032,15 +1032,16 @@ struct OpArgs {
 
 #[derive(Debug, Args)]
 #[command(
-    after_help = "Forms:\n  nixling shell <vm> [--name NAME] [--force]\n  nixling shell <vm> attach [--name NAME] [--force]\n  nixling shell <vm> list [--json]\n  nixling shell <vm> detach [--name NAME] [--json]\n  nixling shell <vm> kill --name NAME [--json]\n\n`nixling shell` opens persistent interactive sessions. Use `nixling vm exec <vm> -- <cmd>` for one-off commands."
+    after_help = "Forms:\n  nixling shell <target> [--name NAME] [--force]\n  nixling shell <target> attach [--name NAME] [--force]\n  nixling shell <target> list [--json]\n  nixling shell <target> detach [--name NAME] [--json]\n  nixling shell <target> kill --name NAME [--json]\n\n`nixling shell` opens persistent interactive sessions for a target workload. Use `nixling vm exec <target> -- <cmd>` for one-off commands."
 )]
 struct ShellArgs {
-    /// VM name as declared in `nixling.vms.<name>`.
+    /// Target address. Current local-only shell generations accept declared local VM names.
+    #[arg(value_name = "TARGET")]
     vm: String,
     /// Shell action. Omit to attach to the configured default session.
     #[arg(value_enum)]
     action: Option<ShellAction>,
-    /// Persistent shell session name. Omit to use the VM's configured default.
+    /// Persistent shell session name. Omit to use the target's configured default.
     #[arg(long)]
     name: Option<String>,
     /// Detach an existing attached client before attaching to this session.
@@ -1058,7 +1059,7 @@ struct ShellArgs {
 enum ShellAction {
     /// Attach to a persistent shell.
     Attach,
-    /// List persistent shell sessions on a VM.
+    /// List persistent shell sessions on a target.
     List,
     /// Detach a persistent shell session without killing it.
     Detach,
@@ -2730,7 +2731,7 @@ fn shell_trailing_command_hint(raw_args: &[OsString]) -> Option<&'static str> {
         return None;
     }
     Some(
-        "hint: `nixling shell` opens persistent interactive sessions; use `nixling vm exec <vm> -- <cmd>` for one-off commands.\n",
+        "hint: `nixling shell` opens persistent interactive sessions; use `nixling vm exec <target> -- <cmd>` for one-off commands.\n",
     )
 }
 
@@ -11242,7 +11243,7 @@ mod host_install_dispatch_tests {
         assert!(
             super::shell_trailing_command_hint(&hint_args)
                 .unwrap()
-                .contains("nixling vm exec <vm> -- <cmd>")
+                .contains("nixling vm exec <target> -- <cmd>")
         );
 
         let invalid = NativeCli::try_parse_from(vec![

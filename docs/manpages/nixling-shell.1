@@ -4,13 +4,13 @@
 .SH NAME
 shell \- Attach to or manage persistent named guest shells
 .SH SYNOPSIS
-\fBshell\fR [\fB\-\-name\fR] [\fB\-\-force\fR] [\fB\-\-json\fR] [\fB\-\-human\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIVM\fR> [\fIACTION\fR] 
+\fBshell\fR [\fB\-\-name\fR] [\fB\-\-force\fR] [\fB\-\-json\fR] [\fB\-\-human\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR> [\fIACTION\fR]
 .SH DESCRIPTION
 Attach to or manage persistent named guest shells
 .SH OPTIONS
 .TP
 \fB\-\-name\fR \fI<NAME>\fR
-Persistent shell session name. Omit to use the VM\*(Aqs configured default
+Persistent shell session name. Omit to use the target\*(Aqs configured default
 .TP
 \fB\-\-force\fR
 Detach an existing attached client before attaching to this session
@@ -24,8 +24,8 @@ Render human\-readable output
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
-<\fIVM\fR>
-VM name as declared in `nixling.vms.<name>`
+<\fITARGET\fR>
+Target address. Current local\-only shell generations accept declared local VM names
 .TP
 [\fIACTION\fR]
 Shell action. Omit to attach to the configured default session
@@ -37,7 +37,7 @@ Shell action. Omit to attach to the configured default session
 .IP \(bu 2
 attach: Attach to a persistent shell
 .IP \(bu 2
-list: List persistent shell sessions on a VM
+list: List persistent shell sessions on a target
 .IP \(bu 2
 detach: Detach a persistent shell session without killing it
 .IP \(bu 2
@@ -45,10 +45,10 @@ kill: Kill a persistent shell session by name
 .RE
 .SH EXTRA
 Forms:
-  nixling shell <vm> [\-\-name NAME] [\-\-force]
-  nixling shell <vm> attach [\-\-name NAME] [\-\-force]
-  nixling shell <vm> list [\-\-json]
-  nixling shell <vm> detach [\-\-name NAME] [\-\-json]
-  nixling shell <vm> kill \-\-name NAME [\-\-json]
+  nixling shell <target> [\-\-name NAME] [\-\-force]
+  nixling shell <target> attach [\-\-name NAME] [\-\-force]
+  nixling shell <target> list [\-\-json]
+  nixling shell <target> detach [\-\-name NAME] [\-\-json]
+  nixling shell <target> kill \-\-name NAME [\-\-json]
 
-`nixling shell` opens persistent interactive sessions. Use `nixling vm exec <vm> \-\- <cmd>` for one\-off commands.
+`nixling shell` opens persistent interactive sessions for a target workload. Use `nixling vm exec <target> \-\- <cmd>` for one\-off commands.

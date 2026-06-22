@@ -96,6 +96,8 @@ errors.
 Capability codes:
 
 - lifecycle, exec, pty, logs, file-copy, port-forward;
+- `persistent-shell` (contract-reserved by ADR 0039; not live until the
+  generated schema and routing implementation land);
 - vsock, virtiofs;
 - window-forwarding, display-streaming, clipboard;
 - audio-playback, audio-capture;
@@ -155,6 +157,15 @@ The pure `StreamMux` state machine enforces:
 - idempotent cancellation retries for already-cancelled streams;
 - no data after close and no double close for non-cancel terminal states.
 
+## Persistent shell routing reservation
+
+ADR 0039 reserves persistent shell as a semantic constellation operation
+family, not as durable exec and not as a provider-native shell channel. The
+future generated model will add `ShellList`, `ShellAttach`, `ShellDetach`, and
+`ShellKill` roots plus the `persistent-shell` capability through normal schema
+generation. Until then, this reference is a contract reservation only; do not
+edit generated JSON by hand.
+
 ## Durable execution
 
 Durable execution metadata is keyed by `ExecutionId` and carries an
@@ -207,6 +218,7 @@ the structured capability.
 ## Related references
 
 - [ADR 0032 — nixling v2 constellation control plane](../adr/0032-nixling-v2-constellation-control-plane.md)
+- [ADR 0039 - constellation persistent shell routing](../adr/0039-constellation-persistent-shell-routing.md)
 - [Constellation peer protocol reference](./constellation-protocol.md)
 - [Daemon API reference](./daemon-api.md)
 - [Naming conventions](./naming-conventions.md)

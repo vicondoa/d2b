@@ -553,39 +553,111 @@ fn tracing_contract_lint() {
         ),
         (
             "argv attr in tracing (forbidden — operator-supplied content; route via typed envelope)",
-            r"(^|[^_a-zA-Z])argv[[:space:]]*=[[:space:]]*[%?]",
+            r"(^|[^_a-zA-Z0-9])argv[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
             "cmdline attr in tracing (forbidden — see argv rule)",
-            r"(^|[^_a-zA-Z])cmdline[[:space:]]*=[[:space:]]*[%?]",
+            r"(^|[^_a-zA-Z0-9])cmdline[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
             "command_line attr in tracing (forbidden — see argv rule)",
-            r"(^|[^_a-zA-Z])command_line[[:space:]]*=[[:space:]]*[%?]",
+            r"(^|[^_a-zA-Z0-9])command_line[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "process_env attr in tracing (forbidden — environment leak)",
+            r"(^|[^_a-zA-Z0-9])process_env[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "environment attr in tracing (forbidden — environment leak)",
+            r"(^|[^_a-zA-Z0-9])environment[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "cwd attr in tracing (forbidden — working-directory leak)",
+            r"(^|[^_a-zA-Z0-9])cwd[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "current_working_directory attr in tracing (forbidden — working-directory leak)",
+            r"(^|[^_a-zA-Z0-9])current_working_directory[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
             "secret attr in tracing (forbidden — credential leak)",
-            r"(^|[^_a-zA-Z])secret[[:space:]]*=[[:space:]]*[%?]",
+            r"(^|[^_a-zA-Z0-9])secret[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
             "password attr in tracing (forbidden — credential leak)",
-            r"(^|[^_a-zA-Z])password[[:space:]]*=[[:space:]]*[%?]",
+            r"(^|[^_a-zA-Z0-9])password[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
             "token attr in tracing (forbidden — credential leak)",
-            r"(^|[^_a-zA-Z])token[[:space:]]*=[[:space:]]*[%?]",
+            r"(^|[^_a-zA-Z0-9])token[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
             "private_key attr in tracing (forbidden — credential leak)",
-            r"private_key[[:space:]]*=[[:space:]]*[%?]",
+            r"(^|[^_a-zA-Z0-9])private_key[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "provider attr in tracing (forbidden — provider context leak)",
+            r"(^|[^_a-zA-Z0-9])provider[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "provider_endpoint attr in tracing (forbidden — provider endpoint leak)",
+            r"(^|[^_a-zA-Z0-9])provider_endpoint[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "provider_resource_id attr in tracing (forbidden — provider resource leak)",
+            r"(^|[^_a-zA-Z0-9])provider_resource_id[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "provider_credential attr in tracing (forbidden — provider credential leak)",
+            r"(^|[^_a-zA-Z0-9])provider_credential[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "credential attr in tracing (forbidden — credential leak)",
+            r"(^|[^_a-zA-Z0-9])credential[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "stream attr in tracing (forbidden — terminal stream context leak)",
+            r"(^|[^_a-zA-Z0-9])stream[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "stream_id attr in tracing (forbidden — terminal stream id leak)",
+            r"(^|[^_a-zA-Z0-9])stream_id[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "terminal_stream_id attr in tracing (forbidden — terminal stream id leak)",
+            r"(^|[^_a-zA-Z0-9])terminal_stream_id[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "attach_id attr in tracing (forbidden — terminal attach id leak)",
+            r"(^|[^_a-zA-Z0-9])attach_id[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "session attr in tracing (forbidden — terminal session context leak)",
+            r"(^|[^_a-zA-Z0-9])session[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "session_id attr in tracing (forbidden — terminal session id leak)",
+            r"(^|[^_a-zA-Z0-9])session_id[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "session-id attr in tracing (forbidden — terminal session id leak)",
+            r"(^|[^_a-zA-Z0-9])session-id[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "resource attr in tracing (forbidden — provider resource leak)",
+            r"(^|[^_a-zA-Z0-9])resource[[:space:]]*=[[:space:]]*[%?]",
+        ),
+        (
+            "resource_id attr in tracing (forbidden — provider resource leak)",
+            r"(^|[^_a-zA-Z0-9])resource_id[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
             "stdout attr in tracing (forbidden — child output; route via typed envelope)",
-            r"(^|[^_a-zA-Z])stdout[[:space:]]*=[[:space:]]*[%?]",
+            r"(^|[^_a-zA-Z0-9])stdout[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
             "stderr attr in tracing (forbidden — child output; route via typed envelope)",
-            r"(^|[^_a-zA-Z])stderr[[:space:]]*=[[:space:]]*[%?]",
+            r"(^|[^_a-zA-Z0-9])stderr[[:space:]]*=[[:space:]]*[%?]",
         ),
     ];
 

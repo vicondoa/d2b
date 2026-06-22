@@ -4,9 +4,9 @@
 
 A provider-managed sandbox is a workload unit that a cloud provider
 creates, manages, and destroys on behalf of nixling. The nixling daemon
-routes typed operations to the provider API and receives typed responses;
-it does not own a hypervisor, broker, or guest OS stack for these nodes.
-The first implemented adapter is Azure Container Apps.
+routes typed operations to the provider API or to a provider-side nixling
+agent and receives typed responses; it does not own a hypervisor or broker
+for these nodes. The first implemented adapter is Azure Container Apps.
 
 This page documents the capability matrix, supported operations, absent
 capabilities, rate-limit/backoff/circuit behavior, credential boundary,
@@ -23,11 +23,14 @@ A provider-managed sandbox is a named workload target in a realm whose
 lifecycle (create, start, stop, destroy) is owned by an external provider
 API rather than by a `nixling-priv-broker` running on a locally managed
 host. From the daemon's perspective it is a node with a bounded positive
-capability set derived from what that provider API supports. The daemon
-never provisions, registers, or expects a `nixlingd`, `nixling-priv-broker`,
-`guestd`, guest-control stack, KVM subsystem, vsock channel, cgroup subtree,
-namespace hierarchy, full-host lifecycle, or device-hotplug surface on a
-provider-managed node.
+capability set derived from what that provider API or provider-side nixling
+agent supports. The daemon never provisions, registers, or expects a full
+host `nixlingd`, `nixling-priv-broker`, KVM subsystem, vsock channel, cgroup
+subtree, namespace hierarchy, full-host lifecycle, or device-hotplug surface
+on a provider-managed node. ADR 0039 reserves one exception to the old
+exec-only model: a provider-managed sandbox may advertise persistent shell
+only when it runs a guestd-compatible nixling agent that exposes shell
+control and terminal-v1 streams over the constellation peer transport.
 
 This model is distinct from a **remote full-host node** (see
 [remote full-host nodes](./remote-full-host-nodes.md)), which runs its
@@ -39,7 +42,7 @@ key differences:
 | --- | --- | --- |
 | Who owns lifecycle | Cloud provider API | Remote `nixlingd` + `nixling-priv-broker` |
 | Broker presence | None | Full broker on the remote host |
-| Guest-control / vsock | Absent | Present |
+| Guest-control / vsock | No vsock or raw guest-control tunnel; persistent-shell-capable sandboxes require a guestd-compatible agent over constellation peer transport. | Present |
 | KVM / hypervisor | Absent | Present |
 | Cgroup / namespace authority | Absent | Present (remote host) |
 | systemd | Absent | Present (remote host) |
@@ -61,6 +64,7 @@ table is not supported; operations requiring it receive
 | --- | --- | --- |
 | `lifecycle` | Conditional | Advertised only when sandbox defaults are configured; create/start/stop/list map to the Azure Container Apps sandbox data plane. |
 | `exec` | ✓ | Synchronous Azure Container Apps `executeShellCommand`; returns a derived execution id, not a durable guest-control session. |
+| `persistent-shell` | No | Contract-reserved by ADR 0039. The executeShellCommand-only adapter must not advertise persistent shell; future support requires a guestd-compatible in-sandbox agent over the constellation peer transport. |
 | `logs` | ✗ | No retained-log stream in this adapter. |
 | `pty` | ✗ | No interactive TTY or stdio attachment. |
 | `file-copy` | ✗ | No bounded file-copy API. |
@@ -94,7 +98,7 @@ refused with `UnsupportedFeature` before contacting the provider API.
 | `create` | Ensures a workload sandbox exists, creating/reusing the disk image and sandbox through the Azure Container Apps data plane. |
 | `start` | Ensures the sandbox exists and resumes it when idle. |
 | `stop` | Resolves the workload alias to a sandbox and posts Azure Container Apps stop; already-absent/already-stopped is success. |
-| `exec` | Runs synchronous `executeShellCommand` against the selected sandbox. Command bytes are opaque payload and are not logged or audited as metadata. |
+| `exec` | Runs synchronous `executeShellCommand` against the selected sandbox. Command bytes are opaque payload and are not logged or audited as metadata. This is not persistent shell. |
 
 Gateway/router layers own idempotency for mutating operations. The Azure Container Apps
 provider itself uses deterministic workload labels to discover upstream
@@ -110,8 +114,12 @@ with `UnsupportedFeature` or `CapabilityDenied`; there are no fallbacks.
 
 - **No broker operation forwarding.** The adapter never forwards raw
   `nixling-priv-broker` frames to the container runtime.
-- **No guest-control or vsock frames.** There is no guestd instance
-  and no vsock channel to attach or tunnel.
+- **No raw guest-control or vsock frames.** The current
+  executeShellCommand-only Azure Container Apps adapter has no guestd instance
+  and no vsock channel to attach or tunnel. Future persistent-shell-capable
+  provider sandboxes must use a guestd-compatible nixling agent over the ADR
+  0032 peer transport; they still do not expose raw guest-control frames or a
+  provider-specific shell channel.
 - **No pidfd or fd passing.** No file descriptors are exchanged with
   the container runtime.
 - **No SSH fallback.** No SSH session is opened when the provider API
@@ -288,6 +296,9 @@ The following items are deferred and not currently supported by the Azure Contai
 adapter:
 
 - Interactive exec sessions or attached TTY to running containers.
+- Persistent named shell sessions; ADR 0039 reserves this for a future
+  guestd-compatible in-sandbox agent and explicitly excludes mapping it to
+  `executeShellCommand`.
 - Live stdio streaming (current support is polling-based log read only).
 - Automatic workload image build or push from a local Nix store.
 - Multi-region or multi-subscription Azure Container Apps targeting from a single
@@ -304,6 +315,7 @@ the capability matrix above.
 
 ## Cross-references
 
+- [ADR 0039 - constellation persistent shell routing](../adr/0039-constellation-persistent-shell-routing.md) - the reserved contract for persistent shells on remote/provider targets.
 - [Remote full-host nodes](./remote-full-host-nodes.md) — the model
   for nodes that run their own `nixlingd`/broker/guest-control stack.
 - [Azure Relay transport](./transport-azure-relay.md) — the Relay

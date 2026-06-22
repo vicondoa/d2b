@@ -1,4 +1,4 @@
-# `nixling shell <vm> list --json`
+# `nixling shell <target> list --json`
 
 > Diataxis: reference. JSON output contract for persistent shell listing.
 
@@ -27,8 +27,8 @@ Schema: [`shell-list.schema.json`](./shell-list.schema.json).
 | Field | Meaning |
 | --- | --- |
 | `command` | Stable command discriminator, always `shell list`. |
-| `vm` | Local VM name after CLI target routing. Gateway-backed targets are rejected before daemon dispatch. |
-| `default_name` | Configured default shell session name for the VM. Present even when `sessions` is empty. |
+| `vm` | Current local routed VM name. Local-shell-only generations resolve only declared local VM targets and reject gateway/remote/provider targets before daemon dispatch; ADR 0039 reserves future target routing. |
+| `default_name` | Configured default shell session name for the target workload. Present even when `sessions` is empty. |
 | `sessions[]` | Bounded session rows reported by guestd. |
 | `sessions[].name` | Validated shell session name. |
 | `sessions[].state` | One of `attached`, `detached`, `killed`, `pool-unavailable`, `feature-disabled`, or `output-gap`. |

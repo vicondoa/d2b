@@ -25,8 +25,10 @@ allowlist.
   [broker audit record](./daemon-api.md) (`OpAuditRecord.tracing_span_id`
   links the audit row back to the span). They MUST NOT appear as span
   attrs.
-* **Secrets, argv contents, command output, terminal bytes, helper diagnostics,
-  raw shell names, and terminal session handles** never enter traces.
+* **Secrets, argv contents, process env values, cwd/current working directory,
+  command output, terminal bytes, helper diagnostics, raw shell names,
+  terminal session handles, provider endpoints, provider resource ids, and
+  provider credentials** never enter traces.
 
 ## Allowed scalar attribute names
 
@@ -67,7 +69,9 @@ than emitting the path itself.
 | `path = %X.display()` inside `ssh_host_key_preflight`  | Same path-leak class at `debug!` level.                      | `cbd2169` |
 | `/nix/store/...` **string literal** inside a `tracing!` arg | Pins the host store hash into the trace backend.        | `b6f4ac9`  |
 | `argv = …`, `cmdline = …`, `command_line = …`          | Argv may contain operator-supplied content / secrets.        | this gate |
+| `process_env = …`, `environment = …`, `cwd = …`, `current_working_directory = …` | Process env and working directories may contain secrets or host/user layout. | this gate |
 | `secret`, `password`, `token`, `private_key`           | Credential leak.                                             | this gate |
+| `provider_endpoint`, `provider_resource_id`, `provider_credential` | Provider endpoints, resource ids, and credentials can identify or authenticate external services. | this gate |
 | `stdout = …`, `stderr = …` carrying child-process bytes | Command output not bounded; flows through typed envelope.   | this gate |
 
 ## How the contract is enforced
@@ -142,7 +146,9 @@ for the per-VM key drift event. The `drift_kind` is a typed
 ## Adding new tracing sites
 
 1. Pick attrs from the **Allowed scalar attribute names** table.
-2. If you need to surface a path, a bundle, argv, or child output:
+2. If you need to surface a path, a bundle, argv, process env, cwd/current
+   working directory, provider endpoint, provider credential, provider
+   resource id, or child output:
    route it through the typed error envelope
    (`packages/nixling-core/src/error.rs`) and the broker audit log,
    not the span.
