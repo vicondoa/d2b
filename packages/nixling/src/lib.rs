@@ -34,10 +34,13 @@ use nixling_ipc::{
         QemuMediaRegistryStatus as IpcQemuMediaRegistryStatus,
         QemuMediaRunnerStatus as IpcQemuMediaRunnerStatus,
         QemuMediaSourceStatus as IpcQemuMediaSourceStatus, QemuMediaStatus as IpcQemuMediaStatus,
-        ReadGuestConfigRequest, StatusRequest as IpcStatusRequest,
-        UsbProbeEntryKind as IpcUsbProbeEntryKind, UsbipProbeEntry as IpcUsbipProbeEntry,
-        UsbipProbeStatus as IpcUsbipProbeStatus, VmAutostartPosture as IpcVmAutostartPosture,
-        VmLifecycleState as IpcVmLifecycleState, VmStatus as IpcVmStatus,
+        ReadGuestConfigRequest, ShellDetachArgs as IpcShellDetachArgs,
+        ShellKillArgs as IpcShellKillArgs, ShellListArgs as IpcShellListArgs,
+        ShellName as IpcShellName, ShellOp, ShellOpResponse, ShellSessionState,
+        StatusRequest as IpcStatusRequest, UsbProbeEntryKind as IpcUsbProbeEntryKind,
+        UsbipProbeEntry as IpcUsbipProbeEntry, UsbipProbeStatus as IpcUsbipProbeStatus,
+        VmAutostartPosture as IpcVmAutostartPosture, VmLifecycleState as IpcVmLifecycleState,
+        VmStatus as IpcVmStatus,
     },
     types::{MediaRef, validate_usb_bus_id},
 };
@@ -671,6 +674,8 @@ enum NativeCommand {
     Auth(AuthArgs),
     /// Low-level realm gateway helpers.
     Realm(RealmArgs),
+    /// Attach to or manage persistent named guest shells.
+    Shell(ShellArgs),
     /// Inspect current constellation operation and trace state.
     Op(OpArgs),
     /// Per-VM lifecycle verbs (start / stop / restart / list / status) plus the
@@ -983,6 +988,64 @@ struct RealmArgs {
 struct OpArgs {
     #[command(subcommand)]
     command: OpCommand,
+}
+
+#[derive(Debug, Args)]
+struct ShellArgs {
+    #[command(subcommand)]
+    command: ShellCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ShellCommand {
+    /// Attach to a persistent shell.
+    Attach(ShellAttachArgs),
+    /// List persistent shell sessions on a VM.
+    List(ShellListArgs),
+    /// Detach a persistent shell session without killing it.
+    Detach(ShellDetachCliArgs),
+    /// Kill a persistent shell session by name.
+    Kill(ShellKillCliArgs),
+}
+
+#[derive(Debug, Args)]
+struct ShellAttachArgs {
+    vm: String,
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Args)]
+struct ShellListArgs {
+    vm: String,
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
+#[derive(Debug, Args)]
+struct ShellDetachCliArgs {
+    vm: String,
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
+#[derive(Debug, Args)]
+struct ShellKillCliArgs {
+    vm: String,
+    #[arg(long)]
+    name: String,
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1860,6 +1923,15 @@ struct GatewayDisplayResponseFrame {
     payload: public_wire::GatewayDisplayOpResponse,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShellResponseFrame {
+    #[serde(rename = "type")]
+    _type_name: String,
+    #[serde(flatten)]
+    payload: ShellOpResponse,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StoreVerifyOutputV2 {
@@ -2069,6 +2141,204 @@ fn render_daemon_audit_lines(lines: &[String], json_mode: bool) -> Result<(), Cl
     Ok(())
 }
 
+fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
+    match &args.command {
+        ShellCommand::Attach(args) => cmd_shell_attach(args),
+        ShellCommand::List(args) => {
+            let response = shell_round_trip(
+                context,
+                ShellOp::List(IpcShellListArgs {
+                    vm: args.vm.clone(),
+                }),
+            )?;
+            let ShellOpResponse::List(result) = response else {
+                return Err(CliFailure::new(1, "shell list: unexpected daemon response"));
+            };
+            if args.json {
+                print_json(&serde_json::json!({
+                    "command": "shell list",
+                    "vm": args.vm,
+                    "default_name": result.default_name.as_str(),
+                    "sessions": result.sessions.iter().map(|entry| serde_json::json!({
+                        "name": entry.name.as_str(),
+                        "state": shell_state_str(entry.state),
+                        "attached": entry.attached,
+                        "is_default": entry.is_default,
+                    })).collect::<Vec<_>>()
+                }))?;
+            } else {
+                print_stdout(&format!("NAME\tSTATE\tATTACHED\tDEFAULT\n"));
+                for entry in result.sessions {
+                    print_stdout(&format!(
+                        "{}\t{}\t{}\t{}\n",
+                        entry.name.as_str(),
+                        shell_state_str(entry.state),
+                        entry.attached,
+                        entry.is_default
+                    ));
+                }
+            }
+            Ok(0)
+        }
+        ShellCommand::Detach(args) => {
+            let response = shell_round_trip(
+                context,
+                ShellOp::Detach(IpcShellDetachArgs {
+                    vm: args.vm.clone(),
+                    name: shell_name_option(args.name.as_deref())?,
+                }),
+            )?;
+            let ShellOpResponse::Detach(result) = response else {
+                return Err(CliFailure::new(
+                    1,
+                    "shell detach: unexpected daemon response",
+                ));
+            };
+            if args.json {
+                print_json(&serde_json::json!({
+                    "command": "shell detach",
+                    "vm": args.vm,
+                    "name": result.resolved_name.as_str(),
+                    "result": if result.detached { "detached" } else { "already-detached-or-absent" },
+                    "cause": result.cause.map(shell_close_cause_str),
+                }))?;
+            } else if result.detached {
+                print_stdout(&format!(
+                    "detached shell '{}' on vm '{}'\n",
+                    result.resolved_name.as_str(),
+                    args.vm
+                ));
+            } else {
+                print_stdout(&format!(
+                    "shell '{}' on vm '{}' was already detached or absent\n",
+                    result.resolved_name.as_str(),
+                    args.vm
+                ));
+            }
+            Ok(0)
+        }
+        ShellCommand::Kill(args) => {
+            let response = shell_round_trip(
+                context,
+                ShellOp::Kill(IpcShellKillArgs {
+                    vm: args.vm.clone(),
+                    name: shell_name(&args.name)?,
+                }),
+            )?;
+            let ShellOpResponse::Kill(result) = response else {
+                return Err(CliFailure::new(1, "shell kill: unexpected daemon response"));
+            };
+            if args.json {
+                print_json(&serde_json::json!({
+                    "command": "shell kill",
+                    "vm": args.vm,
+                    "name": result.name.as_str(),
+                    "result": if result.killed { "killed" } else { "already-absent" },
+                    "state": shell_state_str(result.state),
+                }))?;
+            } else if result.killed {
+                print_stdout(&format!(
+                    "killed shell '{}' on vm '{}'\n",
+                    result.name.as_str(),
+                    args.vm
+                ));
+            } else {
+                print_stdout(&format!(
+                    "shell '{}' on vm '{}' was already absent\n",
+                    result.name.as_str(),
+                    args.vm
+                ));
+            }
+            Ok(0)
+        }
+    }
+}
+
+fn cmd_shell_attach(args: &ShellAttachArgs) -> Result<i32, CliFailure> {
+    let _ = shell_name_option(args.name.as_deref())?;
+    let force_hint = if args.force { " with --force" } else { "" };
+    Err(CliFailure::new(
+        78,
+        format!(
+            "nixling shell attach for vm '{}'{} is not wired in this CLI wave yet; use shell list/detach/kill management verbs for now",
+            args.vm, force_hint
+        ),
+    ))
+}
+
+fn shell_round_trip(context: &Context, op: ShellOp) -> Result<ShellOpResponse, CliFailure> {
+    let request = encode_type_tagged_message("shell", &op, "shell request")?;
+    match try_public_socket_request(context, &request, "shell")? {
+        PublicSocketOutcome::Reply(response) => parse_shell_reply(&response),
+        PublicSocketOutcome::Unavailable => Err(CliFailure::new(
+            69,
+            format!(
+                "shell: nixlingd public socket is unavailable at {}",
+                context.public_socket.display()
+            ),
+        )),
+        PublicSocketOutcome::Unsupported => Err(CliFailure::new(
+            70,
+            "shell: daemon generation does not support persistent shell operations",
+        )),
+    }
+}
+
+fn parse_shell_reply(bytes: &[u8]) -> Result<ShellOpResponse, CliFailure> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|err| CliFailure::new(1, format!("failed to parse shell reply: {err}")))?;
+    match value.get("type").and_then(Value::as_str) {
+        Some("shellResponse") => serde_json::from_value(value)
+            .map(|frame: ShellResponseFrame| frame.payload)
+            .map_err(|err| CliFailure::new(1, format!("failed to decode shellResponse: {err}"))),
+        Some("error") => {
+            let frame: ErrorFrame = serde_json::from_value(value).map_err(|err| {
+                CliFailure::new(1, format!("failed to decode shell error reply: {err}"))
+            })?;
+            Err(cli_failure_from_daemon_error(frame.error))
+        }
+        other => Err(CliFailure::new(
+            1,
+            format!("unexpected shell reply type {:?}", other),
+        )),
+    }
+}
+
+fn shell_name(value: &str) -> Result<IpcShellName, CliFailure> {
+    IpcShellName::new(value.to_owned()).map_err(|_| {
+        CliFailure::new(
+            2,
+            "shell name must match ^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$",
+        )
+    })
+}
+
+fn shell_name_option(value: Option<&str>) -> Result<Option<IpcShellName>, CliFailure> {
+    value.map(shell_name).transpose()
+}
+
+fn shell_state_str(state: ShellSessionState) -> &'static str {
+    match state {
+        ShellSessionState::Attached => "attached",
+        ShellSessionState::Detached => "detached",
+        ShellSessionState::Killed => "killed",
+        ShellSessionState::PoolUnavailable => "pool-unavailable",
+        ShellSessionState::FeatureDisabled => "feature-disabled",
+        ShellSessionState::OutputGap => "output-gap",
+    }
+}
+
+fn shell_close_cause_str(cause: public_wire::ShellCloseCause) -> &'static str {
+    match cause {
+        public_wire::ShellCloseCause::ClientDetach => "client-detach",
+        public_wire::ShellCloseCause::EvictedByForce => "evicted-by-force",
+        public_wire::ShellCloseCause::EvictedByAdminDetach => "evicted-by-admin-detach",
+        public_wire::ShellCloseCause::KilledByAdmin => "killed-by-admin",
+        public_wire::ShellCloseCause::PoolUnavailable => "pool-unavailable",
+        public_wire::ShellCloseCause::OutputGap => "output-gap",
+    }
+}
+
 pub fn cli_command() -> clap::Command {
     let mut command = NativeCli::command();
     command.set_bin_name("nixling");
@@ -2158,6 +2428,7 @@ fn dispatch(
             RealmCommand::Enter(args) => cmd_realm_enter(context, args),
             RealmCommand::Run(args) => cmd_realm_run(context, args),
         },
+        NativeCommand::Shell(args) => cmd_shell(context, args),
         NativeCommand::Op(args) => match &args.command {
             OpCommand::Inspect(args) => cmd_op_inspect(context, args),
         },
