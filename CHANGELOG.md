@@ -19,6 +19,9 @@ deprecations ship one minor release before removal.
 - Persistent shell guests now render the shpool daemon unit with a store-backed
   start script instead of an inline multi-line `ExecStart` command, avoiding
   systemd quote parsing failures.
+- Persistent shell attach/detach now accepts daemon owner error frames that carry
+  the envelope `opId`, matching the successful shell response and exec owner
+  framing.
 - `nixling list --json` now preserves daemon-reported failed lifecycle state as
   `status = "failed"` instead of collapsing it to `unknown`.
 
