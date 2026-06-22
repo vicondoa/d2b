@@ -47,6 +47,9 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Persistent shell CLI: added top-level `nixling shell <vm>` attach and
+  management forms for persistent named guest shell sessions.
+
 - UI colors: added a compositor-agnostic nixling color contract under
   `nixling.site.ui`, `nixling.envs.<env>.ui`, and
   `nixling.vms.<vm>.ui`, with resolved JSON and GTK-compatible CSS

@@ -459,6 +459,21 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
         .manual("nixling CLI")
         .render(&mut host_man_buffer)?;
     fs::write(&host_man_path, host_man_buffer)?;
+    let mut shell_command = nixling::cli_command()
+        .find_subcommand_mut("shell")
+        .expect("shell subcommand exists")
+        .clone();
+    shell_command.build();
+    let shell_man_path = man_dir.join("nixling-shell.1");
+    let mut shell_man_buffer = Vec::new();
+    Man::new(shell_command)
+        .title("nixling-shell")
+        .section("1")
+        .date("1970-01-01")
+        .source("nixling".to_owned())
+        .manual("nixling CLI")
+        .render(&mut shell_man_buffer)?;
+    fs::write(&shell_man_path, shell_man_buffer)?;
 
     let bash_path = comp_dir.join("nixling.bash");
     let mut bash_command = nixling::cli_command();
@@ -483,6 +498,7 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
     Ok(vec![
         man_path,
         host_man_path,
+        shell_man_path,
         bash_path,
         zsh_path,
         fish_path,
