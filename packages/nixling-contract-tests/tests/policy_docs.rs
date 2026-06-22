@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 
 use nixling_contract_tests::{read_repo_file, repo_path_exists};
 use regex::Regex;
+use serde_json::Value;
 
 /// Whether any single line of `content` matches `pattern`. This mirrors `grep`'s
 /// per-line evaluation faithfully (so a `\s*` in the pattern can never span a
@@ -160,6 +161,57 @@ fn manpage_documents_every_top_level_subcommand() {
             .collect::<Vec<_>>()
             .join("\n")
     );
+}
+
+#[test]
+fn ui_color_contract_docs_match_schema_surface() {
+    let doc_rel = "docs/reference/ui-colors.md";
+    let schema_rel = "docs/reference/ui-colors-schema.json";
+    assert!(
+        repo_path_exists(doc_rel),
+        "ui-color-contract: missing {doc_rel}"
+    );
+    assert!(
+        repo_path_exists(schema_rel),
+        "ui-color-contract: missing {schema_rel}"
+    );
+
+    let doc = read_repo_file(doc_rel);
+    let schema: Value =
+        serde_json::from_str(&read_repo_file(schema_rel)).expect("ui color schema is valid JSON");
+
+    assert_eq!(
+        schema.get("$id").and_then(Value::as_str),
+        Some("https://vicondoa.github.io/nixling/schemas/ui-colors-v1.json"),
+        "ui color schema id drifted"
+    );
+    assert_eq!(
+        schema
+            .pointer("/properties/version/const")
+            .and_then(Value::as_i64),
+        Some(1),
+        "ui color schema version drifted"
+    );
+
+    for required in [
+        "version",
+        "host",
+        "states",
+        "envs",
+        "vms",
+        "pendingRestart",
+        "transitioning",
+        "ui-colors-schema.json",
+        "--nixling-host-accent",
+        "--nixling-state-running",
+        "--nixling-env-<env>-accent",
+        "--nixling-vm-<vm>-border-active",
+    ] {
+        assert!(
+            doc.contains(required),
+            "ui color reference doc is missing required contract token: {required}"
+        );
+    }
 }
 
 /// Faithful port of the bash gate's `awk` extraction of the `enum NativeCommand`

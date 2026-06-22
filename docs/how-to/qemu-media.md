@@ -40,8 +40,9 @@ nixling.vms.dark-live = {
       readOnly = true;
     };
 
-    window.niriBorderColor = "#301934";
   };
+
+  ui.border.activeColor = "#301934";
 };
 ```
 

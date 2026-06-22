@@ -76,6 +76,7 @@ inventory. Private bundle artifacts live beside it and are documented in
          "guest": {
            "guestControl": true,
            "exec": true,
+           "shell": true,
            "configSync": true,
            "ssh": true,
            "keys": true,
@@ -114,6 +115,12 @@ inventory. Private bundle artifacts live beside it and are documented in
       "vsockHostSocket": "/var/lib/nixling/vms/work/vsock.sock",
       "agentSocket": "/run/nixling/otlp.sock"
     },
+    "shell": {
+      "enabled": true,
+      "defaultName": "default",
+      "maxSessions": 8,
+      "maxAttached": 1
+    },
     "staticIp": "10.50.0.10" | null,
     "sshUser": "alice" | null
   }
@@ -134,7 +141,7 @@ Fields are listed in `nixos-modules/manifest.nix` declaration order.
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `name` | string | yes | VM name; matches the enclosing top-level key. Pattern `^[a-z][a-z0-9-]*$` (enforced by `nixos-modules/assertions.nix`). |
-| `runtime` | object | yes | Runtime/provider metadata and provider support matrix. Shape: `{ kind, provider: { id, type, driver }, capabilities, operationCapabilities, autostartPolicy, services }`. `operationCapabilities` groups positive operation support by lifecycle/media/display/guest/storage axis; `services[]` contains bounded provider-neutral service summaries. `qemu-media` uses provider `local-qemu-media`/driver `qemu`; its supported capabilities are lifecycle/display/USB hotplug, while guest-control, exec, config-sync, SSH, store-sync, keys, and in-guest observability are unsupported. |
+| `runtime` | object | yes | Runtime/provider metadata and provider support matrix. Shape: `{ kind, provider: { id, type, driver }, capabilities, operationCapabilities, autostartPolicy, services }`. `operationCapabilities` groups positive operation support by lifecycle/media/display/guest/storage axis; `operationCapabilities.guest.shell` records provider support for the staged persistent-shell operation. `services[]` contains bounded provider-neutral service summaries. `qemu-media` uses provider `local-qemu-media`/driver `qemu`; its supported capabilities are lifecycle/display/USB hotplug, while guest-control, exec, shell, config-sync, SSH, store-sync, keys, and in-guest observability are unsupported. |
 | `graphics` | boolean | yes | Mirror of `nixling.vms.<name>.graphics.enable`. The CLI uses it to pick the launch path. |
 | `tpm` | boolean | yes | Mirror of `nixling.vms.<name>.tpm.enable`. |
 | `usbipYubikey` | boolean | yes | Mirror of `nixling.vms.<name>.usbip.yubikey`. `nixling usb attach\|detach\|probe` refuses to run when false. |
@@ -155,6 +162,7 @@ Fields are listed in `nixos-modules/manifest.nix` declaration order.
 | `audioStateFile` | string \| null | yes | Live audio-grant state file (`<stateDir>/state/audio-state.json`). Null for providers without the nixling audio sidecar. |
 | `audioService` | string \| null | yes | Host-side audio sidecar identifier (`nixling-<name>-snd.service`). Null for providers without the nixling audio sidecar. |
 | `observability` | object | yes | Per-VM observability transport metadata (`enabled`, base `vsockCid`/`vsockHostSocket`, guest `agentSocket`). See [Per-VM observability block](#per-vm-observability-block). |
+| `shell` | object \| null | yes | Persistent guest shell policy metadata for providers that support the authenticated guest-control terminal substrate. Null for providers without nixling guest-control. Shape: `{ enabled, defaultName, maxSessions, maxAttached }`; `defaultName` matches `^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$`, `maxSessions` is 1–256, and `maxAttached` is 1–64. This is policy/capability metadata only; runtime helper sockets, shpool state, terminal handles, and session names beyond the configured default are never included in the world-readable manifest. |
 | `staticIp` | string \| null | yes | The VM's static LAN IP. Derived for env-attached VMs; null when no IP source applies. |
 | `sshUser` | string \| null | yes | Username for `nixling`-driven SSH. Mirrors `nixling.vms.<name>.ssh.user`. Null for headless net VMs. |
 
@@ -184,6 +192,9 @@ Version history:
   summaries. Provider-specific socket/vsock fields are now nullable so
   `qemu-media` entries do not fabricate Cloud Hypervisor, guest-control,
   SSH, store-sync, key, or in-guest-observability artifacts.
+- v6 additive: adds per-VM nullable `shell` policy metadata and
+  `runtime.operationCapabilities.guest.shell`. This is additive and does not bump
+  `manifestVersion`.
 
 ### `_observability`
 

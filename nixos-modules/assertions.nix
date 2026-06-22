@@ -793,11 +793,16 @@ let
             && vm.guest.control.auth.tokenFile == null
             && !vm.guest.exec.enable
             && !vm.guest.exec.allowRoot
-            && vm.guest.exec.users == [ ];
+            && vm.guest.exec.users == [ ]
+            && !vm.guest.shell.enable
+            && vm.guest.shell.defaultName == "default"
+            && vm.guest.shell.maxSessions == 8
+            && vm.guest.shell.maxAttached == 1;
           message = ''
             nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
-            with guest-control and guest exec options. Disable
-            guest.control.* and guest.exec.* for this manual-only runtime.
+            with guest-control, guest exec, and persistent shell options.
+            Disable guest.control.*, guest.exec.*, and guest.shell.* for this
+            manual-only runtime.
           '';
         }
         {

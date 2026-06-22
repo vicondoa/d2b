@@ -21,6 +21,9 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- Persistent shell contracts: added staged default-off shell option, manifest,
+  public/guest-control wire, and authz contract scaffolding for later runtime
+  wiring.
 - Guest-control internals: started extracting the shared terminal substrate used
   by interactive exec, with compatibility DTO conversions and redaction tests for
   future interactive-terminal reuse.
@@ -33,6 +36,12 @@ deprecations ship one minor release before removal.
   Rust/static supply-chain gate wiring for upcoming guest-control terminal work.
 
 ### Added
+
+- UI colors: added a compositor-agnostic nixling color contract under
+  `nixling.site.ui`, `nixling.envs.<env>.ui`, and
+  `nixling.vms.<vm>.ui`, with resolved JSON/CSS artifacts at
+  `/etc/nixling/ui-colors.{json,css}` and a niri backend that renders
+  active/inactive/urgent VM borders from the shared model.
 
 - Constellation observability: added `nixling op inspect` for bounded current
   operation and realm-state inspection, with optional TraceContext fields,

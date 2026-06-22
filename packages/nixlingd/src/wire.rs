@@ -55,6 +55,7 @@ pub enum Request {
     HostReconcile(public_wire::HostReconcileRequest),
     ReadGuestConfig(public_wire::ReadGuestConfigRequest),
     Exec(public_wire::ExecOp),
+    Shell(public_wire::ShellOp),
     GatewayDisplay(public_wire::GatewayDisplayOp),
 }
 
@@ -90,6 +91,7 @@ impl Request {
             Self::HostReconcile(_) => "hostReconcile",
             Self::ReadGuestConfig(_) => "readGuestConfig",
             Self::Exec(_) => "exec",
+            Self::Shell(_) => "shell",
             Self::GatewayDisplay(_) => "gatewayDisplay",
         }
     }
@@ -133,6 +135,7 @@ impl Request {
             | Self::UsbipProbe
             | Self::ReadGuestConfig(_)
             | Self::Exec(_)
+            | Self::Shell(_)
             | Self::GatewayDisplay(_) => OpLockClass::ReadOnly,
         }
     }
@@ -336,6 +339,12 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
             object.remove("opId");
             serde_json::from_value(Value::Object(object.clone()))
                 .map(Request::Exec)
+                .map_err(map_parse_error)
+        }
+        "shell" => {
+            object.remove("opId");
+            serde_json::from_value(Value::Object(object.clone()))
+                .map(Request::Shell)
                 .map_err(map_parse_error)
         }
         "gatewayDisplay" => serde_json::from_value(Value::Object(object.clone()))
@@ -600,5 +609,28 @@ fn map_parse_error(error: serde_json::Error) -> TypedError {
         TypedError::WireIfNameInvalid { detail }
     } else {
         TypedError::WireInvalidFrame { detail }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Request, parse_request};
+    use nixling_ipc::public_wire::ShellOp;
+
+    #[test]
+    fn shell_request_parses_as_typed_shell_op() {
+        let frame = br#"{"type":"shell","op":"list","args":{"vm":"corp-vm"}}"#;
+        let request = parse_request(frame).expect("shell request parses");
+        match request {
+            Request::Shell(ShellOp::List(args)) => assert_eq!(args.vm, "corp-vm"),
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shell_request_rejects_invalid_shape_before_dispatch() {
+        let frame = br#"{"type":"shell","op":"kill","args":{"vm":"corp-vm"}}"#;
+        let error = parse_request(frame).expect_err("kill without name rejects");
+        assert_eq!(error.kind(), "wire-invalid-frame");
     }
 }

@@ -170,8 +170,10 @@ serials, block paths, image paths, and registry paths.
   rather than risk swapping guest RAM.
 - Host window presentation for niri routes through the nixling Wayland
   filter proxy and matches the proxy-rewritten app-id prefix
-  `nixling.<vm>.`; set
-  `nixling.vms.<vm>.qemuMedia.window.niriBorderColor` for a fixed color.
+  `nixling.<vm>.`; set `nixling.vms.<vm>.ui.border.activeColor` for a
+  fixed color. The legacy
+  `nixling.vms.<vm>.qemuMedia.window.niriBorderColor` option remains a
+  one-release compatibility input.
 
 ## See also
 
@@ -179,3 +181,4 @@ serials, block paths, image paths, and registry paths.
 - [CLI contract](./cli-contract.md)
 - [Privileges](./privileges.md)
 - [niri VM borders](../how-to/niri-vm-borders.md)
+- [UI color contract](./ui-colors.md)

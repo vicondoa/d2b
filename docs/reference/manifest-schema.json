@@ -196,11 +196,12 @@
         },
         "guest": {
           "type": "object",
-          "required": ["guestControl", "exec", "configSync", "ssh", "keys", "inGuestObservability"],
+          "required": ["guestControl", "exec", "shell", "configSync", "ssh", "keys", "inGuestObservability"],
           "additionalProperties": false,
           "properties": {
             "guestControl": { "type": "boolean" },
             "exec": { "type": "boolean" },
+            "shell": { "type": "boolean" },
             "configSync": { "type": "boolean" },
             "ssh": { "type": "boolean" },
             "keys": { "type": "boolean" },
@@ -237,6 +238,35 @@
         "optional": {
           "type": "boolean",
           "description": "Whether absence of the service is acceptable for this runtime."
+        }
+      }
+    },
+    "vmShell": {
+      "type": "object",
+      "description": "Persistent guest shell policy metadata for providers that support the authenticated guest-control terminal substrate. Null for runtime providers without nixling guest-control.",
+      "required": ["enabled", "defaultName", "maxSessions", "maxAttached"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "True iff nixling.vms.<name>.guest.shell.enable is set on a provider that supports persistent guest shells."
+        },
+        "defaultName": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$",
+          "description": "Default persistent shell session name."
+        },
+        "maxSessions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256,
+          "description": "Maximum persistent shell sessions for this VM."
+        },
+        "maxAttached": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "description": "Maximum concurrently attached persistent shell clients for this VM."
         }
       }
     },
@@ -297,6 +327,7 @@
         "audioStateFile",
         "audioService",
         "observability",
+        "shell",
         "staticIp",
         "sshUser"
       ],
@@ -391,6 +422,13 @@
         },
         "observability": {
           "$ref": "#/$defs/vmObservability"
+        },
+        "shell": {
+          "anyOf": [
+            { "$ref": "#/$defs/vmShell" },
+            { "type": "null" }
+          ],
+          "description": "Persistent guest shell policy metadata, or null for providers without nixling guest-control."
         },
         "staticIp": {
           "type": ["string", "null"],

@@ -240,6 +240,7 @@ mod tests {
                 vsock_host_socket: Some(format!("/run/nixling/vms/{name}/agent-host.sock")),
             },
             runtime: RuntimeMetadata::local_nixos(),
+            shell: None,
             ssh_user: Some("alice".to_owned()),
             state_dir: format!("/var/lib/nixling/vms/{name}"),
             static_ip: static_ip.map(str::to_owned),

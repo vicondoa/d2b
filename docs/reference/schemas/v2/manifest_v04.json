@@ -38,6 +38,12 @@
       },
       "additionalProperties": false
     },
+    "ManifestShellName": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$"
+    },
     "ObservabilityMeta": {
       "type": "object",
       "required": [
@@ -189,6 +195,10 @@
           "type": "boolean"
         },
         "keys": {
+          "type": "boolean"
+        },
+        "shell": {
+          "default": false,
           "type": "boolean"
         },
         "ssh": {
@@ -514,6 +524,16 @@
         "runtime": {
           "$ref": "#/definitions/RuntimeMetadata"
         },
+        "shell": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/VmShellMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "sshUser": {
           "type": [
             "string",
@@ -597,6 +617,34 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmShellMetadata": {
+      "type": "object",
+      "required": [
+        "defaultName",
+        "enabled",
+        "maxAttached",
+        "maxSessions"
+      ],
+      "properties": {
+        "defaultName": {
+          "$ref": "#/definitions/ManifestShellName"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "maxAttached": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "maxSessions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
         }
       },
       "additionalProperties": false

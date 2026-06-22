@@ -345,6 +345,183 @@ impl ::protobuf::reflect::ProtobufValue for ExecRequestMetadata {
     type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
 }
 
+// @@protoc_insertion_point(message:nixling.guest.v1.TerminalRequestMetadata)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalRequestMetadata {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalRequestMetadata.common)
+    pub common: ::protobuf::MessageField<RequestMetadata>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalRequestMetadata.session_id)
+    pub session_id: ::std::string::String,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalRequestMetadata.guest_boot_id)
+    pub guest_boot_id: ::std::string::String,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalRequestMetadata.kind)
+    pub kind: ::protobuf::EnumOrUnknown<TerminalKind>,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.TerminalRequestMetadata.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalRequestMetadata {
+    fn default() -> &'a TerminalRequestMetadata {
+        <TerminalRequestMetadata as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalRequestMetadata {
+    pub fn new() -> TerminalRequestMetadata {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, RequestMetadata>(
+            "common",
+            |m: &TerminalRequestMetadata| { &m.common },
+            |m: &mut TerminalRequestMetadata| { &mut m.common },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "session_id",
+            |m: &TerminalRequestMetadata| { &m.session_id },
+            |m: &mut TerminalRequestMetadata| { &mut m.session_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "guest_boot_id",
+            |m: &TerminalRequestMetadata| { &m.guest_boot_id },
+            |m: &mut TerminalRequestMetadata| { &mut m.guest_boot_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "kind",
+            |m: &TerminalRequestMetadata| { &m.kind },
+            |m: &mut TerminalRequestMetadata| { &mut m.kind },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalRequestMetadata>(
+            "TerminalRequestMetadata",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalRequestMetadata {
+    const NAME: &'static str = "TerminalRequestMetadata";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.common)?;
+                },
+                18 => {
+                    self.session_id = is.read_string()?;
+                },
+                26 => {
+                    self.guest_boot_id = is.read_string()?;
+                },
+                32 => {
+                    self.kind = is.read_enum_or_unknown()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.common.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if !self.session_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.session_id);
+        }
+        if !self.guest_boot_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.guest_boot_id);
+        }
+        if self.kind != ::protobuf::EnumOrUnknown::new(TerminalKind::TERMINAL_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(4, self.kind.value());
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.common.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if !self.session_id.is_empty() {
+            os.write_string(2, &self.session_id)?;
+        }
+        if !self.guest_boot_id.is_empty() {
+            os.write_string(3, &self.guest_boot_id)?;
+        }
+        if self.kind != ::protobuf::EnumOrUnknown::new(TerminalKind::TERMINAL_KIND_UNSPECIFIED) {
+            os.write_enum(4, ::protobuf::EnumOrUnknown::value(&self.kind))?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalRequestMetadata {
+        TerminalRequestMetadata::new()
+    }
+
+    fn clear(&mut self) {
+        self.common.clear();
+        self.session_id.clear();
+        self.guest_boot_id.clear();
+        self.kind = ::protobuf::EnumOrUnknown::new(TerminalKind::TERMINAL_KIND_UNSPECIFIED);
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalRequestMetadata {
+        static instance: TerminalRequestMetadata = TerminalRequestMetadata {
+            common: ::protobuf::MessageField::none(),
+            session_id: ::std::string::String::new(),
+            guest_boot_id: ::std::string::String::new(),
+            kind: ::protobuf::EnumOrUnknown::from_i32(0),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalRequestMetadata {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalRequestMetadata").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalRequestMetadata {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalRequestMetadata {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
 // @@protoc_insertion_point(message:nixling.guest.v1.HelloRequest)
 #[derive(PartialEq,Clone,Default,Debug)]
 pub struct HelloRequest {
@@ -1742,6 +1919,10 @@ pub struct GuestEffectiveLimits {
     pub rpc_rate_per_connection_per_second: u32,
     // @@protoc_insertion_point(field:nixling.guest.v1.GuestEffectiveLimits.rpc_rate_per_vm_burst)
     pub rpc_rate_per_vm_burst: u32,
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestEffectiveLimits.shell_sessions_per_vm)
+    pub shell_sessions_per_vm: u32,
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestEffectiveLimits.shell_attached_sessions_per_vm)
+    pub shell_attached_sessions_per_vm: u32,
     // special fields
     // @@protoc_insertion_point(special_field:nixling.guest.v1.GuestEffectiveLimits.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -1759,7 +1940,7 @@ impl GuestEffectiveLimits {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(17);
+        let mut fields = ::std::vec::Vec::with_capacity(19);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "max_chunk_bytes",
@@ -1846,6 +2027,16 @@ impl GuestEffectiveLimits {
             |m: &GuestEffectiveLimits| { &m.rpc_rate_per_vm_burst },
             |m: &mut GuestEffectiveLimits| { &mut m.rpc_rate_per_vm_burst },
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "shell_sessions_per_vm",
+            |m: &GuestEffectiveLimits| { &m.shell_sessions_per_vm },
+            |m: &mut GuestEffectiveLimits| { &mut m.shell_sessions_per_vm },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "shell_attached_sessions_per_vm",
+            |m: &GuestEffectiveLimits| { &m.shell_attached_sessions_per_vm },
+            |m: &mut GuestEffectiveLimits| { &mut m.shell_attached_sessions_per_vm },
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GuestEffectiveLimits>(
             "GuestEffectiveLimits",
             fields,
@@ -1915,6 +2106,12 @@ impl ::protobuf::Message for GuestEffectiveLimits {
                 136 => {
                     self.rpc_rate_per_vm_burst = is.read_uint32()?;
                 },
+                144 => {
+                    self.shell_sessions_per_vm = is.read_uint32()?;
+                },
+                152 => {
+                    self.shell_attached_sessions_per_vm = is.read_uint32()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -1978,6 +2175,12 @@ impl ::protobuf::Message for GuestEffectiveLimits {
         if self.rpc_rate_per_vm_burst != 0 {
             my_size += ::protobuf::rt::uint32_size(17, self.rpc_rate_per_vm_burst);
         }
+        if self.shell_sessions_per_vm != 0 {
+            my_size += ::protobuf::rt::uint32_size(18, self.shell_sessions_per_vm);
+        }
+        if self.shell_attached_sessions_per_vm != 0 {
+            my_size += ::protobuf::rt::uint32_size(19, self.shell_attached_sessions_per_vm);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -2035,6 +2238,12 @@ impl ::protobuf::Message for GuestEffectiveLimits {
         if self.rpc_rate_per_vm_burst != 0 {
             os.write_uint32(17, self.rpc_rate_per_vm_burst)?;
         }
+        if self.shell_sessions_per_vm != 0 {
+            os.write_uint32(18, self.shell_sessions_per_vm)?;
+        }
+        if self.shell_attached_sessions_per_vm != 0 {
+            os.write_uint32(19, self.shell_attached_sessions_per_vm)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -2069,6 +2278,8 @@ impl ::protobuf::Message for GuestEffectiveLimits {
         self.pending_exec_waits_per_vm = 0;
         self.rpc_rate_per_connection_per_second = 0;
         self.rpc_rate_per_vm_burst = 0;
+        self.shell_sessions_per_vm = 0;
+        self.shell_attached_sessions_per_vm = 0;
         self.special_fields.clear();
     }
 
@@ -2091,6 +2302,8 @@ impl ::protobuf::Message for GuestEffectiveLimits {
             pending_exec_waits_per_vm: 0,
             rpc_rate_per_connection_per_second: 0,
             rpc_rate_per_vm_burst: 0,
+            shell_sessions_per_vm: 0,
+            shell_attached_sessions_per_vm: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -7649,6 +7862,2378 @@ impl ::protobuf::reflect::ProtobufValue for UsbipImportResponse {
     type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
 }
 
+// @@protoc_insertion_point(message:nixling.guest.v1.ShellAttachRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ShellAttachRequest {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellAttachRequest.metadata)
+    pub metadata: ::protobuf::MessageField<RequestMetadata>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellAttachRequest.name)
+    pub name: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellAttachRequest.force)
+    pub force: bool,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellAttachRequest.initial_terminal_size)
+    pub initial_terminal_size: ::protobuf::MessageField<TerminalSize>,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.ShellAttachRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ShellAttachRequest {
+    fn default() -> &'a ShellAttachRequest {
+        <ShellAttachRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ShellAttachRequest {
+    pub fn new() -> ShellAttachRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, RequestMetadata>(
+            "metadata",
+            |m: &ShellAttachRequest| { &m.metadata },
+            |m: &mut ShellAttachRequest| { &mut m.metadata },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "name",
+            |m: &ShellAttachRequest| { &m.name },
+            |m: &mut ShellAttachRequest| { &mut m.name },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "force",
+            |m: &ShellAttachRequest| { &m.force },
+            |m: &mut ShellAttachRequest| { &mut m.force },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, TerminalSize>(
+            "initial_terminal_size",
+            |m: &ShellAttachRequest| { &m.initial_terminal_size },
+            |m: &mut ShellAttachRequest| { &mut m.initial_terminal_size },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ShellAttachRequest>(
+            "ShellAttachRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ShellAttachRequest {
+    const NAME: &'static str = "ShellAttachRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                18 => {
+                    self.name = ::std::option::Option::Some(is.read_string()?);
+                },
+                24 => {
+                    self.force = is.read_bool()?;
+                },
+                34 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.initial_terminal_size)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.name.as_ref() {
+            my_size += ::protobuf::rt::string_size(2, &v);
+        }
+        if self.force != false {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.initial_terminal_size.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if let Some(v) = self.name.as_ref() {
+            os.write_string(2, v)?;
+        }
+        if self.force != false {
+            os.write_bool(3, self.force)?;
+        }
+        if let Some(v) = self.initial_terminal_size.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ShellAttachRequest {
+        ShellAttachRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.name = ::std::option::Option::None;
+        self.force = false;
+        self.initial_terminal_size.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ShellAttachRequest {
+        static instance: ShellAttachRequest = ShellAttachRequest {
+            metadata: ::protobuf::MessageField::none(),
+            name: ::std::option::Option::None,
+            force: false,
+            initial_terminal_size: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ShellAttachRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ShellAttachRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ShellAttachRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ShellAttachRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.ShellAttachResponse)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ShellAttachResponse {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellAttachResponse.session_id)
+    pub session_id: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellAttachResponse.resolved_name)
+    pub resolved_name: ::std::string::String,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellAttachResponse.state)
+    pub state: ::protobuf::EnumOrUnknown<ShellState>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellAttachResponse.force_evicted)
+    pub force_evicted: bool,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellAttachResponse.control_seq)
+    pub control_seq: u64,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellAttachResponse.output_cursor)
+    pub output_cursor: u64,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellAttachResponse.effective_limits)
+    pub effective_limits: ::protobuf::MessageField<GuestEffectiveLimits>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellAttachResponse.error)
+    pub error: ::protobuf::MessageField<GuestControlError>,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.ShellAttachResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ShellAttachResponse {
+    fn default() -> &'a ShellAttachResponse {
+        <ShellAttachResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ShellAttachResponse {
+    pub fn new() -> ShellAttachResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(8);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "session_id",
+            |m: &ShellAttachResponse| { &m.session_id },
+            |m: &mut ShellAttachResponse| { &mut m.session_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "resolved_name",
+            |m: &ShellAttachResponse| { &m.resolved_name },
+            |m: &mut ShellAttachResponse| { &mut m.resolved_name },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "state",
+            |m: &ShellAttachResponse| { &m.state },
+            |m: &mut ShellAttachResponse| { &mut m.state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "force_evicted",
+            |m: &ShellAttachResponse| { &m.force_evicted },
+            |m: &mut ShellAttachResponse| { &mut m.force_evicted },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "control_seq",
+            |m: &ShellAttachResponse| { &m.control_seq },
+            |m: &mut ShellAttachResponse| { &mut m.control_seq },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "output_cursor",
+            |m: &ShellAttachResponse| { &m.output_cursor },
+            |m: &mut ShellAttachResponse| { &mut m.output_cursor },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestEffectiveLimits>(
+            "effective_limits",
+            |m: &ShellAttachResponse| { &m.effective_limits },
+            |m: &mut ShellAttachResponse| { &mut m.effective_limits },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestControlError>(
+            "error",
+            |m: &ShellAttachResponse| { &m.error },
+            |m: &mut ShellAttachResponse| { &mut m.error },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ShellAttachResponse>(
+            "ShellAttachResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ShellAttachResponse {
+    const NAME: &'static str = "ShellAttachResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.session_id = ::std::option::Option::Some(is.read_string()?);
+                },
+                18 => {
+                    self.resolved_name = is.read_string()?;
+                },
+                24 => {
+                    self.state = is.read_enum_or_unknown()?;
+                },
+                32 => {
+                    self.force_evicted = is.read_bool()?;
+                },
+                40 => {
+                    self.control_seq = is.read_uint64()?;
+                },
+                48 => {
+                    self.output_cursor = is.read_uint64()?;
+                },
+                58 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.effective_limits)?;
+                },
+                66 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.session_id.as_ref() {
+            my_size += ::protobuf::rt::string_size(1, &v);
+        }
+        if !self.resolved_name.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.resolved_name);
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(ShellState::SHELL_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.state.value());
+        }
+        if self.force_evicted != false {
+            my_size += 1 + 1;
+        }
+        if self.control_seq != 0 {
+            my_size += ::protobuf::rt::uint64_size(5, self.control_seq);
+        }
+        if self.output_cursor != 0 {
+            my_size += ::protobuf::rt::uint64_size(6, self.output_cursor);
+        }
+        if let Some(v) = self.effective_limits.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.session_id.as_ref() {
+            os.write_string(1, v)?;
+        }
+        if !self.resolved_name.is_empty() {
+            os.write_string(2, &self.resolved_name)?;
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(ShellState::SHELL_STATE_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.state))?;
+        }
+        if self.force_evicted != false {
+            os.write_bool(4, self.force_evicted)?;
+        }
+        if self.control_seq != 0 {
+            os.write_uint64(5, self.control_seq)?;
+        }
+        if self.output_cursor != 0 {
+            os.write_uint64(6, self.output_cursor)?;
+        }
+        if let Some(v) = self.effective_limits.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(7, v, os)?;
+        }
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(8, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ShellAttachResponse {
+        ShellAttachResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.session_id = ::std::option::Option::None;
+        self.resolved_name.clear();
+        self.state = ::protobuf::EnumOrUnknown::new(ShellState::SHELL_STATE_UNSPECIFIED);
+        self.force_evicted = false;
+        self.control_seq = 0;
+        self.output_cursor = 0;
+        self.effective_limits.clear();
+        self.error.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ShellAttachResponse {
+        static instance: ShellAttachResponse = ShellAttachResponse {
+            session_id: ::std::option::Option::None,
+            resolved_name: ::std::string::String::new(),
+            state: ::protobuf::EnumOrUnknown::from_i32(0),
+            force_evicted: false,
+            control_seq: 0,
+            output_cursor: 0,
+            effective_limits: ::protobuf::MessageField::none(),
+            error: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ShellAttachResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ShellAttachResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ShellAttachResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ShellAttachResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.ShellListRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ShellListRequest {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellListRequest.metadata)
+    pub metadata: ::protobuf::MessageField<RequestMetadata>,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.ShellListRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ShellListRequest {
+    fn default() -> &'a ShellListRequest {
+        <ShellListRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ShellListRequest {
+    pub fn new() -> ShellListRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(1);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, RequestMetadata>(
+            "metadata",
+            |m: &ShellListRequest| { &m.metadata },
+            |m: &mut ShellListRequest| { &mut m.metadata },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ShellListRequest>(
+            "ShellListRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ShellListRequest {
+    const NAME: &'static str = "ShellListRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ShellListRequest {
+        ShellListRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ShellListRequest {
+        static instance: ShellListRequest = ShellListRequest {
+            metadata: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ShellListRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ShellListRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ShellListRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ShellListRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.ShellListResponse)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ShellListResponse {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellListResponse.default_name)
+    pub default_name: ::std::string::String,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellListResponse.sessions)
+    pub sessions: ::std::vec::Vec<ShellListEntry>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellListResponse.error)
+    pub error: ::protobuf::MessageField<GuestControlError>,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.ShellListResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ShellListResponse {
+    fn default() -> &'a ShellListResponse {
+        <ShellListResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ShellListResponse {
+    pub fn new() -> ShellListResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "default_name",
+            |m: &ShellListResponse| { &m.default_name },
+            |m: &mut ShellListResponse| { &mut m.default_name },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "sessions",
+            |m: &ShellListResponse| { &m.sessions },
+            |m: &mut ShellListResponse| { &mut m.sessions },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestControlError>(
+            "error",
+            |m: &ShellListResponse| { &m.error },
+            |m: &mut ShellListResponse| { &mut m.error },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ShellListResponse>(
+            "ShellListResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ShellListResponse {
+    const NAME: &'static str = "ShellListResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.default_name = is.read_string()?;
+                },
+                18 => {
+                    self.sessions.push(is.read_message()?);
+                },
+                26 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.default_name.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.default_name);
+        }
+        for value in &self.sessions {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.default_name.is_empty() {
+            os.write_string(1, &self.default_name)?;
+        }
+        for v in &self.sessions {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        };
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ShellListResponse {
+        ShellListResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.default_name.clear();
+        self.sessions.clear();
+        self.error.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ShellListResponse {
+        static instance: ShellListResponse = ShellListResponse {
+            default_name: ::std::string::String::new(),
+            sessions: ::std::vec::Vec::new(),
+            error: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ShellListResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ShellListResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ShellListResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ShellListResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.ShellListEntry)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ShellListEntry {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellListEntry.name)
+    pub name: ::std::string::String,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellListEntry.state)
+    pub state: ::protobuf::EnumOrUnknown<ShellState>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellListEntry.attached)
+    pub attached: bool,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellListEntry.is_default)
+    pub is_default: bool,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.ShellListEntry.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ShellListEntry {
+    fn default() -> &'a ShellListEntry {
+        <ShellListEntry as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ShellListEntry {
+    pub fn new() -> ShellListEntry {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "name",
+            |m: &ShellListEntry| { &m.name },
+            |m: &mut ShellListEntry| { &mut m.name },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "state",
+            |m: &ShellListEntry| { &m.state },
+            |m: &mut ShellListEntry| { &mut m.state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "attached",
+            |m: &ShellListEntry| { &m.attached },
+            |m: &mut ShellListEntry| { &mut m.attached },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "is_default",
+            |m: &ShellListEntry| { &m.is_default },
+            |m: &mut ShellListEntry| { &mut m.is_default },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ShellListEntry>(
+            "ShellListEntry",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ShellListEntry {
+    const NAME: &'static str = "ShellListEntry";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.name = is.read_string()?;
+                },
+                16 => {
+                    self.state = is.read_enum_or_unknown()?;
+                },
+                24 => {
+                    self.attached = is.read_bool()?;
+                },
+                32 => {
+                    self.is_default = is.read_bool()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.name.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.name);
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(ShellState::SHELL_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.state.value());
+        }
+        if self.attached != false {
+            my_size += 1 + 1;
+        }
+        if self.is_default != false {
+            my_size += 1 + 1;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.name.is_empty() {
+            os.write_string(1, &self.name)?;
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(ShellState::SHELL_STATE_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.state))?;
+        }
+        if self.attached != false {
+            os.write_bool(3, self.attached)?;
+        }
+        if self.is_default != false {
+            os.write_bool(4, self.is_default)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ShellListEntry {
+        ShellListEntry::new()
+    }
+
+    fn clear(&mut self) {
+        self.name.clear();
+        self.state = ::protobuf::EnumOrUnknown::new(ShellState::SHELL_STATE_UNSPECIFIED);
+        self.attached = false;
+        self.is_default = false;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ShellListEntry {
+        static instance: ShellListEntry = ShellListEntry {
+            name: ::std::string::String::new(),
+            state: ::protobuf::EnumOrUnknown::from_i32(0),
+            attached: false,
+            is_default: false,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ShellListEntry {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ShellListEntry").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ShellListEntry {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ShellListEntry {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.ShellDetachRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ShellDetachRequest {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellDetachRequest.metadata)
+    pub metadata: ::protobuf::MessageField<RequestMetadata>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellDetachRequest.name)
+    pub name: ::std::option::Option<::std::string::String>,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.ShellDetachRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ShellDetachRequest {
+    fn default() -> &'a ShellDetachRequest {
+        <ShellDetachRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ShellDetachRequest {
+    pub fn new() -> ShellDetachRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, RequestMetadata>(
+            "metadata",
+            |m: &ShellDetachRequest| { &m.metadata },
+            |m: &mut ShellDetachRequest| { &mut m.metadata },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "name",
+            |m: &ShellDetachRequest| { &m.name },
+            |m: &mut ShellDetachRequest| { &mut m.name },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ShellDetachRequest>(
+            "ShellDetachRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ShellDetachRequest {
+    const NAME: &'static str = "ShellDetachRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                18 => {
+                    self.name = ::std::option::Option::Some(is.read_string()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.name.as_ref() {
+            my_size += ::protobuf::rt::string_size(2, &v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if let Some(v) = self.name.as_ref() {
+            os.write_string(2, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ShellDetachRequest {
+        ShellDetachRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.name = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ShellDetachRequest {
+        static instance: ShellDetachRequest = ShellDetachRequest {
+            metadata: ::protobuf::MessageField::none(),
+            name: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ShellDetachRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ShellDetachRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ShellDetachRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ShellDetachRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.ShellKillRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ShellKillRequest {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellKillRequest.metadata)
+    pub metadata: ::protobuf::MessageField<RequestMetadata>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellKillRequest.name)
+    pub name: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.ShellKillRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ShellKillRequest {
+    fn default() -> &'a ShellKillRequest {
+        <ShellKillRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ShellKillRequest {
+    pub fn new() -> ShellKillRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, RequestMetadata>(
+            "metadata",
+            |m: &ShellKillRequest| { &m.metadata },
+            |m: &mut ShellKillRequest| { &mut m.metadata },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "name",
+            |m: &ShellKillRequest| { &m.name },
+            |m: &mut ShellKillRequest| { &mut m.name },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ShellKillRequest>(
+            "ShellKillRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ShellKillRequest {
+    const NAME: &'static str = "ShellKillRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                18 => {
+                    self.name = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if !self.name.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.name);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if !self.name.is_empty() {
+            os.write_string(2, &self.name)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ShellKillRequest {
+        ShellKillRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.name.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ShellKillRequest {
+        static instance: ShellKillRequest = ShellKillRequest {
+            metadata: ::protobuf::MessageField::none(),
+            name: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ShellKillRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ShellKillRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ShellKillRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ShellKillRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.ShellCloseAttachRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ShellCloseAttachRequest {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellCloseAttachRequest.metadata)
+    pub metadata: ::protobuf::MessageField<TerminalRequestMetadata>,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.ShellCloseAttachRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ShellCloseAttachRequest {
+    fn default() -> &'a ShellCloseAttachRequest {
+        <ShellCloseAttachRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ShellCloseAttachRequest {
+    pub fn new() -> ShellCloseAttachRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(1);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, TerminalRequestMetadata>(
+            "metadata",
+            |m: &ShellCloseAttachRequest| { &m.metadata },
+            |m: &mut ShellCloseAttachRequest| { &mut m.metadata },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ShellCloseAttachRequest>(
+            "ShellCloseAttachRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ShellCloseAttachRequest {
+    const NAME: &'static str = "ShellCloseAttachRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ShellCloseAttachRequest {
+        ShellCloseAttachRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ShellCloseAttachRequest {
+        static instance: ShellCloseAttachRequest = ShellCloseAttachRequest {
+            metadata: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ShellCloseAttachRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ShellCloseAttachRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ShellCloseAttachRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ShellCloseAttachRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.ShellDetachResponse)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ShellDetachResponse {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellDetachResponse.resolved_name)
+    pub resolved_name: ::std::string::String,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellDetachResponse.detached)
+    pub detached: bool,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellDetachResponse.cause)
+    pub cause: ::protobuf::EnumOrUnknown<ShellCloseCause>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellDetachResponse.error)
+    pub error: ::protobuf::MessageField<GuestControlError>,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.ShellDetachResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ShellDetachResponse {
+    fn default() -> &'a ShellDetachResponse {
+        <ShellDetachResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ShellDetachResponse {
+    pub fn new() -> ShellDetachResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "resolved_name",
+            |m: &ShellDetachResponse| { &m.resolved_name },
+            |m: &mut ShellDetachResponse| { &mut m.resolved_name },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "detached",
+            |m: &ShellDetachResponse| { &m.detached },
+            |m: &mut ShellDetachResponse| { &mut m.detached },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "cause",
+            |m: &ShellDetachResponse| { &m.cause },
+            |m: &mut ShellDetachResponse| { &mut m.cause },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestControlError>(
+            "error",
+            |m: &ShellDetachResponse| { &m.error },
+            |m: &mut ShellDetachResponse| { &mut m.error },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ShellDetachResponse>(
+            "ShellDetachResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ShellDetachResponse {
+    const NAME: &'static str = "ShellDetachResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.resolved_name = is.read_string()?;
+                },
+                16 => {
+                    self.detached = is.read_bool()?;
+                },
+                24 => {
+                    self.cause = is.read_enum_or_unknown()?;
+                },
+                34 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.resolved_name.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.resolved_name);
+        }
+        if self.detached != false {
+            my_size += 1 + 1;
+        }
+        if self.cause != ::protobuf::EnumOrUnknown::new(ShellCloseCause::SHELL_CLOSE_CAUSE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.cause.value());
+        }
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.resolved_name.is_empty() {
+            os.write_string(1, &self.resolved_name)?;
+        }
+        if self.detached != false {
+            os.write_bool(2, self.detached)?;
+        }
+        if self.cause != ::protobuf::EnumOrUnknown::new(ShellCloseCause::SHELL_CLOSE_CAUSE_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.cause))?;
+        }
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ShellDetachResponse {
+        ShellDetachResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.resolved_name.clear();
+        self.detached = false;
+        self.cause = ::protobuf::EnumOrUnknown::new(ShellCloseCause::SHELL_CLOSE_CAUSE_UNSPECIFIED);
+        self.error.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ShellDetachResponse {
+        static instance: ShellDetachResponse = ShellDetachResponse {
+            resolved_name: ::std::string::String::new(),
+            detached: false,
+            cause: ::protobuf::EnumOrUnknown::from_i32(0),
+            error: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ShellDetachResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ShellDetachResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ShellDetachResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ShellDetachResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.ShellKillResponse)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ShellKillResponse {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellKillResponse.name)
+    pub name: ::std::string::String,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellKillResponse.killed)
+    pub killed: bool,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellKillResponse.state)
+    pub state: ::protobuf::EnumOrUnknown<ShellState>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ShellKillResponse.error)
+    pub error: ::protobuf::MessageField<GuestControlError>,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.ShellKillResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ShellKillResponse {
+    fn default() -> &'a ShellKillResponse {
+        <ShellKillResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ShellKillResponse {
+    pub fn new() -> ShellKillResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "name",
+            |m: &ShellKillResponse| { &m.name },
+            |m: &mut ShellKillResponse| { &mut m.name },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "killed",
+            |m: &ShellKillResponse| { &m.killed },
+            |m: &mut ShellKillResponse| { &mut m.killed },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "state",
+            |m: &ShellKillResponse| { &m.state },
+            |m: &mut ShellKillResponse| { &mut m.state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestControlError>(
+            "error",
+            |m: &ShellKillResponse| { &m.error },
+            |m: &mut ShellKillResponse| { &mut m.error },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ShellKillResponse>(
+            "ShellKillResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ShellKillResponse {
+    const NAME: &'static str = "ShellKillResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.name = is.read_string()?;
+                },
+                16 => {
+                    self.killed = is.read_bool()?;
+                },
+                24 => {
+                    self.state = is.read_enum_or_unknown()?;
+                },
+                34 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.name.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.name);
+        }
+        if self.killed != false {
+            my_size += 1 + 1;
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(ShellState::SHELL_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.state.value());
+        }
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.name.is_empty() {
+            os.write_string(1, &self.name)?;
+        }
+        if self.killed != false {
+            os.write_bool(2, self.killed)?;
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(ShellState::SHELL_STATE_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.state))?;
+        }
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ShellKillResponse {
+        ShellKillResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.name.clear();
+        self.killed = false;
+        self.state = ::protobuf::EnumOrUnknown::new(ShellState::SHELL_STATE_UNSPECIFIED);
+        self.error.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ShellKillResponse {
+        static instance: ShellKillResponse = ShellKillResponse {
+            name: ::std::string::String::new(),
+            killed: false,
+            state: ::protobuf::EnumOrUnknown::from_i32(0),
+            error: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ShellKillResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ShellKillResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ShellKillResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ShellKillResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.TerminalWriteStdinRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalWriteStdinRequest {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalWriteStdinRequest.metadata)
+    pub metadata: ::protobuf::MessageField<TerminalRequestMetadata>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalWriteStdinRequest.offset)
+    pub offset: u64,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalWriteStdinRequest.data)
+    pub data: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalWriteStdinRequest.close_after)
+    pub close_after: bool,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalWriteStdinRequest.client_deadline_ms)
+    pub client_deadline_ms: ::std::option::Option<u64>,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.TerminalWriteStdinRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalWriteStdinRequest {
+    fn default() -> &'a TerminalWriteStdinRequest {
+        <TerminalWriteStdinRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalWriteStdinRequest {
+    pub fn new() -> TerminalWriteStdinRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, TerminalRequestMetadata>(
+            "metadata",
+            |m: &TerminalWriteStdinRequest| { &m.metadata },
+            |m: &mut TerminalWriteStdinRequest| { &mut m.metadata },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "offset",
+            |m: &TerminalWriteStdinRequest| { &m.offset },
+            |m: &mut TerminalWriteStdinRequest| { &mut m.offset },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "data",
+            |m: &TerminalWriteStdinRequest| { &m.data },
+            |m: &mut TerminalWriteStdinRequest| { &mut m.data },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "close_after",
+            |m: &TerminalWriteStdinRequest| { &m.close_after },
+            |m: &mut TerminalWriteStdinRequest| { &mut m.close_after },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "client_deadline_ms",
+            |m: &TerminalWriteStdinRequest| { &m.client_deadline_ms },
+            |m: &mut TerminalWriteStdinRequest| { &mut m.client_deadline_ms },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalWriteStdinRequest>(
+            "TerminalWriteStdinRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalWriteStdinRequest {
+    const NAME: &'static str = "TerminalWriteStdinRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                16 => {
+                    self.offset = is.read_uint64()?;
+                },
+                26 => {
+                    self.data = is.read_bytes()?;
+                },
+                32 => {
+                    self.close_after = is.read_bool()?;
+                },
+                40 => {
+                    self.client_deadline_ms = ::std::option::Option::Some(is.read_uint64()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if self.offset != 0 {
+            my_size += ::protobuf::rt::uint64_size(2, self.offset);
+        }
+        if !self.data.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(3, &self.data);
+        }
+        if self.close_after != false {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.client_deadline_ms {
+            my_size += ::protobuf::rt::uint64_size(5, v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if self.offset != 0 {
+            os.write_uint64(2, self.offset)?;
+        }
+        if !self.data.is_empty() {
+            os.write_bytes(3, &self.data)?;
+        }
+        if self.close_after != false {
+            os.write_bool(4, self.close_after)?;
+        }
+        if let Some(v) = self.client_deadline_ms {
+            os.write_uint64(5, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalWriteStdinRequest {
+        TerminalWriteStdinRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.offset = 0;
+        self.data.clear();
+        self.close_after = false;
+        self.client_deadline_ms = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalWriteStdinRequest {
+        static instance: TerminalWriteStdinRequest = TerminalWriteStdinRequest {
+            metadata: ::protobuf::MessageField::none(),
+            offset: 0,
+            data: ::std::vec::Vec::new(),
+            close_after: false,
+            client_deadline_ms: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalWriteStdinRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalWriteStdinRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalWriteStdinRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalWriteStdinRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.TerminalReadOutputRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalReadOutputRequest {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalReadOutputRequest.metadata)
+    pub metadata: ::protobuf::MessageField<TerminalRequestMetadata>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalReadOutputRequest.stream)
+    pub stream: ::protobuf::EnumOrUnknown<OutputStream>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalReadOutputRequest.offset)
+    pub offset: u64,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalReadOutputRequest.max_len)
+    pub max_len: u64,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalReadOutputRequest.wait)
+    pub wait: bool,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalReadOutputRequest.timeout_ms)
+    pub timeout_ms: u64,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.TerminalReadOutputRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalReadOutputRequest {
+    fn default() -> &'a TerminalReadOutputRequest {
+        <TerminalReadOutputRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalReadOutputRequest {
+    pub fn new() -> TerminalReadOutputRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(6);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, TerminalRequestMetadata>(
+            "metadata",
+            |m: &TerminalReadOutputRequest| { &m.metadata },
+            |m: &mut TerminalReadOutputRequest| { &mut m.metadata },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "stream",
+            |m: &TerminalReadOutputRequest| { &m.stream },
+            |m: &mut TerminalReadOutputRequest| { &mut m.stream },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "offset",
+            |m: &TerminalReadOutputRequest| { &m.offset },
+            |m: &mut TerminalReadOutputRequest| { &mut m.offset },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "max_len",
+            |m: &TerminalReadOutputRequest| { &m.max_len },
+            |m: &mut TerminalReadOutputRequest| { &mut m.max_len },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "wait",
+            |m: &TerminalReadOutputRequest| { &m.wait },
+            |m: &mut TerminalReadOutputRequest| { &mut m.wait },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "timeout_ms",
+            |m: &TerminalReadOutputRequest| { &m.timeout_ms },
+            |m: &mut TerminalReadOutputRequest| { &mut m.timeout_ms },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalReadOutputRequest>(
+            "TerminalReadOutputRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalReadOutputRequest {
+    const NAME: &'static str = "TerminalReadOutputRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                16 => {
+                    self.stream = is.read_enum_or_unknown()?;
+                },
+                24 => {
+                    self.offset = is.read_uint64()?;
+                },
+                32 => {
+                    self.max_len = is.read_uint64()?;
+                },
+                40 => {
+                    self.wait = is.read_bool()?;
+                },
+                48 => {
+                    self.timeout_ms = is.read_uint64()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if self.stream != ::protobuf::EnumOrUnknown::new(OutputStream::OUTPUT_STREAM_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.stream.value());
+        }
+        if self.offset != 0 {
+            my_size += ::protobuf::rt::uint64_size(3, self.offset);
+        }
+        if self.max_len != 0 {
+            my_size += ::protobuf::rt::uint64_size(4, self.max_len);
+        }
+        if self.wait != false {
+            my_size += 1 + 1;
+        }
+        if self.timeout_ms != 0 {
+            my_size += ::protobuf::rt::uint64_size(6, self.timeout_ms);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if self.stream != ::protobuf::EnumOrUnknown::new(OutputStream::OUTPUT_STREAM_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.stream))?;
+        }
+        if self.offset != 0 {
+            os.write_uint64(3, self.offset)?;
+        }
+        if self.max_len != 0 {
+            os.write_uint64(4, self.max_len)?;
+        }
+        if self.wait != false {
+            os.write_bool(5, self.wait)?;
+        }
+        if self.timeout_ms != 0 {
+            os.write_uint64(6, self.timeout_ms)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalReadOutputRequest {
+        TerminalReadOutputRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.stream = ::protobuf::EnumOrUnknown::new(OutputStream::OUTPUT_STREAM_UNSPECIFIED);
+        self.offset = 0;
+        self.max_len = 0;
+        self.wait = false;
+        self.timeout_ms = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalReadOutputRequest {
+        static instance: TerminalReadOutputRequest = TerminalReadOutputRequest {
+            metadata: ::protobuf::MessageField::none(),
+            stream: ::protobuf::EnumOrUnknown::from_i32(0),
+            offset: 0,
+            max_len: 0,
+            wait: false,
+            timeout_ms: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalReadOutputRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalReadOutputRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalReadOutputRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalReadOutputRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.TerminalCloseStdinRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalCloseStdinRequest {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalCloseStdinRequest.metadata)
+    pub metadata: ::protobuf::MessageField<TerminalRequestMetadata>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalCloseStdinRequest.offset)
+    pub offset: u64,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.TerminalCloseStdinRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalCloseStdinRequest {
+    fn default() -> &'a TerminalCloseStdinRequest {
+        <TerminalCloseStdinRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalCloseStdinRequest {
+    pub fn new() -> TerminalCloseStdinRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, TerminalRequestMetadata>(
+            "metadata",
+            |m: &TerminalCloseStdinRequest| { &m.metadata },
+            |m: &mut TerminalCloseStdinRequest| { &mut m.metadata },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "offset",
+            |m: &TerminalCloseStdinRequest| { &m.offset },
+            |m: &mut TerminalCloseStdinRequest| { &mut m.offset },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalCloseStdinRequest>(
+            "TerminalCloseStdinRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalCloseStdinRequest {
+    const NAME: &'static str = "TerminalCloseStdinRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                16 => {
+                    self.offset = is.read_uint64()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if self.offset != 0 {
+            my_size += ::protobuf::rt::uint64_size(2, self.offset);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if self.offset != 0 {
+            os.write_uint64(2, self.offset)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalCloseStdinRequest {
+        TerminalCloseStdinRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.offset = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalCloseStdinRequest {
+        static instance: TerminalCloseStdinRequest = TerminalCloseStdinRequest {
+            metadata: ::protobuf::MessageField::none(),
+            offset: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalCloseStdinRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalCloseStdinRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalCloseStdinRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalCloseStdinRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.TerminalTtyWinResizeRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalTtyWinResizeRequest {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalTtyWinResizeRequest.metadata)
+    pub metadata: ::protobuf::MessageField<TerminalRequestMetadata>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalTtyWinResizeRequest.control_seq)
+    pub control_seq: u64,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalTtyWinResizeRequest.rows)
+    pub rows: u32,
+    // @@protoc_insertion_point(field:nixling.guest.v1.TerminalTtyWinResizeRequest.cols)
+    pub cols: u32,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.TerminalTtyWinResizeRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalTtyWinResizeRequest {
+    fn default() -> &'a TerminalTtyWinResizeRequest {
+        <TerminalTtyWinResizeRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalTtyWinResizeRequest {
+    pub fn new() -> TerminalTtyWinResizeRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, TerminalRequestMetadata>(
+            "metadata",
+            |m: &TerminalTtyWinResizeRequest| { &m.metadata },
+            |m: &mut TerminalTtyWinResizeRequest| { &mut m.metadata },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "control_seq",
+            |m: &TerminalTtyWinResizeRequest| { &m.control_seq },
+            |m: &mut TerminalTtyWinResizeRequest| { &mut m.control_seq },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "rows",
+            |m: &TerminalTtyWinResizeRequest| { &m.rows },
+            |m: &mut TerminalTtyWinResizeRequest| { &mut m.rows },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "cols",
+            |m: &TerminalTtyWinResizeRequest| { &m.cols },
+            |m: &mut TerminalTtyWinResizeRequest| { &mut m.cols },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalTtyWinResizeRequest>(
+            "TerminalTtyWinResizeRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalTtyWinResizeRequest {
+    const NAME: &'static str = "TerminalTtyWinResizeRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                16 => {
+                    self.control_seq = is.read_uint64()?;
+                },
+                24 => {
+                    self.rows = is.read_uint32()?;
+                },
+                32 => {
+                    self.cols = is.read_uint32()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if self.control_seq != 0 {
+            my_size += ::protobuf::rt::uint64_size(2, self.control_seq);
+        }
+        if self.rows != 0 {
+            my_size += ::protobuf::rt::uint32_size(3, self.rows);
+        }
+        if self.cols != 0 {
+            my_size += ::protobuf::rt::uint32_size(4, self.cols);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if self.control_seq != 0 {
+            os.write_uint64(2, self.control_seq)?;
+        }
+        if self.rows != 0 {
+            os.write_uint32(3, self.rows)?;
+        }
+        if self.cols != 0 {
+            os.write_uint32(4, self.cols)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalTtyWinResizeRequest {
+        TerminalTtyWinResizeRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.control_seq = 0;
+        self.rows = 0;
+        self.cols = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalTtyWinResizeRequest {
+        static instance: TerminalTtyWinResizeRequest = TerminalTtyWinResizeRequest {
+            metadata: ::protobuf::MessageField::none(),
+            control_seq: 0,
+            rows: 0,
+            cols: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalTtyWinResizeRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalTtyWinResizeRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalTtyWinResizeRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalTtyWinResizeRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
 // @@protoc_insertion_point(message:nixling.guest.v1.TerminalStatus)
 #[derive(PartialEq,Clone,Default,Debug)]
 pub struct TerminalStatus {
@@ -8150,6 +10735,12 @@ pub enum GuestCapability {
     GUEST_CAPABILITY_READ_GUEST_FILE = 9,
     // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestCapability.GUEST_CAPABILITY_USBIP_IMPORT)
     GUEST_CAPABILITY_USBIP_IMPORT = 10,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestCapability.GUEST_CAPABILITY_SHELL_ATTACHED)
+    GUEST_CAPABILITY_SHELL_ATTACHED = 11,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestCapability.GUEST_CAPABILITY_SHELL_MANAGEMENT)
+    GUEST_CAPABILITY_SHELL_MANAGEMENT = 12,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestCapability.GUEST_CAPABILITY_SHELL_FORCE_ATTACH)
+    GUEST_CAPABILITY_SHELL_FORCE_ATTACH = 13,
 }
 
 impl ::protobuf::Enum for GuestCapability {
@@ -8172,6 +10763,9 @@ impl ::protobuf::Enum for GuestCapability {
             8 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SIGNALS),
             9 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_READ_GUEST_FILE),
             10 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_USBIP_IMPORT),
+            11 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED),
+            12 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SHELL_MANAGEMENT),
+            13 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH),
             _ => ::std::option::Option::None
         }
     }
@@ -8189,6 +10783,9 @@ impl ::protobuf::Enum for GuestCapability {
             "GUEST_CAPABILITY_SIGNALS" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SIGNALS),
             "GUEST_CAPABILITY_READ_GUEST_FILE" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_READ_GUEST_FILE),
             "GUEST_CAPABILITY_USBIP_IMPORT" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_USBIP_IMPORT),
+            "GUEST_CAPABILITY_SHELL_ATTACHED" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED),
+            "GUEST_CAPABILITY_SHELL_MANAGEMENT" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SHELL_MANAGEMENT),
+            "GUEST_CAPABILITY_SHELL_FORCE_ATTACH" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH),
             _ => ::std::option::Option::None
         }
     }
@@ -8205,6 +10802,9 @@ impl ::protobuf::Enum for GuestCapability {
         GuestCapability::GUEST_CAPABILITY_SIGNALS,
         GuestCapability::GUEST_CAPABILITY_READ_GUEST_FILE,
         GuestCapability::GUEST_CAPABILITY_USBIP_IMPORT,
+        GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED,
+        GuestCapability::GUEST_CAPABILITY_SHELL_MANAGEMENT,
+        GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH,
     ];
 }
 
@@ -8251,6 +10851,10 @@ pub enum GuestSubsystem {
     GUEST_SUBSYSTEM_VSOCK = 6,
     // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestSubsystem.GUEST_SUBSYSTEM_USBIP)
     GUEST_SUBSYSTEM_USBIP = 7,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestSubsystem.GUEST_SUBSYSTEM_SHELL)
+    GUEST_SUBSYSTEM_SHELL = 8,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestSubsystem.GUEST_SUBSYSTEM_SHPOOL)
+    GUEST_SUBSYSTEM_SHPOOL = 9,
 }
 
 impl ::protobuf::Enum for GuestSubsystem {
@@ -8270,6 +10874,8 @@ impl ::protobuf::Enum for GuestSubsystem {
             5 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_TOKEN),
             6 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_VSOCK),
             7 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_USBIP),
+            8 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SHELL),
+            9 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SHPOOL),
             _ => ::std::option::Option::None
         }
     }
@@ -8284,6 +10890,8 @@ impl ::protobuf::Enum for GuestSubsystem {
             "GUEST_SUBSYSTEM_TOKEN" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_TOKEN),
             "GUEST_SUBSYSTEM_VSOCK" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_VSOCK),
             "GUEST_SUBSYSTEM_USBIP" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_USBIP),
+            "GUEST_SUBSYSTEM_SHELL" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SHELL),
+            "GUEST_SUBSYSTEM_SHPOOL" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SHPOOL),
             _ => ::std::option::Option::None
         }
     }
@@ -8297,6 +10905,8 @@ impl ::protobuf::Enum for GuestSubsystem {
         GuestSubsystem::GUEST_SUBSYSTEM_TOKEN,
         GuestSubsystem::GUEST_SUBSYSTEM_VSOCK,
         GuestSubsystem::GUEST_SUBSYSTEM_USBIP,
+        GuestSubsystem::GUEST_SUBSYSTEM_SHELL,
+        GuestSubsystem::GUEST_SUBSYSTEM_SHPOOL,
     ];
 }
 
@@ -8321,6 +10931,247 @@ impl ::std::default::Default for GuestSubsystem {
 impl GuestSubsystem {
     fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
         ::protobuf::reflect::GeneratedEnumDescriptorData::new::<GuestSubsystem>("GuestSubsystem")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:nixling.guest.v1.TerminalKind)
+pub enum TerminalKind {
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.TerminalKind.TERMINAL_KIND_UNSPECIFIED)
+    TERMINAL_KIND_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.TerminalKind.TERMINAL_KIND_EXEC)
+    TERMINAL_KIND_EXEC = 1,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.TerminalKind.TERMINAL_KIND_SHELL)
+    TERMINAL_KIND_SHELL = 2,
+}
+
+impl ::protobuf::Enum for TerminalKind {
+    const NAME: &'static str = "TerminalKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<TerminalKind> {
+        match value {
+            0 => ::std::option::Option::Some(TerminalKind::TERMINAL_KIND_UNSPECIFIED),
+            1 => ::std::option::Option::Some(TerminalKind::TERMINAL_KIND_EXEC),
+            2 => ::std::option::Option::Some(TerminalKind::TERMINAL_KIND_SHELL),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<TerminalKind> {
+        match str {
+            "TERMINAL_KIND_UNSPECIFIED" => ::std::option::Option::Some(TerminalKind::TERMINAL_KIND_UNSPECIFIED),
+            "TERMINAL_KIND_EXEC" => ::std::option::Option::Some(TerminalKind::TERMINAL_KIND_EXEC),
+            "TERMINAL_KIND_SHELL" => ::std::option::Option::Some(TerminalKind::TERMINAL_KIND_SHELL),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [TerminalKind] = &[
+        TerminalKind::TERMINAL_KIND_UNSPECIFIED,
+        TerminalKind::TERMINAL_KIND_EXEC,
+        TerminalKind::TERMINAL_KIND_SHELL,
+    ];
+}
+
+impl ::protobuf::EnumFull for TerminalKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("TerminalKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for TerminalKind {
+    fn default() -> Self {
+        TerminalKind::TERMINAL_KIND_UNSPECIFIED
+    }
+}
+
+impl TerminalKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<TerminalKind>("TerminalKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:nixling.guest.v1.ShellState)
+pub enum ShellState {
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.ShellState.SHELL_STATE_UNSPECIFIED)
+    SHELL_STATE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.ShellState.SHELL_STATE_ATTACHED)
+    SHELL_STATE_ATTACHED = 1,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.ShellState.SHELL_STATE_DETACHED)
+    SHELL_STATE_DETACHED = 2,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.ShellState.SHELL_STATE_KILLED)
+    SHELL_STATE_KILLED = 3,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.ShellState.SHELL_STATE_POOL_UNAVAILABLE)
+    SHELL_STATE_POOL_UNAVAILABLE = 4,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.ShellState.SHELL_STATE_FEATURE_DISABLED)
+    SHELL_STATE_FEATURE_DISABLED = 5,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.ShellState.SHELL_STATE_OUTPUT_GAP)
+    SHELL_STATE_OUTPUT_GAP = 6,
+}
+
+impl ::protobuf::Enum for ShellState {
+    const NAME: &'static str = "ShellState";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ShellState> {
+        match value {
+            0 => ::std::option::Option::Some(ShellState::SHELL_STATE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ShellState::SHELL_STATE_ATTACHED),
+            2 => ::std::option::Option::Some(ShellState::SHELL_STATE_DETACHED),
+            3 => ::std::option::Option::Some(ShellState::SHELL_STATE_KILLED),
+            4 => ::std::option::Option::Some(ShellState::SHELL_STATE_POOL_UNAVAILABLE),
+            5 => ::std::option::Option::Some(ShellState::SHELL_STATE_FEATURE_DISABLED),
+            6 => ::std::option::Option::Some(ShellState::SHELL_STATE_OUTPUT_GAP),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ShellState> {
+        match str {
+            "SHELL_STATE_UNSPECIFIED" => ::std::option::Option::Some(ShellState::SHELL_STATE_UNSPECIFIED),
+            "SHELL_STATE_ATTACHED" => ::std::option::Option::Some(ShellState::SHELL_STATE_ATTACHED),
+            "SHELL_STATE_DETACHED" => ::std::option::Option::Some(ShellState::SHELL_STATE_DETACHED),
+            "SHELL_STATE_KILLED" => ::std::option::Option::Some(ShellState::SHELL_STATE_KILLED),
+            "SHELL_STATE_POOL_UNAVAILABLE" => ::std::option::Option::Some(ShellState::SHELL_STATE_POOL_UNAVAILABLE),
+            "SHELL_STATE_FEATURE_DISABLED" => ::std::option::Option::Some(ShellState::SHELL_STATE_FEATURE_DISABLED),
+            "SHELL_STATE_OUTPUT_GAP" => ::std::option::Option::Some(ShellState::SHELL_STATE_OUTPUT_GAP),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ShellState] = &[
+        ShellState::SHELL_STATE_UNSPECIFIED,
+        ShellState::SHELL_STATE_ATTACHED,
+        ShellState::SHELL_STATE_DETACHED,
+        ShellState::SHELL_STATE_KILLED,
+        ShellState::SHELL_STATE_POOL_UNAVAILABLE,
+        ShellState::SHELL_STATE_FEATURE_DISABLED,
+        ShellState::SHELL_STATE_OUTPUT_GAP,
+    ];
+}
+
+impl ::protobuf::EnumFull for ShellState {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ShellState").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ShellState {
+    fn default() -> Self {
+        ShellState::SHELL_STATE_UNSPECIFIED
+    }
+}
+
+impl ShellState {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ShellState>("ShellState")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:nixling.guest.v1.ShellCloseCause)
+pub enum ShellCloseCause {
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.ShellCloseCause.SHELL_CLOSE_CAUSE_UNSPECIFIED)
+    SHELL_CLOSE_CAUSE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.ShellCloseCause.SHELL_CLOSE_CAUSE_CLIENT_DETACH)
+    SHELL_CLOSE_CAUSE_CLIENT_DETACH = 1,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.ShellCloseCause.SHELL_CLOSE_CAUSE_EVICTED_BY_FORCE)
+    SHELL_CLOSE_CAUSE_EVICTED_BY_FORCE = 2,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.ShellCloseCause.SHELL_CLOSE_CAUSE_EVICTED_BY_ADMIN_DETACH)
+    SHELL_CLOSE_CAUSE_EVICTED_BY_ADMIN_DETACH = 3,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.ShellCloseCause.SHELL_CLOSE_CAUSE_KILLED_BY_ADMIN)
+    SHELL_CLOSE_CAUSE_KILLED_BY_ADMIN = 4,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.ShellCloseCause.SHELL_CLOSE_CAUSE_POOL_UNAVAILABLE)
+    SHELL_CLOSE_CAUSE_POOL_UNAVAILABLE = 5,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.ShellCloseCause.SHELL_CLOSE_CAUSE_OUTPUT_GAP)
+    SHELL_CLOSE_CAUSE_OUTPUT_GAP = 6,
+}
+
+impl ::protobuf::Enum for ShellCloseCause {
+    const NAME: &'static str = "ShellCloseCause";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ShellCloseCause> {
+        match value {
+            0 => ::std::option::Option::Some(ShellCloseCause::SHELL_CLOSE_CAUSE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ShellCloseCause::SHELL_CLOSE_CAUSE_CLIENT_DETACH),
+            2 => ::std::option::Option::Some(ShellCloseCause::SHELL_CLOSE_CAUSE_EVICTED_BY_FORCE),
+            3 => ::std::option::Option::Some(ShellCloseCause::SHELL_CLOSE_CAUSE_EVICTED_BY_ADMIN_DETACH),
+            4 => ::std::option::Option::Some(ShellCloseCause::SHELL_CLOSE_CAUSE_KILLED_BY_ADMIN),
+            5 => ::std::option::Option::Some(ShellCloseCause::SHELL_CLOSE_CAUSE_POOL_UNAVAILABLE),
+            6 => ::std::option::Option::Some(ShellCloseCause::SHELL_CLOSE_CAUSE_OUTPUT_GAP),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ShellCloseCause> {
+        match str {
+            "SHELL_CLOSE_CAUSE_UNSPECIFIED" => ::std::option::Option::Some(ShellCloseCause::SHELL_CLOSE_CAUSE_UNSPECIFIED),
+            "SHELL_CLOSE_CAUSE_CLIENT_DETACH" => ::std::option::Option::Some(ShellCloseCause::SHELL_CLOSE_CAUSE_CLIENT_DETACH),
+            "SHELL_CLOSE_CAUSE_EVICTED_BY_FORCE" => ::std::option::Option::Some(ShellCloseCause::SHELL_CLOSE_CAUSE_EVICTED_BY_FORCE),
+            "SHELL_CLOSE_CAUSE_EVICTED_BY_ADMIN_DETACH" => ::std::option::Option::Some(ShellCloseCause::SHELL_CLOSE_CAUSE_EVICTED_BY_ADMIN_DETACH),
+            "SHELL_CLOSE_CAUSE_KILLED_BY_ADMIN" => ::std::option::Option::Some(ShellCloseCause::SHELL_CLOSE_CAUSE_KILLED_BY_ADMIN),
+            "SHELL_CLOSE_CAUSE_POOL_UNAVAILABLE" => ::std::option::Option::Some(ShellCloseCause::SHELL_CLOSE_CAUSE_POOL_UNAVAILABLE),
+            "SHELL_CLOSE_CAUSE_OUTPUT_GAP" => ::std::option::Option::Some(ShellCloseCause::SHELL_CLOSE_CAUSE_OUTPUT_GAP),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ShellCloseCause] = &[
+        ShellCloseCause::SHELL_CLOSE_CAUSE_UNSPECIFIED,
+        ShellCloseCause::SHELL_CLOSE_CAUSE_CLIENT_DETACH,
+        ShellCloseCause::SHELL_CLOSE_CAUSE_EVICTED_BY_FORCE,
+        ShellCloseCause::SHELL_CLOSE_CAUSE_EVICTED_BY_ADMIN_DETACH,
+        ShellCloseCause::SHELL_CLOSE_CAUSE_KILLED_BY_ADMIN,
+        ShellCloseCause::SHELL_CLOSE_CAUSE_POOL_UNAVAILABLE,
+        ShellCloseCause::SHELL_CLOSE_CAUSE_OUTPUT_GAP,
+    ];
+}
+
+impl ::protobuf::EnumFull for ShellCloseCause {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ShellCloseCause").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ShellCloseCause {
+    fn default() -> Self {
+        ShellCloseCause::SHELL_CLOSE_CAUSE_UNSPECIFIED
+    }
+}
+
+impl ShellCloseCause {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ShellCloseCause>("ShellCloseCause")
     }
 }
 
@@ -9420,6 +12271,24 @@ pub enum GuestControlErrorKind {
     GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID = 45,
     // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST)
     GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST = 46,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED)
+    GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED = 47,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME)
+    GUEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME = 48,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_SHELL_CAPACITY_EXCEEDED)
+    GUEST_CONTROL_ERROR_KIND_SHELL_CAPACITY_EXCEEDED = 49,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED)
+    GUEST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED = 50,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND)
+    GUEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND = 51,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_SHELL_ALREADY_ATTACHED)
+    GUEST_CONTROL_ERROR_KIND_SHELL_ALREADY_ATTACHED = 52,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE)
+    GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE = 53,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMATCH)
+    GUEST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMATCH = 54,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP)
+    GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP = 55,
 }
 
 impl ::protobuf::Enum for GuestControlErrorKind {
@@ -9478,6 +12347,15 @@ impl ::protobuf::Enum for GuestControlErrorKind {
             44 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED),
             45 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID),
             46 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST),
+            47 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED),
+            48 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME),
+            49 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_CAPACITY_EXCEEDED),
+            50 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED),
+            51 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND),
+            52 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_ALREADY_ATTACHED),
+            53 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE),
+            54 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMATCH),
+            55 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP),
             _ => ::std::option::Option::None
         }
     }
@@ -9531,6 +12409,15 @@ impl ::protobuf::Enum for GuestControlErrorKind {
             "GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED),
             "GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID),
             "GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST),
+            "GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED),
+            "GUEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME),
+            "GUEST_CONTROL_ERROR_KIND_SHELL_CAPACITY_EXCEEDED" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_CAPACITY_EXCEEDED),
+            "GUEST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED),
+            "GUEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND),
+            "GUEST_CONTROL_ERROR_KIND_SHELL_ALREADY_ATTACHED" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_ALREADY_ATTACHED),
+            "GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE),
+            "GUEST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMATCH" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMATCH),
+            "GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP),
             _ => ::std::option::Option::None
         }
     }
@@ -9583,6 +12470,15 @@ impl ::protobuf::Enum for GuestControlErrorKind {
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED,
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID,
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_CAPACITY_EXCEEDED,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_ALREADY_ATTACHED,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMATCH,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP,
     ];
 }
 
@@ -9617,333 +12513,419 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x01(\rR\x0fprotocolVersion\"\x8d\x01\n\x13ExecRequestMetadata\x129\n\
     \x06common\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.RequestMetadataR\x06c\
     ommon\x12\x17\n\x07exec_id\x18\x02\x20\x01(\tR\x06execId\x12\"\n\rguest_\
-    boot_id\x18\x03\x20\x01(\tR\x0bguestBootId\"\x9b\x01\n\x0cHelloRequest\
-    \x12=\n\x08metadata\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.RequestMetad\
-    ataR\x08metadata\x12\x1d\n\nhost_nonce\x18\x02\x20\x01(\x0cR\thostNonce\
-    \x12-\n\x12transcript_version\x18\x03\x20\x01(\rR\x11transcriptVersion\"\
-    \xa6\x01\n\rHelloResponse\x12\x1f\n\x0bguest_nonce\x18\x01\x20\x01(\x0cR\
-    \nguestNonce\x12\"\n\rguest_boot_id\x18\x02\x20\x01(\tR\x0bguestBootId\
-    \x12)\n\x10protocol_version\x18\x03\x20\x01(\rR\x0fprotocolVersionJ\x04\
-    \x08\x04\x10\x05J\x04\x08\x05\x10\x06R\x11capabilities_hashR\x06health\"\
-    \x8b\x02\n\x13AuthenticateRequest\x12=\n\x08metadata\x18\x01\x20\x01(\
-    \x0b2!.nixling.guest.v1.RequestMetadataR\x08metadata\x12\x1d\n\nhost_non\
-    ce\x18\x02\x20\x01(\x0cR\thostNonce\x12\x1f\n\x0bguest_nonce\x18\x03\x20\
-    \x01(\x0cR\nguestNonce\x12\"\n\rguest_boot_id\x18\x04\x20\x01(\tR\x0bgue\
-    stBootId\x12-\n\x12transcript_version\x18\x05\x20\x01(\rR\x11transcriptV\
-    ersion\x12\"\n\rhost_auth_tag\x18\x06\x20\x01(\x0cR\x0bhostAuthTag\"\xdd\
-    \x02\n\x14AuthenticateResponse\x12)\n\x0eguest_auth_tag\x18\x01\x20\x01(\
-    \x0cH\0R\x0cguestAuthTag\x88\x01\x01\x120\n\x11capabilities_hash\x18\x02\
-    \x20\x01(\tH\x01R\x10capabilitiesHash\x88\x01\x01\x128\n\x06health\x18\
-    \x03\x20\x01(\x0b2\x20.nixling.guest.v1.HealthResponseR\x06health\x12J\n\
-    \x0ccapabilities\x18\x04\x20\x01(\x0b2&.nixling.guest.v1.CapabilitiesRes\
-    ponseR\x0ccapabilities\x129\n\x05error\x18\x05\x20\x01(\x0b2#.nixling.gu\
-    est.v1.GuestControlErrorR\x05errorB\x11\n\x0f_guest_auth_tagB\x14\n\x12_\
-    capabilities_hash\"T\n\x13CapabilitiesRequest\x12=\n\x08metadata\x18\x01\
-    \x20\x01(\x0b2!.nixling.guest.v1.RequestMetadataR\x08metadata\"\xc8\x01\
-    \n\x14CapabilitiesResponse\x12)\n\x10protocol_version\x18\x01\x20\x01(\r\
-    R\x0fprotocolVersion\x12E\n\x0ccapabilities\x18\x02\x20\x03(\x0e2!.nixli\
-    ng.guest.v1.GuestCapabilityR\x0ccapabilities\x12>\n\x06limits\x18\x03\
-    \x20\x01(\x0b2&.nixling.guest.v1.GuestEffectiveLimitsR\x06limits\"N\n\rH\
-    ealthRequest\x12=\n\x08metadata\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.\
-    RequestMetadataR\x08metadata\"\xc1\x03\n\x0eHealthResponse\x126\n\x06ori\
-    gin\x18\x01\x20\x01(\x0e2\x1e.nixling.guest.v1.HealthOriginR\x06origin\
-    \x123\n\x05state\x18\x02\x20\x01(\x0e2\x1d.nixling.guest.v1.HealthStateR\
-    \x05state\x126\n\x06reason\x18\x03\x20\x01(\x0e2\x1e.nixling.guest.v1.He\
-    althReasonR\x06reason\x12E\n\x0bremediation\x18\x04\x20\x01(\x0e2#.nixli\
-    ng.guest.v1.HealthRemediationR\x0bremediation\x12)\n\x10protocol_version\
-    \x18\x05\x20\x01(\rR\x0fprotocolVersion\x12E\n\x0ccapabilities\x18\x06\
-    \x20\x03(\x0e2!.nixling.guest.v1.GuestCapabilityR\x0ccapabilities\x12Q\n\
-    \x13degraded_subsystems\x18\x07\x20\x03(\x0e2\x20.nixling.guest.v1.Guest\
-    SubsystemR\x12degradedSubsystems\"\x94\x08\n\x14GuestEffectiveLimits\x12\
-    &\n\x0fmax_chunk_bytes\x18\x01\x20\x01(\x04R\rmaxChunkBytes\x123\n\x16ma\
-    x_recv_message_bytes\x18\x02\x20\x01(\x04R\x13maxRecvMessageBytes\x12U\n\
-    (decoded_write_stdin_bytes_per_connection\x18\x03\x20\x01(\x04R#decodedW\
-    riteStdinBytesPerConnection\x12L\n#write_stdin_handlers_per_connection\
-    \x18\x04\x20\x01(\rR\x1fwriteStdinHandlersPerConnection\x12<\n\x1bstdin_\
-    queue_chunks_per_exec\x18\x05\x20\x01(\rR\x17stdinQueueChunksPerExec\x12\
-    7\n\x18stdout_live_buffer_bytes\x18\x06\x20\x01(\x04R\x15stdoutLiveBuffe\
-    rBytes\x127\n\x18stderr_live_buffer_bytes\x18\x07\x20\x01(\x04R\x15stder\
-    rLiveBufferBytes\x129\n\x19detached_stdout_log_bytes\x18\x08\x20\x01(\
-    \x04R\x16detachedStdoutLogBytes\x129\n\x19detached_stderr_log_bytes\x18\
-    \t\x20\x01(\x04R\x16detachedStderrLogBytes\x12/\n\x14long_poll_timeout_m\
-    s\x18\n\x20\x01(\x04R\x11longPollTimeoutMs\x123\n\x16slow_consumer_grace\
-    _ms\x18\x0b\x20\x01(\x04R\x13slowConsumerGraceMs\x12/\n\x14exec_sessions\
-    _per_vm\x18\x0c\x20\x01(\rR\x11execSessionsPerVm\x127\n\x18attached_sess\
-    ions_per_vm\x18\r\x20\x01(\rR\x15attachedSessionsPerVm\x12M\n$pending_re\
-    ad_output_waits_per_stream\x18\x0e\x20\x01(\rR\x1fpendingReadOutputWaits\
-    PerStream\x128\n\x19pending_exec_waits_per_vm\x18\x0f\x20\x01(\rR\x15pen\
-    dingExecWaitsPerVm\x12I\n\"rpc_rate_per_connection_per_second\x18\x10\
-    \x20\x01(\rR\x1drpcRatePerConnectionPerSecond\x120\n\x15rpc_rate_per_vm_\
-    burst\x18\x11\x20\x01(\rR\x11rpcRatePerVmBurst\"\xb9\x03\n\x11ExecCreate\
-    Request\x12=\n\x08metadata\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.Reque\
-    stMetadataR\x08metadata\x12\x12\n\x04argv\x18\x02\x20\x03(\tR\x04argv\
-    \x12\x17\n\x04user\x18\x03\x20\x01(\tH\0R\x04user\x88\x01\x01\x12\x15\n\
-    \x03cwd\x18\x04\x20\x01(\tH\x01R\x03cwd\x88\x01\x01\x12*\n\x03env\x18\
-    \x05\x20\x03(\x0b2\x18.nixling.guest.v1.EnvVarR\x03env\x12\x10\n\x03tty\
-    \x18\x06\x20\x01(\x08R\x03tty\x12\x1d\n\nstdin_open\x18\x07\x20\x01(\x08\
-    R\tstdinOpen\x12\x1a\n\x08detached\x18\x08\x20\x01(\x08R\x08detached\x12\
-    R\n\x15initial_terminal_size\x18\t\x20\x01(\x0b2\x1e.nixling.guest.v1.Te\
-    rminalSizeR\x13initialTerminalSize\x12C\n\routput_policy\x18\n\x20\x01(\
-    \x0b2\x1e.nixling.guest.v1.OutputPolicyR\x0coutputPolicyB\x07\n\x05_user\
-    B\x06\n\x04_cwd\"0\n\x06EnvVar\x12\x10\n\x03key\x18\x01\x20\x01(\tR\x03k\
-    ey\x12\x14\n\x05value\x18\x02\x20\x01(\tR\x05value\"6\n\x0cTerminalSize\
-    \x12\x12\n\x04rows\x18\x01\x20\x01(\rR\x04rows\x12\x12\n\x04cols\x18\x02\
-    \x20\x01(\rR\x04cols\"\xf9\x01\n\x0cOutputPolicy\x12&\n\x0fmax_chunk_byt\
-    es\x18\x01\x20\x01(\x04R\rmaxChunkBytes\x12/\n\x14max_stdout_log_bytes\
-    \x18\x02\x20\x01(\x04R\x11maxStdoutLogBytes\x12/\n\x14max_stderr_log_byt\
-    es\x18\x03\x20\x01(\x04R\x11maxStderrLogBytes\x127\n\x18slow_consumer_ti\
-    meout_ms\x18\x04\x20\x01(\x04R\x15slowConsumerTimeoutMs\x12&\n\x0fwait_t\
-    imeout_ms\x18\x05\x20\x01(\x04R\rwaitTimeoutMs\"\xa1\x03\n\x12ExecCreate\
-    Response\x12\x1c\n\x07exec_id\x18\x01\x20\x01(\tH\0R\x06execId\x88\x01\
-    \x01\x125\n\x17created_at_monotonic_ns\x18\x02\x20\x01(\x04R\x14createdA\
-    tMonotonicNs\x12\x1f\n\x0bcontrol_seq\x18\x03\x20\x01(\x04R\ncontrolSeq\
-    \x12#\n\rstdout_cursor\x18\x04\x20\x01(\x04R\x0cstdoutCursor\x12#\n\rstd\
-    err_cursor\x18\x05\x20\x01(\x04R\x0cstderrCursor\x12Q\n\x10effective_lim\
-    its\x18\x06\x20\x01(\x0b2&.nixling.guest.v1.GuestEffectiveLimitsR\x0feff\
-    ectiveLimits\x121\n\x05state\x18\x07\x20\x01(\x0e2\x1b.nixling.guest.v1.\
-    ExecStateR\x05state\x129\n\x05error\x18\x08\x20\x01(\x0b2#.nixling.guest\
-    .v1.GuestControlErrorR\x05errorB\n\n\x08_exec_id\"W\n\x12ExecInspectRequ\
-    est\x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.nixling.guest.v1.ExecReque\
-    stMetadataR\x08metadata\"\x97\x06\n\x13ExecInspectResponse\x121\n\x05sta\
-    te\x18\x01\x20\x01(\x0e2\x1b.nixling.guest.v1.ExecStateR\x05state\x12X\n\
-    \x17visible_terminal_status\x18\x02\x20\x01(\x0b2\x20.nixling.guest.v1.T\
-    erminalStatusR\x15visibleTerminalStatus\x12=\n\x0bstdin_state\x18\x03\
-    \x20\x01(\x0e2\x1c.nixling.guest.v1.StdinStateR\nstdinState\x12.\n\x13st\
-    dout_start_offset\x18\x04\x20\x01(\x04R\x11stdoutStartOffset\x12*\n\x11s\
-    tdout_end_offset\x18\x05\x20\x01(\x04R\x0fstdoutEndOffset\x12.\n\x13stde\
-    rr_start_offset\x18\x06\x20\x01(\x04R\x11stderrStartOffset\x12*\n\x11std\
-    err_end_offset\x18\x07\x20\x01(\x04R\x0fstderrEndOffset\x120\n\x14stdout\
-    _dropped_bytes\x18\x08\x20\x01(\x04R\x12stdoutDroppedBytes\x120\n\x14std\
-    err_dropped_bytes\x18\t\x20\x01(\x04R\x12stderrDroppedBytes\x12C\n\x1est\
-    dout_truncated_for_retention\x18\n\x20\x01(\x08R\x1bstdoutTruncatedForRe\
-    tention\x12C\n\x1estderr_truncated_for_retention\x18\x0b\x20\x01(\x08R\
-    \x1bstderrTruncatedForRetention\x12(\n\x10last_control_seq\x18\x0c\x20\
-    \x01(\x04R\x0elastControlSeq\x12)\n\x10state_generation\x18\r\x20\x01(\
-    \x04R\x0fstateGeneration\x129\n\x05error\x18\x0e\x20\x01(\x0b2#.nixling.\
-    guest.v1.GuestControlErrorR\x05error\"\xc9\x01\n\x0fExecWaitRequest\x12A\
+    boot_id\x18\x03\x20\x01(\tR\x0bguestBootId\"\xcb\x01\n\x17TerminalReques\
+    tMetadata\x129\n\x06common\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.Reque\
+    stMetadataR\x06common\x12\x1d\n\nsession_id\x18\x02\x20\x01(\tR\tsession\
+    Id\x12\"\n\rguest_boot_id\x18\x03\x20\x01(\tR\x0bguestBootId\x122\n\x04k\
+    ind\x18\x04\x20\x01(\x0e2\x1e.nixling.guest.v1.TerminalKindR\x04kind\"\
+    \x9b\x01\n\x0cHelloRequest\x12=\n\x08metadata\x18\x01\x20\x01(\x0b2!.nix\
+    ling.guest.v1.RequestMetadataR\x08metadata\x12\x1d\n\nhost_nonce\x18\x02\
+    \x20\x01(\x0cR\thostNonce\x12-\n\x12transcript_version\x18\x03\x20\x01(\
+    \rR\x11transcriptVersion\"\xa6\x01\n\rHelloResponse\x12\x1f\n\x0bguest_n\
+    once\x18\x01\x20\x01(\x0cR\nguestNonce\x12\"\n\rguest_boot_id\x18\x02\
+    \x20\x01(\tR\x0bguestBootId\x12)\n\x10protocol_version\x18\x03\x20\x01(\
+    \rR\x0fprotocolVersionJ\x04\x08\x04\x10\x05J\x04\x08\x05\x10\x06R\x11cap\
+    abilities_hashR\x06health\"\x8b\x02\n\x13AuthenticateRequest\x12=\n\x08m\
+    etadata\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.RequestMetadataR\x08meta\
+    data\x12\x1d\n\nhost_nonce\x18\x02\x20\x01(\x0cR\thostNonce\x12\x1f\n\
+    \x0bguest_nonce\x18\x03\x20\x01(\x0cR\nguestNonce\x12\"\n\rguest_boot_id\
+    \x18\x04\x20\x01(\tR\x0bguestBootId\x12-\n\x12transcript_version\x18\x05\
+    \x20\x01(\rR\x11transcriptVersion\x12\"\n\rhost_auth_tag\x18\x06\x20\x01\
+    (\x0cR\x0bhostAuthTag\"\xdd\x02\n\x14AuthenticateResponse\x12)\n\x0egues\
+    t_auth_tag\x18\x01\x20\x01(\x0cH\0R\x0cguestAuthTag\x88\x01\x01\x120\n\
+    \x11capabilities_hash\x18\x02\x20\x01(\tH\x01R\x10capabilitiesHash\x88\
+    \x01\x01\x128\n\x06health\x18\x03\x20\x01(\x0b2\x20.nixling.guest.v1.Hea\
+    lthResponseR\x06health\x12J\n\x0ccapabilities\x18\x04\x20\x01(\x0b2&.nix\
+    ling.guest.v1.CapabilitiesResponseR\x0ccapabilities\x129\n\x05error\x18\
+    \x05\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05errorB\x11\n\
+    \x0f_guest_auth_tagB\x14\n\x12_capabilities_hash\"T\n\x13CapabilitiesReq\
+    uest\x12=\n\x08metadata\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.RequestM\
+    etadataR\x08metadata\"\xc8\x01\n\x14CapabilitiesResponse\x12)\n\x10proto\
+    col_version\x18\x01\x20\x01(\rR\x0fprotocolVersion\x12E\n\x0ccapabilitie\
+    s\x18\x02\x20\x03(\x0e2!.nixling.guest.v1.GuestCapabilityR\x0ccapabiliti\
+    es\x12>\n\x06limits\x18\x03\x20\x01(\x0b2&.nixling.guest.v1.GuestEffecti\
+    veLimitsR\x06limits\"N\n\rHealthRequest\x12=\n\x08metadata\x18\x01\x20\
+    \x01(\x0b2!.nixling.guest.v1.RequestMetadataR\x08metadata\"\xc1\x03\n\
+    \x0eHealthResponse\x126\n\x06origin\x18\x01\x20\x01(\x0e2\x1e.nixling.gu\
+    est.v1.HealthOriginR\x06origin\x123\n\x05state\x18\x02\x20\x01(\x0e2\x1d\
+    .nixling.guest.v1.HealthStateR\x05state\x126\n\x06reason\x18\x03\x20\x01\
+    (\x0e2\x1e.nixling.guest.v1.HealthReasonR\x06reason\x12E\n\x0bremediatio\
+    n\x18\x04\x20\x01(\x0e2#.nixling.guest.v1.HealthRemediationR\x0bremediat\
+    ion\x12)\n\x10protocol_version\x18\x05\x20\x01(\rR\x0fprotocolVersion\
+    \x12E\n\x0ccapabilities\x18\x06\x20\x03(\x0e2!.nixling.guest.v1.GuestCap\
+    abilityR\x0ccapabilities\x12Q\n\x13degraded_subsystems\x18\x07\x20\x03(\
+    \x0e2\x20.nixling.guest.v1.GuestSubsystemR\x12degradedSubsystems\"\x8b\t\
+    \n\x14GuestEffectiveLimits\x12&\n\x0fmax_chunk_bytes\x18\x01\x20\x01(\
+    \x04R\rmaxChunkBytes\x123\n\x16max_recv_message_bytes\x18\x02\x20\x01(\
+    \x04R\x13maxRecvMessageBytes\x12U\n(decoded_write_stdin_bytes_per_connec\
+    tion\x18\x03\x20\x01(\x04R#decodedWriteStdinBytesPerConnection\x12L\n#wr\
+    ite_stdin_handlers_per_connection\x18\x04\x20\x01(\rR\x1fwriteStdinHandl\
+    ersPerConnection\x12<\n\x1bstdin_queue_chunks_per_exec\x18\x05\x20\x01(\
+    \rR\x17stdinQueueChunksPerExec\x127\n\x18stdout_live_buffer_bytes\x18\
+    \x06\x20\x01(\x04R\x15stdoutLiveBufferBytes\x127\n\x18stderr_live_buffer\
+    _bytes\x18\x07\x20\x01(\x04R\x15stderrLiveBufferBytes\x129\n\x19detached\
+    _stdout_log_bytes\x18\x08\x20\x01(\x04R\x16detachedStdoutLogBytes\x129\n\
+    \x19detached_stderr_log_bytes\x18\t\x20\x01(\x04R\x16detachedStderrLogBy\
+    tes\x12/\n\x14long_poll_timeout_ms\x18\n\x20\x01(\x04R\x11longPollTimeou\
+    tMs\x123\n\x16slow_consumer_grace_ms\x18\x0b\x20\x01(\x04R\x13slowConsum\
+    erGraceMs\x12/\n\x14exec_sessions_per_vm\x18\x0c\x20\x01(\rR\x11execSess\
+    ionsPerVm\x127\n\x18attached_sessions_per_vm\x18\r\x20\x01(\rR\x15attach\
+    edSessionsPerVm\x12M\n$pending_read_output_waits_per_stream\x18\x0e\x20\
+    \x01(\rR\x1fpendingReadOutputWaitsPerStream\x128\n\x19pending_exec_waits\
+    _per_vm\x18\x0f\x20\x01(\rR\x15pendingExecWaitsPerVm\x12I\n\"rpc_rate_pe\
+    r_connection_per_second\x18\x10\x20\x01(\rR\x1drpcRatePerConnectionPerSe\
+    cond\x120\n\x15rpc_rate_per_vm_burst\x18\x11\x20\x01(\rR\x11rpcRatePerVm\
+    Burst\x121\n\x15shell_sessions_per_vm\x18\x12\x20\x01(\rR\x12shellSessio\
+    nsPerVm\x12B\n\x1eshell_attached_sessions_per_vm\x18\x13\x20\x01(\rR\x1a\
+    shellAttachedSessionsPerVm\"\xb9\x03\n\x11ExecCreateRequest\x12=\n\x08me\
+    tadata\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.RequestMetadataR\x08metad\
+    ata\x12\x12\n\x04argv\x18\x02\x20\x03(\tR\x04argv\x12\x17\n\x04user\x18\
+    \x03\x20\x01(\tH\0R\x04user\x88\x01\x01\x12\x15\n\x03cwd\x18\x04\x20\x01\
+    (\tH\x01R\x03cwd\x88\x01\x01\x12*\n\x03env\x18\x05\x20\x03(\x0b2\x18.nix\
+    ling.guest.v1.EnvVarR\x03env\x12\x10\n\x03tty\x18\x06\x20\x01(\x08R\x03t\
+    ty\x12\x1d\n\nstdin_open\x18\x07\x20\x01(\x08R\tstdinOpen\x12\x1a\n\x08d\
+    etached\x18\x08\x20\x01(\x08R\x08detached\x12R\n\x15initial_terminal_siz\
+    e\x18\t\x20\x01(\x0b2\x1e.nixling.guest.v1.TerminalSizeR\x13initialTermi\
+    nalSize\x12C\n\routput_policy\x18\n\x20\x01(\x0b2\x1e.nixling.guest.v1.O\
+    utputPolicyR\x0coutputPolicyB\x07\n\x05_userB\x06\n\x04_cwd\"0\n\x06EnvV\
+    ar\x12\x10\n\x03key\x18\x01\x20\x01(\tR\x03key\x12\x14\n\x05value\x18\
+    \x02\x20\x01(\tR\x05value\"6\n\x0cTerminalSize\x12\x12\n\x04rows\x18\x01\
+    \x20\x01(\rR\x04rows\x12\x12\n\x04cols\x18\x02\x20\x01(\rR\x04cols\"\xf9\
+    \x01\n\x0cOutputPolicy\x12&\n\x0fmax_chunk_bytes\x18\x01\x20\x01(\x04R\r\
+    maxChunkBytes\x12/\n\x14max_stdout_log_bytes\x18\x02\x20\x01(\x04R\x11ma\
+    xStdoutLogBytes\x12/\n\x14max_stderr_log_bytes\x18\x03\x20\x01(\x04R\x11\
+    maxStderrLogBytes\x127\n\x18slow_consumer_timeout_ms\x18\x04\x20\x01(\
+    \x04R\x15slowConsumerTimeoutMs\x12&\n\x0fwait_timeout_ms\x18\x05\x20\x01\
+    (\x04R\rwaitTimeoutMs\"\xa1\x03\n\x12ExecCreateResponse\x12\x1c\n\x07exe\
+    c_id\x18\x01\x20\x01(\tH\0R\x06execId\x88\x01\x01\x125\n\x17created_at_m\
+    onotonic_ns\x18\x02\x20\x01(\x04R\x14createdAtMonotonicNs\x12\x1f\n\x0bc\
+    ontrol_seq\x18\x03\x20\x01(\x04R\ncontrolSeq\x12#\n\rstdout_cursor\x18\
+    \x04\x20\x01(\x04R\x0cstdoutCursor\x12#\n\rstderr_cursor\x18\x05\x20\x01\
+    (\x04R\x0cstderrCursor\x12Q\n\x10effective_limits\x18\x06\x20\x01(\x0b2&\
+    .nixling.guest.v1.GuestEffectiveLimitsR\x0feffectiveLimits\x121\n\x05sta\
+    te\x18\x07\x20\x01(\x0e2\x1b.nixling.guest.v1.ExecStateR\x05state\x129\n\
+    \x05error\x18\x08\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05\
+    errorB\n\n\x08_exec_id\"W\n\x12ExecInspectRequest\x12A\n\x08metadata\x18\
+    \x01\x20\x01(\x0b2%.nixling.guest.v1.ExecRequestMetadataR\x08metadata\"\
+    \x97\x06\n\x13ExecInspectResponse\x121\n\x05state\x18\x01\x20\x01(\x0e2\
+    \x1b.nixling.guest.v1.ExecStateR\x05state\x12X\n\x17visible_terminal_sta\
+    tus\x18\x02\x20\x01(\x0b2\x20.nixling.guest.v1.TerminalStatusR\x15visibl\
+    eTerminalStatus\x12=\n\x0bstdin_state\x18\x03\x20\x01(\x0e2\x1c.nixling.\
+    guest.v1.StdinStateR\nstdinState\x12.\n\x13stdout_start_offset\x18\x04\
+    \x20\x01(\x04R\x11stdoutStartOffset\x12*\n\x11stdout_end_offset\x18\x05\
+    \x20\x01(\x04R\x0fstdoutEndOffset\x12.\n\x13stderr_start_offset\x18\x06\
+    \x20\x01(\x04R\x11stderrStartOffset\x12*\n\x11stderr_end_offset\x18\x07\
+    \x20\x01(\x04R\x0fstderrEndOffset\x120\n\x14stdout_dropped_bytes\x18\x08\
+    \x20\x01(\x04R\x12stdoutDroppedBytes\x120\n\x14stderr_dropped_bytes\x18\
+    \t\x20\x01(\x04R\x12stderrDroppedBytes\x12C\n\x1estdout_truncated_for_re\
+    tention\x18\n\x20\x01(\x08R\x1bstdoutTruncatedForRetention\x12C\n\x1estd\
+    err_truncated_for_retention\x18\x0b\x20\x01(\x08R\x1bstderrTruncatedForR\
+    etention\x12(\n\x10last_control_seq\x18\x0c\x20\x01(\x04R\x0elastControl\
+    Seq\x12)\n\x10state_generation\x18\r\x20\x01(\x04R\x0fstateGeneration\
+    \x129\n\x05error\x18\x0e\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErr\
+    orR\x05error\"\xc9\x01\n\x0fExecWaitRequest\x12A\n\x08metadata\x18\x01\
+    \x20\x01(\x0b2%.nixling.guest.v1.ExecRequestMetadataR\x08metadata\x12\
+    \x1d\n\ntimeout_ms\x18\x02\x20\x01(\x04R\ttimeoutMs\x129\n\x16known_stat\
+    e_generation\x18\x03\x20\x01(\x04H\0R\x14knownStateGeneration\x88\x01\
+    \x01B\x19\n\x17_known_state_generation\"\xda\x03\n\x10ExecWaitResponse\
+    \x121\n\x05state\x18\x01\x20\x01(\x0e2\x1b.nixling.guest.v1.ExecStateR\
+    \x05state\x12X\n\x17visible_terminal_status\x18\x02\x20\x01(\x0b2\x20.ni\
+    xling.guest.v1.TerminalStatusR\x15visibleTerminalStatus\x12)\n\x10state_\
+    generation\x18\x03\x20\x01(\x04R\x0fstateGeneration\x12.\n\x13stdout_sta\
+    rt_offset\x18\x04\x20\x01(\x04R\x11stdoutStartOffset\x12*\n\x11stdout_en\
+    d_offset\x18\x05\x20\x01(\x04R\x0fstdoutEndOffset\x12.\n\x13stderr_start\
+    _offset\x18\x06\x20\x01(\x04R\x11stderrStartOffset\x12*\n\x11stderr_end_\
+    offset\x18\x07\x20\x01(\x04R\x0fstderrEndOffset\x12\x1b\n\ttimed_out\x18\
+    \x08\x20\x01(\x08R\x08timedOut\x129\n\x05error\x18\t\x20\x01(\x0b2#.nixl\
+    ing.guest.v1.GuestControlErrorR\x05error\"\xbd\x01\n\x0fExecLogsRequest\
+    \x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.nixling.guest.v1.ExecRequestM\
+    etadataR\x08metadata\x126\n\x06stream\x18\x02\x20\x01(\x0e2\x1e.nixling.\
+    guest.v1.OutputStreamR\x06stream\x12\x16\n\x06offset\x18\x03\x20\x01(\
+    \x04R\x06offset\x12\x17\n\x07max_len\x18\x04\x20\x01(\x04R\x06maxLen\"\
+    \xe9\x02\n\x10ExecLogsResponse\x126\n\x06stream\x18\x01\x20\x01(\x0e2\
+    \x1e.nixling.guest.v1.OutputStreamR\x06stream\x12\x16\n\x06offset\x18\
+    \x02\x20\x01(\x04R\x06offset\x12\x1d\n\nend_offset\x18\x03\x20\x01(\x04R\
+    \tendOffset\x12\x12\n\x04data\x18\x04\x20\x01(\x0cR\x04data\x12\x1f\n\
+    \x0bnext_offset\x18\x05\x20\x01(\x04R\nnextOffset\x12\x10\n\x03eof\x18\
+    \x06\x20\x01(\x08R\x03eof\x12!\n\x0cstart_offset\x18\x07\x20\x01(\x04R\
+    \x0bstartOffset\x12#\n\rdropped_bytes\x18\x08\x20\x01(\x04R\x0cdroppedBy\
+    tes\x12\x1c\n\ttruncated\x18\t\x20\x01(\x08R\ttruncated\x129\n\x05error\
+    \x18\n\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"t\n\
+    \x0fExecListRequest\x12=\n\x08metadata\x18\x01\x20\x01(\x0b2!.nixling.gu\
+    est.v1.RequestMetadataR\x08metadata\x12\"\n\rguest_boot_id\x18\x02\x20\
+    \x01(\tR\x0bguestBootId\"\x88\x01\n\x10ExecListResponse\x129\n\x07entrie\
+    s\x18\x01\x20\x03(\x0b2\x1f.nixling.guest.v1.ExecListEntryR\x07entries\
+    \x129\n\x05error\x18\x02\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErr\
+    orR\x05error\"\xb5\x02\n\rExecListEntry\x12\x17\n\x07exec_id\x18\x01\x20\
+    \x01(\tR\x06execId\x12\x12\n\x04slot\x18\x02\x20\x01(\rR\x04slot\x121\n\
+    \x05state\x18\x03\x20\x01(\x0e2\x1b.nixling.guest.v1.ExecStateR\x05state\
+    \x12(\n\x10create_time_unix\x18\x04\x20\x01(\x04R\x0ecreateTimeUnix\x12\
+    \x1f\n\x0bargv_sha256\x18\x05\x20\x01(\tR\nargvSha256\x12)\n\x10stdout_t\
+    runcated\x18\x06\x20\x01(\x08R\x0fstdoutTruncated\x12)\n\x10stderr_trunc\
+    ated\x18\x07\x20\x01(\x08R\x0fstderrTruncated\x12#\n\rdropped_bytes\x18\
+    \x08\x20\x01(\x04R\x0cdroppedBytes\"\xed\x01\n\x11WriteStdinRequest\x12A\
     \n\x08metadata\x18\x01\x20\x01(\x0b2%.nixling.guest.v1.ExecRequestMetada\
-    taR\x08metadata\x12\x1d\n\ntimeout_ms\x18\x02\x20\x01(\x04R\ttimeoutMs\
-    \x129\n\x16known_state_generation\x18\x03\x20\x01(\x04H\0R\x14knownState\
-    Generation\x88\x01\x01B\x19\n\x17_known_state_generation\"\xda\x03\n\x10\
-    ExecWaitResponse\x121\n\x05state\x18\x01\x20\x01(\x0e2\x1b.nixling.guest\
-    .v1.ExecStateR\x05state\x12X\n\x17visible_terminal_status\x18\x02\x20\
-    \x01(\x0b2\x20.nixling.guest.v1.TerminalStatusR\x15visibleTerminalStatus\
-    \x12)\n\x10state_generation\x18\x03\x20\x01(\x04R\x0fstateGeneration\x12\
-    .\n\x13stdout_start_offset\x18\x04\x20\x01(\x04R\x11stdoutStartOffset\
-    \x12*\n\x11stdout_end_offset\x18\x05\x20\x01(\x04R\x0fstdoutEndOffset\
-    \x12.\n\x13stderr_start_offset\x18\x06\x20\x01(\x04R\x11stderrStartOffse\
-    t\x12*\n\x11stderr_end_offset\x18\x07\x20\x01(\x04R\x0fstderrEndOffset\
-    \x12\x1b\n\ttimed_out\x18\x08\x20\x01(\x08R\x08timedOut\x129\n\x05error\
-    \x18\t\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\xbd\
-    \x01\n\x0fExecLogsRequest\x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.nixl\
-    ing.guest.v1.ExecRequestMetadataR\x08metadata\x126\n\x06stream\x18\x02\
-    \x20\x01(\x0e2\x1e.nixling.guest.v1.OutputStreamR\x06stream\x12\x16\n\
-    \x06offset\x18\x03\x20\x01(\x04R\x06offset\x12\x17\n\x07max_len\x18\x04\
-    \x20\x01(\x04R\x06maxLen\"\xe9\x02\n\x10ExecLogsResponse\x126\n\x06strea\
-    m\x18\x01\x20\x01(\x0e2\x1e.nixling.guest.v1.OutputStreamR\x06stream\x12\
-    \x16\n\x06offset\x18\x02\x20\x01(\x04R\x06offset\x12\x1d\n\nend_offset\
-    \x18\x03\x20\x01(\x04R\tendOffset\x12\x12\n\x04data\x18\x04\x20\x01(\x0c\
-    R\x04data\x12\x1f\n\x0bnext_offset\x18\x05\x20\x01(\x04R\nnextOffset\x12\
-    \x10\n\x03eof\x18\x06\x20\x01(\x08R\x03eof\x12!\n\x0cstart_offset\x18\
-    \x07\x20\x01(\x04R\x0bstartOffset\x12#\n\rdropped_bytes\x18\x08\x20\x01(\
-    \x04R\x0cdroppedBytes\x12\x1c\n\ttruncated\x18\t\x20\x01(\x08R\ttruncate\
-    d\x129\n\x05error\x18\n\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErro\
-    rR\x05error\"t\n\x0fExecListRequest\x12=\n\x08metadata\x18\x01\x20\x01(\
-    \x0b2!.nixling.guest.v1.RequestMetadataR\x08metadata\x12\"\n\rguest_boot\
-    _id\x18\x02\x20\x01(\tR\x0bguestBootId\"\x88\x01\n\x10ExecListResponse\
-    \x129\n\x07entries\x18\x01\x20\x03(\x0b2\x1f.nixling.guest.v1.ExecListEn\
-    tryR\x07entries\x129\n\x05error\x18\x02\x20\x01(\x0b2#.nixling.guest.v1.\
-    GuestControlErrorR\x05error\"\xb5\x02\n\rExecListEntry\x12\x17\n\x07exec\
-    _id\x18\x01\x20\x01(\tR\x06execId\x12\x12\n\x04slot\x18\x02\x20\x01(\rR\
-    \x04slot\x121\n\x05state\x18\x03\x20\x01(\x0e2\x1b.nixling.guest.v1.Exec\
-    StateR\x05state\x12(\n\x10create_time_unix\x18\x04\x20\x01(\x04R\x0ecrea\
-    teTimeUnix\x12\x1f\n\x0bargv_sha256\x18\x05\x20\x01(\tR\nargvSha256\x12)\
-    \n\x10stdout_truncated\x18\x06\x20\x01(\x08R\x0fstdoutTruncated\x12)\n\
-    \x10stderr_truncated\x18\x07\x20\x01(\x08R\x0fstderrTruncated\x12#\n\rdr\
-    opped_bytes\x18\x08\x20\x01(\x04R\x0cdroppedBytes\"\xed\x01\n\x11WriteSt\
-    dinRequest\x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.nixling.guest.v1.Ex\
-    ecRequestMetadataR\x08metadata\x12\x16\n\x06offset\x18\x02\x20\x01(\x04R\
-    \x06offset\x12\x12\n\x04data\x18\x03\x20\x01(\x0cR\x04data\x12\x1f\n\x0b\
-    close_after\x18\x04\x20\x01(\x08R\ncloseAfter\x121\n\x12client_deadline_\
-    ms\x18\x05\x20\x01(\x04H\0R\x10clientDeadlineMs\x88\x01\x01B\x15\n\x13_c\
-    lient_deadline_ms\"\xe0\x02\n\x12WriteStdinResponse\x12'\n\x0faccepted_o\
-    ffset\x18\x01\x20\x01(\x04R\x0eacceptedOffset\x12!\n\x0caccepted_len\x18\
-    \x02\x20\x01(\x04R\x0bacceptedLen\x12\x1f\n\x0bnext_offset\x18\x03\x20\
-    \x01(\x04R\nnextOffset\x12=\n\x0bstdin_state\x18\x04\x20\x01(\x0e2\x1c.n\
-    ixling.guest.v1.StdinStateR\nstdinState\x12\x1d\n\nblocked_ms\x18\x05\
-    \x20\x01(\x04R\tblockedMs\x12D\n\x0bdisposition\x18\x06\x20\x01(\x0e2\".\
-    nixling.guest.v1.WriteDispositionR\x0bdisposition\x129\n\x05error\x18\
-    \x07\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\xf2\
-    \x01\n\x11ReadOutputRequest\x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.ni\
-    xling.guest.v1.ExecRequestMetadataR\x08metadata\x126\n\x06stream\x18\x02\
-    \x20\x01(\x0e2\x1e.nixling.guest.v1.OutputStreamR\x06stream\x12\x16\n\
-    \x06offset\x18\x03\x20\x01(\x04R\x06offset\x12\x17\n\x07max_len\x18\x04\
-    \x20\x01(\x04R\x06maxLen\x12\x12\n\x04wait\x18\x05\x20\x01(\x08R\x04wait\
-    \x12\x1d\n\ntimeout_ms\x18\x06\x20\x01(\x04R\ttimeoutMs\"\x88\x03\n\x12R\
-    eadOutputResponse\x126\n\x06stream\x18\x01\x20\x01(\x0e2\x1e.nixling.gue\
-    st.v1.OutputStreamR\x06stream\x12\x16\n\x06offset\x18\x02\x20\x01(\x04R\
-    \x06offset\x12\x1d\n\nend_offset\x18\x03\x20\x01(\x04R\tendOffset\x12\
-    \x12\n\x04data\x18\x04\x20\x01(\x0cR\x04data\x12\x1f\n\x0bnext_offset\
-    \x18\x05\x20\x01(\x04R\nnextOffset\x12\x10\n\x03eof\x18\x06\x20\x01(\x08\
-    R\x03eof\x12!\n\x0cstart_offset\x18\x07\x20\x01(\x04R\x0bstartOffset\x12\
-    #\n\rdropped_bytes\x18\x08\x20\x01(\x04R\x0cdroppedBytes\x12\x1c\n\ttrun\
-    cated\x18\t\x20\x01(\x08R\ttruncated\x12\x1b\n\ttimed_out\x18\n\x20\x01(\
-    \x08R\x08timedOut\x129\n\x05error\x18\x0b\x20\x01(\x0b2#.nixling.guest.v\
-    1.GuestControlErrorR\x05error\"n\n\x11CloseStdinRequest\x12A\n\x08metada\
-    ta\x18\x01\x20\x01(\x0b2%.nixling.guest.v1.ExecRequestMetadataR\x08metad\
-    ata\x12\x16\n\x06offset\x18\x02\x20\x01(\x04R\x06offset\"\xf7\x01\n\x12C\
-    loseStdinResponse\x12=\n\x0bstdin_state\x18\x01\x20\x01(\x0e2\x1c.nixlin\
-    g.guest.v1.StdinStateR\nstdinState\x12!\n\x0cfinal_offset\x18\x02\x20\
-    \x01(\x04R\x0bfinalOffset\x12D\n\x0bdisposition\x18\x03\x20\x01(\x0e2\".\
-    nixling.guest.v1.WriteDispositionR\x0bdisposition\x129\n\x05error\x18\
-    \x04\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\xa1\
-    \x01\n\x13TtyWinResizeRequest\x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.\
-    nixling.guest.v1.ExecRequestMetadataR\x08metadata\x12\x1f\n\x0bcontrol_s\
-    eq\x18\x02\x20\x01(\x04R\ncontrolSeq\x12\x12\n\x04rows\x18\x03\x20\x01(\
-    \rR\x04rows\x12\x12\n\x04cols\x18\x04\x20\x01(\rR\x04cols\"\xc7\x01\n\
-    \x11ExecSignalRequest\x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.nixling.\
-    guest.v1.ExecRequestMetadataR\x08metadata\x12\x1f\n\x0bcontrol_seq\x18\
-    \x02\x20\x01(\x04R\ncontrolSeq\x12\x16\n\x06signal\x18\x03\x20\x01(\rR\
-    \x06signal\x126\n\x06target\x18\x04\x20\x01(\x0e2\x1e.nixling.guest.v1.S\
-    ignalTargetR\x06target\"\xb3\x01\n\x11ExecCancelRequest\x12A\n\x08metada\
-    ta\x18\x01\x20\x01(\x0b2%.nixling.guest.v1.ExecRequestMetadataR\x08metad\
-    ata\x12\x1f\n\x0bcontrol_seq\x18\x02\x20\x01(\x04R\ncontrolSeq\x12:\n\
-    \x06reason\x18\x03\x20\x01(\x0e2\".nixling.guest.v1.ExecCancelReasonR\
-    \x06reason\"\x86\x01\n\nControlAck\x12\x1f\n\x0bcontrol_seq\x18\x01\x20\
-    \x01(\x04R\ncontrolSeq\x12\x1c\n\tduplicate\x18\x02\x20\x01(\x08R\tdupli\
-    cate\x129\n\x05error\x18\x03\x20\x01(\x0b2#.nixling.guest.v1.GuestContro\
-    lErrorR\x05error\"\x8d\x01\n\x14ReadGuestFileRequest\x12=\n\x08metadata\
+    taR\x08metadata\x12\x16\n\x06offset\x18\x02\x20\x01(\x04R\x06offset\x12\
+    \x12\n\x04data\x18\x03\x20\x01(\x0cR\x04data\x12\x1f\n\x0bclose_after\
+    \x18\x04\x20\x01(\x08R\ncloseAfter\x121\n\x12client_deadline_ms\x18\x05\
+    \x20\x01(\x04H\0R\x10clientDeadlineMs\x88\x01\x01B\x15\n\x13_client_dead\
+    line_ms\"\xe0\x02\n\x12WriteStdinResponse\x12'\n\x0faccepted_offset\x18\
+    \x01\x20\x01(\x04R\x0eacceptedOffset\x12!\n\x0caccepted_len\x18\x02\x20\
+    \x01(\x04R\x0bacceptedLen\x12\x1f\n\x0bnext_offset\x18\x03\x20\x01(\x04R\
+    \nnextOffset\x12=\n\x0bstdin_state\x18\x04\x20\x01(\x0e2\x1c.nixling.gue\
+    st.v1.StdinStateR\nstdinState\x12\x1d\n\nblocked_ms\x18\x05\x20\x01(\x04\
+    R\tblockedMs\x12D\n\x0bdisposition\x18\x06\x20\x01(\x0e2\".nixling.guest\
+    .v1.WriteDispositionR\x0bdisposition\x129\n\x05error\x18\x07\x20\x01(\
+    \x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\xf2\x01\n\x11ReadO\
+    utputRequest\x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.nixling.guest.v1.\
+    ExecRequestMetadataR\x08metadata\x126\n\x06stream\x18\x02\x20\x01(\x0e2\
+    \x1e.nixling.guest.v1.OutputStreamR\x06stream\x12\x16\n\x06offset\x18\
+    \x03\x20\x01(\x04R\x06offset\x12\x17\n\x07max_len\x18\x04\x20\x01(\x04R\
+    \x06maxLen\x12\x12\n\x04wait\x18\x05\x20\x01(\x08R\x04wait\x12\x1d\n\nti\
+    meout_ms\x18\x06\x20\x01(\x04R\ttimeoutMs\"\x88\x03\n\x12ReadOutputRespo\
+    nse\x126\n\x06stream\x18\x01\x20\x01(\x0e2\x1e.nixling.guest.v1.OutputSt\
+    reamR\x06stream\x12\x16\n\x06offset\x18\x02\x20\x01(\x04R\x06offset\x12\
+    \x1d\n\nend_offset\x18\x03\x20\x01(\x04R\tendOffset\x12\x12\n\x04data\
+    \x18\x04\x20\x01(\x0cR\x04data\x12\x1f\n\x0bnext_offset\x18\x05\x20\x01(\
+    \x04R\nnextOffset\x12\x10\n\x03eof\x18\x06\x20\x01(\x08R\x03eof\x12!\n\
+    \x0cstart_offset\x18\x07\x20\x01(\x04R\x0bstartOffset\x12#\n\rdropped_by\
+    tes\x18\x08\x20\x01(\x04R\x0cdroppedBytes\x12\x1c\n\ttruncated\x18\t\x20\
+    \x01(\x08R\ttruncated\x12\x1b\n\ttimed_out\x18\n\x20\x01(\x08R\x08timedO\
+    ut\x129\n\x05error\x18\x0b\x20\x01(\x0b2#.nixling.guest.v1.GuestControlE\
+    rrorR\x05error\"n\n\x11CloseStdinRequest\x12A\n\x08metadata\x18\x01\x20\
+    \x01(\x0b2%.nixling.guest.v1.ExecRequestMetadataR\x08metadata\x12\x16\n\
+    \x06offset\x18\x02\x20\x01(\x04R\x06offset\"\xf7\x01\n\x12CloseStdinResp\
+    onse\x12=\n\x0bstdin_state\x18\x01\x20\x01(\x0e2\x1c.nixling.guest.v1.St\
+    dinStateR\nstdinState\x12!\n\x0cfinal_offset\x18\x02\x20\x01(\x04R\x0bfi\
+    nalOffset\x12D\n\x0bdisposition\x18\x03\x20\x01(\x0e2\".nixling.guest.v1\
+    .WriteDispositionR\x0bdisposition\x129\n\x05error\x18\x04\x20\x01(\x0b2#\
+    .nixling.guest.v1.GuestControlErrorR\x05error\"\xa1\x01\n\x13TtyWinResiz\
+    eRequest\x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.nixling.guest.v1.Exec\
+    RequestMetadataR\x08metadata\x12\x1f\n\x0bcontrol_seq\x18\x02\x20\x01(\
+    \x04R\ncontrolSeq\x12\x12\n\x04rows\x18\x03\x20\x01(\rR\x04rows\x12\x12\
+    \n\x04cols\x18\x04\x20\x01(\rR\x04cols\"\xc7\x01\n\x11ExecSignalRequest\
+    \x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.nixling.guest.v1.ExecRequestM\
+    etadataR\x08metadata\x12\x1f\n\x0bcontrol_seq\x18\x02\x20\x01(\x04R\ncon\
+    trolSeq\x12\x16\n\x06signal\x18\x03\x20\x01(\rR\x06signal\x126\n\x06targ\
+    et\x18\x04\x20\x01(\x0e2\x1e.nixling.guest.v1.SignalTargetR\x06target\"\
+    \xb3\x01\n\x11ExecCancelRequest\x12A\n\x08metadata\x18\x01\x20\x01(\x0b2\
+    %.nixling.guest.v1.ExecRequestMetadataR\x08metadata\x12\x1f\n\x0bcontrol\
+    _seq\x18\x02\x20\x01(\x04R\ncontrolSeq\x12:\n\x06reason\x18\x03\x20\x01(\
+    \x0e2\".nixling.guest.v1.ExecCancelReasonR\x06reason\"\x86\x01\n\nContro\
+    lAck\x12\x1f\n\x0bcontrol_seq\x18\x01\x20\x01(\x04R\ncontrolSeq\x12\x1c\
+    \n\tduplicate\x18\x02\x20\x01(\x08R\tduplicate\x129\n\x05error\x18\x03\
+    \x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\x8d\x01\n\
+    \x14ReadGuestFileRequest\x12=\n\x08metadata\x18\x01\x20\x01(\x0b2!.nixli\
+    ng.guest.v1.RequestMetadataR\x08metadata\x126\n\x07file_id\x18\x02\x20\
+    \x01(\x0e2\x1d.nixling.guest.v1.GuestFileIdR\x06fileId\"\xdb\x01\n\x15Re\
+    adGuestFileResponse\x126\n\x07file_id\x18\x01\x20\x01(\x0e2\x1d.nixling.\
+    guest.v1.GuestFileIdR\x06fileId\x12\x1d\n\nsize_bytes\x18\x02\x20\x01(\
+    \x04R\tsizeBytes\x12\x18\n\x07content\x18\x03\x20\x01(\x0cR\x07content\
+    \x12\x16\n\x06sha256\x18\x04\x20\x01(\tR\x06sha256\x129\n\x05error\x18\
+    \x05\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\xbb\
+    \x01\n\x12UsbipImportRequest\x12=\n\x08metadata\x18\x01\x20\x01(\x0b2!.n\
+    ixling.guest.v1.RequestMetadataR\x08metadata\x12;\n\x06action\x18\x02\
+    \x20\x01(\x0e2#.nixling.guest.v1.UsbipImportActionR\x06action\x12\x12\n\
+    \x04host\x18\x03\x20\x01(\tR\x04host\x12\x15\n\x06bus_id\x18\x04\x20\x01\
+    (\tR\x05busId\"\xcb\x01\n\x13UsbipImportResponse\x12;\n\x06action\x18\
+    \x01\x20\x01(\x0e2#.nixling.guest.v1.UsbipImportActionR\x06action\x12\
+    \x15\n\x06bus_id\x18\x02\x20\x01(\tR\x05busId\x12%\n\x0edetached_ports\
+    \x18\x03\x20\x01(\rR\rdetachedPorts\x129\n\x05error\x18\x04\x20\x01(\x0b\
+    2#.nixling.guest.v1.GuestControlErrorR\x05error\"\xdf\x01\n\x12ShellAtta\
+    chRequest\x12=\n\x08metadata\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.Req\
+    uestMetadataR\x08metadata\x12\x17\n\x04name\x18\x02\x20\x01(\tH\0R\x04na\
+    me\x88\x01\x01\x12\x14\n\x05force\x18\x03\x20\x01(\x08R\x05force\x12R\n\
+    \x15initial_terminal_size\x18\x04\x20\x01(\x0b2\x1e.nixling.guest.v1.Ter\
+    minalSizeR\x13initialTerminalSizeB\x07\n\x05_name\"\x9a\x03\n\x13ShellAt\
+    tachResponse\x12\"\n\nsession_id\x18\x01\x20\x01(\tH\0R\tsessionId\x88\
+    \x01\x01\x12#\n\rresolved_name\x18\x02\x20\x01(\tR\x0cresolvedName\x122\
+    \n\x05state\x18\x03\x20\x01(\x0e2\x1c.nixling.guest.v1.ShellStateR\x05st\
+    ate\x12#\n\rforce_evicted\x18\x04\x20\x01(\x08R\x0cforceEvicted\x12\x1f\
+    \n\x0bcontrol_seq\x18\x05\x20\x01(\x04R\ncontrolSeq\x12#\n\routput_curso\
+    r\x18\x06\x20\x01(\x04R\x0coutputCursor\x12Q\n\x10effective_limits\x18\
+    \x07\x20\x01(\x0b2&.nixling.guest.v1.GuestEffectiveLimitsR\x0feffectiveL\
+    imits\x129\n\x05error\x18\x08\x20\x01(\x0b2#.nixling.guest.v1.GuestContr\
+    olErrorR\x05errorB\r\n\x0b_session_id\"Q\n\x10ShellListRequest\x12=\n\
+    \x08metadata\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.RequestMetadataR\
+    \x08metadata\"\xaf\x01\n\x11ShellListResponse\x12!\n\x0cdefault_name\x18\
+    \x01\x20\x01(\tR\x0bdefaultName\x12<\n\x08sessions\x18\x02\x20\x03(\x0b2\
+    \x20.nixling.guest.v1.ShellListEntryR\x08sessions\x129\n\x05error\x18\
+    \x03\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\x93\
+    \x01\n\x0eShellListEntry\x12\x12\n\x04name\x18\x01\x20\x01(\tR\x04name\
+    \x122\n\x05state\x18\x02\x20\x01(\x0e2\x1c.nixling.guest.v1.ShellStateR\
+    \x05state\x12\x1a\n\x08attached\x18\x03\x20\x01(\x08R\x08attached\x12\
+    \x1d\n\nis_default\x18\x04\x20\x01(\x08R\tisDefault\"u\n\x12ShellDetachR\
+    equest\x12=\n\x08metadata\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.Reques\
+    tMetadataR\x08metadata\x12\x17\n\x04name\x18\x02\x20\x01(\tH\0R\x04name\
+    \x88\x01\x01B\x07\n\x05_name\"e\n\x10ShellKillRequest\x12=\n\x08metadata\
     \x18\x01\x20\x01(\x0b2!.nixling.guest.v1.RequestMetadataR\x08metadata\
-    \x126\n\x07file_id\x18\x02\x20\x01(\x0e2\x1d.nixling.guest.v1.GuestFileI\
-    dR\x06fileId\"\xdb\x01\n\x15ReadGuestFileResponse\x126\n\x07file_id\x18\
-    \x01\x20\x01(\x0e2\x1d.nixling.guest.v1.GuestFileIdR\x06fileId\x12\x1d\n\
-    \nsize_bytes\x18\x02\x20\x01(\x04R\tsizeBytes\x12\x18\n\x07content\x18\
-    \x03\x20\x01(\x0cR\x07content\x12\x16\n\x06sha256\x18\x04\x20\x01(\tR\
-    \x06sha256\x129\n\x05error\x18\x05\x20\x01(\x0b2#.nixling.guest.v1.Guest\
-    ControlErrorR\x05error\"\xbb\x01\n\x12UsbipImportRequest\x12=\n\x08metad\
-    ata\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.RequestMetadataR\x08metadata\
-    \x12;\n\x06action\x18\x02\x20\x01(\x0e2#.nixling.guest.v1.UsbipImportAct\
-    ionR\x06action\x12\x12\n\x04host\x18\x03\x20\x01(\tR\x04host\x12\x15\n\
-    \x06bus_id\x18\x04\x20\x01(\tR\x05busId\"\xcb\x01\n\x13UsbipImportRespon\
-    se\x12;\n\x06action\x18\x01\x20\x01(\x0e2#.nixling.guest.v1.UsbipImportA\
-    ctionR\x06action\x12\x15\n\x06bus_id\x18\x02\x20\x01(\tR\x05busId\x12%\n\
-    \x0edetached_ports\x18\x03\x20\x01(\rR\rdetachedPorts\x129\n\x05error\
+    \x12\x12\n\x04name\x18\x02\x20\x01(\tR\x04name\"`\n\x17ShellCloseAttachR\
+    equest\x12E\n\x08metadata\x18\x01\x20\x01(\x0b2).nixling.guest.v1.Termin\
+    alRequestMetadataR\x08metadata\"\xca\x01\n\x13ShellDetachResponse\x12#\n\
+    \rresolved_name\x18\x01\x20\x01(\tR\x0cresolvedName\x12\x1a\n\x08detache\
+    d\x18\x02\x20\x01(\x08R\x08detached\x127\n\x05cause\x18\x03\x20\x01(\x0e\
+    2!.nixling.guest.v1.ShellCloseCauseR\x05cause\x129\n\x05error\x18\x04\
+    \x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\xae\x01\n\
+    \x11ShellKillResponse\x12\x12\n\x04name\x18\x01\x20\x01(\tR\x04name\x12\
+    \x16\n\x06killed\x18\x02\x20\x01(\x08R\x06killed\x122\n\x05state\x18\x03\
+    \x20\x01(\x0e2\x1c.nixling.guest.v1.ShellStateR\x05state\x129\n\x05error\
     \x18\x04\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\
-    \xb8\x01\n\x0eTerminalStatus\x12\x1d\n\texit_code\x18\x01\x20\x01(\x05H\
-    \0R\x08exitCode\x12\x18\n\x06signal\x18\x02\x20\x01(\rH\0R\x06signal\x12\
-    !\n\x0bstatus_code\x18\x03\x20\x01(\x05H\0R\nstatusCode\x12?\n\x05error\
-    \x18\x04\x20\x01(\x0e2'.nixling.guest.v1.GuestControlErrorKindH\0R\x05er\
-    rorB\t\n\x07outcome\"\xd5\x01\n\x11GuestControlError\x12;\n\x04kind\x18\
-    \x01\x20\x01(\x0e2'.nixling.guest.v1.GuestControlErrorKindR\x04kind\x12E\
-    \n\x0bremediation\x18\x02\x20\x01(\x0e2#.nixling.guest.v1.HealthRemediat\
-    ionR\x0bremediation\x12)\n\x0eretry_after_ms\x18\x03\x20\x01(\x04H\0R\
-    \x0cretryAfterMs\x88\x01\x01B\x11\n\x0f_retry_after_ms*\x82\x03\n\x0fGue\
-    stCapability\x12\x20\n\x1cGUEST_CAPABILITY_UNSPECIFIED\x10\0\x12\x1b\n\
-    \x17GUEST_CAPABILITY_HEALTH\x10\x01\x12!\n\x1dGUEST_CAPABILITY_CAPABILIT\
-    IES\x10\x02\x12\"\n\x1eGUEST_CAPABILITY_EXEC_ATTACHED\x10\x03\x12\"\n\
-    \x1eGUEST_CAPABILITY_EXEC_DETACHED\x10\x04\x12\x1d\n\x19GUEST_CAPABILITY\
-    _EXEC_TTY\x10\x05\x12\x1e\n\x1aGUEST_CAPABILITY_EXEC_LOGS\x10\x06\x12\
-    \x1f\n\x1bGUEST_CAPABILITY_TTY_RESIZE\x10\x07\x12\x1c\n\x18GUEST_CAPABIL\
-    ITY_SIGNALS\x10\x08\x12$\n\x20GUEST_CAPABILITY_READ_GUEST_FILE\x10\t\x12\
-    !\n\x1dGUEST_CAPABILITY_USBIP_IMPORT\x10\n*\xf4\x01\n\x0eGuestSubsystem\
-    \x12\x1f\n\x1bGUEST_SUBSYSTEM_UNSPECIFIED\x10\0\x12\x1a\n\x16GUEST_SUBSY\
-    STEM_GUESTD\x10\x01\x12\x19\n\x15GUEST_SUBSYSTEM_USERD\x10\x02\x12\x18\n\
-    \x14GUEST_SUBSYSTEM_EXEC\x10\x03\x12\x1f\n\x1bGUEST_SUBSYSTEM_LOG_STORAG\
-    E\x10\x04\x12\x19\n\x15GUEST_SUBSYSTEM_TOKEN\x10\x05\x12\x19\n\x15GUEST_\
-    SUBSYSTEM_VSOCK\x10\x06\x12\x19\n\x15GUEST_SUBSYSTEM_USBIP\x10\x07*L\n\
-    \x0bGuestFileId\x12\x1d\n\x19GUEST_FILE_ID_UNSPECIFIED\x10\0\x12\x1e\n\
-    \x1aGUEST_FILE_ID_GUEST_CONFIG\x10\x01*x\n\x11UsbipImportAction\x12#\n\
-    \x1fUSBIP_IMPORT_ACTION_UNSPECIFIED\x10\0\x12\x1e\n\x1aUSBIP_IMPORT_ACTI\
-    ON_ATTACH\x10\x01\x12\x1e\n\x1aUSBIP_IMPORT_ACTION_DETACH\x10\x02*s\n\
-    \x0cHealthOrigin\x12\x1d\n\x19HEALTH_ORIGIN_UNSPECIFIED\x10\0\x12\x20\n\
-    \x1cHEALTH_ORIGIN_GUEST_REPORTED\x10\x01\x12\"\n\x1eHEALTH_ORIGIN_HOST_S\
-    YNTHESIZED\x10\x02*\xb9\x02\n\x0bHealthState\x12\x1c\n\x18HEALTH_STATE_U\
-    NSPECIFIED\x10\0\x12\x18\n\x14HEALTH_STATE_HEALTHY\x10\x01\x12\x19\n\x15\
-    HEALTH_STATE_DEGRADED\x10\x02\x12+\n'HEALTH_STATE_UNAVAILABLE_OLD_GENERA\
-    TION\x10\x03\x12\x20\n\x1cHEALTH_STATE_LISTENER_ABSENT\x10\x04\x12&\n\"H\
-    EALTH_STATE_TRANSPORT_UNREACHABLE\x10\x05\x12\x1c\n\x18HEALTH_STATE_AUTH\
-    _FAILED\x10\x06\x12\"\n\x1eHEALTH_STATE_PROTOCOL_MISMATCH\x10\x07\x12\
-    \x1e\n\x1aHEALTH_STATE_STALE_SESSION\x10\x08*\xa4\x05\n\x0cHealthReason\
-    \x12\x1d\n\x19HEALTH_REASON_UNSPECIFIED\x10\0\x12\x16\n\x12HEALTH_REASON\
-    _NONE\x10\x01\x12\x20\n\x1cHEALTH_REASON_OLD_GENERATION\x10\x02\x12!\n\
-    \x1dHEALTH_REASON_LISTENER_ABSENT\x10\x03\x12!\n\x1dHEALTH_REASON_CONNEC\
-    T_REFUSED\x10\x04\x12!\n\x1dHEALTH_REASON_CONNECT_TIMEOUT\x10\x05\x12\
-    \x20\n\x1cHEALTH_REASON_EOF_BEFORE_ACK\x10\x06\x12\x1f\n\x1bHEALTH_REASO\
-    N_MALFORMED_ACK\x10\x07\x12\x1e\n\x1aHEALTH_REASON_ACK_TOO_LONG\x10\x08\
-    \x12\x1e\n\x1aHEALTH_REASON_TRANSPORT_IO\x10\t\x12%\n!HEALTH_REASON_AUTH\
-    _TOKEN_REJECTED\x10\n\x12.\n*HEALTH_REASON_PROTOCOL_VERSION_UNSUPPORTED\
-    \x10\x0b\x12-\n)HEALTH_REASON_SESSION_GENERATION_MISMATCH\x10\x0c\x12,\n\
-    (HEALTH_REASON_EXEC_SUBSYSTEM_UNAVAILABLE\x10\r\x12)\n%HEALTH_REASON_LOG\
-    _STORAGE_UNAVAILABLE\x10\x0e\x12\x20\n\x1cHEALTH_REASON_QUOTA_EXCEEDED\
-    \x10\x0f\x12\x1e\n\x1aHEALTH_REASON_RATE_LIMITED\x10\x10\x12.\n*HEALTH_R\
-    EASON_INTERNAL_HEALTH_CHECK_FAILED\x10\x11*\xe0\x02\n\x11HealthRemediati\
-    on\x12\"\n\x1eHEALTH_REMEDIATION_UNSPECIFIED\x10\0\x12\x1b\n\x17HEALTH_R\
-    EMEDIATION_NONE\x10\x01\x12\x1c\n\x18HEALTH_REMEDIATION_RETRY\x10\x02\
-    \x12!\n\x1dHEALTH_REMEDIATION_RESTART_VM\x10\x03\x12$\n\x20HEALTH_REMEDI\
-    ATION_UPGRADE_GUEST\x10\x04\x12'\n#HEALTH_REMEDIATION_CHECK_AUTH_TOKEN\
-    \x10\x05\x12+\n'HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE\x10\x06\x12\"\n\
-    \x1eHEALTH_REMEDIATION_REDUCE_LOAD\x10\x07\x12)\n%HEALTH_REMEDIATION_INS\
-    PECT_GUEST_LOGS\x10\x08*a\n\x0cOutputStream\x12\x1d\n\x19OUTPUT_STREAM_U\
-    NSPECIFIED\x10\0\x12\x18\n\x14OUTPUT_STREAM_STDOUT\x10\x01\x12\x18\n\x14\
-    OUTPUT_STREAM_STDERR\x10\x02*\x96\x01\n\x10WriteDisposition\x12!\n\x1dWR\
-    ITE_DISPOSITION_UNSPECIFIED\x10\0\x12\x1e\n\x1aWRITE_DISPOSITION_ACCEPTE\
-    D\x10\x01\x12\x1f\n\x1bWRITE_DISPOSITION_DUPLICATE\x10\x02\x12\x1e\n\x1a\
-    WRITE_DISPOSITION_REJECTED\x10\x03*\x9b\x02\n\tExecState\x12\x1a\n\x16EX\
-    EC_STATE_UNSPECIFIED\x10\0\x12\x16\n\x12EXEC_STATE_CREATED\x10\x01\x12\
-    \x16\n\x12EXEC_STATE_RUNNING\x10\x02\x12\x15\n\x11EXEC_STATE_EXITED\x10\
-    \x03\x12\x17\n\x13EXEC_STATE_SIGNALED\x10\x04\x12\x18\n\x14EXEC_STATE_CA\
-    NCELLED\x10\x05\x12&\n\"EXEC_STATE_SLOW_CONSUMER_CANCELLED\x10\x06\x12\
-    \x1d\n\x19EXEC_STATE_PROTOCOL_ERROR\x10\x07\x12\x1a\n\x16EXEC_STATE_LOST\
-    _GUESTD\x10\x08\x12\x15\n\x11EXEC_STATE_REAPED\x10\t*\xbd\x01\n\nStdinSt\
-    ate\x12\x1b\n\x17STDIN_STATE_UNSPECIFIED\x10\0\x12\x14\n\x10STDIN_STATE_\
-    OPEN\x10\x01\x12\x17\n\x13STDIN_STATE_CLOSING\x10\x02\x12\x16\n\x12STDIN\
-    _STATE_CLOSED\x10\x03\x12!\n\x1dSTDIN_STATE_CLOSED_BY_PROCESS\x10\x04\
-    \x12(\n$STDIN_STATE_REJECTED_NOT_INTERACTIVE\x10\x05*y\n\x0cSignalTarget\
-    \x12\x1d\n\x19SIGNAL_TARGET_UNSPECIFIED\x10\0\x12*\n&SIGNAL_TARGET_FOREG\
-    ROUND_PROCESS_GROUP\x10\x01\x12\x1e\n\x1aSIGNAL_TARGET_PROCESS_TREE\x10\
-    \x02*\xd4\x01\n\x10ExecCancelReason\x12\"\n\x1eEXEC_CANCEL_REASON_UNSPEC\
-    IFIED\x10\0\x12(\n$EXEC_CANCEL_REASON_CLIENT_DISCONNECT\x10\x01\x12%\n!E\
-    XEC_CANCEL_REASON_USER_REQUESTED\x10\x02\x12$\n\x20EXEC_CANCEL_REASON_SL\
-    OW_CONSUMER\x10\x03\x12%\n!EXEC_CANCEL_REASON_PROTOCOL_ERROR\x10\x04*\
-    \x98\x12\n\x15GuestControlErrorKind\x12(\n$GUEST_CONTROL_ERROR_KIND_UNSP\
-    ECIFIED\x10\0\x12+\n'GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR\x10\x01\x12\
-    /\n+GUEST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED\x10\x02\x12/\n+GUEST_CON\
-    TROL_ERROR_KIND_STDIN_BACKPRESSURE\x10\x03\x12)\n%GUEST_CONTROL_ERROR_KI\
-    ND_STDIN_CLOSED\x10\x04\x12+\n'GUEST_CONTROL_ERROR_KIND_STDIN_NOT_OPEN\
-    \x10\x05\x124\n0GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED_BY_PROCESS\x10\x06\
-    \x122\n.GUEST_CONTROL_ERROR_KIND_STDIN_OFFSET_MISMATCH\x10\x07\x128\n4GU\
-    EST_CONTROL_ERROR_KIND_STDIN_BYTE_BUDGET_EXHAUSTED\x10\x08\x12+\n'GUEST_\
-    CONTROL_ERROR_KIND_OFFSET_EXPIRED\x10\t\x12-\n)GUEST_CONTROL_ERROR_KIND_\
-    OFFSET_IN_FUTURE\x10\n\x12-\n)GUEST_CONTROL_ERROR_KIND_OFFSET_EXHAUSTED\
-    \x10\x0b\x12(\n$GUEST_CONTROL_ERROR_KIND_OUTPUT_LOST\x10\x0c\x123\n/GUES\
-    T_CONTROL_ERROR_KIND_TTY_STDERR_UNAVAILABLE\x10\r\x12)\n%GUEST_CONTROL_E\
-    RROR_KIND_TTY_REQUIRED\x10\x0e\x123\n/GUEST_CONTROL_ERROR_KIND_EXEC_CAPA\
-    CITY_EXCEEDED\x10\x0f\x12:\n6GUEST_CONTROL_ERROR_KIND_EXEC_ATTACH_CAPACI\
-    TY_EXCEEDED\x10\x10\x12+\n'GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND\x10\
-    \x11\x120\n,GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_EXITED\x10\x12\x120\n,\
-    GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_DISABLED\x10\x13\x123\n/GUEST_CONTRO\
-    L_ERROR_KIND_GUEST_EXEC_ROOT_DENIED\x10\x14\x123\n/GUEST_CONTROL_ERROR_K\
-    IND_GUEST_EXEC_USER_DENIED\x10\x15\x12(\n$GUEST_CONTROL_ERROR_KIND_CWD_I\
-    NVALID\x10\x16\x12'\n#GUEST_CONTROL_ERROR_KIND_CWD_DENIED\x10\x17\x125\n\
-    1GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_PATH_UNSAFE\x10\x18\x128\n4GUEST_\
-    CONTROL_ERROR_KIND_RETAINED_LOG_QUOTA_EXCEEDED\x10\x19\x128\n4GUEST_CONT\
-    ROL_ERROR_KIND_READ_WAIT_CAPACITY_EXCEEDED\x10\x1a\x123\n/GUEST_CONTROL_\
-    ERROR_KIND_WAIT_CAPACITY_EXCEEDED\x10\x1b\x121\n-GUEST_CONTROL_ERROR_KIN\
-    D_SUPERSEDED_READ_WAIT\x10\x1c\x12)\n%GUEST_CONTROL_ERROR_KIND_RATE_LIMI\
-    TED\x10\x1d\x120\n,GUEST_CONTROL_ERROR_KIND_REQUEST_ID_CONFLICT\x10\x1e\
-    \x121\n-GUEST_CONTROL_ERROR_KIND_CONTROL_SEQ_MISMATCH\x10\x1f\x124\n0GUE\
-    ST_CONTROL_ERROR_KIND_SLOW_CONSUMER_CANCELLED\x10\x20\x12*\n&GUEST_CONTR\
-    OL_ERROR_KIND_STALE_SESSION\x10!\x12E\nAGUEST_CONTROL_ERROR_KIND_GUEST_C\
-    ONTROL_UNAVAILABLE_OLD_GENERATION\x10\"\x12(\n$GUEST_CONTROL_ERROR_KIND_\
-    AUTH_FAILED\x10#\x122\n.GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE\
-    \x10$\x12)\n%GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED\x10%\x12+\n'GUEST_CON\
-    TROL_ERROR_KIND_FILE_NOT_FOUND\x10&\x12+\n'GUEST_CONTROL_ERROR_KIND_FILE\
-    _TOO_LARGE\x10'\x12(\n$GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE\x10(\x12(\n$\
-    GUEST_CONTROL_ERROR_KIND_READ_DENIED\x10)\x12,\n(GUEST_CONTROL_ERROR_KIN\
-    D_INVALID_PROGRAM\x10*\x12.\n*GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE\
-    \x10+\x121\n-GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED\x10,\x121\n-G\
-    UEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID\x10-\x12/\n+GUEST_CONTROL_E\
-    RROR_KIND_USBIP_INVALID_HOST\x10.b\x06proto3\
+    \xf9\x01\n\x19TerminalWriteStdinRequest\x12E\n\x08metadata\x18\x01\x20\
+    \x01(\x0b2).nixling.guest.v1.TerminalRequestMetadataR\x08metadata\x12\
+    \x16\n\x06offset\x18\x02\x20\x01(\x04R\x06offset\x12\x12\n\x04data\x18\
+    \x03\x20\x01(\x0cR\x04data\x12\x1f\n\x0bclose_after\x18\x04\x20\x01(\x08\
+    R\ncloseAfter\x121\n\x12client_deadline_ms\x18\x05\x20\x01(\x04H\0R\x10c\
+    lientDeadlineMs\x88\x01\x01B\x15\n\x13_client_deadline_ms\"\xfe\x01\n\
+    \x19TerminalReadOutputRequest\x12E\n\x08metadata\x18\x01\x20\x01(\x0b2).\
+    nixling.guest.v1.TerminalRequestMetadataR\x08metadata\x126\n\x06stream\
+    \x18\x02\x20\x01(\x0e2\x1e.nixling.guest.v1.OutputStreamR\x06stream\x12\
+    \x16\n\x06offset\x18\x03\x20\x01(\x04R\x06offset\x12\x17\n\x07max_len\
+    \x18\x04\x20\x01(\x04R\x06maxLen\x12\x12\n\x04wait\x18\x05\x20\x01(\x08R\
+    \x04wait\x12\x1d\n\ntimeout_ms\x18\x06\x20\x01(\x04R\ttimeoutMs\"z\n\x19\
+    TerminalCloseStdinRequest\x12E\n\x08metadata\x18\x01\x20\x01(\x0b2).nixl\
+    ing.guest.v1.TerminalRequestMetadataR\x08metadata\x12\x16\n\x06offset\
+    \x18\x02\x20\x01(\x04R\x06offset\"\xad\x01\n\x1bTerminalTtyWinResizeRequ\
+    est\x12E\n\x08metadata\x18\x01\x20\x01(\x0b2).nixling.guest.v1.TerminalR\
+    equestMetadataR\x08metadata\x12\x1f\n\x0bcontrol_seq\x18\x02\x20\x01(\
+    \x04R\ncontrolSeq\x12\x12\n\x04rows\x18\x03\x20\x01(\rR\x04rows\x12\x12\
+    \n\x04cols\x18\x04\x20\x01(\rR\x04cols\"\xb8\x01\n\x0eTerminalStatus\x12\
+    \x1d\n\texit_code\x18\x01\x20\x01(\x05H\0R\x08exitCode\x12\x18\n\x06sign\
+    al\x18\x02\x20\x01(\rH\0R\x06signal\x12!\n\x0bstatus_code\x18\x03\x20\
+    \x01(\x05H\0R\nstatusCode\x12?\n\x05error\x18\x04\x20\x01(\x0e2'.nixling\
+    .guest.v1.GuestControlErrorKindH\0R\x05errorB\t\n\x07outcome\"\xd5\x01\n\
+    \x11GuestControlError\x12;\n\x04kind\x18\x01\x20\x01(\x0e2'.nixling.gues\
+    t.v1.GuestControlErrorKindR\x04kind\x12E\n\x0bremediation\x18\x02\x20\
+    \x01(\x0e2#.nixling.guest.v1.HealthRemediationR\x0bremediation\x12)\n\
+    \x0eretry_after_ms\x18\x03\x20\x01(\x04H\0R\x0cretryAfterMs\x88\x01\x01B\
+    \x11\n\x0f_retry_after_ms*\xf7\x03\n\x0fGuestCapability\x12\x20\n\x1cGUE\
+    ST_CAPABILITY_UNSPECIFIED\x10\0\x12\x1b\n\x17GUEST_CAPABILITY_HEALTH\x10\
+    \x01\x12!\n\x1dGUEST_CAPABILITY_CAPABILITIES\x10\x02\x12\"\n\x1eGUEST_CA\
+    PABILITY_EXEC_ATTACHED\x10\x03\x12\"\n\x1eGUEST_CAPABILITY_EXEC_DETACHED\
+    \x10\x04\x12\x1d\n\x19GUEST_CAPABILITY_EXEC_TTY\x10\x05\x12\x1e\n\x1aGUE\
+    ST_CAPABILITY_EXEC_LOGS\x10\x06\x12\x1f\n\x1bGUEST_CAPABILITY_TTY_RESIZE\
+    \x10\x07\x12\x1c\n\x18GUEST_CAPABILITY_SIGNALS\x10\x08\x12$\n\x20GUEST_C\
+    APABILITY_READ_GUEST_FILE\x10\t\x12!\n\x1dGUEST_CAPABILITY_USBIP_IMPORT\
+    \x10\n\x12#\n\x1fGUEST_CAPABILITY_SHELL_ATTACHED\x10\x0b\x12%\n!GUEST_CA\
+    PABILITY_SHELL_MANAGEMENT\x10\x0c\x12'\n#GUEST_CAPABILITY_SHELL_FORCE_AT\
+    TACH\x10\r*\xab\x02\n\x0eGuestSubsystem\x12\x1f\n\x1bGUEST_SUBSYSTEM_UNS\
+    PECIFIED\x10\0\x12\x1a\n\x16GUEST_SUBSYSTEM_GUESTD\x10\x01\x12\x19\n\x15\
+    GUEST_SUBSYSTEM_USERD\x10\x02\x12\x18\n\x14GUEST_SUBSYSTEM_EXEC\x10\x03\
+    \x12\x1f\n\x1bGUEST_SUBSYSTEM_LOG_STORAGE\x10\x04\x12\x19\n\x15GUEST_SUB\
+    SYSTEM_TOKEN\x10\x05\x12\x19\n\x15GUEST_SUBSYSTEM_VSOCK\x10\x06\x12\x19\
+    \n\x15GUEST_SUBSYSTEM_USBIP\x10\x07\x12\x19\n\x15GUEST_SUBSYSTEM_SHELL\
+    \x10\x08\x12\x1a\n\x16GUEST_SUBSYSTEM_SHPOOL\x10\t*^\n\x0cTerminalKind\
+    \x12\x1d\n\x19TERMINAL_KIND_UNSPECIFIED\x10\0\x12\x16\n\x12TERMINAL_KIND\
+    _EXEC\x10\x01\x12\x17\n\x13TERMINAL_KIND_SHELL\x10\x02*\xd5\x01\n\nShell\
+    State\x12\x1b\n\x17SHELL_STATE_UNSPECIFIED\x10\0\x12\x18\n\x14SHELL_STAT\
+    E_ATTACHED\x10\x01\x12\x18\n\x14SHELL_STATE_DETACHED\x10\x02\x12\x16\n\
+    \x12SHELL_STATE_KILLED\x10\x03\x12\x20\n\x1cSHELL_STATE_POOL_UNAVAILABLE\
+    \x10\x04\x12\x20\n\x1cSHELL_STATE_FEATURE_DISABLED\x10\x05\x12\x1a\n\x16\
+    SHELL_STATE_OUTPUT_GAP\x10\x06*\xa1\x02\n\x0fShellCloseCause\x12!\n\x1dS\
+    HELL_CLOSE_CAUSE_UNSPECIFIED\x10\0\x12#\n\x1fSHELL_CLOSE_CAUSE_CLIENT_DE\
+    TACH\x10\x01\x12&\n\"SHELL_CLOSE_CAUSE_EVICTED_BY_FORCE\x10\x02\x12-\n)S\
+    HELL_CLOSE_CAUSE_EVICTED_BY_ADMIN_DETACH\x10\x03\x12%\n!SHELL_CLOSE_CAUS\
+    E_KILLED_BY_ADMIN\x10\x04\x12&\n\"SHELL_CLOSE_CAUSE_POOL_UNAVAILABLE\x10\
+    \x05\x12\x20\n\x1cSHELL_CLOSE_CAUSE_OUTPUT_GAP\x10\x06*L\n\x0bGuestFileI\
+    d\x12\x1d\n\x19GUEST_FILE_ID_UNSPECIFIED\x10\0\x12\x1e\n\x1aGUEST_FILE_I\
+    D_GUEST_CONFIG\x10\x01*x\n\x11UsbipImportAction\x12#\n\x1fUSBIP_IMPORT_A\
+    CTION_UNSPECIFIED\x10\0\x12\x1e\n\x1aUSBIP_IMPORT_ACTION_ATTACH\x10\x01\
+    \x12\x1e\n\x1aUSBIP_IMPORT_ACTION_DETACH\x10\x02*s\n\x0cHealthOrigin\x12\
+    \x1d\n\x19HEALTH_ORIGIN_UNSPECIFIED\x10\0\x12\x20\n\x1cHEALTH_ORIGIN_GUE\
+    ST_REPORTED\x10\x01\x12\"\n\x1eHEALTH_ORIGIN_HOST_SYNTHESIZED\x10\x02*\
+    \xb9\x02\n\x0bHealthState\x12\x1c\n\x18HEALTH_STATE_UNSPECIFIED\x10\0\
+    \x12\x18\n\x14HEALTH_STATE_HEALTHY\x10\x01\x12\x19\n\x15HEALTH_STATE_DEG\
+    RADED\x10\x02\x12+\n'HEALTH_STATE_UNAVAILABLE_OLD_GENERATION\x10\x03\x12\
+    \x20\n\x1cHEALTH_STATE_LISTENER_ABSENT\x10\x04\x12&\n\"HEALTH_STATE_TRAN\
+    SPORT_UNREACHABLE\x10\x05\x12\x1c\n\x18HEALTH_STATE_AUTH_FAILED\x10\x06\
+    \x12\"\n\x1eHEALTH_STATE_PROTOCOL_MISMATCH\x10\x07\x12\x1e\n\x1aHEALTH_S\
+    TATE_STALE_SESSION\x10\x08*\xa4\x05\n\x0cHealthReason\x12\x1d\n\x19HEALT\
+    H_REASON_UNSPECIFIED\x10\0\x12\x16\n\x12HEALTH_REASON_NONE\x10\x01\x12\
+    \x20\n\x1cHEALTH_REASON_OLD_GENERATION\x10\x02\x12!\n\x1dHEALTH_REASON_L\
+    ISTENER_ABSENT\x10\x03\x12!\n\x1dHEALTH_REASON_CONNECT_REFUSED\x10\x04\
+    \x12!\n\x1dHEALTH_REASON_CONNECT_TIMEOUT\x10\x05\x12\x20\n\x1cHEALTH_REA\
+    SON_EOF_BEFORE_ACK\x10\x06\x12\x1f\n\x1bHEALTH_REASON_MALFORMED_ACK\x10\
+    \x07\x12\x1e\n\x1aHEALTH_REASON_ACK_TOO_LONG\x10\x08\x12\x1e\n\x1aHEALTH\
+    _REASON_TRANSPORT_IO\x10\t\x12%\n!HEALTH_REASON_AUTH_TOKEN_REJECTED\x10\
+    \n\x12.\n*HEALTH_REASON_PROTOCOL_VERSION_UNSUPPORTED\x10\x0b\x12-\n)HEAL\
+    TH_REASON_SESSION_GENERATION_MISMATCH\x10\x0c\x12,\n(HEALTH_REASON_EXEC_\
+    SUBSYSTEM_UNAVAILABLE\x10\r\x12)\n%HEALTH_REASON_LOG_STORAGE_UNAVAILABLE\
+    \x10\x0e\x12\x20\n\x1cHEALTH_REASON_QUOTA_EXCEEDED\x10\x0f\x12\x1e\n\x1a\
+    HEALTH_REASON_RATE_LIMITED\x10\x10\x12.\n*HEALTH_REASON_INTERNAL_HEALTH_\
+    CHECK_FAILED\x10\x11*\xe0\x02\n\x11HealthRemediation\x12\"\n\x1eHEALTH_R\
+    EMEDIATION_UNSPECIFIED\x10\0\x12\x1b\n\x17HEALTH_REMEDIATION_NONE\x10\
+    \x01\x12\x1c\n\x18HEALTH_REMEDIATION_RETRY\x10\x02\x12!\n\x1dHEALTH_REME\
+    DIATION_RESTART_VM\x10\x03\x12$\n\x20HEALTH_REMEDIATION_UPGRADE_GUEST\
+    \x10\x04\x12'\n#HEALTH_REMEDIATION_CHECK_AUTH_TOKEN\x10\x05\x12+\n'HEALT\
+    H_REMEDIATION_CHECK_GUESTD_SERVICE\x10\x06\x12\"\n\x1eHEALTH_REMEDIATION\
+    _REDUCE_LOAD\x10\x07\x12)\n%HEALTH_REMEDIATION_INSPECT_GUEST_LOGS\x10\
+    \x08*a\n\x0cOutputStream\x12\x1d\n\x19OUTPUT_STREAM_UNSPECIFIED\x10\0\
+    \x12\x18\n\x14OUTPUT_STREAM_STDOUT\x10\x01\x12\x18\n\x14OUTPUT_STREAM_ST\
+    DERR\x10\x02*\x96\x01\n\x10WriteDisposition\x12!\n\x1dWRITE_DISPOSITION_\
+    UNSPECIFIED\x10\0\x12\x1e\n\x1aWRITE_DISPOSITION_ACCEPTED\x10\x01\x12\
+    \x1f\n\x1bWRITE_DISPOSITION_DUPLICATE\x10\x02\x12\x1e\n\x1aWRITE_DISPOSI\
+    TION_REJECTED\x10\x03*\x9b\x02\n\tExecState\x12\x1a\n\x16EXEC_STATE_UNSP\
+    ECIFIED\x10\0\x12\x16\n\x12EXEC_STATE_CREATED\x10\x01\x12\x16\n\x12EXEC_\
+    STATE_RUNNING\x10\x02\x12\x15\n\x11EXEC_STATE_EXITED\x10\x03\x12\x17\n\
+    \x13EXEC_STATE_SIGNALED\x10\x04\x12\x18\n\x14EXEC_STATE_CANCELLED\x10\
+    \x05\x12&\n\"EXEC_STATE_SLOW_CONSUMER_CANCELLED\x10\x06\x12\x1d\n\x19EXE\
+    C_STATE_PROTOCOL_ERROR\x10\x07\x12\x1a\n\x16EXEC_STATE_LOST_GUESTD\x10\
+    \x08\x12\x15\n\x11EXEC_STATE_REAPED\x10\t*\xbd\x01\n\nStdinState\x12\x1b\
+    \n\x17STDIN_STATE_UNSPECIFIED\x10\0\x12\x14\n\x10STDIN_STATE_OPEN\x10\
+    \x01\x12\x17\n\x13STDIN_STATE_CLOSING\x10\x02\x12\x16\n\x12STDIN_STATE_C\
+    LOSED\x10\x03\x12!\n\x1dSTDIN_STATE_CLOSED_BY_PROCESS\x10\x04\x12(\n$STD\
+    IN_STATE_REJECTED_NOT_INTERACTIVE\x10\x05*y\n\x0cSignalTarget\x12\x1d\n\
+    \x19SIGNAL_TARGET_UNSPECIFIED\x10\0\x12*\n&SIGNAL_TARGET_FOREGROUND_PROC\
+    ESS_GROUP\x10\x01\x12\x1e\n\x1aSIGNAL_TARGET_PROCESS_TREE\x10\x02*\xd4\
+    \x01\n\x10ExecCancelReason\x12\"\n\x1eEXEC_CANCEL_REASON_UNSPECIFIED\x10\
+    \0\x12(\n$EXEC_CANCEL_REASON_CLIENT_DISCONNECT\x10\x01\x12%\n!EXEC_CANCE\
+    L_REASON_USER_REQUESTED\x10\x02\x12$\n\x20EXEC_CANCEL_REASON_SLOW_CONSUM\
+    ER\x10\x03\x12%\n!EXEC_CANCEL_REASON_PROTOCOL_ERROR\x10\x04*\xf0\x15\n\
+    \x15GuestControlErrorKind\x12(\n$GUEST_CONTROL_ERROR_KIND_UNSPECIFIED\
+    \x10\0\x12+\n'GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR\x10\x01\x12/\n+GUE\
+    ST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED\x10\x02\x12/\n+GUEST_CONTROL_ER\
+    ROR_KIND_STDIN_BACKPRESSURE\x10\x03\x12)\n%GUEST_CONTROL_ERROR_KIND_STDI\
+    N_CLOSED\x10\x04\x12+\n'GUEST_CONTROL_ERROR_KIND_STDIN_NOT_OPEN\x10\x05\
+    \x124\n0GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED_BY_PROCESS\x10\x06\x122\n.\
+    GUEST_CONTROL_ERROR_KIND_STDIN_OFFSET_MISMATCH\x10\x07\x128\n4GUEST_CONT\
+    ROL_ERROR_KIND_STDIN_BYTE_BUDGET_EXHAUSTED\x10\x08\x12+\n'GUEST_CONTROL_\
+    ERROR_KIND_OFFSET_EXPIRED\x10\t\x12-\n)GUEST_CONTROL_ERROR_KIND_OFFSET_I\
+    N_FUTURE\x10\n\x12-\n)GUEST_CONTROL_ERROR_KIND_OFFSET_EXHAUSTED\x10\x0b\
+    \x12(\n$GUEST_CONTROL_ERROR_KIND_OUTPUT_LOST\x10\x0c\x123\n/GUEST_CONTRO\
+    L_ERROR_KIND_TTY_STDERR_UNAVAILABLE\x10\r\x12)\n%GUEST_CONTROL_ERROR_KIN\
+    D_TTY_REQUIRED\x10\x0e\x123\n/GUEST_CONTROL_ERROR_KIND_EXEC_CAPACITY_EXC\
+    EEDED\x10\x0f\x12:\n6GUEST_CONTROL_ERROR_KIND_EXEC_ATTACH_CAPACITY_EXCEE\
+    DED\x10\x10\x12+\n'GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND\x10\x11\x120\
+    \n,GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_EXITED\x10\x12\x120\n,GUEST_CON\
+    TROL_ERROR_KIND_GUEST_EXEC_DISABLED\x10\x13\x123\n/GUEST_CONTROL_ERROR_K\
+    IND_GUEST_EXEC_ROOT_DENIED\x10\x14\x123\n/GUEST_CONTROL_ERROR_KIND_GUEST\
+    _EXEC_USER_DENIED\x10\x15\x12(\n$GUEST_CONTROL_ERROR_KIND_CWD_INVALID\
+    \x10\x16\x12'\n#GUEST_CONTROL_ERROR_KIND_CWD_DENIED\x10\x17\x125\n1GUEST\
+    _CONTROL_ERROR_KIND_RETAINED_LOG_PATH_UNSAFE\x10\x18\x128\n4GUEST_CONTRO\
+    L_ERROR_KIND_RETAINED_LOG_QUOTA_EXCEEDED\x10\x19\x128\n4GUEST_CONTROL_ER\
+    ROR_KIND_READ_WAIT_CAPACITY_EXCEEDED\x10\x1a\x123\n/GUEST_CONTROL_ERROR_\
+    KIND_WAIT_CAPACITY_EXCEEDED\x10\x1b\x121\n-GUEST_CONTROL_ERROR_KIND_SUPE\
+    RSEDED_READ_WAIT\x10\x1c\x12)\n%GUEST_CONTROL_ERROR_KIND_RATE_LIMITED\
+    \x10\x1d\x120\n,GUEST_CONTROL_ERROR_KIND_REQUEST_ID_CONFLICT\x10\x1e\x12\
+    1\n-GUEST_CONTROL_ERROR_KIND_CONTROL_SEQ_MISMATCH\x10\x1f\x124\n0GUEST_C\
+    ONTROL_ERROR_KIND_SLOW_CONSUMER_CANCELLED\x10\x20\x12*\n&GUEST_CONTROL_E\
+    RROR_KIND_STALE_SESSION\x10!\x12E\nAGUEST_CONTROL_ERROR_KIND_GUEST_CONTR\
+    OL_UNAVAILABLE_OLD_GENERATION\x10\"\x12(\n$GUEST_CONTROL_ERROR_KIND_AUTH\
+    _FAILED\x10#\x122\n.GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE\x10$\
+    \x12)\n%GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED\x10%\x12+\n'GUEST_CONTROL_\
+    ERROR_KIND_FILE_NOT_FOUND\x10&\x12+\n'GUEST_CONTROL_ERROR_KIND_FILE_TOO_\
+    LARGE\x10'\x12(\n$GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE\x10(\x12(\n$GUEST\
+    _CONTROL_ERROR_KIND_READ_DENIED\x10)\x12,\n(GUEST_CONTROL_ERROR_KIND_INV\
+    ALID_PROGRAM\x10*\x12.\n*GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE\x10+\
+    \x121\n-GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED\x10,\x121\n-GUEST_\
+    CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID\x10-\x12/\n+GUEST_CONTROL_ERROR_\
+    KIND_USBIP_INVALID_HOST\x10.\x121\n-GUEST_CONTROL_ERROR_KIND_GUEST_SHELL\
+    _DISABLED\x10/\x12/\n+GUEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME\x100\
+    \x124\n0GUEST_CONTROL_ERROR_KIND_SHELL_CAPACITY_EXCEEDED\x101\x12;\n7GUE\
+    ST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED\x102\x12,\n(GUEST_C\
+    ONTROL_ERROR_KIND_SHELL_NOT_FOUND\x103\x123\n/GUEST_CONTROL_ERROR_KIND_S\
+    HELL_ALREADY_ATTACHED\x104\x123\n/GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UN\
+    AVAILABLE\x105\x128\n4GUEST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMAT\
+    CH\x106\x12-\n)GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP\x107b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -9961,9 +12943,10 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
     file_descriptor.get(|| {
         let generated_file_descriptor = generated_file_descriptor_lazy.get(|| {
             let mut deps = ::std::vec::Vec::with_capacity(0);
-            let mut messages = ::std::vec::Vec::with_capacity(41);
+            let mut messages = ::std::vec::Vec::with_capacity(56);
             messages.push(RequestMetadata::generated_message_descriptor_data());
             messages.push(ExecRequestMetadata::generated_message_descriptor_data());
+            messages.push(TerminalRequestMetadata::generated_message_descriptor_data());
             messages.push(HelloRequest::generated_message_descriptor_data());
             messages.push(HelloResponse::generated_message_descriptor_data());
             messages.push(AuthenticateRequest::generated_message_descriptor_data());
@@ -10001,11 +12984,28 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             messages.push(ReadGuestFileResponse::generated_message_descriptor_data());
             messages.push(UsbipImportRequest::generated_message_descriptor_data());
             messages.push(UsbipImportResponse::generated_message_descriptor_data());
+            messages.push(ShellAttachRequest::generated_message_descriptor_data());
+            messages.push(ShellAttachResponse::generated_message_descriptor_data());
+            messages.push(ShellListRequest::generated_message_descriptor_data());
+            messages.push(ShellListResponse::generated_message_descriptor_data());
+            messages.push(ShellListEntry::generated_message_descriptor_data());
+            messages.push(ShellDetachRequest::generated_message_descriptor_data());
+            messages.push(ShellKillRequest::generated_message_descriptor_data());
+            messages.push(ShellCloseAttachRequest::generated_message_descriptor_data());
+            messages.push(ShellDetachResponse::generated_message_descriptor_data());
+            messages.push(ShellKillResponse::generated_message_descriptor_data());
+            messages.push(TerminalWriteStdinRequest::generated_message_descriptor_data());
+            messages.push(TerminalReadOutputRequest::generated_message_descriptor_data());
+            messages.push(TerminalCloseStdinRequest::generated_message_descriptor_data());
+            messages.push(TerminalTtyWinResizeRequest::generated_message_descriptor_data());
             messages.push(TerminalStatus::generated_message_descriptor_data());
             messages.push(GuestControlError::generated_message_descriptor_data());
-            let mut enums = ::std::vec::Vec::with_capacity(15);
+            let mut enums = ::std::vec::Vec::with_capacity(18);
             enums.push(GuestCapability::generated_enum_descriptor_data());
             enums.push(GuestSubsystem::generated_enum_descriptor_data());
+            enums.push(TerminalKind::generated_enum_descriptor_data());
+            enums.push(ShellState::generated_enum_descriptor_data());
+            enums.push(ShellCloseCause::generated_enum_descriptor_data());
             enums.push(GuestFileId::generated_enum_descriptor_data());
             enums.push(UsbipImportAction::generated_enum_descriptor_data());
             enums.push(HealthOrigin::generated_enum_descriptor_data());

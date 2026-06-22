@@ -9,6 +9,7 @@
 let
   qemuMediaRefType = lib.types.strMatching "^[a-z][a-z0-9-]{0,62}$";
   qemuMediaByIdNameType = lib.types.strMatching "^[A-Za-z0-9._:+-]{1,255}$";
+  shellNameType = lib.types.strMatching "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$";
 
   qemuMediaSourceType = lib.types.submodule {
     freeformType = null;
@@ -148,6 +149,42 @@ in
           '';
         };
 
+        ui.border = {
+          activeColor = lib.mkOption {
+            type = lib.types.nullOr (lib.types.strMatching "^#[0-9a-fA-F]{6}$");
+            default = null;
+            example = "#7fc8ff";
+            description = ''
+              Optional compositor-agnostic active border color for this VM,
+              as a six-digit CSS hex color (`#rrggbb`). When null, nixling
+              uses the legacy niri-specific color if set, otherwise a
+              deterministic color derived from the VM name.
+            '';
+          };
+
+          inactiveColor = lib.mkOption {
+            type = lib.types.nullOr (lib.types.strMatching "^#[0-9a-fA-F]{6}$");
+            default = null;
+            example = "#7fc8ff";
+            description = ''
+              Optional compositor-agnostic inactive border color for this VM.
+              When null, nixling resolves it to the VM's active border color so
+              identity coloring remains visible even when the window is not
+              focused.
+            '';
+          };
+
+          urgentColor = lib.mkOption {
+            type = lib.types.nullOr (lib.types.strMatching "^#[0-9a-fA-F]{6}$");
+            default = null;
+            example = "#f38ba8";
+            description = ''
+              Optional compositor-agnostic urgent border color for this VM.
+              When null, nixling resolves it to the VM's active border color.
+            '';
+          };
+        };
+
         qemuMedia = lib.mkOption {
           type = lib.types.submodule {
             freeformType = null;
@@ -283,15 +320,15 @@ in
                       default = null;
                       example = "#800080";
                       description = ''
-                        Active border color for this qemu-media VM's host QEMU
-                        window in the niri compositor, as a six-digit CSS hex
-                        color (`#rrggbb`). Used only when
-                        `nixling.site.niriVmBorders.enable = true`.
+                        Deprecated compatibility input for this qemu-media
+                        VM's host-window active border color in the niri
+                        compositor, as a six-digit CSS hex color (`#rrggbb`).
+                        Use `nixling.vms.<vm>.ui.border.activeColor` instead.
 
                         Set to `null` (the default) to use the deterministic
                         palette color derived from the VM name. When set, the
-                        value is placed verbatim into the generated KDL
-                        `active-color` field for the host QEMU window rule.
+                        value feeds the generic UI color resolver as a
+                        one-release compatibility path.
                       '';
                     };
                   };
@@ -604,9 +641,9 @@ in
           default = null;
           example = "#7fc8ff";
           description = ''
-            Active border color for this VM's windows in the niri
-            compositor, as a six-digit CSS hex color (`#rrggbb`).
-            Used only when `nixling.site.niriVmBorders.enable = true`.
+            Deprecated compatibility input for this VM's active border color
+            in the niri compositor, as a six-digit CSS hex color (`#rrggbb`).
+            Use `nixling.vms.<vm>.ui.border.activeColor` instead.
 
             Set to `null` (the default) to use the deterministic
             palette color derived from the VM name — each VM name
@@ -614,12 +651,8 @@ in
             works without any per-VM configuration.
 
             When set, must be a valid six-digit hex color starting
-            with `#`.  The value is placed verbatim into the
-            generated KDL `active-color` field for this VM.
-
-            The inactive border color is always `#505050` and is not
-            configurable here; configure it directly in your niri
-            config if you need a different inactive color.
+            with `#`. The value feeds the generic UI color resolver as a
+            one-release compatibility path.
           '';
         };
 
@@ -1023,6 +1056,55 @@ in
               This ceiling applies only to interactive `tty = true`,
               non-detached execs. Non-interactive attached execs keep their
               fixed built-in runtime ceiling regardless of this value.
+            '';
+          };
+        };
+
+        guest.shell = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              Enable the staged persistent guest-shell contract for this VM.
+
+              Persistent shells use the authenticated guest-control plane and the
+              same workload-user terminal substrate as guest exec. The option is
+              default-off and requires `guest.control.enable = true`,
+              `guest.exec.enable = true`, and a non-root workload user
+              (`ssh.user`). Runtime shpool attachment is staged separately; this
+              option currently carries the host/guest policy and manifest
+              contract used by runtime implementations.
+            '';
+          };
+
+          defaultName = lib.mkOption {
+            type = shellNameType;
+            default = "default";
+            example = "default";
+            description = ''
+              Default persistent shell session name used when an attach/detach
+              request omits `--name`. The identifier is 1–64 ASCII bytes, starts
+              with `[A-Za-z0-9_]`, and then allows `[A-Za-z0-9._-]`.
+            '';
+          };
+
+          maxSessions = lib.mkOption {
+            type = lib.types.ints.between 1 256;
+            default = 8;
+            example = 16;
+            description = ''
+              Maximum number of persistent shell sessions tracked for this VM,
+              including detached and attached sessions.
+            '';
+          };
+
+          maxAttached = lib.mkOption {
+            type = lib.types.ints.between 1 64;
+            default = 1;
+            example = 2;
+            description = ''
+              Maximum number of concurrently attached persistent shell clients
+              for this VM. This is bounded independently from `maxSessions`.
             '';
           };
         };

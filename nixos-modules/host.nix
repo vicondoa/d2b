@@ -300,6 +300,12 @@ in
                 detachedMaxRuntimeSec = lib.mkForce vm'.guest.exec.detachedMaxRuntimeSec;
                 interactiveMaxRuntimeSec = lib.mkForce vm'.guest.exec.interactiveMaxRuntimeSec;
               };
+              nixling.guestControl.shell = {
+                enable = lib.mkForce vm'.guest.shell.enable;
+                defaultName = lib.mkForce vm'.guest.shell.defaultName;
+                maxSessions = lib.mkForce vm'.guest.shell.maxSessions;
+                maxAttached = lib.mkForce vm'.guest.shell.maxAttached;
+              };
             }
             # Per-VM framework-managed shares moved from store.nix to
             # break the module-system infinite

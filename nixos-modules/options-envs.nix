@@ -63,6 +63,18 @@
 
         lan.allowEastWest = lib.mkEnableOption "east-west traffic between workload VMs in this env (default: isolated; also requires nixling.site.allowUnsafeEastWest = true)";
 
+        ui.accentColor = lib.mkOption {
+          type = lib.types.nullOr (lib.types.strMatching "^#[0-9a-fA-F]{6}$");
+          default = null;
+          example = "#ffa500";
+          description = ''
+            Optional compositor-agnostic accent color for this nixling env,
+            as a six-digit CSS hex color (`#rrggbb`). When null, nixling
+            derives a deterministic color from the env name. Resolved UI
+            color artifacts normalize the value to lowercase.
+          '';
+        };
+
         netName = lib.mkOption {
           type = lib.types.str;
           default = "sys-${name}-net";
