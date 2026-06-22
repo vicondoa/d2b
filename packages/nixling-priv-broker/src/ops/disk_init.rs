@@ -575,7 +575,6 @@ mod tests {
     use super::*;
     use nixling_core::bundle_resolver::ResolvedDiskInitOp;
     use std::fs;
-    use std::io::Write;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::path::PathBuf;
 
@@ -605,16 +604,15 @@ mod tests {
 
     fn fake_mkfs_tool(scratch: &Path) -> MkfsTool {
         let script = scratch.join("fake-mkfs-ext4");
-        let mut file = fs::File::create(&script).unwrap();
-        writeln!(
-            file,
+        fs::write(
+            &script,
+            format!(
             "#!/bin/sh\nlast=\"\"\nfor arg in \"$@\"; do last=\"$arg\"; done\nprintf '\\123\\357' | dd of=\"$last\" bs=1 seek={} conv=notrunc >/dev/null 2>&1\n",
             EXT4_MAGIC_OFFSET
+            ),
         )
         .unwrap();
-        drop(file);
-        let file = fs::File::open(&script).unwrap();
-        let mut perms = file.metadata().unwrap().permissions();
+        let mut perms = fs::metadata(&script).unwrap().permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&script, perms).unwrap();
         MkfsTool {
@@ -625,11 +623,12 @@ mod tests {
 
     fn failing_mkfs_tool(scratch: &Path, stderr: &str) -> MkfsTool {
         let script = scratch.join("failing-mkfs-ext4");
-        let mut file = fs::File::create(&script).unwrap();
-        writeln!(file, "#!/bin/sh\nprintf '%s' {:?} >&2\nexit 9\n", stderr).unwrap();
-        drop(file);
-        let file = fs::File::open(&script).unwrap();
-        let mut perms = file.metadata().unwrap().permissions();
+        fs::write(
+            &script,
+            format!("#!/bin/sh\nprintf '%s' {:?} >&2\nexit 9\n", stderr),
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&script).unwrap().permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&script, perms).unwrap();
         MkfsTool {

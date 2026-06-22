@@ -9,6 +9,7 @@ pub mod exec_pty;
 pub mod generated;
 pub mod login_session;
 pub mod service;
+pub mod shell;
 pub mod terminal_io;
 
 use nixling_ipc::guest_wire::{

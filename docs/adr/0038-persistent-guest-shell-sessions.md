@@ -165,29 +165,37 @@ helper stdout, stderr, and log streams before buffering or parsing them.
 
 The long-lived shpool daemon runs as the VM workload user, not root. It is a
 dormant declarative guest NixOS systemd service, started/adopted/stopped by
-guestd on demand. The daemon service owns the login-like environment for
+guestd on demand. The daemon service owns the workload-user environment for
 persistent shells and uses a custom PAM service:
 
 ```nix
 security.pam.services.nixling-shpool-daemon = {
-  startSession = true;
+  startSession = false;
   setEnvironment = true;
   setLoginUid = true;
 };
 ```
 
 The daemon service sets `serviceConfig.User = <workload-user>` and
-`serviceConfig.PAMName = "nixling-shpool-daemon"`. systemd, running as the
-dynamic root service manager, owns PAM module loading, logind session
-registration, and loginuid setup before executing the fully static helper as the
-workload user. The static helper never invokes PAM itself.
+`serviceConfig.PAMName = "nixling-shpool-daemon"`. The PAM service deliberately
+does not start a `pam_systemd` session: session creation would migrate the daemon
+out of the delegated system service cgroup and make service-cgroup teardown
+unreliable. systemd, running as the dynamic root service manager, owns PAM module
+loading and loginuid setup before executing the fully static helper as the
+workload user. Because `pam_systemd` is not creating the environment block, the service
+`ExecStart` runs a small workload-user shell wrapper that derives the effective
+UID with `id -u`, reads the workload user's `HOME`, exports
+`XDG_RUNTIME_DIR=/run/user/<uid>` and
+`DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus`, then `exec`s the daemon
+helper. The static helper never invokes PAM itself.
 guestd does not treat `systemctl start` completion as socket readiness; after
 starting or adopting the daemon service, it performs bounded workload-UID
 readiness probes before spawning attach or management helpers.
 
 The guest module also enables workload-user linger while `guest.shell.enable`
-is true, so `/run/user/<uid>`, the user manager, and session resources can
-outlive attached clients. The daemon uses `/run/user/<uid>` as
+is true, so `/run/user/<uid>` and the user manager can outlive attached clients
+without moving the daemon out of its service cgroup. The daemon uses
+`/run/user/<uid>` as
 `XDG_RUNTIME_DIR`, and the shpool socket is a filesystem-backed UNIX socket under
 that permissioned runtime directory. Abstract namespace sockets are rejected.
 shpool's command-less attach path must spawn the workload shell as a login shell,
