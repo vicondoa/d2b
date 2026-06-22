@@ -57,6 +57,17 @@ let
         users.users.alice = { isNormalUser = true; uid = 1000; };
       };
     };
+    nixling.vms."work-aad" = {
+      enable = true;
+      env = "work";
+      index = 13;
+      ssh.user = "alice";
+      ui.border.activeColor = "#FFA500";
+      config = {
+        networking.hostName = lib.mkDefault "work-aad";
+        users.users.alice = { isNormalUser = true; uid = 1000; };
+      };
+    };
     nixling.vms.media = {
       runtime.kind = "qemu-media";
       env = "work";
@@ -143,12 +154,24 @@ in
     expr = builtins.hasAttr "accent" uiJson.envs.work;
     expected = true;
   };
-  "niri-vm-borders/ui-css-host-var" = {
-    expr = lib.hasInfix "--nixling-host-accent: #89b4fa;" uiCss;
+  "niri-vm-borders/ui-css-host-color" = {
+    expr = lib.hasInfix "@define-color nixling_host_accent #89b4fa;" uiCss;
     expected = true;
   };
-  "niri-vm-borders/ui-css-vm-var" = {
-    expr = lib.hasInfix "--nixling-vm-work-border-active: #ffa07a;" uiCss;
+  "niri-vm-borders/ui-css-state-color" = {
+    expr = lib.hasInfix "@define-color nixling_state_running #a6e3a1;" uiCss;
+    expected = true;
+  };
+  "niri-vm-borders/ui-css-env-color" = {
+    expr = lib.hasInfix "@define-color nixling_env_work_accent" uiCss;
+    expected = true;
+  };
+  "niri-vm-borders/ui-css-vm-color" = {
+    expr = lib.hasInfix "@define-color nixling_vm_work_border_active #ffa07a;" uiCss;
+    expected = true;
+  };
+  "niri-vm-borders/ui-css-hyphenated-vm-color" = {
+    expr = lib.hasInfix "@define-color nixling_vm_work_aad_border_active #ffa500;" uiCss;
     expected = true;
   };
   "niri-vm-borders/ui-json-mode" = {
