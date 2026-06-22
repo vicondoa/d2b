@@ -24,6 +24,10 @@ deprecations ship one minor release before removal.
 - Persistent shell contracts: added staged default-off shell option, manifest,
   public/guest-control wire, and authz contract scaffolding for later runtime
   wiring.
+- Test orchestration: added a central Layer-1 job manifest that drives local
+  `make check`, renders the PR workflow, and adds a stable `check` CI rollup so
+  branch protection can require one context while generated job names remain
+  implementation details.
 - Guest-control internals: started extracting the shared terminal substrate used
   by interactive exec, with compatibility DTO conversions and redaction tests for
   future interactive-terminal reuse.

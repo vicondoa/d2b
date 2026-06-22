@@ -108,6 +108,20 @@ tests/
 Types 2–5 (unit/integration/contract/policy-lint) are Rust and live under
 `packages/`, not here.
 
+## Layer-1 orchestration manifest
+
+`tests/layer1-jobs.json` is the source of truth for the Layer-1 PR/local gate
+graph. Edit it when changing which `make test-*` targets belong to the
+PR-equivalent gate, then run `make layer1-workflow` to regenerate
+`.github/workflows/pr-l1-static-fast.yml`. `make test-drift` runs
+`make layer1-workflow-check` via the manifest tool and fails if the committed
+workflow was edited by hand or not regenerated.
+
+The generated workflow intentionally exposes one stable final `check` job for
+branch protection. Keep intermediate job/matrix names as generated
+implementation details unless a required-context migration explicitly needs
+them preserved.
+
 ### Standalone Rust workspaces
 
 Most Rust crates are members of `packages/Cargo.toml`, but some crates are

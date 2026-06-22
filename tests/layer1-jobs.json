@@ -1,0 +1,167 @@
+{
+  "version": 1,
+  "local": {
+    "defaultJobs": 4,
+    "phases": [
+      {
+        "id": "preflight",
+        "mode": "serial",
+        "jobs": ["tier0"]
+      },
+      {
+        "id": "parallel",
+        "mode": "parallel",
+        "jobs": ["test-lint", "test-rust", "test-proofs", "test-flake", "test-policy"]
+      },
+      {
+        "id": "serial-after-parallel",
+        "mode": "serial",
+        "jobs": ["test-drift"]
+      }
+    ]
+  },
+  "ci": {
+    "workflowName": "pr-l1-static-fast",
+    "jobs": [
+      "tier0",
+      "test-lint",
+      "test-changelog",
+      "test-rust",
+      "test-proofs",
+      "flake-eval-discover",
+      "flake-eval-x86",
+      "flake-eval-x86-outputs",
+      "test-flake-x86",
+      "test-flake-aarch64",
+      "test-drift",
+      "test-policy"
+    ],
+    "rollupJob": "check",
+    "rollupNeeds": [
+      "tier0",
+      "test-lint",
+      "test-changelog",
+      "test-rust",
+      "test-proofs",
+      "test-flake-x86",
+      "test-flake-aarch64",
+      "test-drift",
+      "test-policy"
+    ],
+    "allowedSkippedRollupJobs": ["test-changelog"]
+  },
+  "jobs": {
+    "tier0": {
+      "displayName": "Tier 0 first-pass gate",
+      "makeTarget": "check-tier0",
+      "ciKind": "tier0",
+      "ciJobId": "tier0",
+      "timeoutMinutes": 5,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-lint": {
+      "displayName": "Lint gate (preflight + parse + shellcheck)",
+      "makeTarget": "test-lint",
+      "ciKind": "simple-nix",
+      "ciJobId": "test-lint",
+      "needs": ["tier0"],
+      "timeoutMinutes": 10,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-changelog": {
+      "displayName": "Changelog policy gate",
+      "ciKind": "changelog",
+      "ciJobId": "test-changelog",
+      "needs": ["tier0"],
+      "timeoutMinutes": 10,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-rust": {
+      "displayName": "Rust workspace gate",
+      "makeTarget": "test-rust",
+      "localEnv": {
+        "NL_SKIP_FIXTURE_BUILD": "1"
+      },
+      "ciKind": "rust",
+      "ciJobId": "test-rust",
+      "needs": ["tier0"],
+      "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-proofs": {
+      "displayName": "Proof crates gate",
+      "makeTarget": "test-proofs",
+      "ciKind": "simple-nix",
+      "ciJobId": "test-proofs",
+      "needs": ["tier0"],
+      "timeoutMinutes": 15,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-flake": {
+      "displayName": "Local sharded flake gate",
+      "makeTarget": "test-flake",
+      "localEnv": {
+        "NL_FLAKE_LOCAL_SHARDS": "1"
+      }
+    },
+    "flake-eval-discover": {
+      "displayName": "Enumerate flake checks (x86_64-linux)",
+      "ciKind": "flake-discover",
+      "ciJobId": "flake-eval-discover",
+      "needs": ["tier0"],
+      "timeoutMinutes": 10,
+      "runsOn": "ubuntu-latest"
+    },
+    "flake-eval-x86": {
+      "displayName": "Flake check shard (x86_64-linux)",
+      "ciKind": "flake-x86-shards",
+      "ciJobId": "flake-eval-x86",
+      "needs": ["flake-eval-discover"],
+      "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest",
+      "maxParallel": 4
+    },
+    "flake-eval-x86-outputs": {
+      "displayName": "Flake non-checks outputs (x86_64-linux)",
+      "ciKind": "flake-x86-outputs",
+      "ciJobId": "flake-eval-x86-outputs",
+      "needs": ["tier0"],
+      "timeoutMinutes": 20,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-flake-x86": {
+      "displayName": "Require all x86 flake jobs to pass",
+      "ciKind": "flake-x86-rollup",
+      "ciJobId": "test-flake-x86",
+      "needs": ["flake-eval-discover", "flake-eval-x86", "flake-eval-x86-outputs"],
+      "timeoutMinutes": 5,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-flake-aarch64": {
+      "displayName": "aarch64 smoke eval",
+      "ciKind": "flake-aarch64-smoke",
+      "ciJobId": "test-flake-aarch64",
+      "needs": ["tier0"],
+      "timeoutMinutes": 15,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-drift": {
+      "displayName": "Drift gate",
+      "makeTarget": "test-drift",
+      "ciKind": "simple-nix",
+      "ciJobId": "test-drift",
+      "needs": ["tier0"],
+      "timeoutMinutes": 15,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-policy": {
+      "displayName": "Policy meta-gates",
+      "makeTarget": "test-policy",
+      "ciKind": "simple-nix",
+      "ciJobId": "test-policy",
+      "needs": ["tier0"],
+      "timeoutMinutes": 10,
+      "runsOn": "ubuntu-latest"
+    }
+  }
+}
