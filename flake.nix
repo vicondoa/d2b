@@ -46,6 +46,7 @@
         pkgs = nixpkgsFor.${system};
         guestRustPackagesSrc = pkgs.runCommand "nixling-guest-rust-src" { } ''
           mkdir -p $out/packages
+          cp -r ${./packages/nixling-constellation-core} $out/packages/nixling-constellation-core
           cp -r ${./packages/nixling-core} $out/packages/nixling-core
           cp -r ${./packages/nixling-ipc} $out/packages/nixling-ipc
           cp -r ${./packages/nixling-guestd} $out/packages/nixling-guestd
@@ -53,6 +54,26 @@
           cp -r ${./packages/nixling-exec-runner} $out/packages/nixling-exec-runner
           cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
           chmod -R u+w $out/packages/nixling-core
+          chmod -R u+w $out/packages/nixling-constellation-core
+          cat > $out/packages/nixling-constellation-core/Cargo.toml <<'EOF'
+          [package]
+          name = "nixling-constellation-core"
+          version = "0.0.0-bootstrap"
+          edition = "2024"
+          publish = false
+          license.workspace = true
+
+          [lib]
+          test = false
+          doctest = false
+
+          [lints]
+          workspace = true
+
+          [dependencies]
+          serde.workspace = true
+          schemars.workspace = true
+          EOF
           cat > $out/packages/nixling-core/Cargo.toml <<'EOF'
           [package]
           name = "nixling-core"
@@ -83,6 +104,7 @@
           [workspace]
           resolver = "2"
           members = [
+            "nixling-constellation-core",
             "nixling-core",
             "nixling-ipc",
             "nixling-guestd",
@@ -487,6 +509,7 @@
         '';
         guestRustPackagesSrc = pkgs.runCommand "nixling-guest-rust-src" { } ''
           mkdir -p $out/packages
+          cp -r ${./packages/nixling-constellation-core} $out/packages/nixling-constellation-core
           cp -r ${./packages/nixling-core} $out/packages/nixling-core
           cp -r ${./packages/nixling-ipc} $out/packages/nixling-ipc
           cp -r ${./packages/nixling-guestd} $out/packages/nixling-guestd
@@ -494,6 +517,26 @@
           cp -r ${./packages/nixling-exec-runner} $out/packages/nixling-exec-runner
           cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
           chmod -R u+w $out/packages/nixling-core
+          chmod -R u+w $out/packages/nixling-constellation-core
+          cat > $out/packages/nixling-constellation-core/Cargo.toml <<'EOF'
+          [package]
+          name = "nixling-constellation-core"
+          version = "0.0.0-bootstrap"
+          edition = "2024"
+          publish = false
+          license.workspace = true
+
+          [lib]
+          test = false
+          doctest = false
+
+          [lints]
+          workspace = true
+
+          [dependencies]
+          serde.workspace = true
+          schemars.workspace = true
+          EOF
           cat > $out/packages/nixling-core/Cargo.toml <<'EOF'
           [package]
           name = "nixling-core"
@@ -524,6 +567,7 @@
           [workspace]
           resolver = "2"
           members = [
+            "nixling-constellation-core",
             "nixling-core",
             "nixling-ipc",
             "nixling-guestd",
