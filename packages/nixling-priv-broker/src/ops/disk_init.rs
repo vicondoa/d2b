@@ -168,7 +168,7 @@ enum EmptyImageEvidence {
 enum DataExtentClassification {
     Empty(EmptyImageEvidence),
     HasData,
-    UnknownUnsupported,
+    UnknownUnsupported(rustix::io::Errno),
 }
 
 fn reopen_nofollow_rw(path: &Path) -> io::Result<File> {
@@ -258,19 +258,40 @@ fn validate_existing_posture(file: &File, spec: &ResolvedDiskInitOp) -> Result<(
     Ok(())
 }
 
-fn read_ext4_magic(file: &File) -> io::Result<Option<u16>> {
+fn read_ext4_magic(file: &File, path: &Path) -> io::Result<Option<u16>> {
     use std::os::unix::fs::FileExt;
-    let len = file.metadata()?.len();
+    let len = file
+        .metadata()
+        .map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!(
+                    "disk-init: stat ext4 superblock candidate {}: {e}",
+                    path.display()
+                ),
+            )
+        })?
+        .len();
     if len < EXT4_MAGIC_OFFSET + 2 {
         return Ok(None);
     }
     let mut magic = [0u8; 2];
-    file.read_exact_at(&mut magic, EXT4_MAGIC_OFFSET)?;
+    file.read_exact_at(&mut magic, EXT4_MAGIC_OFFSET)
+        .map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!(
+                    "disk-init: read ext4 superblock magic from {} at offset {}: {e}",
+                    path.display(),
+                    EXT4_MAGIC_OFFSET
+                ),
+            )
+        })?;
     Ok(Some(u16::from_le_bytes(magic)))
 }
 
-fn has_ext4_superblock(file: &File) -> io::Result<bool> {
-    Ok(read_ext4_magic(file)? == Some(EXT4_SUPER_MAGIC))
+fn has_ext4_superblock(file: &File, path: &Path) -> io::Result<bool> {
+    Ok(read_ext4_magic(file, path)? == Some(EXT4_SUPER_MAGIC))
 }
 
 fn classify_seek_data_result(result: rustix::io::Result<u64>) -> DataExtentClassification {
@@ -279,7 +300,7 @@ fn classify_seek_data_result(result: rustix::io::Result<u64>) -> DataExtentClass
         Err(err) if err == rustix::io::Errno::NXIO => {
             DataExtentClassification::Empty(EmptyImageEvidence::NoDataExtents)
         }
-        Err(_) => DataExtentClassification::UnknownUnsupported,
+        Err(err) => DataExtentClassification::UnknownUnsupported(err),
     }
 }
 
@@ -316,14 +337,11 @@ fn run_mkfs_ext4_on_fd_with(file: &File, display_path: &Path, tool: &MkfsTool) -
         .arg(&target)
         .output()
         .map_err(|e| {
-            io::Error::new(
-                e.kind(),
-                format!(
-                    "disk-init: mkfs.ext4 ({}) spawn on {}: {e}",
-                    tool.raw,
-                    display_path.display()
-                ),
-            )
+            DiskInitError::formatter(format!(
+                "mkfs.ext4 ({}) spawn on {} failed: {e}",
+                tool.raw,
+                display_path.display()
+            ))
         })?;
     if !mkfs_output.status.success() {
         let stderr = bounded_lossy(&mkfs_output.stderr, MKFS_STDERR_LIMIT);
@@ -402,7 +420,7 @@ fn create_and_format_with(
     apply_posture(&file, spec, "create")?;
     let _lock = lock_existing_image(&file, &spec.target_path)?;
     run_mkfs_ext4_on_fd_with(&file, &spec.target_path, tool)?;
-    if !has_ext4_superblock(&file)? {
+    if !has_ext4_superblock(&file, &spec.target_path)? {
         return Err(DiskInitError::formatter(format!(
             "mkfs.ext4 did not leave a valid ext4 superblock on {}",
             spec.target_path.display()
@@ -433,13 +451,13 @@ fn validate_or_repair_existing_with(
     })?;
     let _lock = lock_existing_image(&file, &spec.target_path)?;
     validate_existing_posture(&file, spec)?;
-    if has_ext4_superblock(&file)? {
+    if has_ext4_superblock(&file, &spec.target_path)? {
         return Ok(DiskInitOutcome::Skipped);
     }
     match classify_data_extents(&file) {
         DataExtentClassification::Empty(_) => {
             run_mkfs_ext4_on_fd_with(&file, &spec.target_path, tool)?;
-            if !has_ext4_superblock(&file)? {
+            if !has_ext4_superblock(&file, &spec.target_path)? {
                 return Err(DiskInitError::formatter(format!(
                     "mkfs.ext4 did not leave a valid ext4 superblock on {}",
                     spec.target_path.display()
@@ -454,11 +472,13 @@ fn validate_or_repair_existing_with(
             spec.target_path.display()
         ))
         .into()),
-        DataExtentClassification::UnknownUnsupported => Err(DiskInitError::unsafe_repair(format!(
-            "could not prove existing image {} is empty using filesystem extent metadata",
-            spec.target_path.display()
-        ))
-        .into()),
+        DataExtentClassification::UnknownUnsupported(errno) => {
+            Err(DiskInitError::unsafe_repair(format!(
+                "could not prove existing image {} is empty using filesystem extent metadata: {errno}",
+                spec.target_path.display()
+            ))
+            .into())
+        }
     }
 }
 
@@ -668,7 +688,7 @@ mod tests {
         );
         // Owner check (we ran as current euid so fchown is a no-op).
         assert_eq!(meta.uid(), nix::unistd::geteuid().as_raw());
-        assert!(has_ext4_superblock(&fs::File::open(&target).unwrap()).unwrap());
+        assert!(has_ext4_superblock(&fs::File::open(&target).unwrap(), &target).unwrap());
 
         let _ = fs::remove_dir_all(&scratch);
     }
@@ -704,7 +724,7 @@ mod tests {
 
         let outcome = validate_or_repair_existing_with(&spec, &tool).expect("sparse image repairs");
         assert_eq!(outcome, DiskInitOutcome::Repaired);
-        assert!(has_ext4_superblock(&fs::File::open(&target).unwrap()).unwrap());
+        assert!(has_ext4_superblock(&fs::File::open(&target).unwrap(), &target).unwrap());
 
         let _ = fs::remove_dir_all(&scratch);
     }
@@ -794,10 +814,13 @@ mod tests {
         let target = scratch.join("var.img");
         let file = create_regular_image(&target, 4096, 0o600);
 
-        assert_eq!(read_ext4_magic(&file).unwrap(), Some(0));
+        assert_eq!(read_ext4_magic(&file, &target).unwrap(), Some(0));
         write_ext4_magic(&file);
-        assert_eq!(read_ext4_magic(&file).unwrap(), Some(EXT4_SUPER_MAGIC));
-        assert!(has_ext4_superblock(&file).unwrap());
+        assert_eq!(
+            read_ext4_magic(&file, &target).unwrap(),
+            Some(EXT4_SUPER_MAGIC)
+        );
+        assert!(has_ext4_superblock(&file, &target).unwrap());
 
         let _ = fs::remove_dir_all(&scratch);
     }
@@ -810,7 +833,7 @@ mod tests {
         );
         assert_eq!(
             classify_seek_data_result(Err(rustix::io::Errno::INVAL)),
-            DataExtentClassification::UnknownUnsupported
+            DataExtentClassification::UnknownUnsupported(rustix::io::Errno::INVAL)
         );
         assert_eq!(
             classify_seek_data_result(Ok(0)),
