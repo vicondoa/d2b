@@ -4,7 +4,7 @@
 .SH NAME
 shell \- Attach to or manage persistent named guest shells
 .SH SYNOPSIS
-\fBshell\fR [\fB\-\-name\fR] [\fB\-\-force\fR] [\fB\-\-json\fR] [\fB\-\-human\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR> [\fIACTION\fR]
+\fBshell\fR [\fB\-\-name\fR] [\fB\-\-force\fR] [\fB\-\-json\fR] [\fB\-\-human\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR> [\fIACTION\fR] 
 .SH DESCRIPTION
 Attach to or manage persistent named guest shells
 .SH OPTIONS
@@ -25,7 +25,7 @@ Render human\-readable output
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fITARGET\fR>
-Target address. Current local\-only shell generations accept declared local VM names
+Target address. Local VMs use the fast path; gateway\-backed targets route through the realm gateway where supported
 .TP
 [\fIACTION\fR]
 Shell action. Omit to attach to the configured default session
