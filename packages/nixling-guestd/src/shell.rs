@@ -36,14 +36,11 @@ impl ShellRuntimeConfig {
 }
 
 pub trait ShellDaemonManager: Send + Sync {
-    fn ensure_ready(
-        &self,
-        config: &ShellRuntimeConfig,
-    ) -> Result<String, pb::GuestControlErrorKind>;
+    fn ensure_ready(&self, config: &ShellRuntimeConfig) -> Result<String, ShellRuntimeError>;
 }
 
 pub trait ShellHelperSpawner: Send + Sync {
-    fn spawn_helper(&self, name: &str) -> Result<String, pb::GuestControlErrorKind>;
+    fn spawn_helper(&self, name: &str) -> Result<String, ShellRuntimeError>;
 }
 
 pub trait ShellClock: Send + Sync {
@@ -64,11 +61,10 @@ struct ShellSession {
     guest_boot_id: String,
     owner_key: Vec<u8>,
     attached: bool,
-    killed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ShellRuntimeError {
+pub enum ShellRuntimeError {
     InvalidName,
     CapacityExceeded,
     AttachCapacityExceeded,
@@ -96,6 +92,29 @@ impl ShellRuntimeError {
             Self::Disabled => {
                 pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED
             }
+        }
+    }
+
+    fn remediation(self) -> pb::HealthRemediation {
+        match self {
+            Self::Disabled => pb::HealthRemediation::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE,
+            Self::CapacityExceeded | Self::AttachCapacityExceeded => {
+                pb::HealthRemediation::HEALTH_REMEDIATION_REDUCE_LOAD
+            }
+            Self::InvalidName | Self::AlreadyAttached | Self::NotFound => {
+                pb::HealthRemediation::HEALTH_REMEDIATION_NONE
+            }
+        }
+    }
+
+    fn shell_state(self) -> pb::ShellState {
+        match self {
+            Self::Disabled => pb::ShellState::SHELL_STATE_FEATURE_DISABLED,
+            Self::AlreadyAttached => pb::ShellState::SHELL_STATE_ATTACHED,
+            Self::InvalidName
+            | Self::CapacityExceeded
+            | Self::AttachCapacityExceeded
+            | Self::NotFound => pb::ShellState::SHELL_STATE_UNSPECIFIED,
         }
     }
 }
@@ -154,7 +173,7 @@ impl ShellEventQueue {
         self.events.push_back(event);
     }
 
-    fn drain_since(&self, after_seq: u64, limit: usize) -> ShellEventBatch {
+    fn read_since(&self, after_seq: u64, limit: usize) -> ShellEventBatch {
         let mut events = Vec::new();
         if self.dropped_events > 0
             && limit > 0
@@ -314,7 +333,6 @@ impl ShellRuntime {
                 .get_mut(&name)
                 .expect("existing session remains present");
             existing.attached = true;
-            existing.killed = false;
             existing.owner_key = owner_key;
             let cloned = existing.clone();
             if was_attached && force {
@@ -353,7 +371,6 @@ impl ShellRuntime {
             guest_boot_id: self.config.guest_boot_id.clone(),
             owner_key,
             attached: true,
-            killed: false,
         };
         state.sessions.insert(name, session.clone());
         state.events.push(ShellEventKind::AttachCreated);
@@ -373,7 +390,7 @@ impl ShellRuntime {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut response = pb::ShellListResponse::new();
         response.default_name = self.config.default_name.clone();
-        for session in state.sessions.values().filter(|session| !session.killed) {
+        for session in state.sessions.values() {
             let mut entry = pb::ShellListEntry::new();
             entry.name = session.name.clone();
             entry.state = EnumOrUnknown::new(if session.attached {
@@ -403,7 +420,12 @@ impl ShellRuntime {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(session) = state.sessions.get_mut(&resolved) else {
-            return shell_detach_error(ShellRuntimeError::NotFound, resolved);
+            let mut response = pb::ShellDetachResponse::new();
+            response.resolved_name = resolved;
+            response.detached = false;
+            response.cause =
+                EnumOrUnknown::new(pb::ShellCloseCause::SHELL_CLOSE_CAUSE_CLIENT_DETACH);
+            return response;
         };
         let was_attached = session.attached;
         session.attached = false;
@@ -462,7 +484,11 @@ impl ShellRuntime {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(session) = state.sessions.remove(&name) else {
-            return shell_kill_error(ShellRuntimeError::NotFound, name);
+            let mut response = pb::ShellKillResponse::new();
+            response.name = name;
+            response.killed = false;
+            response.state = EnumOrUnknown::new(pb::ShellState::SHELL_STATE_KILLED);
+            return response;
         };
         let _was_attached = session.attached;
         state.events.push(ShellEventKind::Killed);
@@ -490,18 +516,18 @@ impl ShellRuntime {
         }
     }
 
-    pub fn drain_events_since(&self, after_seq: u64, limit: usize) -> ShellEventBatch {
+    pub fn read_events_since(&self, after_seq: u64, limit: usize) -> ShellEventBatch {
         let state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.drain_events_since(after_seq, limit)
+        state.read_events_since(after_seq, limit)
     }
 }
 
 impl ShellRuntimeState {
-    fn drain_events_since(&self, after_seq: u64, limit: usize) -> ShellEventBatch {
-        self.events.drain_since(after_seq, limit)
+    fn read_events_since(&self, after_seq: u64, limit: usize) -> ShellEventBatch {
+        self.events.read_since(after_seq, limit)
     }
 }
 
@@ -516,7 +542,7 @@ pub fn shell_effective_limits(runtime: &ShellRuntime) -> pb::GuestEffectiveLimit
 fn shell_attach_error(error: ShellRuntimeError, name: String) -> pb::ShellAttachResponse {
     let mut response = pb::ShellAttachResponse::new();
     response.resolved_name = safe_error_name(error, name);
-    response.state = EnumOrUnknown::new(pb::ShellState::SHELL_STATE_FEATURE_DISABLED);
+    response.state = EnumOrUnknown::new(error.shell_state());
     response.error = MessageField::some(shell_error(error));
     response
 }
@@ -531,7 +557,7 @@ fn shell_detach_error(error: ShellRuntimeError, name: String) -> pb::ShellDetach
 fn shell_kill_error(error: ShellRuntimeError, name: String) -> pb::ShellKillResponse {
     let mut response = pb::ShellKillResponse::new();
     response.name = safe_error_name(error, name);
-    response.state = EnumOrUnknown::new(pb::ShellState::SHELL_STATE_FEATURE_DISABLED);
+    response.state = EnumOrUnknown::new(error.shell_state());
     response.error = MessageField::some(shell_error(error));
     response
 }
@@ -547,7 +573,7 @@ fn safe_error_name(error: ShellRuntimeError, name: String) -> String {
 fn shell_error(error: ShellRuntimeError) -> pb::GuestControlError {
     let mut wire = pb::GuestControlError::new();
     wire.kind = EnumOrUnknown::new(error.wire());
-    wire.remediation = EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_RETRY);
+    wire.remediation = EnumOrUnknown::new(error.remediation());
     wire
 }
 
@@ -697,6 +723,16 @@ mod tests {
             killed.state.enum_value().unwrap(),
             pb::ShellState::SHELL_STATE_KILLED
         );
+        let detached_again = runtime.detach(None);
+        assert!(detached_again.error.is_none());
+        assert!(!detached_again.detached);
+        let killed_again = runtime.kill("default".to_owned());
+        assert!(killed_again.error.is_none());
+        assert!(!killed_again.killed);
+        assert_eq!(
+            killed_again.state.enum_value().unwrap(),
+            pb::ShellState::SHELL_STATE_KILLED
+        );
     }
 
     #[test]
@@ -772,6 +808,52 @@ mod tests {
             rejected.error.unwrap().kind.enum_value().unwrap(),
             pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED
         );
+        assert_eq!(
+            rejected.state.enum_value().unwrap(),
+            pb::ShellState::SHELL_STATE_UNSPECIFIED
+        );
+        let duplicate = runtime.attach(pb::ShellAttachRequest::new());
+        assert_eq!(
+            duplicate.state.enum_value().unwrap(),
+            pb::ShellState::SHELL_STATE_ATTACHED
+        );
+    }
+
+    #[test]
+    fn terminal_shell_errors_have_actionable_remediation() {
+        let runtime = enabled_runtime();
+        let mut invalid = pb::ShellAttachRequest::new();
+        invalid.name = Some("bad/name".to_owned());
+        let invalid = runtime.attach(invalid);
+        let invalid_error = invalid.error.unwrap();
+        assert_eq!(
+            invalid_error.kind.enum_value().unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME
+        );
+        assert_eq!(
+            invalid_error.remediation.enum_value().unwrap(),
+            pb::HealthRemediation::HEALTH_REMEDIATION_NONE
+        );
+        assert_eq!(
+            invalid.state.enum_value().unwrap(),
+            pb::ShellState::SHELL_STATE_UNSPECIFIED
+        );
+
+        let disabled = ShellRuntime::disabled().attach(pb::ShellAttachRequest::new());
+        assert_eq!(
+            disabled.error.unwrap().remediation.enum_value().unwrap(),
+            pb::HealthRemediation::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE
+        );
+
+        let first = runtime.attach(pb::ShellAttachRequest::new());
+        assert!(first.error.is_none());
+        let mut other = pb::ShellAttachRequest::new();
+        other.name = Some("other".to_owned());
+        let capacity = runtime.attach(other);
+        assert_eq!(
+            capacity.error.unwrap().remediation.enum_value().unwrap(),
+            pb::HealthRemediation::HEALTH_REMEDIATION_REDUCE_LOAD
+        );
     }
 
     #[test]
@@ -787,7 +869,7 @@ mod tests {
         assert!(attached.error.is_none());
         assert!(forced.force_evicted);
 
-        let batch = runtime.drain_events_since(0, 16);
+        let batch = runtime.read_events_since(0, 16);
         let kinds: Vec<ShellEventKind> = batch.events.iter().map(|event| event.kind).collect();
         assert_eq!(
             kinds,
@@ -810,7 +892,7 @@ mod tests {
         queue.push(ShellEventKind::Detached);
         queue.push(ShellEventKind::Killed);
 
-        let batch = queue.drain_since(0, 8);
+        let batch = queue.read_since(0, 8);
         assert_eq!(batch.dropped_events, 1);
         assert_eq!(
             batch
@@ -835,10 +917,10 @@ mod tests {
         queue.push(ShellEventKind::Detached);
         queue.push(ShellEventKind::Killed);
 
-        let batch = queue.drain_since(0, 2);
+        let batch = queue.read_since(0, 2);
         assert_eq!(batch.events.len(), 2);
         assert_eq!(batch.cursor, 2);
-        let next = queue.drain_since(batch.cursor, 8);
+        let next = queue.read_since(batch.cursor, 8);
         assert_eq!(
             next.events
                 .iter()

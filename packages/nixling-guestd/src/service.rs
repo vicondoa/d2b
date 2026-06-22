@@ -2169,6 +2169,19 @@ fn guest_error(kind: pb::GuestControlErrorKind) -> pb::GuestControlError {
         K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID
         | K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST => (R::HEALTH_REMEDIATION_NONE, None),
         K::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED => (R::HEALTH_REMEDIATION_RETRY, None),
+        K::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED
+        | K::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE
+        | K::GUEST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMATCH => {
+            (R::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE, None)
+        }
+        K::GUEST_CONTROL_ERROR_KIND_SHELL_CAPACITY_EXCEEDED
+        | K::GUEST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED => {
+            (R::HEALTH_REMEDIATION_REDUCE_LOAD, None)
+        }
+        K::GUEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME
+        | K::GUEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND
+        | K::GUEST_CONTROL_ERROR_KIND_SHELL_ALREADY_ATTACHED
+        | K::GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP => (R::HEALTH_REMEDIATION_NONE, None),
         _ => (R::HEALTH_REMEDIATION_RETRY, None),
     };
     error.remediation = EnumOrUnknown::new(remediation);
@@ -4439,14 +4452,14 @@ mod tests {
     }
 
     fn assert_shell_disabled(error: MessageField<pb::GuestControlError>) {
+        let error = error.as_ref().expect("shell error");
         assert_eq!(
-            error
-                .as_ref()
-                .expect("shell error")
-                .kind
-                .enum_value()
-                .expect("known error"),
+            error.kind.enum_value().expect("known error"),
             pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED
+        );
+        assert_eq!(
+            error.remediation.enum_value().expect("known remediation"),
+            pb::HealthRemediation::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE
         );
     }
 
