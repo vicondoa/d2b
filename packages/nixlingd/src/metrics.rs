@@ -64,6 +64,11 @@ pub const HOST_PREP_STEP_BUCKETS_SECONDS: &[f64] =
 pub const BROKER_REQUEST_BUCKETS_SECONDS: &[f64] =
     &[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0];
 
+/// Histogram bucket boundaries for provider graceful shutdown waits (seconds).
+pub const VM_SHUTDOWN_BUCKETS_SECONDS: &[f64] = &[
+    0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 90.0, 120.0, 300.0, 600.0,
+];
+
 /// Canonical metric inventory. The order is the order the
 /// exposition format will render in.
 pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
@@ -96,6 +101,18 @@ pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
         kind: MetricKind::Histogram,
         labels: &["op"],
         buckets_seconds: BROKER_REQUEST_BUCKETS_SECONDS,
+    },
+    MetricDescriptor {
+        name: "nixling_daemon_vm_shutdown_total",
+        kind: MetricKind::Counter,
+        labels: &["provider", "outcome"],
+        buckets_seconds: &[],
+    },
+    MetricDescriptor {
+        name: "nixling_daemon_vm_shutdown_duration_seconds",
+        kind: MetricKind::Histogram,
+        labels: &["provider", "outcome"],
+        buckets_seconds: VM_SHUTDOWN_BUCKETS_SECONDS,
     },
     MetricDescriptor {
         name: "nixling_daemon_ownership_drift_total",
@@ -518,6 +535,8 @@ mod tests {
                 "nixling_daemon_host_prep_step_duration_seconds",
                 "nixling_daemon_broker_request_total",
                 "nixling_daemon_broker_request_duration_seconds",
+                "nixling_daemon_vm_shutdown_total",
+                "nixling_daemon_vm_shutdown_duration_seconds",
                 "nixling_daemon_ownership_drift_total",
                 "nixling_daemon_ssh_host_key_drift_total",
                 "nixling_daemon_pidfd_table_size",
@@ -622,6 +641,7 @@ mod tests {
             "outcome",
             "step",
             "op",
+            "provider",
             "le",
             "subsystem",
             "error_kind",
