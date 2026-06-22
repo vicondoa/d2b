@@ -561,10 +561,16 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
     }
     let exec: SharedExec = Arc::new(exec_runtime);
     let shell: SharedShell = if shell_runtime_usable {
+        let guest_boot_id = probe.guest_boot_id().map_err(|_| GuestdServiceError::Io)?;
         Arc::new(ShellRuntime::enabled(ShellRuntimeConfig {
             default_name: config.shell_policy.default_name.clone(),
             max_sessions: config.shell_policy.max_sessions,
             max_attached: config.shell_policy.max_attached,
+            workload_user: exec_user.clone(),
+            workload_uid: exec_uid,
+            guest_boot_id,
+            guestd_instance_id: format!("guestd-{}", config.vm_id),
+            daemon_instance_id: "shpool-daemon-pending".to_owned(),
         }))
     } else {
         Arc::new(ShellRuntime::disabled())
@@ -4307,6 +4313,11 @@ mod tests {
             default_name: "default".to_owned(),
             max_sessions: 2,
             max_attached: 1,
+            workload_user: Some("alice".to_owned()),
+            workload_uid: Some(1000),
+            guest_boot_id: "boot-1".to_owned(),
+            guestd_instance_id: "guestd-1".to_owned(),
+            daemon_instance_id: "daemon-1".to_owned(),
         }));
         let service = test_service(61).with_shell_runtime(runtime);
         authenticate(&service).await;

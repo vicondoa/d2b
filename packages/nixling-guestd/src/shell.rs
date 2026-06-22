@@ -13,6 +13,11 @@ pub struct ShellRuntimeConfig {
     pub default_name: String,
     pub max_sessions: u32,
     pub max_attached: u32,
+    pub workload_user: Option<String>,
+    pub workload_uid: Option<u32>,
+    pub guest_boot_id: String,
+    pub guestd_instance_id: String,
+    pub daemon_instance_id: String,
 }
 
 impl ShellRuntimeConfig {
@@ -21,14 +26,41 @@ impl ShellRuntimeConfig {
             default_name: "default".to_owned(),
             max_sessions: DEFAULT_SHELL_SESSIONS_PER_VM,
             max_attached: DEFAULT_SHELL_ATTACHED_SESSIONS_PER_VM,
+            workload_user: None,
+            workload_uid: None,
+            guest_boot_id: String::new(),
+            guestd_instance_id: String::new(),
+            daemon_instance_id: String::new(),
         }
     }
+}
+
+pub trait ShellDaemonManager: Send + Sync {
+    fn ensure_ready(
+        &self,
+        config: &ShellRuntimeConfig,
+    ) -> Result<String, pb::GuestControlErrorKind>;
+}
+
+pub trait ShellHelperSpawner: Send + Sync {
+    fn spawn_helper(&self, name: &str) -> Result<String, pb::GuestControlErrorKind>;
+}
+
+pub trait ShellClock: Send + Sync {
+    fn now_ms(&self) -> u64;
+}
+
+pub trait ShellEventSink: Send + Sync {
+    fn publish(&self, event: ShellEvent);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ShellSession {
     name: String,
     session_id: String,
+    shell_session_instance_id: String,
+    daemon_instance_id: String,
+    guest_boot_id: String,
     attached: bool,
     killed: bool,
 }
@@ -86,7 +118,7 @@ pub struct ShellEvent {
 pub struct ShellEventBatch {
     pub events: Vec<ShellEvent>,
     pub dropped_events: u64,
-    pub next_seq: u64,
+    pub cursor: u64,
 }
 
 #[derive(Debug)]
@@ -121,17 +153,31 @@ impl ShellEventQueue {
     }
 
     fn drain_since(&self, after_seq: u64, limit: usize) -> ShellEventBatch {
-        let events: Vec<ShellEvent> = self
-            .events
-            .iter()
-            .copied()
-            .filter(|event| event.seq > after_seq)
-            .take(limit)
-            .collect();
+        let mut events = Vec::new();
+        if self.dropped_events > 0
+            && limit > 0
+            && self
+                .events
+                .front()
+                .is_some_and(|oldest| oldest.seq > after_seq.saturating_add(1))
+        {
+            events.push(ShellEvent {
+                seq: after_seq.saturating_add(1),
+                kind: ShellEventKind::ReconciliationGap,
+            });
+        }
+        events.extend(
+            self.events
+                .iter()
+                .copied()
+                .filter(|event| event.seq > after_seq)
+                .take(limit.saturating_sub(events.len())),
+        );
+        let cursor = events.last().map(|event| event.seq).unwrap_or(after_seq);
         ShellEventBatch {
             events,
             dropped_events: self.dropped_events,
-            next_seq: self.next_seq,
+            cursor,
         }
     }
 }
@@ -165,6 +211,7 @@ impl ShellRuntime {
     }
 
     pub fn enabled(config: ShellRuntimeConfig) -> Self {
+        assert_low_cardinality_boundary();
         Self {
             enabled: true,
             config,
@@ -229,7 +276,20 @@ impl ShellRuntime {
                 return Err(ShellRuntimeError::AlreadyAttached);
             }
             if !was_attached && attached_count >= self.config.max_attached as usize {
-                return Err(ShellRuntimeError::AttachCapacityExceeded);
+                if force {
+                    if let Some((_victim_name, victim)) = state
+                        .sessions
+                        .iter_mut()
+                        .find(|(candidate, session)| candidate.as_str() != name && session.attached)
+                    {
+                        victim.attached = false;
+                        state.events.push(ShellEventKind::ForceEvicted);
+                    } else {
+                        return Err(ShellRuntimeError::AttachCapacityExceeded);
+                    }
+                } else {
+                    return Err(ShellRuntimeError::AttachCapacityExceeded);
+                }
             }
             let existing = state
                 .sessions
@@ -248,12 +308,28 @@ impl ShellRuntime {
             return Err(ShellRuntimeError::CapacityExceeded);
         }
         if attached_count >= self.config.max_attached as usize {
-            return Err(ShellRuntimeError::AttachCapacityExceeded);
+            if force {
+                if let Some((_victim_name, victim)) = state
+                    .sessions
+                    .iter_mut()
+                    .find(|(_candidate, session)| session.attached)
+                {
+                    victim.attached = false;
+                    state.events.push(ShellEventKind::ForceEvicted);
+                } else {
+                    return Err(ShellRuntimeError::AttachCapacityExceeded);
+                }
+            } else {
+                return Err(ShellRuntimeError::AttachCapacityExceeded);
+            }
         }
         state.next_session = state.next_session.saturating_add(1);
         let session = ShellSession {
             name: name.clone(),
             session_id: format!("shell-{:016x}", state.next_session),
+            shell_session_instance_id: format!("shell-instance-{:016x}", state.next_session),
+            daemon_instance_id: self.config.daemon_instance_id.clone(),
+            guest_boot_id: self.config.guest_boot_id.clone(),
             attached: true,
             killed: false,
         };
@@ -309,7 +385,9 @@ impl ShellRuntime {
         };
         let was_attached = session.attached;
         session.attached = false;
-        state.events.push(ShellEventKind::Detached);
+        if was_attached {
+            state.events.push(ShellEventKind::Detached);
+        }
         let mut response = pb::ShellDetachResponse::new();
         response.resolved_name = resolved;
         response.detached = was_attached;
@@ -333,7 +411,9 @@ impl ShellRuntime {
                 let name = session.name.clone();
                 let was_attached = session.attached;
                 session.attached = false;
-                state.events.push(ShellEventKind::Detached);
+                if was_attached {
+                    state.events.push(ShellEventKind::Detached);
+                }
                 let mut response = pb::ShellDetachResponse::new();
                 response.resolved_name = name;
                 response.detached = was_attached;
@@ -359,15 +439,18 @@ impl ShellRuntime {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(mut session) = state.sessions.remove(&name) else {
+        let Some(session) = state.sessions.get_mut(&name) else {
             return shell_kill_error(ShellRuntimeError::NotFound, name);
         };
+        let was_killed = session.killed;
         session.attached = false;
         session.killed = true;
-        state.events.push(ShellEventKind::Killed);
+        if !was_killed {
+            state.events.push(ShellEventKind::Killed);
+        }
         let mut response = pb::ShellKillResponse::new();
         response.name = name;
-        response.killed = true;
+        response.killed = !was_killed;
         response.state = EnumOrUnknown::new(pb::ShellState::SHELL_STATE_KILLED);
         response
     }
@@ -397,7 +480,7 @@ pub fn shell_effective_limits(runtime: &ShellRuntime) -> pb::GuestEffectiveLimit
 
 fn shell_attach_error(error: ShellRuntimeError, name: String) -> pb::ShellAttachResponse {
     let mut response = pb::ShellAttachResponse::new();
-    response.resolved_name = name;
+    response.resolved_name = safe_error_name(error, name);
     response.state = EnumOrUnknown::new(pb::ShellState::SHELL_STATE_FEATURE_DISABLED);
     response.error = MessageField::some(shell_error(error));
     response
@@ -405,17 +488,25 @@ fn shell_attach_error(error: ShellRuntimeError, name: String) -> pb::ShellAttach
 
 fn shell_detach_error(error: ShellRuntimeError, name: String) -> pb::ShellDetachResponse {
     let mut response = pb::ShellDetachResponse::new();
-    response.resolved_name = name;
+    response.resolved_name = safe_error_name(error, name);
     response.error = MessageField::some(shell_error(error));
     response
 }
 
 fn shell_kill_error(error: ShellRuntimeError, name: String) -> pb::ShellKillResponse {
     let mut response = pb::ShellKillResponse::new();
-    response.name = name;
+    response.name = safe_error_name(error, name);
     response.state = EnumOrUnknown::new(pb::ShellState::SHELL_STATE_FEATURE_DISABLED);
     response.error = MessageField::some(shell_error(error));
     response
+}
+
+fn safe_error_name(error: ShellRuntimeError, name: String) -> String {
+    if matches!(error, ShellRuntimeError::InvalidName) {
+        "<invalid>".to_owned()
+    } else {
+        name
+    }
 }
 
 fn shell_error(error: ShellRuntimeError) -> pb::GuestControlError {
@@ -444,6 +535,12 @@ fn validate_shell_name(name: &str) -> Result<(), ()> {
     }
 }
 
+fn assert_low_cardinality_boundary() {
+    // User-provided shell names and generated session ids are intentionally
+    // stored only as runtime state. Future metrics/audit exporters must not turn
+    // them into labels or structured tags.
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,6 +550,11 @@ mod tests {
             default_name: "default".to_owned(),
             max_sessions: 2,
             max_attached: 1,
+            workload_user: Some("alice".to_owned()),
+            workload_uid: Some(1000),
+            guest_boot_id: "boot-1".to_owned(),
+            guestd_instance_id: "guestd-1".to_owned(),
+            daemon_instance_id: "daemon-1".to_owned(),
         })
     }
 
@@ -524,6 +626,59 @@ mod tests {
     }
 
     #[test]
+    fn close_attach_detaches_by_session_id() {
+        let runtime = enabled_runtime();
+        let attached = runtime.attach(pb::ShellAttachRequest::new());
+        let session_id = attached.session_id.expect("session id");
+        let closed = runtime.close_attach(&session_id);
+        assert_eq!(closed.resolved_name, "default");
+        assert!(closed.detached);
+
+        let listed = runtime.list();
+        assert_eq!(listed.sessions.len(), 1);
+        assert!(!listed.sessions[0].attached);
+    }
+
+    #[test]
+    fn disabled_runtime_returns_shell_disabled_errors() {
+        let runtime = ShellRuntime::disabled();
+        assert_eq!(
+            runtime
+                .attach(pb::ShellAttachRequest::new())
+                .error
+                .unwrap()
+                .kind
+                .enum_value()
+                .unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED
+        );
+        assert_eq!(
+            runtime.list().error.unwrap().kind.enum_value().unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED
+        );
+        assert_eq!(
+            runtime
+                .detach(None)
+                .error
+                .unwrap()
+                .kind
+                .enum_value()
+                .unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED
+        );
+        assert_eq!(
+            runtime
+                .kill("default".to_owned())
+                .error
+                .unwrap()
+                .kind
+                .enum_value()
+                .unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED
+        );
+    }
+
+    #[test]
     fn admission_caps_are_enforced() {
         let runtime = enabled_runtime();
         let first = runtime.attach(pb::ShellAttachRequest::new());
@@ -563,7 +718,7 @@ mod tests {
             ]
         );
         assert_eq!(batch.dropped_events, 0);
-        assert_eq!(batch.next_seq, 6);
+        assert_eq!(batch.cursor, 5);
     }
 
     #[test]
@@ -581,7 +736,46 @@ mod tests {
                 .iter()
                 .map(|event| event.kind)
                 .collect::<Vec<_>>(),
-            vec![ShellEventKind::Detached, ShellEventKind::Killed]
+            vec![
+                ShellEventKind::ReconciliationGap,
+                ShellEventKind::Detached,
+                ShellEventKind::Killed
+            ]
         );
+        assert_eq!(batch.cursor, 3);
+    }
+
+    #[test]
+    fn event_queue_cursor_advances_only_to_returned_event() {
+        let mut queue = ShellEventQueue::new(8);
+        queue.push(ShellEventKind::AttachCreated);
+        queue.push(ShellEventKind::Detached);
+        queue.push(ShellEventKind::Killed);
+
+        let batch = queue.drain_since(0, 2);
+        assert_eq!(batch.events.len(), 2);
+        assert_eq!(batch.cursor, 2);
+        let next = queue.drain_since(batch.cursor, 8);
+        assert_eq!(
+            next.events
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec![ShellEventKind::Killed]
+        );
+        assert_eq!(next.cursor, 3);
+    }
+
+    #[test]
+    fn invalid_names_are_redacted_in_error_payloads() {
+        let runtime = enabled_runtime();
+        let mut attach = pb::ShellAttachRequest::new();
+        attach.name = Some("\u{1b}[31m".to_owned());
+        assert_eq!(runtime.attach(attach).resolved_name, "<invalid>");
+        assert_eq!(
+            runtime.detach(Some("bad/name".to_owned())).resolved_name,
+            "<invalid>"
+        );
+        assert_eq!(runtime.kill("bad/name".to_owned()).name, "<invalid>");
     }
 }
