@@ -150,6 +150,9 @@ pub enum DaemonEvent {
         action: ShellAuditAction,
         /// Closed shell result.
         result: ShellAuditResult,
+        /// Fixed-length non-raw correlation digest for the targeted shell. This
+        /// is safe to record; raw shell names/session ids are never written.
+        shell_ref_digest: String,
         /// Whether the caller requested force takeover.
         force: bool,
     },
@@ -166,6 +169,9 @@ pub enum DaemonEvent {
         action: ShellAuditAction,
         /// Closed teardown result.
         result: ShellAuditResult,
+        /// Fixed-length non-raw correlation digest for the targeted shell. This
+        /// is safe to record; raw shell names/session ids are never written.
+        shell_ref_digest: String,
     },
     /// Emitted when a detached `vm exec -d` create succeeds.
     ///
@@ -1518,6 +1524,7 @@ mod tests {
             peer_uid: 1000,
             action: ShellAuditAction::Attach,
             result: ShellAuditResult::Attached,
+            shell_ref_digest: "0123456789abcdef".to_owned(),
             force: true,
         })
         .expect("write shell attached event");
@@ -1526,6 +1533,7 @@ mod tests {
             peer_uid: 1000,
             action: ShellAuditAction::Detach,
             result: ShellAuditResult::Closed,
+            shell_ref_digest: "0123456789abcdef".to_owned(),
         })
         .expect("write shell detached event");
 
@@ -1550,7 +1558,13 @@ mod tests {
                 assert!(
                     matches!(
                         key.as_str(),
-                        "kind" | "vm" | "peer_uid" | "action" | "result" | "force"
+                        "kind"
+                            | "vm"
+                            | "peer_uid"
+                            | "action"
+                            | "result"
+                            | "shell_ref_digest"
+                            | "force"
                     ),
                     "shell lifecycle audit exposed unexpected key {key:?}: {line}"
                 );

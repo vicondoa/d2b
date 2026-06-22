@@ -4500,6 +4500,7 @@ const SHELL_POLL_CAP: Duration = Duration::from_secs(30);
 const SHELL_POLL_SLACK: Duration = Duration::from_secs(2);
 const SHELL_OWNER_INFLIGHT_CAP: usize = 64;
 const SHELL_METRIC: &str = "nixling_daemon_guest_control_shell_total";
+const SHELL_SUBSYSTEM: &str = "guest-control-shell";
 
 fn shell_failed(kind: crate::typed_error::GuestControlShellErrorKind) -> TypedError {
     TypedError::GuestControlShellFailed { kind }
@@ -4567,14 +4568,64 @@ fn shell_poll_timeout(args_timeout_ms: u64, wait: bool) -> (u64, Duration) {
 }
 
 fn shell_metric(state: &ServerState, outcome: &'static str, error_kind: &'static str) {
+    debug_assert!(matches!(
+        outcome,
+        "management" | "established" | "closed" | "error"
+    ));
+    debug_assert!(matches!(
+        error_kind,
+        "none"
+            | "transport"
+            | "auth"
+            | "protocol"
+            | "timeout"
+            | "capability"
+            | "stale-session"
+            | "capacity"
+            | "already-attached"
+            | "not-found"
+            | "output-gap"
+            | "guest"
+            | "internal"
+    ));
     state.metrics_registry.counter_inc(
         SHELL_METRIC,
         &[
-            ("subsystem", "guest-control-shell"),
+            ("subsystem", SHELL_SUBSYSTEM),
             ("outcome", outcome),
             ("error_kind", error_kind),
         ],
     );
+}
+
+fn shell_error_kind_label(error: &TypedError) -> &'static str {
+    use crate::typed_error::GuestControlShellErrorKind as K;
+    match error {
+        TypedError::GuestControlShellFailed { kind } => match kind {
+            K::Transport => "transport",
+            K::Auth => "auth",
+            K::Protocol => "protocol",
+            K::Timeout => "timeout",
+            K::Capability => "capability",
+            K::StaleSession => "stale-session",
+            K::Capacity => "capacity",
+            K::AlreadyAttached => "already-attached",
+            K::NotFound => "not-found",
+            K::OutputGap => "output-gap",
+            K::GuestError => "guest",
+            K::Internal => "internal",
+        },
+        _ => "internal",
+    }
+}
+
+fn shell_ref_digest(parts: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part.as_bytes());
+    }
+    format!("{:x}", hasher.finalize())[..16].to_owned()
 }
 
 fn dispatch_shell_management(
@@ -4584,70 +4635,74 @@ fn dispatch_shell_management(
 ) -> Result<Value, TypedError> {
     let response = match op {
         public_wire::ShellOp::List(args) => {
-            let result =
-                run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
-                    let mut request = pb::ShellListRequest::new();
-                    request.metadata = protobuf::MessageField::some(metadata);
-                    async move {
-                        let response: pb::ShellListResponse = client
-                            .unary_with_timeout("ShellList", request, SHELL_MANAGEMENT_TIMEOUT)
-                            .await
-                            .map_err(map_shell_health_error)?;
-                        shell_error_to_typed(response.error.as_ref())?;
-                        map_shell_list_response(response)
-                    }
-                })?;
+            let result = run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
+                let mut request = pb::ShellListRequest::new();
+                request.metadata = protobuf::MessageField::some(metadata);
+                async move {
+                    let response: pb::ShellListResponse = client
+                        .unary_with_timeout("ShellList", request, SHELL_MANAGEMENT_TIMEOUT)
+                        .await
+                        .map_err(map_shell_health_error)?;
+                    shell_error_to_typed(response.error.as_ref())?;
+                    map_shell_list_response(response)
+                }
+            })
+            .inspect_err(|error| shell_metric(state, "error", shell_error_kind_label(error)))?;
             shell_metric(state, "management", "none");
             public_wire::ShellOpResponse::List(result)
         }
         public_wire::ShellOp::Detach(args) => {
             let vm = args.vm.clone();
-            let result =
-                run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
-                    let mut request = pb::ShellDetachRequest::new();
-                    request.metadata = protobuf::MessageField::some(metadata);
-                    request.name = args.name.map(|name| name.as_str().to_owned());
-                    async move {
-                        let response: pb::ShellDetachResponse = client
-                            .unary_with_timeout("ShellDetach", request, SHELL_MANAGEMENT_TIMEOUT)
-                            .await
-                            .map_err(map_shell_health_error)?;
-                        shell_error_to_typed(response.error.as_ref())?;
-                        map_shell_detach_response(response)
-                    }
-                })?;
+            let name_for_audit = args.name.as_ref().map(|name| name.as_str().to_owned());
+            let result = run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
+                let mut request = pb::ShellDetachRequest::new();
+                request.metadata = protobuf::MessageField::some(metadata);
+                request.name = args.name.map(|name| name.as_str().to_owned());
+                async move {
+                    let response: pb::ShellDetachResponse = client
+                        .unary_with_timeout("ShellDetach", request, SHELL_MANAGEMENT_TIMEOUT)
+                        .await
+                        .map_err(map_shell_health_error)?;
+                    shell_error_to_typed(response.error.as_ref())?;
+                    map_shell_detach_response(response)
+                }
+            })
+            .inspect_err(|error| shell_metric(state, "error", shell_error_kind_label(error)))?;
             emit_shell_management_audit(
                 state,
                 peer.uid,
                 &vm,
                 daemon_audit::ShellAuditAction::Detach,
                 daemon_audit::ShellAuditResult::Detached,
+                &shell_ref_digest(&[&vm, name_for_audit.as_deref().unwrap_or("<default>")]),
             );
             shell_metric(state, "management", "none");
             public_wire::ShellOpResponse::Detach(result)
         }
         public_wire::ShellOp::Kill(args) => {
             let vm = args.vm.clone();
-            let result =
-                run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
-                    let mut request = pb::ShellKillRequest::new();
-                    request.metadata = protobuf::MessageField::some(metadata);
-                    request.name = args.name.as_str().to_owned();
-                    async move {
-                        let response: pb::ShellKillResponse = client
-                            .unary_with_timeout("ShellKill", request, SHELL_MANAGEMENT_TIMEOUT)
-                            .await
-                            .map_err(map_shell_health_error)?;
-                        shell_error_to_typed(response.error.as_ref())?;
-                        map_shell_kill_response(response)
-                    }
-                })?;
+            let digest = shell_ref_digest(&[&vm, args.name.as_str()]);
+            let result = run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
+                let mut request = pb::ShellKillRequest::new();
+                request.metadata = protobuf::MessageField::some(metadata);
+                request.name = args.name.as_str().to_owned();
+                async move {
+                    let response: pb::ShellKillResponse = client
+                        .unary_with_timeout("ShellKill", request, SHELL_MANAGEMENT_TIMEOUT)
+                        .await
+                        .map_err(map_shell_health_error)?;
+                    shell_error_to_typed(response.error.as_ref())?;
+                    map_shell_kill_response(response)
+                }
+            })
+            .inspect_err(|error| shell_metric(state, "error", shell_error_kind_label(error)))?;
             emit_shell_management_audit(
                 state,
                 peer.uid,
                 &vm,
                 daemon_audit::ShellAuditAction::Kill,
                 daemon_audit::ShellAuditResult::Killed,
+                &digest,
             );
             shell_metric(state, "management", "none");
             public_wire::ShellOpResponse::Kill(result)
@@ -4669,6 +4724,7 @@ fn emit_shell_management_audit(
     vm: &str,
     action: daemon_audit::ShellAuditAction,
     result: daemon_audit::ShellAuditResult,
+    shell_ref_digest: &str,
 ) {
     let _ = state
         .daemon_audit
@@ -4677,6 +4733,7 @@ fn emit_shell_management_audit(
             peer_uid,
             action,
             result,
+            shell_ref_digest: shell_ref_digest.to_owned(),
         });
 }
 
@@ -4703,6 +4760,7 @@ fn run_shell_owner(
                 stream.as_ref(),
                 &wire::error_frame_with_id(first_op_id, &error),
             );
+            shell_metric(&state, "error", shell_error_kind_label(&error));
             return;
         }
     };
@@ -4713,9 +4771,11 @@ fn run_shell_owner(
                 stream.as_ref(),
                 &wire::error_frame_with_id(first_op_id, &shell_protocol_failed()),
             );
+            shell_metric(&state, "error", "protocol");
             return;
         }
     };
+    let owner_shell_ref_digest = shell_ref_digest(&[&attach.vm, &session_id]);
     let initial_control_seq = attach_response.control_seq;
     let public_attach = match map_shell_attach_response(attach_response) {
         Ok(value) => public_wire::ShellOpResponse::Attach(value),
@@ -4724,6 +4784,7 @@ fn run_shell_owner(
                 stream.as_ref(),
                 &wire::error_frame_with_id(first_op_id, &error),
             );
+            shell_metric(&state, "error", shell_error_kind_label(&error));
             return;
         }
     };
@@ -4744,6 +4805,7 @@ fn run_shell_owner(
             peer_uid: peer.uid,
             action: daemon_audit::ShellAuditAction::Attach,
             result: daemon_audit::ShellAuditResult::Attached,
+            shell_ref_digest: owner_shell_ref_digest.clone(),
             force: attach.force,
         });
     shell_metric(&state, "established", "none");
@@ -4860,12 +4922,17 @@ fn run_shell_owner(
             peer_uid: peer.uid,
             action: daemon_audit::ShellAuditAction::Detach,
             result: close_result,
+            shell_ref_digest: owner_shell_ref_digest,
         });
     shell_metric(&state, "closed", "none");
-    drop(conn_permit);
+    let _ = nix::sys::socket::shutdown(
+        stream.as_ref().as_raw_fd(),
+        nix::sys::socket::Shutdown::Both,
+    );
     for task in poll_tasks {
         let _ = task.join();
     }
+    drop(conn_permit);
 }
 
 fn establish_shell_owner(
