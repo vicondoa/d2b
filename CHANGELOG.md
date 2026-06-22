@@ -59,7 +59,9 @@ deprecations ship one minor release before removal.
 - VM lifecycle CLI: added explicit `--force` / `-f` stop intent for
   `vm stop`, `down`, `vm restart`, and `restart`, with backward-compatible
   public wire serialization that omits `force = false`.
-
+- Broker QMP lifecycle operations for qemu-media now expose typed
+  `system_powerdown`, `query-status`, and `quit` requests, with bounded QMP
+  parsing and audit-safe lifecycle fields.
 - Persistent shell CLI: added top-level `nixling shell <vm>` attach and
   management forms for persistent named guest shell sessions.
 

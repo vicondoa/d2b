@@ -265,6 +265,14 @@ pub enum OperationFields {
         udev_reloaded: bool,
         qmp_commands: Vec<String>,
     },
+    QemuMediaSystemPowerdown {
+        vm_id: String,
+        qmp_command: String,
+    },
+    QemuMediaQuit {
+        vm_id: String,
+        qmp_command: String,
+    },
     QemuMediaDetach {
         vm_id: String,
         media_ref: String,
@@ -575,6 +583,14 @@ impl OperationFields {
                 udev_rule_written: bool,
                 udev_reloaded: bool,
                 qmp_commands: Vec<String>,
+            }),
+            "QemuMediaSystemPowerdown" => parse_fields!(value => QemuMediaSystemPowerdown {
+                vm_id: String,
+                qmp_command: String,
+            }),
+            "QemuMediaQuit" => parse_fields!(value => QemuMediaQuit {
+                vm_id: String,
+                qmp_command: String,
             }),
             "QemuMediaDetach" => parse_fields!(value => QemuMediaDetach {
                 vm_id: String,
@@ -926,6 +942,22 @@ mod tests {
                 "device_add".to_owned(),
                 "cont".to_owned(),
             ],
+        }
+    );
+    roundtrip_test!(
+        qemu_media_system_powerdown_round_trip,
+        "QemuMediaSystemPowerdown",
+        OperationFields::QemuMediaSystemPowerdown {
+            vm_id: "media".to_owned(),
+            qmp_command: "system_powerdown".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        qemu_media_quit_round_trip,
+        "QemuMediaQuit",
+        OperationFields::QemuMediaQuit {
+            vm_id: "media".to_owned(),
+            qmp_command: "quit".to_owned(),
         }
     );
     roundtrip_test!(
