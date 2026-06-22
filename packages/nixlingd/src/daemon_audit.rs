@@ -48,6 +48,27 @@ pub enum DetachedExecAuditResult {
     Error,
 }
 
+/// Closed persistent-shell owner action.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellAuditAction {
+    Attach,
+    Detach,
+    Kill,
+}
+
+/// Closed persistent-shell owner/management result.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellAuditResult {
+    Attached,
+    Detached,
+    Killed,
+    Closed,
+    Timeout,
+    Error,
+}
+
 /// Closed reason a vm-start runner node fast-failed before readiness.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -125,6 +146,10 @@ pub enum DaemonEvent {
         vm: String,
         /// Admin peer uid (from `SO_PEERCRED`) that opened the attachment.
         peer_uid: u32,
+        /// Closed shell action.
+        action: ShellAuditAction,
+        /// Closed shell result.
+        result: ShellAuditResult,
         /// Whether the caller requested force takeover.
         force: bool,
     },
@@ -137,8 +162,10 @@ pub enum DaemonEvent {
         vm: String,
         /// Admin peer uid (from `SO_PEERCRED`) that owned the attachment.
         peer_uid: u32,
-        /// Closed teardown result: `"closed"`, `"close-timeout"`, or `"error"`.
-        result: String,
+        /// Closed shell action.
+        action: ShellAuditAction,
+        /// Closed teardown result.
+        result: ShellAuditResult,
     },
     /// Emitted when a detached `vm exec -d` create succeeds.
     ///
@@ -1479,6 +1506,66 @@ mod tests {
         );
         // The terminate event has no tty field (only vm + peer_uid).
         assert!(terminated["event"].get("tty").is_none());
+    }
+
+    #[test]
+    fn shell_lifecycle_events_are_leak_safe() {
+        const SENTINEL: &str = "SECRET-shell-name-session-terminal-/nix/store/path-like-token";
+        let log = DaemonAuditLog::no_op();
+
+        log.write_event(&DaemonEvent::GuestControlShellAttached {
+            vm: "corp-vm".to_owned(),
+            peer_uid: 1000,
+            action: ShellAuditAction::Attach,
+            result: ShellAuditResult::Attached,
+            force: true,
+        })
+        .expect("write shell attached event");
+        log.write_event(&DaemonEvent::GuestControlShellDetached {
+            vm: "corp-vm".to_owned(),
+            peer_uid: 1000,
+            action: ShellAuditAction::Detach,
+            result: ShellAuditResult::Closed,
+        })
+        .expect("write shell detached event");
+
+        let records = log.captured.lock().expect("lock captured");
+        assert_eq!(records.len(), 2, "expected two captured shell records");
+        for line in records.iter() {
+            assert!(
+                !line.contains(SENTINEL),
+                "shell lifecycle audit leaked sentinel: {line}"
+            );
+            for forbidden in ["SECRET", "/nix/store", "session", "handle", "terminal"] {
+                assert!(
+                    !line.contains(forbidden),
+                    "shell lifecycle audit leaked forbidden canary {forbidden:?}: {line}",
+                );
+            }
+            let record: serde_json::Value =
+                serde_json::from_str(line).expect("parse captured shell record");
+            let event = record.get("event").expect("event object");
+            let obj = event.as_object().expect("event is object");
+            for key in obj.keys() {
+                assert!(
+                    matches!(
+                        key.as_str(),
+                        "kind" | "vm" | "peer_uid" | "action" | "result" | "force"
+                    ),
+                    "shell lifecycle audit exposed unexpected key {key:?}: {line}"
+                );
+            }
+        }
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&records[0]).unwrap()["event"]["result"]
+                .as_str(),
+            Some("attached")
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&records[1]).unwrap()["event"]["result"]
+                .as_str(),
+            Some("closed")
+        );
     }
 
     #[test]
