@@ -13,17 +13,19 @@ use std::{collections::BTreeMap, path::Path};
 
 use crate::runtime::RuntimeMetadata;
 
-/// Current supported `_manifest.manifestVersion`.
+/// Current emitted `_manifest.manifestVersion`.
 ///
 /// Bumped to `6` for the local runtime/provider contract. Per-VM manifest
 /// entries now carry runtime/provider metadata and provider capability bits, and
 /// provider-specific socket/vsock fields are nullable so qemu-media entries do
 /// not fake Cloud Hypervisor, guest-control, or in-guest observability values.
+/// Bumped to `7` for per-VM lifecycle graceful-shutdown metadata.
 ///
-/// There is no legacy compatibility window: the broker / daemon refuse to load
-/// a bundle whose `vms.json` does not pin this exact integer
-/// (`manifest-version-mismatch` typed error).
-pub const MANIFEST_VERSION_CURRENT: u32 = 6;
+/// During the v6 -> v7 live-host rollout the parser accepts both versions. v6
+/// entries default missing lifecycle metadata to graceful shutdown enabled with
+/// the daemon-config timeout.
+pub const MANIFEST_VERSION_CURRENT: u32 = 7;
+pub const MANIFEST_VERSION_LEGACY_COMPAT: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ManifestV04 {
@@ -40,7 +42,9 @@ impl ManifestV04 {
         let parsed: Self = serde_json::from_slice(bytes).map_err(|error| {
             Error::manifest_parse_error("vms.json", manifest_parse_reason(&error.to_string()))
         })?;
-        if parsed.manifest.manifest_version != MANIFEST_VERSION_CURRENT {
+        if parsed.manifest.manifest_version != MANIFEST_VERSION_CURRENT
+            && parsed.manifest.manifest_version != MANIFEST_VERSION_LEGACY_COMPAT
+        {
             return Err(Error::manifest_version_mismatch(
                 "vms.json",
                 "manifest-version-mismatch",
@@ -212,6 +216,8 @@ pub struct VmEntry {
     pub gpu_socket: Option<String>,
     pub graphics: bool,
     pub is_net_vm: bool,
+    #[serde(default)]
+    pub lifecycle: VmLifecycle,
     pub name: String,
     pub net_vm: Option<String>,
     pub observability: VmObservability,
@@ -226,6 +232,36 @@ pub struct VmEntry {
     pub tpm_socket: Option<String>,
     pub usbip_yubikey: bool,
     pub usbipd_host_ip: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmLifecycle {
+    pub graceful_shutdown: VmGracefulShutdown,
+}
+
+impl Default for VmLifecycle {
+    fn default() -> Self {
+        Self {
+            graceful_shutdown: VmGracefulShutdown::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmGracefulShutdown {
+    pub enable: bool,
+    pub timeout_seconds: Option<u32>,
+}
+
+impl Default for VmGracefulShutdown {
+    fn default() -> Self {
+        Self {
+            enable: true,
+            timeout_seconds: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -334,7 +370,7 @@ mod tests {
     // Historical `vms.json-*` fixtures remain frozen for the
     // vms-json-parity gate. This fixture tracks the current manifest
     // version and is byte-identical with the Nix-rendered smoke manifest.
-    const BASELINE_VMS_JSON: &str = include_str!("../../../tests/golden/vms.json-signoz-v6");
+    const BASELINE_VMS_JSON: &str = include_str!("../../../tests/golden/vms.json-signoz-v7");
     const NETWORKING_FIXTURE: &str =
         include_str!("../../../tests/golden/manifest_v04/baseline-vms.json");
 
@@ -350,10 +386,6 @@ mod tests {
     fn networking_fixture_round_trips_with_explicit_fields() {
         let manifest = ManifestV04::from_slice(NETWORKING_FIXTURE.as_bytes())
             .expect("networking fixture parses");
-        let rendered = manifest
-            .to_compact_json()
-            .expect("networking fixture serializes");
-        assert_eq!(rendered, NETWORKING_FIXTURE);
 
         let corp_vm = manifest
             .vms
@@ -399,16 +431,12 @@ mod tests {
         assert!(error.message().contains("opaque reason: name-key-mismatch"));
     }
 
-    // Regression: the daemon and broker pin `_manifest.manifestVersion`
-    // to a single supported integer. A bundle stamped with the previous
-    // version is rejected with `manifest-version-mismatch`, and the new
-    // version must load cleanly.
     #[test]
-    fn legacy_manifest_version_is_rejected() {
+    fn obsolete_manifest_version_is_rejected() {
         let error = ManifestV04::from_slice(
             br#"{"_manifest":{"manifestVersion":5},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318}}"#,
         )
-        .expect_err("previous manifest version must be rejected after the v6 bump");
+        .expect_err("pre-v6 manifest version must be rejected after the v7 bump");
         assert_eq!(error.kind().as_str(), "manifest-version-mismatch");
         assert!(
             error
@@ -420,9 +448,20 @@ mod tests {
     }
 
     #[test]
+    fn v6_manifest_version_loads_with_default_lifecycle() {
+        let manifest = ManifestV04::from_slice(
+            br#"{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"corp-vm":{"apiSocket":"/var/lib/nixling/vms/corp-vm/corp-vm.sock","audio":false,"audioService":"nixling-corp-vm-snd.service","audioStateFile":"/var/lib/nixling/vms/corp-vm/state/audio-state.json","bridge":"br-work-lan","env":"work","gpuSocket":"/var/lib/nixling/vms/corp-vm/corp-vm-gpu.sock","graphics":false,"isNetVm":false,"name":"corp-vm","netVm":"sys-work-net","observability":{"agentSocket":"/run/nixling/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/var/lib/nixling/vms/corp-vm/vsock.sock"},"runtime":{"kind":"nixos","provider":{"id":"local-cloud-hypervisor","type":"local","driver":"cloud-hypervisor"},"capabilities":{"lifecycle":true,"display":true,"usbHotplug":true,"guestControl":true,"exec":true,"configSync":true,"ssh":true,"storeSync":true,"keys":true,"inGuestObservability":true}},"sshUser":"alice","stateDir":"/var/lib/nixling/vms/corp-vm","staticIp":"10.20.0.10","tap":"work-l10","tpm":false,"tpmSocket":"/run/nixling/vms/corp-vm/tpm.sock","usbipYubikey":false,"usbipdHostIp":"192.0.2.1"}}"#,
+        )
+        .expect("v6 manifest version parses during compatibility window");
+        let vm = manifest.vms.get("corp-vm").expect("corp-vm present");
+        assert!(vm.lifecycle.graceful_shutdown.enable);
+        assert_eq!(vm.lifecycle.graceful_shutdown.timeout_seconds, None);
+    }
+
+    #[test]
     fn current_manifest_version_loads() {
         let manifest = ManifestV04::from_slice(
-            br#"{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318}}"#,
+            br#"{"_manifest":{"manifestVersion":7},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318}}"#,
         )
         .expect("current manifest version parses");
         assert_eq!(

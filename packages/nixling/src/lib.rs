@@ -6340,16 +6340,29 @@ fn vm_dag_dry_run_summary(
     summary
 }
 
-fn cmd_vm_lifecycle_verb(
-    context: &Context,
-    verb: &str,
-    vm: &str,
+struct VmLifecycleInvocation<'a> {
+    verb: &'a str,
+    vm: &'a str,
     dry_run: bool,
     apply: bool,
     no_wait_api: bool,
     force: bool,
     json: bool,
+}
+
+fn cmd_vm_lifecycle_verb(
+    context: &Context,
+    invocation: VmLifecycleInvocation<'_>,
 ) -> Result<i32, CliFailure> {
+    let VmLifecycleInvocation {
+        verb,
+        vm,
+        dry_run,
+        apply,
+        no_wait_api,
+        force,
+        json,
+    } = invocation;
     let flags = require_explicit_mutation_flag(&format!("vm {verb}"), dry_run, apply, json)?;
     let route = route_vm_target(context, vm, json)?;
     let vm = match route {
@@ -6466,39 +6479,45 @@ fn cmd_vm_lifecycle_verb(
 fn cmd_vm_start(context: &Context, args: &VmStartArgs) -> Result<i32, CliFailure> {
     cmd_vm_lifecycle_verb(
         context,
-        "start",
-        &args.vm,
-        args.dry_run,
-        args.apply,
-        args.no_wait_api,
-        false,
-        args.json,
+        VmLifecycleInvocation {
+            verb: "start",
+            vm: &args.vm,
+            dry_run: args.dry_run,
+            apply: args.apply,
+            no_wait_api: args.no_wait_api,
+            force: false,
+            json: args.json,
+        },
     )
 }
 
 fn cmd_vm_stop(context: &Context, args: &VmStopArgs) -> Result<i32, CliFailure> {
     cmd_vm_lifecycle_verb(
         context,
-        "stop",
-        &args.vm,
-        args.dry_run,
-        args.apply,
-        false,
-        args.force,
-        args.json,
+        VmLifecycleInvocation {
+            verb: "stop",
+            vm: &args.vm,
+            dry_run: args.dry_run,
+            apply: args.apply,
+            no_wait_api: false,
+            force: args.force,
+            json: args.json,
+        },
     )
 }
 
 fn cmd_vm_restart(context: &Context, args: &VmRestartArgs) -> Result<i32, CliFailure> {
     cmd_vm_lifecycle_verb(
         context,
-        "restart",
-        &args.vm,
-        args.dry_run,
-        args.apply,
-        false,
-        args.force,
-        args.json,
+        VmLifecycleInvocation {
+            verb: "restart",
+            vm: &args.vm,
+            dry_run: args.dry_run,
+            apply: args.apply,
+            no_wait_api: false,
+            force: args.force,
+            json: args.json,
+        },
     )
 }
 
@@ -14717,7 +14736,18 @@ mod host_install_dispatch_tests {
         };
 
         let (result, stdout) = super::with_test_stdout_capture(|| {
-            super::cmd_vm_lifecycle_verb(&context, "start", vm, true, false, false, false, true)
+            super::cmd_vm_lifecycle_verb(
+                &context,
+                super::VmLifecycleInvocation {
+                    verb: "start",
+                    vm,
+                    dry_run: true,
+                    apply: false,
+                    no_wait_api: false,
+                    force: false,
+                    json: true,
+                },
+            )
         });
         assert_eq!(result.expect("qemu-media start dry-run"), 0);
         let rendered = String::from_utf8(stdout).expect("stdout utf8");
@@ -14726,7 +14756,18 @@ mod host_install_dispatch_tests {
         assert!(!rendered.contains("virtiofsd-ro-store"));
 
         let (result, stdout) = super::with_test_stdout_capture(|| {
-            super::cmd_vm_lifecycle_verb(&context, "stop", vm, true, false, false, false, false)
+            super::cmd_vm_lifecycle_verb(
+                &context,
+                super::VmLifecycleInvocation {
+                    verb: "stop",
+                    vm,
+                    dry_run: true,
+                    apply: false,
+                    no_wait_api: false,
+                    force: false,
+                    json: false,
+                },
+            )
         });
         assert_eq!(result.expect("qemu-media stop dry-run"), 0);
         let rendered = String::from_utf8(stdout).expect("stdout utf8");
