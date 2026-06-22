@@ -1041,7 +1041,7 @@ in
               `guest.exec.enable = true`, and a non-root workload user
               (`ssh.user`). Runtime shpool attachment is staged separately; this
               option currently carries the host/guest policy and manifest
-              contract used by later runtime waves.
+              contract used by runtime implementations.
             '';
           };
 
