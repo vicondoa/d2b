@@ -17,7 +17,7 @@ use prost::Message;
 pub const CODEC_ID: &str = "protobuf.v1";
 
 /// Deterministic fingerprint for the hand-authored prost schema in this crate.
-pub const SCHEMA_FINGERPRINT: &str = "pb.v1:f12:h6:op14:sk12:err19:audit11:cap1";
+pub const SCHEMA_FINGERPRINT: &str = "pb.v1:f12:h6:op18:sk13:err19:audit11:cap21";
 
 /// A prost-backed constellation frame codec.
 #[derive(Debug, Clone, Copy, Default)]
@@ -958,6 +958,10 @@ fn encode_operation_kind(kind: OperationKind) -> Result<i32, ConstellationError>
         OperationKind::FileCopyStart => 12,
         OperationKind::PortForwardOpen => 13,
         OperationKind::DisplaySessionOpen => 14,
+        OperationKind::ShellList => 15,
+        OperationKind::ShellAttach => 16,
+        OperationKind::ShellDetach => 17,
+        OperationKind::ShellKill => 18,
     })
 }
 
@@ -977,6 +981,10 @@ fn decode_operation_kind(raw: i32) -> Result<OperationKind, ConstellationError> 
         12 => Ok(OperationKind::FileCopyStart),
         13 => Ok(OperationKind::PortForwardOpen),
         14 => Ok(OperationKind::DisplaySessionOpen),
+        15 => Ok(OperationKind::ShellList),
+        16 => Ok(OperationKind::ShellAttach),
+        17 => Ok(OperationKind::ShellDetach),
+        18 => Ok(OperationKind::ShellKill),
         _ => Err(malformed(format!("unknown operation kind value {raw}"))),
     }
 }
@@ -995,6 +1003,7 @@ fn encode_stream_kind(kind: StreamKind) -> Result<i32, ConstellationError> {
         StreamKind::AudioCapture => 10,
         StreamKind::DeviceHid => 11,
         StreamKind::DeviceUsb => 12,
+        StreamKind::ShellPty => 13,
         _ => return Err(malformed("unsupported stream kind")),
     })
 }
@@ -1013,6 +1022,7 @@ fn decode_stream_kind(raw: i32) -> Result<StreamKind, ConstellationError> {
         10 => Ok(StreamKind::AudioCapture),
         11 => Ok(StreamKind::DeviceHid),
         12 => Ok(StreamKind::DeviceUsb),
+        13 => Ok(StreamKind::ShellPty),
         _ => Err(malformed(format!("unknown stream kind value {raw}"))),
     }
 }
@@ -1081,6 +1091,7 @@ fn encode_capability(capability: Capability) -> Result<i32, ConstellationError> 
         Capability::Hotplug => 18,
         Capability::EphemeralSessions => 19,
         Capability::ProviderManagedIsolation => 20,
+        Capability::PersistentShell => 21,
     })
 }
 
@@ -1106,6 +1117,7 @@ fn decode_capability(raw: i32) -> Option<Capability> {
         18 => Some(Capability::Hotplug),
         19 => Some(Capability::EphemeralSessions),
         20 => Some(Capability::ProviderManagedIsolation),
+        21 => Some(Capability::PersistentShell),
         _ => None,
     }
 }

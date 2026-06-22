@@ -8,8 +8,8 @@ use nixling_constellation_core::{
 };
 
 use crate::error::ProviderResult;
-use crate::provider::{DisplayProvider, StreamMux, WorkloadProvider};
-use crate::types::DisplaySessionRequest;
+use crate::provider::{DisplayProvider, PersistentShellProvider, StreamMux, WorkloadProvider};
+use crate::types::{DisplaySessionRequest, PersistentShellListProviderRequest};
 
 /// Exercise the basic [`WorkloadProvider`] surface: listing must succeed
 /// and capabilities must be queryable. Returns the advertised capability
@@ -37,6 +37,25 @@ pub async fn display_fails_closed_when_unsupported(
         Err(e) => {
             e.kind() == ErrorKind::CapabilityDenied
                 && e.missing_capability() == Some(Capability::WindowForwarding)
+        }
+        Ok(_) => false,
+    }
+}
+
+/// Assert that a provider without `persistent-shell` refuses shell operations
+/// with a typed capability denial instead of falling back to provider exec,
+/// durable execution, SSH, or a native provider shell API.
+pub async fn persistent_shell_fails_closed_when_unsupported(
+    provider: &dyn PersistentShellProvider,
+    req: PersistentShellListProviderRequest,
+) -> bool {
+    if provider.capabilities().has(Capability::PersistentShell) {
+        return true;
+    }
+    match provider.list_shells(req).await {
+        Err(e) => {
+            e.kind() == ErrorKind::CapabilityDenied
+                && e.missing_capability() == Some(Capability::PersistentShell)
         }
         Ok(_) => false,
     }
@@ -96,10 +115,14 @@ pub async fn mux_rejects_inconsistent_open(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mock::{HeadlessDisplayProvider, LoopbackStreamMux, MockWorkloadProvider};
-    use crate::types::DisplaySessionRequest;
+    use crate::mock::{
+        HeadlessDisplayProvider, HeadlessPersistentShellProvider, LoopbackStreamMux,
+        MockWorkloadProvider,
+    };
+    use crate::types::{DisplaySessionRequest, PersistentShellListProviderRequest};
     use nixling_constellation_core::{
-        OperationId, PrincipalId, RealmPath, StreamAuthz, StreamId, StreamKind, WorkloadId,
+        OperationId, PrincipalId, RealmPath, ShellListRequest, StreamAuthz, StreamId, StreamKind,
+        WorkloadId,
     };
 
     #[tokio::test]
@@ -122,6 +145,17 @@ mod tests {
             ),
         };
         assert!(display_fails_closed_when_unsupported(&p, req).await);
+    }
+
+    #[tokio::test]
+    async fn persistent_shell_provider_does_not_fallback_to_exec() {
+        let p = HeadlessPersistentShellProvider;
+        let req = PersistentShellListProviderRequest {
+            workload: WorkloadId::parse("demo").unwrap(),
+            operation_id: OperationId::parse("op-shell-1").unwrap(),
+            request: ShellListRequest { generation: None },
+        };
+        assert!(persistent_shell_fails_closed_when_unsupported(&p, req).await);
     }
 
     #[tokio::test]

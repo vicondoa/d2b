@@ -27,6 +27,11 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- Constellation persistent shell routing: extended remote full-host routing and
+  provider trait seams so ADR 0039 `Shell*` operations require
+  `persistent-shell`, target workloads explicitly, preserve mutating
+  idempotency semantics, round-trip through the protobuf codec, and stay
+  separate from provider exec/durable execution.
 - Constellation persistent shell contracts: promoted ADR 0039's reserved
   `persistent-shell` capability, `Shell*` operation kinds, shell-authorized PTY
   stream kind, and bounded shell DTOs into the generated core schema contract.

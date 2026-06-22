@@ -10,10 +10,16 @@ use nixling_constellation_core::{
 
 use crate::capabilities::{DisplayCapabilitySet, WorkloadCapabilitySet};
 use crate::error::{ProviderError, ProviderResult};
-use crate::provider::{DisplayProvider, StreamMux, WorkloadProvider};
+use crate::provider::{
+    DisplayProvider, GuestControlEndpointProvider, PersistentShellProvider, StreamMux,
+    WorkloadProvider,
+};
 use crate::types::{
     DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest, ExecStartRequest,
-    IncomingStream, ListSelector, StreamHandle, WorkloadStatus,
+    GuestControlEndpointStatus, IncomingStream, ListSelector, PersistentShellAttachProviderRequest,
+    PersistentShellAttachProviderResponse, PersistentShellDetachProviderRequest,
+    PersistentShellKillProviderRequest, PersistentShellListProviderRequest,
+    PersistentShellListProviderResponse, PersistentShellStatus, StreamHandle, WorkloadStatus,
 };
 
 fn id(label: &str) -> ProviderId {
@@ -104,6 +110,89 @@ impl DisplayProvider for HeadlessDisplayProvider {
     }
     async fn close_display_session(&self, _id: DisplaySessionId) -> ProviderResult<()> {
         Ok(())
+    }
+}
+
+/// A provider-managed workload surface with no guestd-compatible agent.
+#[derive(Debug, Clone, Default)]
+pub struct NoGuestControlEndpointProvider;
+
+#[async_trait]
+impl GuestControlEndpointProvider for NoGuestControlEndpointProvider {
+    fn provider_id(&self) -> ProviderId {
+        id("no-guest-control")
+    }
+
+    fn node_id(&self) -> NodeId {
+        NodeId::parse("mock").expect("valid")
+    }
+
+    fn capabilities(&self) -> WorkloadCapabilitySet {
+        WorkloadCapabilitySet::default()
+    }
+
+    async fn endpoint_status(
+        &self,
+        _workload: WorkloadId,
+    ) -> ProviderResult<GuestControlEndpointStatus> {
+        Err(ProviderError::capability_denied(
+            Capability::PersistentShell,
+        ))
+    }
+}
+
+/// A provider-managed workload surface that cannot run persistent shells.
+#[derive(Debug, Clone, Default)]
+pub struct HeadlessPersistentShellProvider;
+
+#[async_trait]
+impl PersistentShellProvider for HeadlessPersistentShellProvider {
+    fn provider_id(&self) -> ProviderId {
+        id("headless-shell")
+    }
+
+    fn node_id(&self) -> NodeId {
+        NodeId::parse("mock").expect("valid")
+    }
+
+    fn capabilities(&self) -> WorkloadCapabilitySet {
+        WorkloadCapabilitySet::default()
+    }
+
+    async fn list_shells(
+        &self,
+        _req: PersistentShellListProviderRequest,
+    ) -> ProviderResult<PersistentShellListProviderResponse> {
+        Err(ProviderError::capability_denied(
+            Capability::PersistentShell,
+        ))
+    }
+
+    async fn attach_shell(
+        &self,
+        _req: PersistentShellAttachProviderRequest,
+    ) -> ProviderResult<PersistentShellAttachProviderResponse> {
+        Err(ProviderError::capability_denied(
+            Capability::PersistentShell,
+        ))
+    }
+
+    async fn detach_shell(
+        &self,
+        _req: PersistentShellDetachProviderRequest,
+    ) -> ProviderResult<PersistentShellStatus> {
+        Err(ProviderError::capability_denied(
+            Capability::PersistentShell,
+        ))
+    }
+
+    async fn kill_shell(
+        &self,
+        _req: PersistentShellKillProviderRequest,
+    ) -> ProviderResult<PersistentShellStatus> {
+        Err(ProviderError::capability_denied(
+            Capability::PersistentShell,
+        ))
     }
 }
 

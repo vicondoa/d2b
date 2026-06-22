@@ -126,6 +126,9 @@ A node that has not advertised `logs` cannot receive retained-log requests.
 implements the shell operation family. Shell routing reaches the remote daemon
 as semantic `Shell*` operations and the remote daemon re-originates local
 guest-control shell RPCs near the guest.
+All `Shell*` remote operations require an explicit workload target. A shell
+request without `workload` fails at route preflight with `missing-workload`
+before any remote peer can observe it.
 
 Capability sets are fixed at registration time for a given transport
 session. A node that gains or loses a substrate capability must
@@ -191,6 +194,14 @@ in-memory idempotency store:
 
 Non-mutating operations (read, inspect, list) are not idempotency-keyed
 and may be retried freely.
+
+`ShellList` is non-mutating. `ShellAttach`, `ShellDetach`, and `ShellKill`
+are mutating persistent-shell operations and use the same gateway deduplication
+and remote-state query behavior as other remote mutations. A same-key lost-reply
+retry replays or queries the remote node before any side effect is retried.
+Shell attach stream setup must also validate the shell generation's
+`guest_boot_id` against the accepted remote route generation before opening a
+`shell-pty` stream.
 
 ---
 
@@ -307,7 +318,7 @@ Errors from the remote full-host node adapter use the standard
 | `missing-idempotency-key` | `InvalidTarget` | Mutating operation arrived without an idempotency key. | Retry with an idempotency key. |
 | `idempotency-key-conflict` | `IdempotencyKeyConflict` | Same key presented with different operation fields. | Use a fresh idempotency key or retry the original request. |
 | `idempotency-key-expired` | `IdempotencyKeyExpired` | Key was reused after its retention window. | Start a new operation with a fresh idempotency key. |
-| `missing-workload` | `InvalidTarget` | A workload or execution operation omitted the workload target. | Target a workload for workload or execution operations. |
+| `missing-workload` | `InvalidTarget` | A workload, execution, or shell operation omitted the workload target. | Target a workload for workload, execution, or shell operations. |
 | `remote-operation-unknown` | `GatewayUnavailable` | Reconnect reconciliation found no matching remote-side operation state. | Retry after the remote node reconciles operation state. |
 | `remote-node-unavailable` | `GatewayUnavailable` | Node is disconnected or stale. | Check the remote daemon peer session and re-register the node. |
 | `capability-denied` | `CapabilityDenied` | Required capability absent from the node's registered set. | Check the substrate provider report and re-register after resolving capability gaps. |
@@ -351,7 +362,8 @@ only. The following items are deferred to later work:
 - Provider-provisioned remote hosts (see the
   [provider-managed sandbox](./provider-managed-sandboxes.md)
   model for provider-scoped work).
-- Persistent shell routing for remote full-host and provider targets ([ADR 0039](../adr/0039-constellation-persistent-shell-routing.md)).
+- Daemon, CLI, guestd, and live provider-agent runtime forwarding for
+  persistent shell remote/provider targets ([ADR 0039](../adr/0039-constellation-persistent-shell-routing.md)).
 - Automatic capability refresh without re-registration.
 - End-user principal delegation across a gateway; the preview binds the
   authenticated gateway principal only.

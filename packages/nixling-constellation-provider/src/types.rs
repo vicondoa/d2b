@@ -4,8 +4,9 @@
 //! `Debug`.
 
 use nixling_constellation_core::{
-    ExecutionId, NodeId, OpaquePayload, OperationId, ProviderId, StreamAuthz, StreamCursor,
-    StreamId, WorkloadId, WorkloadSelector,
+    CapabilitySet, ExecutionId, NodeId, OpaquePayload, OperationId, ProviderId, ShellAttachRequest,
+    ShellAttachSummary, ShellDetachRequest, ShellGeneration, ShellKillRequest, ShellListRequest,
+    ShellListResponse, StreamAuthz, StreamCursor, StreamId, WorkloadId, WorkloadSelector,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -86,6 +87,92 @@ pub struct ExecCancelRequest {
     /// Execution to cancel.
     pub execution: ExecutionId,
 }
+
+/// Non-secret guest-control capability metadata for one provider-managed
+/// workload. It is not a socket address, relay URL, credential, or raw
+/// guest-control endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuestControlEndpointStatus {
+    /// Provider that reported this status.
+    pub provider: ProviderId,
+    /// Node hosting the workload.
+    pub node: NodeId,
+    /// Workload whose guestd-compatible agent is reachable through the
+    /// provider/relay peer transport.
+    pub workload: WorkloadId,
+    /// Positive capabilities advertised by the workload agent.
+    pub capabilities: CapabilitySet,
+    /// Current guest/shell generation reported by the agent.
+    pub generation: ShellGeneration,
+}
+
+/// Request to list persistent shells for a provider-managed workload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentShellListProviderRequest {
+    /// Workload whose shells are listed.
+    pub workload: WorkloadId,
+    /// Operation that authorized the list.
+    pub operation_id: OperationId,
+    /// Bounded shell list DTO from the core contract.
+    pub request: ShellListRequest,
+}
+
+/// Request to attach to a persistent shell for a provider-managed workload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentShellAttachProviderRequest {
+    /// Workload whose shell is attached.
+    pub workload: WorkloadId,
+    /// Operation that authorized the attach and shell PTY stream.
+    pub operation_id: OperationId,
+    /// Bounded shell attach DTO from the core contract.
+    pub request: ShellAttachRequest,
+    /// Already-authorized shell PTY stream open. Providers must reject this
+    /// request if it is not `StreamKind::ShellPty` and internally consistent.
+    pub shell_pty_stream: StreamOpen,
+}
+
+impl PersistentShellAttachProviderRequest {
+    /// Whether the embedded stream open is a valid shell-authorized PTY open.
+    pub fn shell_pty_stream_is_authorized(&self) -> bool {
+        self.shell_pty_stream.descriptor.kind == StreamKind::ShellPty
+            && self.shell_pty_stream.is_consistent()
+    }
+}
+
+/// Request to detach from a persistent shell for a provider-managed workload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentShellDetachProviderRequest {
+    /// Workload whose shell is detached.
+    pub workload: WorkloadId,
+    /// Operation that authorized the detach.
+    pub operation_id: OperationId,
+    /// Bounded shell detach DTO from the core contract.
+    pub request: ShellDetachRequest,
+}
+
+/// Request to kill a persistent shell for a provider-managed workload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentShellKillProviderRequest {
+    /// Workload whose shell is killed.
+    pub workload: WorkloadId,
+    /// Operation that authorized the kill.
+    pub operation_id: OperationId,
+    /// Bounded shell kill DTO from the core contract.
+    pub request: ShellKillRequest,
+}
+
+/// Result returned by a provider-managed persistent-shell detach or kill.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentShellStatus {
+    /// Current shell summary after the operation.
+    pub summary: nixling_constellation_core::ShellSummary,
+}
+
+/// Result returned by a provider-managed persistent-shell list.
+pub type PersistentShellListProviderResponse = ShellListResponse;
+
+/// Result returned by a provider-managed persistent-shell attach.
+pub type PersistentShellAttachProviderResponse = ShellAttachSummary;
 
 /// A display-session id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -296,5 +383,68 @@ impl DaemonAccessMode {
     /// Whether this mode is implemented today.
     pub fn is_implemented(self) -> bool {
         matches!(self, DaemonAccessMode::LocalUnix)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nixling_constellation_core::{
+        Capability, PrincipalId, RealmPath, ShellAttachId, ShellAttachRequest, ShellName,
+        StreamDescriptor,
+    };
+
+    fn shell_generation() -> ShellGeneration {
+        ShellGeneration {
+            guest_boot_id: nixling_constellation_core::ProtocolToken::parse("boot-a").unwrap(),
+            guestd_instance_id: nixling_constellation_core::ProtocolToken::parse("guestd-a")
+                .unwrap(),
+            shell_daemon_instance_id: nixling_constellation_core::ProtocolToken::parse("shell-a")
+                .unwrap(),
+        }
+    }
+
+    fn stream_open(kind: StreamKind, authz_capability: Capability) -> StreamOpen {
+        StreamOpen {
+            descriptor: StreamDescriptor {
+                id: StreamId::parse("shell-pty-1").unwrap(),
+                kind,
+            },
+            operation_id: OperationId::parse("op-shell-1").unwrap(),
+            authz: StreamAuthz {
+                principal: PrincipalId::parse("principal-1").unwrap(),
+                realm: RealmPath::local(),
+                capability: authz_capability,
+            },
+        }
+    }
+
+    fn attach_request(shell_pty_stream: StreamOpen) -> PersistentShellAttachProviderRequest {
+        PersistentShellAttachProviderRequest {
+            workload: WorkloadId::parse("demo").unwrap(),
+            operation_id: OperationId::parse("op-shell-1").unwrap(),
+            request: ShellAttachRequest {
+                name: ShellName::parse("default").unwrap(),
+                generation: shell_generation(),
+                attach_id: ShellAttachId::parse("attach-1").unwrap(),
+                force: false,
+            },
+            shell_pty_stream,
+        }
+    }
+
+    #[test]
+    fn persistent_shell_attach_requires_shell_authorized_pty_stream() {
+        let valid = attach_request(stream_open(
+            StreamKind::ShellPty,
+            Capability::PersistentShell,
+        ));
+        assert!(valid.shell_pty_stream_is_authorized());
+
+        let forged = attach_request(stream_open(StreamKind::ShellPty, Capability::Pty));
+        assert!(!forged.shell_pty_stream_is_authorized());
+
+        let wrong_kind = attach_request(stream_open(StreamKind::Stdio, Capability::Pty));
+        assert!(!wrong_kind.shell_pty_stream_is_authorized());
     }
 }

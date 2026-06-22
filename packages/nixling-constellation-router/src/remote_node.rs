@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use nixling_constellation_core::{
     Capability, CapabilitySet, ErrorKind, ExecutionGeneration, NodeId, NodeKind, NodeSummary,
     OperationKind, OperationRequest, PrincipalId, ProtocolToken, ProviderId, RealmPath,
-    TraceContext,
+    ShellGeneration, TraceContext,
 };
 
 /// Default maximum number of remote full-host nodes retained by one registry.
@@ -850,6 +850,18 @@ pub fn ensure_remote_execution_generation(
     }
 }
 
+/// Validate remote shell generation before opening a shell PTY stream.
+pub fn ensure_remote_shell_generation(
+    route: &RemoteRoute,
+    generation: &ShellGeneration,
+) -> Result<(), RemoteNodeError> {
+    if generation.guest_boot_id == route.generation {
+        Ok(())
+    } else {
+        Err(RemoteNodeError::new(RemoteNodeErrorKind::StaleGeneration))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -888,6 +900,16 @@ mod tests {
 
     fn req(kind: OperationKind, capability: Capability, key: Option<&str>) -> OperationRequest {
         req_with_trace(kind, capability, key, None)
+    }
+
+    fn req_without_workload(
+        kind: OperationKind,
+        capability: Capability,
+        key: Option<&str>,
+    ) -> OperationRequest {
+        let mut request = req(kind, capability, key);
+        request.workload = None;
+        request
     }
 
     fn req_with_trace(
@@ -1136,6 +1158,89 @@ mod tests {
     }
 
     #[test]
+    fn remote_shell_operations_require_persistent_shell_capability() {
+        let mut registry = RemoteNodeRegistry::new();
+        let caps = CapabilitySet::empty().with(Capability::PersistentShell);
+        registry
+            .register(registration("gen-1", caps.clone()), instant(0))
+            .unwrap();
+        for (kind, key, mutating) in [
+            (OperationKind::ShellList, None, false),
+            (OperationKind::ShellAttach, Some("shell-attach-1"), true),
+            (OperationKind::ShellDetach, Some("shell-detach-1"), true),
+            (OperationKind::ShellKill, Some("shell-kill-1"), true),
+        ] {
+            let request = req(kind, Capability::PersistentShell, key);
+            let route = registry
+                .prepare_route(
+                    &request,
+                    &ProtocolToken::parse("gen-1").unwrap(),
+                    &principal(),
+                )
+                .unwrap();
+            assert_eq!(route.operation, kind);
+            assert_eq!(route.required_capability, Some(Capability::PersistentShell));
+            assert_eq!(route.mutating, mutating);
+            assert_eq!(route.capability_fingerprint, caps.stable_fingerprint());
+        }
+    }
+
+    #[test]
+    fn remote_shell_capability_denied_when_node_does_not_advertise_it() {
+        let mut registry = RemoteNodeRegistry::new();
+        registry
+            .register(
+                registration("gen-1", CapabilitySet::empty().with(Capability::Exec)),
+                instant(0),
+            )
+            .unwrap();
+        let request = req(
+            OperationKind::ShellAttach,
+            Capability::PersistentShell,
+            Some("shell-attach-1"),
+        );
+        let err = registry
+            .prepare_route(
+                &request,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &principal(),
+            )
+            .unwrap_err();
+        assert_eq!(err.kind, RemoteNodeErrorKind::CapabilityDenied);
+        assert_eq!(err.missing_capability, Some(Capability::PersistentShell));
+    }
+
+    #[test]
+    fn remote_shell_operations_require_workload_targets() {
+        let mut registry = RemoteNodeRegistry::new();
+        registry
+            .register(
+                registration(
+                    "gen-1",
+                    CapabilitySet::empty().with(Capability::PersistentShell),
+                ),
+                instant(0),
+            )
+            .unwrap();
+        for (kind, key) in [
+            (OperationKind::ShellList, None),
+            (OperationKind::ShellAttach, Some("shell-attach-1")),
+            (OperationKind::ShellDetach, Some("shell-detach-1")),
+            (OperationKind::ShellKill, Some("shell-kill-1")),
+        ] {
+            let request = req_without_workload(kind, Capability::PersistentShell, key);
+            let err = registry
+                .prepare_route(
+                    &request,
+                    &ProtocolToken::parse("gen-1").unwrap(),
+                    &principal(),
+                )
+                .unwrap_err();
+            assert_eq!(err.kind, RemoteNodeErrorKind::MissingWorkload);
+        }
+    }
+
+    #[test]
     fn unsupported_remote_operation_is_refused() {
         let mut registry = RemoteNodeRegistry::new();
         registry
@@ -1202,6 +1307,20 @@ mod tests {
             retry_action_after_disconnect(&list),
             RemoteRetryAction::NoSideEffectToRetry
         );
+        let attach = req(
+            OperationKind::ShellAttach,
+            Capability::PersistentShell,
+            Some("shell-attach-1"),
+        );
+        assert_eq!(
+            retry_action_after_disconnect(&attach),
+            RemoteRetryAction::QueryRemoteState
+        );
+        let shell_list = req(OperationKind::ShellList, Capability::PersistentShell, None);
+        assert_eq!(
+            retry_action_after_disconnect(&shell_list),
+            RemoteRetryAction::NoSideEffectToRetry
+        );
     }
 
     #[test]
@@ -1229,6 +1348,36 @@ mod tests {
             workload_generation: ProtocolToken::parse("workload-gen").unwrap(),
         };
         let err = ensure_remote_execution_generation(&route, &stale).unwrap_err();
+        assert_eq!(err.kind, RemoteNodeErrorKind::StaleGeneration);
+    }
+
+    #[test]
+    fn remote_shell_generation_is_checked_before_shell_pty_open() {
+        let route = RemoteRoute {
+            realm: RealmPath::local(),
+            node: NodeId::parse("remote-host").unwrap(),
+            generation: ProtocolToken::parse("boot-a").unwrap(),
+            operation: OperationKind::ShellAttach,
+            required_capability: Some(Capability::PersistentShell),
+            capability_fingerprint: CapabilitySet::empty()
+                .with(Capability::PersistentShell)
+                .stable_fingerprint(),
+            principal: principal(),
+            trace: None,
+            mutating: true,
+        };
+        let good = ShellGeneration {
+            guest_boot_id: ProtocolToken::parse("boot-a").unwrap(),
+            guestd_instance_id: ProtocolToken::parse("guestd-a").unwrap(),
+            shell_daemon_instance_id: ProtocolToken::parse("shell-a").unwrap(),
+        };
+        assert!(ensure_remote_shell_generation(&route, &good).is_ok());
+        let stale = ShellGeneration {
+            guest_boot_id: ProtocolToken::parse("boot-b").unwrap(),
+            guestd_instance_id: ProtocolToken::parse("guestd-a").unwrap(),
+            shell_daemon_instance_id: ProtocolToken::parse("shell-a").unwrap(),
+        };
+        let err = ensure_remote_shell_generation(&route, &stale).unwrap_err();
         assert_eq!(err.kind, RemoteNodeErrorKind::StaleGeneration);
     }
 
@@ -1359,6 +1508,52 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.kind, RemoteNodeErrorKind::CapabilityDenied);
         assert_eq!(peer.sends, 0);
+    }
+
+    #[test]
+    fn shell_mutations_use_remote_idempotency_and_shell_list_does_not() {
+        let caps = CapabilitySet::empty().with(Capability::PersistentShell);
+        let mut adapter = adapter(caps);
+        let mut peer = FakePeer::default();
+
+        let list = req(OperationKind::ShellList, Capability::PersistentShell, None);
+        let outcome = adapter
+            .dispatch(&list, &ProtocolToken::parse("gen-1").unwrap(), &mut peer)
+            .unwrap();
+        assert!(matches!(outcome, RemoteDispatchOutcome::Sent { .. }));
+        assert_eq!(peer.sends, 1);
+
+        let missing_key = req(
+            OperationKind::ShellAttach,
+            Capability::PersistentShell,
+            None,
+        );
+        let err = adapter
+            .dispatch(
+                &missing_key,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+            )
+            .unwrap_err();
+        assert_eq!(err.kind, RemoteNodeErrorKind::MissingIdempotencyKey);
+
+        for (kind, key) in [
+            (OperationKind::ShellAttach, "shell-attach-1"),
+            (OperationKind::ShellDetach, "shell-detach-1"),
+            (OperationKind::ShellKill, "shell-kill-1"),
+        ] {
+            let request = req(kind, Capability::PersistentShell, Some(key));
+            let outcome = adapter
+                .dispatch(&request, &ProtocolToken::parse("gen-1").unwrap(), &mut peer)
+                .unwrap();
+            assert!(matches!(outcome, RemoteDispatchOutcome::Sent { .. }));
+            let replay = adapter
+                .dispatch(&request, &ProtocolToken::parse("gen-1").unwrap(), &mut peer)
+                .unwrap();
+            assert!(matches!(replay, RemoteDispatchOutcome::Replayed { .. }));
+        }
+        assert_eq!(peer.sends, 4);
+        assert_eq!(peer.queries, 0);
     }
 
     #[test]

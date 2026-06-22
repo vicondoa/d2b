@@ -28,8 +28,9 @@ pub use credential::{
 pub use error::{ProviderDiagnostic, ProviderError, RetryHint};
 pub use provider::{
     CredentialProvider, CredentialStatus, DaemonAccessApi, DaemonAccessTransport, DisplayProvider,
-    DurableExecutionProvider, HostSubstrateProvider, InfrastructureProvider, NodeProvider,
-    ObservabilitySinkProvider, ProtocolCodec, RelayProvider, RuntimeProvider, StreamMux,
-    TransportListener, TransportProvider, WorkloadProvider,
+    DurableExecutionProvider, GuestControlEndpointProvider, HostSubstrateProvider,
+    InfrastructureProvider, NodeProvider, ObservabilitySinkProvider, PersistentShellProvider,
+    ProtocolCodec, RelayProvider, RuntimeProvider, StreamMux, TransportListener, TransportProvider,
+    WorkloadProvider,
 };
 pub use rate_limit::{CircuitBreakerConfig, CircuitBreakerSnapshot, ProviderCircuitBreaker};

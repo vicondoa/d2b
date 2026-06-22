@@ -104,6 +104,15 @@ Gateway/router layers own idempotency for mutating operations. The Azure Contain
 provider itself uses deterministic workload labels to discover upstream
 state before creating or retrying mutating lifecycle calls.
 
+Persistent shell support is a separate provider trait surface. A
+guestd-compatible sandbox that advertises `persistent-shell` handles
+`ShellList`, `ShellAttach`, `ShellDetach`, and `ShellKill` through a
+`PersistentShellProvider`-style seam and binds attach to an authorized
+`shell-pty` stream. This seam is not `WorkloadProvider::exec`, not durable
+execution, and not a provider-native shell channel. The current Azure Container
+Apps execute-only adapter does not implement it and must continue to return
+typed capability denials for `Shell*` operations.
+
 ---
 
 ## Absent capabilities (explicit non-scope)
@@ -120,6 +129,11 @@ with `UnsupportedFeature` or `CapabilityDenied`; there are no fallbacks.
   provider sandboxes must use a guestd-compatible nixling agent over the ADR
   0032 peer transport; they still do not expose raw guest-control frames or a
   provider-specific shell channel.
+- **No exec-to-shell fallback.** `executeShellCommand`,
+  `WorkloadProvider::exec`, and durable execution are one-shot/durable exec
+  surfaces, not ADR 0039 persistent shell. A sandbox without a
+  guestd-compatible agent and `persistent-shell` capability refuses `Shell*`
+  operations with `CapabilityDenied` or `UnsupportedFeature`.
 - **No pidfd or fd passing.** No file descriptors are exchanged with
   the container runtime.
 - **No SSH fallback.** No SSH session is opened when the provider API
@@ -298,7 +312,8 @@ adapter:
 - Interactive exec sessions or attached TTY to running containers.
 - Persistent named shell sessions; ADR 0039 defines this for a
   guestd-compatible in-sandbox agent and explicitly excludes mapping it to
-  `executeShellCommand`.
+  `executeShellCommand`. The pure provider trait/DTO seam exists, but the
+  Azure Container Apps runtime adapter does not implement it.
 - Live stdio streaming (current support is polling-based log read only).
 - Automatic workload image build or push from a local Nix store.
 - Multi-region or multi-subscription Azure Container Apps targeting from a single
