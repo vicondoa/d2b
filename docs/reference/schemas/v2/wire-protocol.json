@@ -6009,7 +6009,7 @@
           }
         },
         {
-          "description": "Persistent named guest-shell operation. Wave 2 exposes only the staged contract DTOs; runtime handlers fail closed until the later shell runtime waves wire guestd and nixlingd implementations.",
+          "description": "Persistent named guest-shell operation. The staged contract DTOs fail closed until guestd and nixlingd runtime implementations are available.",
           "type": "object",
           "required": [
             "kind",

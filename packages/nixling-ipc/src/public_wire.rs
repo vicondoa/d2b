@@ -104,9 +104,8 @@ pub enum PublicRequest {
     /// it never crosses SSH.
     #[serde(rename = "exec")]
     Exec(ExecOp),
-    /// Persistent named guest-shell operation. Wave 2 exposes only the staged
-    /// contract DTOs; runtime handlers fail closed until the later shell runtime
-    /// waves wire guestd and nixlingd implementations.
+    /// Persistent named guest-shell operation. The staged contract DTOs fail
+    /// closed until guestd and nixlingd runtime implementations are available.
     #[serde(rename = "shell")]
     Shell(ShellOp),
     /// Gateway-mode display-session operation. Host-mode daemons reject this

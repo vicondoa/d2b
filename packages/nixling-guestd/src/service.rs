@@ -150,9 +150,9 @@ pub struct GuestdServeConfig {
     /// Absolute path to the guest `usbip` binary. Present only for guests whose
     /// host VM declaration enabled USBIP; advertises the `UsbipImport` RPC.
     pub usbip_path: Option<PathBuf>,
-    /// Host-owned persistent shell contract policy. Wave 2 parses and stores this
-    /// policy so guest units can be rendered, but runtime shell operations remain
-    /// fail-closed until the shell runtime lands.
+    /// Host-owned persistent shell contract policy. guestd parses and stores
+    /// this policy so guest units can be rendered, but runtime shell operations
+    /// remain fail-closed until the shell runtime is available.
     pub shell_policy: ShellPolicy,
 }
 
