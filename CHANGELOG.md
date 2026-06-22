@@ -56,6 +56,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- VM shutdowns now attempt provider-aware graceful guest shutdown for supported
+  Cloud Hypervisor/qemu-media VMs before forced pidfd cleanup, with bounded
+  daemon audit and metrics outcomes.
+
 - Persistent shell CLI: added top-level `nixling shell <vm>` attach and
   management forms for persistent named guest shell sessions.
 
