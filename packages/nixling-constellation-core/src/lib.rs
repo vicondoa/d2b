@@ -54,8 +54,9 @@ pub use payload::OpaquePayload;
 pub use realm::{EntrypointMode, RealmPath};
 pub use shell::{
     ShellAttachId, ShellAttachRequest, ShellAttachSummary, ShellCause, ShellDetachRequest,
-    ShellGeneration, ShellKillRequest, ShellListRequest, ShellListResponse, ShellName,
-    ShellNameError, ShellOpaqueIdError, ShellSessionInstanceId, ShellState, ShellSummary,
+    ShellEventBatch, ShellEventSummary, ShellGeneration, ShellKillRequest, ShellListRequest,
+    ShellListResponse, ShellName, ShellNameError, ShellOpaqueIdError, ShellSessionInstanceId,
+    ShellState, ShellSummary,
 };
 pub use stream::{StreamAuthz, StreamChannel, StreamCloseReason, StreamDescriptor, StreamKind};
 pub use target::{TARGET_SUFFIX, THIS_NODE_ALIAS, TargetName, TargetParseError};
