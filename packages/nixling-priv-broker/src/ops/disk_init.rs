@@ -29,6 +29,7 @@ use nixling_core::bundle_resolver::{BundleResolver, ResolvedDiskInitOp};
 const PERMITTED_ROOT: &str = "/var/lib/nixling/vms/";
 const EXT4_MAGIC_OFFSET: u64 = 1024 + 0x38;
 const EXT4_SUPER_MAGIC: u16 = 0xEF53;
+const MKFS_STDERR_LIMIT: usize = 512;
 
 /// Validate `mkfs.ext4` binary path resolution from
 /// `NIXLING_BROKER_MKFS_EXT4_BINARY` (default
@@ -206,9 +207,12 @@ fn apply_posture(file: &File, spec: &ResolvedDiskInitOp, phase: &str) -> io::Res
 }
 
 fn validate_existing_posture(file: &File, spec: &ResolvedDiskInitOp) -> Result<(), DiskInitError> {
-    let meta = file
-        .metadata()
-        .map_err(|e| DiskInitError::unexpected(format!("stat existing image failed: {e}")))?;
+    let meta = file.metadata().map_err(|e| {
+        DiskInitError::unexpected(format!(
+            "stat existing image {} failed: {e}",
+            spec.target_path.display()
+        ))
+    })?;
     if !meta.file_type().is_file() {
         let kind = if meta.file_type().is_symlink() {
             "symlink"
@@ -220,19 +224,22 @@ fn validate_existing_posture(file: &File, spec: &ResolvedDiskInitOp) -> Result<(
             "non-regular"
         };
         return Err(DiskInitError::unexpected(format!(
-            "existing image is {kind}, expected regular file"
+            "existing image {} is {kind}, expected regular file",
+            spec.target_path.display()
         )));
     }
     if meta.len() != spec.size_bytes {
         return Err(DiskInitError::unexpected(format!(
-            "existing image size {} does not match declared size {}",
+            "existing image {} size {} does not match declared size {}",
+            spec.target_path.display(),
             meta.len(),
             spec.size_bytes
         )));
     }
     if meta.uid() != spec.owner_uid || meta.gid() != spec.owner_gid {
         return Err(DiskInitError::unexpected(format!(
-            "existing image owner {}:{} does not match declared owner {}:{}",
+            "existing image {} owner {}:{} does not match declared owner {}:{}",
+            spec.target_path.display(),
             meta.uid(),
             meta.gid(),
             spec.owner_uid,
@@ -242,8 +249,10 @@ fn validate_existing_posture(file: &File, spec: &ResolvedDiskInitOp) -> Result<(
     let mode = meta.mode() & 0o777;
     if mode != spec.mode {
         return Err(DiskInitError::unexpected(format!(
-            "existing image mode {:04o} does not match declared mode {:04o}",
-            mode, spec.mode
+            "existing image {} mode {:04o} does not match declared mode {:04o}",
+            spec.target_path.display(),
+            mode,
+            spec.mode
         )));
     }
     Ok(())
@@ -299,13 +308,13 @@ fn fd_target_path(file: &File) -> std::path::PathBuf {
 
 fn run_mkfs_ext4_on_fd_with(file: &File, display_path: &Path, tool: &MkfsTool) -> io::Result<()> {
     let target = fd_target_path(file);
-    let mkfs_status = std::process::Command::new(&tool.path)
+    let mkfs_output = std::process::Command::new(&tool.path)
         .arg("-q")
         .arg("-F")
         .arg("-E")
         .arg("lazy_itable_init=1,lazy_journal_init=1")
         .arg(&target)
-        .status()
+        .output()
         .map_err(|e| {
             io::Error::new(
                 e.kind(),
@@ -316,15 +325,32 @@ fn run_mkfs_ext4_on_fd_with(file: &File, display_path: &Path, tool: &MkfsTool) -
                 ),
             )
         })?;
-    if !mkfs_status.success() {
+    if !mkfs_output.status.success() {
+        let stderr = bounded_lossy(&mkfs_output.stderr, MKFS_STDERR_LIMIT);
+        let detail = if stderr.is_empty() {
+            String::new()
+        } else {
+            format!("; stderr: {stderr}")
+        };
         return Err(DiskInitError::formatter(format!(
-            "mkfs.ext4 exit={:?} on {}",
-            mkfs_status.code(),
-            display_path.display()
+            "mkfs.ext4 exit={:?} on {}{}",
+            mkfs_output.status.code(),
+            display_path.display(),
+            detail
         ))
         .into());
     }
     Ok(())
+}
+
+fn bounded_lossy(bytes: &[u8], limit: usize) -> String {
+    let truncated = bytes.len() > limit;
+    let prefix = if truncated { &bytes[..limit] } else { bytes };
+    let mut text = String::from_utf8_lossy(prefix).trim().to_owned();
+    if truncated {
+        text.push_str("...[truncated]");
+    }
+    text
 }
 
 fn create_and_format(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
@@ -577,6 +603,21 @@ mod tests {
         }
     }
 
+    fn failing_mkfs_tool(scratch: &Path, stderr: &str) -> MkfsTool {
+        let script = scratch.join("failing-mkfs-ext4");
+        let mut file = fs::File::create(&script).unwrap();
+        writeln!(file, "#!/bin/sh\nprintf '%s' {:?} >&2\nexit 9\n", stderr).unwrap();
+        drop(file);
+        let file = fs::File::open(&script).unwrap();
+        let mut perms = file.metadata().unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms).unwrap();
+        MkfsTool {
+            raw: script.display().to_string(),
+            path: script,
+        }
+    }
+
     fn create_regular_image(path: &Path, size: u64, mode: u32) -> File {
         use std::os::unix::fs::OpenOptionsExt;
         let file = fs::OpenOptions::new()
@@ -700,6 +741,32 @@ mod tests {
             .expect_err("wrong mode must fail closed");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("mode 0644"));
+        assert!(err.to_string().contains(&target.display().to_string()));
+
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn mkfs_failure_includes_bounded_stderr() {
+        let scratch = scratch_root();
+        let target = scratch.join("var.img");
+        let file = create_regular_image(&target, 4096, 0o600);
+        drop(file);
+        let spec = test_spec(target.clone(), 4096, true);
+        let stderr = format!("permission denied {}", "x".repeat(MKFS_STDERR_LIMIT * 2));
+        let tool = failing_mkfs_tool(&scratch, &stderr);
+
+        let err = validate_or_repair_existing_with(&spec, &tool)
+            .expect_err("failing mkfs must surface stderr");
+        let rendered = err.to_string();
+        assert!(rendered.contains("exit=Some(9)"));
+        assert!(rendered.contains("permission denied"));
+        assert!(rendered.contains("[truncated]"));
+        assert!(
+            rendered.len() < 900,
+            "stderr should be bounded, got {} chars",
+            rendered.len()
+        );
 
         let _ = fs::remove_dir_all(&scratch);
     }
