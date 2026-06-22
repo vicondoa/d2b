@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ShellKillOutputV1",
+  "type": "object",
+  "required": [
+    "command",
+    "name",
+    "result",
+    "state",
+    "vm"
+  ],
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "result": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string"
+    },
+    "vm": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

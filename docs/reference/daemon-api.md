@@ -402,6 +402,8 @@ The redaction policy is strict:
 - no host paths unless the path itself is already part of the stable
   public contract;
 - no secrets, stack traces, credential material, or raw command output;
+- no terminal payloads, argv/env/cwd, helper stderr/stdout, raw shell session
+  handles, or raw shell names in daemon metrics or broad debug/audit fields;
 - one human-readable remediation hint per failure;
 - one docs anchor into [`error-codes.md`](./error-codes.md).
 
@@ -501,6 +503,14 @@ bounded event metadata plus `prev_hash` and `record_hash` fields so a
 verifier can detect missing, reordered, or modified lines. The hash-chain
 helper reports tampering explicitly; the write path remains best-effort so
 an audit sink outage does not abort an already-authorized local operation.
+
+Persistent shell daemon events are in this daemon-owned stream, not the broker
+audit log. The shell variants record only the VM name, admin peer uid, closed
+action/result enums, force flag when relevant, and a fixed shell correlation
+digest. Raw shell names, terminal session handles, terminal bytes, helper
+diagnostics, argv, env, and paths are never written. Abrupt owner disconnects,
+close timeouts, and stale/unsupported guest generations are represented by
+closed result or typed-error buckets rather than free-form text.
 
 Daemon audit sink health is exposed as an explicit report rather than a
 silent fallback. The report distinguishes writable, degraded, and

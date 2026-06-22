@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ShellListOutputV1",
+  "type": "object",
+  "required": [
+    "command",
+    "default_name",
+    "sessions",
+    "vm"
+  ],
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "default_name": {
+      "type": "string"
+    },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ShellListSessionOutputV1"
+      }
+    },
+    "vm": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ShellListSessionOutputV1": {
+      "type": "object",
+      "required": [
+        "attached",
+        "is_default",
+        "name",
+        "state"
+      ],
+      "properties": {
+        "attached": {
+          "type": "boolean"
+        },
+        "is_default": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

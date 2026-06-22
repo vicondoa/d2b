@@ -34,6 +34,8 @@ Nixling gives you:
   tools use the same host/env/VM identity colors.
 - **One operator surface:** the Rust `nixling` CLI talks to `nixlingd`
   and the privileged broker for lifecycle, keys, USB, and host prep.
+- **Persistent guest shells:** `nixling shell <vm>` can reconnect to
+  named interactive guest shells when `guest.shell` is enabled.
 
 At a high level:
 
@@ -82,6 +84,8 @@ sudo nixling vm start personal-dev --apply
 Other entry points: see [Where to start](#where-to-start) below for a
 table of the doc-friendly example aliases (`personal-dev`,
 `graphics-workstation`, `multi-env`) plus the manual integration path.
+For reconnectable interactive shells, see
+[Use persistent guest shells](./docs/how-to/use-persistent-shells.md).
 
 ## Who this is for
 

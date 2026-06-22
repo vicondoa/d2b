@@ -2487,6 +2487,113 @@ Pending-staging notes (`nixling status`, `nixling up`/`start`, and the
 mutating verbs) are emitted on **stderr** for human output only, so they
 never perturb a `--json` stdout envelope.
 
+### `shell`
+
+**Synopsis:** `nixling shell <vm> [ACTION] [--name NAME] [--force] [--json|--human]`
+
+`ACTION` is one of:
+
+- omitted or `attach` — attach to the VM's configured default shell session, or
+  to `--name NAME`;
+- `list` — list persistent shell sessions;
+- `detach` — detach a live/stale client without killing the shell;
+- `kill` — terminate a named shell session.
+
+The first positional after `shell` is always the VM name. A VM named `list`,
+`attach`, `detach`, or `kill` attaches by default; use
+`nixling shell <vm> <ACTION>` for management. Command-like trailing words such as
+`nixling shell work htop` are rejected with a hint to use
+`nixling vm exec <vm> -- <cmd>` for one-off commands.
+
+`shell` uses the local daemon public socket and the authenticated guest-control
+terminal transport. The host daemon does not proxy shell operations into
+gateway-backed realm targets; gateway-backed shells must be managed by running
+the command against the realm gateway's `nixlingd`.
+
+**Flags**
+
+| Flag | Applies to | Semantics |
+| --- | --- | --- |
+| `--name NAME` | attach, detach, kill | Persistent shell session name. Omitted attach/detach uses the configured default; kill requires `--name`. |
+| `--force` | attach | Detach an already-attached client for the same named session before attaching. |
+| `--json` | list, detach, kill | Emit one JSON document on stdout. Attach is human/TTY-only and rejects JSON. |
+| `--human` | list, detach, kill | Force human output. Attach is always human/TTY-only. |
+
+**Shell name rule**
+
+Names are 1-64 ASCII bytes, start with `[A-Za-z0-9_]`, and then contain only
+`[A-Za-z0-9._-]`. Names are user-visible operational identifiers, but daemon
+metrics never use names or terminal handles as labels.
+
+**Human examples**
+
+```text
+$ nixling shell work
+attached to shell 'default' on vm 'work'; detach with Ctrl-Space Ctrl-q; exit or Ctrl-D ends the session
+```
+
+```text
+$ nixling shell work list
+NAME    STATE     ATTACHED  DEFAULT
+default detached  false     true
+```
+
+**`--json` examples**
+
+```json
+{
+  "command": "shell list",
+  "vm": "work",
+  "default_name": "default",
+  "sessions": [
+    {
+      "name": "default",
+      "state": "detached",
+      "attached": false,
+      "is_default": true
+    }
+  ]
+}
+```
+
+```json
+{
+  "command": "shell detach",
+  "vm": "work",
+  "name": "default",
+  "result": "already-detached-or-absent",
+  "cause": null
+}
+```
+
+```json
+{
+  "command": "shell kill",
+  "vm": "work",
+  "name": "build",
+  "result": "killed",
+  "state": "killed"
+}
+```
+
+**Exit codes**
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success, including idempotent detach/kill no-op results. |
+| `1` | Unexpected daemon reply or local protocol/serialization failure. |
+| `2` | Usage error, invalid flag combination, missing required `--name` for kill, invalid shell name, non-TTY attach, or gateway-backed target on the host daemon. |
+| `69` | Local daemon public socket unavailable for shell dispatch. |
+| `70` | Daemon generation does not support persistent shell operations. |
+| `75` | Daemon admin authorization failed before guest contact. |
+
+**Redaction**
+
+Shell management JSON may include validated shell names because they are
+operator-facing identifiers. Daemon audit records use a fixed shell correlation
+digest; metrics labels never carry shell names, terminal session handles, attach
+ids, helper diagnostics, paths, argv, env, or terminal bytes.
+
 ### `vm exec`
 
 **Synopsis:** `nixling vm exec [-i] [-t] [-d|--detach] [--env KEY=VALUE]… [--cwd DIR] [--json|--human] <vm> -- <cmd> [args…]`

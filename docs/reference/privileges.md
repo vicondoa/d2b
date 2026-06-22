@@ -633,6 +633,33 @@ Notes:
   `OpAuditRecord`; the daemon records the public-operation decision and
   the session-establishment event instead.
 
+## Public `shell` operation (daemon-handled, no broker dispatch)
+
+The `nixling shell` verb is a **public** operation handled by the
+unprivileged daemon and CLI. It dispatches **no** broker request
+(`brokerRequired: false`): the daemon proxies persistent-shell management and
+terminal operations over the authenticated guest-control channel to guestd. It
+is in the machine-readable public-operation matrix
+([`schemas/v2/privileges.json`](schemas/v2/privileges.json),
+`publicOperations[].operation = "shell"`).
+
+| Operation | Subject | Scope | Broker dispatch | Destructive | Secret access | Allowed authz | Audit | Default-for-unknown |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `shell` | VM (persistent guest shell) | per VM | none | yes (`kill` terminates a guest shell session) | no | `nixling-admin` only | yes | deny |
+
+Notes:
+
+- `shell` is **admin-only**: the daemon checks the `SO_PEERCRED` admin role
+  before guest-control contact or owner-session handoff.
+- The daemon records attach, detach, and kill decisions in its daemon-owned JSONL
+  event stream. Records carry only the VM name, peer uid, closed action/result
+  enums, force flag when relevant, and a fixed shell correlation digest.
+- Raw shell names, terminal session handles, terminal bytes, helper diagnostics,
+  argv, env, paths, and guest-control nonces never appear in metric labels,
+  traces, or daemon audit fields.
+- No host mutation flows through the broker for `shell`, so there is no
+  `OpAuditRecord`; the broker remains uninvolved.
+
 ## Cross-references
 
 - ADR 0011 (cgroup + pidfd), ADR 0012 (IPv6/IfName/bridge-port),

@@ -11,9 +11,10 @@ use clap_complete::{
 use clap_mangen::Man;
 use nixling::{
     AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, ListOutputV2, OpInspectOutputV1,
-    RealmInspectOutputV1, RealmListOutputV1, StatusOutputV2, StoreVerifyOutputV2,
-    VmDisplayCloseOutputV1, VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1,
-    VmExecListOutputV1, VmExecLogsOutputV1, VmExecStatusOutputV1,
+    RealmInspectOutputV1, RealmListOutputV1, ShellDetachOutputV1, ShellKillOutputV1,
+    ShellListOutputV1, StatusOutputV2, StoreVerifyOutputV2, VmDisplayCloseOutputV1,
+    VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1, VmExecListOutputV1,
+    VmExecLogsOutputV1, VmExecStatusOutputV1,
 };
 use nixling_constellation_core::{
     AdmissionAuditRecord, AuditEnvelope, Capability, CapabilityNegotiation, CapabilitySet,
@@ -325,7 +326,7 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root.join("docs/reference/cli-output");
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 16] = [
+    let schemas: [(&str, RootSchema); 19] = [
         ("list.schema.json", schemars::schema_for!(ListOutputV2)),
         ("status.schema.json", schemars::schema_for!(StatusOutputV2)),
         (
@@ -369,6 +370,18 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
             schemars::schema_for!(VmExecKillOutputV1),
         ),
         ("audit.schema.json", schemars::schema_for!(AuditOutputV2)),
+        (
+            "shell-list.schema.json",
+            schemars::schema_for!(ShellListOutputV1),
+        ),
+        (
+            "shell-detach.schema.json",
+            schemars::schema_for!(ShellDetachOutputV1),
+        ),
+        (
+            "shell-kill.schema.json",
+            schemars::schema_for!(ShellKillOutputV1),
+        ),
         (
             "host-check.schema.json",
             schemars::schema_for!(HostCheckOutputV2),

@@ -50,6 +50,20 @@ host-side group renames.
 
 These constraints let the CLI, manifest, and host-side units resolve resources mechanically without collisions. When docs and code differ, the passing code is canon; see [AGENTS.md](../../AGENTS.md#existing-code-is-canon).
 
+## Persistent shell session names
+
+Persistent shell names use a separate operational identifier shape:
+
+- 1-64 ASCII bytes.
+- First byte: `[A-Za-z0-9_]`.
+- Remaining bytes: `[A-Za-z0-9._-]`.
+- No whitespace, slash, shell template braces, or leading `-`.
+
+The configured default is `default`. Session names may appear in CLI output and
+operator commands, but daemon metrics never use them as labels. Daemon audit
+records use a fixed-length digest for shell correlation instead of raw shell
+names or terminal session handles.
+
 ## Constellation target and model identifiers
 
 Constellation targets extend the VM/env naming rules without making a

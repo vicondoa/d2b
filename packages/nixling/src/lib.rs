@@ -213,6 +213,47 @@ pub struct VmExecKillOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellListOutputV1 {
+    pub command: String,
+    pub vm: String,
+    #[serde(rename = "default_name")]
+    pub default_name: String,
+    pub sessions: Vec<ShellListSessionOutputV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellListSessionOutputV1 {
+    pub name: String,
+    pub state: String,
+    pub attached: bool,
+    #[serde(rename = "is_default")]
+    pub is_default: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellDetachOutputV1 {
+    pub command: String,
+    pub vm: String,
+    pub name: String,
+    pub result: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShellKillOutputV1 {
+    pub command: String,
+    pub vm: String,
+    pub name: String,
+    pub result: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmDisplayListOutputV1 {
     pub command: String,
     pub target: Option<String>,
@@ -2196,17 +2237,22 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
                 return Err(CliFailure::new(1, "shell list: unexpected daemon response"));
             };
             if args.json {
-                print_json(&serde_json::json!({
-                    "command": "shell list",
-                    "vm": local_vm,
-                    "default_name": result.default_name.as_str(),
-                    "sessions": result.sessions.iter().map(|entry| serde_json::json!({
-                        "name": entry.name.as_str(),
-                        "state": shell_state_str(entry.state),
-                        "attached": entry.attached,
-                        "is_default": entry.is_default,
-                    })).collect::<Vec<_>>()
-                }))?;
+                let output = ShellListOutputV1 {
+                    command: "shell list".to_owned(),
+                    vm: local_vm,
+                    default_name: result.default_name.as_str().to_owned(),
+                    sessions: result
+                        .sessions
+                        .iter()
+                        .map(|entry| ShellListSessionOutputV1 {
+                            name: entry.name.as_str().to_owned(),
+                            state: shell_state_str(entry.state).to_owned(),
+                            attached: entry.attached,
+                            is_default: entry.is_default,
+                        })
+                        .collect(),
+                };
+                print_json(&output)?;
             } else {
                 print_stdout("NAME\tSTATE\tATTACHED\tDEFAULT\n");
                 for entry in result.sessions {
@@ -2236,13 +2282,19 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
                 ));
             };
             if args.json {
-                print_json(&serde_json::json!({
-                    "command": "shell detach",
-                    "vm": local_vm,
-                    "name": result.resolved_name.as_str(),
-                    "result": if result.detached { "detached" } else { "already-detached-or-absent" },
-                    "cause": result.cause.map(shell_close_cause_str),
-                }))?;
+                let output = ShellDetachOutputV1 {
+                    command: "shell detach".to_owned(),
+                    vm: local_vm,
+                    name: result.resolved_name.as_str().to_owned(),
+                    result: if result.detached {
+                        "detached"
+                    } else {
+                        "already-detached-or-absent"
+                    }
+                    .to_owned(),
+                    cause: result.cause.map(shell_close_cause_str).map(str::to_owned),
+                };
+                print_json(&output)?;
             } else if result.detached {
                 print_stdout(&format!(
                     "detached shell '{}' on vm '{}'\n",
@@ -2270,13 +2322,19 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
                 return Err(CliFailure::new(1, "shell kill: unexpected daemon response"));
             };
             if args.json {
-                print_json(&serde_json::json!({
-                    "command": "shell kill",
-                    "vm": local_vm,
-                    "name": result.name.as_str(),
-                    "result": if result.killed { "killed" } else { "already-absent" },
-                    "state": shell_state_str(result.state),
-                }))?;
+                let output = ShellKillOutputV1 {
+                    command: "shell kill".to_owned(),
+                    vm: local_vm,
+                    name: result.name.as_str().to_owned(),
+                    result: if result.killed {
+                        "killed"
+                    } else {
+                        "already-absent"
+                    }
+                    .to_owned(),
+                    state: shell_state_str(result.state).to_owned(),
+                };
+                print_json(&output)?;
             } else if result.killed {
                 print_stdout(&format!(
                     "killed shell '{}' on vm '{}'\n",

@@ -25,7 +25,8 @@ allowlist.
   [broker audit record](./daemon-api.md) (`OpAuditRecord.tracing_span_id`
   links the audit row back to the span). They MUST NOT appear as span
   attrs.
-* **Secrets, argv contents, command output** never enter traces.
+* **Secrets, argv contents, command output, terminal bytes, helper diagnostics,
+  raw shell names, and terminal session handles** never enter traces.
 
 ## Allowed scalar attribute names
 

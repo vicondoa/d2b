@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ShellDetachOutputV1",
+  "type": "object",
+  "required": [
+    "command",
+    "name",
+    "result",
+    "vm"
+  ],
+  "properties": {
+    "cause": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "command": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "result": {
+      "type": "string"
+    },
+    "vm": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}
