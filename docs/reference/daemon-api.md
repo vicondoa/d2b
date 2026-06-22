@@ -217,7 +217,7 @@ names are rejected during deserialization.
 | `SshHostKeyPreflightRequest` | struct | [`SshHostKeyPreflightRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1517) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
 | `ReconcileStorageScopeRequest` | struct | [`ReconcileStorageScopeRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1531) | struct { `storage_ref`: `BundleOpId`; `apply`: `bool`; `tracing_span_id`: `Option<TracingSpanId>` } |
 | `ValidateLockSpecRequest` | struct | [`ValidateLockSpecRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1568) | struct { `lock_ref`: `BundleOpId`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `DiskInitRequest` | struct | [`DiskInitRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1597) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `DiskInitRequest` | struct | [`DiskInitRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1601) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
 <!-- END AUTO-GENERATED: request-types -->
 
 <!-- BEGIN AUTO-GENERATED: response-types -->
@@ -272,7 +272,7 @@ names are rejected during deserialization.
 | `SpawnRunnerResponse` | struct | [`SpawnRunnerResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L1393) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `role`: `RunnerRole`; `pid`: `i32`; `start_time_ticks`: `u64`; `pidfd_index`: `u32` } |
 | `ReconcileStorageScopeResponse` | struct | [`ReconcileStorageScopeResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L1552) | struct { `storage_ref`: `BundleOpId`; `scope`: `String`; `kind`: `String`; `status`: `StorageReconcileStatus`; `applied`: `bool`; `path_hash`: `String` } |
 | `ValidateLockSpecResponse` | struct | [`ValidateLockSpecResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L1576) | struct { `lock_ref`: `BundleOpId`; `scope`: `String`; `kind`: `String`; `cloexec_required`: `bool`; `fd_passing_mechanism`: `String`; `order_key`: `String` } |
-| `PollChildReapedResponse` | struct | [`PollChildReapedResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L1658) | struct { `notifications`: `Vec<ChildReapedNotification>` } |
+| `PollChildReapedResponse` | struct | [`PollChildReapedResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L1662) | struct { `notifications`: `Vec<ChildReapedNotification>` } |
 <!-- END AUTO-GENERATED: response-types -->
 
 ## Per-VM lifecycle state
@@ -317,8 +317,8 @@ state-machine node.
 | `RunnerAllocationKind` | enum | [`RunnerAllocationKind`](../../packages/nixling-ipc/src/broker_wire.rs#L1371) | `VsockCid`; `TapFdSlot`; `ApiSocketPath` |
 | `BrokerCallerRole` | enum | [`BrokerCallerRole`](../../packages/nixling-ipc/src/broker_wire.rs#L1437) | `AdminUid` — struct { `uid`: `u32` }; `LauncherUid` — struct { `uid`: `u32` }; `RootUid` — struct { `uid`: `u32` }; `NotAuthorized` |
 | `StorageReconcileStatus` | enum | [`StorageReconcileStatus`](../../packages/nixling-ipc/src/broker_wire.rs#L1541) | `Clean`; `Created`; `Reused`; `CheckedOnly`; `TemplateUnexpanded`; `Refused` |
-| `ChildExitKind` | enum | [`ChildExitKind`](../../packages/nixling-ipc/src/broker_wire.rs#L1610) | `Exited`; `Signaled`; `Killed` |
-| `BrokerNotification` | enum | [`BrokerNotification`](../../packages/nixling-ipc/src/broker_wire.rs#L1648) | `ChildReaped` — (ChildReapedNotification); `Unknown` |
+| `ChildExitKind` | enum | [`ChildExitKind`](../../packages/nixling-ipc/src/broker_wire.rs#L1614) | `Exited`; `Signaled`; `Killed` |
+| `BrokerNotification` | enum | [`BrokerNotification`](../../packages/nixling-ipc/src/broker_wire.rs#L1652) | `ChildReaped` — (ChildReapedNotification); `Unknown` |
 | `AuthDirection` | enum | [`AuthDirection`](../../packages/nixling-ipc/src/guest_auth.rs#L13) | `HostToGuest` |
 | `AuthPurpose` | enum | [`AuthPurpose`](../../packages/nixling-ipc/src/guest_auth.rs#L26) | `GuestControlAuthV1` |
 | `ProofRole` | enum | [`ProofRole`](../../packages/nixling-ipc/src/guest_auth.rs#L39) | `Host`; `Guest` |

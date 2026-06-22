@@ -60,15 +60,6 @@ if [ -n "${NL_FLAKE_CHECK:-}" ]; then
   set -e
   if [ "$rc" -eq 0 ]; then
     ok "flake check shard: ${NL_FLAKE_CHECK}"
-  elif [ "$rc" -eq 139 ]; then
-    log "  WARN: nix eval segfaulted for shard ${NL_FLAKE_CHECK}; retrying via nix-instantiate"
-    if nix-instantiate --eval --strict -E \
-      "let f = builtins.getFlake \"${flake_ref}\"; in f.checks.${native}.${NL_FLAKE_CHECK}.drvPath" >/dev/null; then
-      ok "flake check shard: ${NL_FLAKE_CHECK} (nix-instantiate fallback)"
-    else
-      fail "flake check shard: ${NL_FLAKE_CHECK}"
-      exit 1
-    fi
   else
     fail "flake check shard: ${NL_FLAKE_CHECK}"
     exit 1

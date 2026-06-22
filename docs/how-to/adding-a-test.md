@@ -28,6 +28,24 @@ target and where the test lives.
 | Real-kernel runtime behaviour with **no physical device** (broker sockets, cgroups, pidfd, store, network, audit, ACL, swtpm) | **G-host** | `test-host-integration` | `tests/host-integration/*.nix` runNixOSTest VM checks; local NixOS/KVM host/manual pre-PR, not the PR pipeline |
 | Real **device passthrough** (GPU/YubiKey/hardware-TPM) or a **full microVM boot** | **G-hw** | `test-hardware` | a NixOS host **with the devices** — **not runnable in CI** |
 
+### Group F hosted-runner caveat
+
+The PR workflow discovers hosted-runner `test-flake` shards with
+`make test-flake-list`, not by blindly sharding every
+`flake.checks.x86_64-linux.*` key. The full static check set remains pinned by
+`tests/golden/flake-check-matrix/x86_64-linux.txt`; the hosted matrix may
+intentionally filter checks that are too large or unstable for GitHub-hosted
+runners.
+
+Today `fixture-smoke-full` is one such check. It is the feature-rich contract
+fixture used by local `make test-unit` / contract-test validation, but the
+nested NixOS graph can make hosted-runner Nix evaluators segfault before they
+produce a typed Nix error. Keep it in `flake.checks` and the pin, validate it
+locally with `make test-unit` (or directly with
+`NL_FLAKE_CHECK=fixture-smoke-full make test-flake` on a sufficiently large
+host), and only add it back to the hosted dynamic matrix after the evaluator
+failure mode is gone.
+
 Default when unsure: if it can be expressed as an assertion over a rendered
 artifact, it is **C** (Rust contract test). Ad-hoc bash that shells out to
 `nix eval` / `cargo test` is **rejected** by the placement gate — use a target.
