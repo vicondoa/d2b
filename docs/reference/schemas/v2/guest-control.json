@@ -2222,7 +2222,8 @@
     "ShellName": {
       "type": "string",
       "maxLength": 64,
-      "minLength": 1
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$"
     },
     "ShellState": {
       "type": "string",

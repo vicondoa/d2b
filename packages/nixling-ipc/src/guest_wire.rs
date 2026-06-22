@@ -6,7 +6,11 @@
 //! bindings from the matching `.proto` surface and keep these DTOs aligned
 //! through the schema drift gate.
 
-use schemars::JsonSchema;
+use schemars::{
+    JsonSchema,
+    r#gen::SchemaGenerator,
+    schema::{InstanceType, Schema, SchemaObject, SingleOrVec, StringValidation},
+};
 use serde::{Deserialize, Serialize};
 
 pub const GUEST_CONTROL_SCHEMA_VERSION: &str = "v2";
@@ -216,9 +220,60 @@ bounded_string! {
     TerminalSessionId, 128
 }
 
-bounded_string! {
-    /// Persistent shell session name.
-    ShellName, 64
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct ShellName(pub String);
+
+impl std::fmt::Debug for ShellName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ShellName(<redacted>)")
+    }
+}
+
+impl<'de> Deserialize<'de> for ShellName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if shell_name_valid(&value) {
+            Ok(Self(value))
+        } else {
+            Err(serde::de::Error::custom(
+                "shell name must match ^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$",
+            ))
+        }
+    }
+}
+
+impl JsonSchema for ShellName {
+    fn schema_name() -> String {
+        "ShellName".to_owned()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        Schema::Object(SchemaObject {
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::String))),
+            string: Some(Box::new(StringValidation {
+                min_length: Some(1),
+                max_length: Some(64),
+                pattern: Some("^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$".to_owned()),
+            })),
+            ..Default::default()
+        })
+    }
+}
+
+fn shell_name_valid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > 64 {
+        return false;
+    }
+    let first = bytes[0];
+    (first.is_ascii_alphanumeric() || first == b'_')
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 bounded_string! {
@@ -1347,6 +1402,30 @@ mod tests {
         assert!(!guest_config_encoded_within_frame_caps(
             crate::MAX_FRAME_SIZE
         ));
+    }
+
+    #[test]
+    fn shell_name_shape_is_validated_on_deserialize() {
+        for name in ["default", "ops_1", "A.B-c_9", "_scratch"] {
+            let decoded: ShellName =
+                serde_json::from_value(serde_json::json!(name)).expect("valid shell name");
+            assert_eq!(decoded.0, name);
+        }
+
+        let too_long = "a".repeat(65);
+        for name in [
+            "",
+            ".",
+            "..",
+            "-default",
+            "bad/name",
+            "bad name",
+            "bad{name}",
+            too_long.as_str(),
+        ] {
+            serde_json::from_value::<ShellName>(serde_json::json!(name))
+                .expect_err("invalid shell name rejects");
+        }
     }
 
     #[test]

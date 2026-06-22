@@ -38,6 +38,12 @@
       },
       "additionalProperties": false
     },
+    "ManifestShellName": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$"
+    },
     "ObservabilityMeta": {
       "type": "object",
       "required": [
@@ -625,7 +631,7 @@
       ],
       "properties": {
         "defaultName": {
-          "type": "string"
+          "$ref": "#/definitions/ManifestShellName"
         },
         "enabled": {
           "type": "boolean"
