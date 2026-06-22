@@ -86,13 +86,17 @@ pub struct ProcessNode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum SpawnRunnerPlanOp {
-    /// Create and pre-allocate a disk image file if absent.
+    /// Create and pre-allocate a disk image file if absent; validate
+    /// and safely repair a trusted empty image when present.
     ///
-    /// Used for the per-VM writable store overlay disk
-    /// (`store-overlay.img`). The broker validates `target_path` is
-    /// under `/var/lib/nixling/vms/`, creates the file with
-    /// `O_CREAT|O_EXCL`, pre-allocates `size_bytes` via `fallocate`,
-    /// and sets mode + ownership.
+    /// Used for nixling-owned raw ext4 volumes and the per-VM writable
+    /// store overlay disk (`store-overlay.img`). The broker validates
+    /// `target_path` is under `/var/lib/nixling/vms/`, creates absent
+    /// files with `O_CREAT|O_EXCL`, pre-allocates `size_bytes` via
+    /// `fallocate`, formats them as ext4, and sets mode + ownership.
+    /// Existing files are not accepted on path existence alone: they
+    /// must match the declared posture and carry an ext4 superblock, or
+    /// be proven empty before broker-side repair.
     #[serde(rename_all = "camelCase")]
     DiskInit {
         /// Absolute host path for the new disk image.
@@ -105,8 +109,10 @@ pub enum SpawnRunnerPlanOp {
         owner_uid: u32,
         /// Owner GID.
         owner_gid: u32,
-        /// When `true`, skip creation if the file already exists
-        /// (idempotent re-run).
+        /// When `true`, make re-runs idempotent by validating an
+        /// existing file before skipping; a present but unformatted
+        /// file is repaired only when it is proven empty, otherwise the
+        /// broker fails closed.
         if_absent: bool,
     },
 }

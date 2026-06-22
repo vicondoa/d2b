@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- Broker disk initialization now validates existing nixling-owned ext4 raw
+  images before treating `ifAbsent` as satisfied, safely formats only
+  proven-empty images, and fails closed before VM spawn for malformed or
+  ambiguous image data.
 - Guest-control internals: started extracting the shared terminal substrate used
   by interactive exec, with compatibility DTO conversions and redaction tests for
   future interactive-terminal reuse.

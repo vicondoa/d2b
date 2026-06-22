@@ -13,15 +13,23 @@
 //!   ownership; all values come from the trusted bundle.
 //!
 //! Idempotency: when `if_absent = true` and the file already
-//! exists, the op is skipped (no truncation, no error).
+//! exists, the broker validates that it is the expected nixling-owned
+//! ext4 image before skipping. Empty sparse images may be formatted in
+//! place; malformed or non-empty unknown data fails closed.
 
+use std::fs::File;
 use std::io;
+use std::os::fd::{AsFd, AsRawFd};
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::Path;
 
 use nixling_core::bundle_resolver::{BundleResolver, ResolvedDiskInitOp};
 
 /// Permitted root prefix for all disk-init target paths.
 const PERMITTED_ROOT: &str = "/var/lib/nixling/vms/";
+const O_NOFOLLOW: i32 = 0o400000;
+const EXT4_MAGIC_OFFSET: u64 = 1024 + 0x38;
+const EXT4_SUPER_MAGIC: u16 = 0xEF53;
 
 /// Validate `mkfs.ext4` binary path resolution from
 /// `NIXLING_BROKER_MKFS_EXT4_BINARY` (default
@@ -49,6 +57,19 @@ fn validate_mkfs_ext4_binary(raw: &str) -> io::Result<&std::path::Path> {
     Ok(p)
 }
 
+#[derive(Debug, Clone)]
+struct MkfsTool {
+    raw: String,
+    path: std::path::PathBuf,
+}
+
+fn resolve_mkfs_ext4_binary() -> io::Result<MkfsTool> {
+    let raw = std::env::var("NIXLING_BROKER_MKFS_EXT4_BINARY")
+        .unwrap_or_else(|_| "/run/current-system/sw/bin/mkfs.ext4".to_owned());
+    let path = validate_mkfs_ext4_binary(&raw)?.to_path_buf();
+    Ok(MkfsTool { raw, path })
+}
+
 /// Outcome of a single `disk_init_one` call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiskInitOutcome {
@@ -56,6 +77,8 @@ pub enum DiskInitOutcome {
     Created,
     /// File already existed and `if_absent = true`; skipped.
     Skipped,
+    /// Existing empty image was safely formatted in place.
+    Repaired,
 }
 
 /// Aggregate result of running all disk-init ops for a VM.
@@ -64,27 +87,258 @@ pub struct DiskInitSummary {
     pub ops_total: u32,
     pub ops_created: u32,
     pub ops_skipped: u32,
+    pub ops_repaired: u32,
     /// Stable hash of all target paths for the audit record.
     pub target_paths_hash: String,
 }
 
-/// Execute a single disk-init spec.
-///
-/// Validates the path, creates the file (O_CREAT|O_EXCL),
-/// pre-allocates `size_bytes` via `fallocate`, and sets mode +
-/// owner via `fchmod` + `fchown`.
-///
-/// Returns `DiskInitOutcome::Skipped` when `if_absent = true` and
-/// the file already exists. Returns an `io::Error` on any failure.
-pub fn disk_init_one(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
-    validate_target_path(&spec.target_path)?;
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DiskInitErrorKind {
+    UnexpectedPosture,
+    UnsafeRepair,
+    FormatterFailed,
+}
 
-    // If the file exists and we were asked to skip, do so.
-    if spec.if_absent && spec.target_path.exists() {
-        return Ok(DiskInitOutcome::Skipped);
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiskInitError {
+    kind: DiskInitErrorKind,
+    reason: String,
+}
+
+impl DiskInitError {
+    fn unexpected(reason: impl Into<String>) -> Self {
+        Self {
+            kind: DiskInitErrorKind::UnexpectedPosture,
+            reason: reason.into(),
+        }
     }
 
-    // Ensure the parent directory exists.
+    fn unsafe_repair(reason: impl Into<String>) -> Self {
+        Self {
+            kind: DiskInitErrorKind::UnsafeRepair,
+            reason: reason.into(),
+        }
+    }
+
+    fn formatter(reason: impl Into<String>) -> Self {
+        Self {
+            kind: DiskInitErrorKind::FormatterFailed,
+            reason: reason.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for DiskInitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let action = match self.kind {
+            DiskInitErrorKind::UnexpectedPosture => {
+                "inspect the file ownership, permissions, and size, then restore the declared nixling image posture or remove the conflicting file before retrying"
+            }
+            DiskInitErrorKind::UnsafeRepair => {
+                "inspect and back up the file; remove or explicitly reformat it before retrying if it is safe to discard"
+            }
+            DiskInitErrorKind::FormatterFailed => {
+                "inspect mkfs.ext4 availability and the target image, then retry after correcting the formatter failure"
+            }
+        };
+        write!(f, "disk-init: {} ({action})", self.reason)
+    }
+}
+
+impl std::error::Error for DiskInitError {}
+
+impl From<DiskInitError> for io::Error {
+    fn from(value: DiskInitError) -> Self {
+        let kind = match value.kind {
+            DiskInitErrorKind::UnexpectedPosture | DiskInitErrorKind::UnsafeRepair => {
+                io::ErrorKind::InvalidData
+            }
+            DiskInitErrorKind::FormatterFailed => io::ErrorKind::Other,
+        };
+        io::Error::new(kind, value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmptyImageEvidence {
+    NoDataExtents,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DataExtentClassification {
+    Empty(EmptyImageEvidence),
+    HasData,
+    UnknownUnsupported,
+}
+
+fn reopen_nofollow_rw(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(O_NOFOLLOW)
+        .open(path)
+}
+
+fn apply_posture(file: &File, spec: &ResolvedDiskInitOp, phase: &str) -> io::Result<()> {
+    crate::sys::path_safe::fchmod(file.as_fd(), spec.mode).map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!(
+                "disk-init: {phase} fchmod {:04o} on {}: {e}",
+                spec.mode,
+                spec.target_path.display()
+            ),
+        )
+    })?;
+    crate::sys::path_safe::fchown(file.as_fd(), Some(spec.owner_uid), Some(spec.owner_gid))
+        .map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!(
+                    "disk-init: {phase} fchown {}:{} on {}: {e}",
+                    spec.owner_uid,
+                    spec.owner_gid,
+                    spec.target_path.display()
+                ),
+            )
+        })?;
+    Ok(())
+}
+
+fn validate_existing_posture(file: &File, spec: &ResolvedDiskInitOp) -> Result<(), DiskInitError> {
+    let meta = file
+        .metadata()
+        .map_err(|e| DiskInitError::unexpected(format!("stat existing image failed: {e}")))?;
+    if !meta.file_type().is_file() {
+        let kind = if meta.file_type().is_symlink() {
+            "symlink"
+        } else if meta.file_type().is_dir() {
+            "directory"
+        } else if meta.file_type().is_block_device() {
+            "block-device"
+        } else {
+            "non-regular"
+        };
+        return Err(DiskInitError::unexpected(format!(
+            "existing image is {kind}, expected regular file"
+        )));
+    }
+    if meta.len() != spec.size_bytes {
+        return Err(DiskInitError::unexpected(format!(
+            "existing image size {} does not match declared size {}",
+            meta.len(),
+            spec.size_bytes
+        )));
+    }
+    if meta.uid() != spec.owner_uid || meta.gid() != spec.owner_gid {
+        return Err(DiskInitError::unexpected(format!(
+            "existing image owner {}:{} does not match declared owner {}:{}",
+            meta.uid(),
+            meta.gid(),
+            spec.owner_uid,
+            spec.owner_gid
+        )));
+    }
+    let mode = meta.mode() & 0o777;
+    if mode != spec.mode {
+        return Err(DiskInitError::unexpected(format!(
+            "existing image mode {:04o} does not match declared mode {:04o}",
+            mode, spec.mode
+        )));
+    }
+    Ok(())
+}
+
+fn read_ext4_magic(file: &File) -> io::Result<Option<u16>> {
+    use std::os::unix::fs::FileExt;
+    let len = file.metadata()?.len();
+    if len < EXT4_MAGIC_OFFSET + 2 {
+        return Ok(None);
+    }
+    let mut magic = [0u8; 2];
+    file.read_exact_at(&mut magic, EXT4_MAGIC_OFFSET)?;
+    Ok(Some(u16::from_le_bytes(magic)))
+}
+
+fn has_ext4_superblock(file: &File) -> io::Result<bool> {
+    Ok(read_ext4_magic(file)? == Some(EXT4_SUPER_MAGIC))
+}
+
+fn classify_seek_data_result(result: rustix::io::Result<u64>) -> DataExtentClassification {
+    match result {
+        Ok(_) => DataExtentClassification::HasData,
+        Err(err) if err == rustix::io::Errno::NXIO => {
+            DataExtentClassification::Empty(EmptyImageEvidence::NoDataExtents)
+        }
+        Err(_) => DataExtentClassification::UnknownUnsupported,
+    }
+}
+
+fn classify_data_extents(file: &File) -> DataExtentClassification {
+    classify_seek_data_result(rustix::fs::seek(file, rustix::fs::SeekFrom::Data(0)))
+}
+
+fn lock_existing_image(file: &File, path: &Path) -> io::Result<()> {
+    let lock = nix::libc::flock {
+        l_type: nix::libc::F_WRLCK as nix::libc::c_short,
+        l_whence: nix::libc::SEEK_SET as nix::libc::c_short,
+        l_start: 0,
+        l_len: 0,
+        l_pid: 0,
+    };
+    nix::fcntl::fcntl(file.as_raw_fd(), nix::fcntl::FcntlArg::F_OFD_SETLKW(&lock))
+        .map(|_| ())
+        .map_err(|e| io::Error::other(format!("disk-init: lock {}: {e}", path.display())))
+}
+
+fn fd_target_path(file: &File) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!(
+        "/proc/{}/fd/{}",
+        std::process::id(),
+        file.as_raw_fd()
+    ))
+}
+
+fn run_mkfs_ext4_on_fd_with(file: &File, display_path: &Path, tool: &MkfsTool) -> io::Result<()> {
+    let target = fd_target_path(file);
+    let mkfs_status = std::process::Command::new(&tool.path)
+        .arg("-q")
+        .arg("-F")
+        .arg("-E")
+        .arg("lazy_itable_init=1,lazy_journal_init=1")
+        .arg(&target)
+        .status()
+        .map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!(
+                    "disk-init: mkfs.ext4 ({}) spawn on {}: {e}",
+                    tool.raw,
+                    display_path.display()
+                ),
+            )
+        })?;
+    if !mkfs_status.success() {
+        return Err(DiskInitError::formatter(format!(
+            "mkfs.ext4 exit={:?} on {}",
+            mkfs_status.code(),
+            display_path.display()
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+fn create_and_format(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
+    let tool = resolve_mkfs_ext4_binary()?;
+    create_and_format_with(spec, &tool)
+}
+
+fn create_and_format_with(
+    spec: &ResolvedDiskInitOp,
+    tool: &MkfsTool,
+) -> io::Result<DiskInitOutcome> {
     if let Some(parent) = spec.target_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             io::Error::new(
@@ -94,14 +348,11 @@ pub fn disk_init_one(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
         })?;
     }
 
-    // Open with O_CREAT | O_EXCL — fail if already exists (even
-    // when if_absent = false: we never silently overwrite a disk).
     use std::os::unix::fs::OpenOptionsExt;
     let file = std::fs::OpenOptions::new()
+        .read(true)
         .write(true)
         .create_new(true)
-        // mode is subject to umask when using OpenOptions; we fchmod
-        // explicitly below so umask doesn't matter here.
         .mode(0o600)
         .open(&spec.target_path)
         .map_err(|e| {
@@ -111,10 +362,6 @@ pub fn disk_init_one(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
             )
         })?;
 
-    // Pre-allocate disk space.  fallocate with no flags allocates
-    // blocks without zeroing (fast), falling back gracefully on
-    // filesystems that don't support it (writes sparse extent).
-    use std::os::fd::AsFd;
     rustix::fs::fallocate(
         file.as_fd(),
         rustix::fs::FallocateFlags::empty(),
@@ -129,122 +376,83 @@ pub fn disk_init_one(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
         ))
     })?;
 
-    // Set the file mode explicitly (ignores broker umask).
-    // Uses the safe path_safe::fchmod wrapper (broker crate has
-    // `unsafe_code = "deny"` so we cannot call rustix directly).
-    crate::sys::path_safe::fchmod(file.as_fd(), spec.mode).map_err(|e| {
-        io::Error::new(
-            e.kind(),
-            format!(
-                "disk-init: fchmod {:04o} on {}: {e}",
-                spec.mode,
-                spec.target_path.display()
-            ),
-        )
-    })?;
-
-    // Set owner/group via the safe path_safe::fchown wrapper.
-    crate::sys::path_safe::fchown(file.as_fd(), Some(spec.owner_uid), Some(spec.owner_gid))
-        .map_err(|e| {
-            io::Error::new(
-                e.kind(),
-                format!(
-                    "disk-init: fchown {}:{} on {}: {e}",
-                    spec.owner_uid,
-                    spec.owner_gid,
-                    spec.target_path.display()
-                ),
-            )
-        })?;
-
-    // Format the newly-created raw image with ext4. Without this, the
-    // guest kernel sees an empty raw block device and hangs in initramfs
-    // trying to mount the overlay upperdir/workdir. We close the file
-    // BEFORE running mkfs.ext4 because the tool wants its own exclusive
-    // handle.
-    drop(file);
-    // Resolve mkfs.ext4 binary path with explicit validation. The
-    // broker's PATH is intentionally minimal and does NOT include
-    // e2fsprogs, so we accept an env-var override — but we REJECT
-    // non-absolute paths and any path containing `..` segments to close
-    // the env-injection vector (a malicious env var could otherwise
-    // steer the root-running broker to an attacker-chosen binary). See
-    // `mkfs_ext4_env_var_rejects_*` tests for regression coverage.
-    let mkfs_path_raw = std::env::var("NIXLING_BROKER_MKFS_EXT4_BINARY")
-        .unwrap_or_else(|_| "/run/current-system/sw/bin/mkfs.ext4".to_owned());
-    let mkfs_path = validate_mkfs_ext4_binary(&mkfs_path_raw)?;
-    let mkfs_status = std::process::Command::new(mkfs_path)
-        .arg("-q") // quiet
-        .arg("-F") // force on non-block device (raw file)
-        .arg("-E")
-        .arg("lazy_itable_init=1,lazy_journal_init=1")
-        .arg(&spec.target_path)
-        .status()
-        .map_err(|e| {
-            io::Error::new(
-                e.kind(),
-                format!(
-                    "disk-init: mkfs.ext4 ({mkfs_path_raw}) spawn on {}: {e}",
-                    spec.target_path.display()
-                ),
-            )
-        })?;
-    if !mkfs_status.success() {
-        return Err(io::Error::other(format!(
-            "disk-init: mkfs.ext4 exit={:?} on {}",
-            mkfs_status.code(),
+    apply_posture(&file, spec, "create")?;
+    lock_existing_image(&file, &spec.target_path)?;
+    run_mkfs_ext4_on_fd_with(&file, &spec.target_path, tool)?;
+    if !has_ext4_superblock(&file)? {
+        return Err(DiskInitError::formatter(format!(
+            "mkfs.ext4 did not leave a valid ext4 superblock on {}",
             spec.target_path.display()
-        )));
+        ))
+        .into());
     }
-    // Re-apply mode + owner via fd-based safe ops (path_safe::fchmod /
-    // fchown) on a freshly-opened O_NOFOLLOW handle, NOT via path-based
-    // std::fs::set_permissions + std::os::unix::fs::chown. The earlier
-    // path-based variant reintroduced a TOCTOU/symlink-race window after
-    // `validate_target_path` had already run — between mkfs returning
-    // and chmod/chown reaching the inode, an attacker who had write
-    // access to the parent dir could replace the path with a symlink to
-    // a sensitive target. Re-opening with O_NOFOLLOW refuses symlinks at
-    // this gate too.
-    let reopened = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        // libc::O_NOFOLLOW = 0x20000 = 0o400000 on Linux.
-        .custom_flags(0o400000)
-        .open(&spec.target_path)
-        .map_err(|e| {
-            io::Error::new(
-                e.kind(),
-                format!(
-                    "disk-init: post-mkfs reopen O_NOFOLLOW on {}: {e}",
-                    spec.target_path.display()
-                ),
-            )
-        })?;
-    crate::sys::path_safe::fchmod(reopened.as_fd(), spec.mode).map_err(|e| {
+    apply_posture(&file, spec, "post-mkfs")?;
+    Ok(DiskInitOutcome::Created)
+}
+
+fn validate_or_repair_existing(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
+    let tool = resolve_mkfs_ext4_binary()?;
+    validate_or_repair_existing_with(spec, &tool)
+}
+
+fn validate_or_repair_existing_with(
+    spec: &ResolvedDiskInitOp,
+    tool: &MkfsTool,
+) -> io::Result<DiskInitOutcome> {
+    let file = reopen_nofollow_rw(&spec.target_path).map_err(|e| {
         io::Error::new(
             e.kind(),
             format!(
-                "disk-init: post-mkfs fchmod {:04o} on {}: {e}",
-                spec.mode,
+                "disk-init: open existing O_NOFOLLOW {}: {e}",
                 spec.target_path.display()
             ),
         )
     })?;
-    crate::sys::path_safe::fchown(reopened.as_fd(), Some(spec.owner_uid), Some(spec.owner_gid))
-        .map_err(|e| {
-            io::Error::new(
-                e.kind(),
-                format!(
-                    "disk-init: post-mkfs fchown {}:{} on {}: {e}",
-                    spec.owner_uid,
-                    spec.owner_gid,
+    lock_existing_image(&file, &spec.target_path)?;
+    validate_existing_posture(&file, spec)?;
+    if has_ext4_superblock(&file)? {
+        return Ok(DiskInitOutcome::Skipped);
+    }
+    match classify_data_extents(&file) {
+        DataExtentClassification::Empty(_) => {
+            run_mkfs_ext4_on_fd_with(&file, &spec.target_path, tool)?;
+            if !has_ext4_superblock(&file)? {
+                return Err(DiskInitError::formatter(format!(
+                    "mkfs.ext4 did not leave a valid ext4 superblock on {}",
                     spec.target_path.display()
-                ),
-            )
-        })?;
-    drop(reopened);
+                ))
+                .into());
+            }
+            apply_posture(&file, spec, "post-repair-mkfs")?;
+            Ok(DiskInitOutcome::Repaired)
+        }
+        DataExtentClassification::HasData => Err(DiskInitError::unsafe_repair(format!(
+            "existing image {} has data but no ext4 superblock",
+            spec.target_path.display()
+        ))
+        .into()),
+        DataExtentClassification::UnknownUnsupported => Err(DiskInitError::unsafe_repair(format!(
+            "could not prove existing image {} is empty using filesystem extent metadata",
+            spec.target_path.display()
+        ))
+        .into()),
+    }
+}
 
-    Ok(DiskInitOutcome::Created)
+/// Execute a single disk-init spec.
+///
+/// Validates the path, creates the file (O_CREAT|O_EXCL),
+/// pre-allocates `size_bytes` via `fallocate`, sets mode + owner via
+/// `fchmod` + `fchown`, and formats it as ext4. Existing images are
+/// only skipped after locked posture and ext4-superblock validation.
+///
+/// Returns an `io::Error` on any failure.
+pub fn disk_init_one(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
+    validate_target_path(&spec.target_path)?;
+    if spec.if_absent && spec.target_path.exists() {
+        return validate_or_repair_existing(spec);
+    }
+    create_and_format(spec)
 }
 
 /// Execute all `DiskInit` plan-ops for `vm_id` from the trusted bundle.
@@ -257,6 +465,7 @@ pub fn live_disk_init(resolver: &BundleResolver, vm_id: &str) -> io::Result<Disk
     let ops_total = ops.len() as u32;
     let mut ops_created = 0u32;
     let mut ops_skipped = 0u32;
+    let mut ops_repaired = 0u32;
     let mut paths_concat = String::new();
 
     for op in &ops {
@@ -265,6 +474,7 @@ pub fn live_disk_init(resolver: &BundleResolver, vm_id: &str) -> io::Result<Disk
         match disk_init_one(op)? {
             DiskInitOutcome::Created => ops_created += 1,
             DiskInitOutcome::Skipped => ops_skipped += 1,
+            DiskInitOutcome::Repaired => ops_repaired += 1,
         }
     }
 
@@ -272,6 +482,7 @@ pub fn live_disk_init(resolver: &BundleResolver, vm_id: &str) -> io::Result<Disk
         ops_total,
         ops_created,
         ops_skipped,
+        ops_repaired,
         target_paths_hash: super::hosts::stable_hash_str(&paths_concat),
     })
 }
@@ -321,6 +532,7 @@ mod tests {
     use super::*;
     use nixling_core::bundle_resolver::ResolvedDiskInitOp;
     use std::fs;
+    use std::io::Write;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::path::PathBuf;
 
@@ -337,22 +549,6 @@ mod tests {
         dir
     }
 
-    /// Build a `ResolvedDiskInitOp` pointing under a scratch root that
-    /// mimics the `/var/lib/nixling/vms/` prefix layout for unit tests.
-    /// We can't write into the real `/var/lib/nixling/vms/` from tests
-    /// without root, so we monkey-patch `PERMITTED_ROOT` by temporarily
-    /// setting a writable scratch path and using a custom validator.
-    /// Instead, we test `disk_init_one` directly with the internal
-    /// `validate_target_path` bypassed where necessary (by constructing
-    /// a path that starts with PERMITTED_ROOT but pointing at a tmpfs
-    /// mount — not feasible). For the unit tests we therefore call the
-    /// lower-level `disk_init_one_raw` helper which accepts a pre-
-    /// validated path.
-    ///
-    /// Rationale: the path-safety test runs its own dedicated test
-    /// that calls `disk_init_one` with a bad path and checks the error.
-    /// The creates / skips tests bypass validation and call the internal
-    /// raw helper to stay hermetic (no root required).
     fn test_spec(path: PathBuf, size_bytes: u64, if_absent: bool) -> ResolvedDiskInitOp {
         ResolvedDiskInitOp {
             target_path: path,
@@ -364,44 +560,57 @@ mod tests {
         }
     }
 
-    /// Inner implementation that skips the path-prefix check, used only
-    /// in unit tests to stay root-free.
-    fn disk_init_one_no_prefix_check(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
-        if spec.if_absent && spec.target_path.exists() {
-            return Ok(DiskInitOutcome::Skipped);
+    fn fake_mkfs_tool(scratch: &Path) -> MkfsTool {
+        let script = scratch.join("fake-mkfs-ext4");
+        let mut file = fs::File::create(&script).unwrap();
+        writeln!(
+            file,
+            "#!/bin/sh\nlast=\"\"\nfor arg in \"$@\"; do last=\"$arg\"; done\nprintf '\\123\\357' | dd of=\"$last\" bs=1 seek={} conv=notrunc >/dev/null 2>&1\n",
+            EXT4_MAGIC_OFFSET
+        )
+        .unwrap();
+        drop(file);
+        let file = fs::File::open(&script).unwrap();
+        let mut perms = file.metadata().unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms).unwrap();
+        MkfsTool {
+            raw: script.display().to_string(),
+            path: script,
         }
-        if let Some(parent) = spec.target_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        use std::os::fd::AsFd;
+    }
+
+    fn create_regular_image(path: &Path, size: u64, mode: u32) -> File {
         use std::os::unix::fs::OpenOptionsExt;
-        let file = std::fs::OpenOptions::new()
+        let file = fs::OpenOptions::new()
+            .read(true)
             .write(true)
             .create_new(true)
-            .mode(0o600)
-            .open(&spec.target_path)?;
-        rustix::fs::fallocate(
-            file.as_fd(),
-            rustix::fs::FallocateFlags::empty(),
-            0,
-            spec.size_bytes,
-        )
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-        crate::sys::path_safe::fchmod(file.as_fd(), spec.mode)?;
-        crate::sys::path_safe::fchown(file.as_fd(), Some(spec.owner_uid), Some(spec.owner_gid))?;
-        Ok(DiskInitOutcome::Created)
+            .mode(mode)
+            .open(path)
+            .unwrap();
+        file.set_len(size).unwrap();
+        file
+    }
+
+    fn write_ext4_magic(file: &File) {
+        use std::os::unix::fs::FileExt;
+        file.write_all_at(&EXT4_SUPER_MAGIC.to_le_bytes(), EXT4_MAGIC_OFFSET)
+            .unwrap();
     }
 
     #[test]
-    fn disk_init_creates_file_when_absent() {
+    fn create_and_format_creates_ext4_image_when_absent() {
         let scratch = scratch_root();
         let target = scratch
             .join("vms")
             .join("test-vm")
             .join("store-overlay.img");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
         let spec = test_spec(target.clone(), 4096, true);
+        let tool = fake_mkfs_tool(&scratch);
 
-        let outcome = disk_init_one_no_prefix_check(&spec).expect("disk_init_one succeeds");
+        let outcome = create_and_format_with(&spec, &tool).expect("create and format succeeds");
         assert_eq!(outcome, DiskInitOutcome::Created);
 
         assert!(target.exists(), "file must exist after creation");
@@ -421,24 +630,165 @@ mod tests {
         );
         // Owner check (we ran as current euid so fchown is a no-op).
         assert_eq!(meta.uid(), nix::unistd::geteuid().as_raw());
+        assert!(has_ext4_superblock(&fs::File::open(&target).unwrap()).unwrap());
 
         let _ = fs::remove_dir_all(&scratch);
     }
 
     #[test]
-    fn disk_init_skips_when_present_and_if_absent() {
+    fn existing_valid_ext4_image_skips() {
         let scratch = scratch_root();
         let target = scratch.join("store-overlay.img");
-        // Pre-create the file with sentinel content.
-        fs::write(&target, b"existing").expect("pre-create sentinel file");
+        let file = create_regular_image(&target, 4096, 0o600);
+        write_ext4_magic(&file);
+        drop(file);
 
-        let spec = test_spec(target.clone(), 1_073_741_824 /* 1 GiB */, true);
-        let outcome = disk_init_one_no_prefix_check(&spec).expect("disk_init_one succeeds");
-        assert_eq!(outcome, DiskInitOutcome::Skipped, "must skip existing file");
+        let spec = test_spec(target.clone(), 4096, true);
+        let tool = fake_mkfs_tool(&scratch);
+        let outcome =
+            validate_or_repair_existing_with(&spec, &tool).expect("existing image validates");
+        assert_eq!(outcome, DiskInitOutcome::Skipped);
 
-        // File must not be truncated or grown.
         let meta = fs::metadata(&target).expect("stat file");
-        assert_eq!(meta.len(), 8, "existing file must not be modified");
+        assert_eq!(meta.len(), 4096);
+
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn existing_sparse_unformatted_image_is_repaired() {
+        let scratch = scratch_root();
+        let target = scratch.join("var.img");
+        let file = create_regular_image(&target, 4096, 0o600);
+        drop(file);
+        let spec = test_spec(target.clone(), 4096, true);
+        let tool = fake_mkfs_tool(&scratch);
+
+        let outcome = validate_or_repair_existing_with(&spec, &tool).expect("sparse image repairs");
+        assert_eq!(outcome, DiskInitOutcome::Repaired);
+        assert!(has_ext4_superblock(&fs::File::open(&target).unwrap()).unwrap());
+
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn existing_non_ext4_with_data_fails_closed() {
+        let scratch = scratch_root();
+        let target = scratch.join("var.img");
+        fs::write(&target, vec![0xAA; 4096]).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        let spec = test_spec(target.clone(), 4096, true);
+        let tool = fake_mkfs_tool(&scratch);
+
+        let err = validate_or_repair_existing_with(&spec, &tool)
+            .expect_err("non-ext4 data must fail closed");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("has data but no ext4 superblock"));
+        assert!(err.to_string().contains("inspect and back up"));
+
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn existing_wrong_mode_fails_closed() {
+        let scratch = scratch_root();
+        let target = scratch.join("var.img");
+        let file = create_regular_image(&target, 4096, 0o644);
+        write_ext4_magic(&file);
+        drop(file);
+        let spec = test_spec(target.clone(), 4096, true);
+        let tool = fake_mkfs_tool(&scratch);
+
+        let err = validate_or_repair_existing_with(&spec, &tool)
+            .expect_err("wrong mode must fail closed");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("mode 0644"));
+
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn existing_symlink_fails_closed_at_open() {
+        let scratch = scratch_root();
+        let real = scratch.join("real.img");
+        let link = scratch.join("link.img");
+        fs::write(&real, b"x").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let spec = test_spec(link, 4096, true);
+        let tool = fake_mkfs_tool(&scratch);
+
+        let err =
+            validate_or_repair_existing_with(&spec, &tool).expect_err("symlink must fail closed");
+        assert!(err.to_string().contains("O_NOFOLLOW"));
+
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn ext4_magic_is_little_endian_at_fixed_offset() {
+        let scratch = scratch_root();
+        let target = scratch.join("var.img");
+        let file = create_regular_image(&target, 4096, 0o600);
+
+        assert_eq!(read_ext4_magic(&file).unwrap(), Some(0));
+        write_ext4_magic(&file);
+        assert_eq!(read_ext4_magic(&file).unwrap(), Some(EXT4_SUPER_MAGIC));
+        assert!(has_ext4_superblock(&file).unwrap());
+
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn seek_data_enxio_is_no_data_and_other_errors_are_unknown() {
+        assert_eq!(
+            classify_seek_data_result(Err(rustix::io::Errno::NXIO)),
+            DataExtentClassification::Empty(EmptyImageEvidence::NoDataExtents)
+        );
+        assert_eq!(
+            classify_seek_data_result(Err(rustix::io::Errno::INVAL)),
+            DataExtentClassification::UnknownUnsupported
+        );
+        assert_eq!(
+            classify_seek_data_result(Ok(0)),
+            DataExtentClassification::HasData
+        );
+    }
+
+    #[test]
+    fn fd_target_points_at_broker_proc_fd() {
+        let scratch = scratch_root();
+        let target = scratch.join("var.img");
+        let file = create_regular_image(&target, 4096, 0o600);
+        let fd_path = fd_target_path(&file);
+        let rendered = fd_path.display().to_string();
+        assert!(rendered.starts_with(&format!("/proc/{}/fd/", std::process::id())));
+        assert!(rendered.ends_with(&file.as_raw_fd().to_string()));
+
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn repair_lock_serializes_second_fd() {
+        let scratch = scratch_root();
+        let target = scratch.join("var.img");
+        let first = create_regular_image(&target, 4096, 0o600);
+        let second = reopen_nofollow_rw(&target).unwrap();
+
+        lock_existing_image(&first, &target).unwrap();
+
+        let lock = nix::libc::flock {
+            l_type: nix::libc::F_WRLCK as nix::libc::c_short,
+            l_whence: nix::libc::SEEK_SET as nix::libc::c_short,
+            l_start: 0,
+            l_len: 0,
+            l_pid: 0,
+        };
+        let err = nix::fcntl::fcntl(second.as_raw_fd(), nix::fcntl::FcntlArg::F_OFD_SETLK(&lock))
+            .expect_err("second fd must not acquire the repair lock while first holds it");
+        assert!(
+            matches!(err, nix::errno::Errno::EAGAIN | nix::errno::Errno::EACCES),
+            "unexpected lock error: {err}"
+        );
 
         let _ = fs::remove_dir_all(&scratch);
     }
