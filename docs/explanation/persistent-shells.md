@@ -10,9 +10,10 @@ nixling shell <target> [ACTION]
 ```
 
 where `ACTION` is `attach`, `list`, `detach`, or `kill`. Omitting `ACTION`
-attaches to the target's configured default session. Current local-only
-generations accept local VM names as targets; ADR 0039 defines gateway,
-remote-node, and provider target routing for a future generation.
+attaches to the target's configured default session. Local VM names stay on the
+local daemon fast path. Gateway-backed management actions route through the
+configured realm gateway; interactive gateway attach remains fail-closed until
+semantic ADR 0039 attach support lands.
 
 ## Persistence boundary
 
@@ -35,13 +36,13 @@ connection-owned and exits with the command's status.
 
 ## Local dispatch and network surface
 
-The host CLI currently connects to the local `nixlingd` public socket. Current
-local-shell-only generations reject gateway-backed realm targets locally;
-operators manage those guests by entering the realm gateway and running the
-command there, for example `nixling realm enter work` followed by
-`nixling shell <target>`. That rejection is current-generation behavior, not a
-permanent contract: ADR 0039 defines constellation routing for gateway, remote,
-and provider target addresses.
+The host CLI connects to the local `nixlingd` public socket for local targets.
+For gateway-backed `list`, `detach`, and `kill`, it enters the realm trust
+boundary by running the same `nixling shell <target> ...` command inside the
+gateway VM over the typed guest-control exec path. The host still does not load
+realm credentials or provider transports. Gateway-backed interactive attach
+fails closed on the host facade; operators can enter the realm gateway and run
+`nixling shell <target>` there until the semantic ADR 0039 attach stream lands.
 
 Persistent shells do not add TCP or UDP listeners, network ports, or
 network-bound debug/metrics surfaces. The host-to-guest path reuses the existing

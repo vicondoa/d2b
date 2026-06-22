@@ -33,6 +33,10 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- Persistent shell CLI routing now sends gateway-backed `list`, `detach`, and
+  `kill` management forms through the configured realm gateway over the typed
+  guest-control exec path, while interactive gateway attach fails closed until
+  semantic ADR 0039 attach support lands.
 - Constellation persistent shell routing: extended remote full-host routing and
   provider trait seams so ADR 0039 `Shell*` operations require
   `persistent-shell`, target workloads explicitly, preserve mutating

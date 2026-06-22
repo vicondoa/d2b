@@ -1035,7 +1035,7 @@ struct OpArgs {
     after_help = "Forms:\n  nixling shell <target> [--name NAME] [--force]\n  nixling shell <target> attach [--name NAME] [--force]\n  nixling shell <target> list [--json]\n  nixling shell <target> detach [--name NAME] [--json]\n  nixling shell <target> kill --name NAME [--json]\n\n`nixling shell` opens persistent interactive sessions for a target workload. Use `nixling vm exec <target> -- <cmd>` for one-off commands."
 )]
 struct ShellArgs {
-    /// Target address. Current local-only shell generations accept declared local VM names.
+    /// Target address. Local VMs use the fast path; gateway-backed targets route through the realm gateway where supported.
     #[arg(value_name = "TARGET")]
     vm: String,
     /// Shell action. Omit to attach to the configured default session.
@@ -2160,25 +2160,95 @@ fn render_daemon_audit_lines(lines: &[String], json_mode: bool) -> Result<(), Cl
     Ok(())
 }
 
-fn shell_gateway_target_failure(raw: &str, json: bool) -> CliFailure {
+fn shell_gateway_attach_failure(raw: &str, json: bool) -> CliFailure {
     match emit_host_error(
         &host_error_envelope(
-            &format!("target not dispatchable on the host daemon: {raw}"),
-            "usage",
+            &format!(
+                "gateway-backed shell attach is not available for target `{raw}` in this generation"
+            ),
+            "gateway-shell-attach-unavailable",
             2,
-            "Whether the shell target addresses a local VM the host daemon can dispatch.",
-            "gateway-backed realm target",
-            "Run `nixling shell` against the realm gateway's nixlingd; the host daemon holds no realm configuration.",
-            "docs/reference/error-codes.md#usage",
+            "Whether this CLI/daemon generation can proxy an interactive ADR 0039 shell attach through a realm gateway.",
+            "semantic gateway shell attach is not implemented on the host facade",
+            "Use `nixling realm enter <realm>` and run `nixling shell <target>` inside the gateway, or retry after upgrading to a generation with semantic gateway shell attach.",
+            "docs/adr/0039-constellation-persistent-shell-routing.md#cli-and-facade-behavior",
         ),
         json,
     ) {
         Ok(exit_code) => CliFailure::new(
             exit_code,
-            format!("target not dispatchable on the host daemon: {raw}"),
+            format!("gateway-backed shell attach is not available for target: {raw}"),
         ),
         Err(failure) => failure,
     }
+}
+
+fn shell_action_word(action: ShellAction) -> &'static str {
+    match action {
+        ShellAction::Attach => "attach",
+        ShellAction::List => "list",
+        ShellAction::Detach => "detach",
+        ShellAction::Kill => "kill",
+    }
+}
+
+fn gateway_shell_argv(args: &ShellArgs, action: ShellAction) -> Result<Vec<String>, CliFailure> {
+    let mut argv = vec![
+        "nixling".to_owned(),
+        "shell".to_owned(),
+        args.vm.clone(),
+        shell_action_word(action).to_owned(),
+    ];
+    match action {
+        ShellAction::Attach => {
+            if let Some(name) = args.name.as_deref() {
+                shell_name(name)?;
+                argv.push("--name".to_owned());
+                argv.push(name.to_owned());
+            }
+            if args.force {
+                argv.push("--force".to_owned());
+            }
+        }
+        ShellAction::List => {}
+        ShellAction::Detach => {
+            if let Some(name) = args.name.as_deref() {
+                shell_name(name)?;
+                argv.push("--name".to_owned());
+                argv.push(name.to_owned());
+            }
+        }
+        ShellAction::Kill => {
+            let name = args.name.as_deref().expect("validated before route");
+            shell_name(name)?;
+            argv.push("--name".to_owned());
+            argv.push(name.to_owned());
+        }
+    }
+    if args.json {
+        argv.push("--json".to_owned());
+    } else if args.human {
+        argv.push("--human".to_owned());
+    }
+    Ok(argv)
+}
+
+fn cmd_gateway_shell(
+    context: &Context,
+    args: &ShellArgs,
+    action: ShellAction,
+    realm: String,
+    gateway_vm: String,
+) -> Result<i32, CliFailure> {
+    let json_mode = !matches!(action, ShellAction::Attach) && args.json;
+    if matches!(action, ShellAction::Attach) {
+        let _ = shell_name_option(args.name.as_deref())?;
+        return Err(shell_gateway_attach_failure(&args.vm, json_mode));
+    }
+    let argv = gateway_shell_argv(args, action)?;
+    ensure_realm_gateway_running(context, &realm, &gateway_vm, json_mode)?;
+    let exec_args = realm_gateway_exec_args(gateway_vm, argv, false, false, false, false);
+    cmd_vm_exec(context, &exec_args)
 }
 
 fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
@@ -2218,9 +2288,9 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
     let json_mode = !matches!(action, ShellAction::Attach) && args.json;
     let local_vm = match route_vm_target(context, &args.vm, json_mode)? {
         VmTargetRoute::Local { vm } => vm,
-        VmTargetRoute::Gateway { .. } => {
-            return Err(shell_gateway_target_failure(&args.vm, json_mode));
-        }
+        VmTargetRoute::Gateway {
+            realm, gateway_vm, ..
+        } => return cmd_gateway_shell(context, args, action, realm, gateway_vm),
     };
     match action {
         ShellAction::Attach => {
@@ -11142,6 +11212,124 @@ mod host_install_dispatch_tests {
         })
     }
 
+    fn running_gateway_list_response(gateway_vm: &str) -> Value {
+        json!({
+            "type": "listResponse",
+            "vms": [{
+                "vm": gateway_vm,
+                "name": gateway_vm,
+                "env": "work",
+                "graphics": false,
+                "tpm": false,
+                "usbip": false,
+                "isNetVm": false,
+                "sshUser": "alice",
+                "staticIp": "10.20.0.10",
+                "lifecycle": { "state": "Running", "pendingRestart": false },
+                "runtime": { "detail": "running" },
+                "services": {
+                    "nixling": "active",
+                    "microvm": "inactive",
+                    "virtiofsd": "active",
+                    "gpu": null,
+                    "video": null,
+                    "snd": null,
+                    "swtpm": null
+                }
+            }]
+        })
+    }
+
+    fn run_gateway_shell_command_with_mock_daemon(
+        args: super::ShellArgs,
+    ) -> (Result<i32, super::CliFailure>, Vec<Value>, Vec<u8>) {
+        let socket_path = test_socket_path("gateway-shell", ".sock");
+        let manifest_path = test_socket_path("gateway-shell", ".manifest.json");
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test socket dir");
+        }
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&manifest_path);
+        write_test_manifest(&manifest_path, "sys-work-gateway");
+
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("listener socket");
+        let addr = UnixAddr::new(&socket_path).expect("unix addr");
+        bind(listener.as_raw_fd(), &addr).expect("bind listener");
+        listen(&listener, Backlog::new(2).expect("backlog")).expect("listen");
+
+        let (requests_tx, requests_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            for response in [
+                running_gateway_list_response("sys-work-gateway"),
+                json!({
+                    "type": "error",
+                    "error": {
+                        "kind": "guest-control-exec-unsupported",
+                        "message": "mock stops after recording gateway exec start",
+                        "remediation": "test-only"
+                    }
+                }),
+            ] {
+                let accepted =
+                    accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).expect("accept");
+                let exchange = (|| -> io::Result<()> {
+                    let hello_bytes = recv_test_frame(accepted)?;
+                    let hello: Value = serde_json::from_slice(&hello_bytes)
+                        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                    assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+                    let hello_reply = encode_type_tagged_message(
+                        "helloOk",
+                        &IpcHelloOk {
+                            server_version: Version::new("0.4.0").expect("server version"),
+                            selected_version: Version::new("0.4.0").expect("selected version"),
+                            capabilities: daemon_supported_features(),
+                        },
+                        "test hello reply",
+                    )
+                    .expect("encode hello reply");
+                    send_test_frame(accepted, &hello_reply)?;
+                    let request_bytes = recv_test_frame(accepted)?;
+                    let request: Value = serde_json::from_slice(&request_bytes)
+                        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                    requests_tx
+                        .send(request)
+                        .expect("send request to test thread");
+                    let response_bytes = serde_json::to_vec(&response)
+                        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                    send_test_frame(accepted, &response_bytes)
+                })();
+                close(accepted).expect("close accepted socket");
+                exchange.expect("mock daemon exchange");
+            }
+        });
+
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("bundle.json"),
+            public_socket: socket_path.clone(),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let (result, stdout) =
+            super::with_test_stdout_capture(|| super::cmd_shell(&context, &args));
+        server.join().expect("join mock daemon thread");
+        let requests: Vec<Value> = requests_rx.try_iter().collect();
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&manifest_path);
+        (result, requests, stdout)
+    }
+
     #[test]
     fn shell_reply_decoder_ignores_envelope_op_id() {
         let mut response = shell_response(public_wire::ShellOpResponse::List(
@@ -11302,7 +11490,7 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
-    fn shell_rejects_gateway_targets_before_daemon_dispatch() {
+    fn shell_gateway_attach_fails_closed_before_daemon_dispatch() {
         let manifest_path = test_socket_path("shell-gateway-target", ".manifest.json");
         if let Some(parent) = manifest_path.parent() {
             std::fs::create_dir_all(parent).expect("manifest parent");
@@ -11320,21 +11508,69 @@ mod host_install_dispatch_tests {
             daemon_state_dir: PathBuf::from("/dev/null"),
             metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
         };
+        let args = parse_shell_raw(&["nixling", "shell", "demo.aca.work.nixling", "attach"]);
+        let (result, stdout) =
+            super::with_test_stdout_capture(|| super::cmd_shell(&context, &args));
+        let failure = result.expect_err("gateway shell attach is rejected locally");
+        assert_eq!(failure.exit_code, 2);
+        assert!(failure.message.contains("gateway-backed shell attach"));
+        assert!(stdout.is_empty());
+        let _ = std::fs::remove_file(&manifest_path);
+    }
+
+    #[test]
+    fn shell_gateway_management_routes_through_gateway_exec_command() {
         let args = parse_shell_raw(&[
             "nixling",
             "shell",
             "demo.aca.work.nixling",
-            "list",
+            "kill",
+            "--name",
+            "ops",
             "--json",
         ]);
-        let (result, stdout) =
-            super::with_test_stdout_capture(|| super::cmd_shell(&context, &args));
-        let failure = result.expect_err("gateway shell target is rejected locally");
-        assert_eq!(failure.exit_code, 2);
-        assert!(failure.message.contains("not dispatchable"));
-        let envelope: Value = serde_json::from_slice(&stdout).expect("json usage envelope");
-        assert_eq!(envelope.get("code").and_then(Value::as_str), Some("usage"));
-        let _ = std::fs::remove_file(&manifest_path);
+        let (result, requests, _stdout) = run_gateway_shell_command_with_mock_daemon(args);
+        let failure = result.expect_err("mock stops after gateway exec start");
+        assert_ne!(failure.exit_code, 0);
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[0].get("type").and_then(Value::as_str),
+            Some("list")
+        );
+        assert_eq!(
+            requests[1].get("type").and_then(Value::as_str),
+            Some("exec")
+        );
+        assert_eq!(
+            requests[1].pointer("/args/vm").and_then(Value::as_str),
+            Some("sys-work-gateway")
+        );
+        assert_eq!(
+            requests[1]
+                .pointer("/args/argv")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+            vec![
+                json!("nixling"),
+                json!("shell"),
+                json!("demo.aca.work.nixling"),
+                json!("kill"),
+                json!("--name"),
+                json!("ops"),
+                json!("--json"),
+            ]
+        );
+        assert_eq!(
+            requests[1].pointer("/args/tty").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            requests[1]
+                .pointer("/args/detached")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
     }
 
     #[test]

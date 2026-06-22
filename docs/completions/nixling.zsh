@@ -535,7 +535,7 @@ _arguments "${_arguments_options[@]}" : \
 '(--json)--human[Render human-readable output]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':vm -- Target address. Current local-only shell generations accept declared local VM names:_default' \
+':vm -- Target address. Local VMs use the fast path; gateway-backed targets route through the realm gateway where supported:_default' \
 '::action -- Shell action. Omit to attach to the configured default session:((attach\:"Attach to a persistent shell"
 list\:"List persistent shell sessions on a target"
 detach\:"Detach a persistent shell session without killing it"

@@ -2506,15 +2506,21 @@ A local VM named `list`, `attach`, `detach`, or `kill` attaches by default; use
 `nixling shell work htop` are rejected with a hint to use
 `nixling vm exec <target> -- <cmd>` for one-off commands.
 
-`shell` currently uses the local daemon public socket and the authenticated
-guest-control terminal transport. Current local-shell-only generations reject
-gateway-backed realm targets at the host daemon. Until ADR 0039 routing lands,
-use `nixling realm enter <realm>` to access the gateway interactively, then run
-`nixling shell <target>` inside the gateway boundary.
-[ADR 0039](../adr/0039-constellation-persistent-shell-routing.md) defines the
-constellation route: once gateway shell routing lands, the same command forwards
-gateway-backed targets through the selected gateway and requires the remote node
-or provider agent to advertise `persistent-shell`.
+`shell` keeps declared local VM names on the local daemon public socket and the
+authenticated guest-control terminal transport. Gateway-backed management forms
+(`list`, `detach`, `kill`) resolve the local realm entrypoint, verify the gateway
+VM is running, and run the same `nixling shell <target> ...` command inside the
+gateway VM over the typed `vm exec` guest-control path. The host does not load
+realm credentials, provider transports, raw guest-control frames, SSH, or
+provider-native shell APIs.
+
+Interactive gateway `attach` is fail-closed in this generation with an
+actionable `gateway-shell-attach-unavailable` error. Use
+`nixling realm enter <realm>` and run `nixling shell <target>` inside the
+gateway until semantic ADR 0039 shell attach is implemented. [ADR
+0039](../adr/0039-constellation-persistent-shell-routing.md) defines the final
+constellation route: gateway-backed targets forward through the selected gateway
+and require the remote node or provider agent to advertise `persistent-shell`.
 
 **Flags**
 
@@ -2592,7 +2598,7 @@ gateway, remote-node, and provider target routing for this command family.
 | --- | --- |
 | `0` | Success, including idempotent detach/kill no-op results. |
 | `1` | Unexpected daemon reply or local protocol/serialization failure. |
-| `2` | Usage error, invalid flag combination, missing required `--name` for kill, invalid shell name, non-TTY attach, or gateway-backed target on a local-shell-only daemon generation. |
+| `2` | Usage error, invalid flag combination, missing required `--name` for kill, invalid shell name, non-TTY attach, or gateway-backed interactive attach before semantic shell attach support lands. |
 | `69` | Local daemon public socket unavailable for shell dispatch. |
 | `70` | Daemon generation does not support persistent shell operations. |
 | `75` | Daemon admin authorization failed before guest contact. |
