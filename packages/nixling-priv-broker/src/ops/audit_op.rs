@@ -361,6 +361,8 @@ pub enum OperationFields {
         ops_total: u32,
         ops_created: u32,
         ops_skipped: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ops_repaired: Option<u32>,
         target_paths_hash: String,
     },
     ReconcileStorageScope {
@@ -655,6 +657,7 @@ impl OperationFields {
                 ops_total: u32,
                 ops_created: u32,
                 ops_skipped: u32,
+                ops_repaired: Option<u32>,
                 target_paths_hash: String,
             }),
             "ReconcileStorageScope" => parse_fields!(value => ReconcileStorageScope {

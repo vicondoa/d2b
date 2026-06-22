@@ -3418,6 +3418,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     ops_total: summary.ops_total,
                     ops_created: summary.ops_created,
                     ops_skipped: summary.ops_skipped,
+                    ops_repaired: Some(summary.ops_repaired),
                     target_paths_hash: summary.target_paths_hash,
                 },
             )?;

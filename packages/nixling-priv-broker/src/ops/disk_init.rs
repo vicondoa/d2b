@@ -27,7 +27,6 @@ use nixling_core::bundle_resolver::{BundleResolver, ResolvedDiskInitOp};
 
 /// Permitted root prefix for all disk-init target paths.
 const PERMITTED_ROOT: &str = "/var/lib/nixling/vms/";
-const O_NOFOLLOW: i32 = 0o400000;
 const EXT4_MAGIC_OFFSET: u64 = 1024 + 0x38;
 const EXT4_SUPER_MAGIC: u16 = 0xEF53;
 
@@ -176,7 +175,7 @@ fn reopen_nofollow_rw(path: &Path) -> io::Result<File> {
     std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .custom_flags(O_NOFOLLOW)
+        .custom_flags(nix::libc::O_NOFOLLOW)
         .open(path)
 }
 
@@ -279,17 +278,15 @@ fn classify_data_extents(file: &File) -> DataExtentClassification {
     classify_seek_data_result(rustix::fs::seek(file, rustix::fs::SeekFrom::Data(0)))
 }
 
-fn lock_existing_image(file: &File, path: &Path) -> io::Result<()> {
-    let lock = nix::libc::flock {
-        l_type: nix::libc::F_WRLCK as nix::libc::c_short,
-        l_whence: nix::libc::SEEK_SET as nix::libc::c_short,
-        l_start: 0,
-        l_len: 0,
-        l_pid: 0,
-    };
-    nix::fcntl::fcntl(file.as_raw_fd(), nix::fcntl::FcntlArg::F_OFD_SETLKW(&lock))
-        .map(|_| ())
-        .map_err(|e| io::Error::other(format!("disk-init: lock {}: {e}", path.display())))
+fn lock_existing_image(file: &File, path: &Path) -> io::Result<nix::fcntl::Flock<std::fs::File>> {
+    let lock_file = file.try_clone().map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!("disk-init: clone fd for lock {}: {e}", path.display()),
+        )
+    })?;
+    nix::fcntl::Flock::lock(lock_file, nix::fcntl::FlockArg::LockExclusiveNonblock)
+        .map_err(|(_, e)| io::Error::other(format!("disk-init: lock {}: {e}", path.display())))
 }
 
 fn fd_target_path(file: &File) -> std::path::PathBuf {
@@ -377,7 +374,7 @@ fn create_and_format_with(
     })?;
 
     apply_posture(&file, spec, "create")?;
-    lock_existing_image(&file, &spec.target_path)?;
+    let _lock = lock_existing_image(&file, &spec.target_path)?;
     run_mkfs_ext4_on_fd_with(&file, &spec.target_path, tool)?;
     if !has_ext4_superblock(&file)? {
         return Err(DiskInitError::formatter(format!(
@@ -408,7 +405,7 @@ fn validate_or_repair_existing_with(
             ),
         )
     })?;
-    lock_existing_image(&file, &spec.target_path)?;
+    let _lock = lock_existing_image(&file, &spec.target_path)?;
     validate_existing_posture(&file, spec)?;
     if has_ext4_superblock(&file)? {
         return Ok(DiskInitOutcome::Skipped);
@@ -774,21 +771,11 @@ mod tests {
         let first = create_regular_image(&target, 4096, 0o600);
         let second = reopen_nofollow_rw(&target).unwrap();
 
-        lock_existing_image(&first, &target).unwrap();
+        let _first_lock = lock_existing_image(&first, &target).unwrap();
 
-        let lock = nix::libc::flock {
-            l_type: nix::libc::F_WRLCK as nix::libc::c_short,
-            l_whence: nix::libc::SEEK_SET as nix::libc::c_short,
-            l_start: 0,
-            l_len: 0,
-            l_pid: 0,
-        };
-        let err = nix::fcntl::fcntl(second.as_raw_fd(), nix::fcntl::FcntlArg::F_OFD_SETLK(&lock))
+        let err = lock_existing_image(&second, &target)
             .expect_err("second fd must not acquire the repair lock while first holds it");
-        assert!(
-            matches!(err, nix::errno::Errno::EAGAIN | nix::errno::Errno::EACCES),
-            "unexpected lock error: {err}"
-        );
+        assert!(err.to_string().contains("lock"));
 
         let _ = fs::remove_dir_all(&scratch);
     }
@@ -854,10 +841,9 @@ mod tests {
         let target_link = scratch.join("link.img");
         std::fs::write(&target_real, b"x").unwrap();
         std::os::unix::fs::symlink(&target_real, &target_link).unwrap();
-        // O_NOFOLLOW = 0x20000 = 0o400000 on Linux.
         let err = std::fs::OpenOptions::new()
             .read(true)
-            .custom_flags(0o400000)
+            .custom_flags(nix::libc::O_NOFOLLOW)
             .open(&target_link)
             .expect_err("O_NOFOLLOW must refuse symlink terminal");
         // Linux: ELOOP for O_NOFOLLOW on a symlink terminal.
