@@ -152,7 +152,7 @@ Then update the `include` line in `config.kdl` accordingly.
    cat /etc/nixling/niri-vm-borders.kdl
    ```
 
-   The shared JSON/CSS artifacts are available at:
+   The shared JSON/GTK CSS artifacts are available at:
 
    ```bash
    cat /etc/nixling/ui-colors.json
