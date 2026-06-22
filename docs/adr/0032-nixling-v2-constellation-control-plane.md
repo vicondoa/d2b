@@ -7,7 +7,9 @@
   ADR 0023 (runner-role lifecycle matrix), ADR 0025 (host-jailed
   Wayland filter proxy role), ADR 0026 (native SigNoz observability
   backend), ADR 0028 (guest control plane over virtio-vsock), ADR 0029
-  (framework SSH operations to typed guest-control RPCs)
+  (framework SSH operations to typed guest-control RPCs), ADR 0038
+  (persistent named guest shell sessions), ADR 0039 (constellation
+  persistent shell routing)
 
 ## Context
 
@@ -2347,14 +2349,18 @@ enforcement), and Wave 17 (display desired-state and host receiver
 reconciliation). Full realm rollout must not treat the P0 host-resident
 credential path as production architecture.
 
-Inside the ACA sandbox there is **no systemd and no guestd**: ACA
+Inside the P0 ACA sandbox there is **no systemd and no guestd**: ACA
 dynamic/custom-container sessions run a container init (PID 1 is the
 container entrypoint, `/sys/fs/cgroup` is read-only), so the in-sandbox
 Waypipe server + relay sender are supervised by the sandbox agent under that
-init, and `nixling vm exec <…>.aca.<realm>` runs commands through the **ACA
-provider exec/log subset** (Wave 15), never through a guestd inside the
-sandbox. Reaching a `guestd` over the relay is **not** a P0 capability and is
-not the ADR's model for provider-managed sandboxes (see Wave 10 and Wave 15).
+init, and `nixling vm exec <...>.aca.<realm>` runs commands through the **ACA
+provider exec/log subset** (Wave 15), never through a guestd inside the P0
+sandbox. Reaching a guestd-compatible agent over the relay is **not** a P0
+capability. ADR 0039 updates the future provider-managed persistent-shell
+model: sandboxes that advertise persistent shell must run a nixling
+agent exposing semantic `Shell*` operations over the ADR 0032 peer transport,
+while executeShellCommand-only sandboxes remain exec-only. This does not tunnel
+raw guest ttRPC or guest-control frames.
 
 `nixling vm exec` **never implicitly starts** a stopped workload or a
 not-yet-started display bridge: if the workload is not running or its display
@@ -2804,6 +2810,8 @@ Negative/trade-offs:
 - [ADR 0026: Native SigNoz observability backend](0026-native-signoz-observability.md)
 - [ADR 0028: Guest control plane over virtio-vsock](0028-guest-control-plane-over-vsock.md)
 - [ADR 0029: Migrate framework SSH operations to typed guest-control RPCs](0029-framework-ssh-to-typed-guest-rpc.md)
+- [ADR 0038: Persistent guest shell sessions](0038-persistent-guest-shell-sessions.md)
+- [ADR 0039: Constellation persistent shell routing](0039-constellation-persistent-shell-routing.md)
 - [Design overview](../explanation/design.md)
 - [Daemon API reference](../reference/daemon-api.md)
 - [Tracing contract](../reference/tracing-contract.md)

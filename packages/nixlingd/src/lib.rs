@@ -2733,7 +2733,7 @@ fn dispatch_gateway_display(
                 if let Err(err) =
                     block_on_future(state.gateway_display.orchestrator.close(&session.open))
                 {
-                    tracing::warn!(error = %err, session_id = %args.session_id, "gateway display close cleanup failed");
+                    tracing::warn!(error = %err, "gateway display close cleanup failed");
                 }
                 true
             } else {
@@ -2903,9 +2903,9 @@ fn close_gateway_sessions_for_target(state: &ServerState, target: &str) -> Resul
         })?
         .extract_if(|_, session| session.target == target)
         .collect();
-    for (id, session) in sessions {
+    for (_id, session) in sessions {
         if let Err(err) = block_on_future(state.gateway_display.orchestrator.close(&session.open)) {
-            tracing::warn!(error = %err, session_id = %id, target = %target, "gateway display target cleanup failed");
+            tracing::warn!(error = %err, target = %target, "gateway display target cleanup failed");
         }
     }
     Ok(())
@@ -2935,9 +2935,9 @@ fn gateway_display_gc(state: &ServerState) {
             return;
         }
     };
-    for (id, session) in expired {
+    for (_id, session) in expired {
         if let Err(err) = block_on_future(state.gateway_display.orchestrator.close(&session.open)) {
-            tracing::warn!(error = %err, session_id = %id, "gateway display GC cleanup failed");
+            tracing::warn!(error = %err, "gateway display GC cleanup failed");
         }
     }
 }

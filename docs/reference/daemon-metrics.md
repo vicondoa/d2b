@@ -163,8 +163,10 @@ declared schema; see "Cardinality bounds" below.
 - **Type:** counter
 - **Labels:** `subsystem`, `outcome`, `error_kind`
 - **Meaning:** Cumulative count of guest-control persistent-shell management and
-  attached-owner outcomes. Shell names, terminal session handles, attach ids,
-  helper diagnostics, and terminal bytes are never metric labels.
+  attached-owner outcomes. Shell names, session ids, terminal session handles, attach ids,
+  terminal stream ids, provider/resource ids, provider endpoints,
+  provider credentials, process environments, working directories, helper
+  diagnostics, and terminal bytes are never metric labels.
 
 ## Cardinality bounds
 
@@ -181,7 +183,8 @@ declared schema; see "Cardinality bounds" below.
 | `error_kind` | normalized daemon error bucket | bounded by daemon code |
 
 No label carries free-form text (no error messages, no store paths,
-no command output, no shell session names, no terminal handles). The
+no command output, no shell session names, no terminal handles,
+no terminal stream ids, and no provider resource ids). The
 [observability panel's cardinality + PII rules](../../AGENTS.md#default-observability-panel)
 apply.
 

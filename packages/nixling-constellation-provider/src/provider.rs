@@ -17,8 +17,12 @@ use crate::capabilities::{
 use crate::error::ProviderResult;
 use crate::types::{
     DaemonAccessMode, DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest,
-    ExecStartRequest, IncomingStream, ListSelector, NodeRegistration, RuntimeHandle, RuntimePlan,
-    RuntimeStatus, StreamHandle, TransportSession, TransportTarget, WorkloadSpec, WorkloadStatus,
+    ExecStartRequest, GuestControlEndpointStatus, IncomingStream, ListSelector, NodeRegistration,
+    PersistentShellAttachProviderRequest, PersistentShellAttachProviderResponse,
+    PersistentShellDetachProviderRequest, PersistentShellKillProviderRequest,
+    PersistentShellListProviderRequest, PersistentShellListProviderResponse, PersistentShellStatus,
+    RuntimeHandle, RuntimePlan, RuntimeStatus, StreamHandle, TransportSession, TransportTarget,
+    WorkloadSpec, WorkloadStatus,
 };
 
 /// Installs/checks/prepares nixling on a host OS (NixOS, Ubuntu, generic
@@ -109,6 +113,60 @@ pub trait DurableExecutionProvider: Send + Sync {
         &self,
         req: nixling_constellation_core::ExecCancelRequest,
     ) -> ProviderResult<bool>;
+}
+
+/// Discovery seam for provider-managed workloads that run a
+/// guestd-compatible nixling agent. This reports bounded capability and
+/// generation metadata only; it never returns relay URLs, sockets, vsock
+/// coordinates, credentials, or raw guest-control frames.
+#[async_trait]
+pub trait GuestControlEndpointProvider: Send + Sync {
+    /// Provider id.
+    fn provider_id(&self) -> ProviderId;
+    /// Node this provider serves.
+    fn node_id(&self) -> NodeId;
+    /// Advertised workload-agent capabilities.
+    fn capabilities(&self) -> WorkloadCapabilitySet;
+    /// Resolve non-secret guest-control agent metadata for one workload.
+    async fn endpoint_status(
+        &self,
+        workload: WorkloadId,
+    ) -> ProviderResult<GuestControlEndpointStatus>;
+}
+
+/// Persistent named shell operations for guestd-compatible provider-managed
+/// workloads. This is deliberately separate from [`WorkloadProvider::exec`]
+/// and [`DurableExecutionProvider`]: one-shot provider exec APIs do not
+/// satisfy ADR 0039 shell persistence, attach/detach, generation, audit, or
+/// shell-authorized PTY stream semantics.
+#[async_trait]
+pub trait PersistentShellProvider: Send + Sync {
+    /// Provider id.
+    fn provider_id(&self) -> ProviderId;
+    /// Node this provider serves.
+    fn node_id(&self) -> NodeId;
+    /// Advertised workload-agent capabilities.
+    fn capabilities(&self) -> WorkloadCapabilitySet;
+    /// List persistent shells for a workload.
+    async fn list_shells(
+        &self,
+        req: PersistentShellListProviderRequest,
+    ) -> ProviderResult<PersistentShellListProviderResponse>;
+    /// Attach to a persistent shell and bind the authorized shell PTY stream.
+    async fn attach_shell(
+        &self,
+        req: PersistentShellAttachProviderRequest,
+    ) -> ProviderResult<PersistentShellAttachProviderResponse>;
+    /// Detach a shell attach handle without killing the named shell.
+    async fn detach_shell(
+        &self,
+        req: PersistentShellDetachProviderRequest,
+    ) -> ProviderResult<PersistentShellStatus>;
+    /// Kill a named persistent shell.
+    async fn kill_shell(
+        &self,
+        req: PersistentShellKillProviderRequest,
+    ) -> ProviderResult<PersistentShellStatus>;
 }
 
 /// Window/display forwarding for workloads that can present UI. A provider

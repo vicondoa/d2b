@@ -8,7 +8,7 @@
   constellation control plane), ADR 0034 (storage lifecycle, restart
   adoption, and synchronization), ADR 0036 (qemu-media runtime), ADR 0037
   (local hypervisor runtime seam), ADR 0038 (persistent named guest shell
-  sessions)
+  sessions), ADR 0039 (constellation persistent shell routing)
 
 ## Context
 
@@ -30,6 +30,10 @@ cleanup target wider and sharper:
   UX, a shared terminal streaming substrate with interactive exec, a static
   guest helper around shpool, and an explicitly excluded guest helper
   workspace that needs separate supply-chain and static-link gate wiring.
+- Constellation persistent shell routing extends that local shell surface to
+  target-address semantics, provider guestd-compatible agents, and
+  relay-safe `Shell*` operations without adding provider-specific shell
+  channels.
 
 The current codebase now has a different risk: every security hardening,
 feature wave, generated contract, and test migration has left scaffolding

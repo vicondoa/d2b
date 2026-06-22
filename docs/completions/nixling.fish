@@ -203,7 +203,7 @@ complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_s
 complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "enter" -d 'Open an interactive shell inside the realm gateway VM'
 complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "run" -d 'Run a one-shot command inside the realm gateway VM'
 complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c nixling -n "__fish_nixling_using_subcommand shell" -l name -d 'Persistent shell session name. Omit to use the VM\'s configured default' -r
+complete -c nixling -n "__fish_nixling_using_subcommand shell" -l name -d 'Persistent shell session name. Omit to use the target\'s configured default' -r
 complete -c nixling -n "__fish_nixling_using_subcommand shell" -l force -d 'Detach an existing attached client before attaching to this session'
 complete -c nixling -n "__fish_nixling_using_subcommand shell" -l json -d 'Render machine-readable JSON'
 complete -c nixling -n "__fish_nixling_using_subcommand shell" -l human -d 'Render human-readable output'

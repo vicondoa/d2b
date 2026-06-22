@@ -99,6 +99,10 @@ pub enum OperationKind {
     ExecAttach,
     ExecLogs,
     ExecCancel,
+    ShellList,
+    ShellAttach,
+    ShellDetach,
+    ShellKill,
     FileCopyStart,
     PortForwardOpen,
     DisplaySessionOpen,
@@ -114,6 +118,9 @@ impl OperationKind {
                 | OperationKind::WorkloadStop
                 | OperationKind::ExecStart
                 | OperationKind::ExecCancel
+                | OperationKind::ShellAttach
+                | OperationKind::ShellDetach
+                | OperationKind::ShellKill
                 | OperationKind::FileCopyStart
                 | OperationKind::PortForwardOpen
                 | OperationKind::DisplaySessionOpen
@@ -140,6 +147,10 @@ impl OperationKind {
                 Some(Capability::Exec)
             }
             OperationKind::ExecLogs => Some(Capability::Logs),
+            OperationKind::ShellList
+            | OperationKind::ShellAttach
+            | OperationKind::ShellDetach
+            | OperationKind::ShellKill => Some(Capability::PersistentShell),
             OperationKind::FileCopyStart => Some(Capability::FileCopy),
             OperationKind::PortForwardOpen => Some(Capability::PortForward),
             OperationKind::DisplaySessionOpen => Some(Capability::WindowForwarding),
@@ -555,8 +566,31 @@ mod tests {
     fn mutating_kinds_are_flagged() {
         assert!(OperationKind::WorkloadStart.is_mutating());
         assert!(OperationKind::ExecStart.is_mutating());
+        assert!(OperationKind::ShellAttach.is_mutating());
+        assert!(OperationKind::ShellDetach.is_mutating());
+        assert!(OperationKind::ShellKill.is_mutating());
         assert!(!OperationKind::WorkloadList.is_mutating());
+        assert!(!OperationKind::ShellList.is_mutating());
         assert!(!OperationKind::GuestHealth.is_mutating());
+    }
+
+    #[test]
+    fn shell_operations_require_persistent_shell_capability() {
+        for kind in [
+            OperationKind::ShellList,
+            OperationKind::ShellAttach,
+            OperationKind::ShellDetach,
+            OperationKind::ShellKill,
+        ] {
+            assert_eq!(
+                kind.required_capability(),
+                Some(Capability::PersistentShell)
+            );
+            assert_eq!(
+                kind.authorization_scope(),
+                crate::audit::AuthorizationScope::capability(Capability::PersistentShell)
+            );
+        }
     }
 
     #[test]
@@ -599,6 +633,15 @@ mod tests {
                    \"operation_id\":\"op1\",\
                    \"authz\":{\"principal\":\"p1\",\"realm\":[\"local\"],\"capability\":\"window-forwarding\"}}";
         assert!(serde_json::from_str::<StreamOpen>(ok).is_ok());
+
+        let forged_shell = "{\"descriptor\":{\"id\":\"s1\",\"kind\":\"shell-pty\"},\
+                           \"operation_id\":\"op1\",\
+                           \"authz\":{\"principal\":\"p1\",\"realm\":[\"local\"],\"capability\":\"pty\"}}";
+        assert!(serde_json::from_str::<StreamOpen>(forged_shell).is_err());
+        let ok_shell = "{\"descriptor\":{\"id\":\"s1\",\"kind\":\"shell-pty\"},\
+                       \"operation_id\":\"op1\",\
+                       \"authz\":{\"principal\":\"p1\",\"realm\":[\"local\"],\"capability\":\"persistent-shell\"}}";
+        assert!(serde_json::from_str::<StreamOpen>(ok_shell).is_ok());
     }
 
     #[test]
@@ -616,6 +659,19 @@ mod tests {
         let read = "{\"operation_id\":\"op1\",\"realm\":[\"work\"],\"node\":\"n1\",\
                     \"principal\":\"p1\",\"kind\":\"workload-list\",\"body\":[]}";
         assert!(serde_json::from_str::<OperationRequest>(read).is_ok());
+
+        let shell_read = "{\"operation_id\":\"op1\",\"realm\":[\"work\"],\"node\":\"n1\",\
+                         \"principal\":\"p1\",\"kind\":\"shell-list\",\"body\":[]}";
+        assert!(serde_json::from_str::<OperationRequest>(shell_read).is_ok());
+        let shell_attach_no_key = "{\"operation_id\":\"op1\",\"realm\":[\"work\"],\"node\":\"n1\",\
+                                  \"principal\":\"p1\",\"kind\":\"shell-attach\",\"body\":[]}";
+        assert!(serde_json::from_str::<OperationRequest>(shell_attach_no_key).is_err());
+        // Envelope decoding owns idempotency. Runtime routing separately
+        // requires a workload for shell operations before dispatch.
+        let shell_attach_with_key = "{\"operation_id\":\"op1\",\"idempotency_key\":\"k1\",\
+                                    \"realm\":[\"work\"],\"node\":\"n1\",\
+                                    \"principal\":\"p1\",\"kind\":\"shell-attach\",\"body\":[]}";
+        assert!(serde_json::from_str::<OperationRequest>(shell_attach_with_key).is_ok());
     }
 
     #[test]
