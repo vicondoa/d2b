@@ -119,7 +119,7 @@
       "needs": ["flake-eval-discover"],
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest",
-      "maxParallel": 12
+      "maxParallel": 4
     },
     "flake-eval-x86-outputs": {
       "displayName": "Flake non-checks outputs (x86_64-linux)",

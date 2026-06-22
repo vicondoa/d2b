@@ -168,7 +168,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 12
+      max-parallel: 4
       matrix:
         check: ${{ fromJSON(needs.flake-eval-discover.outputs.checks) }}
     steps:
