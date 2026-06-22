@@ -1302,6 +1302,9 @@ struct VmStopArgs {
     dry_run: bool,
     #[arg(long, conflicts_with = "dry_run")]
     apply: bool,
+    /// Skip provider graceful shutdown and use the forced cleanup path.
+    #[arg(short = 'f', long)]
+    force: bool,
     #[arg(long, conflicts_with = "human")]
     json: bool,
     #[arg(long, conflicts_with = "json")]
@@ -1315,6 +1318,9 @@ struct VmRestartArgs {
     dry_run: bool,
     #[arg(long, conflicts_with = "dry_run")]
     apply: bool,
+    /// Apply force only to the stop phase before starting again.
+    #[arg(short = 'f', long)]
+    force: bool,
     #[arg(long, conflicts_with = "human")]
     json: bool,
     #[arg(long, conflicts_with = "json")]
@@ -6258,7 +6264,12 @@ fn vm_is_qemu_media_runtime(context: &Context, vm: &str) -> Result<bool, CliFail
         .is_some_and(|runtime| runtime.kind == "qemu-media"))
 }
 
-fn vm_dag_dry_run_summary(verb: &str, vm: &str, qemu_media: bool) -> serde_json::Value {
+fn vm_dag_dry_run_summary(
+    verb: &str,
+    vm: &str,
+    qemu_media: bool,
+    force: bool,
+) -> serde_json::Value {
     // The DAG the supervisor would drive. Mirrors the structure emitted
     // by the processes::VmProcessDag exporter — for the headless alpha
     // shape (host-reconcile → store-preflight → virtiofsd-ro-store → ch
@@ -6309,7 +6320,7 @@ fn vm_dag_dry_run_summary(verb: &str, vm: &str, qemu_media: bool) -> serde_json:
             "vm dry-run reports the DAG the supervisor would drive (start: topo order; stop: reverse topo). --apply routes through nixlingd → broker (v1.0 daemon-only per ADR 0015).",
         )
     };
-    serde_json::json!({
+    let mut summary = serde_json::json!({
         "command": format!("vm {verb}"),
         "mode": "dry-run",
         "vm": vm,
@@ -6319,7 +6330,14 @@ fn vm_dag_dry_run_summary(verb: &str, vm: &str, qemu_media: bool) -> serde_json:
         },
         "stopOrder": if stopping || restarting { Some(stop_order) } else { None::<serde_json::Value> },
         "notes": notes,
-    })
+    });
+    if force
+        && (stopping || restarting)
+        && let Some(object) = summary.as_object_mut()
+    {
+        object.insert("force".to_owned(), serde_json::Value::Bool(true));
+    }
+    summary
 }
 
 fn cmd_vm_lifecycle_verb(
@@ -6329,6 +6347,7 @@ fn cmd_vm_lifecycle_verb(
     dry_run: bool,
     apply: bool,
     no_wait_api: bool,
+    force: bool,
     json: bool,
 ) -> Result<i32, CliFailure> {
     let flags = require_explicit_mutation_flag(&format!("vm {verb}"), dry_run, apply, json)?;
@@ -6341,6 +6360,12 @@ fn cmd_vm_lifecycle_verb(
             gateway,
             target,
         } => {
+            if force {
+                return Err(CliFailure::new(
+                    2,
+                    format!("--force is not supported for gateway-routed vm {verb} targets"),
+                ));
+            }
             if flags.apply {
                 return match verb {
                     "start" => cmd_gateway_vm_start(context, target),
@@ -6389,22 +6414,25 @@ fn cmd_vm_lifecycle_verb(
             "restart" => "vmRestart",
             other => other,
         };
-        let extra_fields = if no_wait_api {
-            serde_json::json!({ "vm": vm, "noWaitApi": true })
-        } else {
-            serde_json::json!({ "vm": vm })
-        };
+        let mut extra_fields = serde_json::Map::new();
+        extra_fields.insert("vm".to_owned(), serde_json::Value::String(vm));
+        if no_wait_api {
+            extra_fields.insert("noWaitApi".to_owned(), serde_json::Value::Bool(true));
+        }
+        if force {
+            extra_fields.insert("force".to_owned(), serde_json::Value::Bool(true));
+        }
         return dispatch_mutating_verb(
             context,
             request_type,
-            extra_fields,
+            serde_json::Value::Object(extra_fields),
             flags.dry_run,
             flags.apply,
             json,
         );
     }
     let qemu_media = vm_is_qemu_media_runtime(context, &vm)?;
-    let summary = vm_dag_dry_run_summary(verb, &vm, qemu_media);
+    let summary = vm_dag_dry_run_summary(verb, &vm, qemu_media, force);
     if json {
         let mut rendered = serde_json::to_string_pretty(&summary).map_err(|err| {
             CliFailure::new(1, format!("failed to serialize vm dry-run summary: {err}"))
@@ -6413,12 +6441,22 @@ fn cmd_vm_lifecycle_verb(
         print_stdout(&rendered);
     } else {
         if qemu_media {
+            let force_note = if force && (verb == "stop" || verb == "restart") {
+                " with forced stop cleanup"
+            } else {
+                ""
+            };
             print_stdout(&format!(
-                "vm {verb} --dry-run: would drive the qemu-media DAG for vm '{vm}' (host-reconcile → qemu-media → QemuMediaBoot)\n"
+                "vm {verb} --dry-run: would drive the qemu-media DAG for vm '{vm}'{force_note} (host-reconcile → qemu-media → QemuMediaBoot)\n"
             ));
         } else {
+            let force_note = if force && (verb == "stop" || verb == "restart") {
+                " with forced stop cleanup"
+            } else {
+                ""
+            };
             print_stdout(&format!(
-                "vm {verb} --dry-run: would drive the 5-node DAG for vm '{vm}' (host-reconcile → store-preflight → virtiofsd-ro-store → ch → guest-control-health)\n"
+                "vm {verb} --dry-run: would drive the 5-node DAG for vm '{vm}'{force_note} (host-reconcile → store-preflight → virtiofsd-ro-store → ch → guest-control-health)\n"
             ));
         }
     }
@@ -6433,6 +6471,7 @@ fn cmd_vm_start(context: &Context, args: &VmStartArgs) -> Result<i32, CliFailure
         args.dry_run,
         args.apply,
         args.no_wait_api,
+        false,
         args.json,
     )
 }
@@ -6445,6 +6484,7 @@ fn cmd_vm_stop(context: &Context, args: &VmStopArgs) -> Result<i32, CliFailure> 
         args.dry_run,
         args.apply,
         false,
+        args.force,
         args.json,
     )
 }
@@ -6457,6 +6497,7 @@ fn cmd_vm_restart(context: &Context, args: &VmRestartArgs) -> Result<i32, CliFai
         args.dry_run,
         args.apply,
         false,
+        args.force,
         args.json,
     )
 }
@@ -10931,10 +10972,11 @@ mod host_install_dispatch_tests {
     use super::{
         AddressFamily, ApiReadySimple, ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk,
         IpcUsbProbeEntryKind, IpcUsbipProbeEntry, IpcUsbipProbeStatus, MAX_FRAME_BYTES,
-        ManifestDocument, ManifestVm, MediaRef, MsgFlags, NativeCli, SockFlag, SockType,
-        StatusServicesOutputV2, UnixAddr, UsbAttachArgs, UsbDetachArgs, VmExecArgs, VmStartArgs,
-        broker_error_envelope, build_storage_migration_plan, cmd_host_install, cmd_vm_exec,
-        cmd_vm_start, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
+        ManifestDocument, ManifestVm, MediaRef, MsgFlags, NativeCli, NativeCommand, SockFlag,
+        SockType, StatusServicesOutputV2, UnixAddr, UsbAttachArgs, UsbDetachArgs, VmArgs,
+        VmCommand, VmExecArgs, VmRestartArgs, VmStartArgs, VmStopArgs, broker_error_envelope,
+        build_storage_migration_plan, cmd_host_install, cmd_vm_exec, cmd_vm_restart, cmd_vm_start,
+        cmd_vm_stop, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
         output_service_capabilities, parse_vm_exec_action, public_wire, render_usb_probe_human,
         send, socket, storage_migration_checkpoint_id,
     };
@@ -14675,7 +14717,7 @@ mod host_install_dispatch_tests {
         };
 
         let (result, stdout) = super::with_test_stdout_capture(|| {
-            super::cmd_vm_lifecycle_verb(&context, "start", vm, true, false, false, true)
+            super::cmd_vm_lifecycle_verb(&context, "start", vm, true, false, false, false, true)
         });
         assert_eq!(result.expect("qemu-media start dry-run"), 0);
         let rendered = String::from_utf8(stdout).expect("stdout utf8");
@@ -14684,7 +14726,7 @@ mod host_install_dispatch_tests {
         assert!(!rendered.contains("virtiofsd-ro-store"));
 
         let (result, stdout) = super::with_test_stdout_capture(|| {
-            super::cmd_vm_lifecycle_verb(&context, "stop", vm, true, false, false, false)
+            super::cmd_vm_lifecycle_verb(&context, "stop", vm, true, false, false, false, false)
         });
         assert_eq!(result.expect("qemu-media stop dry-run"), 0);
         let rendered = String::from_utf8(stdout).expect("stdout utf8");
@@ -14878,6 +14920,141 @@ mod host_install_dispatch_tests {
         assert_eq!(result.expect("vm start result"), super::EXIT_API_TIMEOUT);
         assert_eq!(request.get("type").and_then(Value::as_str), Some("vmStart"));
         assert!(request.get("noWaitApi").is_none());
+    }
+
+    #[test]
+    fn stop_and_restart_force_flags_parse_for_primary_and_alias_forms() {
+        let stop = NativeCli::try_parse_from(["nixling", "vm", "stop", "vm-a", "--force"])
+            .expect("vm stop --force parses");
+        assert!(matches!(
+            stop.command,
+            NativeCommand::Vm(VmArgs {
+                command: VmCommand::Stop(VmStopArgs { force: true, .. })
+            })
+        ));
+
+        let stop_short = NativeCli::try_parse_from(["nixling", "vm", "stop", "vm-a", "-f"])
+            .expect("vm stop -f parses");
+        assert!(matches!(
+            stop_short.command,
+            NativeCommand::Vm(VmArgs {
+                command: VmCommand::Stop(VmStopArgs { force: true, .. })
+            })
+        ));
+
+        let down =
+            NativeCli::try_parse_from(["nixling", "down", "vm-a", "-f"]).expect("down -f parses");
+        assert!(matches!(
+            down.command,
+            NativeCommand::Down(VmStopArgs { force: true, .. })
+        ));
+
+        let restart = NativeCli::try_parse_from(["nixling", "vm", "restart", "vm-a", "--force"])
+            .expect("vm restart --force parses");
+        assert!(matches!(
+            restart.command,
+            NativeCommand::Vm(VmArgs {
+                command: VmCommand::Restart(VmRestartArgs { force: true, .. })
+            })
+        ));
+
+        let restart_alias = NativeCli::try_parse_from(["nixling", "restart", "vm-a", "-f"])
+            .expect("restart -f parses");
+        assert!(matches!(
+            restart_alias.command,
+            NativeCommand::Restart(VmRestartArgs { force: true, .. })
+        ));
+    }
+
+    #[test]
+    fn stop_apply_sends_force_only_when_requested() {
+        let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
+        let response = json!({
+            "type": "mutatingVerbResponse",
+            "verb": "vm stop",
+            "outcome": "applied",
+            "summary": "vm stop ok",
+        });
+
+        let (forced_result, forced_request, _) = run_public_command_with_mock_daemon(
+            "vm-stop-force",
+            "vm-a",
+            response.clone(),
+            |context| {
+                cmd_vm_stop(
+                    context,
+                    &VmStopArgs {
+                        vm: "vm-a".to_owned(),
+                        dry_run: false,
+                        apply: true,
+                        force: true,
+                        json: false,
+                        human: false,
+                    },
+                )
+            },
+        );
+        assert_eq!(forced_result.expect("forced vm stop result"), 0);
+        assert_eq!(
+            forced_request.get("type").and_then(Value::as_str),
+            Some("vmStop")
+        );
+        assert_eq!(
+            forced_request.get("force").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let (normal_result, normal_request, _) =
+            run_public_command_with_mock_daemon("vm-stop-normal", "vm-a", response, |context| {
+                cmd_vm_stop(
+                    context,
+                    &VmStopArgs {
+                        vm: "vm-a".to_owned(),
+                        dry_run: false,
+                        apply: true,
+                        force: false,
+                        json: false,
+                        human: false,
+                    },
+                )
+            });
+        assert_eq!(normal_result.expect("normal vm stop result"), 0);
+        assert!(normal_request.get("force").is_none());
+    }
+
+    #[test]
+    fn restart_apply_sends_force_for_stop_phase() {
+        let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
+        let (result, request, _) = run_public_command_with_mock_daemon(
+            "vm-restart-force",
+            "vm-a",
+            json!({
+                "type": "mutatingVerbResponse",
+                "verb": "vm restart",
+                "outcome": "applied",
+                "summary": "vm restart ok",
+            }),
+            |context| {
+                cmd_vm_restart(
+                    context,
+                    &VmRestartArgs {
+                        vm: "vm-a".to_owned(),
+                        dry_run: false,
+                        apply: true,
+                        force: true,
+                        json: false,
+                        human: false,
+                    },
+                )
+            },
+        );
+
+        assert_eq!(result.expect("vm restart result"), 0);
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("vmRestart")
+        );
+        assert_eq!(request.get("force").and_then(Value::as_bool), Some(true));
     }
 
     #[test]

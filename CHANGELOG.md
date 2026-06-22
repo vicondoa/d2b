@@ -56,6 +56,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- VM lifecycle CLI: added explicit `--force` / `-f` stop intent for
+  `vm stop`, `down`, `vm restart`, and `restart`, with backward-compatible
+  public wire serialization that omits `force = false`.
+
 - Persistent shell CLI: added top-level `nixling shell <vm>` attach and
   management forms for persistent named guest shell sessions.
 

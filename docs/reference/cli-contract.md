@@ -284,7 +284,7 @@ vm start corp-vm: spawned pid=4242 start_time_ticks=123456789
 - There is no bash execution path for this verb.
 ### `vm stop`
 
-**Synopsis:** `nixling vm stop <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `nixling vm stop <vm> [--dry-run | --apply] [--force] [--human | --json]`
 
 **Status**
 
@@ -299,6 +299,7 @@ through the daemon.
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the 5-node per-VM DAG without spawning any role. |
 | `--apply` | boolean | `false` | Perform the lifecycle mutation. |
+| `--force`, `-f` | boolean | `false` | Skip provider graceful shutdown and request the existing forced stop cleanup path. Omitted from public JSON when false. |
 | `--json` | boolean | `false` | Emit the dry-run DAG or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -340,6 +341,9 @@ vm stop corp-vm: broker recorded the audited SignalRunner request for role ch-ru
 - `--apply`: routes through `nixlingd` → broker. Daemon-unreachable
   surfaces `daemon-down` exit 1; native-handler-deferred surfaces
   `not-yet-implemented` exit 78; `broker-error` exit 78.
+- `--force` / `-f`: available on both `vm stop` and the top-level
+  `down` alias. It is an explicit stop override, not a shortcut around
+  the existing forced cleanup policy.
 - `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` are
   unrecognised. Broker failures surface on stderr with the redacted
   public-safe remediation and exit `78`.
@@ -350,7 +354,7 @@ vm stop corp-vm: broker recorded the audited SignalRunner request for role ch-ru
 - There is no bash execution path for this verb.
 ### `vm restart`
 
-**Synopsis:** `nixling vm restart <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `nixling vm restart <vm> [--dry-run | --apply] [--force] [--human | --json]`
 
 **Status**
 
@@ -365,6 +369,7 @@ through the daemon.
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the 5-node per-VM DAG without spawning any role. |
 | `--apply` | boolean | `false` | Perform the lifecycle mutation. |
+| `--force`, `-f` | boolean | `false` | Apply force only to the stop phase before the unchanged start phase. Omitted from public JSON when false. |
 | `--json` | boolean | `false` | Emit the dry-run DAG or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -399,6 +404,8 @@ vm restart corp-vm: vm stop corp-vm: broker recorded the audited SignalRunner re
 - `--apply`: routes through `nixlingd` → broker. Daemon-unreachable
   surfaces `daemon-down` exit 1; native-handler-deferred surfaces
   `not-yet-implemented` exit 78; `broker-error` exit 78.
+- `--force` / `-f`: available on both `vm restart` and the top-level
+  `restart` alias. It affects only the stop phase.
 - `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` are
   unrecognised. Broker failures surface on stderr with the redacted
   public-safe remediation and exit `78`.
@@ -2855,8 +2862,8 @@ detached state lives in guestd's detached registry).
 | --- | --- | --- |
 | `list` | `rust-native` | Pure read-only inventory query; the daemon answers it without mutating host or guest state. |
 | `vm start` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed `SpawnRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
-| `vm stop` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed `SignalRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
-| `vm restart` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed stop+start sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `vm stop` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output, including explicit `--force` / `-f` stop intent; `--apply` routes through the daemon-backed `SignalRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `vm restart` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output, including explicit `--force` / `-f` stop-phase intent; `--apply` routes through the daemon-backed stop+start sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `vm list` | `rust-native` | Daemon-side runtime inventory from nixlingd's public socket; daemon-unavailable returns an explicit empty inventory with remediation text. |
 | `status` | `rust-native` | Status is a read-only daemon RPC, including the frozen per-VM JSON shape. |
 | `status --check-bridges` | `rust-native` | The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred. |

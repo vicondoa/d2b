@@ -328,10 +328,18 @@ pub struct VmLifecycleRequest {
     pub vm: String,
     #[serde(default, flatten)]
     pub flags: MutationFlags,
+    /// Bypass provider graceful-shutdown and use the existing forced cleanup path.
+    #[schemars(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub force: bool,
     /// When true, exit 0 on process-alive success without waiting for api-ready.
     /// Default false (strict mode: wait for both process-alive and api-ready).
     #[serde(default)]
     pub no_wait_api: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1827,7 +1835,9 @@ fn default_true() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{PublicRequest, RuntimeSummary, VmLifecycleState};
+    use super::{
+        MutationFlags, PublicRequest, RuntimeSummary, VmLifecycleRequest, VmLifecycleState,
+    };
     use crate::{decode_frame, encode_frame};
     use nixling_core::{
         processes::ProcessRole,
@@ -1854,6 +1864,49 @@ mod tests {
         let error = decode_frame::<PublicRequest>("PublicRequest", &frame)
             .expect_err("unknown field fails");
         assert!(error.message().contains("extra"));
+    }
+
+    #[test]
+    fn vm_lifecycle_force_defaults_false_for_compatibility() {
+        let decoded: PublicRequest = serde_json::from_value(serde_json::json!({
+            "kind": "vm stop",
+            "payload": {
+                "vm": "corp-vm",
+                "apply": true
+            }
+        }))
+        .expect("old vm stop payload decodes");
+
+        assert!(matches!(
+            decoded,
+            PublicRequest::VmStop(VmLifecycleRequest {
+                vm,
+                flags: MutationFlags { apply: true, .. },
+                force: false,
+                no_wait_api: false,
+            }) if vm == "corp-vm"
+        ));
+    }
+
+    #[test]
+    fn vm_lifecycle_omits_false_force_but_serializes_true() {
+        let without_force = serde_json::to_value(PublicRequest::VmStop(VmLifecycleRequest {
+            vm: "corp-vm".to_owned(),
+            flags: MutationFlags::default(),
+            force: false,
+            no_wait_api: false,
+        }))
+        .expect("vm stop serializes");
+        assert!(without_force["payload"].get("force").is_none());
+
+        let with_force = serde_json::to_value(PublicRequest::VmRestart(VmLifecycleRequest {
+            vm: "corp-vm".to_owned(),
+            flags: MutationFlags::default(),
+            force: true,
+            no_wait_api: false,
+        }))
+        .expect("vm restart serializes");
+        assert_eq!(with_force["payload"]["force"], true);
     }
 
     #[test]

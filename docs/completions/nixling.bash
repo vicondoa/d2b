@@ -1128,7 +1128,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__down)
-            opts="-h --dry-run --apply --json --human --help <VM>"
+            opts="-f -h --dry-run --apply --force --json --human --help <VM>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2808,7 +2808,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__restart)
-            opts="-h --dry-run --apply --json --human --help <VM>"
+            opts="-f -h --dry-run --apply --force --json --human --help <VM>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3455,7 +3455,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__vm__subcmd__restart)
-            opts="-h --dry-run --apply --json --human --help <VM>"
+            opts="-f -h --dry-run --apply --force --json --human --help <VM>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3497,7 +3497,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__vm__subcmd__stop)
-            opts="-h --dry-run --apply --json --human --help <VM>"
+            opts="-f -h --dry-run --apply --force --json --human --help <VM>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

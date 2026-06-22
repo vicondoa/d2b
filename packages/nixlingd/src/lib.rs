@@ -1510,6 +1510,7 @@ impl autostart::VmStarter for BrokerVmStarter {
                 dry_run: false,
                 json: true,
             },
+            force: false,
             // Opt-IN to relaxed semantics so api-ready timeout (common
             // during cold boot of net VMs) does not
             // cascade-degrade every workload VM in the env. The
@@ -16728,6 +16729,7 @@ mod broker_dispatch_tests {
                         dry_run: true,
                         ..MutationFlags::default()
                     },
+                    force: false,
                     no_wait_api: false,
                 }),
             ),
@@ -16739,6 +16741,7 @@ mod broker_dispatch_tests {
                         dry_run: true,
                         ..MutationFlags::default()
                     },
+                    force: false,
                     no_wait_api: false,
                 }),
             ),
@@ -16750,6 +16753,7 @@ mod broker_dispatch_tests {
                         dry_run: true,
                         ..MutationFlags::default()
                     },
+                    force: false,
                     no_wait_api: false,
                 }),
             ),
@@ -17219,6 +17223,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -17329,6 +17334,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -17604,6 +17610,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -17763,6 +17770,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -17820,6 +17828,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -17865,6 +17874,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
             std::time::Duration::from_millis(100),
@@ -18005,6 +18015,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18199,6 +18210,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
             Duration::from_millis(100),
@@ -18329,6 +18341,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18427,6 +18440,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18441,6 +18455,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18477,6 +18492,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18516,6 +18532,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18547,6 +18564,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18579,6 +18597,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18619,6 +18638,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18721,6 +18741,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18848,6 +18869,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )

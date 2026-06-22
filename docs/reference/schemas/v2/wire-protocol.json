@@ -9447,6 +9447,10 @@
           "default": false,
           "type": "boolean"
         },
+        "force": {
+          "description": "Bypass provider graceful-shutdown and use the existing forced cleanup path.",
+          "type": "boolean"
+        },
         "json": {
           "default": false,
           "type": "boolean"
