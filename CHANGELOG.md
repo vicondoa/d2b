@@ -25,6 +25,9 @@ deprecations ship one minor release before removal.
 - Persistent shell detach now treats a successful daemon best-effort close as a
   clean owner close even if the first close-attach RPC reports a transient
   guest-control transport error.
+- Persistent shell detach now treats the known close-attach transport-unavailable
+  response as a successful local detach, matching the daemon's owner-disconnect
+  cleanup semantics.
 - `nixling list --json` now preserves daemon-reported failed lifecycle state as
   `status = "failed"` instead of collapsing it to `unknown`.
 
