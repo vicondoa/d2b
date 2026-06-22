@@ -232,6 +232,106 @@ impl GuestControlExecErrorKind {
     }
 }
 
+/// Closed enum of guest-control **shell** failure classes. The daemon never
+/// attaches shell names, session handles, terminal bytes, or guest-supplied
+/// strings to this error; the enum is the only public payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuestControlShellErrorKind {
+    Transport,
+    Auth,
+    Protocol,
+    Timeout,
+    Capability,
+    StaleSession,
+    Capacity,
+    AlreadyAttached,
+    NotFound,
+    OutputGap,
+    GuestError,
+    Internal,
+}
+
+impl GuestControlShellErrorKind {
+    pub fn wire_kind(self) -> &'static str {
+        match self {
+            Self::Transport => "guest-control-shell-transport-unavailable",
+            Self::Auth => "guest-control-shell-auth-failed",
+            Self::Protocol => "guest-control-shell-protocol-error",
+            Self::Timeout => "guest-control-shell-timeout",
+            Self::Capability => "guest-control-shell-capability-unavailable",
+            Self::StaleSession => "guest-control-shell-stale-session",
+            Self::Capacity => "guest-control-shell-capacity",
+            Self::AlreadyAttached => "guest-control-shell-already-attached",
+            Self::NotFound => "guest-control-shell-not-found",
+            Self::OutputGap => "guest-control-shell-output-gap",
+            Self::GuestError => "guest-control-shell-error",
+            Self::Internal => "guest-control-shell-internal",
+        }
+    }
+
+    fn exit_code(self) -> u8 {
+        match self {
+            Self::Transport | Self::Timeout => 69,
+            Self::Capability => 70,
+            Self::Capacity | Self::AlreadyAttached => 75,
+            Self::Protocol | Self::NotFound | Self::OutputGap | Self::GuestError => 76,
+            Self::Auth | Self::StaleSession => 77,
+            Self::Internal => 42,
+        }
+    }
+
+    fn human_message(self) -> &'static str {
+        match self {
+            Self::Transport => "guest-control shell transport to the VM is unavailable",
+            Self::Auth => "guest-control shell authentication to the VM failed",
+            Self::Protocol => "the guest returned a malformed guest-control shell response",
+            Self::Timeout => "the guest-control shell operation timed out",
+            Self::Capability => "the guest does not advertise a required shell capability",
+            Self::StaleSession => "the guest-control shell session is stale",
+            Self::Capacity => "the persistent shell session table is at capacity",
+            Self::AlreadyAttached => "the persistent shell is already attached",
+            Self::NotFound => "the persistent shell session was not found",
+            Self::OutputGap => "the persistent shell output stream has a gap",
+            Self::GuestError => "the guest rejected the shell operation",
+            Self::Internal => "the daemon failed to drive the shell session",
+        }
+    }
+
+    fn remediation(self) -> &'static str {
+        match self {
+            Self::Transport | Self::Timeout => {
+                "confirm the VM is running and guest-control-health is ready (`nixling vm status <vm>`), then retry"
+            }
+            Self::Auth => {
+                "the guest rejected the authenticated handshake; rotate the VM's guest-control material and restart the VM"
+            }
+            Self::Protocol => {
+                "the guest-control protocol versions are skewed; rebuild the guest with a matching nixling generation"
+            }
+            Self::Capability => {
+                "enable persistent guest shell support for the VM and rebuild/restart the guest so it advertises shell capabilities"
+            }
+            Self::StaleSession => {
+                "reattach to the shell after confirming the VM is still running; if the failure persists, restart the VM"
+            }
+            Self::Capacity => "detach or kill an existing persistent shell session, then retry",
+            Self::AlreadyAttached => {
+                "reattach with the force flag or detach the existing owner first"
+            }
+            Self::NotFound => {
+                "list persistent shell sessions for the VM and retry with a listed name"
+            }
+            Self::OutputGap => {
+                "reattach to redraw the persistent shell; terminal output before the gap is no longer available"
+            }
+            Self::GuestError => "inspect guestd shell state and retry the shell operation",
+            Self::Internal => {
+                "retry; if the failure persists inspect the daemon log for the typed shell-session record"
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum TypedError {
     AuthzNotALauncher {
@@ -414,6 +514,11 @@ pub enum TypedError {
     GuestControlExecFailed {
         kind: GuestControlExecErrorKind,
     },
+    /// Authenticated guest-control **shell** failed. Closed-enum kind only; no
+    /// shell name, session handle, terminal bytes, or guest string.
+    GuestControlShellFailed {
+        kind: GuestControlShellErrorKind,
+    },
     /// The daemon refused a new connection because the bounded in-flight
     /// connection-handler pool is saturated. Returned immediately
     /// (non-blocking) from the accept path so a burst of clients cannot
@@ -486,6 +591,7 @@ impl TypedError {
             Self::RuntimeCapabilityUnsupported { .. } => "runtime-capability-unsupported",
             Self::GuestControlReadFailed { kind } => kind.wire_kind(),
             Self::GuestControlExecFailed { kind } => kind.wire_kind(),
+            Self::GuestControlShellFailed { kind } => kind.wire_kind(),
             Self::DaemonBusy => "daemon-busy",
         }
     }
@@ -532,6 +638,7 @@ impl TypedError {
             // distinct `kind` slug carries the sub-class.
             Self::GuestControlReadFailed { .. } => 70,
             Self::GuestControlExecFailed { kind } => kind.exit_code(),
+            Self::GuestControlShellFailed { kind } => kind.exit_code(),
             // Shares the EX_TEMPFAIL-class exit code with the other
             // transient back-pressure refusals (session-capacity,
             // rate-limited): a retry may succeed.
@@ -644,6 +751,7 @@ impl TypedError {
             }
             Self::GuestControlReadFailed { kind } => kind.human_message().to_owned(),
             Self::GuestControlExecFailed { kind } => kind.human_message().to_owned(),
+            Self::GuestControlShellFailed { kind } => kind.human_message().to_owned(),
             Self::DaemonBusy => "the daemon is at its in-flight connection limit".to_owned(),
         }
     }
@@ -752,6 +860,7 @@ impl TypedError {
             }
             Self::GuestControlReadFailed { kind } => kind.remediation().to_owned(),
             Self::GuestControlExecFailed { kind } => kind.remediation().to_owned(),
+            Self::GuestControlShellFailed { kind } => kind.remediation().to_owned(),
             Self::DaemonBusy => {
                 "the daemon is briefly at capacity; retry the command shortly".to_owned()
             }
@@ -880,6 +989,7 @@ impl TypedError {
             | Self::RuntimeCapabilityUnsupported { .. }
             | Self::GuestControlReadFailed { .. }
             | Self::GuestControlExecFailed { .. }
+            | Self::GuestControlShellFailed { .. }
             | Self::DaemonBusy => "internalError",
         }
     }
@@ -1075,6 +1185,47 @@ mod tests {
             // The public envelope must never carry guest-supplied tokens.
             for surface in [err.message(), err.remediation()] {
                 for forbidden in ["argv", "stdout", "stderr", "session=", "handle="] {
+                    assert!(
+                        !surface.contains(forbidden),
+                        "kind={slug} leaks {forbidden:?}: {surface:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn guest_control_shell_failed_kinds_are_leak_free() {
+        let kinds = [
+            GuestControlShellErrorKind::Transport,
+            GuestControlShellErrorKind::Auth,
+            GuestControlShellErrorKind::Protocol,
+            GuestControlShellErrorKind::Timeout,
+            GuestControlShellErrorKind::Capability,
+            GuestControlShellErrorKind::StaleSession,
+            GuestControlShellErrorKind::Capacity,
+            GuestControlShellErrorKind::AlreadyAttached,
+            GuestControlShellErrorKind::NotFound,
+            GuestControlShellErrorKind::OutputGap,
+            GuestControlShellErrorKind::GuestError,
+            GuestControlShellErrorKind::Internal,
+        ];
+        for kind in kinds {
+            let err = TypedError::GuestControlShellFailed { kind };
+            let slug = err.kind();
+            assert!(
+                slug.starts_with("guest-control-shell-"),
+                "slug={slug} does not use guest-control-shell prefix"
+            );
+            assert!(!err.message().is_empty(), "kind={slug} message empty");
+            assert!(
+                !err.remediation().is_empty(),
+                "kind={slug} remediation empty"
+            );
+            assert_no_path_leak(slug, &err.message());
+            assert_no_path_leak(slug, &err.remediation());
+            for surface in [err.message(), err.remediation()] {
+                for forbidden in ["stdout", "stderr", "session=", "handle=", "shell="] {
                     assert!(
                         !surface.contains(forbidden),
                         "kind={slug} leaks {forbidden:?}: {surface:?}"

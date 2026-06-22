@@ -329,20 +329,47 @@ fn fd_target_path(file: &File) -> std::path::PathBuf {
 
 fn run_mkfs_ext4_on_fd_with(file: &File, display_path: &Path, tool: &MkfsTool) -> io::Result<()> {
     let target = fd_target_path(file);
-    let mkfs_output = std::process::Command::new(&tool.path)
-        .arg("-q")
-        .arg("-F")
-        .arg("-E")
-        .arg("lazy_itable_init=1,lazy_journal_init=1")
-        .arg(&target)
-        .output()
-        .map_err(|e| {
-            DiskInitError::formatter(format!(
-                "mkfs.ext4 ({}) spawn on {} failed: {e}",
+    let mut last_spawn_error = None;
+    let mut mkfs_output = None;
+    for attempt in 0..5 {
+        match std::process::Command::new(&tool.path)
+            .arg("-q")
+            .arg("-F")
+            .arg("-E")
+            .arg("lazy_itable_init=1,lazy_journal_init=1")
+            .arg(&target)
+            .output()
+        {
+            Ok(output) => {
+                mkfs_output = Some(output);
+                break;
+            }
+            Err(error) if error.raw_os_error() == Some(nix::libc::ETXTBSY) && attempt < 4 => {
+                last_spawn_error = Some(error);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => {
+                return Err(DiskInitError::formatter(format!(
+                    "mkfs.ext4 ({}) spawn on {} failed: {error}",
+                    tool.raw,
+                    display_path.display()
+                ))
+                .into());
+            }
+        }
+    };
+    let mkfs_output = match mkfs_output {
+        Some(output) => output,
+        None => {
+            let error = last_spawn_error.expect("ETXTBSY error recorded");
+            return Err(DiskInitError::formatter(format!(
+                "mkfs.ext4 ({}) spawn on {} failed: {error}",
                 tool.raw,
                 display_path.display()
             ))
-        })?;
+            .into());
+        }
+    };
     if !mkfs_output.status.success() {
         let stderr = bounded_lossy(&mkfs_output.stderr, MKFS_STDERR_LIMIT);
         let detail = if stderr.is_empty() {

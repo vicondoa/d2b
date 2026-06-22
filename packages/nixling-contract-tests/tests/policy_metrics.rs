@@ -95,6 +95,13 @@ const EXPECTED_METRICS: &[ExpectedMetric] = &[
         buckets_expr: "&[]",
         bucket_values: None,
     },
+    ExpectedMetric {
+        name: "nixling_daemon_guest_control_shell_total",
+        kind: "Counter",
+        labels: &["subsystem", "outcome", "error_kind"],
+        buckets_expr: "&[]",
+        bucket_values: None,
+    },
 ];
 
 // The retired bash gate's doc-parity table predated the guest-control exec

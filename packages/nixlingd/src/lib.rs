@@ -78,6 +78,7 @@ use nixling_ipc::{
         UsbipProxyReconcileRequest as BrokerUsbipProxyReconcileRequest,
         UsbipUnbindRequest as BrokerUsbipUnbindRequest,
     },
+    guest_proto as pb,
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
     types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, VmId},
 };
@@ -2310,6 +2311,43 @@ fn handle_connection_authorized(
                 }
             }
         }
+        if let wire::Request::Shell(op) = &request {
+            if !matches!(peer.role, PeerRole::Admin) {
+                let error = TypedError::AuthzNotAdmin {
+                    verb: "shell".to_owned(),
+                };
+                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+                continue;
+            }
+            if matches!(op, public_wire::ShellOp::Attach(_)) {
+                let first_op_id = wire::shell_op_id(&frame);
+                let owner_state = state.clone();
+                let owner_peer = peer.clone();
+                let op = op.clone();
+                set_frame_read_deadline(&stream, None);
+                let owner_permit = permit;
+                match std::thread::Builder::new()
+                    .name("nixling-shell-owner".to_owned())
+                    .spawn(move || {
+                        run_shell_owner(
+                            stream,
+                            owner_state,
+                            owner_peer,
+                            first_op_id,
+                            op,
+                            owner_permit,
+                        );
+                    }) {
+                    Ok(_) => return Ok(()),
+                    Err(err) => {
+                        return Err(TypedError::InternalIo {
+                            context: "spawn shell owner handler".to_owned(),
+                            detail: err.to_string(),
+                        });
+                    }
+                }
+            }
+        }
         // Gateway display operations can perform provider/relay orchestration.
         // Hand them off the serial accept loop just like exec owner sessions.
         if let wire::Request::GatewayDisplay(op) = &request {
@@ -2460,6 +2498,7 @@ fn verb_requires_admin(verb: &str) -> bool {
             | "hostReconcile"
             | "readGuestConfig"
             | "exec"
+            | "shell"
     )
 }
 
@@ -2557,7 +2596,7 @@ fn dispatch_request_locked(
         // spawned worker off the serial accept loop). Detached management ops
         // are ordinary one-shot requests.
         wire::Request::Exec(op) => dispatch_exec_management(state, peer, op),
-        wire::Request::Shell(_) => Err(TypedError::GuestShellDisabled),
+        wire::Request::Shell(op) => dispatch_shell_management(state, peer, op),
         wire::Request::GatewayDisplay(op) => dispatch_gateway_display(state, peer, op),
     }
 }
@@ -4454,6 +4493,903 @@ fn dispatch_read_guest_config(
             content_base64: encoded,
         },
     ))
+}
+
+const SHELL_MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(12);
+const SHELL_POLL_CAP: Duration = Duration::from_secs(30);
+const SHELL_POLL_SLACK: Duration = Duration::from_secs(2);
+const SHELL_OWNER_INFLIGHT_CAP: usize = 64;
+const SHELL_METRIC: &str = "nixling_daemon_guest_control_shell_total";
+const SHELL_SUBSYSTEM: &str = "guest-control-shell";
+
+fn shell_failed(kind: crate::typed_error::GuestControlShellErrorKind) -> TypedError {
+    TypedError::GuestControlShellFailed { kind }
+}
+
+fn map_shell_health_error(error: guest_control_health::GuestControlHealthError) -> TypedError {
+    use crate::typed_error::GuestControlShellErrorKind as K;
+    match error {
+        guest_control_health::GuestControlHealthError::TransportIo
+        | guest_control_health::GuestControlHealthError::Ttrpc
+        | guest_control_health::GuestControlHealthError::Signer => shell_failed(K::Transport),
+        guest_control_health::GuestControlHealthError::Timeout => shell_failed(K::Timeout),
+        guest_control_health::GuestControlHealthError::AuthFailed => shell_failed(K::Auth),
+        guest_control_health::GuestControlHealthError::StaleSession => {
+            shell_failed(K::StaleSession)
+        }
+        guest_control_health::GuestControlHealthError::Protocol => shell_failed(K::Protocol),
+    }
+}
+
+fn shell_transport_failed() -> TypedError {
+    shell_failed(crate::typed_error::GuestControlShellErrorKind::Transport)
+}
+
+fn shell_capability_failed() -> TypedError {
+    shell_failed(crate::typed_error::GuestControlShellErrorKind::Capability)
+}
+
+fn shell_protocol_failed() -> TypedError {
+    shell_failed(crate::typed_error::GuestControlShellErrorKind::Protocol)
+}
+
+fn map_shell_guest_error(error: &pb::GuestControlError) -> TypedError {
+    use crate::typed_error::GuestControlShellErrorKind as K;
+    use pb::GuestControlErrorKind as G;
+    let kind = match error.kind.enum_value() {
+        Ok(G::GUEST_CONTROL_ERROR_KIND_AUTH_FAILED) => K::Auth,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_STALE_SESSION) => K::StaleSession,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE) => K::Transport,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR)
+        | Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME) => K::Protocol,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED)
+        | Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE)
+        | Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMATCH) => K::Capability,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_CAPACITY_EXCEEDED)
+        | Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED) => K::Capacity,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_ALREADY_ATTACHED) => K::AlreadyAttached,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND) => K::NotFound,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP) => K::OutputGap,
+        _ => K::GuestError,
+    };
+    shell_failed(kind)
+}
+
+fn shell_poll_timeout(args_timeout_ms: u64, wait: bool) -> (u64, Duration) {
+    if !wait {
+        return (0, SHELL_MANAGEMENT_TIMEOUT);
+    }
+    let cap_ms = SHELL_POLL_CAP.as_millis().min(u64::MAX as u128) as u64;
+    let timeout_ms = args_timeout_ms.min(cap_ms);
+    (
+        timeout_ms,
+        Duration::from_millis(timeout_ms) + SHELL_POLL_SLACK,
+    )
+}
+
+fn shell_metric(state: &ServerState, outcome: &'static str, error_kind: &'static str) {
+    debug_assert!(matches!(
+        outcome,
+        "management" | "established" | "closed" | "error"
+    ));
+    debug_assert!(matches!(
+        error_kind,
+        "none"
+            | "transport"
+            | "auth"
+            | "protocol"
+            | "timeout"
+            | "capability"
+            | "stale-session"
+            | "capacity"
+            | "already-attached"
+            | "not-found"
+            | "output-gap"
+            | "guest"
+            | "internal"
+    ));
+    state.metrics_registry.counter_inc(
+        SHELL_METRIC,
+        &[
+            ("subsystem", SHELL_SUBSYSTEM),
+            ("outcome", outcome),
+            ("error_kind", error_kind),
+        ],
+    );
+}
+
+fn shell_error_kind_label(error: &TypedError) -> &'static str {
+    use crate::typed_error::GuestControlShellErrorKind as K;
+    match error {
+        TypedError::GuestControlShellFailed { kind } => match kind {
+            K::Transport => "transport",
+            K::Auth => "auth",
+            K::Protocol => "protocol",
+            K::Timeout => "timeout",
+            K::Capability => "capability",
+            K::StaleSession => "stale-session",
+            K::Capacity => "capacity",
+            K::AlreadyAttached => "already-attached",
+            K::NotFound => "not-found",
+            K::OutputGap => "output-gap",
+            K::GuestError => "guest",
+            K::Internal => "internal",
+        },
+        _ => "internal",
+    }
+}
+
+fn shell_ref_digest(parts: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part.as_bytes());
+    }
+    format!("{:x}", hasher.finalize())[..16].to_owned()
+}
+
+fn dispatch_shell_management(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    op: public_wire::ShellOp,
+) -> Result<Value, TypedError> {
+    let response = match op {
+        public_wire::ShellOp::List(args) => {
+            let result = run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
+                let mut request = pb::ShellListRequest::new();
+                request.metadata = protobuf::MessageField::some(metadata);
+                async move {
+                    let response: pb::ShellListResponse = client
+                        .unary_with_timeout("ShellList", request, SHELL_MANAGEMENT_TIMEOUT)
+                        .await
+                        .map_err(map_shell_health_error)?;
+                    shell_error_to_typed(response.error.as_ref())?;
+                    map_shell_list_response(response)
+                }
+            })
+            .inspect_err(|error| shell_metric(state, "error", shell_error_kind_label(error)))?;
+            shell_metric(state, "management", "none");
+            public_wire::ShellOpResponse::List(result)
+        }
+        public_wire::ShellOp::Detach(args) => {
+            let vm = args.vm.clone();
+            let result = run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
+                let mut request = pb::ShellDetachRequest::new();
+                request.metadata = protobuf::MessageField::some(metadata);
+                request.name = args.name.map(|name| name.as_str().to_owned());
+                async move {
+                    let response: pb::ShellDetachResponse = client
+                        .unary_with_timeout("ShellDetach", request, SHELL_MANAGEMENT_TIMEOUT)
+                        .await
+                        .map_err(map_shell_health_error)?;
+                    shell_error_to_typed(response.error.as_ref())?;
+                    map_shell_detach_response(response)
+                }
+            })
+            .inspect_err(|error| shell_metric(state, "error", shell_error_kind_label(error)))?;
+            emit_shell_management_audit(
+                state,
+                peer.uid,
+                &vm,
+                daemon_audit::ShellAuditAction::Detach,
+                daemon_audit::ShellAuditResult::Detached,
+                &shell_ref_digest(&[&vm, result.resolved_name.as_str()]),
+            );
+            shell_metric(state, "management", "none");
+            public_wire::ShellOpResponse::Detach(result)
+        }
+        public_wire::ShellOp::Kill(args) => {
+            let vm = args.vm.clone();
+            let digest = shell_ref_digest(&[&vm, args.name.as_str()]);
+            let result = run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
+                let mut request = pb::ShellKillRequest::new();
+                request.metadata = protobuf::MessageField::some(metadata);
+                request.name = args.name.as_str().to_owned();
+                async move {
+                    let response: pb::ShellKillResponse = client
+                        .unary_with_timeout("ShellKill", request, SHELL_MANAGEMENT_TIMEOUT)
+                        .await
+                        .map_err(map_shell_health_error)?;
+                    shell_error_to_typed(response.error.as_ref())?;
+                    map_shell_kill_response(response)
+                }
+            })
+            .inspect_err(|error| shell_metric(state, "error", shell_error_kind_label(error)))?;
+            emit_shell_management_audit(
+                state,
+                peer.uid,
+                &vm,
+                daemon_audit::ShellAuditAction::Kill,
+                daemon_audit::ShellAuditResult::Killed,
+                &digest,
+            );
+            shell_metric(state, "management", "none");
+            public_wire::ShellOpResponse::Kill(result)
+        }
+        public_wire::ShellOp::Attach(_)
+        | public_wire::ShellOp::WriteStdin(_)
+        | public_wire::ShellOp::ReadOutput(_)
+        | public_wire::ShellOp::Resize(_)
+        | public_wire::ShellOp::Wait(_)
+        | public_wire::ShellOp::CloseStdin(_)
+        | public_wire::ShellOp::CloseAttach(_) => return Err(shell_protocol_failed()),
+    };
+    Ok(wire::shell_response(&response))
+}
+
+fn emit_shell_management_audit(
+    state: &ServerState,
+    peer_uid: u32,
+    vm: &str,
+    action: daemon_audit::ShellAuditAction,
+    result: daemon_audit::ShellAuditResult,
+    shell_ref_digest: &str,
+) {
+    let _ = state
+        .daemon_audit
+        .write_event(&daemon_audit::DaemonEvent::GuestControlShellDetached {
+            vm: vm.to_owned(),
+            peer_uid,
+            action,
+            result,
+            shell_ref_digest: shell_ref_digest.to_owned(),
+        });
+}
+
+fn run_shell_owner(
+    stream: Socket,
+    state: ServerState,
+    peer: PeerIdentity,
+    first_op_id: u64,
+    first_op: public_wire::ShellOp,
+    conn_permit: Option<concurrency::ConnPermit>,
+) {
+    let stream = Arc::new(stream);
+    let public_wire::ShellOp::Attach(attach) = first_op else {
+        let _ = write_json_frame(
+            stream.as_ref(),
+            &wire::error_frame_with_id(first_op_id, &shell_protocol_failed()),
+        );
+        return;
+    };
+    let (client, guest_boot_id, attach_response) = match establish_shell_owner(&state, &attach) {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = write_json_frame(
+                stream.as_ref(),
+                &wire::error_frame_with_id(first_op_id, &error),
+            );
+            shell_metric(&state, "error", shell_error_kind_label(&error));
+            return;
+        }
+    };
+    let session_id = match attach_response.session_id.clone() {
+        Some(session) => session,
+        None => {
+            let _ = write_json_frame(
+                stream.as_ref(),
+                &wire::error_frame_with_id(first_op_id, &shell_protocol_failed()),
+            );
+            shell_metric(&state, "error", "protocol");
+            return;
+        }
+    };
+    let initial_control_seq = attach_response.control_seq;
+    let owner_shell_ref_digest = shell_ref_digest(&[&attach.vm, &attach_response.resolved_name]);
+    let public_attach = match map_shell_attach_response(attach_response) {
+        Ok(value) => public_wire::ShellOpResponse::Attach(value),
+        Err(error) => {
+            let _ = write_json_frame(
+                stream.as_ref(),
+                &wire::error_frame_with_id(first_op_id, &error),
+            );
+            shell_metric(&state, "error", shell_error_kind_label(&error));
+            return;
+        }
+    };
+    if write_json_frame(
+        stream.as_ref(),
+        &wire::shell_response_with_id(first_op_id, &public_attach),
+    )
+    .is_err()
+    {
+        shell_close_attach_best_effort(&client, &attach.vm, &session_id, &guest_boot_id);
+        shell_metric(&state, "error", "transport");
+        return;
+    }
+    let _ = state
+        .daemon_audit
+        .write_event(&daemon_audit::DaemonEvent::GuestControlShellAttached {
+            vm: attach.vm.clone(),
+            peer_uid: peer.uid,
+            action: daemon_audit::ShellAuditAction::Attach,
+            result: daemon_audit::ShellAuditResult::Attached,
+            shell_ref_digest: owner_shell_ref_digest.clone(),
+            force: attach.force,
+        });
+    shell_metric(&state, "established", "none");
+
+    let mut control_seq = initial_control_seq;
+    let mut poll_tasks: Vec<std::thread::JoinHandle<()>> = Vec::new();
+    let mut attachment_closed = false;
+    while let Ok(frame) = read_frame(stream.as_ref()) {
+        poll_tasks.retain(|task| !task.is_finished());
+        let op_id = wire::shell_op_id(&frame);
+        let op = match wire::parse_shell_op(&frame) {
+            Ok((_, op)) => op,
+            Err(error) => {
+                if write_json_frame(stream.as_ref(), &wire::error_frame_with_id(op_id, &error))
+                    .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
+        };
+        if matches!(op, public_wire::ShellOp::ReadOutput(_)) {
+            if poll_tasks.len() >= SHELL_OWNER_INFLIGHT_CAP {
+                if write_json_frame(
+                    stream.as_ref(),
+                    &wire::error_frame_with_id(
+                        op_id,
+                        &shell_failed(crate::typed_error::GuestControlShellErrorKind::Capacity),
+                    ),
+                )
+                .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
+            let client = Arc::clone(&client);
+            let poll_stream = Arc::clone(&stream);
+            let vm = attach.vm.clone();
+            let session_id = session_id.clone();
+            let guest_boot_id = guest_boot_id.clone();
+            let task = std::thread::Builder::new()
+                .name("nixling-shell-poll".to_owned())
+                .spawn(move || {
+                    let mut ignored_control_seq = 0;
+                    let value = match handle_shell_owner_op(
+                        client.as_ref(),
+                        &vm,
+                        &session_id,
+                        &guest_boot_id,
+                        &mut ignored_control_seq,
+                        op,
+                    ) {
+                        Ok(Some(response)) => wire::shell_response_with_id(op_id, &response),
+                        Ok(None) => return,
+                        Err(error) => wire::error_frame_with_id(op_id, &error),
+                    };
+                    let _ = write_json_frame(poll_stream.as_ref(), &value);
+                });
+            match task {
+                Ok(task) => poll_tasks.push(task),
+                Err(_) => {
+                    let _ = write_json_frame(
+                        stream.as_ref(),
+                        &wire::error_frame_with_id(op_id, &shell_transport_failed()),
+                    );
+                }
+            }
+            continue;
+        }
+        let closes_owner = matches!(op, public_wire::ShellOp::CloseAttach(_));
+        let response = handle_shell_owner_op(
+            &client,
+            &attach.vm,
+            &session_id,
+            &guest_boot_id,
+            &mut control_seq,
+            op,
+        );
+        match response {
+            Ok(Some(response)) => {
+                if write_json_frame(
+                    stream.as_ref(),
+                    &wire::shell_response_with_id(op_id, &response),
+                )
+                .is_err()
+                {
+                    break;
+                }
+                if closes_owner {
+                    attachment_closed = true;
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                if write_json_frame(stream.as_ref(), &wire::error_frame_with_id(op_id, &error))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+    }
+    let close_result = if attachment_closed {
+        daemon_audit::ShellAuditResult::Closed
+    } else {
+        shell_close_attach_best_effort(&client, &attach.vm, &session_id, &guest_boot_id)
+    };
+    let _ = state
+        .daemon_audit
+        .write_event(&daemon_audit::DaemonEvent::GuestControlShellDetached {
+            vm: attach.vm.clone(),
+            peer_uid: peer.uid,
+            action: daemon_audit::ShellAuditAction::Detach,
+            result: close_result,
+            shell_ref_digest: owner_shell_ref_digest,
+        });
+    shell_metric(&state, "closed", "none");
+    let _ = nix::sys::socket::shutdown(
+        stream.as_ref().as_raw_fd(),
+        nix::sys::socket::Shutdown::Both,
+    );
+    for task in poll_tasks {
+        let _ = task.join();
+    }
+    drop(conn_permit);
+}
+
+fn establish_shell_owner(
+    state: &ServerState,
+    attach: &public_wire::ShellAttachArgs,
+) -> Result<
+    (
+        Arc<guest_control_health::TtrpcGuestControlClient>,
+        String,
+        pb::ShellAttachResponse,
+    ),
+    TypedError,
+> {
+    ensure_vm_runtime_capability(
+        state,
+        &attach.vm,
+        RuntimeCapabilityGate::GuestControl,
+        "shell",
+    )?;
+    let resolver = load_bundle_resolver(state)?;
+    let params = resolve_guest_control_probe_params(state, &resolver, &attach.vm)
+        .map_err(|_| shell_transport_failed())?;
+    let broker_path = broker_socket_path(state);
+    block_on_future(async move {
+        let budget = guest_control_health::AttemptBudget::from_now(
+            SHELL_MANAGEMENT_TIMEOUT,
+            guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
+        );
+        let signer = guest_control_bridge::BrokerSigner::new(broker_path, budget);
+        let nonce = guest_control_bridge::host_nonce().map_err(|_| shell_transport_failed())?;
+        let client = guest_control_bridge::connect_and_build_client(&params, budget)
+            .map_err(map_shell_health_error)?;
+        let evidence = guest_control_health::probe_guest_control_health(
+            &params.vm_id,
+            Some(guest_control_bridge::VMADDR_CID_HOST),
+            nonce,
+            &client,
+            &signer,
+        )
+        .await
+        .map_err(map_shell_health_error)?;
+        if !guest_advertises_capability(
+            &evidence.health.capabilities,
+            pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED,
+        ) {
+            return Err(shell_capability_failed());
+        }
+        if attach.force
+            && !guest_advertises_capability(
+                &evidence.health.capabilities,
+                pb::GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH,
+            )
+        {
+            return Err(shell_capability_failed());
+        }
+        let mut request = pb::ShellAttachRequest::new();
+        request.metadata = protobuf::MessageField::some(shell_request_metadata(&params.vm_id));
+        request.name = attach.name.as_ref().map(|name| name.as_str().to_owned());
+        request.force = attach.force;
+        let mut size = pb::TerminalSize::new();
+        size.rows = attach.initial_terminal_size.rows;
+        size.cols = attach.initial_terminal_size.cols;
+        request.initial_terminal_size = protobuf::MessageField::some(size);
+        let response: pb::ShellAttachResponse = client
+            .unary_with_timeout("ShellAttach", request, SHELL_MANAGEMENT_TIMEOUT)
+            .await
+            .map_err(map_shell_health_error)?;
+        shell_error_to_typed(response.error.as_ref())?;
+        Ok((Arc::new(client), evidence.guest_boot_id, response))
+    })
+}
+
+fn shell_request_metadata(vm: &str) -> pb::RequestMetadata {
+    let mut metadata = pb::RequestMetadata::new();
+    metadata.vm_id = vm.to_owned();
+    metadata.request_id = "guest-control-shell".to_owned();
+    metadata.protocol_version = nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+    metadata
+}
+
+fn shell_terminal_metadata(
+    vm: &str,
+    session_id: &str,
+    guest_boot_id: &str,
+) -> pb::TerminalRequestMetadata {
+    let mut metadata = pb::TerminalRequestMetadata::new();
+    metadata.common = protobuf::MessageField::some(shell_request_metadata(vm));
+    metadata.session_id = session_id.to_owned();
+    metadata.guest_boot_id = guest_boot_id.to_owned();
+    metadata.kind = protobuf::EnumOrUnknown::new(pb::TerminalKind::TERMINAL_KIND_SHELL);
+    metadata
+}
+
+fn ensure_shell_owner_session(
+    request_session: &str,
+    owner_session: &str,
+) -> Result<(), TypedError> {
+    if request_session == owner_session {
+        Ok(())
+    } else {
+        Err(shell_failed(
+            crate::typed_error::GuestControlShellErrorKind::StaleSession,
+        ))
+    }
+}
+
+fn unsupported_shell_wait_error() -> TypedError {
+    shell_capability_failed()
+}
+
+fn handle_shell_owner_op(
+    client: &guest_control_health::TtrpcGuestControlClient,
+    vm: &str,
+    session_id: &str,
+    guest_boot_id: &str,
+    control_seq: &mut u64,
+    op: public_wire::ShellOp,
+) -> Result<Option<public_wire::ShellOpResponse>, TypedError> {
+    use nixling_ipc::terminal_wire as tw;
+    match op {
+        public_wire::ShellOp::WriteStdin(args) => {
+            ensure_shell_owner_session(&args.session, session_id)?;
+            let data = nixling_core::base64_codec::decode(&args.chunk_base64)
+                .map_err(|_| shell_protocol_failed())?;
+            let mut request = pb::TerminalWriteStdinRequest::new();
+            request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
+                vm,
+                session_id,
+                guest_boot_id,
+            ));
+            request.offset = args.offset;
+            request.data = data;
+            request.close_after = args.eof;
+            let response: pb::WriteStdinResponse = block_on_future(client.unary_with_timeout(
+                "TerminalWriteStdin",
+                request,
+                SHELL_MANAGEMENT_TIMEOUT,
+            ))
+            .map_err(map_shell_health_error)?;
+            shell_error_to_typed(response.error.as_ref())?;
+            Ok(Some(public_wire::ShellOpResponse::WriteStdin(
+                tw::TerminalWriteStdinResult {
+                    accepted_len: response.accepted_len,
+                    next_offset: response.next_offset,
+                    backpressured: response.blocked_ms > 0,
+                    stdin_closed: matches!(
+                        response.stdin_state.enum_value(),
+                        Ok(pb::StdinState::STDIN_STATE_CLOSED
+                            | pb::StdinState::STDIN_STATE_CLOSED_BY_PROCESS
+                            | pb::StdinState::STDIN_STATE_CLOSING)
+                    ),
+                },
+            )))
+        }
+        public_wire::ShellOp::ReadOutput(args) => {
+            ensure_shell_owner_session(&args.session, session_id)?;
+            let mut request = pb::TerminalReadOutputRequest::new();
+            request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
+                vm,
+                session_id,
+                guest_boot_id,
+            ));
+            request.stream = protobuf::EnumOrUnknown::new(match args.stream {
+                tw::TerminalStream::Stdout => pb::OutputStream::OUTPUT_STREAM_STDOUT,
+                tw::TerminalStream::Stderr => pb::OutputStream::OUTPUT_STREAM_STDERR,
+            });
+            request.offset = args.offset;
+            request.max_len = args
+                .max_len
+                .min(nixling_ipc::public_wire::EXEC_MAX_CHUNK_BYTES);
+            request.wait = args.wait;
+            let (timeout_ms, op_deadline) = shell_poll_timeout(args.timeout_ms, args.wait);
+            request.timeout_ms = timeout_ms;
+            let response: pb::ReadOutputResponse = block_on_future(client.unary_with_timeout(
+                "TerminalReadOutput",
+                request,
+                op_deadline,
+            ))
+            .map_err(map_shell_health_error)?;
+            shell_error_to_typed(response.error.as_ref())?;
+            Ok(Some(public_wire::ShellOpResponse::ReadOutput(
+                tw::TerminalReadOutputChunk {
+                    data_base64: nixling_core::base64_codec::encode(&response.data),
+                    next_offset: response.next_offset,
+                    eof: response.eof,
+                    dropped_bytes: response.dropped_bytes,
+                    truncated: response.truncated,
+                    timed_out: response.timed_out,
+                },
+            )))
+        }
+        public_wire::ShellOp::Resize(args) => {
+            ensure_shell_owner_session(&args.session, session_id)?;
+            *control_seq = control_seq.saturating_add(1);
+            let mut request = pb::TerminalTtyWinResizeRequest::new();
+            request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
+                vm,
+                session_id,
+                guest_boot_id,
+            ));
+            request.control_seq = *control_seq;
+            request.rows = args.rows;
+            request.cols = args.cols;
+            let response: pb::ControlAck = block_on_future(client.unary_with_timeout(
+                "TerminalTtyWinResize",
+                request,
+                SHELL_MANAGEMENT_TIMEOUT,
+            ))
+            .map_err(map_shell_health_error)?;
+            shell_error_to_typed(response.error.as_ref())?;
+            Ok(Some(public_wire::ShellOpResponse::Resize(
+                tw::TerminalControlResult { delivered: true },
+            )))
+        }
+        public_wire::ShellOp::CloseStdin(args) => {
+            ensure_shell_owner_session(&args.session, session_id)?;
+            let mut request = pb::TerminalCloseStdinRequest::new();
+            request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
+                vm,
+                session_id,
+                guest_boot_id,
+            ));
+            let response: pb::CloseStdinResponse = block_on_future(client.unary_with_timeout(
+                "TerminalCloseStdin",
+                request,
+                SHELL_MANAGEMENT_TIMEOUT,
+            ))
+            .map_err(map_shell_health_error)?;
+            shell_error_to_typed(response.error.as_ref())?;
+            Ok(Some(public_wire::ShellOpResponse::CloseStdin(
+                tw::TerminalCloseResult { stdin_closed: true },
+            )))
+        }
+        public_wire::ShellOp::CloseAttach(args) => {
+            ensure_shell_owner_session(&args.session, session_id)?;
+            let response = shell_close_attach(client, vm, session_id, guest_boot_id)?;
+            Ok(Some(public_wire::ShellOpResponse::CloseAttach(response)))
+        }
+        public_wire::ShellOp::Wait(args) => {
+            ensure_shell_owner_session(&args.session, session_id)?;
+            Err(unsupported_shell_wait_error())
+        }
+        public_wire::ShellOp::Attach(_)
+        | public_wire::ShellOp::List(_)
+        | public_wire::ShellOp::Detach(_)
+        | public_wire::ShellOp::Kill(_) => Err(shell_protocol_failed()),
+    }
+}
+
+fn shell_close_attach(
+    client: &guest_control_health::TtrpcGuestControlClient,
+    vm: &str,
+    session_id: &str,
+    guest_boot_id: &str,
+) -> Result<public_wire::ShellDetachResult, TypedError> {
+    let mut request = pb::ShellCloseAttachRequest::new();
+    request.metadata =
+        protobuf::MessageField::some(shell_terminal_metadata(vm, session_id, guest_boot_id));
+    let response: pb::ShellDetachResponse = block_on_future(client.unary_with_timeout(
+        "ShellCloseAttach",
+        request,
+        SHELL_MANAGEMENT_TIMEOUT,
+    ))
+    .map_err(map_shell_health_error)?;
+    shell_error_to_typed(response.error.as_ref())?;
+    map_shell_detach_response(response)
+}
+
+fn shell_close_attach_best_effort(
+    client: &guest_control_health::TtrpcGuestControlClient,
+    vm: &str,
+    session_id: &str,
+    guest_boot_id: &str,
+) -> daemon_audit::ShellAuditResult {
+    match shell_close_attach(client, vm, session_id, guest_boot_id) {
+        Ok(_) => daemon_audit::ShellAuditResult::Closed,
+        Err(TypedError::GuestControlShellFailed {
+            kind: crate::typed_error::GuestControlShellErrorKind::Timeout,
+        }) => daemon_audit::ShellAuditResult::Timeout,
+        Err(_) => daemon_audit::ShellAuditResult::Error,
+    }
+}
+
+fn run_guest_shell_management<F, Fut, T>(
+    state: &ServerState,
+    vm: &str,
+    f: F,
+) -> Result<T, TypedError>
+where
+    F: FnOnce(Arc<guest_control_health::TtrpcGuestControlClient>, pb::RequestMetadata) -> Fut,
+    Fut: Future<Output = Result<T, TypedError>>,
+{
+    ensure_vm_runtime_capability(state, vm, RuntimeCapabilityGate::GuestControl, "shell")?;
+    let resolver = load_bundle_resolver(state)?;
+    let params = resolve_guest_control_probe_params(state, &resolver, vm).map_err(|detail| {
+        tracing::warn!(
+            kind = "critical",
+            subsystem = "guest-control-shell",
+            error_kind = "transport-io",
+            "guest-control shell: probe params unresolved: {detail}"
+        );
+        shell_transport_failed()
+    })?;
+    let broker_path = broker_socket_path(state);
+    block_on_future(async move {
+        let budget = guest_control_health::AttemptBudget::from_now(
+            SHELL_MANAGEMENT_TIMEOUT,
+            guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
+        );
+        let signer = guest_control_bridge::BrokerSigner::new(broker_path, budget);
+        let nonce = guest_control_bridge::host_nonce().map_err(|_| shell_transport_failed())?;
+        let client = guest_control_bridge::connect_and_build_client(&params, budget)
+            .map_err(map_shell_health_error)?;
+        let evidence = guest_control_health::probe_guest_control_health(
+            &params.vm_id,
+            Some(guest_control_bridge::VMADDR_CID_HOST),
+            nonce,
+            &client,
+            &signer,
+        )
+        .await
+        .map_err(map_shell_health_error)?;
+        if !guest_advertises_capability(
+            &evidence.health.capabilities,
+            pb::GuestCapability::GUEST_CAPABILITY_SHELL_MANAGEMENT,
+        ) {
+            return Err(shell_capability_failed());
+        }
+        let mut metadata = pb::RequestMetadata::new();
+        metadata.vm_id = params.vm_id.clone();
+        metadata.request_id = "guest-control-shell".to_owned();
+        metadata.protocol_version = nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        f(Arc::new(client), metadata).await
+    })
+}
+
+fn guest_advertises_capability(
+    capabilities: &[protobuf::EnumOrUnknown<pb::GuestCapability>],
+    cap: pb::GuestCapability,
+) -> bool {
+    capabilities
+        .iter()
+        .filter_map(|value| value.enum_value().ok())
+        .any(|value| value == cap)
+}
+
+fn shell_error_to_typed(error: Option<&pb::GuestControlError>) -> Result<(), TypedError> {
+    if let Some(error) = error
+        && !exec_session_real::is_unspecified(error.kind)
+    {
+        return Err(map_shell_guest_error(error));
+    }
+    Ok(())
+}
+
+fn shell_name_from_guest(value: String) -> Result<public_wire::ShellName, TypedError> {
+    public_wire::ShellName::new(value).map_err(|_| shell_protocol_failed())
+}
+
+fn map_shell_state(
+    state: protobuf::EnumOrUnknown<pb::ShellState>,
+) -> public_wire::ShellSessionState {
+    match state
+        .enum_value()
+        .unwrap_or(pb::ShellState::SHELL_STATE_UNSPECIFIED)
+    {
+        pb::ShellState::SHELL_STATE_ATTACHED => public_wire::ShellSessionState::Attached,
+        pb::ShellState::SHELL_STATE_DETACHED => public_wire::ShellSessionState::Detached,
+        pb::ShellState::SHELL_STATE_KILLED => public_wire::ShellSessionState::Killed,
+        pb::ShellState::SHELL_STATE_POOL_UNAVAILABLE => {
+            public_wire::ShellSessionState::PoolUnavailable
+        }
+        pb::ShellState::SHELL_STATE_FEATURE_DISABLED => {
+            public_wire::ShellSessionState::FeatureDisabled
+        }
+        pb::ShellState::SHELL_STATE_OUTPUT_GAP => public_wire::ShellSessionState::OutputGap,
+        pb::ShellState::SHELL_STATE_UNSPECIFIED => public_wire::ShellSessionState::Detached,
+    }
+}
+
+fn map_shell_close_cause(
+    cause: protobuf::EnumOrUnknown<pb::ShellCloseCause>,
+) -> Option<public_wire::ShellCloseCause> {
+    match cause
+        .enum_value()
+        .unwrap_or(pb::ShellCloseCause::SHELL_CLOSE_CAUSE_UNSPECIFIED)
+    {
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_CLIENT_DETACH => {
+            Some(public_wire::ShellCloseCause::ClientDetach)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_EVICTED_BY_FORCE => {
+            Some(public_wire::ShellCloseCause::EvictedByForce)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_EVICTED_BY_ADMIN_DETACH => {
+            Some(public_wire::ShellCloseCause::EvictedByAdminDetach)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_KILLED_BY_ADMIN => {
+            Some(public_wire::ShellCloseCause::KilledByAdmin)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_POOL_UNAVAILABLE => {
+            Some(public_wire::ShellCloseCause::PoolUnavailable)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_OUTPUT_GAP => {
+            Some(public_wire::ShellCloseCause::OutputGap)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_UNSPECIFIED => None,
+    }
+}
+
+fn map_shell_list_response(
+    response: pb::ShellListResponse,
+) -> Result<public_wire::ShellListResult, TypedError> {
+    Ok(public_wire::ShellListResult {
+        default_name: shell_name_from_guest(response.default_name)?,
+        sessions: response
+            .sessions
+            .into_iter()
+            .map(|entry| {
+                Ok(public_wire::ShellListEntry {
+                    name: shell_name_from_guest(entry.name)?,
+                    state: map_shell_state(entry.state),
+                    attached: entry.attached,
+                    is_default: entry.is_default,
+                })
+            })
+            .collect::<Result<Vec<_>, TypedError>>()?,
+    })
+}
+
+fn map_shell_attach_response(
+    response: pb::ShellAttachResponse,
+) -> Result<public_wire::ShellAttachResult, TypedError> {
+    Ok(public_wire::ShellAttachResult {
+        session: response.session_id.ok_or_else(shell_protocol_failed)?,
+        resolved_name: shell_name_from_guest(response.resolved_name)?,
+        state: map_shell_state(response.state),
+        force_evicted: response.force_evicted,
+    })
+}
+
+fn map_shell_detach_response(
+    response: pb::ShellDetachResponse,
+) -> Result<public_wire::ShellDetachResult, TypedError> {
+    Ok(public_wire::ShellDetachResult {
+        resolved_name: shell_name_from_guest(response.resolved_name)?,
+        detached: response.detached,
+        cause: map_shell_close_cause(response.cause),
+    })
+}
+
+fn map_shell_kill_response(
+    response: pb::ShellKillResponse,
+) -> Result<public_wire::ShellKillResult, TypedError> {
+    Ok(public_wire::ShellKillResult {
+        name: shell_name_from_guest(response.name)?,
+        killed: response.killed,
+        state: map_shell_state(response.state),
+    })
 }
 
 const EXEC_METRIC: &str = "nixling_daemon_guest_control_exec_total";
@@ -14755,10 +15691,11 @@ mod broker_dispatch_tests {
         ChildReapedNotification, DeregisterRunnerPidfdResponse, PollChildReapedResponse,
         RunnerRole, RunnerSignal, SignalRunnerResponse, SpawnRunnerResponse,
     };
+    use nixling_ipc::guest_proto as pb;
     use nixling_ipc::public_wire::{
         ActivationRequest, GcRequest, HostDestroyRequest, HostInstallRequest, HostPrepareRequest,
-        KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest, TrustRequest,
-        VmLifecycleRequest,
+        KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest,
+        ShellSessionState, TrustRequest, VmLifecycleRequest,
     };
     use nixling_ipc::types::{RoleId, VmId};
     use serde::Serialize;
@@ -14781,9 +15718,10 @@ mod broker_dispatch_tests {
         dispatch_broker_run_migrate, dispatch_broker_switch, dispatch_broker_test,
         dispatch_broker_trust, dispatch_broker_vm_restart, dispatch_broker_vm_start,
         dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout, dispatch_request,
-        redact_broker_dispatch_failure_for_launcher, redact_broker_error_for_launcher,
-        resolve_store_view_intent_for_vm, stale_qemu_media_dependency_roles_from_entries,
-        vm_start_node_mode,
+        map_shell_attach_response, map_shell_detach_response, map_shell_kill_response,
+        map_shell_list_response, redact_broker_dispatch_failure_for_launcher,
+        redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
+        stale_qemu_media_dependency_roles_from_entries, vm_start_node_mode,
     };
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
@@ -18596,6 +19534,100 @@ mod broker_dispatch_tests {
         // a launcher / non-admin peer MUST be denied BEFORE any probe / sign /
         // read runs (the gate is enforced in `dispatch_request`).
         assert!(verb_requires_admin("readGuestConfig"));
+    }
+
+    #[test]
+    fn shell_verb_is_admin_only() {
+        use super::verb_requires_admin;
+        // Shell operations cross into the guest and can attach/detach/kill a
+        // workload-user terminal, so the daemon must deny launchers before any
+        // session lookup, guest-control probe, or owner reservation.
+        assert!(verb_requires_admin("shell"));
+    }
+
+    #[test]
+    fn shell_guest_responses_map_to_public_dtos() {
+        let mut attach = pb::ShellAttachResponse::new();
+        attach.session_id = Some("shell-1".to_owned());
+        attach.resolved_name = "default".to_owned();
+        attach.state = protobuf::EnumOrUnknown::new(pb::ShellState::SHELL_STATE_ATTACHED);
+        attach.force_evicted = true;
+        let attach = map_shell_attach_response(attach).expect("attach maps");
+        assert_eq!(attach.session, "shell-1");
+        assert_eq!(attach.resolved_name.as_str(), "default");
+        assert_eq!(attach.state, ShellSessionState::Attached);
+        assert!(attach.force_evicted);
+
+        let mut list = pb::ShellListResponse::new();
+        list.default_name = "default".to_owned();
+        let mut entry = pb::ShellListEntry::new();
+        entry.name = "ops_1".to_owned();
+        entry.state = protobuf::EnumOrUnknown::new(pb::ShellState::SHELL_STATE_DETACHED);
+        entry.attached = false;
+        entry.is_default = false;
+        list.sessions.push(entry);
+        let list = map_shell_list_response(list).expect("list maps");
+        assert_eq!(list.default_name.as_str(), "default");
+        assert_eq!(list.sessions[0].name.as_str(), "ops_1");
+        assert_eq!(list.sessions[0].state, ShellSessionState::Detached);
+
+        let mut detach = pb::ShellDetachResponse::new();
+        detach.resolved_name = "default".to_owned();
+        detach.detached = false;
+        detach.cause =
+            protobuf::EnumOrUnknown::new(pb::ShellCloseCause::SHELL_CLOSE_CAUSE_CLIENT_DETACH);
+        let detach = map_shell_detach_response(detach).expect("detach maps");
+        assert_eq!(detach.resolved_name.as_str(), "default");
+        assert!(!detach.detached);
+        assert!(detach.cause.is_some());
+
+        let mut kill = pb::ShellKillResponse::new();
+        kill.name = "default".to_owned();
+        kill.killed = false;
+        kill.state = protobuf::EnumOrUnknown::new(pb::ShellState::SHELL_STATE_KILLED);
+        let kill = map_shell_kill_response(kill).expect("kill maps");
+        assert_eq!(kill.name.as_str(), "default");
+        assert!(!kill.killed);
+        assert_eq!(kill.state, ShellSessionState::Killed);
+    }
+
+    #[test]
+    fn shell_poll_timeout_clamps_guest_wait_and_extends_transport_deadline() {
+        let (timeout_ms, deadline) = super::shell_poll_timeout(999_000, true);
+        assert_eq!(timeout_ms, super::SHELL_POLL_CAP.as_millis() as u64);
+        assert_eq!(deadline, super::SHELL_POLL_CAP + super::SHELL_POLL_SLACK);
+
+        let (timeout_ms, deadline) = super::shell_poll_timeout(999_000, false);
+        assert_eq!(timeout_ms, 0);
+        assert_eq!(deadline, super::SHELL_MANAGEMENT_TIMEOUT);
+    }
+
+    #[test]
+    fn shell_owner_rejects_stale_session_ids() {
+        let err = super::ensure_shell_owner_session("stale-session", "owner-session")
+            .expect_err("stale session must fail");
+        assert_eq!(err.kind(), "guest-control-shell-stale-session");
+    }
+
+    #[test]
+    fn shell_audit_digest_correlates_on_resolved_name_not_session_id() {
+        let vm = "corp-vm";
+        let resolved_name = "default";
+        let owner_digest = super::shell_ref_digest(&[vm, resolved_name]);
+        let management_digest = super::shell_ref_digest(&[vm, resolved_name]);
+        let session_digest = super::shell_ref_digest(&[vm, "shell-0000000000000001"]);
+
+        assert_eq!(owner_digest, management_digest);
+        assert_ne!(
+            owner_digest, session_digest,
+            "audit correlation must not use generated session ids"
+        );
+    }
+
+    #[test]
+    fn shell_wait_is_explicitly_unsupported() {
+        let err = super::unsupported_shell_wait_error();
+        assert_eq!(err.kind(), "guest-control-shell-capability-unavailable");
     }
 
     #[test]

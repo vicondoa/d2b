@@ -127,6 +127,12 @@ pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
         labels: &["subsystem", "outcome", "error_kind"],
         buckets_seconds: &[],
     },
+    MetricDescriptor {
+        name: "nixling_daemon_guest_control_shell_total",
+        kind: MetricKind::Counter,
+        labels: &["subsystem", "outcome", "error_kind"],
+        buckets_seconds: &[],
+    },
 ];
 
 /// Lookup a descriptor by name. `None` for any unknown name —
@@ -362,6 +368,9 @@ fn help_text(name: &str) -> &'static str {
         "nixling_daemon_guest_control_exec_total" => {
             "Cumulative count of guest-control exec session/op outcomes by error_kind."
         }
+        "nixling_daemon_guest_control_shell_total" => {
+            "Cumulative count of guest-control shell session/op outcomes by error_kind."
+        }
         _ => "",
     }
 }
@@ -514,6 +523,7 @@ mod tests {
                 "nixling_daemon_pidfd_table_size",
                 "nixling_daemon_uptime_seconds",
                 "nixling_daemon_guest_control_exec_total",
+                "nixling_daemon_guest_control_shell_total",
             ]
         );
     }
