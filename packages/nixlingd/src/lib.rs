@@ -5026,6 +5026,23 @@ fn shell_terminal_metadata(
     metadata
 }
 
+fn ensure_shell_owner_session(
+    request_session: &str,
+    owner_session: &str,
+) -> Result<(), TypedError> {
+    if request_session == owner_session {
+        Ok(())
+    } else {
+        Err(shell_failed(
+            crate::typed_error::GuestControlShellErrorKind::StaleSession,
+        ))
+    }
+}
+
+fn unsupported_shell_wait_error() -> TypedError {
+    shell_capability_failed()
+}
+
 fn handle_shell_owner_op(
     client: &guest_control_health::TtrpcGuestControlClient,
     vm: &str,
@@ -5037,11 +5054,7 @@ fn handle_shell_owner_op(
     use nixling_ipc::terminal_wire as tw;
     match op {
         public_wire::ShellOp::WriteStdin(args) => {
-            if args.session != session_id {
-                return Err(shell_failed(
-                    crate::typed_error::GuestControlShellErrorKind::StaleSession,
-                ));
-            }
+            ensure_shell_owner_session(&args.session, session_id)?;
             let data = nixling_core::base64_codec::decode(&args.chunk_base64)
                 .map_err(|_| shell_protocol_failed())?;
             let mut request = pb::TerminalWriteStdinRequest::new();
@@ -5075,11 +5088,7 @@ fn handle_shell_owner_op(
             )))
         }
         public_wire::ShellOp::ReadOutput(args) => {
-            if args.session != session_id {
-                return Err(shell_failed(
-                    crate::typed_error::GuestControlShellErrorKind::StaleSession,
-                ));
-            }
+            ensure_shell_owner_session(&args.session, session_id)?;
             let mut request = pb::TerminalReadOutputRequest::new();
             request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
                 vm,
@@ -5116,11 +5125,7 @@ fn handle_shell_owner_op(
             )))
         }
         public_wire::ShellOp::Resize(args) => {
-            if args.session != session_id {
-                return Err(shell_failed(
-                    crate::typed_error::GuestControlShellErrorKind::StaleSession,
-                ));
-            }
+            ensure_shell_owner_session(&args.session, session_id)?;
             *control_seq = control_seq.saturating_add(1);
             let mut request = pb::TerminalTtyWinResizeRequest::new();
             request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
@@ -5143,11 +5148,7 @@ fn handle_shell_owner_op(
             )))
         }
         public_wire::ShellOp::CloseStdin(args) => {
-            if args.session != session_id {
-                return Err(shell_failed(
-                    crate::typed_error::GuestControlShellErrorKind::StaleSession,
-                ));
-            }
+            ensure_shell_owner_session(&args.session, session_id)?;
             let mut request = pb::TerminalCloseStdinRequest::new();
             request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
                 vm,
@@ -5166,23 +5167,13 @@ fn handle_shell_owner_op(
             )))
         }
         public_wire::ShellOp::CloseAttach(args) => {
-            if args.session != session_id {
-                return Err(shell_failed(
-                    crate::typed_error::GuestControlShellErrorKind::StaleSession,
-                ));
-            }
+            ensure_shell_owner_session(&args.session, session_id)?;
             let response = shell_close_attach(client, vm, session_id, guest_boot_id)?;
             Ok(Some(public_wire::ShellOpResponse::CloseAttach(response)))
         }
         public_wire::ShellOp::Wait(args) => {
-            if args.session != session_id {
-                return Err(shell_failed(
-                    crate::typed_error::GuestControlShellErrorKind::StaleSession,
-                ));
-            }
-            Err(shell_failed(
-                crate::typed_error::GuestControlShellErrorKind::Capability,
-            ))
+            ensure_shell_owner_session(&args.session, session_id)?;
+            Err(unsupported_shell_wait_error())
         }
         public_wire::ShellOp::Attach(_)
         | public_wire::ShellOp::List(_)
@@ -19599,6 +19590,30 @@ mod broker_dispatch_tests {
         assert_eq!(kill.name.as_str(), "default");
         assert!(!kill.killed);
         assert_eq!(kill.state, ShellSessionState::Killed);
+    }
+
+    #[test]
+    fn shell_poll_timeout_clamps_guest_wait_and_extends_transport_deadline() {
+        let (timeout_ms, deadline) = super::shell_poll_timeout(999_000, true);
+        assert_eq!(timeout_ms, super::SHELL_POLL_CAP.as_millis() as u64);
+        assert_eq!(deadline, super::SHELL_POLL_CAP + super::SHELL_POLL_SLACK);
+
+        let (timeout_ms, deadline) = super::shell_poll_timeout(999_000, false);
+        assert_eq!(timeout_ms, 0);
+        assert_eq!(deadline, super::SHELL_MANAGEMENT_TIMEOUT);
+    }
+
+    #[test]
+    fn shell_owner_rejects_stale_session_ids() {
+        let err = super::ensure_shell_owner_session("stale-session", "owner-session")
+            .expect_err("stale session must fail");
+        assert_eq!(err.kind(), "guest-control-shell-stale-session");
+    }
+
+    #[test]
+    fn shell_wait_is_explicitly_unsupported() {
+        let err = super::unsupported_shell_wait_error();
+        assert_eq!(err.kind(), "guest-control-shell-capability-unavailable");
     }
 
     #[test]
