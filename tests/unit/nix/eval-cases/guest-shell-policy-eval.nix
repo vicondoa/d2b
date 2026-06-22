@@ -148,6 +148,8 @@ let
 
   guestdExecStart = corpGuest.systemd.services.nixling-guestd.serviceConfig.ExecStart or "";
   shpoolService = corpGuest.systemd.services.nixling-shpool-daemon or null;
+  shpoolExecStart =
+    if shpoolService == null then "" else shpoolService.serviceConfig.ExecStart or "";
   shpoolPam = corpGuest.security.pam.services.nixling-shpool-daemon or null;
   aliceLinger = corpGuest.users.users.alice.linger or false;
   shellManifest = nixos.config.nixling.manifest.corp-vm.shell;
@@ -170,6 +172,13 @@ let
     assert shpoolService.serviceConfig.User == "alice";
     assert shpoolService.serviceConfig.PAMName == "nixling-shpool-daemon";
     assert shpoolService.serviceConfig.Delegate == true;
+    assert lib.hasInfix "/bin/sh -c" shpoolExecStart;
+    assert lib.hasInfix ''uid="$('' shpoolExecStart;
+    assert lib.hasInfix ''export XDG_RUNTIME_DIR="/run/user/$uid"'' shpoolExecStart;
+    assert lib.hasInfix ''export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"'' shpoolExecStart;
+    assert lib.hasInfix "/bin/nixling-guest-shell-runner daemon" shpoolExecStart;
+    assert !(lib.hasInfix "%U" shpoolExecStart);
+    assert !(lib.hasInfix "%h" shpoolExecStart);
     assert (shpoolService.wantedBy or [ ]) == [ ];
     assert shpoolPam.startSession == false;
     assert shpoolPam.setEnvironment == true;
@@ -214,6 +223,10 @@ let
     assert lib.hasInfix "--shell-systemctl-path /nix/store/" guestdExecStart;
     assert shpoolService.serviceConfig.User == "alice";
     assert shpoolService.serviceConfig.Delegate == true;
+    assert lib.hasInfix ''export XDG_RUNTIME_DIR="/run/user/$uid"'' shpoolExecStart;
+    assert lib.hasInfix ''export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"'' shpoolExecStart;
+    assert !(lib.hasInfix "%U" shpoolExecStart);
+    assert !(lib.hasInfix "%h" shpoolExecStart);
     assert shpoolPam.startSession == false;
     assert aliceLinger == true;
     assert shellManifest.defaultName == "ops_1";

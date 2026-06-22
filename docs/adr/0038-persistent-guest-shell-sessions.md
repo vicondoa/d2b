@@ -182,7 +182,12 @@ does not start a `pam_systemd` session: session creation would migrate the daemo
 out of the delegated system service cgroup and make service-cgroup teardown
 unreliable. systemd, running as the dynamic root service manager, owns PAM module
 loading and loginuid setup before executing the fully static helper as the
-workload user. The static helper never invokes PAM itself.
+workload user. Because `pam_systemd` is not creating the environment block, the service
+`ExecStart` runs a small workload-user shell wrapper that derives the effective
+UID with `id -u`, reads the workload user's `HOME`, exports
+`XDG_RUNTIME_DIR=/run/user/<uid>` and
+`DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus`, then `exec`s the daemon
+helper. The static helper never invokes PAM itself.
 guestd does not treat `systemctl start` completion as socket readiness; after
 starting or adopting the daemon service, it performs bounded workload-UID
 readiness probes before spawning attach or management helpers.

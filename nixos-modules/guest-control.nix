@@ -281,9 +281,19 @@ in
           User = cfg.exec.execUser;
           PAMName = "nixling-shpool-daemon";
           ExecStart =
-            "${guestPackages.nixling-guest-shell-runner-static}/bin/nixling-guest-shell-runner daemon"
-            + " --socket /run/user/%U/nixling-shpool.sock"
-            + " --home %h";
+            let
+              daemonScript = ''
+                set -eu
+                uid="$(${pkgs.coreutils}/bin/id -u)"
+                home="$HOME"
+                export XDG_RUNTIME_DIR="/run/user/$uid"
+                export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+                exec ${guestPackages.nixling-guest-shell-runner-static}/bin/nixling-guest-shell-runner daemon \
+                  --socket "$XDG_RUNTIME_DIR/nixling-shpool.sock" \
+                  --home "$home"
+              '';
+            in
+            "${pkgs.bash}/bin/sh -c ${lib.escapeShellArg daemonScript}";
           WorkingDirectory = "~";
           KillMode = "control-group";
           Delegate = true;
