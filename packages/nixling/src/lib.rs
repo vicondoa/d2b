@@ -2644,13 +2644,21 @@ fn shell_round_trip(context: &Context, op: ShellOp) -> Result<ShellOpResponse, C
 }
 
 fn parse_shell_reply(bytes: &[u8]) -> Result<ShellOpResponse, CliFailure> {
-    let value: Value = serde_json::from_slice(bytes)
+    let mut value: Value = serde_json::from_slice(bytes)
         .map_err(|err| CliFailure::new(1, format!("failed to parse shell reply: {err}")))?;
     match value.get("type").and_then(Value::as_str) {
-        Some("shellResponse") => serde_json::from_value(value)
-            .map(|frame: ShellResponseFrame| frame.payload)
-            .map_err(|err| CliFailure::new(1, format!("failed to decode shellResponse: {err}"))),
+        Some("shellResponse") => {
+            if let Some(object) = value.as_object_mut() {
+                object.remove("opId");
+            }
+            serde_json::from_value(value)
+                .map(|frame: ShellResponseFrame| frame.payload)
+                .map_err(|err| CliFailure::new(1, format!("failed to decode shellResponse: {err}")))
+        }
         Some("error") => {
+            if let Some(object) = value.as_object_mut() {
+                object.remove("opId");
+            }
             let frame: ErrorFrame = serde_json::from_value(value).map_err(|err| {
                 CliFailure::new(1, format!("failed to decode shell error reply: {err}"))
             })?;
@@ -11131,6 +11139,36 @@ mod host_install_dispatch_tests {
                 "remediation": "upgrade nixlingd"
             }
         })
+    }
+
+    #[test]
+    fn shell_reply_decoder_ignores_envelope_op_id() {
+        let mut response = shell_response(public_wire::ShellOpResponse::List(
+            public_wire::ShellListResult {
+                default_name: super::IpcShellName::new("default")
+                    .expect("valid default shell name"),
+                sessions: Vec::new(),
+            },
+        ));
+        response
+            .as_object_mut()
+            .expect("shell response is object")
+            .insert("opId".to_owned(), Value::from(42));
+        let decoded =
+            super::parse_shell_reply(&serde_json::to_vec(&response).expect("serialize response"))
+                .expect("shellResponse with envelope opId decodes");
+        assert!(matches!(decoded, public_wire::ShellOpResponse::List(_)));
+
+        let mut error = unsupported_response();
+        error
+            .as_object_mut()
+            .expect("error response is object")
+            .insert("opId".to_owned(), Value::from(43));
+        let failure =
+            super::parse_shell_reply(&serde_json::to_vec(&error).expect("serialize error"))
+                .expect_err("error frame maps to CliFailure");
+        assert_eq!(failure.exit_code, 70);
+        assert!(!failure.message.contains("unknown field `opId`"));
     }
 
     #[test]
