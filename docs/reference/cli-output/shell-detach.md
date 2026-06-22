@@ -24,6 +24,6 @@ Schema: [`shell-detach.schema.json`](./shell-detach.schema.json).
 | `vm` | Local VM name after CLI target routing. |
 | `name` | Resolved shell session name. When `--name` is omitted, this is the configured default. |
 | `result` | `detached` when a live client was detached; otherwise `already-detached-or-absent`. |
-| `cause` | Optional close cause reported by the daemon/guest path, such as `client-detach` or `evicted-by-admin-detach`. Omitted when absent. |
+| `cause` | Optional close cause reported by the daemon/guest path, such as `client-detach` or `evicted-by-admin-detach`. Null when absent. |
 
 Detach is non-destructive and retry-safe.

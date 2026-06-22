@@ -77,6 +77,9 @@ The contracts. Stable interfaces a consumer can depend on.
 - [`reference/constellation-observability.md`](./reference/constellation-observability.md) —
   bounded `nixling op inspect`, TraceContext propagation, degraded partial
   results, and telemetry redaction/cardinality constraints.
+- [`reference/guest-control-persistent-shell.md`](./reference/guest-control-persistent-shell.md) —
+  guest-control shell RPCs, terminal-generic streaming, shell states,
+  close causes, and redaction contracts.
 - [`reference/remote-full-host-nodes.md`](./reference/remote-full-host-nodes.md) —
   gateway-managed remote nixling hosts: registration, capability gating,
   operation routing, idempotency, and the non-tunneling boundary.
@@ -97,6 +100,8 @@ The contracts. Stable interfaces a consumer can depend on.
   - [`reference/components-audio.md`](./reference/components-audio.md) —
     `nixling.vms.<vm>.audio.*` (vhost-user-sound + PipeWire) plus
     the `nixling audio` CLI surface.
+  - [`reference/components-shell.md`](./reference/components-shell.md) —
+    `nixling.vms.<vm>.guest.shell.*` (persistent named guest shells).
   - [`reference/components-home-manager.md`](./reference/components-home-manager.md) —
     `nixling.vms.<vm>.homeManager.*` (Home Manager as a NixOS
     module inside the VM).
@@ -140,6 +145,8 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
   declare a work/provider realm gateway and verify default-deny isolation.
 - [`how-to/realm-gateway.md`](./how-to/realm-gateway.md) —
   configure, enter, and recover realm gateway guests.
+- [`how-to/use-persistent-shells.md`](./how-to/use-persistent-shells.md) —
+  enable, attach, detach, reattach, list, and kill persistent named guest shells.
 - [`how-to/migrate-nixling-v1-2-to-v2.md`](./how-to/migrate-nixling-v1-2-to-v2.md) —
   migrate from local-only or implicit realm metadata to explicit gateway-backed
   realm policy.
@@ -156,6 +163,9 @@ Understanding-oriented prose. The "why" behind the design choices.
 - [`explanation/storage-lifecycle.md`](./explanation/storage-lifecycle.md) —
   why nixling treats host paths, restart adoption, locks, cleanup, and
   degraded-state reporting as explicit control-plane contracts.
+- [`explanation/persistent-shells.md`](./explanation/persistent-shells.md) —
+  persistence boundary, local IPC model, same-UID AF_UNIX trust boundary, and
+  non-goals for persistent named guest shells.
 - [`adr/README.md`](./adr/README.md) — architecture decision
   records for load-bearing design choices that complement the
   explanation narrative.

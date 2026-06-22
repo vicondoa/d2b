@@ -238,7 +238,6 @@ pub struct ShellDetachOutputV1 {
     pub vm: String,
     pub name: String,
     pub result: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub cause: Option<String>,
 }
 
