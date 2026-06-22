@@ -2471,10 +2471,20 @@ where
             Error = CliFailure,
         >,
 {
-    let _ = transport.round_trip(&ShellOp::CloseAttach(public_wire::ShellCloseAttachArgs {
+    match transport.round_trip(&ShellOp::CloseAttach(public_wire::ShellCloseAttachArgs {
         session: session.to_owned(),
-    }))?;
-    Ok(())
+    })) {
+        Ok(_) => Ok(()),
+        Err(err) if is_close_attach_transport_unavailable(&err) => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn is_close_attach_transport_unavailable(err: &CliFailure) -> bool {
+    err.exit_code == 69
+        && err
+            .message
+            .contains("guest-control-shell-transport-unavailable")
 }
 
 fn run_shell_fsm<T, H, S>(
@@ -11548,6 +11558,7 @@ mod host_install_dispatch_tests {
         ops: Vec<public_wire::ShellOp>,
         write_accepts: VecDeque<u64>,
         read_chunks: VecDeque<nixling_ipc::terminal_wire::TerminalReadOutputChunk>,
+        close_transport_unavailable: bool,
     }
 
     impl super::terminal_client::TerminalTransport for FakeShellTransport {
@@ -11578,6 +11589,12 @@ mod host_install_dispatch_tests {
                 public_wire::ShellOp::ReadOutput(_) => {
                     Ok(public_wire::ShellOpResponse::ReadOutput(
                         self.read_chunks.pop_front().expect("read chunk queued"),
+                    ))
+                }
+                public_wire::ShellOp::CloseAttach(close) if self.close_transport_unavailable => {
+                    Err(super::CliFailure::new(
+                        69,
+                        "guest-control-shell-transport-unavailable: guest-control shell transport to the VM is unavailable",
                     ))
                 }
                 public_wire::ShellOp::CloseAttach(close) => Ok(
@@ -11638,6 +11655,7 @@ mod host_install_dispatch_tests {
         let mut transport = FakeShellTransport {
             ops: Vec::new(),
             write_accepts: VecDeque::new(),
+            close_transport_unavailable: false,
             read_chunks: VecDeque::from([nixling_ipc::terminal_wire::TerminalReadOutputChunk {
                 data_base64: nixling_core::base64_codec::encode(b"hello\n"),
                 next_offset: 6,
@@ -11699,6 +11717,7 @@ mod host_install_dispatch_tests {
         let mut transport = FakeShellTransport {
             ops: Vec::new(),
             write_accepts: VecDeque::new(),
+            close_transport_unavailable: false,
             read_chunks: VecDeque::new(),
         };
         let mut host = FakeShellHost {
@@ -11722,10 +11741,38 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
+    fn shell_attach_fsm_treats_close_transport_unavailable_as_detached() {
+        let mut transport = FakeShellTransport {
+            ops: Vec::new(),
+            write_accepts: VecDeque::new(),
+            close_transport_unavailable: true,
+            read_chunks: VecDeque::new(),
+        };
+        let mut host = FakeShellHost {
+            stdin: Some(vec![0x00, 0x11]),
+            stdout: Vec::new(),
+        };
+        let mut signals = FakeShellSignals {
+            pending: VecDeque::new(),
+        };
+
+        super::run_shell_fsm(&mut transport, &mut host, &mut signals, "shell-session")
+            .expect("transient close transport error should still detach locally");
+
+        assert!(matches!(
+            transport.ops.as_slice(),
+            [public_wire::ShellOp::CloseAttach(public_wire::ShellCloseAttachArgs {
+                session
+            })] if session == "shell-session"
+        ));
+    }
+
+    #[test]
     fn shell_attach_fsm_closes_on_fatal_signal() {
         let mut transport = FakeShellTransport {
             ops: Vec::new(),
             write_accepts: VecDeque::new(),
+            close_transport_unavailable: false,
             read_chunks: VecDeque::new(),
         };
         let mut host = FakeShellHost {
@@ -11752,6 +11799,7 @@ mod host_install_dispatch_tests {
         let mut transport = FakeShellTransport {
             ops: Vec::new(),
             write_accepts: VecDeque::from([3, 4]),
+            close_transport_unavailable: false,
             read_chunks: VecDeque::from([nixling_ipc::terminal_wire::TerminalReadOutputChunk {
                 data_base64: String::new(),
                 next_offset: 0,
