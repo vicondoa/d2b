@@ -1488,30 +1488,6 @@
         "shpool"
       ]
     },
-    "GuestTerminalRequestMetadata": {
-      "type": "object",
-      "required": [
-        "common",
-        "guestBootId",
-        "kind",
-        "sessionId"
-      ],
-      "properties": {
-        "common": {
-          "$ref": "#/definitions/GuestRequestMetadata"
-        },
-        "guestBootId": {
-          "$ref": "#/definitions/GuestBootId"
-        },
-        "kind": {
-          "$ref": "#/definitions/TerminalKind"
-        },
-        "sessionId": {
-          "$ref": "#/definitions/TerminalSessionId"
-        }
-      },
-      "additionalProperties": false
-    },
     "GuestTransportKind": {
       "type": "string",
       "enum": [
@@ -2063,7 +2039,7 @@
       ],
       "properties": {
         "metadata": {
-          "$ref": "#/definitions/GuestTerminalRequestMetadata"
+          "$ref": "#/definitions/TerminalRequestMetadata"
         }
       },
       "additionalProperties": false
@@ -2284,7 +2260,7 @@
       ],
       "properties": {
         "metadata": {
-          "$ref": "#/definitions/GuestTerminalRequestMetadata"
+          "$ref": "#/definitions/TerminalRequestMetadata"
         },
         "offset": {
           "type": "integer",
@@ -2319,7 +2295,7 @@
           "minimum": 1.0
         },
         "metadata": {
-          "$ref": "#/definitions/GuestTerminalRequestMetadata"
+          "$ref": "#/definitions/TerminalRequestMetadata"
         },
         "offset": {
           "type": "integer",
@@ -2336,6 +2312,30 @@
         },
         "wait": {
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalRequestMetadata": {
+      "type": "object",
+      "required": [
+        "common",
+        "guestBootId",
+        "kind",
+        "sessionId"
+      ],
+      "properties": {
+        "common": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        },
+        "guestBootId": {
+          "$ref": "#/definitions/GuestBootId"
+        },
+        "kind": {
+          "$ref": "#/definitions/TerminalKind"
+        },
+        "sessionId": {
+          "$ref": "#/definitions/TerminalSessionId"
         }
       },
       "additionalProperties": false
@@ -2472,7 +2472,7 @@
           "minimum": 0.0
         },
         "metadata": {
-          "$ref": "#/definitions/GuestTerminalRequestMetadata"
+          "$ref": "#/definitions/TerminalRequestMetadata"
         },
         "rows": {
           "type": "integer",
@@ -2507,7 +2507,7 @@
           "$ref": "#/definitions/GuestStdinBytes"
         },
         "metadata": {
-          "$ref": "#/definitions/GuestTerminalRequestMetadata"
+          "$ref": "#/definitions/TerminalRequestMetadata"
         },
         "offset": {
           "type": "integer",

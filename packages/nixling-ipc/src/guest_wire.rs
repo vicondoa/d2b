@@ -484,7 +484,7 @@ pub struct GuestExecRequestMetadata {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GuestTerminalRequestMetadata {
+pub struct TerminalRequestMetadata {
     pub common: GuestRequestMetadata,
     pub session_id: TerminalSessionId,
     pub guest_boot_id: GuestBootId,
@@ -1048,7 +1048,7 @@ pub struct ShellKillRequest {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShellCloseAttachRequest {
-    pub metadata: GuestTerminalRequestMetadata,
+    pub metadata: TerminalRequestMetadata,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1072,7 +1072,7 @@ pub struct ShellKillResponse {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerminalWriteStdinRequest {
-    pub metadata: GuestTerminalRequestMetadata,
+    pub metadata: TerminalRequestMetadata,
     pub offset: u64,
     pub data: GuestStdinBytes,
     pub close_after: bool,
@@ -1082,7 +1082,7 @@ pub struct TerminalWriteStdinRequest {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerminalReadOutputRequest {
-    pub metadata: GuestTerminalRequestMetadata,
+    pub metadata: TerminalRequestMetadata,
     pub stream: OutputStream,
     pub offset: u64,
     #[schemars(range(min = 1, max = 1048576))]
@@ -1094,14 +1094,14 @@ pub struct TerminalReadOutputRequest {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerminalCloseStdinRequest {
-    pub metadata: GuestTerminalRequestMetadata,
+    pub metadata: TerminalRequestMetadata,
     pub offset: u64,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerminalTtyWinResizeRequest {
-    pub metadata: GuestTerminalRequestMetadata,
+    pub metadata: TerminalRequestMetadata,
     pub control_seq: u64,
     #[schemars(range(min = 1, max = 65535))]
     pub rows: u32,
