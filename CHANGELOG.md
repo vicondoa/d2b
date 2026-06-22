@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- VM stop/restart now has the Nix and manifest configuration surface for
+  provider-aware graceful guest shutdown, including global/per-VM enable and
+  1–600 second timeout controls, `manifestVersion = 7`, daemon-config
+  rendering, and host-shutdown `nixlingd.service` ordering/timeout budgeting.
 - Broker disk initialization now validates existing nixling-owned ext4 raw
   images before treating `ifAbsent` as satisfied, safely formats only
   proven-empty images, and fails closed before VM spawn for malformed or

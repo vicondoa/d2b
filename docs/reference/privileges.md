@@ -123,6 +123,7 @@ The currently implemented broker operation catalog. Every row carries
 | `QemuMediaAttach` | qemu-media hotplug | per VM / media ref | live | yes (live QMP media attach) | redacted-only | `nixling-admin` | yes | deny | `vm`, `media_ref`, `slot`, `read_only`, `qmp_commands`; no busid, by-id path, serial, or block path | [0015](../adr/0015-daemon-only-clean-break.md) |
 | `QemuMediaBoot` | qemu-media boot media | per VM / media ref | live | yes (live QMP boot attach + continue) | redacted-only | `nixling-admin` | yes | deny | `vm`, `media_ref`, `slot`, `read_only`, `qmp_commands`; no busid, by-id path, serial, or block path | [0015](../adr/0015-daemon-only-clean-break.md) |
 | `QemuMediaDetach` | qemu-media hotplug | per VM / media ref | live | yes (live QMP media detach) | redacted-only | `nixling-admin` | yes | deny | `vm`, `media_ref`, `slot`, `read_only`, `qmp_commands`; no busid, by-id path, serial, or block path | [0015](../adr/0015-daemon-only-clean-break.md) |
+| `QemuMediaLifecycle` | qemu-media lifecycle QMP | per VM | live | yes (`system_powerdown`, `quit`; read-only `query-status`) | redacted-only | `nixling-admin` | yes for mutating commands; errors-only for read-only polling | deny | `vm`, `qmp_command` (`system_powerdown`/`query-status`/`quit`), `trigger` (`user-stop`/`host-shutdown`/`adoption-cleanup`), `result`; no raw QMP response or guest-controlled output | [0040](../adr/0040-graceful-vm-shutdown.md) |
 
 ## Utility and bootstrap variants
 

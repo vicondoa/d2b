@@ -14,8 +14,8 @@
       "properties": {
         "manifestVersion": {
           "type": "integer",
-          "const": 6,
-          "description": "Schema version. This document is the v6 schema; the field is locked to `const: 6`. v6 adds per-VM runtime/provider metadata and provider capability summaries, and makes provider-specific socket/vsock fields nullable so external providers do not fabricate Cloud Hypervisor, guest-control, SSH, store-sync, key, or in-guest-observability artifacts."
+          "const": 7,
+          "description": "Schema version. This document is the v7 schema; the field is locked to `const: 7`. v7 adds per-VM lifecycle.gracefulShutdown metadata so nixlingd can apply VM-specific graceful guest-shutdown policy while preserving v6 compatibility during the rollout."
         }
       }
     },
@@ -270,6 +270,35 @@
         }
       }
     },
+    "vmGracefulShutdown": {
+      "type": "object",
+      "description": "Per-VM graceful guest shutdown policy consumed by nixlingd.",
+      "required": ["enable", "timeoutSeconds"],
+      "additionalProperties": false,
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "description": "True iff nixlingd should attempt provider-aware graceful guest shutdown before falling back to forced VMM cleanup for this VM."
+        },
+        "timeoutSeconds": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 600,
+          "description": "Optional per-VM graceful shutdown timeout override, in seconds. Null means daemon-config.json gracefulShutdownTimeoutSeconds applies."
+        }
+      }
+    },
+    "vmLifecycle": {
+      "type": "object",
+      "description": "Per-VM lifecycle policy consumed by nixlingd.",
+      "required": ["gracefulShutdown"],
+      "additionalProperties": false,
+      "properties": {
+        "gracefulShutdown": {
+          "$ref": "#/$defs/vmGracefulShutdown"
+        }
+      }
+    },
     "runtimeMetadata": {
       "type": "object",
       "description": "Runtime/provider metadata and capability summary for one VM.",
@@ -310,6 +339,7 @@
       "required": [
         "name",
         "runtime",
+        "lifecycle",
         "graphics",
         "tpm",
         "usbipYubikey",
@@ -340,6 +370,9 @@
         },
         "runtime": {
           "$ref": "#/$defs/runtimeMetadata"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/vmLifecycle"
         },
         "graphics": {
           "type": "boolean",

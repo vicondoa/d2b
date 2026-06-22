@@ -15,6 +15,9 @@
 #      and cross-referenced from docs/reference/daemon-api.md.
 #   4. The `nixling.daemon.autostart.parallelism` NixOS option defaults to
 #      3 and honours an override.
+#   5. The daemon lifecycle graceful-shutdown Nix options render into
+#      daemon-config.json / vms.json and keep host-shutdown systemd timing
+#      bounded.
 #
 # The bash gate's `grep -qF` source/doc checks migrate to pure
 # `builtins.readFile` substring cases (no IFD, no cargo — the flake source
@@ -29,6 +32,8 @@ let
   linesOf = rel: lib.splitString "\n" (builtins.readFile (flakeRoot + rel));
   autostartRs = linesOf "/packages/nixlingd/src/autostart.rs";
   libRs = linesOf "/packages/nixlingd/src/lib.rs";
+  hostDaemonNix = linesOf "/nixos-modules/host-daemon.nix";
+  optionsDaemonNix = linesOf "/nixos-modules/options-daemon.nix";
   autostartMd = linesOf "/docs/reference/daemon-autostart.md";
   apiMd = linesOf "/docs/reference/daemon-api.md";
 
@@ -59,6 +64,40 @@ let
 
   parOf = overrides:
     (mkEval ([ base ] ++ overrides)).config.nixling.daemon.autostart.parallelism;
+  cfgOf = overrides:
+    (mkEval ([ base ] ++ overrides)).config;
+  daemonJsonOf = overrides:
+    builtins.fromJSON (cfgOf overrides).environment.etc."nixling/daemon-config.json".text;
+  lifecycleHost = { lib, ... }: {
+    nixling.vms.work-vm = {
+      env = "work";
+      index = 10;
+      lifecycle.gracefulShutdown.timeoutSeconds = 45;
+    };
+    nixling.vms.media = {
+      runtime.kind = "qemu-media";
+      env = "work";
+      index = 42;
+      qemuMedia.source = {
+        kind = "image-file";
+        path = "/var/lib/nixling/images/installer.img";
+        format = "raw";
+      };
+    };
+  };
+  lifecycleCfg = cfgOf [ lifecycleHost ];
+  disabledLifecycleCfg = cfgOf [
+    lifecycleHost
+    ({ ... }: {
+      nixling.daemon.lifecycle.gracefulShutdown.enable = false;
+      nixling.vms.media.lifecycle.gracefulShutdown.enable = true;
+    })
+  ];
+  failureMessages = overrides:
+    let cfg = cfgOf overrides;
+    in map (a: a.message) (lib.filter (a: !a.assertion) cfg.assertions);
+  hasFailure = overrides: needle:
+    lib.any (message: lib.hasInfix needle message) (failureMessages overrides);
 in
 {
   # (1) Rust public surface in autostart.rs.
@@ -79,6 +118,7 @@ in
   "daemon-autostart/librs-run-startup-autostart" = has libRs "run_startup_autostart";
   "daemon-autostart/librs-broker-vm-starter" = has libRs "struct BrokerVmStarter";
   "daemon-autostart/librs-config-parallelism-field" = has libRs "autostart_parallelism";
+  "daemon-autostart/host-daemon-renders-parallelism" = has hostDaemonNix "autostartParallelism = cfg.daemon.autostart.parallelism;";
 
   # (3) Documentation surface.
   "daemon-autostart/doc-net-vms-first" = has autostartMd "Net VMs first";
@@ -97,5 +137,80 @@ in
   "daemon-autostart/option-override-7" = {
     expr = parOf [ ({ ... }: { nixling.daemon.autostart.parallelism = 7; }) ];
     expected = 7;
+  };
+
+  # (5) Graceful shutdown lifecycle Nix surface.
+  "daemon-lifecycle/graceful-option-default-enabled" = {
+    expr = lifecycleCfg.nixling.daemon.lifecycle.gracefulShutdown.enable;
+    expected = true;
+  };
+  "daemon-lifecycle/graceful-option-default-timeout" = {
+    expr = lifecycleCfg.nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds;
+    expected = 90;
+  };
+  "daemon-lifecycle/graceful-option-docs-upper-bound" =
+    has optionsDaemonNix "between 1 and 600 seconds";
+  "daemon-lifecycle/daemon-config-renders-autostart" = {
+    expr = (daemonJsonOf [ ({ ... }: { nixling.daemon.autostart.parallelism = 5; }) ]).autostartParallelism;
+    expected = 5;
+  };
+  "daemon-lifecycle/daemon-config-renders-timeout" = {
+    expr = (daemonJsonOf [ ({ ... }: { nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds = 120; }) ]).gracefulShutdownTimeoutSeconds;
+    expected = 120;
+  };
+  "daemon-lifecycle/manifest-workload-graceful-enabled" = {
+    expr = lifecycleCfg.nixling.manifest."work-vm".lifecycle.gracefulShutdown.enable;
+    expected = true;
+  };
+  "daemon-lifecycle/manifest-workload-timeout-override" = {
+    expr = lifecycleCfg.nixling.manifest."work-vm".lifecycle.gracefulShutdown.timeoutSeconds;
+    expected = 45;
+  };
+  "daemon-lifecycle/manifest-qemu-graceful-enabled" = {
+    expr = lifecycleCfg.nixling.manifest.media.lifecycle.gracefulShutdown.enable;
+    expected = true;
+  };
+  "daemon-lifecycle/global-disable-per-vm-opt-in" = {
+    expr = {
+      work = disabledLifecycleCfg.nixling.manifest."work-vm".lifecycle.gracefulShutdown.enable;
+      media = disabledLifecycleCfg.nixling.manifest.media.lifecycle.gracefulShutdown.enable;
+    };
+    expected = { work = false; media = true; };
+  };
+  "daemon-lifecycle/timeout-stop-sec-uses-phase-maxima" = {
+    expr = lifecycleCfg.systemd.services.nixlingd.serviceConfig.TimeoutStopSec;
+    expected = "360s";
+  };
+  "daemon-lifecycle/execstop-uses-host-shutdown-hook" = {
+    expr = lib.hasPrefix "+" lifecycleCfg.systemd.services.nixlingd.serviceConfig.ExecStop
+      && lib.hasInfix "nixling-host-shutdown-hook" lifecycleCfg.systemd.services.nixlingd.serviceConfig.ExecStop;
+    expected = true;
+  };
+  "daemon-lifecycle/broker-shutdown-ordering" = {
+    expr =
+      builtins.elem "nixling-priv-broker.service" lifecycleCfg.systemd.services.nixlingd.after
+      && builtins.elem "nixling-priv-broker.socket" lifecycleCfg.systemd.services.nixlingd.after
+      && builtins.elem "dbus.service" lifecycleCfg.systemd.services.nixlingd.after;
+    expected = true;
+  };
+  "daemon-lifecycle/global-timeout-upper-bound-assertion" = {
+    expr = hasFailure
+      [ ({ ... }: { nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds = 601; }) ]
+      "nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds must be";
+    expected = true;
+  };
+  "daemon-lifecycle/per-vm-timeout-lower-bound-assertion" = {
+    expr = hasFailure
+      [
+        ({ ... }: {
+          nixling.vms.work-vm = {
+            env = "work";
+            index = 10;
+            lifecycle.gracefulShutdown.timeoutSeconds = 0;
+          };
+        })
+      ]
+      "nixling.vms.work-vm.lifecycle.gracefulShutdown.timeoutSeconds must be";
+    expected = true;
   };
 }

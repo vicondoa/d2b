@@ -95,6 +95,40 @@
           "expr": "{service_name=~\".+\", vm=~\"${vm:regex}\"} | json | step=~\".+\""
         }
       ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "VM shutdown outcomes",
+      "description": "Bounded graceful-shutdown outcome counters. Outcome labels are enums such as clean_guest_shutdown, clean_vmm_cleanup, api_unavailable, timeout_exceeded, and force_requested.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 18},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "options": {"legend": {"showLegend": true, "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (vm, outcome) (rate(nixling_vm_shutdown_outcome_total{vm=~\"${vm:regex}\"}[5m]))",
+          "legendFormat": "{{vm}} {{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Graceful shutdown wait duration",
+      "description": "Observed provider graceful-shutdown wait duration, in seconds. Use this to tune nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds and per-VM overrides.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 18},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "options": {"legend": {"showLegend": true, "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (vm, le) (rate(nixling_vm_shutdown_graceful_duration_seconds_bucket{vm=~\"${vm:regex}\"}[5m])))",
+          "legendFormat": "{{vm}} p95"
+        }
+      ]
     }
   ]
 }

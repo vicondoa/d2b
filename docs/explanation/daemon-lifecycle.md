@@ -125,6 +125,50 @@ land via the trusted bundle row; the supervisor never accepts
 caller-supplied budget tweaks (the daemon never names a
 spawn-related authority field across the wire).
 
+## Graceful stop path
+
+Stop walks the per-VM DAG in reverse, but local primary VMM runners get a
+provider-aware guest shutdown phase before pidfd signal cleanup. Cloud
+Hypervisor/NixOS VMs use the CH API socket and request
+`PUT /api/v1/vm.shutdown`. qemu-media VMs route QMP through the broker:
+`system_powerdown` for guest shutdown, `query-status` for bounded state
+polling, and `quit` only after the guest is stopped and QEMU is an empty VMM.
+
+The wait is controlled by
+`nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds` (default 90,
+bounded 1–600) or
+`nixling.vms.<vm>.lifecycle.gracefulShutdown.timeoutSeconds`. Per-VM
+`lifecycle.gracefulShutdown.enable = false` skips the provider phase without
+creating a degraded marker. Explicit `nixling vm stop <vm> --force --apply`
+also skips the provider wait, but still uses the normal SIGTERM/SIGKILL and
+cgroup cleanup policy; it is recorded as operator intent rather than as an
+unexpected degraded condition.
+
+While a primary VMM waits for guest shutdown, required sidecars remain in the
+DAG and are monitored. A required sidecar exit interrupts the graceful wait and
+escalates to forced cleanup so teardown does not wait on a guest whose runtime
+substrate has already failed. Reverse-DAG sidecar teardown remains after the
+primary VMM stop/cleanup decision.
+
+## Host shutdown and reboot integration
+
+NixOS still declares only the three ADR-0015 root-visible units:
+`nixlingd.service`, `nixling-priv-broker.socket`, and
+`nixling-priv-broker.service`. There is no per-VM or extra guest-shutdown
+systemd unit. Instead, `nixlingd.service` has an `ExecStop` hook that first
+checks the systemd manager state with absolute systemd helper paths. It runs
+the all-VM shutdown hook only when the system manager is stopping for host
+shutdown or reboot; a manual `systemctl restart nixlingd.service` remains a
+continuation event and does not stop all VMs.
+
+All-VM host shutdown runs in dependency phases: workload VMs in parallel first,
+then env net VMs in parallel. `TimeoutStopSec` is computed from the maximum
+enabled graceful timeout in each phase, plus bounded forced-fallback and
+sidecar-cleanup budgets, and is emitted with `lib.mkDefault` so host operators
+can intentionally override it. `nixlingd.service` orders after the broker
+socket/service and D-Bus so broker-mediated qemu-media shutdown remains
+available while live VMMs are being stopped.
+
 ## State persistence + restart reconciliation
 
 On every supervisor transition the daemon writes a

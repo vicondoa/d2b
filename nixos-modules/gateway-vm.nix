@@ -82,6 +82,8 @@ let
           serverVersion = "0.4.0";
           acceptedClientVersionRange = ">=0.4.0, <0.5.0";
           gatewayConfigPath = "/etc/nixling/gateway.json";
+          autostartParallelism = cfg.daemon.autostart.parallelism;
+          gracefulShutdownTimeoutSeconds = cfg.daemon.lifecycle.gracefulShutdown.timeoutSeconds;
           artifacts = {
             publicManifestPath = "/etc/nixling/manifest.json";
             bundlePath = "/etc/nixling/bundle.json";
