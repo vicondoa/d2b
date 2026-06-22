@@ -4752,9 +4752,14 @@ fn run_shell_owner(
         );
         return;
     };
-    let (client, guest_boot_id, attach_response) = match establish_shell_owner(&state, &attach) {
-        Ok(value) => value,
-        Err(error) => {
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(_) => {
+            let error = shell_transport_failed();
             let _ = write_json_frame(
                 stream.as_ref(),
                 &wire::error_frame_with_id(first_op_id, &error),
@@ -4763,9 +4768,37 @@ fn run_shell_owner(
             return;
         }
     };
+    let (client, guest_boot_id, attach_response) =
+        match rt.block_on(establish_shell_owner_async(&state, &attach)) {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = write_json_frame(
+                    stream.as_ref(),
+                    &wire::error_frame_with_id(first_op_id, &error),
+                );
+                shell_metric(&state, "error", shell_error_kind_label(&error));
+                return;
+            }
+        };
+    if let Err(error) = shell_error_to_typed(attach_response.error.as_ref()) {
+        let _ = write_json_frame(
+            stream.as_ref(),
+            &wire::error_frame_with_id(first_op_id, &error),
+        );
+        shell_metric(&state, "error", shell_error_kind_label(&error));
+        return;
+    }
     let session_id = match attach_response.session_id.clone() {
         Some(session) => session,
         None => {
+            tracing::warn!(
+                vm = %attach.vm,
+                resolved_name_valid = %public_wire::ShellName::new(&attach_response.resolved_name).is_ok(),
+                state = ?attach_response.state.enum_value(),
+                force_evicted = attach_response.force_evicted,
+                error_present = attach_response.error.is_some(),
+                "shell attach response missing session id"
+            );
             let _ = write_json_frame(
                 stream.as_ref(),
                 &wire::error_frame_with_id(first_op_id, &shell_protocol_failed()),
@@ -4797,7 +4830,13 @@ fn run_shell_owner(
     )
     .is_err()
     {
-        shell_close_attach_best_effort(&client, &attach.vm, &session_id, &guest_boot_id);
+        shell_close_attach_best_effort_with_runtime(
+            rt.handle(),
+            &client,
+            &attach.vm,
+            &session_id,
+            &guest_boot_id,
+        );
         shell_metric(&state, "error", "transport");
         return;
     }
@@ -4850,11 +4889,13 @@ fn run_shell_owner(
             let vm = attach.vm.clone();
             let session_id = session_id.clone();
             let guest_boot_id = guest_boot_id.clone();
+            let rt_handle = rt.handle().clone();
             let task = std::thread::Builder::new()
                 .name("nixling-shell-poll".to_owned())
                 .spawn(move || {
                     let mut ignored_control_seq = 0;
                     let value = match handle_shell_owner_op(
+                        &rt_handle,
                         client.as_ref(),
                         &vm,
                         &session_id,
@@ -4881,6 +4922,7 @@ fn run_shell_owner(
         }
         let closes_owner = matches!(op, public_wire::ShellOp::CloseAttach(_));
         let response = handle_shell_owner_op(
+            rt.handle(),
             &client,
             &attach.vm,
             &session_id,
@@ -4907,7 +4949,8 @@ fn run_shell_owner(
             Err(error) => {
                 if closes_owner
                     && matches!(
-                        shell_close_attach_best_effort(
+                        shell_close_attach_best_effort_with_runtime(
+                            rt.handle(),
                             &client,
                             &attach.vm,
                             &session_id,
@@ -4941,7 +4984,13 @@ fn run_shell_owner(
     let close_result = if attachment_closed {
         daemon_audit::ShellAuditResult::Closed
     } else {
-        shell_close_attach_best_effort(&client, &attach.vm, &session_id, &guest_boot_id)
+        shell_close_attach_best_effort_with_runtime(
+            rt.handle(),
+            &client,
+            &attach.vm,
+            &session_id,
+            &guest_boot_id,
+        )
     };
     let _ = state
         .daemon_audit
@@ -4973,7 +5022,7 @@ fn synthetic_shell_close_attach_response(
     }
 }
 
-fn establish_shell_owner(
+async fn establish_shell_owner_async(
     state: &ServerState,
     attach: &public_wire::ShellAttachArgs,
 ) -> Result<
@@ -4994,53 +5043,51 @@ fn establish_shell_owner(
     let params = resolve_guest_control_probe_params(state, &resolver, &attach.vm)
         .map_err(|_| shell_transport_failed())?;
     let broker_path = broker_socket_path(state);
-    block_on_future(async move {
-        let budget = guest_control_health::AttemptBudget::from_now(
-            SHELL_MANAGEMENT_TIMEOUT,
-            guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
-        );
-        let signer = guest_control_bridge::BrokerSigner::new(broker_path, budget);
-        let nonce = guest_control_bridge::host_nonce().map_err(|_| shell_transport_failed())?;
-        let client = guest_control_bridge::connect_and_build_client(&params, budget)
-            .map_err(map_shell_health_error)?;
-        let evidence = guest_control_health::probe_guest_control_health(
-            &params.vm_id,
-            Some(guest_control_bridge::VMADDR_CID_HOST),
-            nonce,
-            &client,
-            &signer,
+    let budget = guest_control_health::AttemptBudget::from_now(
+        SHELL_MANAGEMENT_TIMEOUT,
+        guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
+    );
+    let signer = guest_control_bridge::BrokerSigner::new(broker_path, budget);
+    let nonce = guest_control_bridge::host_nonce().map_err(|_| shell_transport_failed())?;
+    let client = guest_control_bridge::connect_and_build_client(&params, budget)
+        .map_err(map_shell_health_error)?;
+    let evidence = guest_control_health::probe_guest_control_health(
+        &params.vm_id,
+        Some(guest_control_bridge::VMADDR_CID_HOST),
+        nonce,
+        &client,
+        &signer,
+    )
+    .await
+    .map_err(map_shell_health_error)?;
+    if !guest_advertises_capability(
+        &evidence.health.capabilities,
+        pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED,
+    ) {
+        return Err(shell_capability_failed());
+    }
+    if attach.force
+        && !guest_advertises_capability(
+            &evidence.health.capabilities,
+            pb::GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH,
         )
+    {
+        return Err(shell_capability_failed());
+    }
+    let mut request = pb::ShellAttachRequest::new();
+    request.metadata = protobuf::MessageField::some(shell_request_metadata(&params.vm_id));
+    request.name = attach.name.as_ref().map(|name| name.as_str().to_owned());
+    request.force = attach.force;
+    let mut size = pb::TerminalSize::new();
+    size.rows = attach.initial_terminal_size.rows;
+    size.cols = attach.initial_terminal_size.cols;
+    request.initial_terminal_size = protobuf::MessageField::some(size);
+    let response: pb::ShellAttachResponse = client
+        .unary_with_timeout("ShellAttach", request, SHELL_MANAGEMENT_TIMEOUT)
         .await
         .map_err(map_shell_health_error)?;
-        if !guest_advertises_capability(
-            &evidence.health.capabilities,
-            pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED,
-        ) {
-            return Err(shell_capability_failed());
-        }
-        if attach.force
-            && !guest_advertises_capability(
-                &evidence.health.capabilities,
-                pb::GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH,
-            )
-        {
-            return Err(shell_capability_failed());
-        }
-        let mut request = pb::ShellAttachRequest::new();
-        request.metadata = protobuf::MessageField::some(shell_request_metadata(&params.vm_id));
-        request.name = attach.name.as_ref().map(|name| name.as_str().to_owned());
-        request.force = attach.force;
-        let mut size = pb::TerminalSize::new();
-        size.rows = attach.initial_terminal_size.rows;
-        size.cols = attach.initial_terminal_size.cols;
-        request.initial_terminal_size = protobuf::MessageField::some(size);
-        let response: pb::ShellAttachResponse = client
-            .unary_with_timeout("ShellAttach", request, SHELL_MANAGEMENT_TIMEOUT)
-            .await
-            .map_err(map_shell_health_error)?;
-        shell_error_to_typed(response.error.as_ref())?;
-        Ok((Arc::new(client), evidence.guest_boot_id, response))
-    })
+    shell_error_to_typed(response.error.as_ref())?;
+    Ok((Arc::new(client), evidence.guest_boot_id, response))
 }
 
 fn shell_request_metadata(vm: &str) -> pb::RequestMetadata {
@@ -5082,6 +5129,7 @@ fn unsupported_shell_wait_error() -> TypedError {
 }
 
 fn handle_shell_owner_op(
+    rt: &tokio::runtime::Handle,
     client: &guest_control_health::TtrpcGuestControlClient,
     vm: &str,
     session_id: &str,
@@ -5104,12 +5152,21 @@ fn handle_shell_owner_op(
             request.offset = args.offset;
             request.data = data;
             request.close_after = args.eof;
-            let response: pb::WriteStdinResponse = block_on_future(client.unary_with_timeout(
-                "TerminalWriteStdin",
-                request,
-                SHELL_MANAGEMENT_TIMEOUT,
-            ))
-            .map_err(map_shell_health_error)?;
+            let response: pb::WriteStdinResponse = rt
+                .block_on(client.unary_with_timeout(
+                    "TerminalWriteStdin",
+                    request,
+                    SHELL_MANAGEMENT_TIMEOUT,
+                ))
+                .map_err(map_shell_health_error)?;
+            if let Some(error) = response.error.as_ref() {
+                tracing::warn!(
+                    vm = %vm,
+                    op = "write-stdin",
+                    error_kind = ?error.kind.enum_value(),
+                    "shell terminal guest error"
+                );
+            }
             shell_error_to_typed(response.error.as_ref())?;
             Ok(Some(public_wire::ShellOpResponse::WriteStdin(
                 tw::TerminalWriteStdinResult {
@@ -5144,12 +5201,17 @@ fn handle_shell_owner_op(
             request.wait = args.wait;
             let (timeout_ms, op_deadline) = shell_poll_timeout(args.timeout_ms, args.wait);
             request.timeout_ms = timeout_ms;
-            let response: pb::ReadOutputResponse = block_on_future(client.unary_with_timeout(
-                "TerminalReadOutput",
-                request,
-                op_deadline,
-            ))
-            .map_err(map_shell_health_error)?;
+            let response: pb::ReadOutputResponse = rt
+                .block_on(client.unary_with_timeout("TerminalReadOutput", request, op_deadline))
+                .map_err(map_shell_health_error)?;
+            if let Some(error) = response.error.as_ref() {
+                tracing::warn!(
+                    vm = %vm,
+                    op = "read-output",
+                    error_kind = ?error.kind.enum_value(),
+                    "shell terminal guest error"
+                );
+            }
             shell_error_to_typed(response.error.as_ref())?;
             Ok(Some(public_wire::ShellOpResponse::ReadOutput(
                 tw::TerminalReadOutputChunk {
@@ -5174,12 +5236,13 @@ fn handle_shell_owner_op(
             request.control_seq = *control_seq;
             request.rows = args.rows;
             request.cols = args.cols;
-            let response: pb::ControlAck = block_on_future(client.unary_with_timeout(
-                "TerminalTtyWinResize",
-                request,
-                SHELL_MANAGEMENT_TIMEOUT,
-            ))
-            .map_err(map_shell_health_error)?;
+            let response: pb::ControlAck = rt
+                .block_on(client.unary_with_timeout(
+                    "TerminalTtyWinResize",
+                    request,
+                    SHELL_MANAGEMENT_TIMEOUT,
+                ))
+                .map_err(map_shell_health_error)?;
             shell_error_to_typed(response.error.as_ref())?;
             Ok(Some(public_wire::ShellOpResponse::Resize(
                 tw::TerminalControlResult { delivered: true },
@@ -5193,12 +5256,13 @@ fn handle_shell_owner_op(
                 session_id,
                 guest_boot_id,
             ));
-            let response: pb::CloseStdinResponse = block_on_future(client.unary_with_timeout(
-                "TerminalCloseStdin",
-                request,
-                SHELL_MANAGEMENT_TIMEOUT,
-            ))
-            .map_err(map_shell_health_error)?;
+            let response: pb::CloseStdinResponse = rt
+                .block_on(client.unary_with_timeout(
+                    "TerminalCloseStdin",
+                    request,
+                    SHELL_MANAGEMENT_TIMEOUT,
+                ))
+                .map_err(map_shell_health_error)?;
             shell_error_to_typed(response.error.as_ref())?;
             Ok(Some(public_wire::ShellOpResponse::CloseStdin(
                 tw::TerminalCloseResult { stdin_closed: true },
@@ -5206,7 +5270,8 @@ fn handle_shell_owner_op(
         }
         public_wire::ShellOp::CloseAttach(args) => {
             ensure_shell_owner_session(&args.session, session_id)?;
-            let response = shell_close_attach(client, vm, session_id, guest_boot_id)?;
+            let response =
+                shell_close_attach_with_runtime(rt, client, vm, session_id, guest_boot_id)?;
             Ok(Some(public_wire::ShellOpResponse::CloseAttach(response)))
         }
         public_wire::ShellOp::Wait(args) => {
@@ -5220,7 +5285,8 @@ fn handle_shell_owner_op(
     }
 }
 
-fn shell_close_attach(
+fn shell_close_attach_with_runtime(
+    rt: &tokio::runtime::Handle,
     client: &guest_control_health::TtrpcGuestControlClient,
     vm: &str,
     session_id: &str,
@@ -5229,23 +5295,21 @@ fn shell_close_attach(
     let mut request = pb::ShellCloseAttachRequest::new();
     request.metadata =
         protobuf::MessageField::some(shell_terminal_metadata(vm, session_id, guest_boot_id));
-    let response: pb::ShellDetachResponse = block_on_future(client.unary_with_timeout(
-        "ShellCloseAttach",
-        request,
-        SHELL_MANAGEMENT_TIMEOUT,
-    ))
-    .map_err(map_shell_health_error)?;
+    let response: pb::ShellDetachResponse = rt
+        .block_on(client.unary_with_timeout("ShellCloseAttach", request, SHELL_MANAGEMENT_TIMEOUT))
+        .map_err(map_shell_health_error)?;
     shell_error_to_typed(response.error.as_ref())?;
     map_shell_detach_response(response)
 }
 
-fn shell_close_attach_best_effort(
+fn shell_close_attach_best_effort_with_runtime(
+    rt: &tokio::runtime::Handle,
     client: &guest_control_health::TtrpcGuestControlClient,
     vm: &str,
     session_id: &str,
     guest_boot_id: &str,
 ) -> daemon_audit::ShellAuditResult {
-    match shell_close_attach(client, vm, session_id, guest_boot_id) {
+    match shell_close_attach_with_runtime(rt, client, vm, session_id, guest_boot_id) {
         Ok(_) => daemon_audit::ShellAuditResult::Closed,
         Err(TypedError::GuestControlShellFailed {
             kind: crate::typed_error::GuestControlShellErrorKind::Timeout,
@@ -5403,6 +5467,7 @@ fn map_shell_list_response(
 fn map_shell_attach_response(
     response: pb::ShellAttachResponse,
 ) -> Result<public_wire::ShellAttachResult, TypedError> {
+    shell_error_to_typed(response.error.as_ref())?;
     Ok(public_wire::ShellAttachResult {
         session: response.session_id.ok_or_else(shell_protocol_failed)?,
         resolved_name: shell_name_from_guest(response.resolved_name)?,
@@ -5414,6 +5479,7 @@ fn map_shell_attach_response(
 fn map_shell_detach_response(
     response: pb::ShellDetachResponse,
 ) -> Result<public_wire::ShellDetachResult, TypedError> {
+    shell_error_to_typed(response.error.as_ref())?;
     Ok(public_wire::ShellDetachResult {
         resolved_name: shell_name_from_guest(response.resolved_name)?,
         detached: response.detached,
@@ -5424,6 +5490,7 @@ fn map_shell_detach_response(
 fn map_shell_kill_response(
     response: pb::ShellKillResponse,
 ) -> Result<public_wire::ShellKillResult, TypedError> {
+    shell_error_to_typed(response.error.as_ref())?;
     Ok(public_wire::ShellKillResult {
         name: shell_name_from_guest(response.name)?,
         killed: response.killed,
@@ -19628,6 +19695,19 @@ mod broker_dispatch_tests {
         assert_eq!(kill.name.as_str(), "default");
         assert!(!kill.killed);
         assert_eq!(kill.state, ShellSessionState::Killed);
+    }
+
+    #[test]
+    fn shell_guest_error_maps_before_required_attach_fields() {
+        let mut attach = pb::ShellAttachResponse::new();
+        let mut error = pb::GuestControlError::new();
+        error.kind = protobuf::EnumOrUnknown::new(
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE,
+        );
+        attach.error = protobuf::MessageField::some(error);
+
+        let err = map_shell_attach_response(attach).expect_err("guest error maps");
+        assert_eq!(err.kind(), "guest-control-shell-capability-unavailable");
     }
 
     #[test]

@@ -17,6 +17,14 @@ pub struct ShellManagementOutput {
 }
 
 impl ShellManagementOutput {
+    pub fn ok(command: impl Into<String>, name: String) -> Self {
+        Self {
+            command: command.into(),
+            name,
+            result: ManagementResult::Ok,
+        }
+    }
+
     pub fn unsupported(command: impl Into<String>, name: String) -> Self {
         Self {
             command: command.into(),

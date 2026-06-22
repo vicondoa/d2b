@@ -6,3 +6,13 @@ pub fn run(args: libshpool::Args) -> anyhow::Result<()> {
     // process boundary that contains those effects; guestd never calls this.
     unsafe { libshpool::run(args, None) }
 }
+
+pub fn run_with_home(args: libshpool::Args, home: &std::path::Path) -> anyhow::Result<()> {
+    // The daemon helper is single-threaded before this call and exits by running
+    // libshpool; mutating HOME here is the narrow process-boundary effect the
+    // helper exists to contain.
+    unsafe {
+        std::env::set_var("HOME", home);
+    }
+    run(args)
+}
