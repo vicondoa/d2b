@@ -240,6 +240,7 @@ fn host_doctor_baseline_no_state_reports_broker_fail_exit_2() {
             "broker-ready",
             "broker-reap-health",
             "daemon-ready",
+            "graceful-shutdown-status",
             "kernel-module-matrix",
             "metrics-endpoint",
             "otel-host-bridge-runner",
