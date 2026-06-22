@@ -70,9 +70,9 @@ if [ -n "${NL_FLAKE_CHECK:-}" ]; then
     if [ "$inst_rc" -eq 0 ]; then
       ok "flake check shard: ${NL_FLAKE_CHECK} (nix-instantiate fallback)"
     elif [ "$inst_rc" -eq 139 ]; then
-      log "  WARN: nix-instantiate also segfaulted for shard ${NL_FLAKE_CHECK}; retrying via nix build --dry-run"
-      if nix build --dry-run --no-link "${flake_ref}#checks.${native}.${NL_FLAKE_CHECK}" >/dev/null; then
-        ok "flake check shard: ${NL_FLAKE_CHECK} (nix build --dry-run fallback)"
+      log "  WARN: nix-instantiate also segfaulted for shard ${NL_FLAKE_CHECK}; retrying via nix build --dry-run --offline"
+      if nix build --offline --dry-run --no-link "${flake_ref}#checks.${native}.${NL_FLAKE_CHECK}" >/dev/null; then
+        ok "flake check shard: ${NL_FLAKE_CHECK} (nix build --dry-run --offline fallback)"
       else
         fail "flake check shard: ${NL_FLAKE_CHECK}"
         exit 1
