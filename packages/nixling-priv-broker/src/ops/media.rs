@@ -23,9 +23,11 @@ use nixling_host::media::{
     UsbPhysicalIdentity,
 };
 use nixling_ipc::broker_wire::{
-    QemuMediaBootRequest, QemuMediaEnrollRequest, QemuMediaEnrollResponse, QemuMediaHotplugEvent,
-    QemuMediaHotplugRequest, QemuMediaHotplugResponse, QemuMediaHotplugStatus,
-    QemuMediaRefreshRegistryResponse,
+    QemuMediaBootRequest, QemuMediaEnrollRequest, QemuMediaEnrollResponse,
+    QemuMediaHotplugEvent, QemuMediaHotplugRequest, QemuMediaHotplugResponse,
+    QemuMediaHotplugStatus, QemuMediaLifecycleCommand, QemuMediaLifecycleRequest,
+    QemuMediaLifecycleResponse, QemuMediaQueryStatusRequest, QemuMediaQueryStatusResponse,
+    QemuMediaRefreshRegistryResponse, QemuMediaVmStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -112,6 +114,7 @@ struct RegistryIdentity {
 }
 
 const REDACTED_INDEX_PATH: &str = "/run/nixling/qemu-media-registry-index.json";
+const QMP_MAX_RESPONSE_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -259,6 +262,66 @@ pub fn boot(
         redacted_index_written: audit.redacted_index_written,
         udev_rule_written: audit.udev_rule_written,
         udev_reloaded: audit.udev_reloaded,
+    })
+}
+
+pub fn system_powerdown(
+    req: &QemuMediaLifecycleRequest,
+) -> Result<QemuMediaLifecycleResponse, MediaOpError> {
+    let mut client = QmpClient::connect(&qmp_socket_path(req.vm_id.as_str()))?;
+    qmp_system_powerdown(&mut client)?;
+    Ok(QemuMediaLifecycleResponse {
+        vm_id: req.vm_id.clone(),
+        command: QemuMediaLifecycleCommand::SystemPowerdown,
+    })
+}
+
+pub fn query_status(
+    req: &QemuMediaQueryStatusRequest,
+) -> Result<QemuMediaQueryStatusResponse, MediaOpError> {
+    qmp_query_status_from_path(
+        &req.vm_id,
+        &qmp_socket_path(req.vm_id.as_str()),
+        req.shutdown_context,
+    )
+}
+
+fn qmp_query_status_from_path(
+    vm_id: &nixling_ipc::types::VmId,
+    path: &Path,
+    shutdown_context: bool,
+) -> Result<QemuMediaQueryStatusResponse, MediaOpError> {
+    let mut client = match QmpClient::connect(path) {
+        Ok(client) => client,
+        Err(error) if shutdown_context && qmp_error_is_expected_shutdown_disconnect(&error) => {
+            return Ok(QemuMediaQueryStatusResponse {
+                vm_id: vm_id.clone(),
+                status: QemuMediaVmStatus::ConnectionLostDuringShutdown,
+            });
+        }
+        Err(error) => return Err(error),
+    };
+    match qmp_query_status(&mut client) {
+        Ok(status) => Ok(QemuMediaQueryStatusResponse {
+            vm_id: vm_id.clone(),
+            status,
+        }),
+        Err(error) if shutdown_context && qmp_error_is_expected_shutdown_disconnect(&error) => {
+            Ok(QemuMediaQueryStatusResponse {
+                vm_id: vm_id.clone(),
+                status: QemuMediaVmStatus::ConnectionLostDuringShutdown,
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub fn quit(req: &QemuMediaLifecycleRequest) -> Result<QemuMediaLifecycleResponse, MediaOpError> {
+    let mut client = QmpClient::connect(&qmp_socket_path(req.vm_id.as_str()))?;
+    qmp_quit(&mut client)?;
+    Ok(QemuMediaLifecycleResponse {
+        vm_id: req.vm_id.clone(),
+        command: QemuMediaLifecycleCommand::Quit,
     })
 }
 
@@ -424,6 +487,60 @@ fn run_attach_transaction(
 fn qmp_continue_vm(client: &mut QmpClient) -> Result<(), MediaOpError> {
     client.execute("cont", json!({}), None)?;
     Ok(())
+}
+
+fn qmp_system_powerdown(client: &mut QmpClient) -> Result<(), MediaOpError> {
+    client.execute("system_powerdown", json!({}), None)?;
+    Ok(())
+}
+
+fn qmp_quit(client: &mut QmpClient) -> Result<(), MediaOpError> {
+    client.execute("quit", json!({}), None)?;
+    Ok(())
+}
+
+fn qmp_query_status(client: &mut QmpClient) -> Result<QemuMediaVmStatus, MediaOpError> {
+    let value = client.execute("query-status", json!({}), None)?;
+    let status = value
+        .get("status")
+        .and_then(Value::as_str)
+        .ok_or_else(|| MediaOpError::Qmp("query-status:missing-status".to_owned()))?;
+    Ok(qmp_status_from_str(status))
+}
+
+fn qmp_status_from_str(status: &str) -> QemuMediaVmStatus {
+    match status {
+        "running" => QemuMediaVmStatus::Running,
+        "paused" => QemuMediaVmStatus::Paused,
+        "shutdown" => QemuMediaVmStatus::Shutdown,
+        "suspended" => QemuMediaVmStatus::Suspended,
+        "watchdog" => QemuMediaVmStatus::Watchdog,
+        "debug" => QemuMediaVmStatus::Debug,
+        "inmigrate" => QemuMediaVmStatus::Inmigrate,
+        "internal-error" => QemuMediaVmStatus::InternalError,
+        "io-error" => QemuMediaVmStatus::IoError,
+        "postmigrate" => QemuMediaVmStatus::Postmigrate,
+        "prelaunch" => QemuMediaVmStatus::Prelaunch,
+        "finish-migrate" => QemuMediaVmStatus::FinishMigrate,
+        "restore-vm" => QemuMediaVmStatus::RestoreVm,
+        "save-vm" => QemuMediaVmStatus::SaveVm,
+        "guest-panicked" => QemuMediaVmStatus::GuestPanicked,
+        "colo" => QemuMediaVmStatus::Colo,
+        "preconfig" => QemuMediaVmStatus::Preconfig,
+        _ => QemuMediaVmStatus::Unknown,
+    }
+}
+
+fn qmp_error_is_expected_shutdown_disconnect(error: &MediaOpError) -> bool {
+    let MediaOpError::Qmp(reason) = error else {
+        return false;
+    };
+    reason == "eof"
+        || reason.contains("Broken pipe")
+        || reason.contains("Connection reset by peer")
+        || reason.contains("Connection refused")
+        || reason.contains("No such file or directory")
+        || reason.contains("Not connected")
 }
 
 fn hotplug_response(
@@ -1047,15 +1164,36 @@ impl QmpClient {
     }
 
     fn read_message(&mut self) -> Result<Value, MediaOpError> {
-        let mut line = String::new();
-        let bytes = self
-            .reader
-            .read_line(&mut line)
-            .map_err(|err| MediaOpError::Qmp(format!("read:{err}")))?;
-        if bytes == 0 {
+        let line = self.read_line_bounded()?;
+        if line.is_empty() {
             return Err(MediaOpError::Qmp("eof".to_owned()));
         }
-        serde_json::from_str(&line).map_err(|err| MediaOpError::Qmp(format!("decode:{err}")))
+        serde_json::from_slice(&line).map_err(|err| MediaOpError::Qmp(format!("decode:{err}")))
+    }
+
+    fn read_line_bounded(&mut self) -> Result<Vec<u8>, MediaOpError> {
+        let mut line = Vec::new();
+        loop {
+            let available = self
+                .reader
+                .fill_buf()
+                .map_err(|err| MediaOpError::Qmp(format!("read:{err}")))?;
+            if available.is_empty() {
+                return Ok(line);
+            }
+            let take = available
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(available.len(), |pos| pos + 1);
+            if line.len().saturating_add(take) > QMP_MAX_RESPONSE_BYTES {
+                return Err(MediaOpError::Qmp("response-too-large".to_owned()));
+            }
+            line.extend_from_slice(&available[..take]);
+            self.reader.consume(take);
+            if line.last() == Some(&b'\n') {
+                return Ok(line);
+            }
+        }
     }
 }
 
@@ -2360,6 +2498,93 @@ mod tests {
         server.join().expect("fake qmp server joins");
     }
 
+    #[test]
+    fn qmp_lifecycle_sends_powerdown_status_and_quit_as_typed_ops() {
+        let dir = qmp_tempdir();
+        let socket = dir.path().join("qmp.sock");
+        let listener = UnixListener::bind(&socket).expect("bind qmp");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept qmp");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("server read timeout");
+            let mut writer = stream.try_clone().expect("clone qmp writer");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone qmp reader"));
+            write_qmp_greeting_and_capabilities(&mut writer, &mut reader);
+
+            expect_qmp_command(&mut writer, &mut reader, "system_powerdown");
+            expect_qmp_query_status_with(&mut writer, &mut reader, "shutdown");
+            expect_qmp_command(&mut writer, &mut reader, "quit");
+        });
+
+        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
+        qmp_system_powerdown(&mut client).expect("system_powerdown");
+        assert_eq!(
+            qmp_query_status(&mut client).expect("query-status"),
+            QemuMediaVmStatus::Shutdown
+        );
+        qmp_quit(&mut client).expect("quit");
+        server.join().expect("fake qmp server joins");
+    }
+
+    #[test]
+    fn qmp_query_status_maps_unknown_state_to_closed_enum() {
+        assert_eq!(qmp_status_from_str("running"), QemuMediaVmStatus::Running);
+        assert_eq!(
+            qmp_status_from_str("new-future-state"),
+            QemuMediaVmStatus::Unknown
+        );
+    }
+
+    #[test]
+    fn qmp_query_status_treats_missing_socket_as_shutdown_context() {
+        let dir = qmp_tempdir();
+        let missing = dir.path().join("missing.sock");
+        let vm = nixling_ipc::types::VmId::new("media");
+
+        let response = qmp_query_status_from_path(&vm, &missing, true)
+            .expect("missing QMP socket during shutdown is expected");
+        assert_eq!(
+            response.status,
+            QemuMediaVmStatus::ConnectionLostDuringShutdown
+        );
+
+        let err = qmp_query_status_from_path(&vm, &missing, false)
+            .expect_err("missing QMP socket outside shutdown is an error");
+        assert!(matches!(err, MediaOpError::Qmp(reason) if reason.contains("connect:")));
+    }
+
+    #[test]
+    fn qmp_reader_rejects_oversized_response_before_json_parse() {
+        let dir = qmp_tempdir();
+        let socket = dir.path().join("qmp.sock");
+        let listener = UnixListener::bind(&socket).expect("bind qmp");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept qmp");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("server read timeout");
+            let mut writer = stream.try_clone().expect("clone qmp writer");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone qmp reader"));
+            write_qmp_greeting_and_capabilities(&mut writer, &mut reader);
+
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("read query-status");
+            assert!(line.contains("query-status"));
+            let id = qmp_id_from_line(&line);
+            let oversized = "x".repeat(QMP_MAX_RESPONSE_BYTES);
+            writer
+                .write_all(format!(r#"{{"return":{{"status":"{oversized}"}},"id":"{id}"}}"#).as_bytes())
+                .expect("oversized response");
+            writer.write_all(b"\n").expect("oversized newline");
+        });
+
+        let mut client = QmpClient::connect(&socket).expect("connect fake qmp");
+        let err = qmp_query_status(&mut client).expect_err("oversized response must fail");
+        assert!(matches!(err, MediaOpError::Qmp(reason) if reason == "response-too-large"));
+        server.join().expect("fake qmp server joins");
+    }
+
     fn write_qmp_greeting_and_capabilities(
         writer: &mut UnixStream,
         reader: &mut BufReader<UnixStream>,
@@ -2442,6 +2667,21 @@ mod tests {
             reader,
             r#"[{"fdset-id":1000,"fds":[{"fd":0,"opaque":"nixling:installer-usb"}]}]"#,
         );
+    }
+
+    fn expect_qmp_query_status_with(
+        writer: &mut UnixStream,
+        reader: &mut BufReader<UnixStream>,
+        status: &str,
+    ) {
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read query-status");
+        assert!(line.contains("query-status"), "missing query-status in {line}");
+        let id = qmp_id_from_line(&line);
+        writer
+            .write_all(format!(r#"{{"return":{{"status":"{status}"}},"id":"{id}"}}"#).as_bytes())
+            .expect("query-status return");
+        writer.write_all(b"\n").expect("query-status newline");
     }
 
     fn expect_qmp_query_fdsets_with(

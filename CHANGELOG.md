@@ -56,6 +56,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Broker QMP lifecycle operations for qemu-media now expose typed
+  `system_powerdown`, `query-status`, and `quit` requests, with bounded QMP
+  parsing and audit-safe lifecycle fields.
+
 - Persistent shell CLI: added top-level `nixling shell <vm>` attach and
   management forms for persistent named guest shell sessions.
 
