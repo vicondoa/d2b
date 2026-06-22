@@ -111,11 +111,12 @@ jobs:
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
       - name: Rust workspace gate
-        # Skip the fixture nix-build (~35 min) — the same fixtures are
-        # already evaluated by the flake-eval-x86 (fixture-smoke) and
-        # (fixture-smoke-full) shards. The contract tests that depend on
-        # NL_FIXTURES still run in those shards' eval; here we test only
-        # the Rust compilation + unit/integration tests.
+        # Skip the fixture nix-build (~35 min) in hosted PR CI. The lightweight
+        # fixture-smoke shard still instantiates in the flake matrix; the
+        # feature-rich fixture-smoke-full graph is validated by local
+        # pre-PR `make test-unit` because hosted-runner instantiate shards have
+        # repeatedly tripped Nix evaluator segfaults before producing typed
+        # eval errors.
         env:
           NL_SKIP_FIXTURE_BUILD: "1"
         run: make test-rust

@@ -202,10 +202,10 @@ fn ui_color_contract_docs_match_schema_surface() {
         "pendingRestart",
         "transitioning",
         "ui-colors-schema.json",
-        "--nixling-host-accent",
-        "--nixling-state-running",
-        "--nixling-env-<env>-accent",
-        "--nixling-vm-<vm>-border-active",
+        "nixling_host_accent",
+        "nixling_state_running",
+        "nixling_env_<env>_accent",
+        "nixling_vm_<vm>_border_active",
     ] {
         assert!(
             doc.contains(required),
