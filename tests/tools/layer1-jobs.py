@@ -20,7 +20,7 @@ MANIFEST = ROOT / "tests" / "layer1-jobs.json"
 TEMPLATE = ROOT / "tests" / "ci" / "layer1-workflow.template.yml"
 WORKFLOW = ROOT / ".github" / "workflows" / "pr-l1-static-fast.yml"
 CHECKOUT = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
-INSTALL_NIX = "cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b"
+INSTALL_NIX = "cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077"
 RUST_CACHE = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
 
 
