@@ -21,7 +21,7 @@ Schema: [`shell-detach.schema.json`](./shell-detach.schema.json).
 | Field | Meaning |
 | --- | --- |
 | `command` | Stable command discriminator, always `shell detach`. |
-| `vm` | Current local routed VM name. Local-shell-only generations resolve only declared local VM targets and reject gateway/remote/provider targets before daemon dispatch; ADR 0039 defines the target-routing contract. |
+| `vm` | Current schema field for the routed target. Local targets report the resolved VM name; gateway-backed management commands forward the target through the selected gateway, whose response keeps this field name until a future output-version bump can rename it to `target`. |
 | `name` | Resolved shell session name. When `--name` is omitted, this is the configured default. |
 | `result` | `detached` when a live client was detached; otherwise `already-detached-or-absent`. |
 | `cause` | Optional close cause reported by the daemon/guest path, such as `client-detach` or `evicted-by-admin-detach`. Null when absent. |

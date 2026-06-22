@@ -505,6 +505,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nixling-constellation-core"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "schemars",
+ "serde",
+]
+
+[[package]]
 name = "nixling-exec-runner"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -518,6 +526,7 @@ dependencies = [
  "async-trait",
  "futures",
  "hmac",
+ "nixling-constellation-core",
  "nixling-exec-runner",
  "nixling-ipc",
  "protobuf",

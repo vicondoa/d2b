@@ -2247,7 +2247,7 @@ fn cmd_gateway_shell(
     }
     let argv = gateway_shell_argv(args, action)?;
     ensure_realm_gateway_running(context, &realm, &gateway_vm, json_mode)?;
-    let exec_args = realm_gateway_exec_args(gateway_vm, argv, false, false, false, false);
+    let exec_args = realm_gateway_exec_args(gateway_vm, argv, false, false, args.json, args.human);
     cmd_vm_exec(context, &exec_args)
 }
 
@@ -11530,8 +11530,10 @@ mod host_install_dispatch_tests {
             "--json",
         ]);
         let (result, requests, _stdout) = run_gateway_shell_command_with_mock_daemon(args);
-        let failure = result.expect_err("mock stops after gateway exec start");
-        assert_ne!(failure.exit_code, 0);
+        assert_ne!(
+            result.expect("mock returns gateway exec transport status"),
+            0
+        );
         assert_eq!(requests.len(), 2);
         assert_eq!(
             requests[0].get("type").and_then(Value::as_str),

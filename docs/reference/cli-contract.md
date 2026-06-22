@@ -2588,9 +2588,11 @@ default detached  false     true
 }
 ```
 
-The JSON field remains named `vm` for the current schema. In local-shell-only
-generations it contains the resolved local routed VM name; ADR 0039 defines
-gateway, remote-node, and provider target routing for this command family.
+The JSON field remains named `vm` for the current schema. For local targets it
+contains the resolved local routed VM name. Gateway-backed management commands
+forward the requested target through the selected gateway; the in-gateway
+response keeps its own current schema until a future output-version bump can
+rename this field to `target`.
 
 **Exit codes**
 
