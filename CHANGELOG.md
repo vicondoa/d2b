@@ -21,6 +21,9 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- Persistent shell CLI: added staged top-level shell parsing, management JSON
+  rendering, and terminal attach transport wiring for the daemon shell control
+  plane.
 - Persistent shell daemon: started nixlingd-side shell control-plane routing with
   admin-gated management operations, guest-control capability checks, shell
   response framing, and attached-owner terminal proxying scaffolding.

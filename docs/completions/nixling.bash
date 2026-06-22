@@ -76,6 +76,9 @@ _nixling() {
             nixling,rotate-known-host)
                 cmd="nixling__subcmd__rotate__subcmd__known__subcmd__host"
                 ;;
+            nixling,shell)
+                cmd="nixling__subcmd__shell"
+                ;;
             nixling,status)
                 cmd="nixling__subcmd__status"
                 ;;
@@ -237,6 +240,9 @@ _nixling() {
                 ;;
             nixling__subcmd__help,rotate-known-host)
                 cmd="nixling__subcmd__help__subcmd__rotate__subcmd__known__subcmd__host"
+                ;;
+            nixling__subcmd__help,shell)
+                cmd="nixling__subcmd__help__subcmd__shell"
                 ;;
             nixling__subcmd__help,status)
                 cmd="nixling__subcmd__help__subcmd__status"
@@ -614,7 +620,7 @@ _nixling() {
 
     case "${cmd}" in
         nixling)
-            opts="-h -V --help --version list status usb console audio audit host auth realm op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config help"
+            opts="-h -V --help --version list status usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1164,7 +1170,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__help)
-            opts="list status usb console audio audit host auth realm op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config help"
+            opts="list status usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1808,6 +1814,20 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__help__subcmd__rotate__subcmd__known__subcmd__host)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__help__subcmd__shell)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2817,6 +2837,20 @@ _nixling() {
             ;;
         nixling__subcmd__rotate__subcmd__known__subcmd__host)
             opts="-h --dry-run --apply --json --human --help <VM>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__shell)
+            opts="-h --help [ARGS]..."
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
