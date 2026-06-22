@@ -4496,6 +4496,7 @@ fn dispatch_read_guest_config(
 }
 
 const SHELL_MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(12);
+const SHELL_OWNER_INFLIGHT_CAP: usize = 64;
 
 fn dispatch_shell_management(
     state: &ServerState,
@@ -4571,9 +4572,10 @@ fn run_shell_owner(
     first_op: public_wire::ShellOp,
     _conn_permit: Option<concurrency::ConnPermit>,
 ) {
+    let stream = Arc::new(stream);
     let public_wire::ShellOp::Attach(attach) = first_op else {
         let _ = write_json_frame(
-            &stream,
+            stream.as_ref(),
             &wire::error_frame_with_id(first_op_id, &TypedError::GuestShellDisabled),
         );
         return;
@@ -4581,7 +4583,10 @@ fn run_shell_owner(
     let (client, guest_boot_id, attach_response) = match establish_shell_owner(&state, &attach) {
         Ok(value) => value,
         Err(error) => {
-            let _ = write_json_frame(&stream, &wire::error_frame_with_id(first_op_id, &error));
+            let _ = write_json_frame(
+                stream.as_ref(),
+                &wire::error_frame_with_id(first_op_id, &error),
+            );
             return;
         }
     };
@@ -4589,7 +4594,7 @@ fn run_shell_owner(
         Some(session) => session,
         None => {
             let _ = write_json_frame(
-                &stream,
+                stream.as_ref(),
                 &wire::error_frame_with_id(first_op_id, &TypedError::GuestShellDisabled),
             );
             return;
@@ -4599,12 +4604,15 @@ fn run_shell_owner(
     let public_attach = match map_shell_attach_response(attach_response) {
         Ok(value) => public_wire::ShellOpResponse::Attach(value),
         Err(error) => {
-            let _ = write_json_frame(&stream, &wire::error_frame_with_id(first_op_id, &error));
+            let _ = write_json_frame(
+                stream.as_ref(),
+                &wire::error_frame_with_id(first_op_id, &error),
+            );
             return;
         }
     };
     if write_json_frame(
-        &stream,
+        stream.as_ref(),
         &wire::shell_response_with_id(first_op_id, &public_attach),
     )
     .is_err()
@@ -4614,36 +4622,100 @@ fn run_shell_owner(
     }
 
     let mut control_seq = initial_control_seq;
-    while let Ok(frame) = read_frame(&stream) {
+    let mut poll_tasks: Vec<std::thread::JoinHandle<()>> = Vec::new();
+    while let Ok(frame) = read_frame(stream.as_ref()) {
+        poll_tasks.retain(|task| !task.is_finished());
         let op_id = wire::shell_op_id(&frame);
-        let response = match wire::parse_shell_op(&frame) {
-            Ok((_, op)) => handle_shell_owner_op(
-                &client,
-                &attach.vm,
-                &session_id,
-                &guest_boot_id,
-                &mut control_seq,
-                op,
-            ),
-            Err(error) => Err(error),
+        let op = match wire::parse_shell_op(&frame) {
+            Ok((_, op)) => op,
+            Err(error) => {
+                if write_json_frame(stream.as_ref(), &wire::error_frame_with_id(op_id, &error))
+                    .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
         };
+        if matches!(op, public_wire::ShellOp::ReadOutput(_)) {
+            if poll_tasks.len() >= SHELL_OWNER_INFLIGHT_CAP {
+                if write_json_frame(
+                    stream.as_ref(),
+                    &wire::error_frame_with_id(op_id, &TypedError::GuestShellDisabled),
+                )
+                .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
+            let client = Arc::clone(&client);
+            let poll_stream = Arc::clone(&stream);
+            let vm = attach.vm.clone();
+            let session_id = session_id.clone();
+            let guest_boot_id = guest_boot_id.clone();
+            let task = std::thread::Builder::new()
+                .name("nixling-shell-poll".to_owned())
+                .spawn(move || {
+                    let mut ignored_control_seq = 0;
+                    let value = match handle_shell_owner_op(
+                        client.as_ref(),
+                        &vm,
+                        &session_id,
+                        &guest_boot_id,
+                        &mut ignored_control_seq,
+                        op,
+                    ) {
+                        Ok(Some(response)) => wire::shell_response_with_id(op_id, &response),
+                        Ok(None) => return,
+                        Err(error) => wire::error_frame_with_id(op_id, &error),
+                    };
+                    let _ = write_json_frame(poll_stream.as_ref(), &value);
+                });
+            match task {
+                Ok(task) => poll_tasks.push(task),
+                Err(_) => {
+                    let _ = write_json_frame(
+                        stream.as_ref(),
+                        &wire::error_frame_with_id(op_id, &TypedError::GuestShellDisabled),
+                    );
+                }
+            }
+            continue;
+        }
+        let response = handle_shell_owner_op(
+            &client,
+            &attach.vm,
+            &session_id,
+            &guest_boot_id,
+            &mut control_seq,
+            op,
+        );
         match response {
             Ok(Some(response)) => {
-                if write_json_frame(&stream, &wire::shell_response_with_id(op_id, &response))
-                    .is_err()
+                if write_json_frame(
+                    stream.as_ref(),
+                    &wire::shell_response_with_id(op_id, &response),
+                )
+                .is_err()
                 {
                     break;
                 }
             }
             Ok(None) => break,
             Err(error) => {
-                if write_json_frame(&stream, &wire::error_frame_with_id(op_id, &error)).is_err() {
+                if write_json_frame(stream.as_ref(), &wire::error_frame_with_id(op_id, &error))
+                    .is_err()
+                {
                     break;
                 }
             }
         }
     }
     shell_close_attach_best_effort(&client, &attach.vm, &session_id, &guest_boot_id);
+    for task in poll_tasks {
+        let _ = task.join();
+    }
 }
 
 fn establish_shell_owner(
