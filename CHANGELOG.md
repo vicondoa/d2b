@@ -16,6 +16,9 @@ deprecations ship one minor release before removal.
   images before treating `ifAbsent` as satisfied, safely formats only
   proven-empty images, and fails closed before VM spawn for malformed or
   ambiguous image data.
+- Persistent shell guests now render the shpool daemon unit with a store-backed
+  start script instead of an inline multi-line `ExecStart` command, avoiding
+  systemd quote parsing failures.
 - `nixling list --json` now preserves daemon-reported failed lifecycle state as
   `status = "failed"` instead of collapsing it to `unknown`.
 
