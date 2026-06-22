@@ -20,7 +20,7 @@ side-effect audit operation that never reaches the wire dispatcher).
 | CreateTapFd | promoted-live | Opens a TAP fd through the live TAP handler and returns it over `SCM_RIGHTS`. | live in production broker |
 | DelegateCgroupV2 | promoted-live | Delegates the trusted cgroup v2 subtree and records the delegated scope. | live in production broker |
 | DeregisterRunnerPidfd | promoted-live | Removes the runner pidfd registry entry idempotently and returns whether an entry was present. | live in production broker |
-| DiskInit | promoted-live | Resolves trusted disk-init plans for the VM and creates or skips disk images before runner spawn. | live in production broker |
+| DiskInit | promoted-live | Resolves trusted disk-init plans for the VM and creates, validates, or safely repairs disk images before runner spawn; ambiguous existing data fails closed. | live in production broker |
 | ExportBrokerAudit | callable-read-only | Reads the append-only broker audit log, requires `caller_role: AdminUid { uid }`, and streams redacted lines back to `nixlingd`. | live read-only callable |
 | GuestControlSign | callable-read-only | Computes the per-VM guest-control auth tag over the bound transcript; returns only the transcript-bound MAC tag. | guest-control live callable |
 | Hello | callable-read-only | Daemon-only handshake; returns `HelloOk` with the broker capability list. | live read-only callable |

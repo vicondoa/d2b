@@ -88,35 +88,40 @@ Consumers should fail visibly but remain usable if the default artifact is
 missing or malformed. Do not treat the artifact as an authorization source;
 it is presentation metadata only.
 
-## CSS artifact
+## GTK CSS artifact
 
 Nixling also writes `/etc/nixling/ui-colors.css` by default. It exposes
-CSS custom properties for bars, launchers, and compositor-adjacent
-stylesheets:
+GTK-compatible `@define-color` declarations for bars, launchers, and
+compositor-adjacent stylesheets:
 
 ```css
 @import url("/etc/nixling/ui-colors.css");
 
 #work {
-  border-left-color: var(--nixling-env-work-accent);
+  border-left-color: @nixling_env_work_accent;
 }
 ```
 
-Variable names include:
+Color definitions use underscores so GTK/Waybar parsers accept them.
+Definition names include:
 
-| Variable | Meaning |
+| Definition | Meaning |
 | --- | --- |
-| `--nixling-host-accent` | Host identity accent |
-| `--nixling-state-running` | Running state accent |
-| `--nixling-state-transitioning` | Starting/stopping state accent |
-| `--nixling-state-pendingRestart` | Pending-restart state accent |
-| `--nixling-state-error` | Error state accent |
-| `--nixling-state-denied` | Authorization-denied state accent |
-| `--nixling-state-unknown` | Unknown/unavailable state accent |
-| `--nixling-env-<env>-accent` | Environment identity accent |
-| `--nixling-vm-<vm>-border-active` | VM active border color |
-| `--nixling-vm-<vm>-border-inactive` | VM inactive border color |
-| `--nixling-vm-<vm>-border-urgent` | VM urgent border color |
+| `nixling_host_accent` | Host identity accent |
+| `nixling_state_running` | Running state accent |
+| `nixling_state_transitioning` | Starting/stopping state accent |
+| `nixling_state_pending_restart` | Pending-restart state accent |
+| `nixling_state_error` | Error state accent |
+| `nixling_state_denied` | Authorization-denied state accent |
+| `nixling_state_unknown` | Unknown/unavailable state accent |
+| `nixling_env_<env>_accent` | Environment identity accent |
+| `nixling_vm_<vm>_border_active` | VM active border color |
+| `nixling_vm_<vm>_border_inactive` | VM inactive border color |
+| `nixling_vm_<vm>_border_urgent` | VM urgent border color |
+
+Hyphens in environment and VM names are emitted as underscores in the CSS
+definition name, for example VM `work-aad` becomes
+`nixling_vm_work_aad_border_active`.
 
 ## Niri backend
 
@@ -128,7 +133,7 @@ nixling.site.ui.compositors.niri.enable = true;
 
 Nixling writes `/etc/nixling/niri-vm-borders.kdl` by default. The KDL
 renders `active-color`, `inactive-color`, and `urgent-color` from the same
-resolved VM border model used by the JSON and CSS artifacts.
+resolved VM border model used by the JSON and GTK CSS artifacts.
 
 The legacy `nixling.site.niriVmBorders` and `nixling.vms.<vm>.graphics.niriBorderColor`
 options remain compatibility inputs for one release, but new

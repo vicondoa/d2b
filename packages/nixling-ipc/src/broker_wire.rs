@@ -1586,7 +1586,11 @@ pub struct ValidateLockSpecResponse {
 ///
 /// The daemon sends the VM's opaque `vm_id`; the broker resolves
 /// every `DiskInit` plan-op from the trusted bundle's
-/// `ProcessNode.plan_ops` for that VM and creates the disk images.
+/// `ProcessNode.plan_ops` for that VM and creates or validates the
+/// disk images before runner spawn. Existing `ifAbsent` images are
+/// skipped only after posture and ext4-superblock validation; a
+/// present image is repaired only when it is proven empty, otherwise
+/// the broker fails closed.
 ///
 /// Security: the broker NEVER trusts a caller-supplied path. All
 /// `target_path`, `size_bytes`, `mode`, `owner_uid`, and `owner_gid`

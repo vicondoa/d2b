@@ -10,6 +10,15 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Fixed
+
+- Broker disk initialization now validates existing nixling-owned ext4 raw
+  images before treating `ifAbsent` as satisfied, safely formats only
+  proven-empty images, and fails closed before VM spawn for malformed or
+  ambiguous image data.
+- `nixling list --json` now preserves daemon-reported failed lifecycle state as
+  `status = "failed"` instead of collapsing it to `unknown`.
+
 ### Internal
 
 - Persistent shell runtime: started guestd-side shell session runtime scaffolding
@@ -33,9 +42,11 @@ deprecations ship one minor release before removal.
 
 - UI colors: added a compositor-agnostic nixling color contract under
   `nixling.site.ui`, `nixling.envs.<env>.ui`, and
-  `nixling.vms.<vm>.ui`, with resolved JSON/CSS artifacts at
+  `nixling.vms.<vm>.ui`, with resolved JSON and GTK-compatible CSS
+  artifacts at
   `/etc/nixling/ui-colors.{json,css}` and a niri backend that renders
-  active/inactive/urgent VM borders from the shared model.
+  active/inactive/urgent VM borders from the shared model. The CSS artifact
+  uses GTK-compatible `@define-color` declarations with underscore names.
 
 - Constellation observability: added `nixling op inspect` for bounded current
   operation and realm-state inspection, with optional TraceContext fields,

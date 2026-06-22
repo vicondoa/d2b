@@ -38,84 +38,15 @@ Option 1 is preferable: it makes `nix develop` the single source of
 truth for the build env both in CI and locally, matching the cargo
 workflow's existing expectation.
 
-## `DiskInit` leaves `store-overlay.img` unformatted if interrupted between create and `mkfs.ext4` (guest hangs in initrd)
+## Resolved: `DiskInit` validates existing images before skipping
 
-**Symptom.** A `writableStoreOverlay` VM hangs ~3 s into boot, no
-network, and `nixling up <vm>` eventually returns `broker-error`. The
-guest serial console (in the host journal, tagged
-`nixling-priv-broker[<ch-pid>]`) shows the initrd looping on:
-
-```
-EXT4-fs (vdc): VFS: Can't find ext4 filesystem
-         Mounting /sysroot/nix/.rw-store...
-```
-
-`vdc` is `store-overlay.img` (CH `serial=rootfs`). `blkid` on the host
-confirms the image is raw (`TYPE` absent / `file -s` → `data`) while
-`home.img`/`var.img` are valid `ext4`.
-
-**Root cause.** `disk_init_one`
-(`packages/nixling-priv-broker/src/ops/disk_init.rs`) is not
-crash-atomic and its skip check is existence-only:
-
-- L83–85: `if spec.if_absent && spec.target_path.exists() { return Skipped }`
-  — skips purely on the path existing, never validating that the
-  existing image contains a filesystem.
-- L100–112: `create_new(true)` (O_CREAT|O_EXCL) creates the empty file.
-- L118–130: `fallocate` allocates blocks (non-zeroing).
-- L165–198: `mkfs.ext4` runs **after** the file already exists at its
-  final path.
-
-The window between "file created + fallocated" (L112) and "mkfs.ext4
-completed" (L191) is not atomic. If the broker (or the mkfs child) is
-killed in that window — e.g. OOM/SIGKILL under host CPU starvation, a
-host reboot, or a `nixling down` mid-init — the target path is left as a
-fallocated-but-unformatted image. On every subsequent start, L83–85
-sees the file exists and returns `Skipped`, so `mkfs.ext4` never
-re-runs. CH then attaches the blank image (`serial=rootfs`) and the
-guest (`nixos-modules/vm-guest-base.nix:142–147`, which mounts
-`/dev/disk/by-id/virtio-rootfs` at the overlay path and relies on "the
-broker's DiskInit op runs mkfs.ext4 when creating the image") hangs in
-initrd. `home.img`/`var.img` survive because they were formatted by an
-earlier, completed init; only the freshly-added overlay image was
-caught mid-init.
-
-The plan-op is emitted in
-`nixos-modules/processes-json.nix:279–293` and `:797–818`; the
-host-activation owner re-assert path is
-`nixos-modules/host-activation.nix:397–408`.
-
-**Repro.** Enable `writableStoreOverlay` on a VM whose
-`store-overlay.img` does not yet exist, then induce heavy host load (or
-SIGKILL the broker) so the first-boot `mkfs.ext4` is interrupted.
-Subsequent boots hang as above.
-
-**Manual recovery (today).** `nixling down <vm> --apply`; on the host
-`mkfs.ext4 -F /var/lib/nixling/vms/<vm>/store-overlay.img`; restore the
-runner owner + `0600`; `nixling up <vm> --apply`.
-
-**Proposed fix.** Make `DiskInit` crash-atomic and/or self-healing:
-
-1. Atomic publish: create + `fallocate` + `mkfs.ext4` against a
-   `*.img.tmp` (or an `O_TMPFILE`) and only `rename(2)` into the final
-   path after mkfs succeeds, so a partially-initialized image never
-   lands at the target name. A crash leaves only the temp file, which
-   the next init can discard and redo.
-2. Validate-then-repair: when `if_absent` and the file exists, probe for
-   a valid ext4 superblock before skipping; if the image exists but has
-   no recognizable filesystem, re-`mkfs.ext4` (safe for the overlay
-   upperdir, which is empty by construction). Guard against reformatting
-   an image that already carries a valid fs (data preservation).
-3. Defense in depth: a guest-side `mkfs`-if-empty on the
-   `serial=rootfs` device in initrd (as microvm.nix does for ordinary
-   volumes) so a blank overlay disk is repaired in the guest rather than
-   wedging the mount.
-
-Option 1 closes the race for new inits; option 2 repairs images already
-corrupted in the field. Add regression coverage alongside the existing
-`mkfs_ext4_env_var_rejects_*` tests (e.g. a "pre-existing unformatted
-image is re-initialized, pre-existing ext4 is preserved" case). Touches
-the privileged broker disk path, so route through panel review.
+Issue #102 fixed the existence-only `ifAbsent` behavior for broker
+`DiskInit`. Existing nixling-owned raw ext4 images are now opened with
+`O_NOFOLLOW`, locked, checked for the declared size/owner/mode, and
+validated by ext4 superblock magic before they are skipped. A present
+but unformatted image is repaired only when kernel extent metadata
+proves it is empty; non-empty, ambiguous, or wrongly-postured files fail
+closed before the VM runner spawns.
 
 ## Speed up the `assertions-eval` gate by folding probe cases into the batch
 
