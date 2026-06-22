@@ -38,6 +38,8 @@ pub enum Capability {
     FileCopy,
     /// One stream per connection; never a generic network bridge.
     PortForward,
+    /// Persistent named shell operations and their shell-authorized PTY streams.
+    PersistentShell,
     /// virtio-vsock availability.
     Vsock,
     /// virtiofs share availability.
@@ -79,6 +81,7 @@ impl Capability {
             Capability::Logs => "logs",
             Capability::FileCopy => "file-copy",
             Capability::PortForward => "port-forward",
+            Capability::PersistentShell => "persistent-shell",
             Capability::Vsock => "vsock",
             Capability::Virtiofs => "virtiofs",
             Capability::WindowForwarding => "window-forwarding",
@@ -108,6 +111,7 @@ impl Capability {
             "logs" => Some(Capability::Logs),
             "file-copy" => Some(Capability::FileCopy),
             "port-forward" => Some(Capability::PortForward),
+            "persistent-shell" => Some(Capability::PersistentShell),
             "vsock" => Some(Capability::Vsock),
             "virtiofs" => Some(Capability::Virtiofs),
             "window-forwarding" => Some(Capability::WindowForwarding),
@@ -322,6 +326,18 @@ mod tests {
         assert!(caps.has(Capability::Exec));
         assert!(caps.has(Capability::Logs));
         assert!(!caps.has(Capability::Clipboard));
+    }
+
+    #[test]
+    fn persistent_shell_capability_has_stable_code() {
+        assert_eq!(Capability::PersistentShell.code(), "persistent-shell");
+        assert_eq!(
+            Capability::from_code("persistent-shell"),
+            Some(Capability::PersistentShell)
+        );
+        let caps: CapabilitySet = serde_json::from_str("[\"persistent-shell\"]").unwrap();
+        assert!(caps.has(Capability::PersistentShell));
+        assert!(!caps.has(Capability::Pty));
     }
 
     #[test]

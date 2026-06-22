@@ -1,7 +1,7 @@
 //! `nixling-constellation-core` is the pure, codec-neutral v2
 //! constellation model (ADR 0032). It defines identifiers, the realm
 //! model, the capability model, node/workload/execution/stream DTOs, the
-//! audit envelope, the semantic `ConstellationFrame`, a bounded
+//! persistent-shell contract, the audit envelope, the semantic `ConstellationFrame`, a bounded
 //! `TraceContext`, and the typed error surface.
 //!
 //! Invariants:
@@ -25,6 +25,7 @@ pub mod mux;
 pub mod node;
 pub mod payload;
 pub mod realm;
+pub mod shell;
 pub mod stream;
 pub mod target;
 pub mod token;
@@ -51,6 +52,11 @@ pub use mux::{DEFAULT_MAX_OPEN_STREAMS, StreamMux};
 pub use node::{NodeKind, NodeSummary};
 pub use payload::OpaquePayload;
 pub use realm::{EntrypointMode, RealmPath};
+pub use shell::{
+    ShellAttachId, ShellAttachRequest, ShellAttachSummary, ShellCause, ShellDetachRequest,
+    ShellGeneration, ShellKillRequest, ShellListRequest, ShellListResponse, ShellName,
+    ShellNameError, ShellOpaqueIdError, ShellSessionInstanceId, ShellState, ShellSummary,
+};
 pub use stream::{StreamAuthz, StreamChannel, StreamCloseReason, StreamDescriptor, StreamKind};
 pub use target::{TARGET_SUFFIX, THIS_NODE_ALIAS, TargetName, TargetParseError};
 pub use token::ProtocolToken;

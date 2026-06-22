@@ -809,6 +809,10 @@ fn required_remote_capability(kind: OperationKind) -> Result<Option<Capability>,
         | OperationKind::ExecAttach
         | OperationKind::ExecLogs
         | OperationKind::ExecCancel
+        | OperationKind::ShellList
+        | OperationKind::ShellAttach
+        | OperationKind::ShellDetach
+        | OperationKind::ShellKill
         | OperationKind::GuestHealth => Ok(kind.required_capability()),
         OperationKind::FileCopyStart
         | OperationKind::PortForwardOpen
@@ -827,6 +831,10 @@ fn remote_operation_requires_workload(kind: OperationKind) -> bool {
             | OperationKind::ExecAttach
             | OperationKind::ExecLogs
             | OperationKind::ExecCancel
+            | OperationKind::ShellList
+            | OperationKind::ShellAttach
+            | OperationKind::ShellDetach
+            | OperationKind::ShellKill
     )
 }
 

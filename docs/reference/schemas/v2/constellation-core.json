@@ -81,6 +81,45 @@
       "$ref": "#/definitions/ExecutionSummary"
     },
     {
+      "$ref": "#/definitions/ShellName"
+    },
+    {
+      "$ref": "#/definitions/ShellAttachId"
+    },
+    {
+      "$ref": "#/definitions/ShellSessionInstanceId"
+    },
+    {
+      "$ref": "#/definitions/ShellGeneration"
+    },
+    {
+      "$ref": "#/definitions/ShellState"
+    },
+    {
+      "$ref": "#/definitions/ShellCause"
+    },
+    {
+      "$ref": "#/definitions/ShellListRequest"
+    },
+    {
+      "$ref": "#/definitions/ShellAttachRequest"
+    },
+    {
+      "$ref": "#/definitions/ShellDetachRequest"
+    },
+    {
+      "$ref": "#/definitions/ShellKillRequest"
+    },
+    {
+      "$ref": "#/definitions/ShellSummary"
+    },
+    {
+      "$ref": "#/definitions/ShellListResponse"
+    },
+    {
+      "$ref": "#/definitions/ShellAttachSummary"
+    },
+    {
       "$ref": "#/definitions/Handshake"
     },
     {
@@ -763,6 +802,13 @@
           "type": "string",
           "enum": [
             "port-forward"
+          ]
+        },
+        {
+          "description": "Persistent named shell operations and their shell-authorized PTY streams.",
+          "type": "string",
+          "enum": [
+            "persistent-shell"
           ]
         },
         {
@@ -2186,6 +2232,10 @@
         "exec-attach",
         "exec-logs",
         "exec-cancel",
+        "shell-list",
+        "shell-attach",
+        "shell-detach",
+        "shell-kill",
         "file-copy-start",
         "port-forward-open",
         "display-session-open"
@@ -2377,6 +2427,261 @@
       "minLength": 1,
       "pattern": "^[a-z][a-z0-9-]*$"
     },
+    "ShellAttachId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "ShellAttachRequest": {
+      "description": "Request body for `ShellAttach`.",
+      "type": "object",
+      "required": [
+        "force",
+        "generation",
+        "name"
+      ],
+      "properties": {
+        "force": {
+          "type": "boolean"
+        },
+        "generation": {
+          "$ref": "#/definitions/ShellGeneration"
+        },
+        "name": {
+          "$ref": "#/definitions/ShellName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellAttachSummary": {
+      "description": "Successful `ShellAttach` metadata. The terminal stream itself is opened as `StreamKind::ShellPty`, so raw terminal bytes stay out of this DTO.",
+      "type": "object",
+      "required": [
+        "attach_id",
+        "force",
+        "generation",
+        "name",
+        "session_instance_id",
+        "stream_id"
+      ],
+      "properties": {
+        "attach_id": {
+          "$ref": "#/definitions/ShellAttachId"
+        },
+        "force": {
+          "type": "boolean"
+        },
+        "generation": {
+          "$ref": "#/definitions/ShellGeneration"
+        },
+        "name": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "session_instance_id": {
+          "$ref": "#/definitions/ShellSessionInstanceId"
+        },
+        "stream_id": {
+          "$ref": "#/definitions/StreamId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellCause": {
+      "description": "Bounded cause for an observed shell state transition.",
+      "type": "string",
+      "enum": [
+        "admin-detach",
+        "force-detach",
+        "admin-kill",
+        "owner-disconnected",
+        "network-loss",
+        "daemon-loss",
+        "daemon-restart",
+        "resource-kill",
+        "orphan-reap",
+        "reconciliation-gap",
+        "slow-reader",
+        "output-gap",
+        "unknown"
+      ]
+    },
+    "ShellDetachRequest": {
+      "description": "Request body for `ShellDetach`.",
+      "type": "object",
+      "required": [
+        "generation",
+        "name"
+      ],
+      "properties": {
+        "attach_id": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShellAttachId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "$ref": "#/definitions/ShellGeneration"
+        },
+        "name": {
+          "$ref": "#/definitions/ShellName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellGeneration": {
+      "description": "Boot/daemon-generation metadata used to reject stale shell operations.",
+      "type": "object",
+      "required": [
+        "guest_boot_id",
+        "guestd_instance_id",
+        "shpool_daemon_instance_id"
+      ],
+      "properties": {
+        "guest_boot_id": {
+          "$ref": "#/definitions/ProtocolToken"
+        },
+        "guestd_instance_id": {
+          "$ref": "#/definitions/ProtocolToken"
+        },
+        "shpool_daemon_instance_id": {
+          "$ref": "#/definitions/ProtocolToken"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellKillRequest": {
+      "description": "Request body for `ShellKill`.",
+      "type": "object",
+      "required": [
+        "generation",
+        "name"
+      ],
+      "properties": {
+        "generation": {
+          "$ref": "#/definitions/ShellGeneration"
+        },
+        "name": {
+          "$ref": "#/definitions/ShellName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellListRequest": {
+      "description": "Request body for `ShellList`.",
+      "type": "object",
+      "properties": {
+        "generation": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShellGeneration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellListResponse": {
+      "description": "Response body for `ShellList`.",
+      "type": "object",
+      "required": [
+        "generation",
+        "summaries"
+      ],
+      "properties": {
+        "generation": {
+          "$ref": "#/definitions/ShellGeneration"
+        },
+        "summaries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ShellSummary"
+          },
+          "maxItems": 256
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellName": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$"
+    },
+    "ShellSessionInstanceId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "ShellState": {
+      "description": "Coarse persistent-shell lifecycle state.",
+      "type": "string",
+      "enum": [
+        "starting",
+        "detached",
+        "attached",
+        "terminating",
+        "exited",
+        "lost"
+      ]
+    },
+    "ShellSummary": {
+      "description": "Bounded summary returned by `ShellList` and status-like responses.",
+      "type": "object",
+      "required": [
+        "attached",
+        "generation",
+        "is_default",
+        "name",
+        "state"
+      ],
+      "properties": {
+        "attached": {
+          "type": "boolean"
+        },
+        "generation": {
+          "$ref": "#/definitions/ShellGeneration"
+        },
+        "is_default": {
+          "type": "boolean"
+        },
+        "last_cause": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShellCause"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "session_instance_id": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShellSessionInstanceId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/definitions/ShellState"
+        }
+      },
+      "additionalProperties": false
+    },
     "StreamAuthz": {
       "description": "The authorization context evaluated before a stream is opened. The `capability` is always derived from the stream kind via [`StreamAuthz::for_kind`] so a caller cannot pair a stream kind with a weaker capability.",
       "type": "object",
@@ -2532,6 +2837,13 @@
           "type": "string",
           "enum": [
             "pty"
+          ]
+        },
+        {
+          "description": "Persistent-shell terminal bytes authorized by a ShellAttach operation.",
+          "type": "string",
+          "enum": [
+            "shell-pty"
           ]
         },
         {

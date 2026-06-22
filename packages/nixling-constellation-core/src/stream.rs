@@ -29,6 +29,8 @@ pub enum StreamKind {
     Control,
     /// Terminal bytes, resize, exit metadata.
     Pty,
+    /// Persistent-shell terminal bytes authorized by a ShellAttach operation.
+    ShellPty,
     /// Separate stdout/stderr in non-TTY mode.
     Stdio,
     /// Durable execution logs with resume cursors.
@@ -53,7 +55,9 @@ pub enum StreamKind {
 
 impl StreamKind {
     /// The capability a peer must advertise to open this stream kind.
-    /// `Display` requires `WindowForwarding`; clipboard/audio/device are
+    /// Shell attach uses `ShellPty`, not generic `Pty`, so shell terminal
+    /// streams require `PersistentShell` exactly. `Display` requires
+    /// `WindowForwarding`; clipboard/audio/device are
     /// independent so display cannot smuggle them, and audio
     /// playback/capture and HID/USB are split so the required capability
     /// is exact.
@@ -61,6 +65,7 @@ impl StreamKind {
         match self {
             StreamKind::Control => Capability::Lifecycle,
             StreamKind::Pty => Capability::Pty,
+            StreamKind::ShellPty => Capability::PersistentShell,
             StreamKind::Stdio => Capability::Exec,
             StreamKind::Logs => Capability::Logs,
             StreamKind::FileCopy => Capability::FileCopy,
@@ -190,6 +195,15 @@ mod tests {
         );
         assert_eq!(StreamKind::DeviceHid.required_capability(), Capability::Hid);
         assert_eq!(StreamKind::DeviceUsb.required_capability(), Capability::Usb);
+    }
+
+    #[test]
+    fn shell_pty_requires_persistent_shell_not_generic_pty() {
+        assert_eq!(
+            StreamKind::ShellPty.required_capability(),
+            Capability::PersistentShell
+        );
+        assert_ne!(StreamKind::ShellPty.required_capability(), Capability::Pty);
     }
 
     #[test]

@@ -33,8 +33,9 @@ Regenerate that file; do not edit generated JSON by hand.
 | `AuditChainRecord` / `AuditChainLink` / `AuditHash` | `src/audit.rs` | Tamper-evident audit-chain metadata for gateway, remote-node, and daemon audit streams. |
 | `AuditSinkHealth` / `AuditRetentionFloorStatus` | `src/audit.rs` | Redacted audit-sink health and retention-floor status for degraded/fail-closed reporting. |
 | `ConstellationError` | `src/error.rs` | Typed error frame with stable `ErrorKind`, bounded message, and structured missing capability for capability denials. |
-| `NodeSummary` / `WorkloadSelector` / `WorkloadSummary` / `ExecutionSummary` | `src/node.rs`, `src/workload.rs`, `src/execution.rs` | Bounded status summaries and selectors for nodes, workloads, and durable executions. |
+| `NodeSummary` / `WorkloadSelector` / `WorkloadSummary` / `ExecutionSummary` / `ShellSummary` | `src/node.rs`, `src/workload.rs`, `src/execution.rs`, `src/shell.rs` | Bounded status summaries and selectors for nodes, workloads, durable executions, and persistent shells. |
 | `ExecStartRequest` / `ExecAttachRequest` / `ExecLogsRequest` / `ExecCancelRequest` | `src/execution.rs` | Bounded durable-execution metadata for start, reconnect, retained logs, and retry-safe cancel. |
+| `ShellListRequest` / `ShellAttachRequest` / `ShellDetachRequest` / `ShellKillRequest` / `ShellListResponse` / `ShellAttachSummary` | `src/shell.rs` | Bounded persistent-shell metadata for list, attach, detach, kill, list responses, and shell-authorized PTY attachment. |
 | `RealmPath`, identifier newtypes, `CapabilitySet`, `CapabilityNegotiation`, `TraceContext`, `OpaquePayload`, `ProtocolToken` | `src/realm.rs`, `src/ids.rs`, `src/capability.rs`, `src/trace_context.rs`, `src/payload.rs`, `src/token.rs` | Reusable bounded primitives that every higher-level root depends on. |
 
 ## Target addresses
@@ -96,8 +97,8 @@ errors.
 Capability codes:
 
 - lifecycle, exec, pty, logs, file-copy, port-forward;
-- `persistent-shell` (contract-reserved by ADR 0039; not live until the
-  generated schema and routing implementation land);
+- `persistent-shell` for named persistent shell operations and
+  shell-authorized PTY streams;
 - vsock, virtiofs;
 - window-forwarding, display-streaming, clipboard;
 - audio-playback, audio-capture;
@@ -157,14 +158,33 @@ The pure `StreamMux` state machine enforces:
 - idempotent cancellation retries for already-cancelled streams;
 - no data after close and no double close for non-cancel terminal states.
 
-## Persistent shell routing reservation
+## Persistent shell routing
 
-ADR 0039 reserves persistent shell as a semantic constellation operation
-family, not as durable exec and not as a provider-native shell channel. The
-future generated model will add `ShellList`, `ShellAttach`, `ShellDetach`, and
-`ShellKill` roots plus the `persistent-shell` capability through normal schema
-generation. Until then, this reference is a contract reservation only; do not
-edit generated JSON by hand.
+ADR 0039 persistent shell is now part of the generated constellation core
+contract. It is a semantic operation family, not durable exec and not a
+provider-native shell channel.
+
+| Operation | Mutates state | Required capability | Notes |
+| --- | --- | --- | --- |
+| `ShellList` | No | `persistent-shell` | Returns bounded shell summaries for the target workload. |
+| `ShellAttach` | Yes | `persistent-shell` | Creates/adopts the named shell and authorizes one `shell-pty` terminal stream. |
+| `ShellDetach` | Yes | `persistent-shell` | Detaches a live or stale attach handle without killing the named shell. |
+| `ShellKill` | Yes | `persistent-shell` | Terminates the named shell session. |
+
+`ShellAttach`, `ShellDetach`, and `ShellKill` require an idempotency key just
+like other mutating operation kinds. `ShellList` is read-only and does not.
+
+Shell terminal streams use `StreamKind::ShellPty`, whose required capability is
+`persistent-shell`. Generic `Pty` remains available for non-shell terminal uses,
+but it does not authorize persistent shell attach. `StreamOpen` decode rejects a
+`shell-pty` descriptor paired with any capability other than
+`persistent-shell`.
+
+The shell DTOs carry only bounded metadata: validated 64-byte shell names,
+generation tokens, state/cause enums, opaque attach/session ids, stream ids, and
+bounded summaries. They do not contain terminal bytes, argv, environment, cwd,
+provider endpoints, provider resource ids, credentials, raw helper output, or
+paths. Unknown fields are rejected on shell request/summary decode.
 
 ## Durable execution
 

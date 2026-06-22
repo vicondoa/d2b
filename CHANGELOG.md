@@ -27,6 +27,9 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- Constellation persistent shell contracts: promoted ADR 0039's reserved
+  `persistent-shell` capability, `Shell*` operation kinds, shell-authorized PTY
+  stream kind, and bounded shell DTOs into the generated core schema contract.
 - Constellation persistent shell routing: added ADR 0039 and reference stubs
   reserving the provider/remote contract for ADR 0038 shells, including the
   guestd-compatible provider-agent requirement and the rule that
