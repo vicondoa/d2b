@@ -114,6 +114,32 @@ pub enum DaemonEvent {
         /// Admin peer uid (from `SO_PEERCRED`) that owned the session.
         peer_uid: u32,
     },
+    /// Emitted when an authenticated persistent shell owner attachment is
+    /// established.
+    ///
+    /// Leak-safe: carries ONLY the VM name, admin peer uid, and whether a force
+    /// takeover was requested. Shell names, session handles, and terminal bytes
+    /// are never recorded.
+    GuestControlShellAttached {
+        /// VM name the shell attachment targets.
+        vm: String,
+        /// Admin peer uid (from `SO_PEERCRED`) that opened the attachment.
+        peer_uid: u32,
+        /// Whether the caller requested force takeover.
+        force: bool,
+    },
+    /// Emitted when a persistent shell owner attachment ends.
+    ///
+    /// Leak-safe: carries ONLY the VM name, admin peer uid, and a closed result
+    /// enum. No shell name, session handle, or terminal bytes.
+    GuestControlShellDetached {
+        /// VM name the shell attachment targeted.
+        vm: String,
+        /// Admin peer uid (from `SO_PEERCRED`) that owned the attachment.
+        peer_uid: u32,
+        /// Closed teardown result: `"closed"`, `"close-timeout"`, or `"error"`.
+        result: String,
+    },
     /// Emitted when a detached `vm exec -d` create succeeds.
     ///
     /// Leak-safe: carries ONLY the VM name, admin peer uid, closed

@@ -4567,7 +4567,7 @@ fn dispatch_shell_management(
 fn run_shell_owner(
     stream: Socket,
     state: ServerState,
-    _peer: PeerIdentity,
+    peer: PeerIdentity,
     first_op_id: u64,
     first_op: public_wire::ShellOp,
     _conn_permit: Option<concurrency::ConnPermit>,
@@ -4620,6 +4620,13 @@ fn run_shell_owner(
         shell_close_attach_best_effort(&client, &attach.vm, &session_id, &guest_boot_id);
         return;
     }
+    let _ = state
+        .daemon_audit
+        .write_event(&daemon_audit::DaemonEvent::GuestControlShellAttached {
+            vm: attach.vm.clone(),
+            peer_uid: peer.uid,
+            force: attach.force,
+        });
 
     let mut control_seq = initial_control_seq;
     let mut poll_tasks: Vec<std::thread::JoinHandle<()>> = Vec::new();
@@ -4712,7 +4719,15 @@ fn run_shell_owner(
             }
         }
     }
-    shell_close_attach_best_effort(&client, &attach.vm, &session_id, &guest_boot_id);
+    let close_result =
+        shell_close_attach_best_effort(&client, &attach.vm, &session_id, &guest_boot_id);
+    let _ = state
+        .daemon_audit
+        .write_event(&daemon_audit::DaemonEvent::GuestControlShellDetached {
+            vm: attach.vm.clone(),
+            peer_uid: peer.uid,
+            result: close_result.to_owned(),
+        });
     for task in poll_tasks {
         let _ = task.join();
     }
@@ -4989,8 +5004,11 @@ fn shell_close_attach_best_effort(
     vm: &str,
     session_id: &str,
     guest_boot_id: &str,
-) {
-    let _ = shell_close_attach(client, vm, session_id, guest_boot_id);
+) -> &'static str {
+    match shell_close_attach(client, vm, session_id, guest_boot_id) {
+        Ok(_) => "closed",
+        Err(_) => "error",
+    }
 }
 
 fn run_guest_shell_management<F, Fut, T>(
