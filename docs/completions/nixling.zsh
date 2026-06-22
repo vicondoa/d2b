@@ -529,9 +529,17 @@ esac
 ;;
 (shell)
 _arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-'*::raw -- VM name followed by optional shell action and flags; run `nixling shell --help` for forms:_default' \
+'--name=[Persistent shell session name. Omit to use the VM'\''s configured default]:NAME:_default' \
+'--force[Detach an existing attached client before attaching to this session]' \
+'(--human)--json[Render machine-readable JSON]' \
+'(--json)--human[Render human-readable output]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':vm -- VM name as declared in `nixling.vms.<name>`:_default' \
+'::action -- Shell action. Omit to attach to the configured default session:((attach\:"Attach to a persistent shell"
+list\:"List persistent shell sessions on a VM"
+detach\:"Detach a persistent shell session without killing it"
+kill\:"Kill a persistent shell session by name"))' \
 && ret=0
 ;;
 (op)
@@ -2574,12 +2582,7 @@ _nixling__subcmd__rotate-known-host_commands() {
 }
 (( $+functions[_nixling__subcmd__shell_commands] )) ||
 _nixling__subcmd__shell_commands() {
-    local commands; commands=(
-'attach:Attach to a persistent shell' \
-'list:List persistent shell sessions on a VM' \
-'detach:Detach a persistent shell session without killing it' \
-'kill:Kill a persistent shell session by name' \
-    )
+    local commands; commands=()
     _describe -t commands 'nixling shell commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__status_commands] )) ||

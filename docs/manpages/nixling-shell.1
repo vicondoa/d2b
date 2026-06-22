@@ -4,16 +4,45 @@
 .SH NAME
 shell \- Attach to or manage persistent named guest shells
 .SH SYNOPSIS
-\fBshell\fR [\fB\-h\fR|\fB\-\-help\fR] [\fIARGS\fR] 
+\fBshell\fR [\fB\-\-name\fR] [\fB\-\-force\fR] [\fB\-\-json\fR] [\fB\-\-human\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIVM\fR> [\fIACTION\fR] 
 .SH DESCRIPTION
 Attach to or manage persistent named guest shells
 .SH OPTIONS
 .TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help
+\fB\-\-name\fR \fI<NAME>\fR
+Persistent shell session name. Omit to use the VM\*(Aqs configured default
 .TP
-[\fIARGS\fR]
-VM name followed by optional shell action and flags; run `nixling shell \-\-help` for forms
+\fB\-\-force\fR
+Detach an existing attached client before attaching to this session
+.TP
+\fB\-\-json\fR
+Render machine\-readable JSON
+.TP
+\fB\-\-human\fR
+Render human\-readable output
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIVM\fR>
+VM name as declared in `nixling.vms.<name>`
+.TP
+[\fIACTION\fR]
+Shell action. Omit to attach to the configured default session
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+attach: Attach to a persistent shell
+.IP \(bu 2
+list: List persistent shell sessions on a VM
+.IP \(bu 2
+detach: Detach a persistent shell session without killing it
+.IP \(bu 2
+kill: Kill a persistent shell session by name
+.RE
 .SH EXTRA
 Forms:
   nixling shell <vm> [\-\-name NAME] [\-\-force]

@@ -995,93 +995,35 @@ struct OpArgs {
     after_help = "Forms:\n  nixling shell <vm> [--name NAME] [--force]\n  nixling shell <vm> attach [--name NAME] [--force]\n  nixling shell <vm> list [--json]\n  nixling shell <vm> detach [--name NAME] [--json]\n  nixling shell <vm> kill --name NAME [--json]\n\n`nixling shell` opens persistent interactive sessions. Use `nixling vm exec <vm> -- <cmd>` for one-off commands."
 )]
 struct ShellArgs {
-    /// VM name followed by optional shell action and flags; run `nixling shell --help` for forms.
-    #[arg(value_name = "ARGS", num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true)]
-    raw: Vec<OsString>,
-}
-
-#[derive(Debug)]
-struct ParsedShellArgs {
     /// VM name as declared in `nixling.vms.<name>`.
     vm: String,
-    /// Session name for implicit attach (`nixling shell <vm>`).
+    /// Shell action. Omit to attach to the configured default session.
+    #[arg(value_enum)]
+    action: Option<ShellAction>,
+    /// Persistent shell session name. Omit to use the VM's configured default.
+    #[arg(long)]
     name: Option<String>,
-    /// Force takeover for implicit attach (`nixling shell <vm>`).
+    /// Detach an existing attached client before attaching to this session.
+    #[arg(long)]
     force: bool,
-    command: Option<ShellCommand>,
+    /// Render machine-readable JSON.
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    /// Render human-readable output.
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
 }
 
-#[derive(Debug)]
-enum ShellCommand {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ShellAction {
     /// Attach to a persistent shell.
-    Attach(ShellAttachArgs),
+    Attach,
     /// List persistent shell sessions on a VM.
-    List(ShellListArgs),
+    List,
     /// Detach a persistent shell session without killing it.
-    Detach(ShellDetachCliArgs),
+    Detach,
     /// Kill a persistent shell session by name.
-    Kill(ShellKillCliArgs),
-}
-
-#[derive(Debug, Parser)]
-#[command(no_binary_name = true)]
-struct ShellImplicitAttachArgs {
-    /// Persistent shell session name. Omit to use the VM's configured default.
-    #[arg(long)]
-    name: Option<String>,
-    /// Detach an existing attached client before attaching to this session.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-#[command(no_binary_name = true)]
-struct ShellAttachArgs {
-    /// Persistent shell session name. Omit to use the VM's configured default.
-    #[arg(long)]
-    name: Option<String>,
-    /// Detach an existing attached client before attaching to this session.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Debug, Parser)]
-#[command(no_binary_name = true)]
-struct ShellListArgs {
-    /// Render machine-readable JSON.
-    #[arg(long, conflicts_with = "human")]
-    json: bool,
-    /// Render human-readable output.
-    #[arg(long, conflicts_with = "json")]
-    human: bool,
-}
-
-#[derive(Debug, Parser)]
-#[command(no_binary_name = true)]
-struct ShellDetachCliArgs {
-    /// Persistent shell session name. Omit to detach the configured default.
-    #[arg(long)]
-    name: Option<String>,
-    /// Render machine-readable JSON.
-    #[arg(long, conflicts_with = "human")]
-    json: bool,
-    /// Render human-readable output.
-    #[arg(long, conflicts_with = "json")]
-    human: bool,
-}
-
-#[derive(Debug, Parser)]
-#[command(no_binary_name = true)]
-struct ShellKillCliArgs {
-    /// Persistent shell session name to kill. Required because kill is destructive.
-    #[arg(long)]
-    name: String,
-    /// Render machine-readable JSON.
-    #[arg(long, conflicts_with = "human")]
-    json: bool,
-    /// Render human-readable output.
-    #[arg(long, conflicts_with = "json")]
-    human: bool,
+    Kill,
 }
 
 #[derive(Debug, Subcommand)]
@@ -2177,105 +2119,6 @@ fn render_daemon_audit_lines(lines: &[String], json_mode: bool) -> Result<(), Cl
     Ok(())
 }
 
-fn shell_clap_failure(err: clap::Error) -> CliFailure {
-    CliFailure {
-        exit_code: err.exit_code(),
-        message: "shell usage error".to_owned(),
-        rendered_stderr: Some(err.to_string()),
-    }
-}
-
-fn shell_arg_to_string(value: &OsString, field: &str) -> Result<String, CliFailure> {
-    value
-        .to_str()
-        .map(str::to_owned)
-        .ok_or_else(|| CliFailure::new(2, format!("shell: {field} must be valid UTF-8")))
-}
-
-fn parse_shell_args(args: &ShellArgs) -> Result<ParsedShellArgs, CliFailure> {
-    let Some(raw_vm) = args.raw.first() else {
-        return Err(CliFailure::new(2, "shell: missing VM"));
-    };
-    let vm = shell_arg_to_string(raw_vm, "VM")?;
-    let tail = &args.raw[1..];
-    if tail.is_empty() {
-        let parsed = ShellImplicitAttachArgs::try_parse_from(std::iter::empty::<OsString>())
-            .map_err(shell_clap_failure)?;
-        return Ok(ParsedShellArgs {
-            vm,
-            name: parsed.name,
-            force: parsed.force,
-            command: None,
-        });
-    }
-    let tail_word = shell_arg_to_string(&tail[0], "shell argument")?;
-    match tail_word.as_str() {
-        "attach" => {
-            let parsed = ShellAttachArgs::try_parse_from(tail[1..].iter().cloned())
-                .map_err(shell_clap_failure)?;
-            Ok(ParsedShellArgs {
-                vm,
-                name: None,
-                force: false,
-                command: Some(ShellCommand::Attach(parsed)),
-            })
-        }
-        "list" => {
-            let parsed = ShellListArgs::try_parse_from(tail[1..].iter().cloned())
-                .map_err(shell_clap_failure)?;
-            Ok(ParsedShellArgs {
-                vm,
-                name: None,
-                force: false,
-                command: Some(ShellCommand::List(parsed)),
-            })
-        }
-        "detach" => {
-            let parsed = ShellDetachCliArgs::try_parse_from(tail[1..].iter().cloned())
-                .map_err(shell_clap_failure)?;
-            Ok(ParsedShellArgs {
-                vm,
-                name: None,
-                force: false,
-                command: Some(ShellCommand::Detach(parsed)),
-            })
-        }
-        "kill" => {
-            let parsed = ShellKillCliArgs::try_parse_from(tail[1..].iter().cloned())
-                .map_err(shell_clap_failure)?;
-            Ok(ParsedShellArgs {
-                vm,
-                name: None,
-                force: false,
-                command: Some(ShellCommand::Kill(parsed)),
-            })
-        }
-        word if word.starts_with('-') => {
-            let parsed = ShellImplicitAttachArgs::try_parse_from(tail.iter().cloned())
-                .map_err(shell_clap_failure)?;
-            Ok(ParsedShellArgs {
-                vm,
-                name: parsed.name,
-                force: parsed.force,
-                command: None,
-            })
-        }
-        _ => Err(CliFailure::new(
-            2,
-            "shell: unexpected trailing argument; `nixling shell` opens persistent interactive sessions; use `nixling vm exec <vm> -- <cmd>` for one-off commands",
-        )),
-    }
-}
-
-fn shell_json_mode(args: &ParsedShellArgs) -> bool {
-    match &args.command {
-        None | Some(ShellCommand::Attach(_)) => false,
-        Some(ShellCommand::List(args)) => args.json,
-        Some(ShellCommand::Detach(args)) => args.json,
-        Some(ShellCommand::Kill(args)) => args.json,
-    }
-}
-
 fn shell_gateway_target_failure(raw: &str, json: bool) -> Result<CliFailure, CliFailure> {
     let exit_code = emit_host_error(
         &host_error_envelope(
@@ -2296,20 +2139,51 @@ fn shell_gateway_target_failure(raw: &str, json: bool) -> Result<CliFailure, Cli
 }
 
 fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
-    let parsed = parse_shell_args(args)?;
-    let json_mode = shell_json_mode(&parsed);
-    let local_vm = match route_vm_target(context, &parsed.vm, json_mode)? {
+    let action = args.action.unwrap_or(ShellAction::Attach);
+    if matches!(action, ShellAction::Attach) && (args.json || args.human) {
+        return Err(CliFailure::new(
+            2,
+            "nixling shell attach is human/TTY-only and does not support --json or --human",
+        ));
+    }
+    if matches!(action, ShellAction::List) && (args.name.is_some() || args.force) {
+        return Err(CliFailure::new(
+            2,
+            "nixling shell list does not accept --name or --force",
+        ));
+    }
+    if matches!(action, ShellAction::Detach) && args.force {
+        return Err(CliFailure::new(
+            2,
+            "nixling shell detach does not accept --force",
+        ));
+    }
+    if matches!(action, ShellAction::Kill) {
+        if args.name.is_none() {
+            return Err(CliFailure::new(
+                2,
+                "nixling shell kill requires --name because it is destructive",
+            ));
+        }
+        if args.force {
+            return Err(CliFailure::new(
+                2,
+                "nixling shell kill does not accept --force",
+            ));
+        }
+    }
+    let json_mode = !matches!(action, ShellAction::Attach) && args.json;
+    let local_vm = match route_vm_target(context, &args.vm, json_mode)? {
         VmTargetRoute::Local { vm } => vm,
         VmTargetRoute::Gateway { .. } => {
-            return Err(shell_gateway_target_failure(&parsed.vm, json_mode)?);
+            return Err(shell_gateway_target_failure(&args.vm, json_mode)?);
         }
     };
-    match &parsed.command {
-        None => cmd_shell_attach(context, &local_vm, parsed.name.as_deref(), parsed.force),
-        Some(ShellCommand::Attach(attach)) => {
-            cmd_shell_attach(context, &local_vm, attach.name.as_deref(), attach.force)
+    match action {
+        ShellAction::Attach => {
+            cmd_shell_attach(context, &local_vm, args.name.as_deref(), args.force)
         }
-        Some(ShellCommand::List(list_args)) => {
+        ShellAction::List => {
             let response = shell_round_trip(
                 context,
                 ShellOp::List(IpcShellListArgs {
@@ -2319,7 +2193,7 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
             let ShellOpResponse::List(result) = response else {
                 return Err(CliFailure::new(1, "shell list: unexpected daemon response"));
             };
-            if list_args.json {
+            if args.json {
                 print_json(&serde_json::json!({
                     "command": "shell list",
                     "vm": local_vm,
@@ -2345,12 +2219,12 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
             }
             Ok(0)
         }
-        Some(ShellCommand::Detach(detach_args)) => {
+        ShellAction::Detach => {
             let response = shell_round_trip(
                 context,
                 ShellOp::Detach(IpcShellDetachArgs {
                     vm: local_vm.clone(),
-                    name: shell_name_option(detach_args.name.as_deref())?,
+                    name: shell_name_option(args.name.as_deref())?,
                 }),
             )?;
             let ShellOpResponse::Detach(result) = response else {
@@ -2359,7 +2233,7 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
                     "shell detach: unexpected daemon response",
                 ));
             };
-            if detach_args.json {
+            if args.json {
                 print_json(&serde_json::json!({
                     "command": "shell detach",
                     "vm": local_vm,
@@ -2382,18 +2256,18 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
             }
             Ok(0)
         }
-        Some(ShellCommand::Kill(kill_args)) => {
+        ShellAction::Kill => {
             let response = shell_round_trip(
                 context,
                 ShellOp::Kill(IpcShellKillArgs {
                     vm: local_vm.clone(),
-                    name: shell_name(&kill_args.name)?,
+                    name: shell_name(args.name.as_deref().expect("validated above"))?,
                 }),
             )?;
             let ShellOpResponse::Kill(result) = response else {
                 return Err(CliFailure::new(1, "shell kill: unexpected daemon response"));
             };
-            if kill_args.json {
+            if args.json {
                 print_json(&serde_json::json!({
                     "command": "shell kill",
                     "vm": local_vm,
@@ -2779,6 +2653,20 @@ fn shell_attach_intro(vm: &str, attach: &public_wire::ShellAttachResult) -> Stri
     )
 }
 
+fn shell_trailing_command_hint(raw_args: &[OsString]) -> Option<&'static str> {
+    let command = raw_args.get(1).and_then(|arg| arg.to_str())?;
+    if command != "shell" {
+        return None;
+    }
+    let trailing = raw_args.get(3).and_then(|arg| arg.to_str())?;
+    if trailing.starts_with('-') || matches!(trailing, "attach" | "list" | "detach" | "kill") {
+        return None;
+    }
+    Some(
+        "hint: `nixling shell` opens persistent interactive sessions; use `nixling vm exec <vm> -- <cmd>` for one-off commands.\n",
+    )
+}
+
 pub fn cli_command() -> clap::Command {
     let mut command = NativeCli::command();
     command.set_bin_name("nixling");
@@ -2818,6 +2706,9 @@ where
                     .map(|arg| arg == "check")
                     .unwrap_or(false);
             let _ = err.print();
+            if let Some(hint) = shell_trailing_command_hint(&raw_args) {
+                let _ = write_stderr_bytes(hint.as_bytes());
+            }
             return if is_host_usage { 3 } else { err.exit_code() };
         }
     };
@@ -11165,11 +11056,6 @@ mod host_install_dispatch_tests {
         }
     }
 
-    fn parse_shell(argv: &[&str]) -> super::ParsedShellArgs {
-        let raw = parse_shell_raw(argv);
-        super::parse_shell_args(&raw).expect("shell subgrammar parses")
-    }
-
     fn shell_response(response: public_wire::ShellOpResponse) -> Value {
         let bytes = encode_type_tagged_message("shellResponse", &response, "shell test response")
             .expect("encode shell response");
@@ -11178,100 +11064,86 @@ mod host_install_dispatch_tests {
 
     #[test]
     fn shell_vm_first_grammar_parses_attach_and_management_forms() {
-        let implicit = parse_shell(&["nixling", "shell", "work", "--name", "dev", "--force"]);
+        let implicit = parse_shell_raw(&["nixling", "shell", "work", "--name", "dev", "--force"]);
         assert_eq!(implicit.vm, "work");
         assert_eq!(implicit.name.as_deref(), Some("dev"));
         assert!(implicit.force);
-        assert!(implicit.command.is_none());
+        assert_eq!(implicit.action, None);
 
-        let explicit = parse_shell(&[
+        let explicit = parse_shell_raw(&[
             "nixling", "shell", "work", "attach", "--name", "ops", "--force",
         ]);
         assert_eq!(explicit.vm, "work");
-        assert!(matches!(
-            explicit.command,
-            Some(super::ShellCommand::Attach(super::ShellAttachArgs {
-                name,
-                force: true
-            })) if name.as_deref() == Some("ops")
-        ));
+        assert_eq!(explicit.action, Some(super::ShellAction::Attach));
+        assert_eq!(explicit.name.as_deref(), Some("ops"));
+        assert!(explicit.force);
 
-        let list = parse_shell(&["nixling", "shell", "work", "list", "--json"]);
+        let list = parse_shell_raw(&["nixling", "shell", "work", "list", "--json"]);
         assert_eq!(list.vm, "work");
-        assert!(matches!(
-            list.command,
-            Some(super::ShellCommand::List(super::ShellListArgs {
-                json: true,
-                human: false
-            }))
-        ));
+        assert_eq!(list.action, Some(super::ShellAction::List));
+        assert!(list.json);
+        assert!(!list.human);
 
-        let detach = parse_shell(&["nixling", "shell", "work", "detach", "--name", "ops"]);
+        let detach = parse_shell_raw(&["nixling", "shell", "work", "detach", "--name", "ops"]);
         assert_eq!(detach.vm, "work");
-        assert!(matches!(
-            detach.command,
-            Some(super::ShellCommand::Detach(super::ShellDetachCliArgs {
-                name,
-                json: false,
-                human: false
-            })) if name.as_deref() == Some("ops")
-        ));
+        assert_eq!(detach.action, Some(super::ShellAction::Detach));
+        assert_eq!(detach.name.as_deref(), Some("ops"));
+        assert!(!detach.json);
+        assert!(!detach.human);
 
-        let kill = parse_shell(&[
+        let kill = parse_shell_raw(&[
             "nixling", "shell", "work", "kill", "--name", "ops", "--json",
         ]);
         assert_eq!(kill.vm, "work");
-        assert!(matches!(
-            kill.command,
-            Some(super::ShellCommand::Kill(super::ShellKillCliArgs {
-                name,
-                json: true,
-                human: false
-            })) if name == "ops"
-        ));
+        assert_eq!(kill.action, Some(super::ShellAction::Kill));
+        assert_eq!(kill.name.as_deref(), Some("ops"));
+        assert!(kill.json);
+        assert!(!kill.human);
     }
 
     #[test]
     fn shell_vm_first_grammar_supports_verb_named_vms() {
         for vm in ["attach", "list", "detach", "kill"] {
-            let implicit = parse_shell(&["nixling", "shell", vm]);
+            let implicit = parse_shell_raw(&["nixling", "shell", vm]);
             assert_eq!(implicit.vm, vm);
-            assert!(implicit.command.is_none());
+            assert_eq!(implicit.action, None);
 
-            let explicit = parse_shell(&["nixling", "shell", vm, "attach", "--name", "dev"]);
+            let explicit = parse_shell_raw(&["nixling", "shell", vm, "attach", "--name", "dev"]);
             assert_eq!(explicit.vm, vm);
-            assert!(matches!(
-                explicit.command,
-                Some(super::ShellCommand::Attach(super::ShellAttachArgs { name, .. }))
-                    if name.as_deref() == Some("dev")
-            ));
+            assert_eq!(explicit.action, Some(super::ShellAction::Attach));
+            assert_eq!(explicit.name.as_deref(), Some("dev"));
         }
     }
 
     #[test]
     fn shell_parser_rejects_missing_vm_command_tail_and_invalid_utf8() {
-        let missing = parse_shell_raw(&["nixling", "shell"]);
-        let missing_failure =
-            super::parse_shell_args(&missing).expect_err("missing VM is rejected");
-        assert_eq!(missing_failure.exit_code, 2);
-        assert!(missing_failure.message.contains("missing VM"));
+        let missing = NativeCli::try_parse_from(["nixling", "shell"])
+            .expect_err("missing VM is a clap usage error");
+        assert_eq!(missing.exit_code(), 2);
 
-        let tail = parse_shell_raw(&["nixling", "shell", "work", "htop"]);
-        let tail_failure = super::parse_shell_args(&tail).expect_err("command tail is rejected");
-        assert_eq!(tail_failure.exit_code, 2);
+        let tail = NativeCli::try_parse_from(["nixling", "shell", "work", "htop"])
+            .expect_err("command tail is rejected by clap value parser");
+        assert_eq!(tail.exit_code(), 2);
+        let hint_args = [
+            OsString::from("nixling"),
+            OsString::from("shell"),
+            OsString::from("work"),
+            OsString::from("htop"),
+        ];
         assert!(
-            tail_failure
-                .message
+            super::shell_trailing_command_hint(&hint_args)
+                .unwrap()
                 .contains("nixling vm exec <vm> -- <cmd>")
         );
 
-        let invalid = super::ShellArgs {
-            raw: vec![OsString::from("work"), OsString::from_vec(vec![0xff])],
-        };
-        let invalid_failure =
-            super::parse_shell_args(&invalid).expect_err("invalid utf8 tail is rejected");
-        assert_eq!(invalid_failure.exit_code, 2);
-        assert!(invalid_failure.message.contains("valid UTF-8"));
+        let invalid = NativeCli::try_parse_from(vec![
+            OsString::from("nixling"),
+            OsString::from("shell"),
+            OsString::from("work"),
+            OsString::from_vec(vec![0xff]),
+        ])
+        .expect_err("invalid utf8 tail is rejected by clap");
+        assert_eq!(invalid.exit_code(), 2);
     }
 
     #[test]
