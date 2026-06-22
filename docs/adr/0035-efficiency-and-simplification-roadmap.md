@@ -6,7 +6,9 @@
   toolchain, MSRV, and supply-chain policy), ADR 0015 (daemon-only clean
   break), ADR 0022 (stabilization-mode releases), ADR 0032 (nixling v2
   constellation control plane), ADR 0034 (storage lifecycle, restart
-  adoption, and synchronization)
+  adoption, and synchronization), ADR 0036 (qemu-media runtime), ADR 0037
+  (local hypervisor runtime seam), ADR 0038 (persistent named guest shell
+  sessions)
 
 ## Context
 
@@ -14,6 +16,20 @@ Nixling has intentionally paid complexity to remove legacy surfaces and
 to make host mutation explicit: daemon-only lifecycle, typed broker ops,
 generated bundle artifacts, pidfd handoff, minijail profiles, guest-control
 RPCs, and v2 constellation/provider seams. Those decisions are still correct.
+
+Since this roadmap was accepted, three major components have made the
+cleanup target wider and sharper:
+
+- `qemu-media` is now a documented local runtime with QMP fd-passing,
+  broker-owned media mutation, a manual-only host-window/physical-media
+  posture, and deliberately unsupported NixOS workload capabilities.
+- The local hypervisor runtime seam makes QEMU, Cloud Hypervisor/crosvm, and
+  per-VM sidecars implementations of one runtime/service abstraction with
+  shared capability, lifecycle, status, denial, reap, and adapter boundaries.
+- Persistent named guest shell sessions add a default-off top-level operator
+  UX, a shared terminal streaming substrate with interactive exec, a static
+  guest helper around shpool, and an explicitly excluded guest helper
+  workspace that needs separate supply-chain and static-link gate wiring.
 
 The current codebase now has a different risk: every security hardening,
 feature wave, generated contract, and test migration has left scaffolding
@@ -65,6 +81,20 @@ surface while preserving the load-bearing contracts from earlier ADRs:
 - The Rust CLI remains the only operator CLI surface.
 - Generated bundle artifacts remain versioned contracts, not ad hoc JSON.
 - Storage, lock, ACL, cleanup, and restart behavior follow ADR 0034.
+- QEMU media, Cloud Hypervisor/crosvm workloads, and their sidecars follow
+  ADR 0037's runtime/service seam. Runtime kind, provider, capability,
+  unsupported-operation, stopped-state, and service-health contracts are
+  shared; QMP, QEMU argv, Cloud Hypervisor API, crosvm argv, USBIP, and
+  sidecar details stay behind adapters.
+- ADR 0036's qemu-media runtime is a current local hypervisor implementation,
+  not a second lifecycle architecture. Cleanup may remove the public enroll UX
+  as ADR 0037 requires, but it must preserve broker-owned media fd opening,
+  paused-before-boot QMP sequencing, manual-only/autostart denial reasons, and
+  redacted output/audit behavior.
+- ADR 0038's persistent shell UX reuses the exec terminal substrate and keeps
+  shpool private behind a guest helper. Cleanup consolidates terminal
+  streaming, admission, resize, cursor, detach/force/kill, and redaction
+  semantics rather than creating parallel exec and shell protocols.
 - Task, thread, and I/O ownership become explicit. Request/task threads do
   not perform unbounded synchronous I/O; blocking filesystem, process,
   network, or broker work runs behind bounded blocking pools, workers, or
@@ -73,6 +103,12 @@ surface while preserving the load-bearing contracts from earlier ADRs:
   that path rather than introducing another abstraction hierarchy.
 - Tests remain fail-closed and follow the Layer-1-first test model; this ADR
   does not authorize new ad hoc shell gates.
+- Excluded Rust workspaces, including the broker and the persistent-shell
+  guest helper when introduced, are intentional only when they enforce a real
+  unsafe-code, dependency, static-link, or supply-chain boundary. Each excluded
+  workspace must be wired explicitly into fmt, clippy, test, coverage where
+  applicable, deny, audit, static-ELF, and dependency-policy validation as
+  applicable.
 - Backward compatibility with retired CLI, systemd, option, test, or module
   surfaces is not a constraint for these cleanup waves. The default action is
   removal, not shimming.
@@ -82,10 +118,13 @@ surface while preserving the load-bearing contracts from earlier ADRs:
 
 The waves below are ordered to reduce future work first. Wave 0 creates
 measurement and starts compatibility deletion; Waves 1-4 remove duplicated
-infrastructure; Waves 5-8 reshape Rust/Nix boundaries; Wave 9 aligns v2
-providers; Waves 10-11 fix task/runtime hot paths; Wave 12 trims docs and
-examples; Wave 13 removes avoidable unsafe code; Wave 14 is the recurring
-ratchet that keeps the codebase from growing back.
+infrastructure; Waves 5-8 reshape Rust/Nix boundaries and the explicitly
+separate helper workspaces; Wave 9 aligns v2 providers with the local
+hypervisor seam; Waves 10-11 fix task/runtime hot paths including QMP,
+terminal streaming, and shell helper supervision; Wave 12 trims docs and
+examples; Wave 13 removes avoidable unsafe code, including helper-prelude and
+fd-passing edges; Wave 14 is the recurring ratchet that keeps the codebase
+from growing back.
 
 ## Efficiency principles
 
@@ -95,12 +134,25 @@ If the CLI, daemon, broker, docs, and tests all need the same shape, that
 shape belongs in a contract crate or generated artifact. Presentation code
 may adapt it, but it must not redefine a parallel schema.
 
+This includes provider-neutral local runtime status and capabilities from ADR
+0037 and terminal-v1/session contracts shared by interactive exec and
+persistent shell from ADR 0038. QMP object ids, shpool protocol details, and
+backend argv internals are adapter-private implementation data unless a later
+versioned contract explicitly makes a redacted field public.
+
 ### One normalized model per evaluation
 
 Nix module evaluation should normalize `cfg.vms`, `cfg.envs`, bundle
 artifacts, runner roles, and provider capability records once, then pass
 indexes to consumers. Repeated `filterAttrs` / `mapAttrsToList` scans are
 acceptable only in leaf modules whose input is already narrowed.
+
+New runtime-facing option shapes stay declarative and feed that same
+normalization pass. qemu-media inputs describe runtime kind, media refs,
+display posture, and manual-only policy as VM/runtime configuration; persistent
+shell inputs stay under the guest shell option family (`guest.shell.*`) and
+describe enablement, default name, and session limits. Neither surface may grow
+a parallel evaluator, an imperative host hook, or a second capability tree.
 
 ### Concern-first naming
 
@@ -176,6 +228,12 @@ constellation protocol code under `constellation/{frame,stream,capability,...}`.
 Do not encode historical wave names, temporary implementation phases, or
 review finding IDs in source file, type, crate, or package names.
 
+ADR 0038's shell helper follows the same rule: the binary may be named
+`nixling-guest-shell-runner` because it runs in the guest and owns shell
+helper behavior; host terminal adapters, daemon shell admission, guestd shell
+RPC handlers, and shpool translation do not share a locus-free `shell` or
+`terminal` bucket.
+
 ### One side-effect owner
 
 Every mutable host surface has exactly one owner. NixOS tmpfiles creates
@@ -183,6 +241,12 @@ static base roots, activation performs migrations and static repairs, the
 broker mutates privileged runtime state, and `nixlingd` owns daemon ledgers.
 No wave may reintroduce broad recursive `chmod`, `chown`, `setfacl`, or
 raw-path repair logic to make a test pass.
+
+Runtime and service operations must also be idempotent. Start, stop, reap,
+adopt, detach, and cleanup paths for sidecars such as Wayland proxy, QEMU,
+QMP media attachments, virtiofsd, swtpm, USBIP, audio/video, guest shell
+helpers, and shpool daemons must tolerate already-done and partially-cleaned
+state without leaking resources or weakening the ownership boundary.
 
 ### Delete obsolete compatibility scaffolding by default
 
@@ -230,7 +294,7 @@ supports it; static linting is necessary but not sufficient. This applies to
 local-only paths and ADR 0032 constellation/provider paths: adding remote
 transports must not move blocking I/O onto the daemon's request handlers.
 
-The concurrency model has four hard rules:
+The concurrency model has six hard rules:
 
 1. **One runtime, structured supervision.** A daemon or broker that owns a
    Tokio runtime uses structured tasks, cancellation tokens, bounded queues,
@@ -261,6 +325,17 @@ The concurrency model has four hard rules:
    `OwnedFd` or closed before the next cancellation point. Use a
    cancellation-safe readiness pattern plus synchronous `recvmsg`, or an
    owned blocking worker that performs receive-and-wrap atomically.
+
+Persistent-shell helper supervision inherits these rules. guestd may spawn
+short-lived helper processes and manage shpool daemon adoption only through an
+explicit owner with bounded stdout/stderr/framed-JSON reads, pidfd-backed
+teardown, liveness handling, and no process-global `libshpool` calls inside
+guestd.
+
+The shpool socket trust model remains same-UID. Guest storage, runtime
+directory, and socket cleanup may tighten workload-user permissions, but must
+not broaden them to host users, daemon users, auxiliary sidecar users, or a
+shared group as a convenience for management commands.
 
 ### Future compatibility bridge keys
 
@@ -471,6 +546,8 @@ Tasks:
    - enabled envs;
    - workloads by env;
    - graphics/audio/video/TPM/USBIP/observability subsets;
+   - qemu-media/manual-only/runtime-media capability subsets;
+   - persistent-shell enablement and configured shell limits;
    - declared net VM per env;
    - stable per-env port/name/IP metadata;
    - provider/runtime capability summary.
@@ -572,6 +649,8 @@ Tasks:
    - guest-control client/server bridge;
    - gateway-mode routing;
    - QEMU media lifecycle;
+   - provider-neutral local runtime/service status and capability adapters;
+   - terminal-v1 streaming plus exec and persistent-shell adapters;
    - host doctor/read-only checks;
    - CLI command groups.
 2. Replace broad imports in hub files with narrow module APIs.
@@ -589,7 +668,9 @@ Primary targets:
 - `packages/nixling-priv-broker/src/runtime.rs`;
 - `packages/nixling-priv-broker/src/live_handlers.rs`;
 - `packages/nixling-core/src/bundle_resolver.rs`;
-- `packages/nixling-guestd/src/service.rs`.
+- `packages/nixling-guestd/src/service.rs`;
+- `packages/nixling-guest-shell-runner/*` once ADR 0038 implementation
+  introduces the excluded helper workspace.
 
 Validation:
 
@@ -625,13 +706,21 @@ Tasks:
    weakening their current tests.
 3. Make `processes.json`, minijail profiles, storage references, and broker
    `SpawnRunner` requests consume the same builder model.
-4. Keep provider-specific launch details behind provider adapters, not in
+4. Model qemu-media QEMU runner startup, paused-before-boot readiness, QMP
+   socket readiness, and media boot transaction dependencies without leaking
+   QMP internals into the generic builder.
+5. Model persistent-shell helper execution and shpool daemon adoption through
+   the same process/isolation vocabulary where it fits, while keeping the
+   shpool protocol private to the guest helper and guestd adapter.
+6. Keep provider-specific launch details behind provider adapters, not in
    the generic builder.
 
 Primary targets:
 
 - `packages/nixling-host/src/*_argv.rs`;
 - `packages/nixling-host/src/runner_argv_regenerator.rs`;
+- `packages/nixling-host/src/qemu_media_argv.rs` if present, or the current
+  qemu-media argv renderer home;
 - `packages/nixling-core/src/processes.rs`;
 - `nixos-modules/processes-json.nix`;
 - `nixos-modules/minijail-profiles.nix`;
@@ -641,6 +730,9 @@ Primary targets:
 Validation:
 
 - existing argv-shape and minijail-validator tests remain green;
+- qemu-media tests cover paused-before-boot readiness, QMP fd/block/device
+  transaction ordering, and failure cleanup for boot media and runtime hotplug
+  dependencies;
 - rendered `processes.json` and minijail profile fixtures are unchanged
   unless an intentional schema bump is made;
 - adding a new runner role requires a lifecycle matrix plus builder
@@ -669,6 +761,14 @@ Tasks:
 5. Delete no-op systemd and activation scaffolding once no consumers remain.
 6. Replace inherited or incidental file locks with sync-contract-owned OFD
    locks.
+7. Treat qemu-media boot images, physical media registry state, QMP sockets,
+   and stale proxy cleanup as runtime-owned storage/cleanup surfaces with one
+   broker or daemon owner per mutation.
+8. Treat persistent-shell runtime directories, shpool sockets, helper logs, and
+   boot-scoped shell metadata as generated storage/sync rows or guest-owned
+   ledgers; do not add host activation or daemon raw-path repair as a shortcut.
+   Helper logs must have an explicit rotation or maximum-size policy before
+   long-lived shells ship.
 
 Primary targets:
 
@@ -684,6 +784,9 @@ Validation:
 
 - storage lifecycle contract tests cover every mutable host path touched by
   activation, broker, or daemon code;
+- guestd and guest-owned lifecycle tests cover persistent-shell runtime
+  directories, shpool sockets, helper logs, and boot-scoped shell metadata
+  cleanup/adoption where those paths are not host-mutable;
 - no new raw-path privileged mutation enters daemon code;
 - restart/adoption behavior remains continuation-safe.
 
@@ -778,6 +881,10 @@ Tasks:
 10. Keep wire compatibility separate from Rust naming. Wire field names can
    remain stable for schema/version reasons while Rust types/modules move to
    concern-first names behind generated schemas.
+11. Keep the persistent-shell helper as an excluded workspace only while it
+   needs the unsafe/libshpool/static-link boundary described in ADR 0038.
+   Its separate lockfile, deny policy, and static packaging gates are part of
+   the justification, not boilerplate to be silently dropped.
 
 Primary targets:
 
@@ -787,7 +894,8 @@ Primary targets:
 - `packages/nixling-provider-*`;
 - `packages/nixling-gateway*`;
 - `packages/nixling-host-providers`;
-- `flake.nix` Rust package source construction.
+- `packages/nixling-guest-shell-runner/*` once introduced;
+- `flake.nix` Rust package source construction;
 - `docs/reference/naming-conventions.md`.
 
 Validation:
@@ -804,6 +912,9 @@ Exit criteria:
 
 - each crate has a sentence-long reason to exist and an explicit concern
   prefix or documented public-binary exception;
+- each excluded workspace has a sentence-long reason to stay excluded, the
+  validation gates that cover it, and the condition under which it can rejoin
+  or be deleted;
 - compile graphs match operator paths: local-only users do not pay for
   provider experiments;
 - reviewers can identify host/guest/gateway/provider/constellation ownership
@@ -815,12 +926,13 @@ Goal: make ADR 0032 extensibility reduce code, not multiply adapters.
 
 Tasks:
 
-1. Fold Wave 0 provider abstraction work from ADR 0032 into the efficiency
-   taxonomy from this ADR: provider code is an adapter, not a new place to
-   define core lifecycle semantics.
+1. Fold Wave 0 provider abstraction work from ADR 0032 and the local
+   hypervisor seam from ADR 0037 into the efficiency taxonomy from this ADR:
+   provider code is an adapter, not a new place to define core lifecycle
+   semantics.
 2. Define a single provider capability descriptor that covers local
-   hypervisors, host substrates, display transports, cloud sandboxes, and
-   remote full hosts.
+   hypervisors, host substrates, display transports, cloud sandboxes, remote
+   full hosts, and runtime/service capability denial.
 3. Keep local fast path as one provider instance with no relay/gateway
    overhead when no remote realm is configured.
 4. Make unsupported operations fail through typed capability denial, not
@@ -828,6 +940,17 @@ Tasks:
 5. Require each provider to declare which generic builders/contracts it
    consumes: runner/process, storage/sync, display, transport, audit, and
    observability.
+6. Convert qemu-media's current enrollment compatibility into the ADR 0037
+   start-time boot media and runtime QMP hotplug model. The removal is not a
+   generic USBIP cleanup; it is a provider-adapter simplification that keeps
+   physical media redaction and broker-owned fd opening intact.
+7. Make Wayland/window policy consume runtime display capabilities rather than
+   provider names or process-node names.
+8. Ensure capability-denial errors preserve their typed reason across daemon,
+   guest-control, and CLI JSON boundaries. Disabled persistent shell, shell
+   capacity exhaustion, qemu-media unsupported guest-control, and manual-only
+   autostart denials must produce actionable operator messages before side
+   effects.
 
 Primary targets:
 
@@ -836,6 +959,8 @@ Primary targets:
 - `packages/nixling-constellation-router`;
 - `packages/nixling-provider-aca`;
 - `packages/nixling-provider-relay`;
+- qemu-media provider/adapter modules in `packages/nixlingd` and
+  `packages/nixling-priv-broker`;
 - `packages/nixling-gateway-runtime`;
 - `nixos-modules/gateway-vm.nix`;
 - ADR 0032 implementation wave notes.
@@ -844,6 +969,12 @@ Validation:
 
 - local single-host lifecycle path is unchanged and does not instantiate
   gateway/relay/provider credentials;
+- qemu-media unsupported guest features fail before side effects through the
+  shared capability-denial protocol;
+- capability-denial DTOs round-trip through generated schemas without
+  collapsing distinct denial reasons into opaque provider errors;
+- qemu-media autostart/manual-only reasons are visible through status/doctor
+  without starting the runtime;
 - provider-managed sandbox paths use provider exec/log/display subsets and
   do not pretend to be local guestd VMs;
 - capability denial is covered by unit/contract tests.
@@ -861,8 +992,9 @@ from doing unbounded blocking I/O.
 Tasks:
 
 1. Inventory every daemon, broker, guest-control, gateway, relay, provider,
-   metrics, and CLI path that performs filesystem, socket, process, DNS/HTTP,
-   JSON parse/read, or broker IPC work.
+   metrics, CLI, qemu-media/QMP, terminal streaming, and persistent-shell path
+   that performs filesystem, socket, process, DNS/HTTP, JSON parse/read,
+   guest-control, shpool helper, or broker IPC work.
 2. Classify each operation by owner and execution class:
    - async non-blocking socket I/O;
    - bounded blocking filesystem/process work;
@@ -903,12 +1035,22 @@ Tasks:
    detached sleep loops.
 11. Classify subprocess execution sites. Host mutation commands such as
    `systemctl`, `mkfs`, `nft`, NetworkManager tools, detached exec
-   reconciliation, and activation helpers either become async subprocesses,
-   broker-owned blocking work, or pure Rust operations with explicit
-   backpressure.
+   reconciliation, persistent-shell helper processes, qemu-media QEMU/QMP
+   readiness helpers, and activation helpers either become async subprocesses,
+   broker-owned blocking work, actor/worker-owned process work, or pure Rust
+   operations with explicit backpressure.
 12. Move broad supervisor state and pidfd/task ledgers toward actor ownership
    so mutation is serialized by the owner task instead of guarded by global
    synchronous mutexes that can be touched by blocking worker code.
+13. Extract terminal-v1 as a shared owner model for interactive exec and shell:
+   stdin chunk offsets, output cursors, resize sequencing, raw-mode guards,
+   owner teardown, attach slot accounting, force/detach/kill semantics, and
+   slow-reader/output-gap handling live in one substrate with adapters for the
+   distinct public contracts.
+14. Keep guestd shell helper management off async hot paths: bounded management
+   frames, bounded diagnostic streams, pidfd-backed helper lifecycle, and
+   shpool daemon readiness/adoption use explicit owners and cancellation
+   paths.
 
 Primary targets:
 
@@ -916,6 +1058,7 @@ Primary targets:
 - `packages/nixlingd/src/autostart.rs`;
 - `packages/nixlingd/src/concurrency.rs`;
 - `packages/nixlingd/src/exec_session*.rs`;
+- `packages/nixlingd/src/shell*`;
 - `packages/nixlingd/src/guest_control_bridge.rs`;
 - `packages/nixlingd/src/guest_control_*`;
 - `packages/nixlingd/src/supervisor/*`;
@@ -927,7 +1070,9 @@ Primary targets:
 - `packages/nixling-gateway-runtime/*`;
 - `packages/nixling-provider-*`;
 - `packages/nixling-constellation-*`;
-- `packages/nixling-core/src/bundle_resolver.rs`.
+- `packages/nixling-core/src/bundle_resolver.rs`;
+- `packages/nixling-guestd/src/service.rs`;
+- `packages/nixling-guest-shell-runner/*` once introduced.
 
 Validation:
 
@@ -938,11 +1083,19 @@ Validation:
 - every long-running stream/relay/task path has cancellation and bounded
   queue/backpressure coverage;
 - list/status/doctor hot paths use snapshots or cached reads with freshness
-  metadata where appropriate.
+  metadata where appropriate;
 - no nested Tokio runtime construction is used to service request-path async
   work;
 - subprocess sites have explicit execution-class coverage: async process,
-  actor/worker, broker-owned blocking op, or startup/reconcile only.
+  actor/worker, broker-owned blocking op, or startup/reconcile only;
+- terminal-v1 tests prove exec and shell share streaming semantics without
+  merging their public lifecycle contracts;
+- terminal-v1 tests prove stdout/stderr/output rings, resize events, cursor
+  state, detach/force/kill notifications, and slow-reader/output-gap handling
+  use bounded queues and close cleanly on disconnect;
+- shell helper stream caps, management framing, pidfd teardown, and shpool
+  readiness/adoption are covered by unit, binary, or VM tests appropriate to
+  the Linux boundary being exercised.
 
 Exit criteria:
 
@@ -975,6 +1128,21 @@ Tasks:
    code does not duplicate kernel traversal.
 5. Keep expensive observability scraping off command-response paths; surface
    cached health with timestamps and explicit freshness.
+6. Cache static runtime capability records and service specs by bundle hash so
+   list/status/doctor do not re-read provider-specific artifacts to explain
+   qemu-media unsupported operations or persistent-shell availability.
+7. Keep terminal streaming hot paths allocation- and lock-conscious: cursor
+   state, attach slots, and resize events are owned by session actors rather
+   than repeatedly walking global daemon maps.
+8. Keep instrumentation and exporters isolated from core lifecycle. Scrape
+   failures, exporter timeouts, stale-cache reads, helper diagnostic failures,
+   and provider telemetry errors must surface degraded/freshness state without
+   crashing the daemon, blocking lifecycle requests, or poisoning cached health.
+9. Bound telemetry cardinality and retention for new runtimes. Persistent shell
+   session names, attach ids, shell instance ids, QMP object ids, physical media
+   selectors, host media paths, image paths, registry paths, and helper log
+   paths are not metric labels; helper diagnostics and logs are byte-capped and
+   rotated or size-limited before they can persist indefinitely.
 
 Primary targets:
 
@@ -992,7 +1160,13 @@ Validation:
 - broker audit remains per typed operation;
 - batched operations cannot create unbounded audit/log cardinality or burst
   volume;
-- list/status/doctor output includes freshness where cached health is used.
+- list/status/doctor output includes freshness where cached health is used;
+- cached runtime/shell capability reads cannot dispatch stale bundle data after
+  host switch.
+- exporter and scrape failures degrade only the relevant health surface and do
+  not block VM lifecycle operations;
+- metric and log tests reject shell session names, QMP object ids, media paths,
+  and helper paths as labels or unbounded fields.
 
 Exit criteria:
 
@@ -1016,6 +1190,11 @@ Tasks:
    surfaces as the code.
 5. Keep process markers out of shipped consumer docs and released changelog
    sections.
+6. Describe qemu-media as a narrow local runtime with explicit unsupported
+   capabilities, not as a general NixOS VM mode or USBIP replacement.
+7. Describe persistent shell as a first-class `nixling shell` UX over
+   guest-control and shpool-backed guest state, not as SSH, tmux/screen, or a
+   public shpool protocol.
 
 Primary targets:
 
@@ -1024,7 +1203,9 @@ Primary targets:
 - `docs/reference/*`;
 - `examples/*`;
 - `templates/default/*`;
-- `CHANGELOG.md`.
+- `CHANGELOG.md`;
+- ADR 0036, ADR 0037, and ADR 0038 cross-references when shipped docs describe
+  their surfaces.
 
 Validation:
 
@@ -1046,11 +1227,14 @@ Tasks:
 
 1. Inventory every `unsafe` block, `unsafe fn`, `unsafe impl`, and
    `allow(unsafe_code)` in tracked Rust code. The initial audit starts with
-   the broker FFI quarantine and tests plus the host activation helper:
+   the broker FFI quarantine and tests plus the host activation helper; when
+   the persistent-shell helper lands, include its prelude/libshpool boundary in
+   the same inventory:
    - `packages/nixling-priv-broker/src/sys.rs`;
    - `packages/nixling-priv-broker/src/seccomp_compile_tests.rs`;
    - `packages/nixling-priv-broker/tests/socket_activation.rs`;
-   - `packages/nixling-host-activation-helper/src/main.rs`.
+   - `packages/nixling-host-activation-helper/src/main.rs`;
+   - `packages/nixling-guest-shell-runner/*`.
 2. For each site, choose one disposition:
    - replace with a maintained safe API (`rustix`, `nix`, `capctl`, or another
      focused crate);
@@ -1077,6 +1261,24 @@ Tasks:
    modules unless the call is routed through the approved task model
    (`spawn_blocking`, actor/worker, broker op, or startup/reconcile phase)
    with a bounded queue/concurrency limit.
+8. Treat `libshpool::run`, helper privilege-drop preludes, pidfd acquisition,
+   fd cleanup, terminal controlling-tty setup, and process-global environment
+   mutation as unsafe-boundary work even when the Rust `unsafe` keyword is
+   hidden inside an upstream crate. The ADR/module contract must name the
+   process isolation and test evidence that keep guestd and daemon runtime
+   workers safe.
+9. QEMU media fd paths use close-on-exec defaults, explicit ownership transfer,
+   and deterministic cleanup. Fds opened by the broker are `O_CLOEXEC` until the
+   deliberate QMP handoff, and any failed handoff closes the fd before the next
+   cancellation point.
+10. Persistent-shell daemon adoption is PID-reuse-safe. guestd may use pidfds,
+    systemd unit identity, or another kernel-backed identity proof, but it must
+    never treat a numeric pid alone as authority after a helper exits or guestd
+    restarts.
+11. Helper preludes reset inherited signal masks and dispositions where needed,
+    establish the intended process/session/controlling-terminal relationship,
+    and verify the final non-root credential/capability state before touching
+    the shpool socket or spawning descendants.
 
 Primary targets:
 
@@ -1084,6 +1286,7 @@ Primary targets:
 - `packages/nixling-priv-broker/src/seccomp_compile_tests.rs`;
 - `packages/nixling-priv-broker/tests/socket_activation.rs`;
 - `packages/nixling-host-activation-helper/src/main.rs`;
+- `packages/nixling-guest-shell-runner/*` once introduced;
 - `packages/*/Cargo.toml` lint settings;
 - `packages/nixling-contract-tests/tests/policy_*.rs`.
 
@@ -1100,7 +1303,12 @@ Validation:
   syscall, or process semantics;
 - no production crate broadens `allow(unsafe_code)` beyond the quarantine;
 - blocking-I/O policy coverage rejects new unbounded sync filesystem,
-  process, network, or JSON reads in request/async hot paths.
+  process, network, or JSON reads in request/async hot paths;
+- the persistent-shell helper remains the only place that may call shpool's
+  process-global entrypoints, and guestd never calls them in-process;
+- tests prove helper process-global side effects, including signal handling,
+  environment mutation, tracing setup, daemonization, and stdio/fd changes, do
+  not leak back into guestd or daemon runtime workers.
 
 Exit criteria:
 
@@ -1190,6 +1398,10 @@ These targets are good first compatibility-removal and consolidation inputs:
 | Shell policy checks that parse source | Rust contract/policy tests. |
 | Provider dependencies on local-only path | Feature-gated/provider-isolated compile graph. |
 | Ambiguous crate/module/type names | Concern-first naming taxonomy that separates host, guest, gateway, provider, constellation, daemon, broker, and CLI ownership. |
+| Duplicated local runtime status paths | One provider-neutral runtime/service status, capability, denial, and stopped-state contract. |
+| qemu-media enrollment compatibility | Start-time boot media resolution plus runtime QMP hotplug behind a qemu-media adapter. |
+| Separate exec and shell terminal machinery | One terminal-v1 substrate with distinct exec and shell public adapters. |
+| Excluded helper workspace drift | Explicit per-workspace justification and gate wiring for unsafe/static/supply-chain boundaries. |
 | Example/template historical comments | Current-model examples with history moved to ADRs. |
 
 ## Anti-goals
@@ -1201,6 +1413,16 @@ These targets are good first compatibility-removal and consolidation inputs:
 - Do not replace many small explicit broker ops with one unstructured
   "run shell" or "apply path" escape hatch.
 - Do not introduce a second v2 architecture beside ADR 0032.
+- Do not introduce a second local runtime architecture beside ADR 0037. QEMU
+  media and Cloud Hypervisor/crosvm can have different adapters and
+  capabilities, but lifecycle/status/denial/reap vocabulary is shared.
+- Do not turn qemu-media into a general NixOS workload runtime by silently
+  adding guest-control, store sync, SSH, or observability assumptions it does
+  not support.
+- Do not expose shpool's CLI, config language, templates, or protocol as
+  nixling's public shell contract.
+- Do not reintroduce SSH, tmux/screen management, or broker shell execution to
+  implement persistent shells.
 - Do not add new shell gates for efficiency measurement; use existing
   Layer-1 test types or repository-local generated reports.
 - Do not use line count alone as a success metric. Deleting useful
@@ -1224,6 +1446,12 @@ Positive:
 - The v2 provider architecture gets simpler because providers plug into
   existing lifecycle/storage/display/transport contracts instead of
   inventing parallel paths.
+- The local runtime architecture gets simpler because qemu-media, Cloud
+  Hypervisor/crosvm, and sidecars share status/capability/denial semantics
+  while keeping backend mechanisms private.
+- Interactive exec and persistent shell share terminal streaming mechanics
+  without weakening exec's connection-owned command contract or shell's
+  persistent-session contract.
 - Local-only users pay less compile and runtime cost for cloud/provider
   experiments.
 - Generated-artifact failures become narrower and cheaper to fix.
@@ -1248,6 +1476,11 @@ Negative:
   requires careful CI wiring to avoid accidental coverage gaps.
 - Compile-graph feature gating can make local development more sensitive to
   missing feature flags if not documented well.
+- Excluded helper workspaces prevent unsafe/static-link risk from leaking into
+  the main workspace, but they also add validation surfaces that must be kept
+  wired explicitly.
+- Provider-neutral runtime status can hide necessary backend details if the
+  adapter-private/public-contract boundary is not reviewed carefully.
 - Moving blocking work behind actors or bounded pools can reveal backpressure
   and timeout choices that were previously implicit.
 - Removing unsafe wrappers may require dependency updates or waiting for safe
@@ -1265,6 +1498,9 @@ Each implementation wave must include:
    architecture or behavior;
 5. no new compatibility surface; update callers and delete old paths in the
    same wave instead.
+6. explicit handling for any ADR accepted since this roadmap whose components
+   add runtime kinds, helpers, workspaces, public commands, generated
+   contracts, or unsafe/task-model boundaries.
 
 Panel reviewers should treat this ADR as a ratchet: a wave that only adds a
 new abstraction without deleting duplication has not satisfied the roadmap,
