@@ -25,8 +25,9 @@
 //! - `autostart_status` — read daemon-persisted
 //!   `autostart-report.json`. Report the degraded + failed count.
 //! - `graceful_shutdown_status` — read daemon-persisted
-//!   `shutdown-degraded.json`. Report uncleared graceful-shutdown degraded
-//!   markers and bounded remediation.
+//!   `shutdown-degraded.json` and `pidfd-table.json`. Report uncleared
+//!   graceful-shutdown degraded markers, bounded remediation, and live
+//!   primary-VMM inventory for lifecycle follow-up.
 //! - `storage_lifecycle_report` — read daemon-persisted
 //!   `storage-lifecycle-report.json`. Report storage/restart/sync
 //!   contract drift and the safe remediation command.
@@ -169,7 +170,7 @@ pub fn run_doctor(context: &Context) -> DoctorReport {
     check_usbipd_runners(&pidfd_entries, &mut report);
     check_kernel_module_matrix(&context.daemon_state_dir, &mut report);
     check_autostart_status(&context.daemon_state_dir, &mut report);
-    check_graceful_shutdown_status(&context.daemon_state_dir, &mut report);
+    check_graceful_shutdown_status(&context.daemon_state_dir, &pidfd_entries, &mut report);
     check_storage_lifecycle_report(&context.daemon_state_dir, &mut report);
     // v1.2 invariant probes
     check_seccomp_bpf_loaded(&pidfd_entries, &mut report);
@@ -850,15 +851,40 @@ struct PersistedShutdownDegradedMarker {
     elapsed_ms: u64,
 }
 
-fn check_graceful_shutdown_status(daemon_state_dir: &Path, report: &mut DoctorReport) {
+fn check_graceful_shutdown_status(
+    daemon_state_dir: &Path,
+    pidfd_entries: &PidfdEntries,
+    report: &mut DoctorReport,
+) {
     let path = daemon_state_dir.join("shutdown-degraded.json");
+    let live_primary_vmm = live_primary_vmm_entries(pidfd_entries);
+    if matches!(
+        pidfd_entries.state,
+        PidfdState::ParseError(_) | PidfdState::UnreadableDir
+    ) {
+        report.push_with_data(
+            "graceful-shutdown-status",
+            DoctorStatus::Warn,
+            "pidfd-table inspection failed; graceful-shutdown live state not fully verifiable",
+            json!({
+                "livePrimaryVmmCount": live_primary_vmm.len(),
+                "livePrimaryVms": live_primary_vmm,
+            }),
+        );
+        return;
+    }
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            report.push(
+            report.push_with_data(
                 "graceful-shutdown-status",
                 DoctorStatus::Pass,
                 "no graceful-shutdown degraded marker present",
+                json!({
+                    "livePrimaryVmmCount": live_primary_vmm.len(),
+                    "livePrimaryVms": live_primary_vmm,
+                    "markers": [],
+                }),
             );
             return;
         }
@@ -883,10 +909,16 @@ fn check_graceful_shutdown_status(daemon_state_dir: &Path, report: &mut DoctorRe
         }
     };
     if parsed.markers.is_empty() {
-        report.push(
+        report.push_with_data(
             "graceful-shutdown-status",
             DoctorStatus::Pass,
             "graceful-shutdown degraded marker report is empty",
+            json!({
+                "schemaVersion": parsed.schema_version,
+                "livePrimaryVmmCount": live_primary_vmm.len(),
+                "livePrimaryVms": live_primary_vmm,
+                "markers": [],
+            }),
         );
         return;
     }
@@ -920,8 +952,28 @@ fn check_graceful_shutdown_status(daemon_state_dir: &Path, report: &mut DoctorRe
             "fail": fail_count,
             "warn": warn_count,
             "markers": parsed.markers,
+            "livePrimaryVmmCount": live_primary_vmm.len(),
+            "livePrimaryVms": live_primary_vmm,
         }),
     );
+}
+
+fn live_primary_vmm_entries(pidfd_entries: &PidfdEntries) -> Vec<Value> {
+    pidfd_entries
+        .entries
+        .iter()
+        .filter(|entry| {
+            let role = entry.role.as_str();
+            role == "ch-runner" || role == "qemu-media"
+        })
+        .map(|entry| {
+            json!({
+                "vm": entry.vm,
+                "role": entry.role,
+                "pid": entry.pid,
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------

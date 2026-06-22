@@ -108,8 +108,8 @@ VM/role details remain in `data.issues[]` only.
 | Field | Value |
 |-------|-------|
 | Invariant | No VM has an uncleared degraded shutdown marker |
-| Source | `<daemon-state-dir>/shutdown-degraded.json` plus live lifecycle state |
-| Pass | No marker exists and no adopted primary VMM is in a guest-stopped/empty-VMM state |
+| Source | `<daemon-state-dir>/shutdown-degraded.json` plus primary VMM entries from `<daemon-state-dir>/pidfd-table.json` |
+| Pass | No marker exists; JSON output includes any live primary VMM inventory in `livePrimaryVms[]` for follow-up inspection |
 | Warn | Last stop used explicit `--force` (operator intent) or a provider API was unavailable but cleanup completed |
 | Fail | Graceful shutdown timed out, empty-VMM cleanup failed, or a resource-holding runner/cgroup stayed populated after bounded cleanup |
 

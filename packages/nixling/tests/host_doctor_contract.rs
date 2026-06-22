@@ -46,6 +46,14 @@ const PIDFD_TABLE_JSON: &str = r#"{
   ]
 }"#;
 
+const PIDFD_TABLE_PRIMARY_VMS_JSON: &str = r#"{
+  "entries": [
+    { "vm": "corp-vm",   "role": "ch-runner",  "pid": 2001, "startTimeTicks": 7 },
+    { "vm": "media-vm",  "role": "qemu-media", "pid": 2002, "startTimeTicks": 8 },
+    { "vm": "media-vm",  "role": "virtiofsd",  "pid": 2003, "startTimeTicks": 8 }
+  ]
+}"#;
+
 const KERNEL_MODULE_CLEAN_JSON: &str = r#"{
   "required": ["kvm_intel"],
   "present": ["kvm_intel"],
@@ -286,6 +294,42 @@ fn host_doctor_pidfd_table_reports_otel_and_usbipd_runners() {
         usbipd["data"]["count"].as_u64(),
         Some(2),
         "two per-env usbipd runners expected"
+    );
+}
+
+#[test]
+fn host_doctor_graceful_shutdown_reports_live_primary_vmm_inventory() {
+    let sandbox = Sandbox::new();
+    sandbox.write_state("pidfd-table.json", PIDFD_TABLE_PRIMARY_VMS_JSON);
+
+    let (_code, env) = sandbox.run_doctor_json();
+    let graceful = check(&env, "graceful-shutdown-status");
+    assert_eq!(
+        graceful["status"], "pass",
+        "absent degraded marker should still be pass while reporting live primary VMMs"
+    );
+    assert_eq!(
+        graceful["data"]["livePrimaryVmmCount"], 2,
+        "graceful-shutdown-status must inspect pidfd-table primary VMM state"
+    );
+    let live_vms = graceful["data"]["livePrimaryVms"]
+        .as_array()
+        .expect("livePrimaryVms array");
+    assert!(
+        live_vms.iter().any(|entry| entry["vm"] == "corp-vm"
+            && entry["role"] == "ch-runner"
+            && entry["pid"] == 2001),
+        "livePrimaryVms missing ch-runner entry: {live_vms:#?}"
+    );
+    assert!(
+        live_vms.iter().any(|entry| entry["vm"] == "media-vm"
+            && entry["role"] == "qemu-media"
+            && entry["pid"] == 2002),
+        "livePrimaryVms missing qemu-media entry: {live_vms:#?}"
+    );
+    assert!(
+        live_vms.iter().all(|entry| entry["role"] != "virtiofsd"),
+        "livePrimaryVms must not include sidecars: {live_vms:#?}"
     );
 }
 
