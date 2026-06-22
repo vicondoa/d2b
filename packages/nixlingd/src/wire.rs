@@ -448,29 +448,6 @@ pub fn hello_ok(
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{Request, parse_request};
-    use nixling_ipc::public_wire::ShellOp;
-
-    #[test]
-    fn shell_request_parses_as_typed_shell_op() {
-        let frame = br#"{"type":"shell","op":"list","args":{"vm":"corp-vm"}}"#;
-        let request = parse_request(frame).expect("shell request parses");
-        match request {
-            Request::Shell(ShellOp::List(args)) => assert_eq!(args.vm, "corp-vm"),
-            other => panic!("unexpected request: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn shell_request_rejects_invalid_shape_before_dispatch() {
-        let frame = br#"{"type":"shell","op":"kill","args":{"vm":"corp-vm"}}"#;
-        let error = parse_request(frame).expect_err("kill without name rejects");
-        assert_eq!(error.kind(), "wire-invalid-frame");
-    }
-}
-
 pub fn hello_rejected(error: &TypedError) -> HelloRejectedFrame {
     HelloRejectedFrame {
         type_name: "helloRejected",
@@ -632,5 +609,28 @@ fn map_parse_error(error: serde_json::Error) -> TypedError {
         TypedError::WireIfNameInvalid { detail }
     } else {
         TypedError::WireInvalidFrame { detail }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Request, parse_request};
+    use nixling_ipc::public_wire::ShellOp;
+
+    #[test]
+    fn shell_request_parses_as_typed_shell_op() {
+        let frame = br#"{"type":"shell","op":"list","args":{"vm":"corp-vm"}}"#;
+        let request = parse_request(frame).expect("shell request parses");
+        match request {
+            Request::Shell(ShellOp::List(args)) => assert_eq!(args.vm, "corp-vm"),
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shell_request_rejects_invalid_shape_before_dispatch() {
+        let frame = br#"{"type":"shell","op":"kill","args":{"vm":"corp-vm"}}"#;
+        let error = parse_request(frame).expect_err("kill without name rejects");
+        assert_eq!(error.kind(), "wire-invalid-frame");
     }
 }
