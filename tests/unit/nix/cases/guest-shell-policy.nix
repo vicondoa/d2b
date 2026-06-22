@@ -13,7 +13,7 @@ in
 {
   "guest-shell-policy/enabled-positive" = {
     expr = shell "enabled";
-    expected = "{\"defaultName\":\"default\",\"maxAttached\":1,\"maxSessions\":8,\"scenario\":\"enabled\"}";
+    expected = "{\"defaultName\":\"default\",\"linger\":true,\"maxAttached\":1,\"maxSessions\":8,\"scenario\":\"enabled\"}";
   };
 
   "guest-shell-policy/defaults-positive" = {
@@ -23,7 +23,7 @@ in
 
   "guest-shell-policy/custom-positive" = {
     expr = shell "custom";
-    expected = "{\"defaultName\":\"ops_1\",\"maxAttached\":2,\"maxSessions\":16,\"scenario\":\"custom\"}";
+    expected = "{\"defaultName\":\"ops_1\",\"linger\":true,\"maxAttached\":2,\"maxSessions\":16,\"scenario\":\"custom\"}";
   };
 
   "guest-shell-policy/shell-no-control-rejected" = {

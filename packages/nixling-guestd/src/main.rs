@@ -78,6 +78,8 @@ fn parse_serve_args(
     let mut shell_default_name = String::from("default");
     let mut shell_max_sessions: u32 = 8;
     let mut shell_max_attached: u32 = 1;
+    let mut shell_runner_path: Option<PathBuf> = None;
+    let mut shell_systemctl_path: Option<PathBuf> = None;
     while let Some(arg) = iter.next() {
         match arg.to_str() {
             Some("--vm-id") => {
@@ -133,6 +135,12 @@ fn parse_serve_args(
                     .filter(|value| (1..=64).contains(value))
                     .ok_or(nixling_guestd::service::GuestdServiceError::Ttrpc)?;
             }
+            Some("--shell-runner-path") => {
+                shell_runner_path = Some(parse_abs_path(iter.next())?);
+            }
+            Some("--shell-systemctl-path") => {
+                shell_systemctl_path = Some(parse_abs_path(iter.next())?);
+            }
             Some("--detached-max-runtime-sec") => {
                 detached_max_runtime_sec = iter
                     .next()
@@ -178,6 +186,8 @@ fn parse_serve_args(
             default_name: shell_default_name,
             max_sessions: shell_max_sessions,
             max_attached: shell_max_attached,
+            runner_path: shell_runner_path,
+            systemctl_path: shell_systemctl_path,
         })
     } else {
         None

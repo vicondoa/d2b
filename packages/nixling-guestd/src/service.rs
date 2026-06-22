@@ -50,6 +50,7 @@ use crate::{
     exec_linux::LinuxProcessSpawner,
     exec_pty::linux::LinuxPtyProcessSpawner,
     generated::guest_control_ttrpc::{GuestControl, create_guest_control},
+    shell::{ShellRuntime, ShellRuntimeConfig},
 };
 
 /// Absolute path to the guest login shell (NixOS system profile). Interactive
@@ -81,6 +82,7 @@ type SharedExec = Arc<RuntimeExec>;
 /// The cross-connection detached-exec registry, present only when the host
 /// wired detached runtime constants into the guest unit.
 type SharedDetached = Option<Arc<DetachedRegistry>>;
+type SharedShell = Arc<ShellRuntime>;
 
 const TOKEN_FILE_NAME: &str = "guest_control_token";
 const MAX_TOKEN_BYTES: usize = 4096;
@@ -162,6 +164,8 @@ pub struct ShellPolicy {
     pub default_name: String,
     pub max_sessions: u32,
     pub max_attached: u32,
+    pub runner_path: Option<PathBuf>,
+    pub systemctl_path: Option<PathBuf>,
 }
 
 impl ShellPolicy {
@@ -171,6 +175,8 @@ impl ShellPolicy {
             default_name: "default".to_owned(),
             max_sessions: 8,
             max_attached: 1,
+            runner_path: None,
+            systemctl_path: None,
         }
     }
 }
@@ -340,6 +346,9 @@ pub struct CapabilitiesConfig {
     /// Guest-side USBIP import lifecycle. Advertised only when the USBIP guest
     /// component wired an explicit `usbip` binary path into guestd.
     pub usbip_import: bool,
+    pub shell_attached: bool,
+    pub shell_management: bool,
+    pub shell_force_attach: bool,
 }
 
 /// Derive the advertised capability set from runtime presence.
@@ -357,6 +366,7 @@ fn derive_capabilities_config(
     exec_tty: bool,
     read_guest_file: bool,
     usbip_import: bool,
+    shell_usable: bool,
 ) -> CapabilitiesConfig {
     CapabilitiesConfig {
         exec_attached: exec_paths_present,
@@ -365,6 +375,9 @@ fn derive_capabilities_config(
         exec_tty,
         read_guest_file,
         usbip_import,
+        shell_attached: shell_usable,
+        shell_management: shell_usable,
+        shell_force_attach: shell_usable,
     }
 }
 
@@ -383,10 +396,12 @@ pub fn build_runtime_auth_core(
     ))
 }
 
-struct ServiceRuntime {
+#[derive(Clone)]
+pub struct ServiceRuntime {
     auth: SharedAuthCore,
     exec: SharedExec,
     detached: SharedDetached,
+    shell: SharedShell,
     guest_config_path: Option<PathBuf>,
     usbip_path: Option<PathBuf>,
 }
@@ -477,6 +492,18 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
         .as_ref()
         .filter(|path| probe.path_is_file(path))
         .cloned();
+    let shell_runtime_usable = config.shell_policy.enabled
+        && exec_enabled_user
+        && config
+            .shell_policy
+            .runner_path
+            .as_ref()
+            .is_some_and(|path| probe.path_is_file(path))
+        && config
+            .shell_policy
+            .systemctl_path
+            .as_ref()
+            .is_some_and(|path| probe.path_is_file(path));
 
     let detached: SharedDetached = match (config.detached.as_ref(), exec_user.clone(), exec_uid) {
         (Some(detached_cfg), Some(user), Some(uid))
@@ -533,6 +560,15 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
             .with_interactive_ceiling(ceiling);
     }
     let exec: SharedExec = Arc::new(exec_runtime);
+    let shell: SharedShell = if shell_runtime_usable {
+        Arc::new(ShellRuntime::enabled(ShellRuntimeConfig {
+            default_name: config.shell_policy.default_name.clone(),
+            max_sessions: config.shell_policy.max_sessions,
+            max_attached: config.shell_policy.max_attached,
+        }))
+    } else {
+        Arc::new(ShellRuntime::disabled())
+    };
 
     let capabilities = derive_capabilities_config(
         // Non-TTY attached exec (and its required ReadOutput streaming) is served
@@ -542,6 +578,7 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
         exec.tty_usable(),
         config.guest_config_path.is_some(),
         usbip_path.is_some(),
+        shell.is_enabled(),
     );
 
     let auth = Arc::new(Mutex::new(build_runtime_auth_core(
@@ -553,6 +590,7 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
         auth,
         exec,
         detached,
+        shell,
         guest_config_path,
         usbip_path,
     })
@@ -560,13 +598,7 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
 
 pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceError> {
     let vm_id = config.vm_id.clone();
-    let ServiceRuntime {
-        auth,
-        exec,
-        detached,
-        guest_config_path,
-        usbip_path,
-    } = prepare_service_runtime_with_probe(config, &ProductionStartupProbe).await?;
+    let runtime = prepare_service_runtime_with_probe(config, &ProductionStartupProbe).await?;
     let listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, GUEST_CONTROL_AUTH_PORT))
         .map_err(|_| GuestdServiceError::Ttrpc)?;
 
@@ -575,24 +607,11 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
             tokio::time::sleep(Duration::from_millis(100)).await;
             continue;
         };
-        let auth = Arc::clone(&auth);
-        let exec = Arc::clone(&exec);
-        let detached = detached.clone();
+        let runtime = runtime.clone();
         let vm_id = vm_id.clone();
-        let guest_config_path = guest_config_path.clone();
-        let usbip_path = usbip_path.clone();
         tokio::spawn(async move {
             if let Ok(context) = connection_context(vm_id, peer_addr.cid()) {
-                let _ = run_single_connection(
-                    stream,
-                    auth,
-                    exec,
-                    detached,
-                    context,
-                    guest_config_path,
-                    usbip_path,
-                )
-                .await;
+                let _ = run_single_connection(stream, runtime, context).await;
             }
         });
     }
@@ -685,26 +704,27 @@ fn new_connection_instance() -> Result<[u8; CONNECTION_INSTANCE_LEN], GuestdServ
 
 pub async fn run_single_connection<S>(
     stream: S,
-    auth: SharedAuthCore,
-    exec: SharedExec,
-    detached: SharedDetached,
+    runtime: ServiceRuntime,
     context: AuthConnectionContext,
-    guest_config_path: Option<PathBuf>,
-    usbip_path: Option<PathBuf>,
 ) -> Result<(), GuestdServiceError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
 {
-    let cleanup = ConnectionCleanup::new(Arc::clone(&auth), Arc::clone(&exec), context.clone());
+    let cleanup = ConnectionCleanup::new(
+        Arc::clone(&runtime.auth),
+        Arc::clone(&runtime.exec),
+        context.clone(),
+    );
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
     let wrapped = CleanupStream::new(stream, cleanup.clone(), done_tx);
     let listener = ttrpc::r#async::transport::Listener::new(stream::once(async move {
         Ok::<_, std::io::Error>(wrapped)
     }));
     let service = Arc::new(
-        GuestControlService::new(auth, exec, detached, context)
-            .with_guest_config_path(guest_config_path)
-            .with_usbip_path(usbip_path),
+        GuestControlService::new(runtime.auth, runtime.exec, runtime.detached, context)
+            .with_shell_runtime(runtime.shell)
+            .with_guest_config_path(runtime.guest_config_path)
+            .with_usbip_path(runtime.usbip_path),
     );
     let mut server = ttrpc::r#async::Server::new()
         .add_listener(listener)
@@ -724,6 +744,7 @@ pub struct GuestControlService {
     auth: SharedAuthCore,
     exec: SharedExec,
     detached: SharedDetached,
+    shell: SharedShell,
     context: AuthConnectionContext,
     // Per-connection interactive-stdin backpressure budgets (shared across the
     // Arc-cloned service for this connection): the count of in-flight
@@ -751,6 +772,7 @@ impl GuestControlService {
             auth,
             exec,
             detached,
+            shell: Arc::new(ShellRuntime::disabled()),
             context,
             write_stdin_handlers: Arc::new(AtomicU64::new(0)),
             write_stdin_bytes: Arc::new(AtomicU64::new(0)),
@@ -770,6 +792,11 @@ impl GuestControlService {
     /// `UsbipImport`.
     pub fn with_usbip_path(mut self, path: Option<PathBuf>) -> Self {
         self.usbip_path = path;
+        self
+    }
+
+    pub fn with_shell_runtime(mut self, shell: SharedShell) -> Self {
+        self.shell = shell;
         self
     }
 
@@ -1042,12 +1069,6 @@ fn write_stdin_error(error: ExecError) -> pb::WriteStdinResponse {
 
 fn shell_disabled_error() -> pb::GuestControlError {
     guest_error(pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED)
-}
-
-fn shell_detach_disabled_response() -> pb::ShellDetachResponse {
-    let mut response = pb::ShellDetachResponse::new();
-    response.error = MessageField::some(shell_disabled_error());
-    response
 }
 
 fn terminal_metadata_common(
@@ -1571,10 +1592,7 @@ impl GuestControl for GuestControlService {
     ) -> ttrpc::Result<pb::ShellAttachResponse> {
         self.require_authenticated()?;
         self.validate_metadata(request.metadata.as_ref())?;
-        let mut response = pb::ShellAttachResponse::new();
-        response.state = EnumOrUnknown::new(pb::ShellState::SHELL_STATE_FEATURE_DISABLED);
-        response.error = MessageField::some(shell_disabled_error());
-        Ok(response)
+        Ok(self.shell.attach(request))
     }
 
     async fn shell_list(
@@ -1584,10 +1602,7 @@ impl GuestControl for GuestControlService {
     ) -> ttrpc::Result<pb::ShellListResponse> {
         self.require_authenticated()?;
         self.validate_metadata(request.metadata.as_ref())?;
-        let mut response = pb::ShellListResponse::new();
-        response.default_name = "default".to_owned();
-        response.error = MessageField::some(shell_disabled_error());
-        Ok(response)
+        Ok(self.shell.list())
     }
 
     async fn shell_detach(
@@ -1597,7 +1612,7 @@ impl GuestControl for GuestControlService {
     ) -> ttrpc::Result<pb::ShellDetachResponse> {
         self.require_authenticated()?;
         self.validate_metadata(request.metadata.as_ref())?;
-        Ok(shell_detach_disabled_response())
+        Ok(self.shell.detach(request.name))
     }
 
     async fn shell_kill(
@@ -1607,11 +1622,7 @@ impl GuestControl for GuestControlService {
     ) -> ttrpc::Result<pb::ShellKillResponse> {
         self.require_authenticated()?;
         self.validate_metadata(request.metadata.as_ref())?;
-        let mut response = pb::ShellKillResponse::new();
-        response.name = request.name;
-        response.state = EnumOrUnknown::new(pb::ShellState::SHELL_STATE_FEATURE_DISABLED);
-        response.error = MessageField::some(shell_disabled_error());
-        Ok(response)
+        Ok(self.shell.kill(request.name))
     }
 
     async fn shell_close_attach(
@@ -1621,7 +1632,12 @@ impl GuestControl for GuestControlService {
     ) -> ttrpc::Result<pb::ShellDetachResponse> {
         self.require_authenticated()?;
         self.validate_metadata(terminal_metadata_common(request.metadata.as_ref()))?;
-        Ok(shell_detach_disabled_response())
+        let session_id = request
+            .metadata
+            .as_ref()
+            .map(|metadata| metadata.session_id.as_str())
+            .unwrap_or("");
+        Ok(self.shell.close_attach(session_id))
     }
 
     async fn terminal_write_stdin(
@@ -2459,6 +2475,21 @@ impl RuntimeCapabilitiesProvider {
                 pb::GuestCapability::GUEST_CAPABILITY_USBIP_IMPORT,
             ));
         }
+        if config.shell_attached {
+            capabilities.capabilities.push(EnumOrUnknown::new(
+                pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED,
+            ));
+        }
+        if config.shell_management {
+            capabilities.capabilities.push(EnumOrUnknown::new(
+                pb::GuestCapability::GUEST_CAPABILITY_SHELL_MANAGEMENT,
+            ));
+        }
+        if config.shell_force_attach {
+            capabilities.capabilities.push(EnumOrUnknown::new(
+                pb::GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH,
+            ));
+        }
         capabilities.limits = MessageField::some(limits);
 
         let mut health = pb::HealthResponse::new();
@@ -2698,6 +2729,7 @@ mod tests {
                                 exec_tty,
                                 read_guest_file,
                                 usbip_import,
+                                false,
                             );
                             assert_eq!(
                                 cfg.exec_attached, cfg.exec_logs,
@@ -4236,6 +4268,77 @@ mod tests {
             .unwrap();
         assert!(!advertised(&without.capabilities.capabilities));
         assert!(!advertised(&without.health.capabilities));
+    }
+
+    #[test]
+    fn shell_capabilities_are_advertised_only_when_runtime_is_usable() {
+        let advertised = |caps: &[EnumOrUnknown<pb::GuestCapability>], cap: pb::GuestCapability| {
+            caps.iter().any(|c| c.enum_value().unwrap() == cap)
+        };
+        let with = RuntimeCapabilitiesProvider::new(CapabilitiesConfig {
+            shell_attached: true,
+            shell_management: true,
+            shell_force_attach: true,
+            ..CapabilitiesConfig::default()
+        })
+        .snapshot()
+        .unwrap();
+        for cap in [
+            pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED,
+            pb::GuestCapability::GUEST_CAPABILITY_SHELL_MANAGEMENT,
+            pb::GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH,
+        ] {
+            assert!(advertised(&with.capabilities.capabilities, cap));
+            assert!(advertised(&with.health.capabilities, cap));
+        }
+
+        let without = RuntimeCapabilitiesProvider::new(CapabilitiesConfig::default())
+            .snapshot()
+            .unwrap();
+        assert!(!advertised(
+            &without.capabilities.capabilities,
+            pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED
+        ));
+    }
+
+    #[tokio::test]
+    async fn shell_rpcs_attach_list_detach_and_kill_when_runtime_enabled() {
+        let runtime = Arc::new(ShellRuntime::enabled(ShellRuntimeConfig {
+            default_name: "default".to_owned(),
+            max_sessions: 2,
+            max_attached: 1,
+        }));
+        let service = test_service(61).with_shell_runtime(runtime);
+        authenticate(&service).await;
+        let ctx = ttrpc_context();
+
+        let mut attach = pb::ShellAttachRequest::new();
+        attach.metadata = metadata();
+        let attached = service.shell_attach(&ctx, attach).await.unwrap();
+        assert!(attached.error.is_none());
+        assert_eq!(attached.resolved_name, "default");
+        assert!(attached.session_id.is_some());
+
+        let mut list = pb::ShellListRequest::new();
+        list.metadata = metadata();
+        let listed = service.shell_list(&ctx, list).await.unwrap();
+        assert!(listed.error.is_none());
+        assert_eq!(listed.default_name, "default");
+        assert_eq!(listed.sessions.len(), 1);
+        assert!(listed.sessions[0].attached);
+
+        let mut detach = pb::ShellDetachRequest::new();
+        detach.metadata = metadata();
+        let detached = service.shell_detach(&ctx, detach).await.unwrap();
+        assert!(detached.error.is_none());
+        assert!(detached.detached);
+
+        let mut kill = pb::ShellKillRequest::new();
+        kill.metadata = metadata();
+        kill.name = "default".to_owned();
+        let killed = service.shell_kill(&ctx, kill).await.unwrap();
+        assert!(killed.error.is_none());
+        assert!(killed.killed);
     }
 
     #[test]

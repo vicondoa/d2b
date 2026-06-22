@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- Persistent shell runtime: started guestd-side shell session runtime scaffolding
+  with staged Nix/PAM/service wiring, in-memory admission/idempotency tests, and
+  fail-closed guest-control shell capability handling.
 - Persistent shell contracts: added staged default-off shell option, manifest,
   public/guest-control wire, and authz contract scaffolding for later runtime
   wiring.

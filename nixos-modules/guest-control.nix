@@ -261,6 +261,10 @@ in
                   + " --shell-default-name ${lib.escapeShellArg cfg.shell.defaultName}"
                   + " --shell-max-sessions ${toString cfg.shell.maxSessions}"
                   + " --shell-max-attached ${toString cfg.shell.maxAttached}"
+                  + lib.optionalString execEnabledUser
+                      " --shell-runner-path ${guestPackages.nixling-guest-shell-runner-static}/bin/nixling-guest-shell-runner"
+                  + lib.optionalString execEnabledUser
+                      " --shell-systemctl-path ${pkgs.systemd}/bin/systemctl"
                 );
             in
             "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}${usbipFlags}${shellFlags}";
@@ -269,6 +273,31 @@ in
           ];
         };
       };
+
+      nixling-shpool-daemon = lib.mkIf (cfg.shell.enable && cfg.exec.execUser != null) {
+        description = "nixling persistent shell pool daemon";
+        serviceConfig = {
+          Type = "exec";
+          User = cfg.exec.execUser;
+          PAMName = "nixling-shpool-daemon";
+          ExecStart =
+            "${guestPackages.nixling-guest-shell-runner-static}/bin/nixling-guest-shell-runner daemon"
+            + " --socket /run/user/%U/nixling-shpool.sock"
+            + " --home %h";
+          WorkingDirectory = "~";
+          KillMode = "control-group";
+        };
+      };
+    };
+
+    security.pam.services.nixling-shpool-daemon = lib.mkIf cfg.shell.enable {
+      startSession = true;
+      setEnvironment = true;
+      setLoginUid = true;
+    };
+
+    users.users = lib.mkIf (cfg.shell.enable && cfg.exec.execUser != null) {
+      ${cfg.exec.execUser}.linger = true;
     };
 
     # Detached exec runtime substrate (parent dir + slice), declared as

@@ -145,7 +145,11 @@ let
   };
 
   corpGuest = nixos.config.nixling._computed.corp-vm.config;
+
   guestdExecStart = corpGuest.systemd.services.nixling-guestd.serviceConfig.ExecStart or "";
+  shpoolService = corpGuest.systemd.services.nixling-shpool-daemon or null;
+  shpoolPam = corpGuest.security.pam.services.nixling-shpool-daemon or null;
+  aliceLinger = corpGuest.users.users.alice.linger or false;
   shellManifest = nixos.config.nixling.manifest.corp-vm.shell;
   opShell = nixos.config.nixling.manifest.corp-vm.runtime.operationCapabilities.guest.shell;
 
@@ -158,6 +162,18 @@ let
     assert lib.hasInfix "--shell-default-name default" guestdExecStart;
     assert lib.hasInfix "--shell-max-sessions 8" guestdExecStart;
     assert lib.hasInfix "--shell-max-attached 1" guestdExecStart;
+    assert lib.hasInfix "--shell-runner-path /nix/store/" guestdExecStart;
+    assert lib.hasInfix "/bin/nixling-guest-shell-runner" guestdExecStart;
+    assert lib.hasInfix "--shell-systemctl-path /nix/store/" guestdExecStart;
+    assert lib.hasInfix "/bin/systemctl" guestdExecStart;
+    assert shpoolService != null;
+    assert shpoolService.serviceConfig.User == "alice";
+    assert shpoolService.serviceConfig.PAMName == "nixling-shpool-daemon";
+    assert (shpoolService.wantedBy or [ ]) == [ ];
+    assert shpoolPam.startSession == true;
+    assert shpoolPam.setEnvironment == true;
+    assert shpoolPam.setLoginUid == true;
+    assert aliceLinger == true;
     assert shellManifest.enabled == true;
     assert shellManifest.defaultName == "default";
     assert shellManifest.maxSessions == 8;
@@ -168,10 +184,13 @@ let
       defaultName = shellManifest.defaultName;
       maxSessions = shellManifest.maxSessions;
       maxAttached = shellManifest.maxAttached;
+      linger = aliceLinger;
     };
 
   positiveDefaults =
     assert !(builtins.hasAttr "nixling-guestd" corpGuest.systemd.services);
+    assert shpoolService == null;
+    assert shpoolPam == null;
     assert shellManifest.enabled == false;
     assert shellManifest.defaultName == "default";
     assert shellManifest.maxSessions == 8;
@@ -190,6 +209,11 @@ let
     assert lib.hasInfix "--shell-default-name ops_1" guestdExecStart;
     assert lib.hasInfix "--shell-max-sessions 16" guestdExecStart;
     assert lib.hasInfix "--shell-max-attached 2" guestdExecStart;
+    assert lib.hasInfix "--shell-runner-path /nix/store/" guestdExecStart;
+    assert lib.hasInfix "--shell-systemctl-path /nix/store/" guestdExecStart;
+    assert shpoolService.serviceConfig.User == "alice";
+    assert shpoolPam.startSession == true;
+    assert aliceLinger == true;
     assert shellManifest.defaultName == "ops_1";
     assert shellManifest.maxSessions == 16;
     assert shellManifest.maxAttached == 2;
@@ -198,6 +222,7 @@ let
       defaultName = shellManifest.defaultName;
       maxSessions = shellManifest.maxSessions;
       maxAttached = shellManifest.maxAttached;
+      linger = aliceLinger;
     };
 in
 if scenario == "enabled" then
