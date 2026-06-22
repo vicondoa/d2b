@@ -2119,8 +2119,8 @@ fn render_daemon_audit_lines(lines: &[String], json_mode: bool) -> Result<(), Cl
     Ok(())
 }
 
-fn shell_gateway_target_failure(raw: &str, json: bool) -> Result<CliFailure, CliFailure> {
-    let exit_code = emit_host_error(
+fn shell_gateway_target_failure(raw: &str, json: bool) -> CliFailure {
+    match emit_host_error(
         &host_error_envelope(
             &format!("target not dispatchable on the host daemon: {raw}"),
             "usage",
@@ -2131,11 +2131,13 @@ fn shell_gateway_target_failure(raw: &str, json: bool) -> Result<CliFailure, Cli
             "docs/reference/error-codes.md#usage",
         ),
         json,
-    )?;
-    Ok(CliFailure::new(
-        exit_code,
-        format!("target not dispatchable on the host daemon: {raw}"),
-    ))
+    ) {
+        Ok(exit_code) => CliFailure::new(
+            exit_code,
+            format!("target not dispatchable on the host daemon: {raw}"),
+        ),
+        Err(failure) => failure,
+    }
 }
 
 fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
@@ -2176,7 +2178,7 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
     let local_vm = match route_vm_target(context, &args.vm, json_mode)? {
         VmTargetRoute::Local { vm } => vm,
         VmTargetRoute::Gateway { .. } => {
-            return Err(shell_gateway_target_failure(&args.vm, json_mode)?);
+            return Err(shell_gateway_target_failure(&args.vm, json_mode));
         }
     };
     match action {
@@ -11062,6 +11064,18 @@ mod host_install_dispatch_tests {
         serde_json::from_slice(&bytes).expect("shell response json")
     }
 
+    fn unsupported_response() -> Value {
+        serde_json::json!({
+            "type": "error",
+            "error": {
+                "kind": "wire-unsupported-request",
+                "exitCode": 70,
+                "message": "unsupported request",
+                "remediation": "upgrade nixlingd"
+            }
+        })
+    }
+
     #[test]
     fn shell_vm_first_grammar_parses_attach_and_management_forms() {
         let implicit = parse_shell_raw(&["nixling", "shell", "work", "--name", "dev", "--force"]);
@@ -11156,6 +11170,42 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
+    fn shell_semantic_argument_validation_rejects_invalid_flag_combinations() {
+        let context = missing_daemon_context();
+        for argv in [
+            ["nixling", "shell", "work", "attach", "--json"].as_slice(),
+            ["nixling", "shell", "work", "attach", "--human"].as_slice(),
+            ["nixling", "shell", "work", "list", "--name", "ops"].as_slice(),
+            ["nixling", "shell", "work", "list", "--force"].as_slice(),
+            ["nixling", "shell", "work", "detach", "--force"].as_slice(),
+            ["nixling", "shell", "work", "kill"].as_slice(),
+            [
+                "nixling", "shell", "work", "kill", "--name", "ops", "--force",
+            ]
+            .as_slice(),
+        ] {
+            let args = parse_shell_raw(argv);
+            let failure = super::cmd_shell(&context, &args)
+                .expect_err("semantic shell validation rejects invalid flags");
+            assert_eq!(failure.exit_code, 2, "argv {argv:?}");
+        }
+    }
+
+    #[test]
+    fn shell_round_trip_reports_unavailable_daemon() {
+        let context = missing_daemon_context();
+        let failure = super::shell_round_trip(
+            &context,
+            public_wire::ShellOp::List(public_wire::ShellListArgs {
+                vm: "work".to_owned(),
+            }),
+        )
+        .expect_err("missing public socket reports unavailable");
+        assert_eq!(failure.exit_code, 69);
+        assert!(failure.message.contains("public socket is unavailable"));
+    }
+
+    #[test]
     fn shell_rejects_gateway_targets_before_daemon_dispatch() {
         let manifest_path = test_socket_path("shell-gateway-target", ".manifest.json");
         if let Some(parent) = manifest_path.parent() {
@@ -11189,6 +11239,25 @@ mod host_install_dispatch_tests {
         let envelope: Value = serde_json::from_slice(&stdout).expect("json usage envelope");
         assert_eq!(envelope.get("code").and_then(Value::as_str), Some("usage"));
         let _ = std::fs::remove_file(&manifest_path);
+    }
+
+    #[test]
+    fn shell_management_reports_unsupported_daemon_generation() {
+        let args = parse_shell_raw(&["nixling", "shell", "work", "list", "--json"]);
+        let (result, request, _stdout) = run_public_command_with_mock_daemon(
+            "shell-unsupported-daemon",
+            "work",
+            unsupported_response(),
+            |context| super::cmd_shell(context, &args),
+        );
+        assert_eq!(request.get("type").and_then(Value::as_str), Some("shell"));
+        let failure = result.expect_err("unsupported shell generation fails closed");
+        assert_eq!(failure.exit_code, 70);
+        assert!(
+            failure
+                .message
+                .contains("does not support persistent shell")
+        );
     }
 
     #[test]
