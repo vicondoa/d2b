@@ -21,6 +21,9 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- Persistent shell daemon: started nixlingd-side shell control-plane routing with
+  admin-gated management operations, guest-control capability checks, shell
+  response framing, and attached-owner terminal proxying scaffolding.
 - Persistent shell runtime: started guestd-side shell session runtime scaffolding
   with staged Nix/PAM/service wiring, in-memory admission/idempotency tests, and
   fail-closed guest-control shell capability handling.

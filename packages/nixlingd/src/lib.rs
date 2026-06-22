@@ -2311,6 +2311,43 @@ fn handle_connection_authorized(
                 }
             }
         }
+        if let wire::Request::Shell(op) = &request {
+            if !matches!(peer.role, PeerRole::Admin) {
+                let error = TypedError::AuthzNotAdmin {
+                    verb: "shell".to_owned(),
+                };
+                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+                continue;
+            }
+            if matches!(op, public_wire::ShellOp::Attach(_)) {
+                let first_op_id = wire::shell_op_id(&frame);
+                let owner_state = state.clone();
+                let owner_peer = peer.clone();
+                let op = op.clone();
+                set_frame_read_deadline(&stream, None);
+                let owner_permit = permit;
+                match std::thread::Builder::new()
+                    .name("nixling-shell-owner".to_owned())
+                    .spawn(move || {
+                        run_shell_owner(
+                            stream,
+                            owner_state,
+                            owner_peer,
+                            first_op_id,
+                            op,
+                            owner_permit,
+                        );
+                    }) {
+                    Ok(_) => return Ok(()),
+                    Err(err) => {
+                        return Err(TypedError::InternalIo {
+                            context: "spawn shell owner handler".to_owned(),
+                            detail: err.to_string(),
+                        });
+                    }
+                }
+            }
+        }
         // Gateway display operations can perform provider/relay orchestration.
         // Hand them off the serial accept loop just like exec owner sessions.
         if let wire::Request::GatewayDisplay(op) = &request {
@@ -4526,6 +4563,364 @@ fn dispatch_shell_management(
     Ok(wire::shell_response(&response))
 }
 
+fn run_shell_owner(
+    stream: Socket,
+    state: ServerState,
+    _peer: PeerIdentity,
+    first_op_id: u64,
+    first_op: public_wire::ShellOp,
+    _conn_permit: Option<concurrency::ConnPermit>,
+) {
+    let public_wire::ShellOp::Attach(attach) = first_op else {
+        let _ = write_json_frame(
+            &stream,
+            &wire::error_frame_with_id(first_op_id, &TypedError::GuestShellDisabled),
+        );
+        return;
+    };
+    let (client, guest_boot_id, attach_response) = match establish_shell_owner(&state, &attach) {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = write_json_frame(&stream, &wire::error_frame_with_id(first_op_id, &error));
+            return;
+        }
+    };
+    let session_id = match attach_response.session_id.clone() {
+        Some(session) => session,
+        None => {
+            let _ = write_json_frame(
+                &stream,
+                &wire::error_frame_with_id(first_op_id, &TypedError::GuestShellDisabled),
+            );
+            return;
+        }
+    };
+    let initial_control_seq = attach_response.control_seq;
+    let public_attach = match map_shell_attach_response(attach_response) {
+        Ok(value) => public_wire::ShellOpResponse::Attach(value),
+        Err(error) => {
+            let _ = write_json_frame(&stream, &wire::error_frame_with_id(first_op_id, &error));
+            return;
+        }
+    };
+    if write_json_frame(
+        &stream,
+        &wire::shell_response_with_id(first_op_id, &public_attach),
+    )
+    .is_err()
+    {
+        shell_close_attach_best_effort(&client, &attach.vm, &session_id, &guest_boot_id);
+        return;
+    }
+
+    let mut control_seq = initial_control_seq;
+    while let Ok(frame) = read_frame(&stream) {
+        let op_id = wire::shell_op_id(&frame);
+        let response = match wire::parse_shell_op(&frame) {
+            Ok((_, op)) => handle_shell_owner_op(
+                &client,
+                &attach.vm,
+                &session_id,
+                &guest_boot_id,
+                &mut control_seq,
+                op,
+            ),
+            Err(error) => Err(error),
+        };
+        match response {
+            Ok(Some(response)) => {
+                if write_json_frame(&stream, &wire::shell_response_with_id(op_id, &response))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                if write_json_frame(&stream, &wire::error_frame_with_id(op_id, &error)).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    shell_close_attach_best_effort(&client, &attach.vm, &session_id, &guest_boot_id);
+}
+
+fn establish_shell_owner(
+    state: &ServerState,
+    attach: &public_wire::ShellAttachArgs,
+) -> Result<
+    (
+        Arc<guest_control_health::TtrpcGuestControlClient>,
+        String,
+        pb::ShellAttachResponse,
+    ),
+    TypedError,
+> {
+    ensure_vm_runtime_capability(
+        state,
+        &attach.vm,
+        RuntimeCapabilityGate::GuestControl,
+        "shell",
+    )?;
+    let resolver = load_bundle_resolver(state)?;
+    let params = resolve_guest_control_probe_params(state, &resolver, &attach.vm)
+        .map_err(|_| TypedError::GuestShellDisabled)?;
+    let broker_path = broker_socket_path(state);
+    block_on_future(async move {
+        let budget = guest_control_health::AttemptBudget::from_now(
+            SHELL_MANAGEMENT_TIMEOUT,
+            guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
+        );
+        let signer = guest_control_bridge::BrokerSigner::new(broker_path, budget);
+        let nonce =
+            guest_control_bridge::host_nonce().map_err(|_| TypedError::GuestShellDisabled)?;
+        let client = guest_control_bridge::connect_and_build_client(&params, budget)
+            .map_err(|_| TypedError::GuestShellDisabled)?;
+        let evidence = guest_control_health::probe_guest_control_health(
+            &params.vm_id,
+            Some(guest_control_bridge::VMADDR_CID_HOST),
+            nonce,
+            &client,
+            &signer,
+        )
+        .await
+        .map_err(|_| TypedError::GuestShellDisabled)?;
+        if !guest_advertises_capability(
+            &evidence.health.capabilities,
+            pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED,
+        ) {
+            return Err(TypedError::GuestShellDisabled);
+        }
+        if attach.force
+            && !guest_advertises_capability(
+                &evidence.health.capabilities,
+                pb::GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH,
+            )
+        {
+            return Err(TypedError::GuestShellDisabled);
+        }
+        let mut request = pb::ShellAttachRequest::new();
+        request.metadata = protobuf::MessageField::some(shell_request_metadata(&params.vm_id));
+        request.name = attach.name.as_ref().map(|name| name.as_str().to_owned());
+        request.force = attach.force;
+        let mut size = pb::TerminalSize::new();
+        size.rows = attach.initial_terminal_size.rows;
+        size.cols = attach.initial_terminal_size.cols;
+        request.initial_terminal_size = protobuf::MessageField::some(size);
+        let response: pb::ShellAttachResponse = client
+            .unary_with_timeout("ShellAttach", request, SHELL_MANAGEMENT_TIMEOUT)
+            .await
+            .map_err(|_| TypedError::GuestShellDisabled)?;
+        shell_error_to_typed(response.error.as_ref())?;
+        Ok((Arc::new(client), evidence.guest_boot_id, response))
+    })
+}
+
+fn shell_request_metadata(vm: &str) -> pb::RequestMetadata {
+    let mut metadata = pb::RequestMetadata::new();
+    metadata.vm_id = vm.to_owned();
+    metadata.request_id = "guest-control-shell".to_owned();
+    metadata.protocol_version = nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+    metadata
+}
+
+fn shell_terminal_metadata(
+    vm: &str,
+    session_id: &str,
+    guest_boot_id: &str,
+) -> pb::TerminalRequestMetadata {
+    let mut metadata = pb::TerminalRequestMetadata::new();
+    metadata.common = protobuf::MessageField::some(shell_request_metadata(vm));
+    metadata.session_id = session_id.to_owned();
+    metadata.guest_boot_id = guest_boot_id.to_owned();
+    metadata.kind = protobuf::EnumOrUnknown::new(pb::TerminalKind::TERMINAL_KIND_SHELL);
+    metadata
+}
+
+fn handle_shell_owner_op(
+    client: &guest_control_health::TtrpcGuestControlClient,
+    vm: &str,
+    session_id: &str,
+    guest_boot_id: &str,
+    control_seq: &mut u64,
+    op: public_wire::ShellOp,
+) -> Result<Option<public_wire::ShellOpResponse>, TypedError> {
+    use nixling_ipc::terminal_wire as tw;
+    match op {
+        public_wire::ShellOp::WriteStdin(args) => {
+            if args.session != session_id {
+                return Err(TypedError::GuestShellDisabled);
+            }
+            let data = nixling_core::base64_codec::decode(&args.chunk_base64)
+                .map_err(|_| TypedError::GuestShellDisabled)?;
+            let mut request = pb::TerminalWriteStdinRequest::new();
+            request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
+                vm,
+                session_id,
+                guest_boot_id,
+            ));
+            request.offset = args.offset;
+            request.data = data;
+            request.close_after = args.eof;
+            let response: pb::WriteStdinResponse = block_on_future(client.unary_with_timeout(
+                "TerminalWriteStdin",
+                request,
+                SHELL_MANAGEMENT_TIMEOUT,
+            ))
+            .map_err(|_| TypedError::GuestShellDisabled)?;
+            shell_error_to_typed(response.error.as_ref())?;
+            Ok(Some(public_wire::ShellOpResponse::WriteStdin(
+                tw::TerminalWriteStdinResult {
+                    accepted_len: response.accepted_len,
+                    next_offset: response.next_offset,
+                    backpressured: response.blocked_ms > 0,
+                    stdin_closed: matches!(
+                        response.stdin_state.enum_value(),
+                        Ok(pb::StdinState::STDIN_STATE_CLOSED
+                            | pb::StdinState::STDIN_STATE_CLOSED_BY_PROCESS
+                            | pb::StdinState::STDIN_STATE_CLOSING)
+                    ),
+                },
+            )))
+        }
+        public_wire::ShellOp::ReadOutput(args) => {
+            if args.session != session_id {
+                return Err(TypedError::GuestShellDisabled);
+            }
+            let mut request = pb::TerminalReadOutputRequest::new();
+            request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
+                vm,
+                session_id,
+                guest_boot_id,
+            ));
+            request.stream = protobuf::EnumOrUnknown::new(match args.stream {
+                tw::TerminalStream::Stdout => pb::OutputStream::OUTPUT_STREAM_STDOUT,
+                tw::TerminalStream::Stderr => pb::OutputStream::OUTPUT_STREAM_STDERR,
+            });
+            request.offset = args.offset;
+            request.max_len = args
+                .max_len
+                .min(nixling_ipc::public_wire::EXEC_MAX_CHUNK_BYTES);
+            request.wait = args.wait;
+            request.timeout_ms = args.timeout_ms;
+            let response: pb::ReadOutputResponse = block_on_future(client.unary_with_timeout(
+                "TerminalReadOutput",
+                request,
+                SHELL_MANAGEMENT_TIMEOUT,
+            ))
+            .map_err(|_| TypedError::GuestShellDisabled)?;
+            shell_error_to_typed(response.error.as_ref())?;
+            Ok(Some(public_wire::ShellOpResponse::ReadOutput(
+                tw::TerminalReadOutputChunk {
+                    data_base64: nixling_core::base64_codec::encode(&response.data),
+                    next_offset: response.next_offset,
+                    eof: response.eof,
+                    dropped_bytes: response.dropped_bytes,
+                    truncated: response.truncated,
+                    timed_out: response.timed_out,
+                },
+            )))
+        }
+        public_wire::ShellOp::Resize(args) => {
+            if args.session != session_id {
+                return Err(TypedError::GuestShellDisabled);
+            }
+            *control_seq = control_seq.saturating_add(1);
+            let mut request = pb::TerminalTtyWinResizeRequest::new();
+            request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
+                vm,
+                session_id,
+                guest_boot_id,
+            ));
+            request.control_seq = *control_seq;
+            request.rows = args.rows;
+            request.cols = args.cols;
+            let response: pb::ControlAck = block_on_future(client.unary_with_timeout(
+                "TerminalTtyWinResize",
+                request,
+                SHELL_MANAGEMENT_TIMEOUT,
+            ))
+            .map_err(|_| TypedError::GuestShellDisabled)?;
+            shell_error_to_typed(response.error.as_ref())?;
+            Ok(Some(public_wire::ShellOpResponse::Resize(
+                tw::TerminalControlResult { delivered: true },
+            )))
+        }
+        public_wire::ShellOp::CloseStdin(args) => {
+            if args.session != session_id {
+                return Err(TypedError::GuestShellDisabled);
+            }
+            let mut request = pb::TerminalCloseStdinRequest::new();
+            request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
+                vm,
+                session_id,
+                guest_boot_id,
+            ));
+            let response: pb::CloseStdinResponse = block_on_future(client.unary_with_timeout(
+                "TerminalCloseStdin",
+                request,
+                SHELL_MANAGEMENT_TIMEOUT,
+            ))
+            .map_err(|_| TypedError::GuestShellDisabled)?;
+            shell_error_to_typed(response.error.as_ref())?;
+            Ok(Some(public_wire::ShellOpResponse::CloseStdin(
+                tw::TerminalCloseResult { stdin_closed: true },
+            )))
+        }
+        public_wire::ShellOp::CloseAttach(args) => {
+            if args.session != session_id {
+                return Err(TypedError::GuestShellDisabled);
+            }
+            let response = shell_close_attach(client, vm, session_id, guest_boot_id)?;
+            Ok(Some(public_wire::ShellOpResponse::CloseAttach(response)))
+        }
+        public_wire::ShellOp::Wait(args) => {
+            if args.session != session_id {
+                return Err(TypedError::GuestShellDisabled);
+            }
+            Ok(Some(public_wire::ShellOpResponse::Wait(
+                tw::TerminalWaitResult {
+                    running: true,
+                    terminal_status: None,
+                },
+            )))
+        }
+        public_wire::ShellOp::Attach(_)
+        | public_wire::ShellOp::List(_)
+        | public_wire::ShellOp::Detach(_)
+        | public_wire::ShellOp::Kill(_) => Err(TypedError::GuestShellDisabled),
+    }
+}
+
+fn shell_close_attach(
+    client: &guest_control_health::TtrpcGuestControlClient,
+    vm: &str,
+    session_id: &str,
+    guest_boot_id: &str,
+) -> Result<public_wire::ShellDetachResult, TypedError> {
+    let mut request = pb::ShellCloseAttachRequest::new();
+    request.metadata =
+        protobuf::MessageField::some(shell_terminal_metadata(vm, session_id, guest_boot_id));
+    let response: pb::ShellDetachResponse = block_on_future(client.unary_with_timeout(
+        "ShellCloseAttach",
+        request,
+        SHELL_MANAGEMENT_TIMEOUT,
+    ))
+    .map_err(|_| TypedError::GuestShellDisabled)?;
+    shell_error_to_typed(response.error.as_ref())?;
+    map_shell_detach_response(response)
+}
+
+fn shell_close_attach_best_effort(
+    client: &guest_control_health::TtrpcGuestControlClient,
+    vm: &str,
+    session_id: &str,
+    guest_boot_id: &str,
+) {
+    let _ = shell_close_attach(client, vm, session_id, guest_boot_id);
+}
+
 fn run_guest_shell_management<F, Fut, T>(
     state: &ServerState,
     vm: &str,
@@ -4672,6 +5067,17 @@ fn map_shell_list_response(
                 })
             })
             .collect::<Result<Vec<_>, TypedError>>()?,
+    })
+}
+
+fn map_shell_attach_response(
+    response: pb::ShellAttachResponse,
+) -> Result<public_wire::ShellAttachResult, TypedError> {
+    Ok(public_wire::ShellAttachResult {
+        session: response.session_id.ok_or(TypedError::GuestShellDisabled)?,
+        resolved_name: shell_name_from_guest(response.resolved_name)?,
+        state: map_shell_state(response.state),
+        force_evicted: response.force_evicted,
     })
 }
 
