@@ -194,7 +194,6 @@ names are rejected during deserialization.
 | `QemuMediaBootRequest` | struct | [`QemuMediaBootRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L860) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
 | `QemuMediaLifecycleRequest` | struct | [`QemuMediaLifecycleRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L868) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
 | `QemuMediaQueryStatusRequest` | struct | [`QemuMediaQueryStatusRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L876) | struct { `vm_id`: `VmId`; `shutdown_context`: `bool`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `QemuMediaLifecycleCommand` | enum | [`QemuMediaLifecycleCommand`](../../packages/nixling-ipc/src/broker_wire.rs#L890) | `SystemPowerdown`; `Quit` |
 | `QemuMediaHotplugRequest` | struct | [`QemuMediaHotplugRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L941) | struct { `vm_id`: `VmId`; `bus_id`: `String`; `tracing_span_id`: `Option<TracingSpanId>` } |
 | `OpenPidfdRequest` | struct | [`OpenPidfdRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L999) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `pid`: `i32`; `expected_start_time_ticks`: `u64`; `tracing_span_id`: `Option<TracingSpanId>` } |
 | `OpenVhostNetRequest` | struct | [`OpenVhostNetRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1035) | struct { `role_id`: `RoleId`; `tracing_span_id`: `Option<TracingSpanId>` } |
@@ -261,7 +260,7 @@ names are rejected during deserialization.
 | `GuestControlSignResponse` | struct | [`GuestControlSignResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L742) | struct { `tag`: `Vec<u8>` } |
 | `QemuMediaEnrollResponse` | struct | [`QemuMediaEnrollResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L827) | struct { `vm_id`: `VmId`; `media_ref`: `MediaRef`; `read_only`: `bool`; `enrolled`: `bool`; `udev_rule_written`: `bool`; `udev_reloaded`: `bool` } |
 | `QemuMediaRefreshRegistryResponse` | struct | [`QemuMediaRefreshRegistryResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L845) | struct { `record_count`: `u32`; `redacted_index_written`: `bool`; `udev_rule_written`: `bool`; `udev_reloaded`: `bool` } |
-| `QemuMediaLifecycleResponse` | struct | [`QemuMediaLifecycleResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L921) | struct { `vm_id`: `VmId`; `command`: `QemuMediaLifecycleCommand` } |
+| `QemuMediaLifecycleResponse` | struct | [`QemuMediaLifecycleResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L921) | struct { `vm_id`: `VmId`; `command`: `QemuMediaLifecycleAction` } |
 | `QemuMediaQueryStatusResponse` | struct | [`QemuMediaQueryStatusResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L928) | struct { `vm_id`: `VmId`; `status`: `QemuMediaVmStatus` } |
 | `QemuMediaHotplugResponse` | struct | [`QemuMediaHotplugResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L971) | struct { `vm_id`: `VmId`; `media_ref`: `MediaRef`; `slot`: `String`; `read_only`: `bool`; `qmp_commands`: `Vec<String>`; `events`: `Vec<QemuMediaHotplugEvent>` } |
 | `OpenPidfdResponse` | struct | [`OpenPidfdResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L1020) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `pid`: `i32`; `verified_start_time_ticks`: `u64`; `pidfd_index`: `u32` } |
@@ -323,7 +322,7 @@ stop phase only.
 | `GuestControlProofRole` | enum | [`GuestControlProofRole`](../../packages/nixling-ipc/src/broker_wire.rs#L641) | `HostProof`; `GuestProof` |
 | `GuestControlDirection` | enum | [`GuestControlDirection`](../../packages/nixling-ipc/src/broker_wire.rs#L648) | `HostToGuest` |
 | `GuestControlAuthPurpose` | enum | [`GuestControlAuthPurpose`](../../packages/nixling-ipc/src/broker_wire.rs#L654) | `GuestControlAuthV1` |
-| `QemuMediaLifecycleCommand` | enum | [`QemuMediaLifecycleCommand`](../../packages/nixling-ipc/src/broker_wire.rs#L890) | `SystemPowerdown`; `Quit` |
+| `QemuMediaLifecycleAction` | enum | [`QemuMediaLifecycleAction`](../../packages/nixling-ipc/src/broker_wire.rs#L890) | `SystemPowerdown`; `Quit` |
 | `QemuMediaVmStatus` | enum | [`QemuMediaVmStatus`](../../packages/nixling-ipc/src/broker_wire.rs#L897) | `Running`; `Paused`; `Shutdown`; `Suspended`; `Watchdog`; `Debug`; `Inmigrate`; `InternalError`; `IoError`; `Postmigrate`; `Prelaunch`; `FinishMigrate`; `RestoreVm`; `SaveVm`; `GuestPanicked`; `Colo`; `Preconfig`; `Unknown`; `ConnectionLostDuringShutdown` |
 | `QemuMediaHotplugStatus` | enum | [`QemuMediaHotplugStatus`](../../packages/nixling-ipc/src/broker_wire.rs#L950) | `IdentityResolved`; `QmpConnected`; `QmpCapabilities`; `FdAdded`; `BlockdevAdded`; `DeviceAdded`; `DeviceDeleted`; `BlockdevDeleted`; `FdRemoved`; `VmContinued` |
 | `StoreVerifyStatus` | enum | [`StoreVerifyStatus`](../../packages/nixling-ipc/src/broker_wire.rs#L1130) | `Ok`; `Drift`; `Unknown`; `Repaired`; `Failed`; `NotFound` |

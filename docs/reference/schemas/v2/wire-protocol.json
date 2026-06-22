@@ -6671,7 +6671,7 @@
         "vm-continued"
       ]
     },
-    "QemuMediaLifecycleCommand": {
+    "QemuMediaLifecycleAction": {
       "type": "string",
       "enum": [
         "system-powerdown",
@@ -6705,7 +6705,7 @@
       ],
       "properties": {
         "command": {
-          "$ref": "#/definitions/QemuMediaLifecycleCommand"
+          "$ref": "#/definitions/QemuMediaLifecycleAction"
         },
         "vmId": {
           "type": "string"

@@ -25,7 +25,7 @@ use nixling_host::media::{
 use nixling_ipc::broker_wire::{
     QemuMediaBootRequest, QemuMediaEnrollRequest, QemuMediaEnrollResponse,
     QemuMediaHotplugEvent, QemuMediaHotplugRequest, QemuMediaHotplugResponse,
-    QemuMediaHotplugStatus, QemuMediaLifecycleCommand, QemuMediaLifecycleRequest,
+    QemuMediaHotplugStatus, QemuMediaLifecycleAction, QemuMediaLifecycleRequest,
     QemuMediaLifecycleResponse, QemuMediaQueryStatusRequest, QemuMediaQueryStatusResponse,
     QemuMediaRefreshRegistryResponse, QemuMediaVmStatus,
 };
@@ -272,7 +272,7 @@ pub fn system_powerdown(
     qmp_system_powerdown(&mut client)?;
     Ok(QemuMediaLifecycleResponse {
         vm_id: req.vm_id.clone(),
-        command: QemuMediaLifecycleCommand::SystemPowerdown,
+        command: QemuMediaLifecycleAction::SystemPowerdown,
     })
 }
 
@@ -321,7 +321,7 @@ pub fn quit(req: &QemuMediaLifecycleRequest) -> Result<QemuMediaLifecycleRespons
     qmp_quit(&mut client)?;
     Ok(QemuMediaLifecycleResponse {
         vm_id: req.vm_id.clone(),
-        command: QemuMediaLifecycleCommand::Quit,
+        command: QemuMediaLifecycleAction::Quit,
     })
 }
 

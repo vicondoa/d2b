@@ -887,7 +887,7 @@ pub struct QemuMediaQueryStatusRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-pub enum QemuMediaLifecycleCommand {
+pub enum QemuMediaLifecycleAction {
     SystemPowerdown,
     Quit,
 }
@@ -920,7 +920,7 @@ pub enum QemuMediaVmStatus {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QemuMediaLifecycleResponse {
     pub vm_id: VmId,
-    pub command: QemuMediaLifecycleCommand,
+    pub command: QemuMediaLifecycleAction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

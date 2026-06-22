@@ -8071,7 +8071,7 @@ mod tests {
         ) -> Result<nixling_ipc::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
             Ok(nixling_ipc::broker_wire::QemuMediaLifecycleResponse {
                 vm_id: req.vm_id.clone(),
-                command: nixling_ipc::broker_wire::QemuMediaLifecycleCommand::SystemPowerdown,
+                command: nixling_ipc::broker_wire::QemuMediaLifecycleAction::SystemPowerdown,
             })
         }
 
@@ -8096,7 +8096,7 @@ mod tests {
         ) -> Result<nixling_ipc::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
             Ok(nixling_ipc::broker_wire::QemuMediaLifecycleResponse {
                 vm_id: req.vm_id.clone(),
-                command: nixling_ipc::broker_wire::QemuMediaLifecycleCommand::Quit,
+                command: nixling_ipc::broker_wire::QemuMediaLifecycleAction::Quit,
             })
         }
     }
@@ -8105,7 +8105,7 @@ mod tests {
     #[test]
     fn qemu_media_lifecycle_dispatch_audits_mutations_but_not_status_poll() {
         use nixling_ipc::broker_wire::{
-            BrokerCallerRole, BrokerRequest, QemuMediaLifecycleCommand, QemuMediaLifecycleRequest,
+            BrokerCallerRole, BrokerRequest, QemuMediaLifecycleAction, QemuMediaLifecycleRequest,
             QemuMediaQueryStatusRequest, QemuMediaVmStatus,
         };
         use nixling_ipc::types::{TracingSpanId, VmId};
@@ -8149,7 +8149,7 @@ mod tests {
         ));
         match powerdown.response {
             BrokerResponse::QemuMediaSystemPowerdown(response) => {
-                assert_eq!(response.command, QemuMediaLifecycleCommand::SystemPowerdown);
+                assert_eq!(response.command, QemuMediaLifecycleAction::SystemPowerdown);
             }
             other => panic!("expected QemuMediaSystemPowerdown, got {other:?}"),
         }
@@ -8180,7 +8180,7 @@ mod tests {
         }));
         match quit.response {
             BrokerResponse::QemuMediaQuit(response) => {
-                assert_eq!(response.command, QemuMediaLifecycleCommand::Quit);
+                assert_eq!(response.command, QemuMediaLifecycleAction::Quit);
             }
             other => panic!("expected QemuMediaQuit, got {other:?}"),
         }
@@ -8932,7 +8932,7 @@ mod tests {
             BrokerResponse::QemuMediaSystemPowerdown(response) => {
                 assert_eq!(
                     response.command,
-                    nixling_ipc::broker_wire::QemuMediaLifecycleCommand::SystemPowerdown
+                    nixling_ipc::broker_wire::QemuMediaLifecycleAction::SystemPowerdown
                 );
             }
             other => panic!("expected QemuMediaSystemPowerdown response, got {other:?}"),
@@ -9000,7 +9000,7 @@ mod tests {
             BrokerResponse::QemuMediaQuit(response) => {
                 assert_eq!(
                     response.command,
-                    nixling_ipc::broker_wire::QemuMediaLifecycleCommand::Quit
+                    nixling_ipc::broker_wire::QemuMediaLifecycleAction::Quit
                 );
             }
             other => panic!("expected QemuMediaQuit response, got {other:?}"),
