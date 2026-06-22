@@ -24,6 +24,9 @@
 //!   missing optionals = warn; clean = pass.
 //! - `autostart_status` — read daemon-persisted
 //!   `autostart-report.json`. Report the degraded + failed count.
+//! - `graceful_shutdown_status` — read daemon-persisted
+//!   `shutdown-degraded.json`. Report uncleared graceful-shutdown degraded
+//!   markers and bounded remediation.
 //! - `storage_lifecycle_report` — read daemon-persisted
 //!   `storage-lifecycle-report.json`. Report storage/restart/sync
 //!   contract drift and the safe remediation command.
@@ -166,6 +169,7 @@ pub fn run_doctor(context: &Context) -> DoctorReport {
     check_usbipd_runners(&pidfd_entries, &mut report);
     check_kernel_module_matrix(&context.daemon_state_dir, &mut report);
     check_autostart_status(&context.daemon_state_dir, &mut report);
+    check_graceful_shutdown_status(&context.daemon_state_dir, &mut report);
     check_storage_lifecycle_report(&context.daemon_state_dir, &mut report);
     // v1.2 invariant probes
     check_seccomp_bpf_loaded(&pidfd_entries, &mut report);
@@ -817,6 +821,107 @@ fn check_autostart_status(daemon_state_dir: &Path, report: &mut DoctorReport) {
         "autostart: started={started} already_running={already} failed={failed} degraded={degraded} (degraded_total={degraded_total})"
     );
     report.push_with_data("autostart-status", status, detail, data);
+}
+
+// ---------------------------------------------------------------
+// shutdown-degraded.json
+// ---------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct PersistedShutdownDegradedReport {
+    #[serde(default)]
+    schema_version: u32,
+    #[serde(default)]
+    markers: Vec<PersistedShutdownDegradedMarker>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedShutdownDegradedMarker {
+    #[serde(default)]
+    vm: String,
+    #[serde(default)]
+    outcome: String,
+    #[serde(default)]
+    severity: String,
+    #[serde(default)]
+    remediation: String,
+    #[serde(default)]
+    elapsed_ms: u64,
+}
+
+fn check_graceful_shutdown_status(daemon_state_dir: &Path, report: &mut DoctorReport) {
+    let path = daemon_state_dir.join("shutdown-degraded.json");
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            report.push(
+                "graceful-shutdown-status",
+                DoctorStatus::Pass,
+                "no graceful-shutdown degraded marker present",
+            );
+            return;
+        }
+        Err(err) => {
+            report.push(
+                "graceful-shutdown-status",
+                DoctorStatus::Warn,
+                format!("read {}: {err}", path.display()),
+            );
+            return;
+        }
+    };
+    let parsed: PersistedShutdownDegradedReport = match serde_json::from_slice(&bytes) {
+        Ok(report) => report,
+        Err(err) => {
+            report.push(
+                "graceful-shutdown-status",
+                DoctorStatus::Warn,
+                format!("parse {}: {err}", path.display()),
+            );
+            return;
+        }
+    };
+    if parsed.markers.is_empty() {
+        report.push(
+            "graceful-shutdown-status",
+            DoctorStatus::Pass,
+            "graceful-shutdown degraded marker report is empty",
+        );
+        return;
+    }
+    let fail_count = parsed
+        .markers
+        .iter()
+        .filter(|marker| marker.severity == "fail")
+        .count();
+    let warn_count = parsed
+        .markers
+        .iter()
+        .filter(|marker| marker.severity == "warn")
+        .count();
+    let status = if fail_count > 0 {
+        DoctorStatus::Fail
+    } else {
+        DoctorStatus::Warn
+    };
+    let vms = parsed
+        .markers
+        .iter()
+        .map(|marker| marker.vm.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    report.push_with_data(
+        "graceful-shutdown-status",
+        status,
+        format!("graceful-shutdown markers: fail={fail_count} warn={warn_count} vms={vms}"),
+        json!({
+            "schemaVersion": parsed.schema_version,
+            "fail": fail_count,
+            "warn": warn_count,
+            "markers": parsed.markers,
+        }),
+    );
 }
 
 // ---------------------------------------------------------------

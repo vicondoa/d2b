@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry};
 use std::fs::{self, File, OpenOptions};
 use std::future::Future;
-use std::io::{IoSliceMut, Read, Write};
+use std::io::{self, IoSliceMut, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
@@ -607,6 +607,11 @@ pub fn autostart_report_path(daemon_state_dir: &Path) -> PathBuf {
 /// Path of the persisted storage/restart/sync startup contract report.
 pub fn storage_lifecycle_report_path(daemon_state_dir: &Path) -> PathBuf {
     daemon_state_dir.join("storage-lifecycle-report.json")
+}
+
+/// Path of the persisted graceful-shutdown degraded marker report.
+pub fn shutdown_degraded_report_path(daemon_state_dir: &Path) -> PathBuf {
+    daemon_state_dir.join("shutdown-degraded.json")
 }
 
 fn persist_json_report(path: &Path, json: &[u8]) -> std::io::Result<()> {
@@ -9066,6 +9071,23 @@ enum VmShutdownOutcome {
     CleanupFailed,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShutdownDegradedReport {
+    schema_version: u32,
+    markers: Vec<ShutdownDegradedMarker>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShutdownDegradedMarker {
+    vm: String,
+    outcome: String,
+    severity: String,
+    remediation: String,
+    elapsed_ms: u64,
+}
+
 static FORCE_SHUTDOWN_GENERATIONS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
 
 fn force_shutdown_generations() -> &'static Mutex<HashMap<String, u64>> {
@@ -9117,6 +9139,34 @@ impl VmShutdownOutcome {
             Self::Disabled => daemon_audit::VmShutdownOutcome::Disabled,
             Self::ForcedCleanup => daemon_audit::VmShutdownOutcome::ForcedCleanup,
             Self::CleanupFailed => daemon_audit::VmShutdownOutcome::CleanupFailed,
+        }
+    }
+
+    fn degraded_severity(self) -> Option<&'static str> {
+        match self {
+            Self::CleanGuestShutdown | Self::CleanVmmCleanup | Self::Disabled => None,
+            Self::ForceRequested | Self::ApiUnavailable => Some("warn"),
+            Self::TimeoutExceeded | Self::ForcedCleanup | Self::CleanupFailed => Some("fail"),
+        }
+    }
+
+    fn remediation(self) -> &'static str {
+        match self {
+            Self::TimeoutExceeded => {
+                "fix the in-guest shutdown path and retry `nixling vm stop <vm> --apply`, or intentionally bypass with `nixling vm stop <vm> --force --apply`"
+            }
+            Self::CleanupFailed => {
+                "host-side empty-VMM cleanup failed; inspect nixlingd logs and retry a focused force stop"
+            }
+            Self::ForcedCleanup => {
+                "forced cleanup was required; verify the VM is stopped and inspect nixlingd logs if resources remain"
+            }
+            Self::ApiUnavailable => {
+                "provider shutdown API was unavailable; verify provider socket health before the next stop"
+            }
+            Self::ForceRequested => "explicit force stop requested by operator",
+            Self::Disabled => "graceful shutdown disabled by configuration",
+            Self::CleanGuestShutdown | Self::CleanVmmCleanup => "no remediation required",
         }
     }
 }
@@ -9204,6 +9254,52 @@ fn emit_vm_shutdown_outcome_audit(
             })
     {
         tracing::warn!(error = %err, vm = %vm, "failed to write vm shutdown outcome audit event");
+    }
+    persist_vm_shutdown_marker(state, vm, outcome, elapsed);
+}
+
+fn persist_vm_shutdown_marker(
+    state: &ServerState,
+    vm: &str,
+    outcome: VmShutdownOutcome,
+    elapsed: Duration,
+) {
+    let path = shutdown_degraded_report_path(&state.daemon_state_dir);
+    let mut report = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<ShutdownDegradedReport>(&bytes).ok())
+        .unwrap_or(ShutdownDegradedReport {
+            schema_version: 1,
+            markers: Vec::new(),
+        });
+    report.markers.retain(|marker| marker.vm != vm);
+    if let Some(severity) = outcome.degraded_severity() {
+        report.markers.push(ShutdownDegradedMarker {
+            vm: vm.to_owned(),
+            outcome: outcome.label().to_owned(),
+            severity: severity.to_owned(),
+            remediation: outcome.remediation().replace("<vm>", vm),
+            elapsed_ms: elapsed.as_millis() as u64,
+        });
+    }
+    if report.markers.is_empty() {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                tracing::warn!(error = %err, path = %path.display(), "failed to clear shutdown degraded marker");
+            }
+        }
+        return;
+    }
+    match serde_json::to_vec_pretty(&report)
+        .map_err(io::Error::other)
+        .and_then(|json| persist_json_report(&path, &json))
+    {
+        Ok(()) => {}
+        Err(err) => {
+            tracing::warn!(error = %err, path = %path.display(), "failed to persist shutdown degraded marker");
+        }
     }
 }
 
