@@ -32,6 +32,38 @@ cd "$ROOT"
 # contract — see tests/lib.sh nl_flake_ref).
 flake_ref=$(nl_flake_ref "$ROOT")
 
+dump_nix_segfault_debug() {
+  local label="$1"
+  shift
+
+  log "  DEBUG: ${label} segfault diagnostics"
+  {
+    echo "::group::${label} segfault diagnostics"
+    echo "command: $*"
+    echo "nix: $(command -v nix || true)"
+    nix --version || true
+    echo "nix-instantiate: $(command -v nix-instantiate || true)"
+    nix-instantiate --version || true
+    uname -a || true
+    free -h || true
+    ulimit -a || true
+    echo "NIX_CONFIG=${NIX_CONFIG:-}"
+    echo "flake_ref=${flake_ref}"
+    echo "NL_FLAKE_CHECK=${NL_FLAKE_CHECK:-}"
+    if command -v gdb >/dev/null 2>&1; then
+      gdb -q -batch \
+        -ex 'set pagination off' \
+        -ex run \
+        -ex 'thread apply all bt full' \
+        -ex 'info registers' \
+        --args "$@" || true
+    else
+      echo "gdb unavailable; skipping native backtrace"
+    fi
+    echo "::endgroup::"
+  } >&2
+}
+
 # Single-check shard mode (CI dynamic matrix): NL_FLAKE_CHECK=<name> instantiates
 # just that one flake check's derivation for the native system, matching the
 # `--no-build` semantics of the full sweep (evaluate + instantiate, do not
@@ -62,6 +94,8 @@ if [ -n "${NL_FLAKE_CHECK:-}" ]; then
     ok "flake check shard: ${NL_FLAKE_CHECK}"
   elif [ "$rc" -eq 139 ]; then
     log "  WARN: nix eval segfaulted for shard ${NL_FLAKE_CHECK}; retrying via nix-instantiate"
+    dump_nix_segfault_debug "nix eval ${NL_FLAKE_CHECK}" \
+      nix eval --raw "${flake_ref}#checks.${native}.${NL_FLAKE_CHECK}.drvPath"
     set +e
     nix-instantiate --eval --strict -E \
       "let f = builtins.getFlake \"${flake_ref}\"; in f.checks.${native}.${NL_FLAKE_CHECK}.drvPath" >/dev/null
@@ -71,6 +105,9 @@ if [ -n "${NL_FLAKE_CHECK:-}" ]; then
       ok "flake check shard: ${NL_FLAKE_CHECK} (nix-instantiate fallback)"
     elif [ "$inst_rc" -eq 139 ]; then
       log "  WARN: nix-instantiate also segfaulted for shard ${NL_FLAKE_CHECK}; retrying via nix build --dry-run"
+      dump_nix_segfault_debug "nix-instantiate ${NL_FLAKE_CHECK}" \
+        nix-instantiate --eval --strict -E \
+        "let f = builtins.getFlake \"${flake_ref}\"; in f.checks.${native}.${NL_FLAKE_CHECK}.drvPath"
       if nix build --quiet --no-substitute --dry-run --no-link "${flake_ref}#checks.${native}.${NL_FLAKE_CHECK}" >/dev/null; then
         ok "flake check shard: ${NL_FLAKE_CHECK} (nix build --dry-run fallback)"
       else
