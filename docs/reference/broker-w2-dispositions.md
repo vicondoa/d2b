@@ -44,7 +44,10 @@ side-effect audit operation that never reaches the wire dispatcher).
 | QemuMediaBoot | promoted-live | Resolves the declared boot source, passes the media fd to QEMU over QMP, attaches the boot USB storage device, and continues the paused runner. | live in production broker |
 | QemuMediaDetach | promoted-live | Resolves an enrolled qemu-media slot, removes the QMP device/block/fd nodes, and returns only redacted command labels. | live in production broker |
 | QemuMediaEnroll | promoted-live | Enrolls a physical USB device into root-only qemu-media registry state and reconciles runtime automount-inhibition rules. | live in production broker |
+| QemuMediaQueryStatus | promoted-live | Queries qemu-media QMP run state for lifecycle reconciliation; success polling is summarized by daemon lifecycle audit rather than per-poll broker audit records. | live in production broker |
+| QemuMediaQuit | promoted-live | Requests clean qemu-media VMM exit over QMP after the guest has reached shutdown state. | live in production broker |
 | QemuMediaRefreshRegistry | promoted-live | Rebuilds redacted daemon-readable qemu-media registry state and runtime automount-inhibition rules from the root-only persistent registry. | live in production broker |
+| QemuMediaSystemPowerdown | promoted-live | Requests qemu-media guest shutdown through QMP `system_powerdown` before forced runner cleanup. | live in production broker |
 | ReadSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret read paths are not implemented. | future work |
 | ReconcileStorageScope | promoted-live | Resolves the trusted storage contract row and reconciles or validates the static storage scope without exposing raw paths. | live in production broker |
 | ResumeBroker | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; broker admin resume controls are not implemented. | future work |
