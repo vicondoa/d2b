@@ -447,17 +447,19 @@ fn decode_capability_negotiation(
     fingerprint: String,
 ) -> Result<CapabilityNegotiation, ConstellationError> {
     let wire_fingerprint = parse_protocol_token(fingerprint, "handshake capability_fingerprint")?;
-    let caps = capabilities
-        .into_iter()
-        .map(|raw| match decode_capability(raw) {
-            Some(capability) => capability.code().to_owned(),
-            None => format!("unknown-protobuf-capability-{raw}"),
-        })
-        .collect::<Vec<_>>();
-    let caps_json = serde_json::to_string(&caps)
-        .map_err(|_| malformed("failed to encode protobuf capability set for semantic decode"))?;
-    let capabilities: CapabilitySet = serde_json::from_str(&caps_json)
-        .map_err(|err| malformed(format!("protobuf capability set decode failed: {err}")))?;
+    let caps =
+        capabilities
+            .into_iter()
+            .map(|raw| match decode_capability(raw) {
+                Some(capability) => ProtocolToken::parse(capability.code()).map_err(|_| {
+                    malformed("failed to encode known protobuf capability as protocol token")
+                }),
+                None => ProtocolToken::parse(format!("unknown-protobuf-capability-{raw}")).map_err(
+                    |err| malformed(format!("unknown protobuf capability token invalid: {err}")),
+                ),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+    let capabilities = CapabilitySet::from_tokens(caps);
     let expected = capabilities.stable_fingerprint();
     let has_unknown = capabilities.unknown_iter().next().is_some();
     if schema_version

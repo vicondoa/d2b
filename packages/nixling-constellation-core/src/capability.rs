@@ -151,6 +151,20 @@ impl CapabilitySet {
         caps.into_iter().collect()
     }
 
+    /// Build from already-validated capability protocol tokens, preserving
+    /// unknown future tokens through serialization and fingerprinting.
+    pub fn from_tokens<I: IntoIterator<Item = ProtocolToken>>(tokens: I) -> Self {
+        let mut set = Self::empty();
+        for token in tokens {
+            if let Some(capability) = Capability::from_code(token.as_str()) {
+                set.known.insert(capability);
+            } else {
+                set.unknown.insert(token);
+            }
+        }
+        set
+    }
+
     /// Add a capability (builder style).
     pub fn with(mut self, cap: Capability) -> Self {
         self.known.insert(cap);
@@ -262,8 +276,7 @@ impl<'de> Deserialize<'de> for CapabilitySet {
                 A: SeqAccess<'de>,
             {
                 let mut count = 0_usize;
-                let mut known = BTreeSet::new();
-                let mut unknown = BTreeSet::new();
+                let mut tokens = Vec::new();
                 while let Some(capability) = seq.next_element::<ProtocolToken>()? {
                     count += 1;
                     if count > MAX_CAPABILITY_SET_LEN {
@@ -271,13 +284,9 @@ impl<'de> Deserialize<'de> for CapabilitySet {
                             "capability set exceeds {MAX_CAPABILITY_SET_LEN} entries"
                         )));
                     }
-                    if let Some(capability) = Capability::from_code(capability.as_str()) {
-                        known.insert(capability);
-                    } else {
-                        unknown.insert(capability);
-                    }
+                    tokens.push(capability);
                 }
-                Ok(CapabilitySet { known, unknown })
+                Ok(CapabilitySet::from_tokens(tokens))
             }
         }
 
