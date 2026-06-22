@@ -15400,10 +15400,11 @@ mod broker_dispatch_tests {
         ChildReapedNotification, DeregisterRunnerPidfdResponse, PollChildReapedResponse,
         RunnerRole, RunnerSignal, SignalRunnerResponse, SpawnRunnerResponse,
     };
+    use nixling_ipc::guest_proto as pb;
     use nixling_ipc::public_wire::{
         ActivationRequest, GcRequest, HostDestroyRequest, HostInstallRequest, HostPrepareRequest,
-        KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest, TrustRequest,
-        VmLifecycleRequest,
+        KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest,
+        ShellSessionState, TrustRequest, VmLifecycleRequest,
     };
     use nixling_ipc::types::{RoleId, VmId};
     use serde::Serialize;
@@ -15426,9 +15427,10 @@ mod broker_dispatch_tests {
         dispatch_broker_run_migrate, dispatch_broker_switch, dispatch_broker_test,
         dispatch_broker_trust, dispatch_broker_vm_restart, dispatch_broker_vm_start,
         dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout, dispatch_request,
-        redact_broker_dispatch_failure_for_launcher, redact_broker_error_for_launcher,
-        resolve_store_view_intent_for_vm, stale_qemu_media_dependency_roles_from_entries,
-        vm_start_node_mode,
+        map_shell_attach_response, map_shell_detach_response, map_shell_kill_response,
+        map_shell_list_response, redact_broker_dispatch_failure_for_launcher,
+        redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
+        stale_qemu_media_dependency_roles_from_entries, vm_start_node_mode,
     };
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
@@ -19250,6 +19252,52 @@ mod broker_dispatch_tests {
         // workload-user terminal, so the daemon must deny launchers before any
         // session lookup, guest-control probe, or owner reservation.
         assert!(verb_requires_admin("shell"));
+    }
+
+    #[test]
+    fn shell_guest_responses_map_to_public_dtos() {
+        let mut attach = pb::ShellAttachResponse::new();
+        attach.session_id = Some("shell-1".to_owned());
+        attach.resolved_name = "default".to_owned();
+        attach.state = protobuf::EnumOrUnknown::new(pb::ShellState::SHELL_STATE_ATTACHED);
+        attach.force_evicted = true;
+        let attach = map_shell_attach_response(attach).expect("attach maps");
+        assert_eq!(attach.session, "shell-1");
+        assert_eq!(attach.resolved_name.as_str(), "default");
+        assert_eq!(attach.state, ShellSessionState::Attached);
+        assert!(attach.force_evicted);
+
+        let mut list = pb::ShellListResponse::new();
+        list.default_name = "default".to_owned();
+        let mut entry = pb::ShellListEntry::new();
+        entry.name = "ops_1".to_owned();
+        entry.state = protobuf::EnumOrUnknown::new(pb::ShellState::SHELL_STATE_DETACHED);
+        entry.attached = false;
+        entry.is_default = false;
+        list.sessions.push(entry);
+        let list = map_shell_list_response(list).expect("list maps");
+        assert_eq!(list.default_name.as_str(), "default");
+        assert_eq!(list.sessions[0].name.as_str(), "ops_1");
+        assert_eq!(list.sessions[0].state, ShellSessionState::Detached);
+
+        let mut detach = pb::ShellDetachResponse::new();
+        detach.resolved_name = "default".to_owned();
+        detach.detached = false;
+        detach.cause =
+            protobuf::EnumOrUnknown::new(pb::ShellCloseCause::SHELL_CLOSE_CAUSE_CLIENT_DETACH);
+        let detach = map_shell_detach_response(detach).expect("detach maps");
+        assert_eq!(detach.resolved_name.as_str(), "default");
+        assert!(!detach.detached);
+        assert!(detach.cause.is_some());
+
+        let mut kill = pb::ShellKillResponse::new();
+        kill.name = "default".to_owned();
+        kill.killed = false;
+        kill.state = protobuf::EnumOrUnknown::new(pb::ShellState::SHELL_STATE_KILLED);
+        let kill = map_shell_kill_response(kill).expect("kill maps");
+        assert_eq!(kill.name.as_str(), "default");
+        assert!(!kill.killed);
+        assert_eq!(kill.state, ShellSessionState::Killed);
     }
 
     #[test]
