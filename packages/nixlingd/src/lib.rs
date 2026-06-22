@@ -4653,7 +4653,6 @@ fn dispatch_shell_management(
         }
         public_wire::ShellOp::Detach(args) => {
             let vm = args.vm.clone();
-            let name_for_audit = args.name.as_ref().map(|name| name.as_str().to_owned());
             let result = run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
                 let mut request = pb::ShellDetachRequest::new();
                 request.metadata = protobuf::MessageField::some(metadata);
@@ -4674,7 +4673,7 @@ fn dispatch_shell_management(
                 &vm,
                 daemon_audit::ShellAuditAction::Detach,
                 daemon_audit::ShellAuditResult::Detached,
-                &shell_ref_digest(&[&vm, name_for_audit.as_deref().unwrap_or("<default>")]),
+                &shell_ref_digest(&[&vm, result.resolved_name.as_str()]),
             );
             shell_metric(state, "management", "none");
             public_wire::ShellOpResponse::Detach(result)
@@ -4775,8 +4774,8 @@ fn run_shell_owner(
             return;
         }
     };
-    let owner_shell_ref_digest = shell_ref_digest(&[&attach.vm, &session_id]);
     let initial_control_seq = attach_response.control_seq;
+    let owner_shell_ref_digest = shell_ref_digest(&[&attach.vm, &attach_response.resolved_name]);
     let public_attach = match map_shell_attach_response(attach_response) {
         Ok(value) => public_wire::ShellOpResponse::Attach(value),
         Err(error) => {
@@ -19608,6 +19607,21 @@ mod broker_dispatch_tests {
         let err = super::ensure_shell_owner_session("stale-session", "owner-session")
             .expect_err("stale session must fail");
         assert_eq!(err.kind(), "guest-control-shell-stale-session");
+    }
+
+    #[test]
+    fn shell_audit_digest_correlates_on_resolved_name_not_session_id() {
+        let vm = "corp-vm";
+        let resolved_name = "default";
+        let owner_digest = super::shell_ref_digest(&[vm, resolved_name]);
+        let management_digest = super::shell_ref_digest(&[vm, resolved_name]);
+        let session_digest = super::shell_ref_digest(&[vm, "shell-0000000000000001"]);
+
+        assert_eq!(owner_digest, management_digest);
+        assert_ne!(
+            owner_digest, session_digest,
+            "audit correlation must not use generated session ids"
+        );
     }
 
     #[test]
