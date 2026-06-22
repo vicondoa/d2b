@@ -151,6 +151,21 @@ declared schema; see "Cardinality bounds" below.
   `changes(nixling_daemon_uptime_seconds[5m]) > 0` for a restart
   alert.
 
+### `nixling_daemon_guest_control_exec_total`
+
+- **Type:** counter
+- **Labels:** `subsystem`, `outcome`, `error_kind`
+- **Meaning:** Cumulative count of guest-control exec session/op outcomes by
+  subsystem, closed outcome, and bounded error bucket.
+
+### `nixling_daemon_guest_control_shell_total`
+
+- **Type:** counter
+- **Labels:** `subsystem`, `outcome`, `error_kind`
+- **Meaning:** Cumulative count of guest-control persistent-shell management and
+  attached-owner outcomes. Shell names, terminal session handles, attach ids,
+  helper diagnostics, and terminal bytes are never metric labels.
+
 ## Cardinality bounds
 
 | Label | Source | Bound |
@@ -161,9 +176,12 @@ declared schema; see "Cardinality bounds" below.
 | `step` | closed enum (host-prep DAG step IDs) | bounded by [`host-prep-dag.md`](./host-prep-dag.md) |
 | `op` | closed enum (broker wire op names) | bounded by [`daemon-api.md`](./daemon-api.md) |
 | `outcome` (broker) | closed enum | 3 |
+| `subsystem` | closed guest-control subsystem enum | bounded by daemon code |
+| `outcome` (guest-control) | closed enum | bounded by daemon code |
+| `error_kind` | normalized daemon error bucket | bounded by daemon code |
 
 No label carries free-form text (no error messages, no store paths,
-no command output). The
+no command output, no shell session names, no terminal handles). The
 [observability panel's cardinality + PII rules](../../AGENTS.md#default-observability-panel)
 apply.
 

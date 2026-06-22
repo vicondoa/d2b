@@ -28,6 +28,9 @@ JSON envelopes.
 | `vm exec <vm> status` | `vm-exec-status.schema.json` | [cli-contract.md § `vm exec`](../cli-contract.md#vm-exec) |
 | `vm exec <vm> logs` | `vm-exec-logs.schema.json` | [cli-contract.md § `vm exec`](../cli-contract.md#vm-exec) |
 | `vm exec <vm> kill` | `vm-exec-kill.schema.json` | [cli-contract.md § `vm exec`](../cli-contract.md#vm-exec) |
+| `shell <vm> list` | `shell-list.schema.json` | [shell-list.md](./shell-list.md) |
+| `shell <vm> detach` | `shell-detach.schema.json` | [shell-detach.md](./shell-detach.md) |
+| `shell <vm> kill` | `shell-kill.schema.json` | [shell-kill.md](./shell-kill.md) |
 
 The legacy bash compatibility commands keep their existing JSON
 contracts, but only rust-native JSON surfaces get dedicated schema

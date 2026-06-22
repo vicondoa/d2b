@@ -282,7 +282,7 @@ in
           PAMName = "nixling-shpool-daemon";
           ExecStart =
             let
-              daemonScript = ''
+              daemonScript = pkgs.writeShellScript "nixling-shpool-daemon-start" ''
                 set -eu
                 uid="$(${pkgs.coreutils}/bin/id -u)"
                 home="$HOME"
@@ -293,7 +293,7 @@ in
                   --home "$home"
               '';
             in
-            "${pkgs.bash}/bin/sh -c ${lib.escapeShellArg daemonScript}";
+            "${daemonScript}";
           WorkingDirectory = "~";
           KillMode = "control-group";
           Delegate = true;

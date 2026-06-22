@@ -104,10 +104,7 @@ const EXPECTED_METRICS: &[ExpectedMetric] = &[
     },
 ];
 
-// The retired bash gate's doc-parity table predated the guest-control exec
-// metric. The source inventory above is code-canonical; this count preserves the
-// exact reference-doc assertions that shell gate actually ran.
-const RETIRED_DOC_METRIC_COUNT: usize = 9;
+const RETIRED_DOC_METRIC_COUNT: usize = EXPECTED_METRICS.len();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedMetric {
