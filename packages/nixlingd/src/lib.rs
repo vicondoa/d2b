@@ -78,6 +78,7 @@ use nixling_ipc::{
         UsbipProxyReconcileRequest as BrokerUsbipProxyReconcileRequest,
         UsbipUnbindRequest as BrokerUsbipUnbindRequest,
     },
+    guest_proto as pb,
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
     types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, VmId},
 };
@@ -2460,6 +2461,7 @@ fn verb_requires_admin(verb: &str) -> bool {
             | "hostReconcile"
             | "readGuestConfig"
             | "exec"
+            | "shell"
     )
 }
 
@@ -2557,7 +2559,7 @@ fn dispatch_request_locked(
         // spawned worker off the serial accept loop). Detached management ops
         // are ordinary one-shot requests.
         wire::Request::Exec(op) => dispatch_exec_management(state, peer, op),
-        wire::Request::Shell(_) => Err(TypedError::GuestShellDisabled),
+        wire::Request::Shell(op) => dispatch_shell_management(state, op),
         wire::Request::GatewayDisplay(op) => dispatch_gateway_display(state, peer, op),
     }
 }
@@ -4454,6 +4456,243 @@ fn dispatch_read_guest_config(
             content_base64: encoded,
         },
     ))
+}
+
+const SHELL_MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(12);
+
+fn dispatch_shell_management(
+    state: &ServerState,
+    op: public_wire::ShellOp,
+) -> Result<Value, TypedError> {
+    let response = match op {
+        public_wire::ShellOp::List(args) => {
+            let result =
+                run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
+                    let mut request = pb::ShellListRequest::new();
+                    request.metadata = protobuf::MessageField::some(metadata);
+                    async move {
+                        let response: pb::ShellListResponse = client
+                            .unary_with_timeout("ShellList", request, SHELL_MANAGEMENT_TIMEOUT)
+                            .await
+                            .map_err(|_| TypedError::GuestShellDisabled)?;
+                        shell_error_to_typed(response.error.as_ref())?;
+                        map_shell_list_response(response)
+                    }
+                })?;
+            public_wire::ShellOpResponse::List(result)
+        }
+        public_wire::ShellOp::Detach(args) => {
+            let result =
+                run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
+                    let mut request = pb::ShellDetachRequest::new();
+                    request.metadata = protobuf::MessageField::some(metadata);
+                    request.name = args.name.map(|name| name.as_str().to_owned());
+                    async move {
+                        let response: pb::ShellDetachResponse = client
+                            .unary_with_timeout("ShellDetach", request, SHELL_MANAGEMENT_TIMEOUT)
+                            .await
+                            .map_err(|_| TypedError::GuestShellDisabled)?;
+                        shell_error_to_typed(response.error.as_ref())?;
+                        map_shell_detach_response(response)
+                    }
+                })?;
+            public_wire::ShellOpResponse::Detach(result)
+        }
+        public_wire::ShellOp::Kill(args) => {
+            let result =
+                run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
+                    let mut request = pb::ShellKillRequest::new();
+                    request.metadata = protobuf::MessageField::some(metadata);
+                    request.name = args.name.as_str().to_owned();
+                    async move {
+                        let response: pb::ShellKillResponse = client
+                            .unary_with_timeout("ShellKill", request, SHELL_MANAGEMENT_TIMEOUT)
+                            .await
+                            .map_err(|_| TypedError::GuestShellDisabled)?;
+                        shell_error_to_typed(response.error.as_ref())?;
+                        map_shell_kill_response(response)
+                    }
+                })?;
+            public_wire::ShellOpResponse::Kill(result)
+        }
+        public_wire::ShellOp::Attach(_)
+        | public_wire::ShellOp::WriteStdin(_)
+        | public_wire::ShellOp::ReadOutput(_)
+        | public_wire::ShellOp::Resize(_)
+        | public_wire::ShellOp::Wait(_)
+        | public_wire::ShellOp::CloseStdin(_)
+        | public_wire::ShellOp::CloseAttach(_) => return Err(TypedError::GuestShellDisabled),
+    };
+    Ok(wire::shell_response(&response))
+}
+
+fn run_guest_shell_management<F, Fut, T>(
+    state: &ServerState,
+    vm: &str,
+    f: F,
+) -> Result<T, TypedError>
+where
+    F: FnOnce(Arc<guest_control_health::TtrpcGuestControlClient>, pb::RequestMetadata) -> Fut,
+    Fut: Future<Output = Result<T, TypedError>>,
+{
+    ensure_vm_runtime_capability(state, vm, RuntimeCapabilityGate::GuestControl, "shell")?;
+    let resolver = load_bundle_resolver(state)?;
+    let params = resolve_guest_control_probe_params(state, &resolver, vm).map_err(|detail| {
+        tracing::warn!(
+            kind = "critical",
+            subsystem = "guest-control-shell",
+            error_kind = "transport-io",
+            "guest-control shell: probe params unresolved: {detail}"
+        );
+        TypedError::GuestShellDisabled
+    })?;
+    let broker_path = broker_socket_path(state);
+    block_on_future(async move {
+        let budget = guest_control_health::AttemptBudget::from_now(
+            SHELL_MANAGEMENT_TIMEOUT,
+            guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
+        );
+        let signer = guest_control_bridge::BrokerSigner::new(broker_path, budget);
+        let nonce =
+            guest_control_bridge::host_nonce().map_err(|_| TypedError::GuestShellDisabled)?;
+        let client = guest_control_bridge::connect_and_build_client(&params, budget)
+            .map_err(|_| TypedError::GuestShellDisabled)?;
+        let evidence = guest_control_health::probe_guest_control_health(
+            &params.vm_id,
+            Some(guest_control_bridge::VMADDR_CID_HOST),
+            nonce,
+            &client,
+            &signer,
+        )
+        .await
+        .map_err(|_| TypedError::GuestShellDisabled)?;
+        if !guest_advertises_capability(
+            &evidence.health.capabilities,
+            pb::GuestCapability::GUEST_CAPABILITY_SHELL_MANAGEMENT,
+        ) {
+            return Err(TypedError::GuestShellDisabled);
+        }
+        let mut metadata = pb::RequestMetadata::new();
+        metadata.vm_id = params.vm_id.clone();
+        metadata.request_id = "guest-control-shell".to_owned();
+        metadata.protocol_version = nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        f(Arc::new(client), metadata).await
+    })
+}
+
+fn guest_advertises_capability(
+    capabilities: &[protobuf::EnumOrUnknown<pb::GuestCapability>],
+    cap: pb::GuestCapability,
+) -> bool {
+    capabilities
+        .iter()
+        .filter_map(|value| value.enum_value().ok())
+        .any(|value| value == cap)
+}
+
+fn shell_error_to_typed(error: Option<&pb::GuestControlError>) -> Result<(), TypedError> {
+    if let Some(error) = error
+        && !exec_session_real::is_unspecified(error.kind)
+    {
+        return Err(TypedError::GuestShellDisabled);
+    }
+    Ok(())
+}
+
+fn shell_name_from_guest(value: String) -> Result<public_wire::ShellName, TypedError> {
+    public_wire::ShellName::new(value).map_err(|_| TypedError::WireInvalidFrame {
+        detail: "guest shell response carried an invalid shell name".to_owned(),
+    })
+}
+
+fn map_shell_state(
+    state: protobuf::EnumOrUnknown<pb::ShellState>,
+) -> public_wire::ShellSessionState {
+    match state
+        .enum_value()
+        .unwrap_or(pb::ShellState::SHELL_STATE_UNSPECIFIED)
+    {
+        pb::ShellState::SHELL_STATE_ATTACHED => public_wire::ShellSessionState::Attached,
+        pb::ShellState::SHELL_STATE_DETACHED => public_wire::ShellSessionState::Detached,
+        pb::ShellState::SHELL_STATE_KILLED => public_wire::ShellSessionState::Killed,
+        pb::ShellState::SHELL_STATE_POOL_UNAVAILABLE => {
+            public_wire::ShellSessionState::PoolUnavailable
+        }
+        pb::ShellState::SHELL_STATE_FEATURE_DISABLED => {
+            public_wire::ShellSessionState::FeatureDisabled
+        }
+        pb::ShellState::SHELL_STATE_OUTPUT_GAP => public_wire::ShellSessionState::OutputGap,
+        pb::ShellState::SHELL_STATE_UNSPECIFIED => public_wire::ShellSessionState::Detached,
+    }
+}
+
+fn map_shell_close_cause(
+    cause: protobuf::EnumOrUnknown<pb::ShellCloseCause>,
+) -> Option<public_wire::ShellCloseCause> {
+    match cause
+        .enum_value()
+        .unwrap_or(pb::ShellCloseCause::SHELL_CLOSE_CAUSE_UNSPECIFIED)
+    {
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_CLIENT_DETACH => {
+            Some(public_wire::ShellCloseCause::ClientDetach)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_EVICTED_BY_FORCE => {
+            Some(public_wire::ShellCloseCause::EvictedByForce)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_EVICTED_BY_ADMIN_DETACH => {
+            Some(public_wire::ShellCloseCause::EvictedByAdminDetach)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_KILLED_BY_ADMIN => {
+            Some(public_wire::ShellCloseCause::KilledByAdmin)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_POOL_UNAVAILABLE => {
+            Some(public_wire::ShellCloseCause::PoolUnavailable)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_OUTPUT_GAP => {
+            Some(public_wire::ShellCloseCause::OutputGap)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_UNSPECIFIED => None,
+    }
+}
+
+fn map_shell_list_response(
+    response: pb::ShellListResponse,
+) -> Result<public_wire::ShellListResult, TypedError> {
+    Ok(public_wire::ShellListResult {
+        default_name: shell_name_from_guest(response.default_name)?,
+        sessions: response
+            .sessions
+            .into_iter()
+            .map(|entry| {
+                Ok(public_wire::ShellListEntry {
+                    name: shell_name_from_guest(entry.name)?,
+                    state: map_shell_state(entry.state),
+                    attached: entry.attached,
+                    is_default: entry.is_default,
+                })
+            })
+            .collect::<Result<Vec<_>, TypedError>>()?,
+    })
+}
+
+fn map_shell_detach_response(
+    response: pb::ShellDetachResponse,
+) -> Result<public_wire::ShellDetachResult, TypedError> {
+    Ok(public_wire::ShellDetachResult {
+        resolved_name: shell_name_from_guest(response.resolved_name)?,
+        detached: response.detached,
+        cause: map_shell_close_cause(response.cause),
+    })
+}
+
+fn map_shell_kill_response(
+    response: pb::ShellKillResponse,
+) -> Result<public_wire::ShellKillResult, TypedError> {
+    Ok(public_wire::ShellKillResult {
+        name: shell_name_from_guest(response.name)?,
+        killed: response.killed,
+        state: map_shell_state(response.state),
+    })
 }
 
 const EXEC_METRIC: &str = "nixling_daemon_guest_control_exec_total";
@@ -18596,6 +18835,15 @@ mod broker_dispatch_tests {
         // a launcher / non-admin peer MUST be denied BEFORE any probe / sign /
         // read runs (the gate is enforced in `dispatch_request`).
         assert!(verb_requires_admin("readGuestConfig"));
+    }
+
+    #[test]
+    fn shell_verb_is_admin_only() {
+        use super::verb_requires_admin;
+        // Shell operations cross into the guest and can attach/detach/kill a
+        // workload-user terminal, so the daemon must deny launchers before any
+        // session lookup, guest-control probe, or owner reservation.
+        assert!(verb_requires_admin("shell"));
     }
 
     #[test]

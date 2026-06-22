@@ -397,6 +397,46 @@ pub fn parse_exec_op(bytes: &[u8]) -> Result<(u64, public_wire::ExecOp), TypedEr
     Ok((op_id, op))
 }
 
+/// Extract the envelope-level `opId` from a shell request frame, defaulting to
+/// `0` when absent. Mirrors exec owner framing without making `opId` part of the
+/// public `ShellOp` JSON body.
+pub fn shell_op_id(bytes: &[u8]) -> u64 {
+    serde_json::from_slice::<Value>(bytes)
+        .ok()
+        .and_then(|value| value.get("opId").and_then(Value::as_u64))
+        .unwrap_or(0)
+}
+
+/// Parse a shell op frame into its correlating `opId` and multiplexed op.
+pub fn parse_shell_op(bytes: &[u8]) -> Result<(u64, public_wire::ShellOp), TypedError> {
+    let mut value: Value =
+        serde_json::from_slice(bytes).map_err(|err| TypedError::WireInvalidFrame {
+            detail: err.to_string(),
+        })?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "request frame must be a JSON object".to_owned(),
+        })?;
+    let request_type = object
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "missing request type".to_owned(),
+        })?
+        .to_owned();
+    if request_type != "shell" {
+        return Err(TypedError::WireUnsupportedRequest { request_type });
+    }
+    object.remove("type");
+    let op_id = object
+        .remove("opId")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let op = serde_json::from_value(Value::Object(object.clone())).map_err(map_parse_error)?;
+    Ok((op_id, op))
+}
+
 pub fn negotiate_version(
     client_range: &str,
     accepted_range: &str,
@@ -575,6 +615,24 @@ pub fn exec_response_with_id(op_id: u64, payload: &public_wire::ExecOpResponse) 
     value
 }
 
+/// Serialize a `ShellOpResponse` as the `shellResponse` daemon wire frame.
+pub fn shell_response(payload: &public_wire::ShellOpResponse) -> Value {
+    let mut value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("type".to_owned(), Value::String("shellResponse".to_owned()));
+    }
+    value
+}
+
+/// `shellResponse` frame tagged with the correlating envelope `opId`.
+pub fn shell_response_with_id(op_id: u64, payload: &public_wire::ShellOpResponse) -> Value {
+    let mut value = shell_response(payload);
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("opId".to_owned(), Value::from(op_id));
+    }
+    value
+}
+
 /// `error` frame tagged with the correlating envelope `opId` so the owner
 /// connection can return an out-of-order op error without the CLI mismatching
 /// it against a different in-flight op.
@@ -614,8 +672,8 @@ fn map_parse_error(error: serde_json::Error) -> TypedError {
 
 #[cfg(test)]
 mod tests {
-    use super::{Request, parse_request};
-    use nixling_ipc::public_wire::ShellOp;
+    use super::{Request, parse_request, shell_response_with_id};
+    use nixling_ipc::public_wire::{ShellListResult, ShellName, ShellOp, ShellOpResponse};
 
     #[test]
     fn shell_request_parses_as_typed_shell_op() {
@@ -632,5 +690,17 @@ mod tests {
         let frame = br#"{"type":"shell","op":"kill","args":{"vm":"corp-vm"}}"#;
         let error = parse_request(frame).expect_err("kill without name rejects");
         assert_eq!(error.kind(), "wire-invalid-frame");
+    }
+
+    #[test]
+    fn shell_response_is_op_id_tagged() {
+        let payload = ShellOpResponse::List(ShellListResult {
+            default_name: ShellName::new("default").unwrap(),
+            sessions: Vec::new(),
+        });
+        let value = shell_response_with_id(42, &payload);
+        assert_eq!(value["type"], "shellResponse");
+        assert_eq!(value["opId"], 42);
+        assert_eq!(value["op"], "list");
     }
 }
