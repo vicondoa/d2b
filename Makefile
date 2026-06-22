@@ -4,11 +4,12 @@
 # interface incrementally during the test rearchitecture.
 
 .PHONY: pre-tag smoke-lite i3-check \
-        check check-ci check-all check-fast check-tier0 \
+        check check-static check-ci check-all check-fast check-tier0 \
         test test-unit \
         test-lint test-rust test-proofs test-flake test-nix-unit \
         test-flake-list \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
+        layer1-workflow layer1-workflow-check \
         ledger ledger-regen check-inventory pr-checklist-gate ci-uses-make nix-unit-pin flake-matrix-pin
 
 # Current Nix system double, used to address per-system flake.checks attrs.
@@ -18,11 +19,11 @@ SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 
 # ===========================================================================
-# Test-rearchitecture interface (plan §2.9). The targets are the stable
-# contract; the tools behind them change per wave. W0: `check` wraps today's
-# static.sh; per-layer targets route through tests/migration-ledger.toml.
+# Test-rearchitecture interface. The targets are the stable contract; the
+# local/CI Layer-1 gate graph lives in tests/layer1-jobs.json.
 #
-#   make check          L1 PR gate (A-F,H) — Ubuntu+Nix, any runner. Done-gate.
+#   make check          L1 PR-equivalent gate, locally parallelized.
+#   make check-static   Legacy monolithic tests/static.sh full-static gate.
 #   make check-ci       check + test-integration for local/manual compatibility.
 #   make check-all      check-ci + test-hardware + perf — full local NixOS gate.
 #   make test-<layer>   focused per-layer run (ledger-driven).
@@ -31,8 +32,15 @@ NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 #   make test-hardware     G-hw real GPU/YubiKey/TPM passthrough — NixOS host only.
 # ===========================================================================
 
-## check — the Layer-1 PR done-gate. W0: the authoritative static.sh gate.
+## check — the Layer-1 PR-equivalent done-gate. The manifest runner executes
+##          check-tier0 first, then safe L1 sub-targets in parallel, then
+##          drift after the parallel phase. Tune with NL_CHECK_JOBS and
+##          NL_FLAKE_JOBS.
 check:
+	bash tests/tools/layer1-jobs run-local
+
+## check-static — legacy/full-static monolithic gate retained for explicit use.
+check-static:
 	bash tests/static.sh
 
 ## check-ci — W0: run check, then skip or run legacy G-ci on a suitable host.
@@ -57,19 +65,19 @@ check-tier0:
 # Umbrella test targets (local / agent development).
 #
 #   make test-unit        L1 gate sub-targets (lint, rust, proofs, flake, drift,
-#                         policy). The full local-dev fast gate. Use in place of
-#                         the old check-fast.
+#                         policy), run through the same manifest as CI.
 #   make test             test-unit + test-integration (full local gate).
 #   make test-integration L2 podman container integration tests.
 #
-# CI runs the individual sub-targets in parallel; locally, `make test-unit`
-# runs them serially (or `make -j test-unit` for parallelism, but beware
-# /nix/store contention).
+# CI and local runs share tests/layer1-jobs.json. Locally, NL_CHECK_JOBS bounds
+# parallel sub-targets; CI renders .github/workflows/pr-l1-static-fast.yml from
+# the same manifest.
 # ===========================================================================
 
 test: test-unit test-integration
 
-test-unit: test-lint test-rust test-proofs test-flake test-drift test-policy
+test-unit:
+	bash tests/tools/layer1-jobs run-local --skip-preflight
 
 # ===========================================================================
 # Sub-targets. Each has a corresponding tests/test-<name>.sh driver.
@@ -122,6 +130,14 @@ test-policy:
 ## test-integration — L2 podman container integration tests.
 test-integration:
 	bash tests/test-integration.sh
+
+## layer1-workflow — regenerate the Layer-1 PR workflow from tests/layer1-jobs.json.
+layer1-workflow:
+	bash tests/tools/layer1-jobs render-workflow --write
+
+## layer1-workflow-check — fail if the generated Layer-1 PR workflow is stale.
+layer1-workflow-check:
+	bash tests/tools/layer1-jobs check-workflow
 
 # ===========================================================================
 # Additional targets (helper utilities, legacy aliases, meta gates).

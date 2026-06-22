@@ -5,6 +5,7 @@
 #   * tests/unit/gates/drift-check.sh  — consolidated xtask gen-* drift
 #                                        (error-codes, daemon-api, schemas, …)
 #   * tests/unit/gates/vms-json-parity.sh — rendered vms.json vs manifest parity
+#   * tests/tools/layer1-jobs.py check-workflow — generated CI workflow drift
 #
 # CI runs this as its own job; locally it is one prerequisite of `make test-unit`.
 
@@ -38,6 +39,14 @@ for gate in \
     log "  SKIP: $gate (not present)"
   fi
 done
+
+log "--> tests/tools/layer1-jobs check-workflow"
+if bash "$ROOT/tests/tools/layer1-jobs" check-workflow; then
+  ok "layer1 workflow generated artifact"
+else
+  fail "layer1 workflow generated artifact"
+  rc=1
+fi
 
 [ "$rc" -eq 0 ] || exit 1
 log "test-drift OK"
