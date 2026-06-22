@@ -16,6 +16,10 @@
 
 set -euo pipefail
 
+# CI hosted runners default to an 8 MiB process stack, which can make
+# deep nixosSystem evaluations segfault before producing a Nix trace.
+ulimit -s 65536 || true
+
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
 NL_LOG=${NL_LOG:-/dev/null}
@@ -35,11 +39,31 @@ flake_ref=$(nl_flake_ref "$ROOT")
 dump_nix_segfault_debug() {
   local label="$1"
   shift
+  local cmd="$1"
+  shift
+  local args=("$@")
+  local resolved
+
+  resolved=$(command -v "$cmd" || true)
+  if [ -n "$resolved" ]; then
+    cmd="$resolved"
+  fi
+  if [ -e "$cmd" ]; then
+    cmd=$(readlink -f "$cmd")
+  fi
+  if [ -f "$cmd" ] && head -n 1 "$cmd" 2>/dev/null | grep -q '^#!'; then
+    resolved=$(grep -o -E '/[^[:space:]]+/bin/[^[:space:]]+' "$cmd" | head -n 1 || true)
+    if [ -n "$resolved" ] && [ -x "$resolved" ]; then
+      cmd="$resolved"
+    fi
+  fi
 
   log "  DEBUG: ${label} segfault diagnostics"
+  printf '::group::%s segfault diagnostics\n' "$label"
   {
-    echo "::group::${label} segfault diagnostics"
-    echo "command: $*"
+    printf 'command:'
+    printf ' %q' "$cmd" "${args[@]}"
+    printf '\n'
     echo "nix: $(command -v nix || true)"
     nix --version || true
     echo "nix-instantiate: $(command -v nix-instantiate || true)"
@@ -47,21 +71,26 @@ dump_nix_segfault_debug() {
     uname -a || true
     free -h || true
     ulimit -a || true
-    echo "NIX_CONFIG=${NIX_CONFIG:-}"
+    if [ -n "${NIX_CONFIG:-}" ]; then
+      echo "NIX_CONFIG: present (redacted)"
+    else
+      echo "NIX_CONFIG: unset"
+    fi
     echo "flake_ref=${flake_ref}"
     echo "NL_FLAKE_CHECK=${NL_FLAKE_CHECK:-}"
     if command -v gdb >/dev/null 2>&1; then
-      gdb -q -batch \
+      DEBUGINFOD_URLS="" gdb -q -batch \
         -ex 'set pagination off' \
+        -ex 'set debuginfod enabled off' \
         -ex run \
-        -ex 'thread apply all bt full' \
+        -ex 'thread apply all bt 100' \
         -ex 'info registers' \
-        --args "$@" || true
+        --args "$cmd" "${args[@]}" || true
     else
       echo "gdb unavailable; skipping native backtrace"
     fi
-    echo "::endgroup::"
-  } >&2
+  } 2>&1 | sed 's/^::/ : : /' >&2
+  printf '::endgroup::\n'
 }
 
 # Single-check shard mode (CI dynamic matrix): NL_FLAKE_CHECK=<name> instantiates
@@ -108,8 +137,18 @@ if [ -n "${NL_FLAKE_CHECK:-}" ]; then
       dump_nix_segfault_debug "nix-instantiate ${NL_FLAKE_CHECK}" \
         nix-instantiate --eval --strict -E \
         "let f = builtins.getFlake \"${flake_ref}\"; in f.checks.${native}.${NL_FLAKE_CHECK}.drvPath"
-      if nix build --quiet --no-substitute --dry-run --no-link "${flake_ref}#checks.${native}.${NL_FLAKE_CHECK}" >/dev/null; then
+      set +e
+      nix build --quiet --no-substitute --dry-run --no-link "${flake_ref}#checks.${native}.${NL_FLAKE_CHECK}" >/dev/null
+      build_rc=$?
+      set -e
+      if [ "$build_rc" -eq 0 ]; then
         ok "flake check shard: ${NL_FLAKE_CHECK} (nix build --dry-run fallback)"
+      elif [ "$build_rc" -eq 139 ]; then
+        dump_nix_segfault_debug "nix build --dry-run ${NL_FLAKE_CHECK}" \
+          nix build --quiet --no-substitute --dry-run --no-link \
+          "${flake_ref}#checks.${native}.${NL_FLAKE_CHECK}"
+        fail "flake check shard: ${NL_FLAKE_CHECK}"
+        exit 1
       else
         fail "flake check shard: ${NL_FLAKE_CHECK}"
         exit 1
