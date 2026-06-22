@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH nixling-shell 1 1970-01-01 nixling "nixling CLI"
+.SH NAME
+shell \- Attach to or manage persistent named guest shells
+.SH SYNOPSIS
+\fBshell\fR [\fB\-h\fR|\fB\-\-help\fR] [\fIARGS\fR] 
+.SH DESCRIPTION
+Attach to or manage persistent named guest shells
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fIARGS\fR]
+VM name followed by optional shell action and flags; run `nixling shell \-\-help` for forms
+.SH EXTRA
+Forms:
+  nixling shell <vm> [\-\-name NAME] [\-\-force]
+  nixling shell <vm> attach [\-\-name NAME] [\-\-force]
+  nixling shell <vm> list [\-\-json]
+  nixling shell <vm> detach [\-\-name NAME] [\-\-json]
+  nixling shell <vm> kill \-\-name NAME [\-\-json]
+
+`nixling shell` opens persistent interactive sessions. Use `nixling vm exec <vm> \-\- <cmd>` for one\-off commands.

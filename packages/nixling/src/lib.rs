@@ -991,8 +991,11 @@ struct OpArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(
+    after_help = "Forms:\n  nixling shell <vm> [--name NAME] [--force]\n  nixling shell <vm> attach [--name NAME] [--force]\n  nixling shell <vm> list [--json]\n  nixling shell <vm> detach [--name NAME] [--json]\n  nixling shell <vm> kill --name NAME [--json]\n\n`nixling shell` opens persistent interactive sessions. Use `nixling vm exec <vm> -- <cmd>` for one-off commands."
+)]
 struct ShellArgs {
-    /// Shell command arguments. The first value is always the VM name.
+    /// VM name followed by optional shell action and flags; run `nixling shell --help` for forms.
     #[arg(value_name = "ARGS", num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true)]
     raw: Vec<OsString>,
 }
@@ -1023,8 +1026,10 @@ enum ShellCommand {
 #[derive(Debug, Parser)]
 #[command(no_binary_name = true)]
 struct ShellImplicitAttachArgs {
+    /// Persistent shell session name. Omit to use the VM's configured default.
     #[arg(long)]
     name: Option<String>,
+    /// Detach an existing attached client before attaching to this session.
     #[arg(long)]
     force: bool,
 }
@@ -1032,8 +1037,10 @@ struct ShellImplicitAttachArgs {
 #[derive(Debug, Parser)]
 #[command(no_binary_name = true)]
 struct ShellAttachArgs {
+    /// Persistent shell session name. Omit to use the VM's configured default.
     #[arg(long)]
     name: Option<String>,
+    /// Detach an existing attached client before attaching to this session.
     #[arg(long)]
     force: bool,
 }
@@ -1041,8 +1048,10 @@ struct ShellAttachArgs {
 #[derive(Debug, Parser)]
 #[command(no_binary_name = true)]
 struct ShellListArgs {
+    /// Render machine-readable JSON.
     #[arg(long, conflicts_with = "human")]
     json: bool,
+    /// Render human-readable output.
     #[arg(long, conflicts_with = "json")]
     human: bool,
 }
@@ -1050,10 +1059,13 @@ struct ShellListArgs {
 #[derive(Debug, Parser)]
 #[command(no_binary_name = true)]
 struct ShellDetachCliArgs {
+    /// Persistent shell session name. Omit to detach the configured default.
     #[arg(long)]
     name: Option<String>,
+    /// Render machine-readable JSON.
     #[arg(long, conflicts_with = "human")]
     json: bool,
+    /// Render human-readable output.
     #[arg(long, conflicts_with = "json")]
     human: bool,
 }
@@ -1061,10 +1073,13 @@ struct ShellDetachCliArgs {
 #[derive(Debug, Parser)]
 #[command(no_binary_name = true)]
 struct ShellKillCliArgs {
+    /// Persistent shell session name to kill. Required because kill is destructive.
     #[arg(long)]
     name: String,
+    /// Render machine-readable JSON.
     #[arg(long, conflicts_with = "human")]
     json: bool,
+    /// Render human-readable output.
     #[arg(long, conflicts_with = "json")]
     human: bool,
 }
@@ -2183,18 +2198,19 @@ fn parse_shell_args(args: &ShellArgs) -> Result<ParsedShellArgs, CliFailure> {
     };
     let vm = shell_arg_to_string(raw_vm, "VM")?;
     let tail = &args.raw[1..];
-    match tail.first().and_then(|value| value.to_str()) {
-        None => {
-            let parsed = ShellImplicitAttachArgs::try_parse_from(std::iter::empty::<OsString>())
-                .map_err(shell_clap_failure)?;
-            Ok(ParsedShellArgs {
-                vm,
-                name: parsed.name,
-                force: parsed.force,
-                command: None,
-            })
-        }
-        Some("attach") => {
+    if tail.is_empty() {
+        let parsed = ShellImplicitAttachArgs::try_parse_from(std::iter::empty::<OsString>())
+            .map_err(shell_clap_failure)?;
+        return Ok(ParsedShellArgs {
+            vm,
+            name: parsed.name,
+            force: parsed.force,
+            command: None,
+        });
+    }
+    let tail_word = shell_arg_to_string(&tail[0], "shell argument")?;
+    match tail_word.as_str() {
+        "attach" => {
             let parsed = ShellAttachArgs::try_parse_from(tail[1..].iter().cloned())
                 .map_err(shell_clap_failure)?;
             Ok(ParsedShellArgs {
@@ -2204,7 +2220,7 @@ fn parse_shell_args(args: &ShellArgs) -> Result<ParsedShellArgs, CliFailure> {
                 command: Some(ShellCommand::Attach(parsed)),
             })
         }
-        Some("list") => {
+        "list" => {
             let parsed = ShellListArgs::try_parse_from(tail[1..].iter().cloned())
                 .map_err(shell_clap_failure)?;
             Ok(ParsedShellArgs {
@@ -2214,7 +2230,7 @@ fn parse_shell_args(args: &ShellArgs) -> Result<ParsedShellArgs, CliFailure> {
                 command: Some(ShellCommand::List(parsed)),
             })
         }
-        Some("detach") => {
+        "detach" => {
             let parsed = ShellDetachCliArgs::try_parse_from(tail[1..].iter().cloned())
                 .map_err(shell_clap_failure)?;
             Ok(ParsedShellArgs {
@@ -2224,7 +2240,7 @@ fn parse_shell_args(args: &ShellArgs) -> Result<ParsedShellArgs, CliFailure> {
                 command: Some(ShellCommand::Detach(parsed)),
             })
         }
-        Some("kill") => {
+        "kill" => {
             let parsed = ShellKillCliArgs::try_parse_from(tail[1..].iter().cloned())
                 .map_err(shell_clap_failure)?;
             Ok(ParsedShellArgs {
@@ -2234,7 +2250,7 @@ fn parse_shell_args(args: &ShellArgs) -> Result<ParsedShellArgs, CliFailure> {
                 command: Some(ShellCommand::Kill(parsed)),
             })
         }
-        Some(word) if word.starts_with('-') => {
+        word if word.starts_with('-') => {
             let parsed = ShellImplicitAttachArgs::try_parse_from(tail.iter().cloned())
                 .map_err(shell_clap_failure)?;
             Ok(ParsedShellArgs {
@@ -2244,25 +2260,60 @@ fn parse_shell_args(args: &ShellArgs) -> Result<ParsedShellArgs, CliFailure> {
                 command: None,
             })
         }
-        Some(_) => Err(CliFailure::new(
+        _ => Err(CliFailure::new(
             2,
             "shell: unexpected trailing argument; `nixling shell` opens persistent interactive sessions; use `nixling vm exec <vm> -- <cmd>` for one-off commands",
         )),
     }
 }
 
+fn shell_json_mode(args: &ParsedShellArgs) -> bool {
+    match &args.command {
+        None | Some(ShellCommand::Attach(_)) => false,
+        Some(ShellCommand::List(args)) => args.json,
+        Some(ShellCommand::Detach(args)) => args.json,
+        Some(ShellCommand::Kill(args)) => args.json,
+    }
+}
+
+fn shell_gateway_target_failure(raw: &str, json: bool) -> Result<CliFailure, CliFailure> {
+    let exit_code = emit_host_error(
+        &host_error_envelope(
+            &format!("target not dispatchable on the host daemon: {raw}"),
+            "usage",
+            2,
+            "Whether the shell target addresses a local VM the host daemon can dispatch.",
+            "gateway-backed realm target",
+            "Run `nixling shell` against the realm gateway's nixlingd; the host daemon holds no realm configuration.",
+            "docs/reference/error-codes.md#usage",
+        ),
+        json,
+    )?;
+    Ok(CliFailure::new(
+        exit_code,
+        format!("target not dispatchable on the host daemon: {raw}"),
+    ))
+}
+
 fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
     let parsed = parse_shell_args(args)?;
+    let json_mode = shell_json_mode(&parsed);
+    let local_vm = match route_vm_target(context, &parsed.vm, json_mode)? {
+        VmTargetRoute::Local { vm } => vm,
+        VmTargetRoute::Gateway { .. } => {
+            return Err(shell_gateway_target_failure(&parsed.vm, json_mode)?);
+        }
+    };
     match &parsed.command {
-        None => cmd_shell_attach(context, &parsed.vm, parsed.name.as_deref(), parsed.force),
+        None => cmd_shell_attach(context, &local_vm, parsed.name.as_deref(), parsed.force),
         Some(ShellCommand::Attach(attach)) => {
-            cmd_shell_attach(context, &parsed.vm, attach.name.as_deref(), attach.force)
+            cmd_shell_attach(context, &local_vm, attach.name.as_deref(), attach.force)
         }
         Some(ShellCommand::List(list_args)) => {
             let response = shell_round_trip(
                 context,
                 ShellOp::List(IpcShellListArgs {
-                    vm: parsed.vm.clone(),
+                    vm: local_vm.clone(),
                 }),
             )?;
             let ShellOpResponse::List(result) = response else {
@@ -2271,7 +2322,7 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
             if list_args.json {
                 print_json(&serde_json::json!({
                     "command": "shell list",
-                    "vm": parsed.vm,
+                    "vm": local_vm,
                     "default_name": result.default_name.as_str(),
                     "sessions": result.sessions.iter().map(|entry| serde_json::json!({
                         "name": entry.name.as_str(),
@@ -2298,7 +2349,7 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
             let response = shell_round_trip(
                 context,
                 ShellOp::Detach(IpcShellDetachArgs {
-                    vm: parsed.vm.clone(),
+                    vm: local_vm.clone(),
                     name: shell_name_option(detach_args.name.as_deref())?,
                 }),
             )?;
@@ -2311,7 +2362,7 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
             if detach_args.json {
                 print_json(&serde_json::json!({
                     "command": "shell detach",
-                    "vm": parsed.vm,
+                    "vm": local_vm,
                     "name": result.resolved_name.as_str(),
                     "result": if result.detached { "detached" } else { "already-detached-or-absent" },
                     "cause": result.cause.map(shell_close_cause_str),
@@ -2320,13 +2371,13 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
                 print_stdout(&format!(
                     "detached shell '{}' on vm '{}'\n",
                     result.resolved_name.as_str(),
-                    parsed.vm
+                    local_vm
                 ));
             } else {
                 print_stdout(&format!(
                     "shell '{}' on vm '{}' was already detached or absent\n",
                     result.resolved_name.as_str(),
-                    parsed.vm
+                    local_vm
                 ));
             }
             Ok(0)
@@ -2335,7 +2386,7 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
             let response = shell_round_trip(
                 context,
                 ShellOp::Kill(IpcShellKillArgs {
-                    vm: parsed.vm.clone(),
+                    vm: local_vm.clone(),
                     name: shell_name(&kill_args.name)?,
                 }),
             )?;
@@ -2345,7 +2396,7 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
             if kill_args.json {
                 print_json(&serde_json::json!({
                     "command": "shell kill",
-                    "vm": parsed.vm,
+                    "vm": local_vm,
                     "name": result.name.as_str(),
                     "result": if result.killed { "killed" } else { "already-absent" },
                     "state": shell_state_str(result.state),
@@ -2354,13 +2405,13 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
                 print_stdout(&format!(
                     "killed shell '{}' on vm '{}'\n",
                     result.name.as_str(),
-                    parsed.vm
+                    local_vm
                 ));
             } else {
                 print_stdout(&format!(
                     "shell '{}' on vm '{}' was already absent\n",
                     result.name.as_str(),
-                    parsed.vm
+                    local_vm
                 ));
             }
             Ok(0)
@@ -2381,6 +2432,14 @@ fn cmd_shell_attach(
         ));
     }
     let name = shell_name_option(name)?;
+    let _guard = exec_client::FdStateGuard::enter(true, true)
+        .map_err(|err| CliFailure::new(42, format!("shell: failed to enter raw mode: {err}")))?;
+    let mut signals = exec_client::install_signals().map_err(|err| {
+        CliFailure::new(
+            42,
+            format!("shell: failed to install signal handlers: {err}"),
+        )
+    })?;
     let mut transport = shell_owner_transport(context)?;
     let size = exec_client::current_window_size()
         .map(|(rows, cols)| nixling_ipc::terminal_wire::TerminalSize { rows, cols })
@@ -2397,26 +2456,8 @@ fn cmd_shell_attach(
             "shell attach: unexpected daemon response",
         ));
     };
-    let forced = if attach.force_evicted {
-        "; forced detach of existing client"
-    } else {
-        ""
-    };
-    print_stdout(&format!(
-        "attached to shell '{}' on vm '{}'{}; detach with Ctrl-Space Ctrl-q; exit or Ctrl-D ends the session\n",
-        attach.resolved_name.as_str(),
-        vm,
-        forced
-    ));
-    let _guard = exec_client::FdStateGuard::enter(true, true)
-        .map_err(|err| CliFailure::new(42, format!("shell: failed to enter raw mode: {err}")))?;
+    print_stdout(&format!("{}\r\n", shell_attach_intro(vm, &attach)));
     let mut host = exec_client::RealHostIo;
-    let mut signals = exec_client::install_signals().map_err(|err| {
-        CliFailure::new(
-            42,
-            format!("shell: failed to install signal handlers: {err}"),
-        )
-    })?;
     run_shell_fsm(
         &mut transport,
         &mut host,
@@ -2489,6 +2530,20 @@ fn encode_shell_op_frame(op: &ShellOp, op_id: u64) -> Result<Vec<u8>, CliFailure
         .map_err(|err| CliFailure::new(1, format!("failed to serialize shell op: {err}")))
 }
 
+fn close_shell_attach<T>(transport: &mut T, session: &str) -> Result<(), CliFailure>
+where
+    T: terminal_client::TerminalTransport<
+            Op = ShellOp,
+            Response = ShellOpResponse,
+            Error = CliFailure,
+        >,
+{
+    let _ = transport.round_trip(&ShellOp::CloseAttach(public_wire::ShellCloseAttachArgs {
+        session: session.to_owned(),
+    }))?;
+    Ok(())
+}
+
 fn run_shell_fsm<T, H, S>(
     transport: &mut T,
     host: &mut H,
@@ -2508,43 +2563,55 @@ where
     let mut stdout_offset = 0_u64;
     let mut control_op_id = 1_u64;
     let mut buf = vec![0_u8; nixling_ipc::public_wire::EXEC_MAX_CHUNK_BYTES as usize];
+    let mut pending_stdin: Vec<u8> = Vec::new();
+    let mut detach_escape_pending = false;
     loop {
         for signal in signals.drain() {
-            if signal == exec_client::ExecSignal::Winch
-                && let Some((rows, cols)) = host.window_size()
-            {
-                let _ = transport.round_trip(&ShellOp::Resize(
-                    nixling_ipc::terminal_wire::TerminalResize {
-                        session: session.to_owned(),
-                        rows,
-                        cols,
-                        op_id: control_op_id,
-                    },
-                ))?;
-                control_op_id = control_op_id.wrapping_add(1);
+            match signal {
+                exec_client::ExecSignal::Winch => {
+                    if let Some((rows, cols)) = host.window_size() {
+                        let _ = transport.round_trip(&ShellOp::Resize(
+                            nixling_ipc::terminal_wire::TerminalResize {
+                                session: session.to_owned(),
+                                rows,
+                                cols,
+                                op_id: control_op_id,
+                            },
+                        ))?;
+                        control_op_id = control_op_id.wrapping_add(1);
+                    }
+                }
+                exec_client::ExecSignal::Interrupt
+                | exec_client::ExecSignal::Terminate
+                | exec_client::ExecSignal::Stop
+                | exec_client::ExecSignal::Hangup
+                | exec_client::ExecSignal::Quit => {
+                    close_shell_attach(transport, session)?;
+                    return Ok(());
+                }
             }
         }
 
         match host.read_stdin(&mut buf) {
             Ok(0) => {
-                let _ = transport.round_trip(&ShellOp::CloseAttach(
-                    public_wire::ShellCloseAttachArgs {
-                        session: session.to_owned(),
-                    },
-                ));
+                close_shell_attach(transport, session)?;
                 return Ok(());
             }
             Ok(read) => {
-                let response = transport.round_trip(&ShellOp::WriteStdin(
-                    nixling_ipc::terminal_wire::TerminalWriteStdin {
-                        session: session.to_owned(),
-                        offset: stdin_offset,
-                        chunk_base64: nixling_core::base64_codec::encode(&buf[..read]),
-                        eof: false,
-                    },
-                ))?;
-                if let ShellOpResponse::WriteStdin(result) = response {
-                    stdin_offset = result.next_offset;
+                for byte in &buf[..read] {
+                    if detach_escape_pending {
+                        detach_escape_pending = false;
+                        if *byte == 0x11 {
+                            close_shell_attach(transport, session)?;
+                            return Ok(());
+                        }
+                        pending_stdin.push(0);
+                    }
+                    if *byte == 0 {
+                        detach_escape_pending = true;
+                    } else {
+                        pending_stdin.push(*byte);
+                    }
                 }
             }
             Err(err)
@@ -2558,6 +2625,45 @@ where
                     format!("shell: stdin read failed: {err}"),
                 ));
             }
+        }
+
+        let mut sent = 0_usize;
+        while sent < pending_stdin.len() {
+            let end = (sent + nixling_ipc::public_wire::EXEC_MAX_CHUNK_BYTES as usize)
+                .min(pending_stdin.len());
+            let response = transport.round_trip(&ShellOp::WriteStdin(
+                nixling_ipc::terminal_wire::TerminalWriteStdin {
+                    session: session.to_owned(),
+                    offset: stdin_offset,
+                    chunk_base64: nixling_core::base64_codec::encode(&pending_stdin[sent..end]),
+                    eof: false,
+                },
+            ))?;
+            let ShellOpResponse::WriteStdin(result) = response else {
+                return Err(CliFailure::new(1, "shell: unexpected writeStdin response"));
+            };
+            let accepted_len = usize::try_from(result.accepted_len).map_err(|_| {
+                CliFailure::new(1, "shell: daemon reported invalid accepted stdin length")
+            })?;
+            if accepted_len > end - sent {
+                return Err(CliFailure::new(
+                    1,
+                    "shell: daemon accepted more stdin bytes than were offered",
+                ));
+            }
+            stdin_offset = result.next_offset;
+            if result.stdin_closed {
+                pending_stdin.clear();
+                sent = 0;
+                break;
+            }
+            sent += accepted_len;
+            if accepted_len == 0 {
+                break;
+            }
+        }
+        if sent > 0 {
+            pending_stdin.drain(..sent);
         }
 
         let response = transport.round_trip(&ShellOp::ReadOutput(
@@ -2659,17 +2765,17 @@ fn shell_close_cause_str(cause: public_wire::ShellCloseCause) -> &'static str {
     }
 }
 
-fn shell_trailing_command_hint(raw_args: &[OsString]) -> Option<&'static str> {
-    let command = raw_args.get(1).and_then(|arg| arg.to_str())?;
-    if command != "shell" {
-        return None;
-    }
-    let trailing = raw_args.get(3).and_then(|arg| arg.to_str())?;
-    if trailing.starts_with('-') || matches!(trailing, "attach" | "list" | "detach" | "kill") {
-        return None;
-    }
-    Some(
-        "hint: `nixling shell` opens persistent interactive sessions; use `nixling vm exec <vm> -- <cmd>` for one-off commands.\n",
+fn shell_attach_intro(vm: &str, attach: &public_wire::ShellAttachResult) -> String {
+    let forced = if attach.force_evicted {
+        "; forced detach of existing client"
+    } else {
+        ""
+    };
+    format!(
+        "attached to shell '{}' on vm '{}'{}; detach with Ctrl-Space Ctrl-q; exit or Ctrl-D ends the session",
+        attach.resolved_name.as_str(),
+        vm,
+        forced
     )
 }
 
@@ -2712,9 +2818,6 @@ where
                     .map(|arg| arg == "check")
                     .unwrap_or(false);
             let _ = err.print();
-            if let Some(hint) = shell_trailing_command_hint(&raw_args) {
-                let _ = write_stderr_bytes(hint.as_bytes());
-            }
             return if is_host_usage { 3 } else { err.exit_code() };
         }
     };
@@ -10849,7 +10952,7 @@ mod host_install_dispatch_tests {
         io,
         os::{
             fd::{AsRawFd as _, RawFd},
-            unix::fs::PermissionsExt,
+            unix::{ffi::OsStringExt, fs::PermissionsExt},
         },
         path::PathBuf,
         sync::{
@@ -11146,23 +11249,74 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
-    fn shell_trailing_command_hint_points_to_vm_exec() {
-        let raw_args = [
-            OsString::from("nixling"),
-            OsString::from("shell"),
-            OsString::from("work"),
-            OsString::from("htop"),
-        ];
-        let hint = super::shell_trailing_command_hint(&raw_args).expect("command-like tail hints");
-        assert!(hint.contains("nixling vm exec <vm> -- <cmd>"));
+    fn shell_parser_rejects_missing_vm_command_tail_and_invalid_utf8() {
+        let missing = parse_shell_raw(&["nixling", "shell"]);
+        let missing_failure =
+            super::parse_shell_args(&missing).expect_err("missing VM is rejected");
+        assert_eq!(missing_failure.exit_code, 2);
+        assert!(missing_failure.message.contains("missing VM"));
 
-        let management = [
-            OsString::from("nixling"),
-            OsString::from("shell"),
-            OsString::from("work"),
-            OsString::from("list"),
-        ];
-        assert!(super::shell_trailing_command_hint(&management).is_none());
+        let tail = parse_shell_raw(&["nixling", "shell", "work", "htop"]);
+        let tail_failure = super::parse_shell_args(&tail).expect_err("command tail is rejected");
+        assert_eq!(tail_failure.exit_code, 2);
+        assert!(
+            tail_failure
+                .message
+                .contains("nixling vm exec <vm> -- <cmd>")
+        );
+
+        let invalid = super::ShellArgs {
+            raw: vec![OsString::from("work"), OsString::from_vec(vec![0xff])],
+        };
+        let invalid_failure =
+            super::parse_shell_args(&invalid).expect_err("invalid utf8 tail is rejected");
+        assert_eq!(invalid_failure.exit_code, 2);
+        assert!(invalid_failure.message.contains("valid UTF-8"));
+    }
+
+    #[test]
+    fn shell_attach_requires_terminal_before_daemon_access() {
+        let context = missing_daemon_context();
+        let failure = super::cmd_shell_attach(&context, "work", None, false)
+            .expect_err("non-tty attach is rejected");
+        assert_eq!(failure.exit_code, 2);
+        assert!(failure.message.contains("requires stdin and stdout"));
+    }
+
+    #[test]
+    fn shell_rejects_gateway_targets_before_daemon_dispatch() {
+        let manifest_path = test_socket_path("shell-gateway-target", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("manifest parent");
+        }
+        write_test_manifest(&manifest_path, "sys-work-gateway");
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("bundle.json"),
+            public_socket: manifest_path.with_extension("sock"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let args = parse_shell_raw(&[
+            "nixling",
+            "shell",
+            "demo.aca.work.nixling",
+            "list",
+            "--json",
+        ]);
+        let (result, stdout) =
+            super::with_test_stdout_capture(|| super::cmd_shell(&context, &args));
+        let failure = result.expect_err("gateway shell target is rejected locally");
+        assert_eq!(failure.exit_code, 2);
+        assert!(failure.message.contains("not dispatchable"));
+        let envelope: Value = serde_json::from_slice(&stdout).expect("json usage envelope");
+        assert_eq!(envelope.get("code").and_then(Value::as_str), Some("usage"));
+        let _ = std::fs::remove_file(&manifest_path);
     }
 
     #[test]
@@ -11274,8 +11428,89 @@ mod host_install_dispatch_tests {
         );
     }
 
+    #[test]
+    fn shell_management_renders_human_shapes() {
+        let list_args = parse_shell_raw(&["nixling", "shell", "work", "list"]);
+        let (list_result, _, list_stdout) = run_public_command_with_mock_daemon(
+            "shell-list-human",
+            "work",
+            shell_response(public_wire::ShellOpResponse::List(
+                public_wire::ShellListResult {
+                    default_name: super::IpcShellName::new("default")
+                        .expect("valid default shell name"),
+                    sessions: vec![public_wire::ShellListEntry {
+                        name: super::IpcShellName::new("default").expect("valid shell name"),
+                        state: public_wire::ShellSessionState::Detached,
+                        attached: false,
+                        is_default: true,
+                    }],
+                },
+            )),
+            |context| super::cmd_shell(context, &list_args),
+        );
+        assert_eq!(list_result.expect("list exits successfully"), 0);
+        let list_text = String::from_utf8(list_stdout).expect("list human utf8");
+        assert!(list_text.contains("NAME\tSTATE\tATTACHED\tDEFAULT"));
+        assert!(list_text.contains("default\tdetached\tfalse\ttrue"));
+
+        let detach_args = parse_shell_raw(&["nixling", "shell", "work", "detach"]);
+        let (detach_result, _, detach_stdout) = run_public_command_with_mock_daemon(
+            "shell-detach-human",
+            "work",
+            shell_response(public_wire::ShellOpResponse::Detach(
+                public_wire::ShellDetachResult {
+                    resolved_name: super::IpcShellName::new("default").expect("valid shell name"),
+                    detached: true,
+                    cause: Some(public_wire::ShellCloseCause::EvictedByAdminDetach),
+                },
+            )),
+            |context| super::cmd_shell(context, &detach_args),
+        );
+        assert_eq!(detach_result.expect("detach exits successfully"), 0);
+        let detach_text = String::from_utf8(detach_stdout).expect("detach human utf8");
+        assert!(detach_text.contains("detached shell 'default' on vm 'work'"));
+
+        let kill_args = parse_shell_raw(&["nixling", "shell", "work", "kill", "--name", "ops"]);
+        let (kill_result, _, kill_stdout) = run_public_command_with_mock_daemon(
+            "shell-kill-human",
+            "work",
+            shell_response(public_wire::ShellOpResponse::Kill(
+                public_wire::ShellKillResult {
+                    name: super::IpcShellName::new("ops").expect("valid shell name"),
+                    killed: false,
+                    state: public_wire::ShellSessionState::Killed,
+                },
+            )),
+            |context| super::cmd_shell(context, &kill_args),
+        );
+        assert_eq!(kill_result.expect("kill exits successfully"), 0);
+        let kill_text = String::from_utf8(kill_stdout).expect("kill human utf8");
+        assert!(kill_text.contains("shell 'ops' on vm 'work' was already absent"));
+    }
+
+    #[test]
+    fn shell_management_rejects_mismatched_daemon_response() {
+        let kill_args = parse_shell_raw(&["nixling", "shell", "work", "kill", "--name", "ops"]);
+        let (result, _, _) = run_public_command_with_mock_daemon(
+            "shell-kill-mismatch",
+            "work",
+            shell_response(public_wire::ShellOpResponse::List(
+                public_wire::ShellListResult {
+                    default_name: super::IpcShellName::new("default")
+                        .expect("valid default shell name"),
+                    sessions: Vec::new(),
+                },
+            )),
+            |context| super::cmd_shell(context, &kill_args),
+        );
+        let failure = result.expect_err("mismatched shell response fails");
+        assert_eq!(failure.exit_code, 1);
+        assert!(failure.message.contains("unexpected daemon response"));
+    }
+
     struct FakeShellTransport {
         ops: Vec<public_wire::ShellOp>,
+        write_accepts: VecDeque<u64>,
         read_chunks: VecDeque<nixling_ipc::terminal_wire::TerminalReadOutputChunk>,
     }
 
@@ -11291,9 +11526,10 @@ mod host_install_dispatch_tests {
                     nixling_ipc::terminal_wire::TerminalControlResult { delivered: true },
                 )),
                 public_wire::ShellOp::WriteStdin(write) => {
-                    let accepted_len = nixling_core::base64_codec::decode(&write.chunk_base64)
+                    let offered_len = nixling_core::base64_codec::decode(&write.chunk_base64)
                         .expect("stdin chunk is valid base64")
                         .len() as u64;
+                    let accepted_len = self.write_accepts.pop_front().unwrap_or(offered_len);
                     Ok(public_wire::ShellOpResponse::WriteStdin(
                         nixling_ipc::terminal_wire::TerminalWriteStdinResult {
                             accepted_len,
@@ -11308,6 +11544,14 @@ mod host_install_dispatch_tests {
                         self.read_chunks.pop_front().expect("read chunk queued"),
                     ))
                 }
+                public_wire::ShellOp::CloseAttach(close) => Ok(
+                    public_wire::ShellOpResponse::CloseAttach(public_wire::ShellDetachResult {
+                        resolved_name: super::IpcShellName::new("default")
+                            .expect("valid shell name"),
+                        detached: close.session == "shell-session",
+                        cause: Some(public_wire::ShellCloseCause::ClientDetach),
+                    }),
+                ),
                 other => panic!("unexpected shell op in fake transport: {other:?}"),
             }
         }
@@ -11342,18 +11586,14 @@ mod host_install_dispatch_tests {
     }
 
     struct FakeShellSignals {
-        pending: bool,
+        pending: VecDeque<Vec<super::exec_client::ExecSignal>>,
     }
 
     impl super::terminal_client::TerminalSignalSource for FakeShellSignals {
         type Signal = super::exec_client::ExecSignal;
 
         fn drain(&mut self) -> Vec<Self::Signal> {
-            if std::mem::take(&mut self.pending) {
-                vec![super::exec_client::ExecSignal::Winch]
-            } else {
-                Vec::new()
-            }
+            self.pending.pop_front().unwrap_or_default()
         }
     }
 
@@ -11361,6 +11601,7 @@ mod host_install_dispatch_tests {
     fn shell_attach_fsm_reuses_terminal_transport() {
         let mut transport = FakeShellTransport {
             ops: Vec::new(),
+            write_accepts: VecDeque::new(),
             read_chunks: VecDeque::from([nixling_ipc::terminal_wire::TerminalReadOutputChunk {
                 data_base64: nixling_core::base64_codec::encode(b"hello\n"),
                 next_offset: 6,
@@ -11374,7 +11615,9 @@ mod host_install_dispatch_tests {
             stdin: Some(b"echo hi\n".to_vec()),
             stdout: Vec::new(),
         };
-        let mut signals = FakeShellSignals { pending: true };
+        let mut signals = FakeShellSignals {
+            pending: VecDeque::from([vec![super::exec_client::ExecSignal::Winch]]),
+        };
 
         super::run_shell_fsm(&mut transport, &mut host, &mut signals, "shell-session")
             .expect("shell FSM completes");
@@ -11413,6 +11656,111 @@ mod host_install_dispatch_tests {
                 }
             )) if session == "shell-session"
         ));
+    }
+
+    #[test]
+    fn shell_attach_fsm_intercepts_detach_escape() {
+        let mut transport = FakeShellTransport {
+            ops: Vec::new(),
+            write_accepts: VecDeque::new(),
+            read_chunks: VecDeque::new(),
+        };
+        let mut host = FakeShellHost {
+            stdin: Some(vec![0x00, 0x11]),
+            stdout: Vec::new(),
+        };
+        let mut signals = FakeShellSignals {
+            pending: VecDeque::new(),
+        };
+
+        super::run_shell_fsm(&mut transport, &mut host, &mut signals, "shell-session")
+            .expect("detach escape closes attach");
+
+        assert!(matches!(
+            transport.ops.as_slice(),
+            [public_wire::ShellOp::CloseAttach(public_wire::ShellCloseAttachArgs {
+                session
+            })] if session == "shell-session"
+        ));
+        assert!(host.stdout.is_empty());
+    }
+
+    #[test]
+    fn shell_attach_fsm_closes_on_fatal_signal() {
+        let mut transport = FakeShellTransport {
+            ops: Vec::new(),
+            write_accepts: VecDeque::new(),
+            read_chunks: VecDeque::new(),
+        };
+        let mut host = FakeShellHost {
+            stdin: None,
+            stdout: Vec::new(),
+        };
+        let mut signals = FakeShellSignals {
+            pending: VecDeque::from([vec![super::exec_client::ExecSignal::Terminate]]),
+        };
+
+        super::run_shell_fsm(&mut transport, &mut host, &mut signals, "shell-session")
+            .expect("fatal signal closes attach");
+
+        assert!(matches!(
+            transport.ops.as_slice(),
+            [public_wire::ShellOp::CloseAttach(public_wire::ShellCloseAttachArgs {
+                session
+            })] if session == "shell-session"
+        ));
+    }
+
+    #[test]
+    fn shell_attach_fsm_retries_partially_accepted_stdin() {
+        let mut transport = FakeShellTransport {
+            ops: Vec::new(),
+            write_accepts: VecDeque::from([3, 4]),
+            read_chunks: VecDeque::from([nixling_ipc::terminal_wire::TerminalReadOutputChunk {
+                data_base64: String::new(),
+                next_offset: 0,
+                eof: true,
+                dropped_bytes: 0,
+                truncated: false,
+                timed_out: false,
+            }]),
+        };
+        let mut host = FakeShellHost {
+            stdin: Some(b"abcdefg".to_vec()),
+            stdout: Vec::new(),
+        };
+        let mut signals = FakeShellSignals {
+            pending: VecDeque::new(),
+        };
+
+        super::run_shell_fsm(&mut transport, &mut host, &mut signals, "shell-session")
+            .expect("partial stdin writes complete");
+
+        let writes: Vec<Vec<u8>> = transport
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                public_wire::ShellOp::WriteStdin(write) => {
+                    Some(nixling_core::base64_codec::decode(&write.chunk_base64).unwrap())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(writes, vec![b"abcdefg".to_vec(), b"defg".to_vec()]);
+    }
+
+    #[test]
+    fn shell_attach_intro_mentions_force_eviction() {
+        let attach = public_wire::ShellAttachResult {
+            session: "session-1".to_owned(),
+            resolved_name: super::IpcShellName::new("ops").expect("valid shell name"),
+            state: public_wire::ShellSessionState::Attached,
+            force_evicted: true,
+        };
+        let message = super::shell_attach_intro("work", &attach);
+        assert!(message.contains("forced detach of existing client"));
+        assert!(message.contains("detach with Ctrl-Space Ctrl-q"));
+        assert!(message.contains("exit or Ctrl-D ends the session"));
     }
 
     #[test]

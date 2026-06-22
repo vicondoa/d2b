@@ -459,18 +459,35 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
         .manual("nixling CLI")
         .render(&mut host_man_buffer)?;
     fs::write(&host_man_path, host_man_buffer)?;
+    let mut shell_command = nixling::cli_command()
+        .find_subcommand_mut("shell")
+        .expect("shell subcommand exists")
+        .clone();
+    shell_command.build();
+    let shell_man_path = man_dir.join("nixling-shell.1");
+    let mut shell_man_buffer = Vec::new();
+    Man::new(shell_command)
+        .title("nixling-shell")
+        .section("1")
+        .date("1970-01-01")
+        .source("nixling".to_owned())
+        .manual("nixling CLI")
+        .render(&mut shell_man_buffer)?;
+    fs::write(&shell_man_path, shell_man_buffer)?;
 
     let bash_path = comp_dir.join("nixling.bash");
     let mut bash_command = nixling::cli_command();
     let mut bash_buffer = Vec::new();
     generate(Bash, &mut bash_command, "nixling", &mut bash_buffer);
     let bash_buffer = patch_vm_exec_logs_bash_completion(String::from_utf8(bash_buffer)?)?;
+    let bash_buffer = patch_shell_bash_completion(bash_buffer)?;
     fs::write(&bash_path, bash_buffer)?;
 
     let zsh_path = comp_dir.join("nixling.zsh");
     let mut zsh_command = nixling::cli_command();
     let mut zsh_buffer = Vec::new();
     generate(Zsh, &mut zsh_command, "nixling", &mut zsh_buffer);
+    let zsh_buffer = patch_shell_zsh_completion(String::from_utf8(zsh_buffer)?)?;
     fs::write(&zsh_path, zsh_buffer)?;
 
     let fish_path = comp_dir.join("nixling.fish");
@@ -478,15 +495,67 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
     let mut fish_buffer = Vec::new();
     generate(Fish, &mut fish_command, "nixling", &mut fish_buffer);
     let fish_buffer = patch_vm_exec_logs_fish_completion(String::from_utf8(fish_buffer)?)?;
+    let fish_buffer = patch_shell_fish_completion(fish_buffer)?;
     fs::write(&fish_path, fish_buffer)?;
 
     Ok(vec![
         man_path,
         host_man_path,
+        shell_man_path,
         bash_path,
         zsh_path,
         fish_path,
     ])
+}
+
+fn patch_shell_bash_completion(generated: String) -> Result<String, Box<dyn std::error::Error>> {
+    replace_once(
+        generated,
+        r#"            opts="-h --help [ARGS]..."
+"#,
+        r#"            opts="-h --name --force --json --human --help attach list detach kill [ARGS]..."
+"#,
+        "bash shell opts",
+    )
+}
+
+fn patch_shell_zsh_completion(generated: String) -> Result<String, Box<dyn std::error::Error>> {
+    replace_once(
+        generated,
+        r#"_nixling__subcmd__shell_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling shell commands' commands "$@"
+"#,
+        r#"_nixling__subcmd__shell_commands() {
+    local commands; commands=(
+'attach:Attach to a persistent shell' \
+'list:List persistent shell sessions on a VM' \
+'detach:Detach a persistent shell session without killing it' \
+'kill:Kill a persistent shell session by name' \
+    )
+    _describe -t commands 'nixling shell commands' commands "$@"
+"#,
+        "zsh shell commands",
+    )
+}
+
+fn patch_shell_fish_completion(generated: String) -> Result<String, Box<dyn std::error::Error>> {
+    replace_once(
+        generated,
+        r#"complete -c nixling -n "__fish_nixling_using_subcommand shell" -s h -l help -d 'Print help'
+"#,
+        r#"complete -c nixling -n "__fish_nixling_using_subcommand shell" -s h -l help -d 'Print help'
+complete -c nixling -n "__fish_nixling_using_subcommand shell" -f -a "attach" -d 'Attach to a persistent shell'
+complete -c nixling -n "__fish_nixling_using_subcommand shell" -f -a "list" -d 'List persistent shell sessions on a VM'
+complete -c nixling -n "__fish_nixling_using_subcommand shell" -f -a "detach" -d 'Detach a persistent shell session without killing it'
+complete -c nixling -n "__fish_nixling_using_subcommand shell" -f -a "kill" -d 'Kill a persistent shell session by name'
+complete -c nixling -n "__fish_nixling_using_subcommand shell" -l name -d 'Persistent shell session name'
+complete -c nixling -n "__fish_nixling_using_subcommand shell" -l force -d 'Detach an existing attached client before attaching'
+complete -c nixling -n "__fish_nixling_using_subcommand shell" -l json -d 'Render machine-readable JSON'
+complete -c nixling -n "__fish_nixling_using_subcommand shell" -l human -d 'Render human-readable output'
+"#,
+        "fish shell completions",
+    )
 }
 
 fn patch_vm_exec_logs_bash_completion(
