@@ -96,8 +96,12 @@ make test-flake
 make test-drift
 make test-policy
 
-# Full Layer-1 gate; currently wraps tests/static.sh.
+# PR-equivalent Layer-1 gate. Uses tests/layer1-jobs.json to run
+# independent make test-* shards locally with bounded parallelism.
 make check
+
+# Legacy/full-static monolithic gate retained for explicit use.
+make check-static
 
 # Local Layer 1 + container integration. Still run the explicit
 # host/manual pre-PR targets below before opening an agent-owned PR.

@@ -48,12 +48,12 @@ Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
 
 | Command | Runs | Where |
 |---------|------|-------|
-| `make test-unit` | **L1 umbrella**: lint + rust + proofs + flake + drift + policy | local + CI (parallel jobs) |
+| `make test-unit` | **L1 umbrella** from `tests/layer1-jobs.json`: lint + rust + proofs + flake + drift + policy | local + CI (parallel jobs) |
 | `make test` | `test-unit` + `test-integration` | local host; still run `make test-host-integration` before opening an agent-owned PR |
 | `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
 | `make test-rust` | comprehensive Rust gate (fmt, clippy, cargo test, contract, broker ×3, deny/audit) | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
-| `make test-flake` | `nix flake check --no-build` (native system); `NL_FLAKE_CHECK=<name>` instantiates one check, `NL_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
+| `make test-flake` | `nix flake check --no-build` (native system); `NL_FLAKE_CHECK=<name>` instantiates one check, `NL_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `NL_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
 | `make test-flake-list` | emit native-system flake check names as JSON (CI matrix plumbing) | CI (dynamic matrix) |
 | `make test-nix-unit` | sharded nix-unit corpus checks (already covered by test-flake; focused convenience target) | local |
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
@@ -62,7 +62,10 @@ Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
 | `make test-host-integration` | type-10 runNixOSTest VM checks | **local NixOS host w/ KVM**, manual pre-PR (not the PR pipeline; TCG fallback) |
 | `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
-| `make check` | full Layer-1 gate (`tests/static.sh`) | local + CI |
+| `make check` | PR-equivalent Layer-1 gate from `tests/layer1-jobs.json` with bounded local parallelism | local |
+| `make check-static` | legacy/full-static monolithic gate (`tests/static.sh`) | local |
+| `make layer1-workflow` | regenerate `.github/workflows/pr-l1-static-fast.yml` from `tests/layer1-jobs.json` + template | local |
+| `make layer1-workflow-check` | verify the generated workflow is up to date | local + CI via `make test-drift` |
 | `make flake-matrix-pin` | regenerate the CI flake-check-matrix drift pin after adding/removing a flake check | local |
 | `make nix-unit-pin` | regenerate the nix-unit case-presence pins | local |
 | `NL_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests | **manual, against a deployed nixling host** |
@@ -73,17 +76,26 @@ a `nixlingd` restart. The USBIP script requires
 `NL_USBIP_VM=<vm>` and `NL_USBIP_BUSID=<busid>` and uses only `nixling usb`
 verbs for USB state changes.
 
-CI runs the individual Layer-1 sub-targets (`test-lint`, `test-rust`, etc.) in parallel.
+`tests/layer1-jobs.json` is the central Layer-1 job graph. `make check` and
+`make test-unit` consume it directly; `.github/workflows/pr-l1-static-fast.yml`
+is generated from it by `make layer1-workflow` and checked by
+`make layer1-workflow-check` during `make test-drift`. CI runs the individual
+Layer-1 sub-targets (`test-lint`, `test-rust`, etc.) in parallel and exposes a
+stable final `check` rollup job intended for branch protection.
+
 The x86 `test-flake` leg is sharded one job per flake check (the matrix is
 enumerated at CI time by `make test-flake-list`; the `test-flake-x86` job is a
 stable aggregator over the shards + the non-`checks` outputs job). The aarch64
 leg runs only the lightweight `smoke-eval-aarch64.nix` expression. A fail-closed
 drift gate keeps the matrix and smoke wiring in sync with the flake (`make
-flake-matrix-pin` to update its pin).
-Locally, `make test-unit` runs the sub-targets serially and `make test-flake`
-runs the full native check. Agent-owned PRs also run `make test-integration`
-and `make test-host-integration` on the host before the PR is opened; those
-manual integration tiers are not replaced by PR pipeline jobs.
+flake-matrix-pin` to update its pin). Locally, manifest-driven `make check`
+sets `NL_FLAKE_LOCAL_SHARDS=1` for `make test-flake` and
+`NL_SKIP_FIXTURE_BUILD=1` for `make test-rust`, matching the PR Rust job because
+the fixture checks run in the flake shard set; tune `NL_CHECK_JOBS` and
+`NL_FLAKE_JOBS` for host capacity. Agent-owned PRs also run
+`make test-integration` and `make test-host-integration` on the host before the
+PR is opened; those manual integration tiers are not replaced by PR pipeline
+jobs.
 
 Useful knobs:
 - `NL_NO_SCCACHE=1` — disable sccache in the rust gate.

@@ -27,14 +27,7 @@ native=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || ec
 echo "test-flake-list: enumerating checks.$native.*" >&2
 
 # attrNames forces only the keys of the checks attrset (cheap) — it does not
-# evaluate each check's derivation. Omit the feature-rich fixture-smoke-full
-# from the dynamic hosted-runner matrix: that fixture's full VM graph is
-# validated by local `make test-unit`, while the separate CI instantiate shard
-# repeatedly trips Nix evaluator segfaults on GitHub runners before any typed
-# eval error can be reported. The key still exists in flake.checks, so local
-# full gates and contract-test fixture builds can exercise it explicitly.
-nix eval --json "${flake_ref}#checks.${native}" --apply '
-  checks:
-    builtins.filter (name: name != "fixture-smoke-full")
-      (builtins.attrNames checks)
-'
+# evaluate each check's derivation. Keep every check in the dynamic matrix; if
+# an evaluator segfaults, tests/test-flake.sh emits grouped diagnostics and a
+# gdb backtrace for the failing evaluator command.
+nix eval --json "${flake_ref}#checks.${native}" --apply builtins.attrNames
