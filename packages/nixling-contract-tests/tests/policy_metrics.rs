@@ -63,14 +63,14 @@ const EXPECTED_METRICS: &[ExpectedMetric] = &[
     ExpectedMetric {
         name: "nixling_daemon_vm_shutdown_total",
         kind: "Counter",
-        labels: &["provider", "outcome"],
+        labels: &["vm", "provider", "outcome"],
         buckets_expr: "&[]",
         bucket_values: None,
     },
     ExpectedMetric {
         name: "nixling_daemon_vm_shutdown_duration_seconds",
         kind: "Histogram",
-        labels: &["provider", "outcome"],
+        labels: &["vm", "provider", "outcome"],
         buckets_expr: "VM_SHUTDOWN_BUCKETS_SECONDS",
         bucket_values: Some(&[
             0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 90.0, 120.0, 300.0, 600.0,
