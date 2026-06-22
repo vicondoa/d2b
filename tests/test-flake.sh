@@ -32,6 +32,45 @@ cd "$ROOT"
 # contract — see tests/lib.sh nl_flake_ref).
 flake_ref=$(nl_flake_ref "$ROOT")
 
+dump_flake_eval_segfault() {
+  local label="$1"
+  shift
+
+  log "  SEGFAULT diagnostics for $label"
+  {
+    echo "=== command ==="
+    printf '%q ' "$@"
+    echo
+    echo "=== system ==="
+    uname -a || true
+    nix --version || true
+    nix-instantiate --version || true
+    echo "=== limits ==="
+    ulimit -a || true
+    echo "=== memory ==="
+    free -h || true
+    echo "=== disk ==="
+    df -h || true
+    echo "=== process status ==="
+    grep -E '^(Name|State|Threads|VmPeak|VmSize|VmRSS|VmStk|Sig)' /proc/$$/status || true
+  } >&2
+
+  if command -v gdb >/dev/null 2>&1; then
+    log "  SEGFAULT gdb backtrace for $label"
+    gdb --batch --quiet \
+      -ex 'set pagination off' \
+      -ex 'set print frame-arguments all' \
+      -ex 'set print elements 64' \
+      -ex run \
+      -ex 'thread apply all bt full' \
+      -ex 'info registers' \
+      -ex quit \
+      --args "$@" >&2 || true
+  else
+    log "  SEGFAULT gdb backtrace skipped for $label (gdb not found)"
+  fi
+}
+
 # Local all-shards mode: mirror CI's x86 flake fan-out on one host instead of
 # re-combining every check into a monolithic evaluator process. This is used by
 # the Layer-1 manifest runner behind `make check`; `NL_FLAKE_JOBS` bounds local
@@ -193,10 +232,20 @@ if [ -n "${NL_FLAKE_CHECK:-}" ]; then
     ok "flake check shard: ${NL_FLAKE_CHECK}"
   elif [ "$rc" -eq 139 ]; then
     log "  WARN: nix eval segfaulted for shard ${NL_FLAKE_CHECK}; retrying via nix-instantiate"
+    dump_flake_eval_segfault \
+      "nix eval ${NL_FLAKE_CHECK}" \
+      nix eval --raw "${flake_ref}#checks.${native}.${NL_FLAKE_CHECK}.drvPath"
     if nix-instantiate --eval --strict -E \
       "let f = builtins.getFlake \"${flake_ref}\"; in f.checks.${native}.${NL_FLAKE_CHECK}.drvPath" >/dev/null; then
       ok "flake check shard: ${NL_FLAKE_CHECK} (nix-instantiate fallback)"
     else
+      fallback_rc=$?
+      if [ "$fallback_rc" -eq 139 ]; then
+        dump_flake_eval_segfault \
+          "nix-instantiate ${NL_FLAKE_CHECK}" \
+          nix-instantiate --eval --strict -E \
+          "let f = builtins.getFlake \"${flake_ref}\"; in f.checks.${native}.${NL_FLAKE_CHECK}.drvPath"
+      fi
       fail "flake check shard: ${NL_FLAKE_CHECK}"
       exit 1
     fi

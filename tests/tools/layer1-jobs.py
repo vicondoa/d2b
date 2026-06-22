@@ -221,6 +221,8 @@ def flake_x86_shards_job(job: dict[str, Any]) -> str:
           sudo mkswap "$SWAP"
           sudo swapon "$SWAP"
 {nix_setup_step()}
+      - name: Install flake shard diagnostics
+        run: sudo apt-get update && sudo apt-get install -y gdb
       - name: {job["displayName"]}
         # NL_FLAKE_CHECK is passed via the step environment, NOT interpolated
         # into the shell command: a flake check attr name is PR-controlled, so
