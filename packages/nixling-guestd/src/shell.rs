@@ -59,6 +59,7 @@ struct ShellSession {
     name: String,
     session_id: String,
     shell_session_instance_id: String,
+    guestd_instance_id: String,
     daemon_instance_id: String,
     guest_boot_id: String,
     owner_key: Vec<u8>,
@@ -162,8 +163,13 @@ impl ShellEventQueue {
                 .front()
                 .is_some_and(|oldest| oldest.seq > after_seq.saturating_add(1))
         {
+            let gap_seq = self
+                .events
+                .front()
+                .map(|oldest| oldest.seq.saturating_sub(1))
+                .unwrap_or_else(|| after_seq.saturating_add(1));
             events.push(ShellEvent {
-                seq: after_seq.saturating_add(1),
+                seq: gap_seq,
                 kind: ShellEventKind::ReconciliationGap,
             });
         }
@@ -342,6 +348,7 @@ impl ShellRuntime {
             name: name.clone(),
             session_id: format!("shell-{:016x}", state.next_session),
             shell_session_instance_id: format!("shell-instance-{:016x}", state.next_session),
+            guestd_instance_id: self.config.guestd_instance_id.clone(),
             daemon_instance_id: self.config.daemon_instance_id.clone(),
             guest_boot_id: self.config.guest_boot_id.clone(),
             owner_key,
@@ -817,6 +824,7 @@ mod tests {
                 ShellEventKind::Killed
             ]
         );
+        assert_eq!(batch.events[0].seq, 1);
         assert_eq!(batch.cursor, 3);
     }
 
