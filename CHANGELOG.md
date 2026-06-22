@@ -22,6 +22,9 @@ deprecations ship one minor release before removal.
 - Persistent shell attach/detach now accepts daemon owner error frames that carry
   the envelope `opId`, matching the successful shell response and exec owner
   framing.
+- Persistent shell detach now treats a successful daemon best-effort close as a
+  clean owner close even if the first close-attach RPC reports a transient
+  guest-control transport error.
 - `nixling list --json` now preserves daemon-reported failed lifecycle state as
   `status = "failed"` instead of collapsing it to `unknown`.
 
