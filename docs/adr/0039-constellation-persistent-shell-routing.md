@@ -27,9 +27,10 @@ ADR 0032 capability and stream authorization.
 
 The initial ADR wave was documentation and contract reservation only. The
 generated constellation core schema now includes the shell capability,
-operation, stream, and bounded DTO roots; router, provider, daemon, guestd, and
-provider-agent runtime behavior remains staged behind later implementation
-waves.
+operation, stream, and bounded DTO roots, and the router/provider seams now
+understand persistent-shell capability gating and provider guestd-compatible
+agents. Daemon, guestd, provider-agent runtime behavior, and CLI gateway
+routing remain staged behind later implementation waves.
 
 ## Decision
 

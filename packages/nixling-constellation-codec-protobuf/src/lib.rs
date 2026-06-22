@@ -394,16 +394,28 @@ fn decode_proto_frame(frame: ProtoFrame) -> Result<ConstellationFrame, Constella
 }
 
 fn encode_handshake(frame: &Handshake) -> Result<ProtoHandshake, ConstellationError> {
+    let mut capabilities = frame
+        .capabilities
+        .capabilities
+        .iter()
+        .map(encode_capability)
+        .collect::<Result<Vec<_>, _>>()?;
+    for token in frame.capabilities.capabilities.unknown_iter() {
+        if let Some(raw) = token
+            .as_str()
+            .strip_prefix("unknown-protobuf-capability-")
+            .and_then(|raw| raw.parse::<i32>().ok())
+        {
+            capabilities.push(raw);
+        }
+    }
+    capabilities.sort_unstable();
+    capabilities.dedup();
     Ok(ProtoHandshake {
         protocol_version: Some(frame.protocol_version),
         codec_id: frame.codec_id.as_str().to_owned(),
         schema_fingerprint: frame.schema_fingerprint.as_str().to_owned(),
-        capabilities: frame
-            .capabilities
-            .capabilities
-            .iter()
-            .map(encode_capability)
-            .collect::<Result<Vec<_>, _>>()?,
+        capabilities,
         capability_schema_version: frame.capabilities.schema_version,
         capability_fingerprint: frame.capabilities.fingerprint.clone(),
         peer: frame.peer.as_ref().map(encode_peer_context),
@@ -435,16 +447,19 @@ fn decode_capability_negotiation(
     fingerprint: String,
 ) -> Result<CapabilityNegotiation, ConstellationError> {
     let wire_fingerprint = parse_protocol_token(fingerprint, "handshake capability_fingerprint")?;
-    let mut saw_unknown = false;
-    let caps = capabilities.into_iter().filter_map(|raw| {
-        let decoded = decode_capability(raw);
-        if decoded.is_none() {
-            saw_unknown = true;
-        }
-        decoded
-    });
-    let capabilities = CapabilitySet::from_caps(caps);
+    let caps = capabilities
+        .into_iter()
+        .map(|raw| match decode_capability(raw) {
+            Some(capability) => capability.code().to_owned(),
+            None => format!("unknown-protobuf-capability-{raw}"),
+        })
+        .collect::<Vec<_>>();
+    let caps_json = serde_json::to_string(&caps)
+        .map_err(|_| malformed("failed to encode protobuf capability set for semantic decode"))?;
+    let capabilities: CapabilitySet = serde_json::from_str(&caps_json)
+        .map_err(|err| malformed(format!("protobuf capability set decode failed: {err}")))?;
     let expected = capabilities.stable_fingerprint();
+    let has_unknown = capabilities.unknown_iter().next().is_some();
     if schema_version
         != nixling_constellation_core::capability::CAPABILITY_NEGOTIATION_SCHEMA_VERSION
     {
@@ -452,7 +467,7 @@ fn decode_capability_negotiation(
             "handshake capability negotiation schema version mismatch",
         ));
     }
-    if !saw_unknown && wire_fingerprint.as_str() != expected {
+    if !has_unknown && wire_fingerprint.as_str() != expected {
         return Err(malformed(
             "handshake capability negotiation fingerprint mismatch",
         ));
@@ -1287,8 +1302,43 @@ mod tests {
     }
 
     #[test]
+    fn shell_enum_integer_mappings_are_stable() {
+        assert_eq!(encode_operation_kind(OperationKind::ShellList).unwrap(), 15);
+        assert_eq!(
+            encode_operation_kind(OperationKind::ShellAttach).unwrap(),
+            16
+        );
+        assert_eq!(
+            encode_operation_kind(OperationKind::ShellDetach).unwrap(),
+            17
+        );
+        assert_eq!(encode_operation_kind(OperationKind::ShellKill).unwrap(), 18);
+        assert_eq!(decode_operation_kind(15).unwrap(), OperationKind::ShellList);
+        assert_eq!(
+            decode_operation_kind(16).unwrap(),
+            OperationKind::ShellAttach
+        );
+        assert_eq!(
+            decode_operation_kind(17).unwrap(),
+            OperationKind::ShellDetach
+        );
+        assert_eq!(decode_operation_kind(18).unwrap(), OperationKind::ShellKill);
+
+        assert_eq!(encode_stream_kind(StreamKind::ShellPty).unwrap(), 13);
+        assert_eq!(decode_stream_kind(13).unwrap(), StreamKind::ShellPty);
+
+        assert_eq!(encode_capability(Capability::PersistentShell).unwrap(), 21);
+        assert_eq!(
+            decode_capability_strict(21).unwrap(),
+            Capability::PersistentShell
+        );
+    }
+
+    #[test]
     fn protobuf_decode_ignores_unknown_advertised_capabilities() {
         let codec = ProtobufCodec::new();
+        let expected_caps: CapabilitySet =
+            serde_json::from_str("[\"exec\",\"unknown-protobuf-capability-999\"]").unwrap();
         let encoded = ProtoFrame {
             body: Some(proto_frame::Body::Handshake(ProtoHandshake {
                 protocol_version: Some(1),
@@ -1297,7 +1347,7 @@ mod tests {
                 capabilities: vec![encode_capability(Capability::Exec).unwrap(), 999],
                 capability_schema_version:
                     nixling_constellation_core::capability::CAPABILITY_NEGOTIATION_SCHEMA_VERSION,
-                capability_fingerprint: "cap-v1-future999".to_owned(),
+                capability_fingerprint: expected_caps.stable_fingerprint(),
                 peer: None,
             })),
         }
@@ -1310,11 +1360,21 @@ mod tests {
         assert!(handshake.capabilities.capabilities.has(Capability::Exec));
         assert!(!handshake.capabilities.capabilities.has(Capability::Logs));
         assert_eq!(
-            handshake.capabilities.fingerprint,
-            CapabilitySet::empty()
-                .with(Capability::Exec)
-                .stable_fingerprint()
+            handshake
+                .capabilities
+                .capabilities
+                .unknown_iter()
+                .map(ProtocolToken::as_str)
+                .collect::<Vec<_>>(),
+            ["unknown-protobuf-capability-999"]
         );
+        assert!(
+            serde_json::to_string(&handshake.capabilities.capabilities)
+                .unwrap()
+                .contains("unknown-protobuf-capability-999")
+        );
+        let reencoded = encode_handshake(&handshake).unwrap();
+        assert!(reencoded.capabilities.contains(&999));
     }
 
     #[test]

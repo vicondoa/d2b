@@ -135,6 +135,7 @@ impl PersistentShellAttachProviderRequest {
     /// Whether the embedded stream open is a valid shell-authorized PTY open.
     pub fn shell_pty_stream_is_authorized(&self) -> bool {
         self.shell_pty_stream.descriptor.kind == StreamKind::ShellPty
+            && self.shell_pty_stream.operation_id == self.operation_id
             && self.shell_pty_stream.is_consistent()
     }
 }
@@ -446,5 +447,9 @@ mod tests {
 
         let wrong_kind = attach_request(stream_open(StreamKind::Stdio, Capability::Pty));
         assert!(!wrong_kind.shell_pty_stream_is_authorized());
+
+        let mut wrong_op = stream_open(StreamKind::ShellPty, Capability::PersistentShell);
+        wrong_op.operation_id = OperationId::parse("op-other").unwrap();
+        assert!(!attach_request(wrong_op).shell_pty_stream_is_authorized());
     }
 }

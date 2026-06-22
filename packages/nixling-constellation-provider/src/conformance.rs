@@ -61,6 +61,21 @@ pub async fn persistent_shell_fails_closed_when_unsupported(
     }
 }
 
+/// Assert that a persistent-shell provider rejects an attach request whose
+/// embedded stream is not a shell-authorized PTY open.
+pub async fn persistent_shell_rejects_unauthorized_attach_stream(
+    provider: &dyn PersistentShellProvider,
+    req: crate::types::PersistentShellAttachProviderRequest,
+) -> bool {
+    if req.shell_pty_stream_is_authorized() {
+        return true;
+    }
+    match provider.attach_shell(req).await {
+        Err(e) => e.kind() == ErrorKind::CapabilityDenied,
+        Ok(_) => false,
+    }
+}
+
 fn stream_open(kind: StreamKind, authz_capability: Option<Capability>) -> StreamOpen {
     let principal = PrincipalId::parse("conformance-principal").expect("valid");
     let realm = RealmPath::local();
@@ -117,12 +132,15 @@ mod tests {
     use super::*;
     use crate::mock::{
         HeadlessDisplayProvider, HeadlessPersistentShellProvider, LoopbackStreamMux,
-        MockWorkloadProvider,
+        MockWorkloadProvider, StrictPersistentShellProvider,
     };
-    use crate::types::{DisplaySessionRequest, PersistentShellListProviderRequest};
+    use crate::types::{
+        DisplaySessionRequest, PersistentShellAttachProviderRequest,
+        PersistentShellListProviderRequest,
+    };
     use nixling_constellation_core::{
-        OperationId, PrincipalId, RealmPath, ShellListRequest, StreamAuthz, StreamId, StreamKind,
-        WorkloadId,
+        OperationId, PrincipalId, RealmPath, ShellAttachId, ShellAttachRequest, ShellGeneration,
+        ShellListRequest, ShellName, StreamAuthz, StreamId, StreamKind, WorkloadId,
     };
 
     #[tokio::test]
@@ -156,6 +174,34 @@ mod tests {
             request: ShellListRequest { generation: None },
         };
         assert!(persistent_shell_fails_closed_when_unsupported(&p, req).await);
+    }
+
+    #[tokio::test]
+    async fn persistent_shell_rejects_forged_attach_stream() {
+        let provider = StrictPersistentShellProvider;
+        let req = PersistentShellAttachProviderRequest {
+            workload: WorkloadId::parse("demo").unwrap(),
+            operation_id: OperationId::parse("op-shell-attach-1").unwrap(),
+            request: ShellAttachRequest {
+                name: ShellName::parse("default").unwrap(),
+                generation: ShellGeneration {
+                    guest_boot_id: nixling_constellation_core::ProtocolToken::parse("boot-1")
+                        .unwrap(),
+                    guestd_instance_id: nixling_constellation_core::ProtocolToken::parse(
+                        "guestd-1",
+                    )
+                    .unwrap(),
+                    shell_daemon_instance_id: nixling_constellation_core::ProtocolToken::parse(
+                        "shell-daemon-1",
+                    )
+                    .unwrap(),
+                },
+                attach_id: ShellAttachId::parse("attach-1").unwrap(),
+                force: false,
+            },
+            shell_pty_stream: stream_open(StreamKind::ShellPty, Some(Capability::Pty)),
+        };
+        assert!(persistent_shell_rejects_unauthorized_attach_stream(&provider, req).await);
     }
 
     #[tokio::test]

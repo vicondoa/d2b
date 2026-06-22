@@ -196,6 +196,69 @@ impl PersistentShellProvider for HeadlessPersistentShellProvider {
     }
 }
 
+/// A provider-managed workload surface that advertises persistent shell support
+/// but still rejects forged attach streams before doing any work.
+#[derive(Debug, Clone, Default)]
+pub struct StrictPersistentShellProvider;
+
+#[async_trait]
+impl PersistentShellProvider for StrictPersistentShellProvider {
+    fn provider_id(&self) -> ProviderId {
+        id("strict-shell")
+    }
+
+    fn node_id(&self) -> NodeId {
+        NodeId::parse("mock").expect("valid")
+    }
+
+    fn capabilities(&self) -> WorkloadCapabilitySet {
+        WorkloadCapabilitySet {
+            caps: CapabilitySet::empty().with(Capability::PersistentShell),
+        }
+    }
+
+    async fn list_shells(
+        &self,
+        _req: PersistentShellListProviderRequest,
+    ) -> ProviderResult<PersistentShellListProviderResponse> {
+        Err(ProviderError::unsupported(
+            "strict mock does not list shells",
+        ))
+    }
+
+    async fn attach_shell(
+        &self,
+        req: PersistentShellAttachProviderRequest,
+    ) -> ProviderResult<PersistentShellAttachProviderResponse> {
+        if !req.shell_pty_stream_is_authorized() {
+            return Err(ProviderError::capability_denied(
+                Capability::PersistentShell,
+            ));
+        }
+        Err(ProviderError::unsupported(
+            "strict mock does not attach shells",
+        ))
+    }
+
+    async fn detach_shell(
+        &self,
+        _req: PersistentShellDetachProviderRequest,
+    ) -> ProviderResult<PersistentShellStatus> {
+        Err(ProviderError::unsupported(
+            "strict mock does not detach shells",
+        ))
+    }
+
+    async fn kill_shell(
+        &self,
+        _req: PersistentShellKillProviderRequest,
+    ) -> ProviderResult<PersistentShellStatus> {
+        Err(ProviderError::unsupported(
+            "strict mock does not kill shells",
+        ))
+    }
+}
+
 /// A mux that advertises a fixed capability set and opens a stream only
 /// when (a) the open's authz capability matches the descriptor kind and
 /// (b) the required capability is advertised — otherwise it fails closed
