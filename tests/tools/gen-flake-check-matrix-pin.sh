@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # tests/tools/gen-flake-check-matrix-pin.sh — regenerate / verify the committed
-# pin of x86_64-linux flake check names that the CI dynamic matrix shards over.
+# pin of x86_64-linux flake check names.
 #
-# The `pr-l1-static-fast` workflow shards the x86_64 flake check one job per
-# `flake.checks.x86_64-linux.*` entry (enumerated at CI time by
-# `make test-flake-list`). That keeps the matrix in sync BY CONSTRUCTION, but a
-# silently-added or -removed check would change CI coverage with no diff a human
-# reviews. This pin makes the check SET explicit: adding/removing a flake check
-# fails the drift gate until `make flake-matrix-pin` is run, forcing a reviewer
-# to confirm the new shard coverage (and the `test-flake-x86` aggregator still
-# gates it).
+# The `pr-l1-static-fast` workflow discovers its hosted-runner x86_64 matrix
+# via `make test-flake-list`. That list may intentionally filter checks that are
+# too large or unstable for GitHub-hosted runners (for example
+# `fixture-smoke-full`). This pin tracks the full static
+# `flake.checks.x86_64-linux.*` set instead: adding/removing a flake check fails
+# the drift gate until `make flake-matrix-pin` is run, forcing a reviewer to
+# confirm whether the new check is hosted-runner-sharded, local/manual only, or
+# otherwise covered.
 #
 #   make flake-matrix-pin                              # regenerate the pin
 #   bash tests/tools/gen-flake-check-matrix-pin.sh --check   # diff (CI gate)
@@ -37,14 +37,14 @@ if [ "${1:-}" = "--check" ]; then
   mode="check"
 fi
 
-# attrNames + sort: the authoritative, deterministic set of check names. This is
-# the SAME enumeration `make test-flake-list` feeds the CI matrix.
+# attrNames + sort: the authoritative, deterministic full check set. This may
+# be a superset of the hosted-runner matrix emitted by `make test-flake-list`.
 live=$(nix eval --raw "${flake_ref}#checks.${SYSTEM}" --apply \
   'cs: builtins.concatStringsSep "\n" (builtins.sort (a: b: a < b) (builtins.attrNames cs))')
 
 render() {
-  printf '# CI dynamic-matrix pin: names of flake.checks.%s.* that the\n' "$SYSTEM"
-  printf '# pr-l1-static-fast "flake-eval-x86" matrix shards over (one job each).\n'
+  printf '# Flake-check pin: full names of flake.checks.%s.*.\n' "$SYSTEM"
+  printf '# The hosted-runner dynamic matrix may intentionally filter this set.\n'
   printf '# Regenerate with: make flake-matrix-pin\n'
   printf '%s\n' "$live"
 }
@@ -63,9 +63,9 @@ if [ "$mode" = "check" ]; then
     {
       echo ""
       echo "FAIL: flake.checks.$SYSTEM drifted from the committed CI-matrix pin."
-      echo "A flake check was added or removed, so the sharded 'flake-eval-x86'"
-      echo "matrix coverage changed. Run 'make flake-matrix-pin', then confirm the"
-      echo "new check is shard-covered and the test-flake-x86 aggregator gates it."
+      echo "A flake check was added or removed. Run 'make flake-matrix-pin',"
+      echo "then confirm the new check is covered by the hosted matrix,"
+      echo "a local/manual gate, or another explicit validation path."
     } >&2
     exit 1
   fi

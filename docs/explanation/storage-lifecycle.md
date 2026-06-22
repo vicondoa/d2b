@@ -114,6 +114,13 @@ contain sensitive context. The design therefore uses scope-salted hashes in
 structured audit and local doctor output, not in metric labels. Metrics use
 closed reason and scope classes.
 
+Disk-image preparation follows the same fail-closed posture. A broker
+`DiskInit` re-run does not treat path existence as sufficient evidence that a
+raw image is mountable: it verifies the declared posture and ext4 superblock
+before skipping, and formats an existing image only when kernel extent metadata
+proves it is empty. This keeps host-side storage validation from letting a VM
+boot into initrd emergency with an unmountable `/var` or writable-store image.
+
 When a path is undeclared or malicious, nixling emits a separate
 rate-limited incident event. Violation events have their own quota so an
 attacker cannot flood the violation lane and evict normal audit history.

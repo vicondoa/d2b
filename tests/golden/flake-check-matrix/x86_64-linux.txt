@@ -1,5 +1,5 @@
-# CI dynamic-matrix pin: names of flake.checks.x86_64-linux.* that the
-# pr-l1-static-fast "flake-eval-x86" matrix shards over (one job each).
+# Flake-check pin: full names of flake.checks.x86_64-linux.*.
+# The hosted-runner dynamic matrix may intentionally filter this set.
 # Regenerate with: make flake-matrix-pin
 eval-graphics
 eval-minimal

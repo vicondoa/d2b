@@ -16,7 +16,7 @@ status.
 | `tpm` | boolean | Whether the VM declares TPM support. | Stable wire contract. |
 | `usbip` | boolean | Whether the VM declares USBIP/YubiKey support. | Stable wire contract. |
 | `staticIp` | string or `null` | Declared static IPv4 address. Present and `null` for DHCP-backed shapes. | Stable wire contract. |
-| `status` | string enum | One of `stopped`, `running`, `pending-restart`, or `unknown`. | Stable wire contract. |
+| `status` | string enum | One of `stopped`, `running`, `pending-restart`, `failed`, or `unknown`. | Stable wire contract. |
 | `isNetVm` | boolean | True only for auto-declared per-env net VMs. | Stable wire contract. |
 
 ## Ordering and null handling
@@ -27,7 +27,7 @@ status.
 
 ## Stability promise
 
-The field set and the four `status` enum values are part of the
+The field set and the five `status` enum values are part of the
 compatibility contract. Human table spacing may change; the JSON shape
 may not change without an intentional schema update.
 

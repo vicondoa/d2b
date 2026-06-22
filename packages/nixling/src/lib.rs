@@ -8608,7 +8608,8 @@ fn public_lifecycle_list_status_label(lifecycle: &nixling_ipc::public_wire::VmLi
         | IpcVmLifecycleState::Starting
         | IpcVmLifecycleState::Stopping
         | IpcVmLifecycleState::Restarting => "running",
-        IpcVmLifecycleState::Failed | IpcVmLifecycleState::Unknown => "unknown",
+        IpcVmLifecycleState::Failed => "failed",
+        IpcVmLifecycleState::Unknown => "unknown",
     }
     .to_owned()
 }
@@ -13869,6 +13870,19 @@ mod host_install_dispatch_tests {
         assert_eq!(
             super::public_lifecycle_list_status_label(&lifecycle),
             "running"
+        );
+    }
+
+    #[test]
+    fn public_list_status_preserves_failed_lifecycle_label() {
+        let lifecycle = nixling_ipc::public_wire::VmLifecycle {
+            pending_restart: false,
+            state: nixling_ipc::public_wire::VmLifecycleState::Failed,
+        };
+
+        assert_eq!(
+            super::public_lifecycle_list_status_label(&lifecycle),
+            "failed"
         );
     }
 
