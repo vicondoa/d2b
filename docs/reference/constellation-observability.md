@@ -32,6 +32,14 @@ provider tokens, credential material, full endpoints, host paths, or PII.
 Labels are low-cardinality and limited to bounded operation/trace identifiers,
 realm/node/workload kind, state, and redacted error classifications.
 
+Graceful VM shutdown telemetry follows the same rule. Metric and span
+attributes use bounded outcome enums such as `clean_guest_shutdown`,
+`clean_vmm_cleanup`, `api_unavailable`, `timeout_exceeded`, and
+`force_requested`; human summary strings and raw CH/QMP errors are not label
+values. The applied graceful shutdown timeout and elapsed wait are numeric
+`*_seconds` values, and degraded shutdown markers are exported as bounded
+state metrics for dashboards and `nixling op inspect`.
+
 Observer/ops realm export is opt-in. Exporters must reuse existing
 observability configuration and must not acquire new fd, pidfd, cgroup,
 namespace, or long-lived socket authority beyond the established observability

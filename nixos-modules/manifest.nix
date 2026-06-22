@@ -116,6 +116,12 @@ let
     {
       inherit name;
       runtime = runtime;
+      lifecycle = {
+        gracefulShutdown = {
+          enable = vm.lifecycle.gracefulShutdown.enable;
+          timeoutSeconds = vm.lifecycle.gracefulShutdown.timeoutSeconds;
+        };
+      };
       graphics = isNixosRuntime && vm.graphics.enable;
       tpm = isNixosRuntime && vm.tpm.enable;
       usbipYubikey = isNixosRuntime && vm.usbip.yubikey;
@@ -390,6 +396,37 @@ let
     };
   };
 
+  manifestGracefulShutdownType = lib.types.submodule {
+    freeformType = null;
+    options = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        description = ''
+          True iff nixlingd should attempt provider-aware graceful guest
+          shutdown for this VM before falling back to forced VMM cleanup.
+        '';
+      };
+
+      timeoutSeconds = lib.mkOption {
+        type = lib.types.nullOr lib.types.int;
+        description = ''
+          Optional per-VM graceful shutdown timeout override, in seconds. Null
+          means the daemon default from daemon-config.json applies.
+        '';
+      };
+    };
+  };
+
+  manifestLifecycleType = lib.types.submodule {
+    freeformType = null;
+    options = {
+      gracefulShutdown = lib.mkOption {
+        type = manifestGracefulShutdownType;
+        description = "Per-VM graceful guest shutdown policy.";
+      };
+    };
+  };
+
   manifestObservabilityType = lib.types.submodule {
     freeformType = null;
     options = {
@@ -399,7 +436,6 @@ let
           True iff `nixling.vms.<name>.observability.enable` is set.
         '';
       };
-
       vsockCid = lib.mkOption {
         type = lib.types.nullOr lib.types.ints.unsigned;
         description = ''
@@ -449,6 +485,15 @@ let
           the provider-neutral dispatch surface for daemon lifecycle/status
           integration; provider-specific runner details stay in private bundle
           artifacts.
+        '';
+      };
+
+      lifecycle = lib.mkOption {
+        type = manifestLifecycleType;
+        description = ''
+          Per-VM lifecycle policy consumed by nixlingd. v7 currently contains
+          provider-aware graceful guest shutdown enablement and optional
+          timeout override metadata.
         '';
       };
 
@@ -687,7 +732,7 @@ in
 
   options.nixling._manifestVersion = lib.mkOption {
     type = lib.types.ints.unsigned;
-    default = 6;
+    default = 7;
     internal = true;
     description = ''
       Internal: the integer schema version stamped into
@@ -736,6 +781,9 @@ in
           fields nullable so qemu-media entries do not fabricate Cloud
           Hypervisor, guest-control, SSH, store-sync, key, or
           in-guest-observability artifacts.
+        * 7 — adds per-VM lifecycle.gracefulShutdown metadata so nixlingd
+          can apply VM-specific graceful guest-shutdown policy while
+          preserving old-manifest compatibility during the v6→v7 rollout.
     '';
   };
 

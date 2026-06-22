@@ -24,6 +24,8 @@ than literal byte-for-byte goldens unless the corresponding
 > for the multi-line block format used on those envelopes. `nixling
 > up/down/restart/list` are first-class top-level aliases for `vm
 > start/stop/restart/list` and route through the same daemon path.
+> Stop-like aliases accept the same `--force` / `-f` flag as the
+> corresponding `vm` command.
 
 - Command headings use the dispatched **leaf** form (`keys list`,
   `audio mic`, `status --check-bridges`) because disposition is
@@ -284,7 +286,7 @@ vm start corp-vm: spawned pid=4242 start_time_ticks=123456789
 - There is no bash execution path for this verb.
 ### `vm stop`
 
-**Synopsis:** `nixling vm stop <vm> [--dry-run | --apply] [--force] [--human | --json]`
+**Synopsis:** `nixling vm stop <vm> [--force | -f] [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
@@ -299,7 +301,7 @@ through the daemon.
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the 5-node per-VM DAG without spawning any role. |
 | `--apply` | boolean | `false` | Perform the lifecycle mutation. |
-| `--force`, `-f` | boolean | `false` | Skip provider graceful shutdown and request the existing forced stop cleanup path. Omitted from public JSON when false. |
+| `--force`, `-f` | boolean | `false` | Skip provider-aware graceful guest shutdown and begin the standard SIGTERM/SIGKILL VMM cleanup path. This is not an immediate SIGKILL shortcut. |
 | `--json` | boolean | `false` | Emit the dry-run DAG or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -322,6 +324,16 @@ There is no bash fallback. Daemon-unreachable returns `daemon-down`
 (exit 1), and the old `nixling down` exit table is preserved in this
 file as history.
 
+Normal `vm stop --apply` asks supported local providers to shut the guest
+down before host-side VMM cleanup: Cloud Hypervisor receives
+`PUT /api/v1/vm.shutdown`, and qemu-media receives broker-mediated QMP
+`system_powerdown`. The wait is bounded by
+`nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds` or the per-VM
+manifest override. Human output prints progress such as
+`Waiting for guest to shut down (up to 90s)...`; the maximum command wait is
+that graceful timeout plus the standard forced-cleanup signal windows.
+`--force` / `-f` bypasses only the graceful wait.
+
 Pidfd `EPERM` while stopping a per-VM-UID runner used to surface as
 typed `broker-error` exit 78. Current `--apply` recovers that specific
 case by asking the broker to run `SignalRunner`; if the broker reports
@@ -333,12 +345,14 @@ still surface as `broker-error` / exit 78.
 
 ```text
 $ nixling vm stop corp-vm --apply
-vm stop corp-vm: broker recorded the audited SignalRunner request for role ch-runner (signal=term, signaled=true)
+Waiting for guest to shut down (up to 90s)...
+vm stop corp-vm: clean guest shutdown
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable
+- `--apply`: routes through `nixlingd` → provider graceful shutdown
+  (when enabled) → broker cleanup as needed. Daemon-unreachable
   surfaces `daemon-down` exit 1; native-handler-deferred surfaces
   `not-yet-implemented` exit 78; `broker-error` exit 78.
 - `--force` / `-f`: available on both `vm stop` and the top-level
@@ -347,14 +361,15 @@ vm stop corp-vm: broker recorded the audited SignalRunner request for role ch-ru
 - `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` are
   unrecognised. Broker failures surface on stderr with the redacted
   public-safe remediation and exit `78`.
-- Live path: `nixlingd` → broker `SignalRunner`.
+- Live path: `nixlingd` → CH API or broker-mediated QMP for guest
+  shutdown → broker `SignalRunner` / cgroup cleanup fallback.
 
 **Bash**
 
 - There is no bash execution path for this verb.
 ### `vm restart`
 
-**Synopsis:** `nixling vm restart <vm> [--dry-run | --apply] [--force] [--human | --json]`
+**Synopsis:** `nixling vm restart <vm> [--force | -f] [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
@@ -369,7 +384,7 @@ through the daemon.
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the 5-node per-VM DAG without spawning any role. |
 | `--apply` | boolean | `false` | Perform the lifecycle mutation. |
-| `--force`, `-f` | boolean | `false` | Apply force only to the stop phase before the unchanged start phase. Omitted from public JSON when false. |
+| `--force`, `-f` | boolean | `false` | Apply force only to the stop phase: skip graceful guest shutdown, then run the usual cleanup before the unchanged start phase. |
 | `--json` | boolean | `false` | Emit the dry-run DAG or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -396,7 +411,7 @@ this file as history.
 
 ```text
 $ nixling vm restart corp-vm --apply
-vm restart corp-vm: vm stop corp-vm: broker recorded the audited SignalRunner request for role ch-runner (signal=term, signaled=true); vm start corp-vm: spawned pid=4242 start_time_ticks=123456789
+vm restart corp-vm: vm stop corp-vm: clean guest shutdown; vm start corp-vm: spawned pid=4242 start_time_ticks=123456789
 ```
 
 **Native**
@@ -409,8 +424,8 @@ vm restart corp-vm: vm stop corp-vm: broker recorded the audited SignalRunner re
 - `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` are
   unrecognised. Broker failures surface on stderr with the redacted
   public-safe remediation and exit `78`.
-- Live path: `nixlingd` → broker `SignalRunner` for the stop phase,
-  then `SpawnRunner` for the start phase.
+- Live path: same as `vm stop` for the stop phase, then broker
+  `SpawnRunner` for the start phase.
 
 **Bash**
 

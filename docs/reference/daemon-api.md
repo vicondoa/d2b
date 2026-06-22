@@ -142,22 +142,22 @@ names are rejected during deserialization.
 | `StatusRequest` | struct | [`StatusRequest`](../../packages/nixling-ipc/src/public_wire.rs#L284) | struct { `check_bridges`: `bool`; `vm`: `Option<String>` } |
 | `AuditRequest` | struct | [`AuditRequest`](../../packages/nixling-ipc/src/public_wire.rs#L292) | struct { `filter`: `Option<AuditSelector>`; `format`: `AuditFormat`; `since`: `Option<String>` } |
 | `HostCheckRequest` | struct | [`HostCheckRequest`](../../packages/nixling-ipc/src/public_wire.rs#L301) | struct { `read_only`: `bool`; `strict`: `bool` } |
-| `VmLifecycleRequest` | struct | [`VmLifecycleRequest`](../../packages/nixling-ipc/src/public_wire.rs#L327) | struct { `vm`: `String`; `flags`: `MutationFlags`; `force`: `bool`; `no_wait_api`: `bool` } |
-| `ActivationRequest` | struct | [`ActivationRequest`](../../packages/nixling-ipc/src/public_wire.rs#L347) | struct { `vm`: `String`; `flags`: `MutationFlags` } |
-| `GcRequest` | struct | [`GcRequest`](../../packages/nixling-ipc/src/public_wire.rs#L355) | struct { `flags`: `MutationFlags`; `keep_generations`: `Option<u32>` } |
-| `KeysShowRequest` | struct | [`KeysShowRequest`](../../packages/nixling-ipc/src/public_wire.rs#L364) | struct { `vm`: `String` } |
-| `KeysRotateRequest` | struct | [`KeysRotateRequest`](../../packages/nixling-ipc/src/public_wire.rs#L370) | struct { `vm`: `String`; `flags`: `MutationFlags` } |
-| `TrustRequest` | struct | [`TrustRequest`](../../packages/nixling-ipc/src/public_wire.rs#L378) | struct { `vm`: `String`; `flags`: `MutationFlags` } |
-| `RotateKnownHostRequest` | struct | [`RotateKnownHostRequest`](../../packages/nixling-ipc/src/public_wire.rs#L386) | struct { `vm`: `String`; `flags`: `MutationFlags` } |
-| `UsbipBindCliRequest` | struct | [`UsbipBindCliRequest`](../../packages/nixling-ipc/src/public_wire.rs#L394) | struct { `vm`: `String`; `bus_id`: `String`; `flags`: `MutationFlags` } |
-| `UsbipUnbindCliRequest` | struct | [`UsbipUnbindCliRequest`](../../packages/nixling-ipc/src/public_wire.rs#L403) | struct { `vm`: `String`; `bus_id`: `String`; `flags`: `MutationFlags` } |
-| `StoreVerifyRequest` | struct | [`StoreVerifyRequest`](../../packages/nixling-ipc/src/public_wire.rs#L412) | struct { `vm`: `String`; `repair`: `bool` } |
-| `ReadGuestConfigRequest` | struct | [`ReadGuestConfigRequest`](../../packages/nixling-ipc/src/public_wire.rs#L425) | struct { `vm`: `String` } |
-| `MigrateRequest` | struct | [`MigrateRequest`](../../packages/nixling-ipc/src/public_wire.rs#L1391) | struct { `flags`: `MutationFlags` } |
-| `HostPrepareRequest` | struct | [`HostPrepareRequest`](../../packages/nixling-ipc/src/public_wire.rs#L1398) | struct { `flags`: `MutationFlags` } |
-| `HostDestroyRequest` | struct | [`HostDestroyRequest`](../../packages/nixling-ipc/src/public_wire.rs#L1405) | struct { `flags`: `MutationFlags` } |
-| `HostInstallRequest` | struct | [`HostInstallRequest`](../../packages/nixling-ipc/src/public_wire.rs#L1412) | struct { `flags`: `MutationFlags`; `enable`: `bool`; `start`: `bool`; `no_start`: `bool` } |
-| `HostReconcileRequest` | struct | [`HostReconcileRequest`](../../packages/nixling-ipc/src/public_wire.rs#L1430) | struct { `flags`: `MutationFlags`; `network`: `bool` } |
+| `VmLifecycleRequest` | struct | [`VmLifecycleRequest`](../../packages/nixling-ipc/src/public_wire.rs#L327) | struct { `vm`: `String`; `flags`: `MutationFlags`; `no_wait_api`: `bool`; `force`: `bool` (serde-defaulted, omitted when false) } |
+| `ActivationRequest` | struct | [`ActivationRequest`](../../packages/nixling-ipc/src/public_wire.rs#L339) | struct { `vm`: `String`; `flags`: `MutationFlags` } |
+| `GcRequest` | struct | [`GcRequest`](../../packages/nixling-ipc/src/public_wire.rs#L347) | struct { `flags`: `MutationFlags`; `keep_generations`: `Option<u32>` } |
+| `KeysShowRequest` | struct | [`KeysShowRequest`](../../packages/nixling-ipc/src/public_wire.rs#L356) | struct { `vm`: `String` } |
+| `KeysRotateRequest` | struct | [`KeysRotateRequest`](../../packages/nixling-ipc/src/public_wire.rs#L362) | struct { `vm`: `String`; `flags`: `MutationFlags` } |
+| `TrustRequest` | struct | [`TrustRequest`](../../packages/nixling-ipc/src/public_wire.rs#L370) | struct { `vm`: `String`; `flags`: `MutationFlags` } |
+| `RotateKnownHostRequest` | struct | [`RotateKnownHostRequest`](../../packages/nixling-ipc/src/public_wire.rs#L378) | struct { `vm`: `String`; `flags`: `MutationFlags` } |
+| `UsbipBindCliRequest` | struct | [`UsbipBindCliRequest`](../../packages/nixling-ipc/src/public_wire.rs#L386) | struct { `vm`: `String`; `bus_id`: `String`; `flags`: `MutationFlags` } |
+| `UsbipUnbindCliRequest` | struct | [`UsbipUnbindCliRequest`](../../packages/nixling-ipc/src/public_wire.rs#L395) | struct { `vm`: `String`; `bus_id`: `String`; `flags`: `MutationFlags` } |
+| `StoreVerifyRequest` | struct | [`StoreVerifyRequest`](../../packages/nixling-ipc/src/public_wire.rs#L404) | struct { `vm`: `String`; `repair`: `bool` } |
+| `ReadGuestConfigRequest` | struct | [`ReadGuestConfigRequest`](../../packages/nixling-ipc/src/public_wire.rs#L417) | struct { `vm`: `String` } |
+| `MigrateRequest` | struct | [`MigrateRequest`](../../packages/nixling-ipc/src/public_wire.rs#L1383) | struct { `flags`: `MutationFlags` } |
+| `HostPrepareRequest` | struct | [`HostPrepareRequest`](../../packages/nixling-ipc/src/public_wire.rs#L1390) | struct { `flags`: `MutationFlags` } |
+| `HostDestroyRequest` | struct | [`HostDestroyRequest`](../../packages/nixling-ipc/src/public_wire.rs#L1397) | struct { `flags`: `MutationFlags` } |
+| `HostInstallRequest` | struct | [`HostInstallRequest`](../../packages/nixling-ipc/src/public_wire.rs#L1404) | struct { `flags`: `MutationFlags`; `enable`: `bool`; `start`: `bool`; `no_start`: `bool` } |
+| `HostReconcileRequest` | struct | [`HostReconcileRequest`](../../packages/nixling-ipc/src/public_wire.rs#L1422) | struct { `flags`: `MutationFlags`; `network`: `bool` } |
 
 ### Broker socket request types
 
@@ -298,6 +298,15 @@ a wire break. The public state surface distinguishes:
 v0.4.0 bash CLI: it means the VM is running, `booted` exists,
 `current` exists, and the two store paths differ. It is not a separate
 state-machine node.
+
+Stop and restart requests accept a serde-defaulted `force` flag. When
+`force = false`, nixlingd applies the VM's manifest
+`lifecycle.gracefulShutdown` policy: supported local providers receive a
+bounded graceful guest-shutdown request before VMM pidfd cleanup. When
+`force = true`, nixlingd records explicit operator intent and skips only the
+provider graceful wait; it still uses the standard SIGTERM/SIGKILL cleanup
+policy rather than jumping directly to SIGKILL. Restart applies force to the
+stop phase only.
 
 <!-- BEGIN AUTO-GENERATED: enum-variants -->
 ### Lifecycle enum
@@ -519,6 +528,15 @@ diagnostics, argv, env, and paths are never written. Abrupt owner disconnects,
 close timeouts, and stale/unsupported guest generations are represented by
 closed result or typed-error buckets rather than free-form text.
 
+Graceful-shutdown daemon events also use this daemon-owned stream. Before a
+normal stop sends CH `vm.shutdown` or broker-mediated QMP `system_powerdown`,
+nixlingd records bounded intent fields (`vm`, peer uid/authz class, provider,
+timeout seconds, trigger). It records a final bounded outcome such as
+`clean_guest_shutdown`, `clean_vmm_cleanup`, `api_unavailable`,
+`timeout_exceeded`, or `force_requested`; raw provider HTTP/QMP payloads,
+socket paths, command output, argv, and guest-controlled strings stay out of
+audit records.
+
 Daemon audit sink health is exposed as an explicit report rather than a
 silent fallback. The report distinguishes writable, degraded, and
 unavailable states, including retention-floor degradation. It intentionally
@@ -559,3 +577,8 @@ See [`docs/reference/daemon-autostart.md`](daemon-autostart.md) for
 the full contract (net VMs first, configurable concurrency cap,
 degraded-mode tolerance, idempotent re-entry). The cap is
 controlled by `nixling.daemon.autostart.parallelism` (default 3).
+
+`/etc/nixling/daemon-config.json` carries both
+`autostartParallelism` and `gracefulShutdownTimeoutSeconds`. The latter is the
+daemon-wide default used when a v7 manifest entry has
+`lifecycle.gracefulShutdown.timeoutSeconds = null`.

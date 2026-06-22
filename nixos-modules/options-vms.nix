@@ -4,9 +4,10 @@
 # `nixos-modules/components/`
 # are conditionally imported by host.nix on this submodule's
 # resolved values. Extracted from options.nix for reviewability.
-{ lib, ... }:
+{ lib, config, ... }:
 
 let
+  globalConfig = config;
   qemuMediaRefType = lib.types.strMatching "^[a-z][a-z0-9-]{0,62}$";
   qemuMediaByIdNameType = lib.types.strMatching "^[A-Za-z0-9._:+-]{1,255}$";
   shellNameType = lib.types.strMatching "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$";
@@ -122,7 +123,7 @@ in
   options.nixling.vms = lib.mkOption {
     description = "MicroVMs to declare via the nixling framework.";
     default = { };
-    type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
+    type = lib.types.attrsOf (lib.types.submodule ({ name, config, ... }: {
       # options-vms-removed.nix's mkRemovedOptionModule shim
       # was retired here. It cannot be imported into an `attrsOf
       # submodule` per-instance because the per-VM submodule layer
@@ -147,6 +148,32 @@ in
             manual-only for now, emits a paused fd-backed QEMU runner, and
             deliberately skips the per-VM NixOS evaluator.
           '';
+        };
+
+        lifecycle.gracefulShutdown = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            description = ''
+              Whether this VM participates in provider-aware graceful guest
+              shutdown before nixlingd falls back to host-side VMM
+              termination. Supported local providers (`nixos`/Cloud
+              Hypervisor and `qemu-media`) inherit the global daemon
+              default; unsupported future providers default false unless
+              their runtime explicitly opts in.
+            '';
+          };
+
+          timeoutSeconds = lib.mkOption {
+            type = lib.types.nullOr lib.types.int;
+            default = null;
+            example = 120;
+            description = ''
+              Optional per-VM graceful guest shutdown timeout, in seconds.
+              When null, nixlingd uses
+              `nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds`.
+              Non-null values must be between 1 and 600 seconds.
+            '';
+          };
         };
 
         ui.border = {
@@ -1130,6 +1157,13 @@ in
             module per-VM via `nixling.vms.<vm>.config.imports`.
           '';
         };
+      };
+
+      config = {
+        lifecycle.gracefulShutdown.enable = lib.mkDefault (
+          globalConfig.nixling.daemon.lifecycle.gracefulShutdown.enable
+          && builtins.elem config.runtime.kind [ "nixos" "qemu-media" ]
+        );
       };
     }));
   };

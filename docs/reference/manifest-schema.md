@@ -1,6 +1,6 @@
 # nixling JSON manifest schema
 
-**Status:** current public manifest version is `manifestVersion = 6`.
+**Status:** current public manifest version is `manifestVersion = 7`.
 **Source of truth:** [`manifest-schema.json`](./manifest-schema.json)
 (JSON Schema Draft 2020-12). When this prose and the JSON Schema
 disagree, the JSON Schema wins.
@@ -22,7 +22,7 @@ inventory. Private bundle artifacts live beside it and are documented in
 
 ```jsonc
 {
-  "_manifest": { "manifestVersion": 6 },
+  "_manifest": { "manifestVersion": 7 },
   "_observability": {
     "enabled": true,
     "vmName": "sys-obs",
@@ -93,6 +93,12 @@ inventory. Private bundle artifacts live beside it and are documented in
          { "id": "cloud-hypervisor", "role": "hypervisor", "optional": false }
       ]
     },
+    "lifecycle": {
+     "gracefulShutdown": {
+       "enable": true,
+       "timeoutSeconds": null
+     }
+    },
     "graphics": false,
     "tpm": false,
     "usbipYubikey": false,
@@ -142,6 +148,7 @@ Fields are listed in `nixos-modules/manifest.nix` declaration order.
 | --- | --- | --- | --- |
 | `name` | string | yes | VM name; matches the enclosing top-level key. Pattern `^[a-z][a-z0-9-]*$` (enforced by `nixos-modules/assertions.nix`). |
 | `runtime` | object | yes | Runtime/provider metadata and provider support matrix. Shape: `{ kind, provider: { id, type, driver }, capabilities, operationCapabilities, autostartPolicy, services }`. `operationCapabilities` groups positive operation support by lifecycle/media/display/guest/storage axis; `operationCapabilities.guest.shell` records provider support for the staged persistent-shell operation. `services[]` contains bounded provider-neutral service summaries. `qemu-media` uses provider `local-qemu-media`/driver `qemu`; its supported capabilities are lifecycle/display/USB hotplug, while guest-control, exec, shell, config-sync, SSH, store-sync, keys, and in-guest observability are unsupported. |
+| `lifecycle` | object | yes | Per-VM lifecycle policy. Shape: `{ gracefulShutdown: { enable, timeoutSeconds } }`. `enable` tells nixlingd whether to attempt provider-aware guest shutdown before forced VMM cleanup; `timeoutSeconds` is a nullable 1–600 second per-VM override, where `null` means the daemon default from `/etc/nixling/daemon-config.json` applies. |
 | `graphics` | boolean | yes | Mirror of `nixling.vms.<name>.graphics.enable`. The CLI uses it to pick the launch path. |
 | `tpm` | boolean | yes | Mirror of `nixling.vms.<name>.tpm.enable`. |
 | `usbipYubikey` | boolean | yes | Mirror of `nixling.vms.<name>.usbip.yubikey`. `nixling usb attach\|detach\|probe` refuses to run when false. |
@@ -195,6 +202,10 @@ Version history:
 - v6 additive: adds per-VM nullable `shell` policy metadata and
   `runtime.operationCapabilities.guest.shell`. This is additive and does not bump
   `manifestVersion`.
+- v7: adds required per-VM `lifecycle.gracefulShutdown` metadata for
+  provider-aware guest shutdown policy. The daemon accepts v6 manifests during
+  the rollout by treating missing lifecycle metadata as `{ enable = true,
+  timeoutSeconds = null }` for supported local providers.
 
 ### `_observability`
 
@@ -228,8 +239,15 @@ transport paths from naming conventions.
 ## Compatibility policy
 
 Consumers must reject manifests with a newer `manifestVersion` than they
-support. The daemon and broker fail closed on mismatched bundle/manifest
-versions rather than guessing compatibility.
+support. The daemon and broker normally fail closed on mismatched
+bundle/manifest versions rather than guessing compatibility.
+
+The v6→v7 transition has one explicit compatibility window: new daemons may
+load a v6 manifest that lacks `lifecycle.gracefulShutdown` and synthesize the
+same default policy the v7 Nix emitter writes (`enable = true` for supported
+local Cloud Hypervisor and qemu-media providers, `timeoutSeconds = null`).
+This is only for running systems that have switched the daemon before the host
+manifest is refreshed; newly rendered manifests use v7.
 
 Adding optional fields without changing semantics can remain within the
 same manifest version only when all consumers tolerate the field.
