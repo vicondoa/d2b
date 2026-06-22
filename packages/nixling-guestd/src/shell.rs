@@ -267,10 +267,10 @@ impl ShellRuntime {
         force: bool,
         owner_key: Vec<u8>,
     ) -> Result<(ShellSession, bool), ShellRuntimeError> {
+        validate_shell_name(&name).map_err(|_| ShellRuntimeError::InvalidName)?;
         if !self.enabled {
             return Err(ShellRuntimeError::Disabled);
         }
-        validate_shell_name(&name).map_err(|_| ShellRuntimeError::InvalidName)?;
         let mut state = self
             .state
             .lock()
@@ -718,6 +718,14 @@ mod tests {
                 .enum_value()
                 .unwrap(),
             pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED
+        );
+        let mut invalid_attach = pb::ShellAttachRequest::new();
+        invalid_attach.name = Some("\u{1b}[31m".to_owned());
+        let invalid = runtime.attach(invalid_attach);
+        assert_eq!(invalid.resolved_name, "<invalid>");
+        assert_eq!(
+            invalid.error.unwrap().kind.enum_value().unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME
         );
         assert_eq!(
             runtime.list().error.unwrap().kind.enum_value().unwrap(),
