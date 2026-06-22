@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 
 use nixling_ipc::guest_proto as pb;
@@ -6,6 +6,7 @@ use protobuf::{EnumOrUnknown, MessageField};
 
 pub const DEFAULT_SHELL_SESSIONS_PER_VM: u32 = 8;
 pub const DEFAULT_SHELL_ATTACHED_SESSIONS_PER_VM: u32 = 1;
+const EVENT_QUEUE_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellRuntimeConfig {
@@ -65,10 +66,87 @@ impl ShellRuntimeError {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellEventKind {
+    AttachCreated,
+    AttachReused,
+    ForceEvicted,
+    Detached,
+    Killed,
+    ReconciliationGap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShellEvent {
+    pub seq: u64,
+    pub kind: ShellEventKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellEventBatch {
+    pub events: Vec<ShellEvent>,
+    pub dropped_events: u64,
+    pub next_seq: u64,
+}
+
+#[derive(Debug)]
+struct ShellEventQueue {
+    events: VecDeque<ShellEvent>,
+    next_seq: u64,
+    dropped_events: u64,
+    capacity: usize,
+}
+
+impl ShellEventQueue {
+    fn new(capacity: usize) -> Self {
+        Self {
+            events: VecDeque::new(),
+            next_seq: 1,
+            dropped_events: 0,
+            capacity,
+        }
+    }
+
+    fn push(&mut self, kind: ShellEventKind) {
+        if self.events.len() == self.capacity {
+            self.events.pop_front();
+            self.dropped_events = self.dropped_events.saturating_add(1);
+        }
+        let event = ShellEvent {
+            seq: self.next_seq,
+            kind,
+        };
+        self.next_seq = self.next_seq.saturating_add(1);
+        self.events.push_back(event);
+    }
+
+    fn drain_since(&self, after_seq: u64, limit: usize) -> ShellEventBatch {
+        let events: Vec<ShellEvent> = self
+            .events
+            .iter()
+            .copied()
+            .filter(|event| event.seq > after_seq)
+            .take(limit)
+            .collect();
+        ShellEventBatch {
+            events,
+            dropped_events: self.dropped_events,
+            next_seq: self.next_seq,
+        }
+    }
+}
+
 #[derive(Default)]
 struct ShellRuntimeState {
     sessions: BTreeMap<String, ShellSession>,
     next_session: u64,
+    events: ShellEventQueue,
+}
+
+impl Default for ShellEventQueue {
+    fn default() -> Self {
+        Self::new(EVENT_QUEUE_CAPACITY)
+    }
 }
 
 pub struct ShellRuntime {
@@ -159,7 +237,12 @@ impl ShellRuntime {
                 .expect("existing session remains present");
             existing.attached = true;
             existing.killed = false;
-            return Ok((existing.clone(), was_attached && force));
+            let cloned = existing.clone();
+            if was_attached && force {
+                state.events.push(ShellEventKind::ForceEvicted);
+            }
+            state.events.push(ShellEventKind::AttachReused);
+            return Ok((cloned, was_attached && force));
         }
         if state.sessions.len() >= self.config.max_sessions as usize {
             return Err(ShellRuntimeError::CapacityExceeded);
@@ -175,6 +258,7 @@ impl ShellRuntime {
             killed: false,
         };
         state.sessions.insert(name, session.clone());
+        state.events.push(ShellEventKind::AttachCreated);
         Ok((session, false))
     }
 
@@ -225,6 +309,7 @@ impl ShellRuntime {
         };
         let was_attached = session.attached;
         session.attached = false;
+        state.events.push(ShellEventKind::Detached);
         let mut response = pb::ShellDetachResponse::new();
         response.resolved_name = resolved;
         response.detached = was_attached;
@@ -248,6 +333,7 @@ impl ShellRuntime {
                 let name = session.name.clone();
                 let was_attached = session.attached;
                 session.attached = false;
+                state.events.push(ShellEventKind::Detached);
                 let mut response = pb::ShellDetachResponse::new();
                 response.resolved_name = name;
                 response.detached = was_attached;
@@ -278,11 +364,26 @@ impl ShellRuntime {
         };
         session.attached = false;
         session.killed = true;
+        state.events.push(ShellEventKind::Killed);
         let mut response = pb::ShellKillResponse::new();
         response.name = name;
         response.killed = true;
         response.state = EnumOrUnknown::new(pb::ShellState::SHELL_STATE_KILLED);
         response
+    }
+
+    pub fn drain_events_since(&self, after_seq: u64, limit: usize) -> ShellEventBatch {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.drain_events_since(after_seq, limit)
+    }
+}
+
+impl ShellRuntimeState {
+    fn drain_events_since(&self, after_seq: u64, limit: usize) -> ShellEventBatch {
+        self.events.drain_since(after_seq, limit)
     }
 }
 
@@ -433,6 +534,54 @@ mod tests {
         assert_eq!(
             rejected.error.unwrap().kind.enum_value().unwrap(),
             pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED
+        );
+    }
+
+    #[test]
+    fn event_queue_reports_bounded_lifecycle_events() {
+        let runtime = enabled_runtime();
+        let attached = runtime.attach(pb::ShellAttachRequest::new());
+        let mut force = pb::ShellAttachRequest::new();
+        force.force = true;
+        let forced = runtime.attach(force);
+        let _ = runtime.detach(None);
+        let _ = runtime.kill("default".to_owned());
+
+        assert!(attached.error.is_none());
+        assert!(forced.force_evicted);
+
+        let batch = runtime.drain_events_since(0, 16);
+        let kinds: Vec<ShellEventKind> = batch.events.iter().map(|event| event.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ShellEventKind::AttachCreated,
+                ShellEventKind::ForceEvicted,
+                ShellEventKind::AttachReused,
+                ShellEventKind::Detached,
+                ShellEventKind::Killed,
+            ]
+        );
+        assert_eq!(batch.dropped_events, 0);
+        assert_eq!(batch.next_seq, 6);
+    }
+
+    #[test]
+    fn event_queue_drops_oldest_and_reports_gap_count() {
+        let mut queue = ShellEventQueue::new(2);
+        queue.push(ShellEventKind::AttachCreated);
+        queue.push(ShellEventKind::Detached);
+        queue.push(ShellEventKind::Killed);
+
+        let batch = queue.drain_since(0, 8);
+        assert_eq!(batch.dropped_events, 1);
+        assert_eq!(
+            batch
+                .events
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec![ShellEventKind::Detached, ShellEventKind::Killed]
         );
     }
 }
