@@ -286,6 +286,7 @@ in
             + " --home %h";
           WorkingDirectory = "~";
           KillMode = "control-group";
+          Delegate = true;
         };
       };
     };
