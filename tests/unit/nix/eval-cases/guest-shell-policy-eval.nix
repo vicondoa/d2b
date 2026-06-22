@@ -171,7 +171,7 @@ let
     assert shpoolService.serviceConfig.PAMName == "nixling-shpool-daemon";
     assert shpoolService.serviceConfig.Delegate == true;
     assert (shpoolService.wantedBy or [ ]) == [ ];
-    assert shpoolPam.startSession == true;
+    assert shpoolPam.startSession == false;
     assert shpoolPam.setEnvironment == true;
     assert shpoolPam.setLoginUid == true;
     assert aliceLinger == true;
@@ -214,7 +214,7 @@ let
     assert lib.hasInfix "--shell-systemctl-path /nix/store/" guestdExecStart;
     assert shpoolService.serviceConfig.User == "alice";
     assert shpoolService.serviceConfig.Delegate == true;
-    assert shpoolPam.startSession == true;
+    assert shpoolPam.startSession == false;
     assert aliceLinger == true;
     assert shellManifest.defaultName == "ops_1";
     assert shellManifest.maxSessions == 16;

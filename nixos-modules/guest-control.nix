@@ -292,7 +292,10 @@ in
     };
 
     security.pam.services.nixling-shpool-daemon = lib.mkIf (cfg.shell.enable && cfg.exec.execUser != null) {
-      startSession = true;
+      # Do not start a pam_systemd session here: it migrates the daemon out of
+      # the delegated system service cgroup. Linger keeps /run/user/<uid>
+      # available while the daemon stays under systemd's service authority.
+      startSession = false;
       setEnvironment = true;
       setLoginUid = true;
     };
