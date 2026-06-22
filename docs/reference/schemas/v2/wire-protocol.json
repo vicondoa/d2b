@@ -4932,6 +4932,7 @@
             "wire-unknown-field",
             "wire-ifname-invalid",
             "wire-malformed-json",
+            "guest-shell-disabled",
             "broker-unimplemented",
             "broker-validation-failed",
             "manifest-parse-error",

@@ -29,6 +29,8 @@ pub enum Kind {
     WireIfNameInvalid,
     #[serde(rename = "wire-malformed-json")]
     WireMalformedJson,
+    #[serde(rename = "guest-shell-disabled")]
+    GuestShellDisabled,
     #[serde(rename = "broker-unimplemented")]
     BrokerUnimplemented,
     #[serde(rename = "broker-validation-failed")]
@@ -59,7 +61,7 @@ pub struct ErrorKindRecord {
     pub docs_anchor: &'static str,
 }
 
-static ERROR_KIND_RECORDS: [ErrorKindRecord; 13] = [
+static ERROR_KIND_RECORDS: [ErrorKindRecord; 14] = [
     ErrorKindRecord {
         kind: Kind::AuthzNotALauncher,
         exit_code: 10,
@@ -115,6 +117,14 @@ static ERROR_KIND_RECORDS: [ErrorKindRecord; 13] = [
         message_template: "{type_name} could not be decoded from JSON (opaque reason: {opaque_reason})",
         remediation: "Send a complete JSON object that matches the documented wire schema.",
         docs_anchor: "#wire-malformed-json",
+    },
+    ErrorKindRecord {
+        kind: Kind::GuestShellDisabled,
+        exit_code: 70,
+        owning_command: "shell",
+        message_template: "persistent guest shell is not available for this VM",
+        remediation: "Enable nixling.vms.<vm>.guest.shell when the shell runtime is available, rebuild the guest, and retry.",
+        docs_anchor: "#guest-shell-disabled",
     },
     ErrorKindRecord {
         kind: Kind::BrokerUnimplemented,
@@ -180,6 +190,7 @@ impl Kind {
             Self::WireUnknownField => "wire-unknown-field",
             Self::WireIfNameInvalid => "wire-ifname-invalid",
             Self::WireMalformedJson => "wire-malformed-json",
+            Self::GuestShellDisabled => "guest-shell-disabled",
             Self::BrokerUnimplemented => "broker-unimplemented",
             Self::BrokerValidationFailed => "broker-validation-failed",
             Self::ManifestParseError => "manifest-parse-error",
@@ -222,12 +233,13 @@ impl Kind {
             Self::WireUnknownField => &ERROR_KIND_RECORDS[4],
             Self::WireIfNameInvalid => &ERROR_KIND_RECORDS[5],
             Self::WireMalformedJson => &ERROR_KIND_RECORDS[6],
-            Self::BrokerUnimplemented => &ERROR_KIND_RECORDS[7],
-            Self::BrokerValidationFailed => &ERROR_KIND_RECORDS[8],
-            Self::ManifestParseError => &ERROR_KIND_RECORDS[9],
-            Self::ManifestVersionMismatch => &ERROR_KIND_RECORDS[10],
-            Self::InternalIo => &ERROR_KIND_RECORDS[11],
-            Self::BundleTampered => &ERROR_KIND_RECORDS[12],
+            Self::GuestShellDisabled => &ERROR_KIND_RECORDS[7],
+            Self::BrokerUnimplemented => &ERROR_KIND_RECORDS[8],
+            Self::BrokerValidationFailed => &ERROR_KIND_RECORDS[9],
+            Self::ManifestParseError => &ERROR_KIND_RECORDS[10],
+            Self::ManifestVersionMismatch => &ERROR_KIND_RECORDS[11],
+            Self::InternalIo => &ERROR_KIND_RECORDS[12],
+            Self::BundleTampered => &ERROR_KIND_RECORDS[13],
         }
     }
 }
@@ -281,6 +293,10 @@ impl Error {
             type_name,
             opaque_reason: opaque_reason.into(),
         })
+    }
+
+    pub fn guest_shell_disabled() -> Self {
+        Self::Wire(WireError::GuestShellDisabled)
     }
 
     pub fn broker_unimplemented(operation: BrokerOp, target_wave: u8) -> Self {
@@ -478,6 +494,7 @@ pub enum WireError {
         type_name: &'static str,
         opaque_reason: String,
     },
+    GuestShellDisabled,
 }
 
 impl WireError {
@@ -488,6 +505,7 @@ impl WireError {
             Self::UnknownField { .. } => Kind::WireUnknownField,
             Self::IfNameInvalid { .. } => Kind::WireIfNameInvalid,
             Self::MalformedJson { .. } => Kind::WireMalformedJson,
+            Self::GuestShellDisabled => Kind::GuestShellDisabled,
         }
     }
 
@@ -517,6 +535,9 @@ impl WireError {
             } => format!(
                 "{type_name} could not be decoded from JSON (opaque reason: {opaque_reason})"
             ),
+            Self::GuestShellDisabled => {
+                "persistent guest shell is not available for this VM".to_owned()
+            }
         }
     }
 
@@ -1025,6 +1046,7 @@ mod tests {
                 Error::malformed_json("HelloRequest", "unexpected EOF at line 1 column 42"),
                 "wire-malformed-json",
             ),
+            (Error::guest_shell_disabled(), "guest-shell-disabled"),
             (
                 Error::broker_unimplemented(BrokerOp::CreateTapFd, 3),
                 "broker-unimplemented",
@@ -1060,8 +1082,8 @@ mod tests {
     }
 
     #[test]
-    fn all_kinds_count_is_thirteen() {
+    fn all_kinds_count_is_fourteen() {
         // Kind::ManifestVersionMismatch is part of the public table.
-        assert_eq!(Error::all_kinds().len(), 13);
+        assert_eq!(Error::all_kinds().len(), 14);
     }
 }

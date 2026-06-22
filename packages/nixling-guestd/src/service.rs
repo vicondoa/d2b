@@ -1050,6 +1050,32 @@ fn shell_detach_disabled_response() -> pb::ShellDetachResponse {
     response
 }
 
+fn terminal_metadata_common(
+    metadata: Option<&pb::TerminalRequestMetadata>,
+) -> Option<&pb::RequestMetadata> {
+    metadata.and_then(|metadata| metadata.common.as_ref())
+}
+
+fn terminal_metadata_is_shell(metadata: Option<&pb::TerminalRequestMetadata>) -> bool {
+    metadata
+        .and_then(|metadata| metadata.kind.enum_value().ok())
+        .is_some_and(|kind| kind == pb::TerminalKind::TERMINAL_KIND_SHELL)
+}
+
+fn terminal_write_disabled_response(
+    metadata: Option<&pb::TerminalRequestMetadata>,
+) -> pb::WriteStdinResponse {
+    if terminal_metadata_is_shell(metadata) {
+        let mut response = pb::WriteStdinResponse::new();
+        response.stdin_state = EnumOrUnknown::new(pb::StdinState::STDIN_STATE_OPEN);
+        response.disposition = EnumOrUnknown::new(pb::WriteDisposition::WRITE_DISPOSITION_REJECTED);
+        response.error = MessageField::some(shell_disabled_error());
+        response
+    } else {
+        write_stdin_error(ExecError::ExecDisabled)
+    }
+}
+
 fn inspect_response(snapshot: &ExecSnapshot) -> pb::ExecInspectResponse {
     let mut response = pb::ExecInspectResponse::new();
     response.state = EnumOrUnknown::new(wire_exec_state(snapshot.state));
@@ -1594,12 +1620,7 @@ impl GuestControl for GuestControlService {
         request: pb::ShellCloseAttachRequest,
     ) -> ttrpc::Result<pb::ShellDetachResponse> {
         self.require_authenticated()?;
-        self.validate_metadata(
-            request
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.common.as_ref()),
-        )?;
+        self.validate_metadata(terminal_metadata_common(request.metadata.as_ref()))?;
         Ok(shell_detach_disabled_response())
     }
 
@@ -1609,13 +1630,8 @@ impl GuestControl for GuestControlService {
         request: pb::TerminalWriteStdinRequest,
     ) -> ttrpc::Result<pb::WriteStdinResponse> {
         self.require_authenticated()?;
-        self.validate_metadata(
-            request
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.common.as_ref()),
-        )?;
-        Ok(write_stdin_error(ExecError::ExecDisabled))
+        self.validate_metadata(terminal_metadata_common(request.metadata.as_ref()))?;
+        Ok(terminal_write_disabled_response(request.metadata.as_ref()))
     }
 
     async fn terminal_read_output(
@@ -1624,15 +1640,15 @@ impl GuestControl for GuestControlService {
         request: pb::TerminalReadOutputRequest,
     ) -> ttrpc::Result<pb::ReadOutputResponse> {
         self.require_authenticated()?;
-        self.validate_metadata(
-            request
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.common.as_ref()),
-        )?;
+        self.validate_metadata(terminal_metadata_common(request.metadata.as_ref()))?;
         let mut response = pb::ReadOutputResponse::new();
         response.stream = request.stream;
-        response.error = MessageField::some(shell_disabled_error());
+        response.error =
+            MessageField::some(if terminal_metadata_is_shell(request.metadata.as_ref()) {
+                shell_disabled_error()
+            } else {
+                guest_error_kind(ExecError::ExecDisabled)
+            });
         Ok(response)
     }
 
@@ -1642,15 +1658,15 @@ impl GuestControl for GuestControlService {
         request: pb::TerminalCloseStdinRequest,
     ) -> ttrpc::Result<pb::CloseStdinResponse> {
         self.require_authenticated()?;
-        self.validate_metadata(
-            request
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.common.as_ref()),
-        )?;
+        self.validate_metadata(terminal_metadata_common(request.metadata.as_ref()))?;
         let mut response = pb::CloseStdinResponse::new();
         response.disposition = EnumOrUnknown::new(pb::WriteDisposition::WRITE_DISPOSITION_REJECTED);
-        response.error = MessageField::some(shell_disabled_error());
+        response.error =
+            MessageField::some(if terminal_metadata_is_shell(request.metadata.as_ref()) {
+                shell_disabled_error()
+            } else {
+                guest_error_kind(ExecError::ExecDisabled)
+            });
         Ok(response)
     }
 
@@ -1660,15 +1676,15 @@ impl GuestControl for GuestControlService {
         request: pb::TerminalTtyWinResizeRequest,
     ) -> ttrpc::Result<pb::ControlAck> {
         self.require_authenticated()?;
-        self.validate_metadata(
-            request
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.common.as_ref()),
-        )?;
+        self.validate_metadata(terminal_metadata_common(request.metadata.as_ref()))?;
         let mut response = pb::ControlAck::new();
         response.control_seq = request.control_seq;
-        response.error = MessageField::some(shell_disabled_error());
+        response.error =
+            MessageField::some(if terminal_metadata_is_shell(request.metadata.as_ref()) {
+                shell_disabled_error()
+            } else {
+                guest_error_kind(ExecError::ExecDisabled)
+            });
         Ok(response)
     }
 
@@ -2500,6 +2516,42 @@ mod tests {
 
     const TEST_TOKEN: &[u8] = b"service-test-token";
     const HOST_NONCE: [u8; AUTH_NONCE_LEN] = [0x44; AUTH_NONCE_LEN];
+
+    fn terminal_metadata(kind: pb::TerminalKind) -> pb::TerminalRequestMetadata {
+        let mut metadata = pb::TerminalRequestMetadata::new();
+        metadata.kind = EnumOrUnknown::new(kind);
+        metadata
+    }
+
+    #[test]
+    fn terminal_disabled_response_preserves_terminal_kind_boundary() {
+        let shell = terminal_write_disabled_response(Some(&terminal_metadata(
+            pb::TerminalKind::TERMINAL_KIND_SHELL,
+        )));
+        assert_eq!(
+            shell
+                .error
+                .as_ref()
+                .expect("shell error")
+                .kind
+                .enum_value()
+                .expect("known shell kind"),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED
+        );
+
+        let exec = terminal_write_disabled_response(Some(&terminal_metadata(
+            pb::TerminalKind::TERMINAL_KIND_EXEC,
+        )));
+        assert_eq!(
+            exec.error
+                .as_ref()
+                .expect("exec error")
+                .kind
+                .enum_value()
+                .expect("known exec kind"),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_DISABLED
+        );
+    }
 
     fn test_context(instance: u8) -> AuthConnectionContext {
         AuthConnectionContext {

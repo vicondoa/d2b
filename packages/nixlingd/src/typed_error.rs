@@ -295,6 +295,7 @@ pub enum TypedError {
     WireUnsupportedRequest {
         request_type: String,
     },
+    GuestShellDisabled,
     BundleTampered {
         path: PathBuf,
         reason: String,
@@ -473,6 +474,7 @@ impl TypedError {
             Self::WireInvalidFrame { .. } => "wire-invalid-frame",
             Self::WireBadHello { .. } => "wire-bad-hello",
             Self::WireUnsupportedRequest { .. } => "wire-unsupported-request",
+            Self::GuestShellDisabled => "guest-shell-disabled",
             Self::BundleTampered { .. } => "bundle-tampered",
             Self::OwnershipMatrixDrift { .. } => "ownership-matrix-drift",
             Self::SshdHostKeyDrift { .. } => "sshd-host-key-drift",
@@ -507,6 +509,7 @@ impl TypedError {
             | Self::WireInvalidFrame { .. }
             | Self::WireBadHello { .. }
             | Self::WireUnsupportedRequest { .. } => 54,
+            Self::GuestShellDisabled => 70,
             Self::BundleTampered { .. } => 60,
             Self::OwnershipMatrixDrift { .. } => 61,
             Self::SshdHostKeyDrift { .. } => 62,
@@ -585,6 +588,9 @@ impl TypedError {
             Self::WireBadHello { detail } => format!("invalid hello handshake: {detail}"),
             Self::WireUnsupportedRequest { request_type } => {
                 format!("unsupported request type {request_type}")
+            }
+            Self::GuestShellDisabled => {
+                "persistent guest shell is not available for this VM".to_owned()
             }
             Self::BundleTampered { reason, .. } => {
                 format!("bundle tamper detected: {reason}")
@@ -703,6 +709,10 @@ impl TypedError {
             | Self::WireBadHello { .. }
             | Self::WireUnsupportedRequest { .. } => {
                 "resend a valid framed JSON request that matches the documented daemon wire shape"
+                    .to_owned()
+            }
+            Self::GuestShellDisabled => {
+                "enable nixling.vms.<vm>.guest.shell when the shell runtime is available, rebuild the guest, and retry"
                     .to_owned()
             }
             Self::BundleTampered { .. } => {
@@ -847,7 +857,8 @@ impl TypedError {
             | Self::WireFrameTooLarge { .. }
             | Self::WireInvalidFrame { .. }
             | Self::WireBadHello { .. }
-            | Self::WireUnsupportedRequest { .. } => "internalError",
+            | Self::WireUnsupportedRequest { .. }
+            | Self::GuestShellDisabled => "internalError",
             Self::AuthzNotALauncher { .. }
             | Self::AuthzNotAdmin { .. }
             | Self::AuthzAuditRequiresAdmin
@@ -952,6 +963,17 @@ mod tests {
         assert!(err.remediation().contains("mode 0600"));
         assert_no_path_leak("GatewayDisplayUnavailable", &err.message());
         assert_no_path_leak("GatewayDisplayUnavailable", &err.remediation());
+    }
+
+    #[test]
+    fn guest_shell_disabled_is_typed_and_actionable() {
+        let err = TypedError::GuestShellDisabled;
+        assert_eq!(err.kind(), "guest-shell-disabled");
+        assert_eq!(err.exit_code(), 70);
+        assert!(err.message().contains("persistent guest shell"));
+        assert!(err.remediation().contains("guest.shell"));
+        assert_no_path_leak("GuestShellDisabled", &err.message());
+        assert_no_path_leak("GuestShellDisabled", &err.remediation());
     }
 
     #[test]
