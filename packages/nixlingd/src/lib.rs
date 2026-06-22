@@ -4776,7 +4776,7 @@ fn run_shell_owner(
     };
     let initial_control_seq = attach_response.control_seq;
     let owner_shell_ref_digest = shell_ref_digest(&[&attach.vm, &attach_response.resolved_name]);
-    let public_attach = match map_shell_attach_response(attach_response) {
+    let public_attach_result = match map_shell_attach_response(attach_response) {
         Ok(value) => public_wire::ShellOpResponse::Attach(value),
         Err(error) => {
             let _ = write_json_frame(
@@ -4787,9 +4787,13 @@ fn run_shell_owner(
             return;
         }
     };
+    let owner_resolved_name = match &public_attach_result {
+        public_wire::ShellOpResponse::Attach(result) => result.resolved_name.clone(),
+        _ => unreachable!("public_attach_result is always Attach"),
+    };
     if write_json_frame(
         stream.as_ref(),
-        &wire::shell_response_with_id(first_op_id, &public_attach),
+        &wire::shell_response_with_id(first_op_id, &public_attach_result),
     )
     .is_err()
     {
@@ -4901,6 +4905,31 @@ fn run_shell_owner(
             }
             Ok(None) => break,
             Err(error) => {
+                if closes_owner
+                    && matches!(
+                        shell_close_attach_best_effort(
+                            &client,
+                            &attach.vm,
+                            &session_id,
+                            &guest_boot_id
+                        ),
+                        daemon_audit::ShellAuditResult::Closed
+                    )
+                {
+                    let response = public_wire::ShellOpResponse::CloseAttach(
+                        synthetic_shell_close_attach_response(owner_resolved_name.clone()),
+                    );
+                    if write_json_frame(
+                        stream.as_ref(),
+                        &wire::shell_response_with_id(op_id, &response),
+                    )
+                    .is_err()
+                    {
+                        break;
+                    }
+                    attachment_closed = true;
+                    break;
+                }
                 if write_json_frame(stream.as_ref(), &wire::error_frame_with_id(op_id, &error))
                     .is_err()
                 {
@@ -4932,6 +4961,16 @@ fn run_shell_owner(
         let _ = task.join();
     }
     drop(conn_permit);
+}
+
+fn synthetic_shell_close_attach_response(
+    resolved_name: public_wire::ShellName,
+) -> public_wire::ShellDetachResult {
+    public_wire::ShellDetachResult {
+        resolved_name,
+        detached: true,
+        cause: Some(public_wire::ShellCloseCause::ClientDetach),
+    }
 }
 
 fn establish_shell_owner(
@@ -15694,8 +15733,8 @@ mod broker_dispatch_tests {
     use nixling_ipc::guest_proto as pb;
     use nixling_ipc::public_wire::{
         ActivationRequest, GcRequest, HostDestroyRequest, HostInstallRequest, HostPrepareRequest,
-        KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest,
-        ShellSessionState, TrustRequest, VmLifecycleRequest,
+        KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest, ShellCloseCause,
+        ShellName, ShellSessionState, TrustRequest, VmLifecycleRequest,
     };
     use nixling_ipc::types::{RoleId, VmId};
     use serde::Serialize;
@@ -19589,6 +19628,16 @@ mod broker_dispatch_tests {
         assert_eq!(kill.name.as_str(), "default");
         assert!(!kill.killed);
         assert_eq!(kill.state, ShellSessionState::Killed);
+    }
+
+    #[test]
+    fn synthetic_shell_close_response_preserves_resolved_name() {
+        let response = super::synthetic_shell_close_attach_response(
+            ShellName::new("smoke").expect("valid shell name"),
+        );
+        assert_eq!(response.resolved_name.as_str(), "smoke");
+        assert!(response.detached);
+        assert_eq!(response.cause, Some(ShellCloseCause::ClientDetach));
     }
 
     #[test]
