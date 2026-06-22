@@ -195,9 +195,6 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Install Nix segfault diagnostics
-        if: matrix.check == 'fixture-smoke-full'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gdb
       - name: Flake check shard (x86_64-linux)
         # NL_FLAKE_CHECK is passed via the step environment, NOT interpolated
         # into the shell command: a flake check attr name is PR-controlled, so
