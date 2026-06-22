@@ -4630,6 +4630,7 @@ fn run_shell_owner(
 
     let mut control_seq = initial_control_seq;
     let mut poll_tasks: Vec<std::thread::JoinHandle<()>> = Vec::new();
+    let mut attachment_closed = false;
     while let Ok(frame) = read_frame(stream.as_ref()) {
         poll_tasks.retain(|task| !task.is_finished());
         let op_id = wire::shell_op_id(&frame);
@@ -4690,6 +4691,7 @@ fn run_shell_owner(
             }
             continue;
         }
+        let closes_owner = matches!(op, public_wire::ShellOp::CloseAttach(_));
         let response = handle_shell_owner_op(
             &client,
             &attach.vm,
@@ -4708,6 +4710,10 @@ fn run_shell_owner(
                 {
                     break;
                 }
+                if closes_owner {
+                    attachment_closed = true;
+                    break;
+                }
             }
             Ok(None) => break,
             Err(error) => {
@@ -4719,8 +4725,11 @@ fn run_shell_owner(
             }
         }
     }
-    let close_result =
-        shell_close_attach_best_effort(&client, &attach.vm, &session_id, &guest_boot_id);
+    let close_result = if attachment_closed {
+        "closed"
+    } else {
+        shell_close_attach_best_effort(&client, &attach.vm, &session_id, &guest_boot_id)
+    };
     let _ = state
         .daemon_audit
         .write_event(&daemon_audit::DaemonEvent::GuestControlShellDetached {
