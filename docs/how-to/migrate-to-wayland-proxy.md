@@ -107,7 +107,7 @@ Or use the generated include file (see
 [Set up niri window borders for nixling VMs](./niri-vm-borders.md)):
 
 ```nix
-nixling.site.niriVmBorders.enable = true;
+nixling.site.ui.compositors.niri.enable = true;
 ```
 
 ```kdl

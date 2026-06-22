@@ -85,7 +85,8 @@ Practical implications:
   `nixling vm start corp-desktop --apply`.
 - Guest app IDs are prefixed with `nixling.corp-desktop.` by the
   filter proxy. If you use niri, you can opt into a generated
-  window-rule include file via `nixling.site.niriVmBorders.enable = true`
+  window-rule include file via
+  `nixling.site.ui.compositors.niri.enable = true`
   — see [`docs/how-to/niri-vm-borders.md`](../../docs/how-to/niri-vm-borders.md).
 - This example explicitly sets `graphics.crossDomainTrusted = true` so it
   exercises the filtered cross-domain path. Do not use that setting for

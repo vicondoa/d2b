@@ -23,7 +23,7 @@
   nixling.site = {
     waylandUser = "alice";
     launcherUsers = [ "alice" ];
-    niriVmBorders.enable = true;
+    ui.compositors.niri.enable = true;
     yubikey.enable = false;
   };
 
@@ -59,7 +59,8 @@
         readOnly = true;
       };
 
-      window.niriBorderColor = "#301934";
     };
+
+    ui.border.activeColor = "#301934";
   };
 }

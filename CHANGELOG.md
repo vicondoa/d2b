@@ -25,6 +25,12 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- UI colors: added a compositor-agnostic nixling color contract under
+  `nixling.site.ui`, `nixling.envs.<env>.ui`, and
+  `nixling.vms.<vm>.ui`, with resolved JSON/CSS artifacts at
+  `/etc/nixling/ui-colors.{json,css}` and a niri backend that renders
+  active/inactive/urgent VM borders from the shared model.
+
 - Constellation observability: added `nixling op inspect` for bounded current
   operation and realm-state inspection, with optional TraceContext fields,
   degraded partial results, generated CLI schema coverage, and reference docs

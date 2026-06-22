@@ -18,11 +18,12 @@ hidden on the host compositor.
 Add the following to your NixOS host configuration:
 
 ```nix
-nixling.site.niriVmBorders.enable = true;
+nixling.site.ui.compositors.niri.enable = true;
 ```
 
 After `nixos-rebuild switch`, nixling installs a KDL file at
-`/etc/nixling/niri-vm-borders.kdl`.
+`/etc/nixling/niri-vm-borders.kdl` and the shared UI color artifacts at
+`/etc/nixling/ui-colors.json` and `/etc/nixling/ui-colors.css`.
 
 ## Sourcing the file from niri
 
@@ -73,14 +74,16 @@ window-rule {
     border {
         on
         active-color "#7fc8ff"
-        inactive-color "#505050"
+        inactive-color "#7fc8ff"
+        urgent-color "#7fc8ff"
     }
 }
 ```
 
-The active border color is derived deterministically from the VM name
-when no override is set, so the same VM always gets the same color
-across rebuilds.
+The border color is derived deterministically from the VM name when no
+override is set, so the same VM always gets the same color across
+rebuilds. Inactive and urgent colors default to the active identity
+color; set them in nixling if you prefer a neutral inactive color.
 
 ### qemu-media host-window rules
 
@@ -95,30 +98,39 @@ window-rule {
     border {
         on
         active-color "#800080"
-        inactive-color "#505050"
+        inactive-color "#800080"
+        urgent-color "#800080"
     }
 }
 ```
 
 ## Customizing border colors
 
-To choose a specific active border color for a VM, set:
+To choose a specific border color for a VM, set the compositor-agnostic
+UI color option:
 
 ```nix
-nixling.vms.work.graphics.niriBorderColor = "#ff8c00";
+nixling.vms.work.ui.border.activeColor = "#ff8c00";
 ```
 
-For a qemu-media host window, set:
+For a qemu-media host window, use the same VM-level option:
 
 ```nix
-nixling.vms.media.qemuMedia.window.niriBorderColor = "#800080";
+nixling.vms.media.ui.border.activeColor = "#800080";
 ```
 
 The value must be a six-digit hex color (e.g. `#rrggbb`).
 
-The inactive border color (`#505050`) is the same for all VMs.  To
-use a different inactive color, add a supplementary rule in your own
-`config.kdl` that overrides `inactive-color` for the affected VM.
+To use a different inactive or urgent color, set:
+
+```nix
+nixling.vms.work.ui.border.inactiveColor = "#505050";
+nixling.vms.work.ui.border.urgentColor = "#ff8c00";
+```
+
+Do not add supplemental niri rules just to keep inactive VM borders in
+the VM identity color; nixling renders that state from the same source
+model.
 
 ## Changing the output path
 
@@ -126,7 +138,7 @@ The default install path is `/etc/nixling/niri-vm-borders.kdl`.  To
 use a different location under `/etc/`:
 
 ```nix
-nixling.site.niriVmBorders.outputPath = "/etc/nixling/custom-borders.kdl";
+nixling.site.ui.compositors.niri.outputPath = "/etc/nixling/custom-borders.kdl";
 ```
 
 Then update the `include` line in `config.kdl` accordingly.
@@ -138,6 +150,13 @@ Then update the `include` line in `config.kdl` accordingly.
 
    ```bash
    cat /etc/nixling/niri-vm-borders.kdl
+   ```
+
+   The shared JSON/CSS artifacts are available at:
+
+   ```bash
+   cat /etc/nixling/ui-colors.json
+   cat /etc/nixling/ui-colors.css
    ```
 
 2. Check that niri loaded the config without errors:
@@ -170,10 +189,19 @@ proxy absent, guest windows retain their original app-ids and the
 `nixling.<vm>.` prefix is never written, so the generated niri rules
 cannot match.
 
-If you enable `niriVmBorders` for a VM whose `crossDomainTrusted` is
+If you enable the niri backend for a VM whose `crossDomainTrusted` is
 false, the border rule is generated but will not match any window.
 Set `crossDomainTrusted = true` to activate app-id rewriting for
 that VM.
+
+## Legacy options
+
+The legacy `nixling.site.niriVmBorders.*`,
+`nixling.vms.<vm>.graphics.niriBorderColor`, and
+`nixling.vms.<vm>.qemuMedia.window.niriBorderColor` options remain as
+compatibility inputs for one release. New configurations should use
+`nixling.site.ui.compositors.niri.*` and
+`nixling.vms.<vm>.ui.border.*`.
 
 ## Minimum niri version
 

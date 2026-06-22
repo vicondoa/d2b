@@ -29,6 +29,9 @@ Nixling gives you:
   instead of ad-hoc host services.
 - **One Wayland desktop:** graphical VMs integrate with the host
   compositor without asking you to live in a separate desktop.
+- **Shared UI colors:** nixling can emit a compositor-agnostic JSON/CSS
+  color contract so niri, Waybar, and desktop control tools use the same
+  host/env/VM identity colors.
 - **One operator surface:** the Rust `nixling` CLI talks to `nixlingd`
   and the privileged broker for lifecycle, keys, USB, and host prep.
 
