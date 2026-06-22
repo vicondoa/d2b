@@ -291,7 +291,7 @@ in
       };
     };
 
-    security.pam.services.nixling-shpool-daemon = lib.mkIf cfg.shell.enable {
+    security.pam.services.nixling-shpool-daemon = lib.mkIf (cfg.shell.enable && cfg.exec.execUser != null) {
       startSession = true;
       setEnvironment = true;
       setLoginUid = true;

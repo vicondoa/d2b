@@ -719,6 +719,7 @@ where
     let cleanup = ConnectionCleanup::new(
         Arc::clone(&runtime.auth),
         Arc::clone(&runtime.exec),
+        Arc::clone(&runtime.shell),
         context.clone(),
     );
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
@@ -1598,7 +1599,7 @@ impl GuestControl for GuestControlService {
     ) -> ttrpc::Result<pb::ShellAttachResponse> {
         self.require_authenticated()?;
         self.validate_metadata(request.metadata.as_ref())?;
-        Ok(self.shell.attach(request))
+        Ok(self.shell.attach_with_owner(request, self.connection_key()))
     }
 
     async fn shell_list(
@@ -2299,15 +2300,22 @@ fn control_ack_disabled() -> pb::ControlAck {
 struct ConnectionCleanup {
     auth: SharedAuthCore,
     exec: SharedExec,
+    shell: SharedShell,
     context: AuthConnectionContext,
     closed: Arc<AtomicBool>,
 }
 
 impl ConnectionCleanup {
-    fn new(auth: SharedAuthCore, exec: SharedExec, context: AuthConnectionContext) -> Self {
+    fn new(
+        auth: SharedAuthCore,
+        exec: SharedExec,
+        shell: SharedShell,
+        context: AuthConnectionContext,
+    ) -> Self {
         Self {
             auth,
             exec,
+            shell,
             context,
             closed: Arc::new(AtomicBool::new(false)),
         }
@@ -2321,6 +2329,8 @@ impl ConnectionCleanup {
             // Terminate and forget every exec this connection owned.
             self.exec
                 .close_connection(&self.context.connection_instance.to_vec());
+            self.shell
+                .close_connection(&self.context.connection_instance);
         }
     }
 }
@@ -4328,7 +4338,7 @@ mod tests {
         let attached = service.shell_attach(&ctx, attach).await.unwrap();
         assert!(attached.error.is_none());
         assert_eq!(attached.resolved_name, "default");
-        assert!(attached.session_id.is_some());
+        let session_id = attached.session_id.expect("session id");
 
         let mut list = pb::ShellListRequest::new();
         list.metadata = metadata();
@@ -4344,12 +4354,100 @@ mod tests {
         assert!(detached.error.is_none());
         assert!(detached.detached);
 
+        let mut attach_again = pb::ShellAttachRequest::new();
+        attach_again.metadata = metadata();
+        let attached_again = service.shell_attach(&ctx, attach_again).await.unwrap();
+        assert!(attached_again.error.is_none());
+
+        let mut close = pb::ShellCloseAttachRequest::new();
+        let mut term = pb::TerminalRequestMetadata::new();
+        term.common = metadata();
+        term.session_id = session_id;
+        term.guest_boot_id = "boot-1".to_owned();
+        term.kind = EnumOrUnknown::new(pb::TerminalKind::TERMINAL_KIND_SHELL);
+        close.metadata = MessageField::some(term);
+        let closed = service.shell_close_attach(&ctx, close).await.unwrap();
+        assert!(closed.error.is_none());
+        assert!(closed.detached);
+
         let mut kill = pb::ShellKillRequest::new();
         kill.metadata = metadata();
         kill.name = "default".to_owned();
         let killed = service.shell_kill(&ctx, kill).await.unwrap();
         assert!(killed.error.is_none());
         assert!(killed.killed);
+    }
+
+    #[tokio::test]
+    async fn shell_rpcs_fail_closed_when_runtime_disabled() {
+        let service = test_service(62);
+        authenticate(&service).await;
+        let ctx = ttrpc_context();
+
+        let mut attach = pb::ShellAttachRequest::new();
+        attach.metadata = metadata();
+        assert_shell_disabled(service.shell_attach(&ctx, attach).await.unwrap().error);
+
+        let mut list = pb::ShellListRequest::new();
+        list.metadata = metadata();
+        assert_shell_disabled(service.shell_list(&ctx, list).await.unwrap().error);
+
+        let mut detach = pb::ShellDetachRequest::new();
+        detach.metadata = metadata();
+        assert_shell_disabled(service.shell_detach(&ctx, detach).await.unwrap().error);
+
+        let mut kill = pb::ShellKillRequest::new();
+        kill.metadata = metadata();
+        kill.name = "default".to_owned();
+        assert_shell_disabled(service.shell_kill(&ctx, kill).await.unwrap().error);
+
+        let mut close = pb::ShellCloseAttachRequest::new();
+        let mut term = pb::TerminalRequestMetadata::new();
+        term.common = metadata();
+        term.session_id = "shell-1".to_owned();
+        term.guest_boot_id = "boot-1".to_owned();
+        term.kind = EnumOrUnknown::new(pb::TerminalKind::TERMINAL_KIND_SHELL);
+        close.metadata = MessageField::some(term);
+        assert_shell_disabled(service.shell_close_attach(&ctx, close).await.unwrap().error);
+    }
+
+    #[tokio::test]
+    async fn connection_cleanup_releases_shell_attachment() {
+        let runtime = Arc::new(ShellRuntime::enabled(ShellRuntimeConfig {
+            default_name: "default".to_owned(),
+            max_sessions: 2,
+            max_attached: 1,
+            workload_user: Some("alice".to_owned()),
+            workload_uid: Some(1000),
+            guest_boot_id: "boot-1".to_owned(),
+            guestd_instance_id: "guestd-1".to_owned(),
+            daemon_instance_id: "daemon-1".to_owned(),
+        }));
+        let service = test_service(63).with_shell_runtime(Arc::clone(&runtime));
+        authenticate(&service).await;
+        let ctx = ttrpc_context();
+        let mut attach = pb::ShellAttachRequest::new();
+        attach.metadata = metadata();
+        let response = service.shell_attach(&ctx, attach).await.unwrap();
+        assert!(response.error.is_none());
+
+        let cleanup = ConnectionCleanup::new(test_auth(), test_exec(), runtime, test_context(63));
+        cleanup.close();
+        let listed = service.shell.list();
+        assert_eq!(listed.sessions.len(), 1);
+        assert!(!listed.sessions[0].attached);
+    }
+
+    fn assert_shell_disabled(error: MessageField<pb::GuestControlError>) {
+        assert_eq!(
+            error
+                .as_ref()
+                .expect("shell error")
+                .kind
+                .enum_value()
+                .expect("known error"),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED
+        );
     }
 
     #[test]

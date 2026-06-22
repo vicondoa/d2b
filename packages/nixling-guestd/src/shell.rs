@@ -61,6 +61,7 @@ struct ShellSession {
     shell_session_instance_id: String,
     daemon_instance_id: String,
     guest_boot_id: String,
+    owner_key: Vec<u8>,
     attached: bool,
     killed: bool,
 }
@@ -228,12 +229,20 @@ impl ShellRuntime {
     }
 
     pub fn attach(&self, request: pb::ShellAttachRequest) -> pb::ShellAttachResponse {
+        self.attach_with_owner(request, Vec::new())
+    }
+
+    pub fn attach_with_owner(
+        &self,
+        request: pb::ShellAttachRequest,
+        owner_key: Vec<u8>,
+    ) -> pb::ShellAttachResponse {
         let name = request
             .name
             .as_deref()
             .unwrap_or(&self.config.default_name)
             .to_owned();
-        let result = self.attach_inner(name.clone(), request.force);
+        let result = self.attach_inner(name.clone(), request.force, owner_key);
         match result {
             Ok((session, force_evicted)) => {
                 let mut response = pb::ShellAttachResponse::new();
@@ -256,6 +265,7 @@ impl ShellRuntime {
         &self,
         name: String,
         force: bool,
+        owner_key: Vec<u8>,
     ) -> Result<(ShellSession, bool), ShellRuntimeError> {
         if !self.enabled {
             return Err(ShellRuntimeError::Disabled);
@@ -270,6 +280,7 @@ impl ShellRuntime {
             .values()
             .filter(|session| session.attached)
             .count();
+        let mut force_evicted = false;
         if let Some(existing_view) = state.sessions.get(&name) {
             let was_attached = existing_view.attached;
             if was_attached && !force {
@@ -284,6 +295,7 @@ impl ShellRuntime {
                     {
                         victim.attached = false;
                         state.events.push(ShellEventKind::ForceEvicted);
+                        force_evicted = true;
                     } else {
                         return Err(ShellRuntimeError::AttachCapacityExceeded);
                     }
@@ -297,12 +309,13 @@ impl ShellRuntime {
                 .expect("existing session remains present");
             existing.attached = true;
             existing.killed = false;
+            existing.owner_key = owner_key;
             let cloned = existing.clone();
             if was_attached && force {
                 state.events.push(ShellEventKind::ForceEvicted);
             }
             state.events.push(ShellEventKind::AttachReused);
-            return Ok((cloned, was_attached && force));
+            return Ok((cloned, (was_attached && force) || force_evicted));
         }
         if state.sessions.len() >= self.config.max_sessions as usize {
             return Err(ShellRuntimeError::CapacityExceeded);
@@ -316,6 +329,7 @@ impl ShellRuntime {
                 {
                     victim.attached = false;
                     state.events.push(ShellEventKind::ForceEvicted);
+                    force_evicted = true;
                 } else {
                     return Err(ShellRuntimeError::AttachCapacityExceeded);
                 }
@@ -330,12 +344,13 @@ impl ShellRuntime {
             shell_session_instance_id: format!("shell-instance-{:016x}", state.next_session),
             daemon_instance_id: self.config.daemon_instance_id.clone(),
             guest_boot_id: self.config.guest_boot_id.clone(),
+            owner_key,
             attached: true,
             killed: false,
         };
         state.sessions.insert(name, session.clone());
         state.events.push(ShellEventKind::AttachCreated);
-        Ok((session, false))
+        Ok((session, force_evicted))
     }
 
     pub fn list(&self) -> pb::ShellListResponse {
@@ -439,20 +454,33 @@ impl ShellRuntime {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(session) = state.sessions.get_mut(&name) else {
+        let Some(session) = state.sessions.remove(&name) else {
             return shell_kill_error(ShellRuntimeError::NotFound, name);
         };
-        let was_killed = session.killed;
-        session.attached = false;
-        session.killed = true;
-        if !was_killed {
-            state.events.push(ShellEventKind::Killed);
-        }
+        let _was_attached = session.attached;
+        state.events.push(ShellEventKind::Killed);
         let mut response = pb::ShellKillResponse::new();
         response.name = name;
-        response.killed = !was_killed;
+        response.killed = true;
         response.state = EnumOrUnknown::new(pb::ShellState::SHELL_STATE_KILLED);
         response
+    }
+
+    pub fn close_connection(&self, owner_key: &[u8]) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut changed = false;
+        for session in state.sessions.values_mut() {
+            if session.attached && session.owner_key == owner_key {
+                session.attached = false;
+                changed = true;
+            }
+        }
+        if changed {
+            state.events.push(ShellEventKind::Detached);
+        }
     }
 
     pub fn drain_events_since(&self, after_seq: u64, limit: usize) -> ShellEventBatch {
@@ -597,26 +625,51 @@ mod tests {
         req.name = Some("other".to_owned());
         req.force = true;
         let res = runtime.attach(req);
-        assert!(res.force_evicted, "expected force_evicted when evicting another session on new creation");
+        assert!(
+            res.force_evicted,
+            "expected force_evicted when evicting another session on new creation"
+        );
+        assert_eq!(res.resolved_name, "other");
+        let listed = runtime.list();
+        assert!(
+            listed
+                .sessions
+                .iter()
+                .any(|entry| entry.name == "default" && !entry.attached)
+        );
+        assert!(
+            listed
+                .sessions
+                .iter()
+                .any(|entry| entry.name == "other" && entry.attached)
+        );
         let mut req2 = pb::ShellAttachRequest::new();
         req2.name = Some("default".to_owned());
         req2.force = true;
         let res2 = runtime.attach(req2);
-        assert!(res2.force_evicted, "expected force_evicted when evicting another session on existing unattached");
-        return; // stop here for this test
-
-        let runtime = enabled_runtime();
         assert!(
-            runtime
-                .attach(pb::ShellAttachRequest::new())
-                .error
-                .is_none()
+            res2.force_evicted,
+            "expected force_evicted when evicting another session on existing unattached"
         );
+    }
+
+    #[test]
+    fn close_connection_releases_owned_attachments() {
+        let runtime = enabled_runtime();
         let mut request = pb::ShellAttachRequest::new();
-        request.force = true;
-        let forced = runtime.attach(request);
-        assert!(forced.force_evicted);
-        assert!(forced.error.is_none());
+        request.name = Some("owned".to_owned());
+        let owner = vec![7, 7, 7];
+        let attached = runtime.attach_with_owner(request, owner.clone());
+        assert!(attached.error.is_none());
+
+        runtime.close_connection(&owner);
+        let listed = runtime.list();
+        let entry = listed
+            .sessions
+            .iter()
+            .find(|entry| entry.name == "owned")
+            .expect("owned session listed");
+        assert!(!entry.attached);
     }
 
     #[test]
