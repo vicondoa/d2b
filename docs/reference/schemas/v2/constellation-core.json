@@ -120,6 +120,12 @@
       "$ref": "#/definitions/ShellAttachSummary"
     },
     {
+      "$ref": "#/definitions/ShellEventSummary"
+    },
+    {
+      "$ref": "#/definitions/ShellEventBatch"
+    },
+    {
       "$ref": "#/definitions/Handshake"
     },
     {
@@ -2533,6 +2539,66 @@
         },
         "name": {
           "$ref": "#/definitions/ShellName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellEventBatch": {
+      "description": "Response body for a shell lifecycle event poll. `reconciliation_gap` tells callers that older events were dropped before `cursor`; callers must re-list shells before presenting state as complete.",
+      "type": "object",
+      "required": [
+        "cursor",
+        "dropped_events",
+        "events",
+        "generation",
+        "reconciliation_gap"
+      ],
+      "properties": {
+        "cursor": {
+          "$ref": "#/definitions/StreamCursor"
+        },
+        "dropped_events": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ShellEventSummary"
+          },
+          "maxItems": 256
+        },
+        "generation": {
+          "$ref": "#/definitions/ShellGeneration"
+        },
+        "reconciliation_gap": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellEventSummary": {
+      "description": "Bounded constellation-safe shell lifecycle event metadata. It never carries terminal bytes, argv, environment, cwd, provider endpoints, or credentials.",
+      "type": "object",
+      "required": [
+        "cause",
+        "cursor",
+        "generation",
+        "state"
+      ],
+      "properties": {
+        "cause": {
+          "$ref": "#/definitions/ShellCause"
+        },
+        "cursor": {
+          "$ref": "#/definitions/StreamCursor"
+        },
+        "generation": {
+          "$ref": "#/definitions/ShellGeneration"
+        },
+        "state": {
+          "$ref": "#/definitions/ShellState"
         }
       },
       "additionalProperties": false

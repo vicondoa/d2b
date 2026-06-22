@@ -3,6 +3,7 @@
 //! argv, environment, cwd, provider endpoints, and credentials stay in opaque
 //! operation/stream payloads owned by higher layers and never appear here.
 
+use crate::ids::StreamCursor;
 use crate::ids::StreamId;
 use crate::token::ProtocolToken;
 use schemars::{
@@ -16,6 +17,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub const MAX_SHELL_NAME_LEN: usize = 64;
 /// Maximum summaries returned by one list response.
 pub const MAX_SHELL_SUMMARIES: usize = 256;
+/// Maximum shell lifecycle events returned by one event batch.
+pub const MAX_SHELL_EVENTS: usize = 256;
 /// Maximum bytes in a shell attach/session correlation id.
 pub const MAX_SHELL_OPAQUE_ID_LEN: usize = 128;
 
@@ -386,6 +389,62 @@ impl<'de> Deserialize<'de> for ShellListResponse {
     }
 }
 
+/// Bounded constellation-safe shell lifecycle event metadata. It never carries
+/// terminal bytes, argv, environment, cwd, provider endpoints, or credentials.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ShellEventSummary {
+    pub cursor: StreamCursor,
+    pub generation: ShellGeneration,
+    pub state: ShellState,
+    pub cause: ShellCause,
+}
+
+/// Response body for a shell lifecycle event poll. `reconciliation_gap` tells
+/// callers that older events were dropped before `cursor`; callers must
+/// re-list shells before presenting state as complete.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ShellEventBatch {
+    pub generation: ShellGeneration,
+    #[schemars(length(max = 256))]
+    pub events: Vec<ShellEventSummary>,
+    pub cursor: StreamCursor,
+    pub dropped_events: u64,
+    pub reconciliation_gap: bool,
+}
+
+impl<'de> Deserialize<'de> for ShellEventBatch {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            generation: ShellGeneration,
+            events: Vec<ShellEventSummary>,
+            cursor: StreamCursor,
+            dropped_events: u64,
+            reconciliation_gap: bool,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        if raw.events.len() > MAX_SHELL_EVENTS {
+            return Err(serde::de::Error::custom(format!(
+                "shell event batch exceeds {MAX_SHELL_EVENTS} events"
+            )));
+        }
+        Ok(Self {
+            generation: raw.generation,
+            events: raw.events,
+            cursor: raw.cursor,
+            dropped_events: raw.dropped_events,
+            reconciliation_gap: raw.reconciliation_gap,
+        })
+    }
+}
+
 /// Successful `ShellAttach` metadata. The terminal stream itself is opened as
 /// `StreamKind::ShellPty`, so raw terminal bytes stay out of this DTO.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -502,5 +561,54 @@ mod tests {
                 .join(",")
         );
         assert!(serde_json::from_str::<ShellListResponse>(&too_many).is_err());
+    }
+
+    #[test]
+    fn shell_event_batch_is_bounded_and_redaction_safe() {
+        let event = ShellEventSummary {
+            cursor: StreamCursor::parse("shell-event-1").unwrap(),
+            generation: generation(),
+            state: ShellState::Lost,
+            cause: ShellCause::ReconciliationGap,
+        };
+        let batch = ShellEventBatch {
+            generation: generation(),
+            events: vec![event],
+            cursor: StreamCursor::parse("shell-event-1").unwrap(),
+            dropped_events: 3,
+            reconciliation_gap: true,
+        };
+        let json = serde_json::to_string(&batch).unwrap();
+        assert!(serde_json::from_str::<ShellEventBatch>(&json).is_ok());
+        for forbidden in [
+            "argv",
+            "env",
+            "cwd",
+            "TOKEN=",
+            "provider_endpoint",
+            "credential",
+            "terminal bytes",
+            "/nix/store",
+        ] {
+            assert!(
+                !json.contains(forbidden),
+                "event leaked {forbidden}: {json}"
+            );
+        }
+
+        let one = "{\"cursor\":\"shell-event-1\",\"generation\":{\"guest_boot_id\":\"boot-1\",\
+                   \"guestd_instance_id\":\"guestd-1\",\
+                   \"shell_daemon_instance_id\":\"shell-daemon-1\"},\
+                   \"state\":\"lost\",\"cause\":\"reconciliation-gap\"}";
+        let too_many = format!(
+            "{{\"generation\":{{\"guest_boot_id\":\"boot-1\",\
+             \"guestd_instance_id\":\"guestd-1\",\
+             \"shell_daemon_instance_id\":\"shell-daemon-1\"}},\"events\":[{}],\
+             \"cursor\":\"shell-event-1\",\"dropped_events\":0,\"reconciliation_gap\":false}}",
+            std::iter::repeat_n(one, MAX_SHELL_EVENTS + 1)
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        assert!(serde_json::from_str::<ShellEventBatch>(&too_many).is_err());
     }
 }

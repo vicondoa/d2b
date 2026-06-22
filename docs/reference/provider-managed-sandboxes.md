@@ -115,6 +115,33 @@ typed capability denials for `Shell*` operations.
 
 ---
 
+## guestd-compatible provider-agent bootstrap contract
+
+A provider-managed sandbox may advertise `persistent-shell` only after its
+provider reports a complete, non-secret guestd-compatible bootstrap contract:
+
+1. The sandbox image places the guestd-compatible nixling agent binary in the
+   image under provider control.
+2. Auth bootstrap material is short-lived and relay-scoped; long-lived realm,
+   provider, and Relay rule credentials remain gateway-side only.
+3. The agent learns only an ADR 0032 peer-transport rendezvous, not a raw
+   guest-control/vsock endpoint and not a provider-specific shell channel.
+4. The sandbox has a workload identity suitable for acquiring its scoped relay
+   sender material.
+5. The persistent-shell helper is available in the sandbox image.
+6. The agent reports bounded effective shell limits (`maxSessions` 1–256,
+   `maxAttached` 1–64, and `maxAttached <= maxSessions`).
+7. Health and capability advertisement come from the in-sandbox agent, with
+   generation metadata for the guest boot, guestd instance, and shell daemon.
+
+If any prerequisite is absent or malformed, the provider advertises no
+`persistent-shell` capability. The current Azure Container Apps
+`executeShellCommand` adapter intentionally reports the fail-closed bootstrap
+shape: it may advertise `exec` and provider-managed isolation, but it does not
+claim persistent shell until an ACA image can boot the guestd-compatible agent.
+
+---
+
 ## Absent capabilities (explicit non-scope)
 
 The following items are outside the provider-managed sandbox model and

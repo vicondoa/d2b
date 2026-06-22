@@ -1754,6 +1754,7 @@ dependencies = [
  "async-trait",
  "futures",
  "hmac",
+ "nixling-constellation-core",
  "nixling-exec-runner",
  "nixling-ipc",
  "protobuf",

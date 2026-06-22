@@ -4,12 +4,15 @@
 //! `Debug`.
 
 use nixling_constellation_core::{
-    CapabilitySet, ExecutionId, NodeId, OpaquePayload, OperationId, ProviderId, ShellAttachRequest,
-    ShellAttachSummary, ShellDetachRequest, ShellGeneration, ShellKillRequest, ShellListRequest,
-    ShellListResponse, StreamAuthz, StreamCursor, StreamId, WorkloadId, WorkloadSelector,
+    Capability, CapabilitySet, ExecutionId, NodeId, OpaquePayload, OperationId, ProviderId,
+    ShellAttachRequest, ShellAttachSummary, ShellDetachRequest, ShellGeneration, ShellKillRequest,
+    ShellListRequest, ShellListResponse, StreamAuthz, StreamCursor, StreamId, WorkloadId,
+    WorkloadSelector,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
+
+use crate::capabilities::WorkloadCapabilitySet;
 
 pub use nixling_constellation_core::{StreamKind, StreamOpen};
 
@@ -174,6 +177,132 @@ pub type PersistentShellListProviderResponse = ShellListResponse;
 
 /// Result returned by a provider-managed persistent-shell attach.
 pub type PersistentShellAttachProviderResponse = ShellAttachSummary;
+
+/// Non-secret provider guestd/agent bootstrap contract for a
+/// provider-managed sandbox. This is a capability-advertisement input, not a
+/// credential or endpoint DTO: it never carries relay URLs, tokens, image
+/// digests, paths, argv, or host-held realm credentials.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderGuestdBootstrapContract {
+    /// Where the guestd-compatible agent binary comes from.
+    pub guestd_binary: ProviderGuestdBinaryPlacement,
+    /// How non-secret auth bootstrap is delivered to the sandbox.
+    pub auth_material: ProviderGuestdAuthMaterial,
+    /// How the agent learns its peer-transport rendezvous.
+    pub relay_endpoint: ProviderGuestdRelayEndpoint,
+    /// Workload identity available to the sandbox.
+    pub workload_identity: ProviderWorkloadIdentity,
+    /// Persistent-shell helper availability.
+    pub shell_helper: ProviderShellHelperAvailability,
+    /// Effective shell limits reported by the agent.
+    pub shell_limits: Option<ProviderShellLimits>,
+    /// Whether the agent can answer health/capabilities from inside the
+    /// sandbox. Without this, capability advertisement must stay fail-closed.
+    pub health_capability_advertisement: bool,
+}
+
+impl ProviderGuestdBootstrapContract {
+    /// Execute-only provider sandboxes start fail-closed for persistent shell.
+    pub fn execute_only_fail_closed() -> Self {
+        Self {
+            guestd_binary: ProviderGuestdBinaryPlacement::Absent,
+            auth_material: ProviderGuestdAuthMaterial::Absent,
+            relay_endpoint: ProviderGuestdRelayEndpoint::Absent,
+            workload_identity: ProviderWorkloadIdentity::Absent,
+            shell_helper: ProviderShellHelperAvailability::Absent,
+            shell_limits: None,
+            health_capability_advertisement: false,
+        }
+    }
+
+    /// True iff every ADR 0039 prerequisite is present and internally bounded.
+    pub fn persistent_shell_ready(&self) -> bool {
+        matches!(
+            self.guestd_binary,
+            ProviderGuestdBinaryPlacement::ImageOwned
+        ) && matches!(
+            self.auth_material,
+            ProviderGuestdAuthMaterial::RelayScopedEphemeral
+        ) && matches!(
+            self.relay_endpoint,
+            ProviderGuestdRelayEndpoint::PeerTransport
+        ) && matches!(
+            self.workload_identity,
+            ProviderWorkloadIdentity::ManagedIdentity
+        ) && matches!(
+            self.shell_helper,
+            ProviderShellHelperAvailability::Available
+        ) && self
+            .shell_limits
+            .as_ref()
+            .is_some_and(ProviderShellLimits::valid)
+            && self.health_capability_advertisement
+    }
+
+    /// Positive workload capabilities implied by this bootstrap status.
+    pub fn advertised_capabilities(&self) -> WorkloadCapabilitySet {
+        let mut caps = CapabilitySet::empty().with(Capability::ProviderManagedIsolation);
+        if self.persistent_shell_ready() {
+            caps = caps.with(Capability::PersistentShell);
+        }
+        WorkloadCapabilitySet { caps }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderGuestdBinaryPlacement {
+    Absent,
+    /// The provider image contains the guestd-compatible agent binary at a
+    /// provider-defined location.
+    ImageOwned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderGuestdAuthMaterial {
+    Absent,
+    /// Short-lived, relay-scoped bootstrap material delivered to the sandbox;
+    /// long-lived realm/provider credentials remain gateway-side only.
+    RelayScopedEphemeral,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderGuestdRelayEndpoint {
+    Absent,
+    /// The agent joins the constellation peer transport; no raw guest-control
+    /// or provider-specific shell channel is exposed.
+    PeerTransport,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderWorkloadIdentity {
+    Absent,
+    ManagedIdentity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderShellHelperAvailability {
+    Absent,
+    Available,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderShellLimits {
+    pub max_sessions: u32,
+    pub max_attached: u32,
+}
+
+impl ProviderShellLimits {
+    pub fn valid(&self) -> bool {
+        (1..=256).contains(&self.max_sessions)
+            && (1..=64).contains(&self.max_attached)
+            && self.max_attached <= self.max_sessions
+    }
+}
 
 /// A display-session id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -451,5 +580,46 @@ mod tests {
         let mut wrong_op = stream_open(StreamKind::ShellPty, Capability::PersistentShell);
         wrong_op.operation_id = OperationId::parse("op-other").unwrap();
         assert!(!attach_request(wrong_op).shell_pty_stream_is_authorized());
+    }
+
+    #[test]
+    fn provider_guestd_bootstrap_advertises_shell_only_when_complete() {
+        let fail_closed = ProviderGuestdBootstrapContract::execute_only_fail_closed();
+        assert!(!fail_closed.persistent_shell_ready());
+        assert!(
+            !fail_closed
+                .advertised_capabilities()
+                .has(Capability::PersistentShell)
+        );
+
+        let mut ready = ProviderGuestdBootstrapContract {
+            guestd_binary: ProviderGuestdBinaryPlacement::ImageOwned,
+            auth_material: ProviderGuestdAuthMaterial::RelayScopedEphemeral,
+            relay_endpoint: ProviderGuestdRelayEndpoint::PeerTransport,
+            workload_identity: ProviderWorkloadIdentity::ManagedIdentity,
+            shell_helper: ProviderShellHelperAvailability::Available,
+            shell_limits: Some(ProviderShellLimits {
+                max_sessions: 8,
+                max_attached: 1,
+            }),
+            health_capability_advertisement: true,
+        };
+        assert!(ready.persistent_shell_ready());
+        assert!(
+            ready
+                .advertised_capabilities()
+                .has(Capability::PersistentShell)
+        );
+
+        ready.shell_limits = Some(ProviderShellLimits {
+            max_sessions: 1,
+            max_attached: 2,
+        });
+        assert!(!ready.persistent_shell_ready());
+        assert!(
+            !ready
+                .advertised_capabilities()
+                .has(Capability::PersistentShell)
+        );
     }
 }

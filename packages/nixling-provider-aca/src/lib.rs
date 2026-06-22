@@ -79,7 +79,7 @@ use nixling_constellation_provider::error::{
 use nixling_constellation_provider::provider::WorkloadProvider;
 use nixling_constellation_provider::rate_limit::{CircuitPermit, ProviderCircuitBreaker};
 use nixling_constellation_provider::types::{
-    ExecStartRequest, ListSelector, WorkloadSpec, WorkloadStatus,
+    ExecStartRequest, ListSelector, ProviderGuestdBootstrapContract, WorkloadSpec, WorkloadStatus,
 };
 
 /// The Entra scope for the Azure Container Apps data plane (plane 1). Explicit managed/workload
@@ -809,6 +809,13 @@ impl AcaWorkloadProvider {
             token_cache: Arc::new(tokio::sync::Mutex::new(None)),
             circuit: Arc::new(ProviderCircuitBreaker::default()),
         }
+    }
+
+    /// Current ACA executeShellCommand-only sandboxes do not boot a
+    /// guestd-compatible agent, so persistent-shell advertisement is
+    /// fail-closed until the image/relay/bootstrap contract is complete.
+    pub fn guestd_bootstrap_contract(&self) -> ProviderGuestdBootstrapContract {
+        ProviderGuestdBootstrapContract::execute_only_fail_closed()
     }
 
     /// Share a provider-endpoint circuit breaker across Azure Container Apps provider instances.
@@ -2031,6 +2038,7 @@ mod tests {
             Capability::Usb,
             Capability::Hid,
             Capability::Snapshots,
+            Capability::PersistentShell,
         ] {
             assert!(
                 !caps.caps.has(absent),
@@ -2044,6 +2052,19 @@ mod tests {
         assert!(caps.caps.has(Capability::Exec));
         assert!(caps.caps.has(Capability::Lifecycle));
         assert!(caps.caps.has(Capability::ProviderManagedIsolation));
+    }
+
+    #[test]
+    fn guestd_bootstrap_contract_keeps_persistent_shell_fail_closed() {
+        let (p, _) = provider_seq(vec![]);
+        let bootstrap = p.guestd_bootstrap_contract();
+        assert!(!bootstrap.persistent_shell_ready());
+        assert!(
+            !bootstrap
+                .advertised_capabilities()
+                .has(Capability::PersistentShell)
+        );
+        assert!(!p.capabilities().has(Capability::PersistentShell));
     }
 
     #[test]

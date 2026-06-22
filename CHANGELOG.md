@@ -38,6 +38,11 @@ deprecations ship one minor release before removal.
   `persistent-shell`, target workloads explicitly, preserve mutating
   idempotency semantics, round-trip through the protobuf codec, and stay
   separate from provider exec/durable execution.
+- Constellation persistent shell runtime alignment: guestd now gates shell
+  capability advertisement on the usable exec/workload-user/helper/shpool
+  runtime, reports configured shell limits, uses opaque shell ids, exposes
+  core DTO adapters for shell summaries/events, and documents the fail-closed
+  provider guestd bootstrap contract.
 - Constellation persistent shell contracts: promoted ADR 0039's reserved
   `persistent-shell` capability, `Shell*` operation kinds, shell-authorized PTY
   stream kind, and bounded shell DTOs into the generated core schema contract.
