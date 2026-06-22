@@ -364,6 +364,7 @@ mod tests {
                 vsock_host_socket: Some(String::new()),
             },
             runtime: RuntimeMetadata::local_nixos(),
+            lifecycle: Default::default(),
             shell: None,
             ssh_user: None,
             state_dir: "/var/lib/nixling/vms/sys-work-net".to_owned(),
