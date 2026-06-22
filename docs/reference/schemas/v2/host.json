@@ -980,6 +980,10 @@
         "keys": {
           "type": "boolean"
         },
+        "shell": {
+          "default": false,
+          "type": "boolean"
+        },
         "ssh": {
           "type": "boolean"
         }

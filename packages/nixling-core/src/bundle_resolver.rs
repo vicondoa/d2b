@@ -3142,6 +3142,7 @@ mod tests {
                         ),
                     },
                     runtime: RuntimeMetadata::local_nixos(),
+                    shell: None,
                     ssh_user: Some("alice".to_owned()),
                     state_dir: state_dir.to_owned(),
                     static_ip: Some("192.0.2.20".to_owned()),

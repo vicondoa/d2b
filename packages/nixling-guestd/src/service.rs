@@ -150,6 +150,29 @@ pub struct GuestdServeConfig {
     /// Absolute path to the guest `usbip` binary. Present only for guests whose
     /// host VM declaration enabled USBIP; advertises the `UsbipImport` RPC.
     pub usbip_path: Option<PathBuf>,
+    /// Host-owned persistent shell contract policy. guestd parses and stores
+    /// this policy so guest units can be rendered, but runtime shell operations
+    /// remain fail-closed until the shell runtime is available.
+    pub shell_policy: ShellPolicy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShellPolicy {
+    pub enabled: bool,
+    pub default_name: String,
+    pub max_sessions: u32,
+    pub max_attached: u32,
+}
+
+impl ShellPolicy {
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            default_name: "default".to_owned(),
+            max_sessions: 8,
+            max_attached: 1,
+        }
+    }
 }
 
 /// Host-supplied, controlled-constant runtime configuration for detached exec.
@@ -186,6 +209,7 @@ impl GuestdServeConfig {
             interactive_max_runtime_sec: 0,
             guest_config_path: None,
             usbip_path: None,
+            shell_policy: ShellPolicy::disabled(),
         })
     }
 
@@ -214,6 +238,11 @@ impl GuestdServeConfig {
     /// `UsbipImport`. Setting it makes guestd advertise the USBIP capability.
     pub fn with_usbip_path(mut self, path: PathBuf) -> Self {
         self.usbip_path = Some(path);
+        self
+    }
+
+    pub fn with_shell_policy(mut self, policy: ShellPolicy) -> Self {
+        self.shell_policy = policy;
         self
     }
 }
@@ -1011,6 +1040,42 @@ fn write_stdin_error(error: ExecError) -> pb::WriteStdinResponse {
     response
 }
 
+fn shell_disabled_error() -> pb::GuestControlError {
+    guest_error(pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED)
+}
+
+fn shell_detach_disabled_response() -> pb::ShellDetachResponse {
+    let mut response = pb::ShellDetachResponse::new();
+    response.error = MessageField::some(shell_disabled_error());
+    response
+}
+
+fn terminal_metadata_common(
+    metadata: Option<&pb::TerminalRequestMetadata>,
+) -> Option<&pb::RequestMetadata> {
+    metadata.and_then(|metadata| metadata.common.as_ref())
+}
+
+fn terminal_metadata_is_shell(metadata: Option<&pb::TerminalRequestMetadata>) -> bool {
+    metadata
+        .and_then(|metadata| metadata.kind.enum_value().ok())
+        .is_some_and(|kind| kind == pb::TerminalKind::TERMINAL_KIND_SHELL)
+}
+
+fn terminal_write_disabled_response(
+    metadata: Option<&pb::TerminalRequestMetadata>,
+) -> pb::WriteStdinResponse {
+    if terminal_metadata_is_shell(metadata) {
+        let mut response = pb::WriteStdinResponse::new();
+        response.stdin_state = EnumOrUnknown::new(pb::StdinState::STDIN_STATE_OPEN);
+        response.disposition = EnumOrUnknown::new(pb::WriteDisposition::WRITE_DISPOSITION_REJECTED);
+        response.error = MessageField::some(shell_disabled_error());
+        response
+    } else {
+        write_stdin_error(ExecError::ExecDisabled)
+    }
+}
+
 fn inspect_response(snapshot: &ExecSnapshot) -> pb::ExecInspectResponse {
     let mut response = pb::ExecInspectResponse::new();
     response.state = EnumOrUnknown::new(wire_exec_state(snapshot.state));
@@ -1112,6 +1177,8 @@ pub fn effective_limits() -> pb::GuestEffectiveLimits {
     limits.pending_exec_waits_per_vm = crate::exec::PENDING_EXEC_WAITS_PER_VM as u32;
     limits.rpc_rate_per_connection_per_second = 200;
     limits.rpc_rate_per_vm_burst = 1_000;
+    limits.shell_sessions_per_vm = 8;
+    limits.shell_attached_sessions_per_vm = 1;
     limits
 }
 
@@ -1495,6 +1562,130 @@ impl GuestControl for GuestControlService {
                 Ok(response)
             }
         }
+    }
+
+    async fn shell_attach(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        request: pb::ShellAttachRequest,
+    ) -> ttrpc::Result<pb::ShellAttachResponse> {
+        self.require_authenticated()?;
+        self.validate_metadata(request.metadata.as_ref())?;
+        let mut response = pb::ShellAttachResponse::new();
+        response.state = EnumOrUnknown::new(pb::ShellState::SHELL_STATE_FEATURE_DISABLED);
+        response.error = MessageField::some(shell_disabled_error());
+        Ok(response)
+    }
+
+    async fn shell_list(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        request: pb::ShellListRequest,
+    ) -> ttrpc::Result<pb::ShellListResponse> {
+        self.require_authenticated()?;
+        self.validate_metadata(request.metadata.as_ref())?;
+        let mut response = pb::ShellListResponse::new();
+        response.default_name = "default".to_owned();
+        response.error = MessageField::some(shell_disabled_error());
+        Ok(response)
+    }
+
+    async fn shell_detach(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        request: pb::ShellDetachRequest,
+    ) -> ttrpc::Result<pb::ShellDetachResponse> {
+        self.require_authenticated()?;
+        self.validate_metadata(request.metadata.as_ref())?;
+        Ok(shell_detach_disabled_response())
+    }
+
+    async fn shell_kill(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        request: pb::ShellKillRequest,
+    ) -> ttrpc::Result<pb::ShellKillResponse> {
+        self.require_authenticated()?;
+        self.validate_metadata(request.metadata.as_ref())?;
+        let mut response = pb::ShellKillResponse::new();
+        response.name = request.name;
+        response.state = EnumOrUnknown::new(pb::ShellState::SHELL_STATE_FEATURE_DISABLED);
+        response.error = MessageField::some(shell_disabled_error());
+        Ok(response)
+    }
+
+    async fn shell_close_attach(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        request: pb::ShellCloseAttachRequest,
+    ) -> ttrpc::Result<pb::ShellDetachResponse> {
+        self.require_authenticated()?;
+        self.validate_metadata(terminal_metadata_common(request.metadata.as_ref()))?;
+        Ok(shell_detach_disabled_response())
+    }
+
+    async fn terminal_write_stdin(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        request: pb::TerminalWriteStdinRequest,
+    ) -> ttrpc::Result<pb::WriteStdinResponse> {
+        self.require_authenticated()?;
+        self.validate_metadata(terminal_metadata_common(request.metadata.as_ref()))?;
+        Ok(terminal_write_disabled_response(request.metadata.as_ref()))
+    }
+
+    async fn terminal_read_output(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        request: pb::TerminalReadOutputRequest,
+    ) -> ttrpc::Result<pb::ReadOutputResponse> {
+        self.require_authenticated()?;
+        self.validate_metadata(terminal_metadata_common(request.metadata.as_ref()))?;
+        let mut response = pb::ReadOutputResponse::new();
+        response.stream = request.stream;
+        response.error =
+            MessageField::some(if terminal_metadata_is_shell(request.metadata.as_ref()) {
+                shell_disabled_error()
+            } else {
+                guest_error_kind(ExecError::ExecDisabled)
+            });
+        Ok(response)
+    }
+
+    async fn terminal_close_stdin(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        request: pb::TerminalCloseStdinRequest,
+    ) -> ttrpc::Result<pb::CloseStdinResponse> {
+        self.require_authenticated()?;
+        self.validate_metadata(terminal_metadata_common(request.metadata.as_ref()))?;
+        let mut response = pb::CloseStdinResponse::new();
+        response.disposition = EnumOrUnknown::new(pb::WriteDisposition::WRITE_DISPOSITION_REJECTED);
+        response.error =
+            MessageField::some(if terminal_metadata_is_shell(request.metadata.as_ref()) {
+                shell_disabled_error()
+            } else {
+                guest_error_kind(ExecError::ExecDisabled)
+            });
+        Ok(response)
+    }
+
+    async fn terminal_tty_win_resize(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        request: pb::TerminalTtyWinResizeRequest,
+    ) -> ttrpc::Result<pb::ControlAck> {
+        self.require_authenticated()?;
+        self.validate_metadata(terminal_metadata_common(request.metadata.as_ref()))?;
+        let mut response = pb::ControlAck::new();
+        response.control_seq = request.control_seq;
+        response.error =
+            MessageField::some(if terminal_metadata_is_shell(request.metadata.as_ref()) {
+                shell_disabled_error()
+            } else {
+                guest_error_kind(ExecError::ExecDisabled)
+            });
+        Ok(response)
     }
 
     async fn write_stdin(
@@ -2325,6 +2516,42 @@ mod tests {
 
     const TEST_TOKEN: &[u8] = b"service-test-token";
     const HOST_NONCE: [u8; AUTH_NONCE_LEN] = [0x44; AUTH_NONCE_LEN];
+
+    fn terminal_metadata(kind: pb::TerminalKind) -> pb::TerminalRequestMetadata {
+        let mut metadata = pb::TerminalRequestMetadata::new();
+        metadata.kind = EnumOrUnknown::new(kind);
+        metadata
+    }
+
+    #[test]
+    fn terminal_disabled_response_preserves_terminal_kind_boundary() {
+        let shell = terminal_write_disabled_response(Some(&terminal_metadata(
+            pb::TerminalKind::TERMINAL_KIND_SHELL,
+        )));
+        assert_eq!(
+            shell
+                .error
+                .as_ref()
+                .expect("shell error")
+                .kind
+                .enum_value()
+                .expect("known shell kind"),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED
+        );
+
+        let exec = terminal_write_disabled_response(Some(&terminal_metadata(
+            pb::TerminalKind::TERMINAL_KIND_EXEC,
+        )));
+        assert_eq!(
+            exec.error
+                .as_ref()
+                .expect("exec error")
+                .kind
+                .enum_value()
+                .expect("known exec kind"),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_DISABLED
+        );
+    }
 
     fn test_context(instance: u8) -> AuthConnectionContext {
         AuthConnectionContext {

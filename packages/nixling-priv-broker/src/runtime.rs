@@ -7247,6 +7247,7 @@ mod tests {
                         ),
                     },
                     runtime: RuntimeMetadata::local_nixos(),
+                    shell: None,
                     ssh_user: Some("alice".to_owned()),
                     state_dir: "/var/lib/nixling/vms/corp-vm".to_owned(),
                     static_ip: Some("192.0.2.10".to_owned()),

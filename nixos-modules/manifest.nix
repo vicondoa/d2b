@@ -140,6 +140,13 @@ let
         vsockHostSocket = baseVsockHostSocket;
         agentSocket = if isNixosRuntime then "/run/nixling/otlp.sock" else null;
       };
+      shell =
+        if isNixosRuntime then {
+          enabled = vm.guest.shell.enable;
+          defaultName = vm.guest.shell.defaultName;
+          maxSessions = vm.guest.shell.maxSessions;
+          maxAttached = vm.guest.shell.maxAttached;
+        } else null;
       staticIp =
         if derivedIp != null then derivedIp
         else vm.staticIp;
@@ -158,6 +165,34 @@ let
       # access, not from this world-readable file. The PUBLIC key
       # is fine to expose; if a future use case warrants it, add
       # `sshPubKeyPath` here.
+    };
+
+    manifestShellType = lib.types.submodule {
+      freeformType = null;
+      options = {
+        enabled = lib.mkOption {
+          type = lib.types.bool;
+          description = ''
+            True iff `nixling.vms.<name>.guest.shell.enable` is set on a runtime
+            provider that supports persistent guest shells.
+          '';
+        };
+
+        defaultName = lib.mkOption {
+          type = lib.types.strMatching "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$";
+          description = "Default persistent shell session name.";
+        };
+
+        maxSessions = lib.mkOption {
+          type = lib.types.ints.between 1 256;
+          description = "Maximum persistent shell sessions for this VM.";
+        };
+
+        maxAttached = lib.mkOption {
+          type = lib.types.ints.between 1 64;
+          description = "Maximum concurrently attached persistent shell clients for this VM.";
+        };
+      };
     };
 
   computedManifest = lib.mapAttrs vmMeta enabledVms;
@@ -267,6 +302,7 @@ let
           options = {
             guestControl = lib.mkOption { type = lib.types.bool; };
             exec = lib.mkOption { type = lib.types.bool; };
+            shell = lib.mkOption { type = lib.types.bool; };
             configSync = lib.mkOption { type = lib.types.bool; };
             ssh = lib.mkOption { type = lib.types.bool; };
             keys = lib.mkOption { type = lib.types.bool; };
@@ -601,6 +637,15 @@ let
           Per-VM observability transport metadata. Always emitted so the
           observability track can rely on the field existing even before
           the sidecars land.
+        '';
+      };
+
+      shell = lib.mkOption {
+        type = lib.types.nullOr manifestShellType;
+        description = ''
+          Persistent guest shell policy metadata for providers that support the
+          authenticated guest-control terminal substrate. Null for runtime
+          providers without nixling guest-control.
         '';
       };
     };

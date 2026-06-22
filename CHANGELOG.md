@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- Persistent shell contracts: added staged default-off shell option, manifest,
+  public/guest-control wire, and authz contract scaffolding for later runtime
+  wiring.
 - Guest-control internals: started extracting the shared terminal substrate used
   by interactive exec, with compatibility DTO conversions and redaction tests for
   future interactive-terminal reuse.

@@ -4932,6 +4932,7 @@
             "wire-unknown-field",
             "wire-ifname-invalid",
             "wire-malformed-json",
+            "guest-shell-disabled",
             "broker-unimplemented",
             "broker-validation-failed",
             "manifest-parse-error",
@@ -6009,6 +6010,25 @@
           }
         },
         {
+          "description": "Persistent named guest-shell operation. The staged contract DTOs fail closed until guestd and nixlingd runtime implementations are available.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "shell"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ShellOp"
+            }
+          }
+        },
+        {
           "description": "Gateway-mode display-session operation. Host-mode daemons reject this with a typed gateway-unavailable error; gateway-mode nixlingd handles it through the ADR 0032 orchestrator.",
           "type": "object",
           "required": [
@@ -6262,6 +6282,24 @@
             },
             "payload": {
               "$ref": "#/definitions/ExecOpResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "shell"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ShellOpResponse"
             }
           }
         },
@@ -7308,6 +7346,10 @@
         "keys": {
           "type": "boolean"
         },
+        "shell": {
+          "default": false,
+          "type": "boolean"
+        },
         "ssh": {
           "type": "boolean"
         }
@@ -7599,6 +7641,608 @@
         }
       },
       "additionalProperties": false
+    },
+    "ShellAttachArgs": {
+      "type": "object",
+      "required": [
+        "initialTerminalSize",
+        "vm"
+      ],
+      "properties": {
+        "force": {
+          "default": false,
+          "type": "boolean"
+        },
+        "initialTerminalSize": {
+          "$ref": "#/definitions/TerminalSize"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShellName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellAttachResult": {
+      "type": "object",
+      "required": [
+        "resolvedName",
+        "session",
+        "state"
+      ],
+      "properties": {
+        "forceEvicted": {
+          "default": false,
+          "type": "boolean"
+        },
+        "resolvedName": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "session": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/definitions/ShellSessionState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellCloseAttachArgs": {
+      "type": "object",
+      "required": [
+        "session"
+      ],
+      "properties": {
+        "session": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellCloseCause": {
+      "type": "string",
+      "enum": [
+        "client-detach",
+        "evicted-by-force",
+        "evicted-by-admin-detach",
+        "killed-by-admin",
+        "pool-unavailable",
+        "output-gap"
+      ]
+    },
+    "ShellDetachArgs": {
+      "type": "object",
+      "required": [
+        "vm"
+      ],
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShellName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellDetachResult": {
+      "type": "object",
+      "required": [
+        "detached",
+        "resolvedName"
+      ],
+      "properties": {
+        "cause": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShellCloseCause"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detached": {
+          "type": "boolean"
+        },
+        "resolvedName": {
+          "$ref": "#/definitions/ShellName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellKillArgs": {
+      "type": "object",
+      "required": [
+        "name",
+        "vm"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellKillResult": {
+      "type": "object",
+      "required": [
+        "killed",
+        "name",
+        "state"
+      ],
+      "properties": {
+        "killed": {
+          "type": "boolean"
+        },
+        "name": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "state": {
+          "$ref": "#/definitions/ShellSessionState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellListArgs": {
+      "type": "object",
+      "required": [
+        "vm"
+      ],
+      "properties": {
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellListEntry": {
+      "type": "object",
+      "required": [
+        "name",
+        "state"
+      ],
+      "properties": {
+        "attached": {
+          "default": false,
+          "type": "boolean"
+        },
+        "isDefault": {
+          "default": false,
+          "type": "boolean"
+        },
+        "name": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "state": {
+          "$ref": "#/definitions/ShellSessionState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellListResult": {
+      "type": "object",
+      "required": [
+        "defaultName",
+        "sessions"
+      ],
+      "properties": {
+        "defaultName": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ShellListEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellName": {
+      "description": "Persistent shell session name.",
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$"
+    },
+    "ShellOp": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ShellAttachArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "attach"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/TerminalWriteStdin"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "writeStdin"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/TerminalReadOutput"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "readOutput"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/TerminalResize"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "resize"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/TerminalWait"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "wait"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/TerminalClose"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "closeStdin"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ShellCloseAttachArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "closeAttach"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ShellListArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "list"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ShellDetachArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "detach"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ShellKillArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "kill"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ShellOpResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "attach"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ShellAttachResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "writeStdin"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/TerminalWriteStdinResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "readOutput"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/TerminalReadOutputChunk"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "resize"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/TerminalControlResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "wait"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/TerminalWaitResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "closeStdin"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/TerminalCloseResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "closeAttach"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ShellDetachResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "list"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ShellListResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "detach"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ShellDetachResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "kill"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ShellKillResult"
+            }
+          }
+        }
+      ]
+    },
+    "ShellSessionState": {
+      "type": "string",
+      "enum": [
+        "attached",
+        "detached",
+        "killed",
+        "pool-unavailable",
+        "feature-disabled",
+        "output-gap"
+      ]
     },
     "SignalRunnerRequest": {
       "type": "object",
@@ -8076,6 +8720,346 @@
         },
         "tap": {
           "$ref": "#/definitions/IfName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalClose": {
+      "type": "object",
+      "required": [
+        "session"
+      ],
+      "properties": {
+        "session": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalCloseResult": {
+      "type": "object",
+      "properties": {
+        "stdinClosed": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalControlResult": {
+      "type": "object",
+      "properties": {
+        "delivered": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalReadOutput": {
+      "type": "object",
+      "required": [
+        "maxLen",
+        "offset",
+        "session",
+        "stream"
+      ],
+      "properties": {
+        "maxLen": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "session": {
+          "type": "string"
+        },
+        "stream": {
+          "$ref": "#/definitions/TerminalStream"
+        },
+        "timeoutMs": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "wait": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalReadOutputChunk": {
+      "type": "object",
+      "required": [
+        "dataBase64",
+        "nextOffset"
+      ],
+      "properties": {
+        "dataBase64": {
+          "type": "string"
+        },
+        "droppedBytes": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "eof": {
+          "default": false,
+          "type": "boolean"
+        },
+        "nextOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "timedOut": {
+          "default": false,
+          "type": "boolean"
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalResize": {
+      "type": "object",
+      "required": [
+        "cols",
+        "rows",
+        "session"
+      ],
+      "properties": {
+        "cols": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "opId": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalSize": {
+      "type": "object",
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "properties": {
+        "cols": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "exited"
+              ]
+            },
+            "value": {
+              "type": "object",
+              "required": [
+                "code"
+              ],
+              "properties": {
+                "code": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "signaled"
+              ]
+            },
+            "value": {
+              "type": "object",
+              "required": [
+                "signal"
+              ],
+              "properties": {
+                "signal": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0.0
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            },
+            "value": {
+              "type": "object",
+              "required": [
+                "slug"
+              ],
+              "properties": {
+                "slug": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "TerminalStream": {
+      "type": "string",
+      "enum": [
+        "stdout",
+        "stderr"
+      ]
+    },
+    "TerminalWait": {
+      "type": "object",
+      "required": [
+        "session"
+      ],
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalWaitResult": {
+      "type": "object",
+      "properties": {
+        "running": {
+          "default": false,
+          "type": "boolean"
+        },
+        "terminalStatus": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TerminalStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalWriteStdin": {
+      "type": "object",
+      "required": [
+        "chunkBase64",
+        "offset",
+        "session"
+      ],
+      "properties": {
+        "chunkBase64": {
+          "type": "string"
+        },
+        "eof": {
+          "default": false,
+          "type": "boolean"
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalWriteStdinResult": {
+      "type": "object",
+      "required": [
+        "acceptedLen",
+        "nextOffset"
+      ],
+      "properties": {
+        "acceptedLen": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "backpressured": {
+          "default": false,
+          "type": "boolean"
+        },
+        "nextOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdinClosed": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "additionalProperties": false

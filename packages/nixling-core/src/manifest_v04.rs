@@ -2,7 +2,10 @@ use crate::error::Error;
 use schemars::{
     JsonSchema,
     r#gen::SchemaGenerator,
-    schema::{InstanceType, Metadata, ObjectValidation, Schema, SchemaObject, SingleOrVec},
+    schema::{
+        InstanceType, Metadata, ObjectValidation, Schema, SchemaObject, SingleOrVec,
+        StringValidation,
+    },
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -213,6 +216,8 @@ pub struct VmEntry {
     pub net_vm: Option<String>,
     pub observability: VmObservability,
     pub runtime: RuntimeMetadata,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<VmShellMetadata>,
     pub ssh_user: Option<String>,
     pub state_dir: String,
     pub static_ip: Option<String>,
@@ -237,6 +242,65 @@ pub struct VmObservability {
     pub enabled: bool,
     pub vsock_cid: Option<u32>,
     pub vsock_host_socket: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmShellMetadata {
+    pub default_name: ManifestShellName,
+    pub enabled: bool,
+    pub max_attached: u32,
+    pub max_sessions: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct ManifestShellName(pub String);
+
+impl<'de> Deserialize<'de> for ManifestShellName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if shell_name_valid(&value) {
+            Ok(Self(value))
+        } else {
+            Err(serde::de::Error::custom(
+                "shell defaultName must match ^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$",
+            ))
+        }
+    }
+}
+
+impl JsonSchema for ManifestShellName {
+    fn schema_name() -> String {
+        "ManifestShellName".to_owned()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        Schema::Object(SchemaObject {
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::String))),
+            string: Some(Box::new(StringValidation {
+                min_length: Some(1),
+                max_length: Some(64),
+                pattern: Some("^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$".to_owned()),
+            })),
+            ..Default::default()
+        })
+    }
+}
+
+fn shell_name_valid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > 64 {
+        return false;
+    }
+    let first = bytes[0];
+    (first.is_ascii_alphanumeric() || first == b'_')
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 fn vm_key_ok(value: &str) -> bool {
@@ -379,5 +443,14 @@ mod tests {
                 .message()
                 .contains("opaque reason: manifest-version-mismatch")
         );
+    }
+
+    #[test]
+    fn shell_default_name_shape_is_validated() {
+        let error = ManifestV04::from_slice(
+            br#"{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"corp-vm":{"apiSocket":"/var/lib/nixling/vms/corp-vm/corp-vm.sock","audio":false,"audioService":"nixling-corp-vm-snd.service","audioStateFile":"/var/lib/nixling/vms/corp-vm/state/audio-state.json","bridge":"br-work-lan","env":"work","gpuSocket":"/var/lib/nixling/vms/corp-vm/corp-vm-gpu.sock","graphics":false,"isNetVm":false,"name":"corp-vm","netVm":"sys-work-net","observability":{"agentSocket":"/run/nixling/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/var/lib/nixling/vms/corp-vm/vsock.sock"},"runtime":{"kind":"nixos","provider":{"id":"local-cloud-hypervisor","type":"local","driver":"cloud-hypervisor"},"capabilities":{"lifecycle":true,"display":true,"usbHotplug":true,"guestControl":true,"exec":true,"configSync":true,"ssh":true,"storeSync":true,"keys":true,"inGuestObservability":true}},"shell":{"defaultName":"bad/name","enabled":true,"maxAttached":1,"maxSessions":8},"sshUser":"alice","stateDir":"/var/lib/nixling/vms/corp-vm","staticIp":"10.20.0.10","tap":"work-l10","tpm":false,"tpmSocket":"/run/swtpm/corp-vm/sock","usbipYubikey":false,"usbipdHostIp":"192.0.2.1"}}"#,
+        )
+        .expect_err("invalid shell defaultName must fail closed");
+        assert_eq!(error.kind().as_str(), "manifest-parse-error");
     }
 }

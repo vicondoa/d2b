@@ -221,6 +221,16 @@ guest-exec-policy/invalid-user-rejected
 guest-exec-policy/missing-user-rejected
 guest-exec-policy/root-user-rejected
 guest-exec-policy/uid-zero-alias-rejected
+guest-shell-policy/custom-positive
+guest-shell-policy/defaults-positive
+guest-shell-policy/enabled-positive
+guest-shell-policy/shell-invalid-name-rejected
+guest-shell-policy/shell-no-control-rejected
+guest-shell-policy/shell-no-exec-rejected
+guest-shell-policy/shell-no-user-rejected
+guest-shell-policy/shell-qemu-media-rejected
+guest-shell-policy/shell-root-user-rejected
+guest-shell-policy/shell-too-many-attached-rejected
 ifname-rendered-host-json/bridge-and-tap-role-tags
 ifname-rendered-host-json/derived-ifnames-match-regex
 ifname-rendered-host-json/host-runtime-override-source-hook-present

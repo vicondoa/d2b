@@ -2557,6 +2557,7 @@ fn dispatch_request_locked(
         // spawned worker off the serial accept loop). Detached management ops
         // are ordinary one-shot requests.
         wire::Request::Exec(op) => dispatch_exec_management(state, peer, op),
+        wire::Request::Shell(_) => Err(TypedError::GuestShellDisabled),
         wire::Request::GatewayDisplay(op) => dispatch_gateway_display(state, peer, op),
     }
 }
@@ -12264,6 +12265,7 @@ mod public_status_tests {
                 vsock_host_socket: None,
             },
             runtime,
+            shell: None,
             ssh_user: None,
             state_dir: "/var/lib/nixling/vms/installer".to_owned(),
             static_ip: None,
