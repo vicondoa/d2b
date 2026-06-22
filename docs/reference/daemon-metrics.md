@@ -117,7 +117,7 @@ declared schema; see "Cardinality bounds" below.
 ### `nixling_daemon_vm_shutdown_total`
 
 - **Type:** counter
-- **Labels:** `provider`, `outcome`
+- **Labels:** `vm`, `provider`, `outcome`
 - **Provider values:** `cloud_hypervisor`, `qemu_media`, `unknown`
 - **Outcome values:** bounded daemon enum such as `clean_guest_shutdown`,
   `clean_vmm_cleanup`, `api_unavailable`, `timeout_exceeded`,
@@ -129,7 +129,7 @@ declared schema; see "Cardinality bounds" below.
 ### `nixling_daemon_vm_shutdown_duration_seconds`
 
 - **Type:** histogram
-- **Labels:** `provider`, `outcome`
+- **Labels:** `vm`, `provider`, `outcome`
 - **Buckets (seconds):** `0.5, 1, 2, 5, 10, 30, 60, 90, 120, 300, 600`
 - **Meaning:** Elapsed provider graceful-shutdown wait time. Explicit
   force and config-disabled paths record near-zero observations with their

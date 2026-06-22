@@ -9142,6 +9142,7 @@ fn provider_metric_label(kind: Option<provider_shutdown::ProviderKind>) -> &'sta
 
 fn record_vm_shutdown_metric(
     state: &ServerState,
+    vm: &str,
     provider: Option<provider_shutdown::ProviderKind>,
     outcome: VmShutdownOutcome,
     elapsed: Duration,
@@ -9150,11 +9151,11 @@ fn record_vm_shutdown_metric(
     let outcome = outcome.label();
     state.metrics_registry.counter_inc(
         "nixling_daemon_vm_shutdown_total",
-        &[("provider", provider), ("outcome", outcome)],
+        &[("vm", vm), ("provider", provider), ("outcome", outcome)],
     );
     state.metrics_registry.histogram_observe(
         "nixling_daemon_vm_shutdown_duration_seconds",
-        &[("provider", provider), ("outcome", outcome)],
+        &[("vm", vm), ("provider", provider), ("outcome", outcome)],
         elapsed.as_secs_f64(),
     );
 }
@@ -9852,13 +9853,35 @@ fn required_sidecars_for_graceful_wait(entries: &[PidfdRegistration]) -> Vec<Pid
         .collect()
 }
 
-async fn wait_pidfd_readable(fd: OwnedFd, timeout: Duration) -> bool {
+async fn wait_registered_pidfd_exit(
+    state: &ServerState,
+    vm: &str,
+    role_id: &str,
+    timeout: Duration,
+) -> bool {
+    let Some((fd, _, _)) = state.pidfd_table.dup_pidfd_for(vm, role_id) else {
+        return true;
+    };
     let Ok(async_fd) = tokio::io::unix::AsyncFd::new(fd) else {
         return false;
     };
-    tokio::time::timeout(timeout, async_fd.readable())
-        .await
-        .is_ok()
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        match tokio::time::timeout(remaining, async_fd.readable()).await {
+            Ok(Ok(mut guard)) => {
+                if state.pidfd_table.still_alive_same_start_time(vm, role_id) {
+                    guard.clear_ready();
+                    continue;
+                }
+                return true;
+            }
+            Ok(Err(_)) | Err(_) => return false,
+        }
+    }
 }
 
 fn sidecar_interrupted(state: &ServerState, sidecars: &[PidfdRegistration]) -> Option<String> {
@@ -9942,7 +9965,14 @@ async fn run_provider_graceful_shutdown(
         let tick = PROVIDER_SHUTDOWN_POLL_INTERVAL.min(remaining);
         tokio::select! {
             readable = async_fd.readable() => {
-                if readable.is_ok() {
+                if let Ok(mut guard) = readable {
+                    if state
+                        .pidfd_table
+                        .still_alive_same_start_time(&input.target.vm, input.role_id)
+                    {
+                        guard.clear_ready();
+                        continue;
+                    }
                     finish_terminated_runner(state, input.caller_role.clone(), &input.target.vm, input.role_id);
                     let cgroup_empty = prove_role_cgroup_empty_or_escalate(
                         state,
@@ -9971,10 +10001,13 @@ async fn run_provider_graceful_shutdown(
         match input.provider.poll_state(input.target).await {
             provider_shutdown::ProviderGuestState::GuestStopped => {
                 let _ = input.provider.request_vmm_exit(input.target).await;
-                if let Some((pidfd, _, _)) = state
-                    .pidfd_table
-                    .dup_pidfd_for(&input.target.vm, input.role_id)
-                    && wait_pidfd_readable(pidfd, EMPTY_VMM_CLEANUP_GRACE).await
+                if wait_registered_pidfd_exit(
+                    state,
+                    &input.target.vm,
+                    input.role_id,
+                    EMPTY_VMM_CLEANUP_GRACE,
+                )
+                .await
                 {
                     finish_terminated_runner(
                         state,
@@ -10002,7 +10035,7 @@ async fn run_provider_graceful_shutdown(
                         }),
                     );
                 }
-                return (VmShutdownOutcome::CleanVmmCleanup, None);
+                return (VmShutdownOutcome::ForcedCleanup, None);
             }
             provider_shutdown::ProviderGuestState::Running
             | provider_shutdown::ProviderGuestState::Unknown { .. } => {}
@@ -10047,10 +10080,16 @@ fn stop_vmm_runner_with_provider(
             input.term_timeout,
             input.kill_timeout,
         );
+        let audit_outcome = report
+            .as_ref()
+            .ok()
+            .and_then(|report| report.shutdown_outcome)
+            .unwrap_or(VmShutdownOutcome::ForceRequested);
         record_vm_shutdown_metric(
             state,
+            input.vm,
             Some(target.kind),
-            VmShutdownOutcome::ForceRequested,
+            audit_outcome,
             started.elapsed(),
         );
         emit_vm_shutdown_outcome_audit(
@@ -10058,11 +10097,13 @@ fn stop_vmm_runner_with_provider(
             input.vm,
             &input.caller_role,
             Some(target.kind),
-            VmShutdownOutcome::ForceRequested,
+            audit_outcome,
             started.elapsed(),
         );
         return Some(report.map(|mut report| {
-            report.shutdown_outcome = Some(VmShutdownOutcome::ForceRequested);
+            if report.shutdown_outcome != Some(VmShutdownOutcome::CleanupFailed) {
+                report.shutdown_outcome = Some(VmShutdownOutcome::ForceRequested);
+            }
             report
         }));
     }
@@ -10076,10 +10117,16 @@ fn stop_vmm_runner_with_provider(
             input.term_timeout,
             input.kill_timeout,
         );
+        let audit_outcome = report
+            .as_ref()
+            .ok()
+            .and_then(|report| report.shutdown_outcome)
+            .unwrap_or(VmShutdownOutcome::Disabled);
         record_vm_shutdown_metric(
             state,
+            input.vm,
             Some(target.kind),
-            VmShutdownOutcome::Disabled,
+            audit_outcome,
             started.elapsed(),
         );
         emit_vm_shutdown_outcome_audit(
@@ -10087,11 +10134,13 @@ fn stop_vmm_runner_with_provider(
             input.vm,
             &input.caller_role,
             Some(target.kind),
-            VmShutdownOutcome::Disabled,
+            audit_outcome,
             started.elapsed(),
         );
         return Some(report.map(|mut report| {
-            report.shutdown_outcome = Some(VmShutdownOutcome::Disabled);
+            if report.shutdown_outcome != Some(VmShutdownOutcome::CleanupFailed) {
+                report.shutdown_outcome = Some(VmShutdownOutcome::Disabled);
+            }
             report
         }));
     }
@@ -10121,7 +10170,13 @@ fn stop_vmm_runner_with_provider(
         },
     ));
     if let Some(report) = report {
-        record_vm_shutdown_metric(state, Some(target.kind), outcome, started.elapsed());
+        record_vm_shutdown_metric(
+            state,
+            input.vm,
+            Some(target.kind),
+            outcome,
+            started.elapsed(),
+        );
         emit_vm_shutdown_outcome_audit(
             state,
             input.vm,
@@ -10142,19 +10197,35 @@ fn stop_vmm_runner_with_provider(
         input.term_timeout,
         input.kill_timeout,
     );
-    record_vm_shutdown_metric(state, Some(target.kind), outcome, started.elapsed());
+    let fallback = fallback.map(|mut report| {
+        let final_outcome = match report.shutdown_outcome {
+            Some(VmShutdownOutcome::CleanupFailed) => VmShutdownOutcome::CleanupFailed,
+            _ => outcome,
+        };
+        report.shutdown_outcome = Some(final_outcome);
+        report
+    });
+    let audit_outcome = fallback
+        .as_ref()
+        .ok()
+        .and_then(|report| report.shutdown_outcome)
+        .unwrap_or(outcome);
+    record_vm_shutdown_metric(
+        state,
+        input.vm,
+        Some(target.kind),
+        audit_outcome,
+        started.elapsed(),
+    );
     emit_vm_shutdown_outcome_audit(
         state,
         input.vm,
         &input.caller_role,
         Some(target.kind),
-        outcome,
+        audit_outcome,
         started.elapsed(),
     );
-    Some(fallback.map(|mut report| {
-        report.shutdown_outcome = Some(outcome);
-        report
-    }))
+    Some(fallback)
 }
 
 fn wait_terminated_with_broker_poll(

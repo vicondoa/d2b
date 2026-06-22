@@ -61,7 +61,7 @@
         },
         {
           "refId": "C",
-          "expr": "max by (vm, env, role) (time() - nixling_vm_last_scrape_timestamp_seconds{env=~\"${env:regex}\", vm=~\"${vm:regex}\"})",
+          "expr": "nixling_daemon_uptime_seconds",
           "format": "table",
           "instant": true
         }
@@ -77,7 +77,7 @@
               "state": "last_state",
               "Value": "state_active",
               "Value 1": "ch_api_up",
-              "Value 2": "last_scrape_age_seconds"
+              "Value 2": "daemon_uptime_seconds"
             }
           }
         }
@@ -144,7 +144,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "time() - nixling_vm_last_scrape_timestamp_seconds{env=~\"${env:regex}\", vm=~\"${vm:regex}\"}",
+          "expr": "nixling_daemon_uptime_seconds",
           "legendFormat": "{{vm}}"
         }
       ]
@@ -164,9 +164,9 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (reason) (nixling_vm_shutdown_degraded{env=~\"${env:regex}\", vm=~\"${vm:regex}\"})",
+          "expr": "sum by (vm, outcome) (nixling_daemon_vm_shutdown_total{vm=~\"${vm:regex}\", outcome=~\"timeout_exceeded|api_unavailable|cleanup_failed|forced_cleanup\"})",
           "instant": true,
-          "legendFormat": "{{reason}}"
+          "legendFormat": "{{vm}} {{outcome}}"
         }
       ]
     }
