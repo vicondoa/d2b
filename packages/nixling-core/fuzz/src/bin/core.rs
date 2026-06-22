@@ -221,7 +221,7 @@ fn w1_matrix_contains_public_and_broker_rows() {
 fn manifest_baseline_round_trips_compact() {
     // Embed via include_str! so the fuzz harness does not read outside
     // the cargo sandbox.
-    const BASELINE: &str = include_str!("../../../../../tests/golden/vms.json-signoz-v6");
+    const BASELINE: &str = include_str!("../../../../../tests/golden/vms.json-signoz-v7");
     let manifest = ManifestV04::from_slice(BASELINE.as_bytes()).expect("baseline parses");
     let rendered = manifest.to_compact_json().expect("baseline serializes");
     assert_eq!(rendered, BASELINE);
