@@ -199,6 +199,7 @@ probe_common() {
     return 1
   fi
   pass_check "$vm: nixling vm start returned"
+  PROBE_COMMON_STARTED=1
 
   # 2. api_ready within budget.
   if wait_for_api_ready "$vm" "$NL_SMOKE_APIREADY_BUDGET"; then
@@ -234,14 +235,13 @@ probe_common() {
   local zombies
   zombies=$(grep -r 'Z (defunct)' /proc/*/stat 2>/dev/null \
     | grep -E 'virtiofsd|cloud-hypervisor|swtpm|gpu|audio' \
-    | grep -F "$vm" \
     | wc -l || true)
   # Alternative detection via /proc/*/status
   zombies_alt=$(for f in /proc/*/status; do
     if grep -q '^State:[[:space:]]*Z' "$f" 2>/dev/null; then
       comm=$(grep '^Name:' "$f" 2>/dev/null | awk '{print $2}' || true)
       case "$comm" in virtiofsd|cloud-hypervisor|swtpm|gpu-sidecar|audio-sidecar)
-        tr '\0' ' ' < "${f%/status}/cmdline" 2>/dev/null | grep -F "$vm" || true
+        echo "$comm"
         ;;
       esac
     fi
@@ -503,9 +503,12 @@ log "==> HEAD=$HEAD_SHA mode=$MODE ts=$ISO_TS"
 
 # Primary VM probes (both modes).
 primary_ready=0
+primary_started=0
+PROBE_COMMON_STARTED=0
 if probe_common "$NL_SMOKE_VM_PRIMARY"; then
   primary_ready=1
 fi
+primary_started=$PROBE_COMMON_STARTED
 
 if [ "$MODE" = "full" ]; then
   # Full-mode: TPM probes on primary VM (personal-dev has TPM enabled).
@@ -518,21 +521,26 @@ if [ "$MODE" = "full" ]; then
 
   # Full-mode: secondary VM (work-aad) common probes.
   secondary_ready=0
+  secondary_started=0
+  PROBE_COMMON_STARTED=0
   if probe_common "$NL_SMOKE_VM_SECONDARY"; then
     secondary_ready=1
   fi
+  secondary_started=$PROBE_COMMON_STARTED
 
   if [ "$secondary_ready" -eq 1 ]; then
     # Full-mode: audio probe on secondary VM (work-aad has audio sidecar).
     probe_audio "$NL_SMOKE_VM_SECONDARY"
+  fi
 
-    # Teardown secondary VM.
+  # Teardown secondary VM if start returned, even if later probes failed.
+  if [ "$secondary_started" -eq 1 ]; then
     probe_teardown "$NL_SMOKE_VM_SECONDARY"
   fi
 fi
 
-# Teardown primary VM.
-if [ "$primary_ready" -eq 1 ]; then
+# Teardown primary VM if start returned, even if later probes failed.
+if [ "$primary_started" -eq 1 ]; then
   probe_teardown "$NL_SMOKE_VM_PRIMARY"
 fi
 

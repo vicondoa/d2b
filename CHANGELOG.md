@@ -141,6 +141,9 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- ADR 0035 Wave 4 decomposed CLI read-model/rendering helpers and daemon
+  admission helpers into focused Rust modules while preserving output and
+  authorization contracts.
 - ADR 0035 Wave 3 moved stable CLI JSON output DTOs into the shared IPC contract
   crate, keeping CLI presentation and schema generation on the same strict
   deserialization contract.
