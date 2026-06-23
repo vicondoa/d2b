@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, ... }:
 
 let
   cfg = config.nixling;
@@ -128,14 +128,11 @@ let
     ++ usbipLocks;
   };
 
-  jsonText = builtins.toJSON data;
-  jsonFile = pkgs.writeText "nixling-sync.json" jsonText;
 in
 {
   config = {
     nixling._bundle.syncJson = {
-      inherit data jsonText;
-      path = "${jsonFile}";
+      inherit data;
       installFileName = "sync.json";
       classification = "contractPrivateNonSecret";
       sensitivity = "nonSecret";

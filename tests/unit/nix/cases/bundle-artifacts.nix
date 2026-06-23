@@ -46,14 +46,28 @@ in
 {
   "bundle-artifacts/storage-json-central-etc" = {
     expr = {
-      mode = cfgDaemon.environment.etc."nixling/storage.json".mode;
-      user = cfgDaemon.environment.etc."nixling/storage.json".user;
-      group = cfgDaemon.environment.etc."nixling/storage.json".group;
+      storage = {
+        mode = cfgDaemon.environment.etc."nixling/storage.json".mode;
+        user = cfgDaemon.environment.etc."nixling/storage.json".user;
+        group = cfgDaemon.environment.etc."nixling/storage.json".group;
+      };
+      sync = {
+        mode = cfgDaemon.environment.etc."nixling/sync.json".mode;
+        user = cfgDaemon.environment.etc."nixling/sync.json".user;
+        group = cfgDaemon.environment.etc."nixling/sync.json".group;
+      };
     };
     expected = {
-      mode = "0640";
-      user = "root";
-      group = "nixlingd";
+      storage = {
+        mode = "0640";
+        user = "root";
+        group = "nixlingd";
+      };
+      sync = {
+        mode = "0640";
+        user = "root";
+        group = "nixlingd";
+      };
     };
   };
 

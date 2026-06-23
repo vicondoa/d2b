@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, ... }:
 
 let
   cfg = config.nixling;
@@ -342,14 +342,11 @@ let
     ];
   };
 
-  jsonText = builtins.toJSON data;
-  jsonFile = pkgs.writeText "nixling-storage.json" jsonText;
 in
 {
   config = {
     nixling._bundle.storageJson = {
-      inherit data jsonText;
-      path = "${jsonFile}";
+      inherit data;
       installFileName = "storage.json";
       classification = "contractPrivateNonSecret";
       sensitivity = "nonSecret";
