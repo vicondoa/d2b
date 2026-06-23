@@ -975,6 +975,26 @@ mod tests {
             .unwrap();
     }
 
+    fn retry_on_transient_lease_contention<T>(
+        mut f: impl FnMut() -> io::Result<T>,
+    ) -> io::Result<T> {
+        let mut last_err = None;
+        for _ in 0..20 {
+            match f() {
+                Ok(value) => return Ok(value),
+                Err(err)
+                    if err.kind() == io::ErrorKind::InvalidData
+                        && err.to_string().contains("Resource temporarily unavailable") =>
+                {
+                    last_err = Some(err);
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(last_err.expect("retry loop records transient lease error"))
+    }
+
     #[test]
     fn create_and_format_creates_ext4_image_when_absent() {
         let scratch = scratch_root();
@@ -1104,8 +1124,9 @@ mod tests {
         // shared test process. Production cannot skip the lease, and the
         // lease helper itself is still covered by integration through the
         // normal non-skipped paths.
-        let outcome = validate_or_repair_existing_with(&spec, &tool)
-            .expect("safe stale posture repairs automatically");
+        let outcome =
+            retry_on_transient_lease_contention(|| validate_or_repair_existing_with(&spec, &tool))
+                .expect("safe stale posture repairs automatically");
         assert_eq!(outcome, DiskInitOutcome::PostureRepaired);
         let mode = fs::metadata(&target).unwrap().mode() & 0o777;
         assert_eq!(mode, 0o600);
