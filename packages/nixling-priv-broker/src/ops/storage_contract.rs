@@ -183,6 +183,23 @@ fn apply_is_check_only(path: &Path) -> bool {
 }
 
 fn validate_owned_root(path: &Path, subject: &str) -> Result<(), StorageContractError> {
+    validate_owned_root_against(
+        path,
+        subject,
+        &[
+            Path::new("/etc/nixling"),
+            Path::new("/var/lib/nixling"),
+            Path::new("/run/nixling"),
+            Path::new("/var/cache/nixling"),
+        ],
+    )
+}
+
+fn validate_owned_root_against(
+    path: &Path,
+    subject: &str,
+    roots: &[&Path],
+) -> Result<(), StorageContractError> {
     if path
         .components()
         .any(|component| matches!(component, std::path::Component::ParentDir))
@@ -192,7 +209,11 @@ fn validate_owned_root(path: &Path, subject: &str) -> Result<(), StorageContract
             reason: "storage-path-parent-dir-refused".to_owned(),
         });
     }
-    let root = owned_root_for(path).ok_or_else(|| StorageContractError::Refused {
+    let root = roots
+        .iter()
+        .copied()
+        .find(|root| path.starts_with(root))
+        .ok_or_else(|| StorageContractError::Refused {
         subject: subject.to_owned(),
         reason: "storage-path-outside-owned-roots".to_owned(),
     })?;
@@ -385,8 +406,8 @@ mod tests {
         {
             std::os::unix::fs::symlink("/etc", root.join("escape")).unwrap();
             assert_refused_reason(
-                validate_owned_root(&root.join("escape/passwd"), "x"),
-                "storage-path-outside-owned-roots",
+                validate_owned_root_against(&root.join("escape/passwd"), "x", &[&root]),
+                "storage-path-escapes-owned-root",
             );
         }
     }

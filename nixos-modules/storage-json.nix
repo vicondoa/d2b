@@ -194,7 +194,7 @@ let
       cleanupPolicy = "boot";
       repairPolicy = "nix-activation";
       leaseClass = "file-record";
-      invariants = [ "no-symlink" "root-owned-parent" "broker-opaque-id-only" "scope-authorization-required" ];
+      invariants = [ "no-symlink" "broker-opaque-id-only" "scope-authorization-required" ];
     })
     (mkPath {
       id = "path:run-state";
@@ -218,7 +218,7 @@ let
       persistence = "boot-scoped";
       owner = principal "user" "nixlingd";
       group = principal "group" "nixling";
-      mode = "0750";
+      mode = "0755";
       creator = actor "nix-module" "tmpfiles";
       writers = [
         (actor "daemon" "nixlingd")
@@ -584,7 +584,7 @@ let
         ];
         cleanupPolicy = "never";
         repairPolicy = "broker-reconcile";
-        leaseClass = "file-record";
+        leaseClass = "none";
         invariants = [ "no-symlink" "same-filesystem" "broker-opaque-id-only" ];
       })
     ])
