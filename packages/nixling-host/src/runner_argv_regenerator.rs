@@ -45,6 +45,7 @@ use crate::ch_argv::{ChArgvInput, generate_ch_argv};
 use crate::gpu_argv::{GpuArgvInput, generate_gpu_argv};
 use crate::otel_host_bridge_argv::{OtelHostBridgeArgvInputs, generate_otel_host_bridge_argv};
 use crate::qemu_media_argv::{QemuMediaArgvInput, generate_qemu_media_argv};
+use crate::runner_process::runner_process_metadata;
 use crate::swtpm_argv::{SwtpmArgvInput, generate_swtpm_argv};
 use crate::usbip_argv::{UsbipArgvInput, UsbipSubcommand, generate_usbip_argv};
 use crate::video_argv::{VideoArgvInput, generate_video_argv};
@@ -132,6 +133,11 @@ pub fn regenerate_argv(
     intent: &ResolvedRunnerIntent,
     extra: &RunnerArgvExtra,
 ) -> Result<Vec<String>, RegenerateArgvError> {
+    let metadata = runner_process_metadata(&intent.role);
+    if !metadata.regenerator_wired() {
+        return Err(RegenerateArgvError::NotYetWired(intent.role.clone()));
+    }
+
     match &intent.role {
         ProcessRole::CloudHypervisorRunner => {
             let ch_input = require(&extra.ch_input, &intent.role, "ch_input")?;
@@ -209,18 +215,14 @@ pub fn regenerate_argv(
             replace_arg0(&mut argv, intent);
             Ok(argv)
         }
-        // Roles handled by other dispatch surfaces (readiness probes,
-        // pre-start hooks). The regenerator does not own these.
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::GuestSshReadiness
         | ProcessRole::GuestControlHealth
-        | ProcessRole::SwtpmPreStartFlush => {
-            Err(RegenerateArgvError::NotYetWired(intent.role.clone()))
+        | ProcessRole::SwtpmPreStartFlush
+        | ProcessRole::WaylandProxy => {
+            unreachable!("non-wired runner role should be returned before generator dispatch")
         }
-        // WaylandProxy: argv regeneration wired in Wave 2 / Lane A when the
-        // nixling-wayland-filter binary is added to the workspace.
-        ProcessRole::WaylandProxy => Err(RegenerateArgvError::NotYetWired(intent.role.clone())),
     }
 }
 
@@ -254,6 +256,37 @@ fn require<'a, T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runner_process::{RUNNER_PROCESS_MATRIX, RegeneratorWiring};
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ExpectedRegeneratorClassification {
+        MissingInput,
+        NotYetWired,
+    }
+
+    fn expected_regenerator_classification(
+        role: &ProcessRole,
+    ) -> ExpectedRegeneratorClassification {
+        match role {
+            ProcessRole::CloudHypervisorRunner
+            | ProcessRole::Virtiofsd
+            | ProcessRole::QemuMediaRunner
+            | ProcessRole::Swtpm
+            | ProcessRole::Gpu
+            | ProcessRole::GpuRenderNode
+            | ProcessRole::Audio
+            | ProcessRole::Video
+            | ProcessRole::VsockRelay
+            | ProcessRole::OtelHostBridge
+            | ProcessRole::Usbip => ExpectedRegeneratorClassification::MissingInput,
+            ProcessRole::HostReconcile
+            | ProcessRole::StoreVirtiofsPreflight
+            | ProcessRole::GuestSshReadiness
+            | ProcessRole::GuestControlHealth
+            | ProcessRole::SwtpmPreStartFlush
+            | ProcessRole::WaylandProxy => ExpectedRegeneratorClassification::NotYetWired,
+        }
+    }
 
     fn fake_intent(role: ProcessRole) -> ResolvedRunnerIntent {
         nixling_core::test_support::ResolvedRunnerIntentBuilder::new()
@@ -287,43 +320,63 @@ mod tests {
     }
 
     #[test]
-    fn all_wired_roles_return_missing_input_without_extras() {
-        // After v1.1.1 wires every role's regenerator, the
-        // dispatcher returns MissingInput when the caller doesn't
-        // provide the per-role input record.
-        for role in [
-            ProcessRole::Virtiofsd,
-            ProcessRole::Swtpm,
-            ProcessRole::Gpu,
-            ProcessRole::Audio,
-            ProcessRole::Video,
-            ProcessRole::VsockRelay,
-            ProcessRole::Usbip,
-        ] {
-            let intent = fake_intent(role.clone());
+    fn matrix_classification_matches_pre_matrix_dispatcher() {
+        for row in RUNNER_PROCESS_MATRIX {
+            let intent = fake_intent(row.role.clone());
             let err = regenerate_argv(&intent, &RunnerArgvExtra::default()).unwrap_err();
-            assert!(
-                matches!(err, RegenerateArgvError::MissingInput { ref role, .. } if role == &intent.role),
-                "expected MissingInput({role:?}, ...), got {err:?}"
+            let actual = match err {
+                RegenerateArgvError::MissingInput { .. } => {
+                    ExpectedRegeneratorClassification::MissingInput
+                }
+                RegenerateArgvError::NotYetWired(_) => {
+                    ExpectedRegeneratorClassification::NotYetWired
+                }
+                RegenerateArgvError::Generator(_) => {
+                    panic!(
+                        "generator should not run without typed inputs for {:?}",
+                        row.role
+                    )
+                }
+            };
+            assert_eq!(
+                actual,
+                expected_regenerator_classification(&row.role),
+                "classification changed for {:?}",
+                row.role
             );
         }
     }
 
     #[test]
-    fn readiness_only_roles_return_not_yet_wired() {
-        // Pure readiness / pre-start roles aren't dispatchable
-        // through the regenerator; they live on other surfaces.
-        for role in [
-            ProcessRole::HostReconcile,
-            ProcessRole::StoreVirtiofsPreflight,
-            ProcessRole::GuestSshReadiness,
-            ProcessRole::SwtpmPreStartFlush,
-        ] {
-            let intent = fake_intent(role.clone());
+    fn matrix_wired_roles_keep_missing_input_classification_without_extras() {
+        for row in RUNNER_PROCESS_MATRIX {
+            if row.regenerator_wiring != RegeneratorWiring::Wired {
+                continue;
+            }
+
+            let intent = fake_intent(row.role.clone());
             let err = regenerate_argv(&intent, &RunnerArgvExtra::default()).unwrap_err();
             assert!(
-                matches!(err, RegenerateArgvError::NotYetWired(ref r) if r == &role),
-                "expected NotYetWired({role:?}), got {err:?}"
+                matches!(err, RegenerateArgvError::MissingInput { ref role, .. } if role == &intent.role),
+                "expected MissingInput for wired role {:?}, got {err:?}",
+                row.role
+            );
+        }
+    }
+
+    #[test]
+    fn matrix_not_yet_wired_roles_keep_not_yet_wired_classification() {
+        for row in RUNNER_PROCESS_MATRIX {
+            if row.regenerator_wiring != RegeneratorWiring::NotYetWired {
+                continue;
+            }
+
+            let intent = fake_intent(row.role.clone());
+            let err = regenerate_argv(&intent, &RunnerArgvExtra::default()).unwrap_err();
+            assert!(
+                matches!(err, RegenerateArgvError::NotYetWired(ref role) if role == &row.role),
+                "expected NotYetWired for non-wired role {:?}, got {err:?}",
+                row.role
             );
         }
     }
