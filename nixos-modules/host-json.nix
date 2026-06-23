@@ -12,13 +12,6 @@ let
   anyUsbip = cfg.site.yubikey.enable && builtins.any (vm: vm.usbip.yubikey) (lib.attrValues enabledVms);
   defaultMtu = 1500;
 
-  privateEtc = source: {
-    inherit source;
-    mode = "0640";
-    user = "root";
-    group = if cfg.daemonExperimental.enable then "nixlingd" else "root";
-  };
-
   moduleRow = module: feature: requirement: gate: sysctls: jailVisibleDevice: {
     inherit module feature requirement gate sysctls jailVisibleDevice;
   };
@@ -459,18 +452,13 @@ let
   jsonFile = pkgs.writeText "nixling-host.json" jsonText;
 in
 {
-  options.nixling._bundle.hostJson = lib.mkOption {
-    type = lib.types.unspecified;
-    readOnly = true;
-    internal = true;
-    description = "Internal schema-v2 host.json artifact metadata.";
-  };
-
   config = {
     nixling._bundle.hostJson = {
       inherit data jsonText;
       path = "${jsonFile}";
+      installFileName = "host.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
     };
-    environment.etc."nixling/host.json" = privateEtc jsonFile;
   };
 }

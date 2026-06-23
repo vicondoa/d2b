@@ -1,15 +1,8 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, ... }:
 
 let
   cfg = config.nixling;
   processDags = cfg._bundle.processesJson.data.vms or [ ];
-
-  privateEtc = source: {
-    inherit source;
-    mode = "0640";
-    user = "root";
-    group = if cfg.daemonExperimental.enable then "nixlingd" else "root";
-  };
 
   actor = kind: value: { inherit kind value; };
   principal = kind: value: { inherit kind value; };
@@ -349,22 +342,14 @@ let
     ];
   };
 
-  jsonText = builtins.toJSON data;
-  jsonFile = pkgs.writeText "nixling-storage.json" jsonText;
 in
 {
-  options.nixling._bundle.storageJson = lib.mkOption {
-    type = lib.types.unspecified;
-    readOnly = true;
-    internal = true;
-    description = "Internal schema-v2 storage lifecycle artifact metadata.";
-  };
-
   config = {
     nixling._bundle.storageJson = {
-      inherit data jsonText;
-      path = "${jsonFile}";
+      inherit data;
+      installFileName = "storage.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
     };
-    environment.etc."nixling/storage.json" = privateEtc jsonFile;
   };
 }

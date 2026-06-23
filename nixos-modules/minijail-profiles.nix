@@ -813,6 +813,8 @@ let
         inherit data;
         path = file;
         relativePath = "minijail-profiles/${profileId}.json";
+        classification = "contractPrivateNonSecret";
+        sensitivity = "nonSecret";
         roleProfile = toRoleProfile data;
       })
     fullProfileTable;
@@ -851,13 +853,6 @@ let
     (lib.mapAttrsToList (uid: pairs: { inherit uid; value = pairs; }) principalUidByUid);
 in
 {
-  options.nixling._bundle.minijailProfiles = lib.mkOption {
-    type = lib.types.unspecified;
-    readOnly = true;
-    internal = true;
-    description = "Internal typed minijail profile artifacts keyed by profileId.";
-  };
-
   config = {
     nixling._bundle.minijailProfiles = renderedProfiles;
     environment.etc = lib.mapAttrs'

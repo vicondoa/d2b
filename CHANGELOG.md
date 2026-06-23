@@ -48,6 +48,8 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- Consolidated internal NixOS bundle artifact definitions behind a typed central
+  model while preserving generated artifact bytes and private install metadata.
 - ADR 0035 Wave 0 internal cleanup added deterministic inventory tooling and
   `compat-ADR` bridge-key policy coverage, removed caller-free test/Make
   compatibility aliases, and dropped stale retired bash-CLI option comments.
