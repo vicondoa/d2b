@@ -670,6 +670,7 @@
             "broker-caps.nix"
             "broker-service-posture.nix"
             "broker-socket-activation.nix"
+            "bundle-artifacts.nix"
             "daemon-autostart.nix"
             "daemon-default-compat.nix"
             "gateway-vm.nix"

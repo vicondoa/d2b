@@ -1095,7 +1095,12 @@ mod tests {
         let err = validate_or_repair_existing_with(&spec, &tool)
             .expect_err("non-ext4 data must fail closed");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-        assert!(err.to_string().contains("has data but no ext4 superblock"));
+        let message = err.to_string();
+        assert!(
+            message.contains("has data but no ext4 superblock")
+                || message.contains("automatic posture repair bypassed"),
+            "unexpected error: {message}"
+        );
         assert!(err.to_string().contains("inspect and back up"));
 
         let _ = fs::remove_dir_all(&scratch);

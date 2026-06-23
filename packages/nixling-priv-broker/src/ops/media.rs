@@ -2086,6 +2086,7 @@ fn reload_udev_rules() -> bool {
     Command::new("udevadm")
         .arg("control")
         .arg("--reload-rules")
+        .env_remove("NOTIFY_SOCKET")
         .status()
         .map(|status| status.success())
         .unwrap_or(false)

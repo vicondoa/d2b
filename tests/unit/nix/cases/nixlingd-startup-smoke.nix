@@ -95,6 +95,11 @@ in
     expected = [ "d /var/lib/nixling/current-bundle 0755 root root -" ];
   };
 
+  "nixlingd-startup-smoke/tmpfiles-daemon-state" = {
+    expr = rulesForPath "/var/lib/nixling/daemon-state";
+    expected = [ "d /var/lib/nixling/daemon-state 0700 nixlingd nixlingd -" ];
+  };
+
   "nixlingd-startup-smoke/socket-listen-seqpacket" = {
     expr = brokerSocket.socketConfig.ListenSequentialPacket;
     expected = "/run/nixling/priv.sock";
@@ -152,7 +157,7 @@ in
 
   "nixlingd-startup-smoke/daemon-restart-if-changed" = {
     expr = daemonService.restartIfChanged or null;
-    expected = false;
+    expected = true;
   };
 
   "nixlingd-startup-smoke/daemon-user" = {
@@ -163,6 +168,31 @@ in
   "nixlingd-startup-smoke/daemon-restrict-address-families" = {
     expr = daemonService.serviceConfig.RestrictAddressFamilies;
     expected = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
+  };
+
+  "nixlingd-startup-smoke/daemon-type-notify" = {
+    expr = daemonService.serviceConfig.Type;
+    expected = "notify";
+  };
+
+  "nixlingd-startup-smoke/daemon-notify-access-main" = {
+    expr = daemonService.serviceConfig.NotifyAccess;
+    expected = "main";
+  };
+
+  "nixlingd-startup-smoke/daemon-timeout-start" = {
+    expr = daemonService.serviceConfig.TimeoutStartSec;
+    expected = "5min";
+  };
+
+  "nixlingd-startup-smoke/daemon-killmode-process" = {
+    expr = daemonService.serviceConfig.KillMode;
+    expected = "process";
+  };
+
+  "nixlingd-startup-smoke/daemon-execstop-hook" = {
+    expr = lib.hasInfix "nixling-host-shutdown-hook" daemonService.serviceConfig.ExecStop;
+    expected = true;
   };
 
   "nixlingd-startup-smoke/daemon-wants-broker-socket" = {

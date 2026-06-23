@@ -1,14 +1,6 @@
 { config, lib, pkgs, ... }:
 
 let
-  privateGroup = if config.nixling.daemonExperimental.enable then "nixlingd" else "root";
-  privateEtc = source: {
-    inherit source;
-    mode = "0640";
-    user = "root";
-    group = privateGroup;
-  };
-
   closureRefs = lib.sortOn (ref: ref.vm) (lib.mapAttrsToList (_: closure: {
     vm = closure.vm;
     path = closure.relativePath;
@@ -141,19 +133,14 @@ let
   '';
 in
 {
-  options.nixling._bundle.bundle = lib.mkOption {
-    type = lib.types.unspecified;
-    readOnly = true;
-    internal = true;
-    description = "Internal schema-v1 bundle.json artifact metadata.";
-  };
-
   config = {
     nixling._bundle.bundle = {
       inherit data jsonText;
       path = "${jsonFile}";
+      installFileName = "bundle.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
     };
-    environment.etc."nixling/bundle.json" = privateEtc jsonFile;
 
     # The CLI reads these integrity-pinned bundle artifacts directly before
     # some daemon requests. They must remain non-secret: every regular file

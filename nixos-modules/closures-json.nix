@@ -92,19 +92,14 @@ let
     in {
       vm = name;
       path = file;
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
       inherit relativePath;
     };
 
   closures = lib.mapAttrs (name: _: closureArtifact name) normalNixosVms;
 in
 {
-  options.nixling._bundle.closures = lib.mkOption {
-    type = lib.types.unspecified;
-    readOnly = true;
-    internal = true;
-    description = "Internal per-VM schema-v1 closures/<vm>.json artifact metadata.";
-  };
-
   config = {
     nixling._bundle.closures = closures;
     environment.etc = lib.mapAttrs'

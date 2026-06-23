@@ -1,13 +1,6 @@
 { config, lib, pkgs, ... }:
 
 let
-  privateEtc = source: {
-    inherit source;
-    mode = "0640";
-    user = "root";
-    group = if config.nixling.daemonExperimental.enable then "nixlingd" else "root";
-  };
-
   retainedFields = [ "operation" "subject" "scope" "result" ];
 
   normalizeRow = row:
@@ -1519,18 +1512,13 @@ let
   jsonFile = pkgs.writeText "nixling-privileges.json" jsonText;
 in
 {
-  options.nixling._bundle.privilegesJson = lib.mkOption {
-    type = lib.types.unspecified;
-    readOnly = true;
-    internal = true;
-    description = "Internal schema-v1 privileges.json artifact metadata.";
-  };
-
   config = {
     nixling._bundle.privilegesJson = {
       inherit data jsonText;
       path = "${jsonFile}";
+      installFileName = "privileges.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
     };
-    environment.etc."nixling/privileges.json" = privateEtc jsonFile;
   };
 }
