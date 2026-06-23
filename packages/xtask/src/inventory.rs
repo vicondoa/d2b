@@ -419,8 +419,9 @@ fn parse_toml_string_array(toml: &str, key: &str) -> Vec<String> {
 }
 
 fn parse_toml_assignment_string(line: &str, key: &str) -> Option<String> {
-    let assignment = format!("{key} =");
-    line.strip_prefix(&assignment)
+    let (left, right) = line.split_once('=')?;
+    (left.trim() == key)
+        .then_some(right)
         .and_then(|value| extract_quoted_strings(value).into_iter().next())
 }
 
@@ -490,7 +491,7 @@ fn compat_adr_tokens(line: &str) -> Vec<String> {
     tokens
 }
 
-fn marker_terms(line_lowercase: &str) -> Vec<String> {
+fn marker_terms(line_lowercase: &str) -> Vec<&'static str> {
     [
         concat!("back", "-compat"),
         concat!("backward ", "compatibility"),
@@ -504,7 +505,6 @@ fn marker_terms(line_lowercase: &str) -> Vec<String> {
         concat!("tomb", "stone"),
     ]
     .into_iter()
-    .map(str::to_owned)
     .filter(|term| line_lowercase.contains(term))
     .collect()
 }
@@ -594,7 +594,7 @@ exclude = ["standalone"]
         assert_eq!(compat_adr_tokens(&line), vec![marker.clone()]);
         assert_eq!(
             marker_terms(&line.to_ascii_lowercase()),
-            ["fallback".to_owned(), "legacy".to_owned()]
+            ["fallback", "legacy"]
         );
     }
 
@@ -608,6 +608,22 @@ version = "0.0.0"
 "#;
 
         assert_eq!(parse_package_name(toml), Some("real-package".to_owned()));
+    }
+
+    #[test]
+    fn toml_assignment_parser_allows_variable_whitespace() {
+        assert_eq!(
+            parse_toml_assignment_string(r#"name="compact""#, "name"),
+            Some("compact".to_owned())
+        );
+        assert_eq!(
+            parse_toml_assignment_string(r#"name  =   "spaced""#, "name"),
+            Some("spaced".to_owned())
+        );
+        assert_eq!(
+            parse_toml_assignment_string(r#"name_suffix = "ignored""#, "name"),
+            None
+        );
     }
 
     #[test]
