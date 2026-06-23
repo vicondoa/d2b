@@ -294,6 +294,67 @@ pub struct UserNamespaceSpec {
     pub host_gid_for_zero: u32,
 }
 
+impl ResolvedRunnerIntent {
+    /// Convert one trusted process-DAG node into the broker runner intent shape.
+    ///
+    /// Non-runner/readiness-only roles and runner roles without a safe current or
+    /// legacy spawn specification return `None`.
+    pub fn from_process_node(vm_name: &str, node: &ProcessNode) -> Option<Self> {
+        let role_name = runner_role_name(&node.role)?;
+        let (binary_path, argv) = match node.binary_path.as_deref() {
+            Some(binary_path)
+                if binary_path.starts_with('/')
+                    && !node.argv.is_empty()
+                    && !node.argv[0].is_empty()
+                    && !is_placeholder_runner_spec(binary_path, &node.argv, role_name) =>
+            {
+                (binary_path.to_owned(), node.argv.clone())
+            }
+            _ => legacy_runner_spec(vm_name, &node.role)?,
+        };
+        // v1.1.1fu11 (Option B): start with the baseline NIXLING_VM
+        // env var, then append any node-specific env entries from the
+        // bundle (used by audio/gpu/video sidecars to thread
+        // PIPEWIRE_RUNTIME_DIR / XDG_RUNTIME_DIR / WAYLAND_DISPLAY).
+        let mut env = vec![format!("NIXLING_VM={vm_name}")];
+        env.extend(node.env.iter().cloned());
+        let RoleProfile {
+            profile_id,
+            uid,
+            gid,
+            adr_carve_out,
+            caps,
+            namespaces,
+            seccomp_policy_ref,
+            mount_policy,
+            cgroup_placement,
+            user_namespace,
+            umask,
+        } = &node.profile;
+        Some(Self {
+            intent_id: intent_id_runner(vm_name, &node.id.0),
+            vm_name: vm_name.to_owned(),
+            role_id: node.id.0.clone(),
+            role: node.role.clone(),
+            binary_path: PathBuf::from(binary_path),
+            argv,
+            env,
+            uid: *uid,
+            gid: *gid,
+            supplementary_groups: Vec::new(),
+            capabilities: caps.clone(),
+            namespaces: namespaces.clone(),
+            seccomp_policy_ref: seccomp_policy_ref.clone(),
+            mount_policy: mount_policy.clone(),
+            cgroup_placement: cgroup_placement.clone(),
+            root_carve_out: adr_carve_out.is_some(),
+            profile_id: profile_id.clone(),
+            user_namespace: user_namespace.map(UserNamespaceSpec::from),
+            umask: *umask,
+        })
+    }
+}
+
 // Convenience From impls across the wire (`UserNamespaceProfile`) and
 // intent (`UserNamespaceSpec`) types so layer boundaries can `.into()`
 // instead of hand-copying fields.
@@ -2236,7 +2297,7 @@ fn build_runner_intents(processes: &ProcessesJson) -> BTreeMap<String, ResolvedR
     let mut out = BTreeMap::new();
     for dag in &processes.vms {
         for node in &dag.nodes {
-            let Some(resolved) = resolve_runner_node(dag, node) else {
+            let Some(resolved) = ResolvedRunnerIntent::from_process_node(&dag.vm, node) else {
                 continue;
             };
             out.insert(resolved.intent_id.clone(), resolved);
@@ -2273,27 +2334,23 @@ fn is_placeholder_runner_spec(binary_path: &str, argv: &[String], role_name: &st
         && argv[0] == role_name
 }
 
-fn legacy_runner_spec(
-    dag: &VmProcessDag,
-    role: &ProcessRole,
-    _role_name: &str,
-) -> Option<(String, Vec<String>)> {
+fn legacy_runner_spec(vm_name: &str, role: &ProcessRole) -> Option<(String, Vec<String>)> {
     let (binary_name, arg0) = match role {
-        ProcessRole::SwtpmPreStartFlush => ("bash", format!("nixling-swtpm-flush@{}", dag.vm)),
-        ProcessRole::Swtpm => ("swtpm", format!("microvm-swtpm@{}", dag.vm)),
-        ProcessRole::Virtiofsd => ("virtiofsd", format!("microvm-virtiofsd@{}", dag.vm)),
+        ProcessRole::SwtpmPreStartFlush => ("bash", format!("nixling-swtpm-flush@{vm_name}")),
+        ProcessRole::Swtpm => ("swtpm", format!("microvm-swtpm@{vm_name}")),
+        ProcessRole::Virtiofsd => ("virtiofsd", format!("microvm-virtiofsd@{vm_name}")),
         // Video must always carry the patched crosvm video-decoder binary
         // and closed argv from processes.json. Never fall back to stock crosvm.
         ProcessRole::Video => return None,
-        ProcessRole::Gpu => ("crosvm", format!("nixling-{}-gpu", dag.vm)),
-        ProcessRole::GpuRenderNode => ("crosvm", format!("nixling-{}-gpu-render-node", dag.vm)),
-        ProcessRole::Audio => ("vhost-device-sound", format!("nixling-{}-snd", dag.vm)),
-        ProcessRole::CloudHypervisorRunner => ("cloud-hypervisor", format!("microvm@{}", dag.vm)),
+        ProcessRole::Gpu => ("crosvm", format!("nixling-{vm_name}-gpu")),
+        ProcessRole::GpuRenderNode => ("crosvm", format!("nixling-{vm_name}-gpu-render-node")),
+        ProcessRole::Audio => ("vhost-device-sound", format!("nixling-{vm_name}-snd")),
+        ProcessRole::CloudHypervisorRunner => ("cloud-hypervisor", format!("microvm@{vm_name}")),
         // QEMU media runners must carry the closed scaffold argv from
         // processes.json. There is no Cloud Hypervisor-compatible legacy
         // fallback for this runtime kind.
         ProcessRole::QemuMediaRunner => return None,
-        ProcessRole::VsockRelay => ("socat", format!("nixling-otel-relay@{}", dag.vm)),
+        ProcessRole::VsockRelay => ("socat", format!("nixling-otel-relay@{vm_name}")),
         // OtelHostBridge must always carry the closed argv from
         // processes.json; it has no legacy singleton fallback.
         ProcessRole::OtelHostBridge => return None,
@@ -2315,62 +2372,9 @@ fn legacy_runner_spec(
     ))
 }
 
+#[cfg(test)]
 fn resolve_runner_node(dag: &VmProcessDag, node: &ProcessNode) -> Option<ResolvedRunnerIntent> {
-    let role_name = runner_role_name(&node.role)?;
-    let (binary_path, argv) = match node.binary_path.as_deref() {
-        Some(binary_path)
-            if binary_path.starts_with('/')
-                && !node.argv.is_empty()
-                && !node.argv[0].is_empty()
-                && !is_placeholder_runner_spec(binary_path, &node.argv, role_name) =>
-        {
-            (binary_path.to_owned(), node.argv.clone())
-        }
-        _ => legacy_runner_spec(dag, &node.role, role_name)?,
-    };
-    // v1.1.1fu11 (Option B): start with the baseline NIXLING_VM
-    // env var, then append any node-specific env entries from the
-    // bundle (used by audio/gpu/video sidecars to thread
-    // PIPEWIRE_RUNTIME_DIR / XDG_RUNTIME_DIR / WAYLAND_DISPLAY).
-    let mut env = vec![format!("NIXLING_VM={}", dag.vm)];
-    env.extend(node.env.iter().cloned());
-    let RoleProfile {
-        profile_id,
-        uid,
-        gid,
-        adr_carve_out,
-        caps,
-        namespaces,
-        seccomp_policy_ref,
-        mount_policy,
-        cgroup_placement,
-        user_namespace,
-        umask,
-    } = &node.profile;
-    Some(ResolvedRunnerIntent {
-        intent_id: intent_id_runner(&dag.vm, &node.id.0),
-        vm_name: dag.vm.clone(),
-        role_id: node.id.0.clone(),
-        role: node.role.clone(),
-        binary_path: PathBuf::from(binary_path),
-        argv,
-        env,
-        uid: *uid,
-        gid: *gid,
-        supplementary_groups: Vec::new(),
-        capabilities: caps.clone(),
-        namespaces: namespaces.clone(),
-        seccomp_policy_ref: seccomp_policy_ref.clone(),
-        mount_policy: mount_policy.clone(),
-        cgroup_placement: cgroup_placement.clone(),
-        root_carve_out: adr_carve_out.is_some(),
-        profile_id: profile_id.clone(),
-        user_namespace: user_namespace.map(|ns| UserNamespaceSpec {
-            host_uid_for_zero: ns.host_uid_for_zero,
-            host_gid_for_zero: ns.host_gid_for_zero,
-        }),
-        umask: *umask,
-    })
+    ResolvedRunnerIntent::from_process_node(&dag.vm, node)
 }
 
 fn role_tag_for(role: &crate::host::TapRole) -> String {
