@@ -580,12 +580,10 @@ exclude = ["standalone"]
 
     #[test]
     fn compatibility_scan_emits_tokens_not_line_content() {
-        let line = "compat-ADR0035-added-20260622-cli-example legacy fallback secret=value";
+        let marker = ["compat", "ADR0035-added-20260622-cli-example"].join("-");
+        let line = format!("{marker} legacy fallback secret=value");
 
-        assert_eq!(
-            compat_adr_tokens(line),
-            ["compat-ADR0035-added-20260622-cli-example"]
-        );
+        assert_eq!(compat_adr_tokens(&line), vec![marker.clone()]);
         assert_eq!(
             compatibility_terms(&line.to_ascii_lowercase()),
             ["fallback", "legacy"]
