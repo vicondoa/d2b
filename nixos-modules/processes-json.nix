@@ -71,13 +71,7 @@ EOF
   nixlingWaylandFilterPackage = if prebuilt ? "nixling-wayland-filter" then prebuilt."nixling-wayland-filter" else nixlingWaylandFilterSourcePackage;
   nixlingWaylandFilterBinary = "${nixlingWaylandFilterPackage}/bin/nixling-wayland-filter";
 
-  envPortMap = lib.listToAttrs (
-    lib.imap0 (i: envName: {
-      name = envName;
-      value = 3241 + i;
-    }) (lib.attrNames cfg.envs)
-  );
-  backendPort = envName: envPortMap.${envName};
+  backendPort = envName: cfg._index.usbip.backendPorts.${envName};
 
   profileIdFor = name: nodeId: "vm-${name}-${nodeId}";
   profileFor = name: nodeId:

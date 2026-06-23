@@ -26,6 +26,15 @@ let
       uplinkSubnet = "198.51.100.0/30";
       hostBlocklist = [ "203.0.113.0/24" "192.168.0.0/16" ];
     };
+    nixling.envs.empty = {
+      lanSubnet = "10.40.0.0/24";
+      uplinkSubnet = "203.0.113.0/30";
+    };
+    nixling.envs.disabled = {
+      enable = false;
+      lanSubnet = "10.60.0.0/24";
+      uplinkSubnet = "203.0.113.4/30";
+    };
     nixling.envs.alpha = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
@@ -100,6 +109,7 @@ let
     "app"
     "media"
     "sys-alpha-net"
+    "sys-empty-net"
     "sys-obs"
     "sys-obs-net"
     "sys-zeta-net"
@@ -117,20 +127,22 @@ in
       workloadNamesByEnv = index.workloadNamesByEnv;
     };
     expected = {
-      enabledEnvNames = [ "alpha" "obs" "zeta" ];
+      enabledEnvNames = [ "alpha" "empty" "obs" "zeta" ];
       enabledVmNames = expectedVmNames;
       normalNixosVmNames = [
         "app"
         "sys-alpha-net"
+        "sys-empty-net"
         "sys-obs"
         "sys-obs-net"
         "sys-zeta-net"
         "zed"
       ];
       qemuMediaVmNames = [ "media" ];
-      netVmNames = [ "sys-alpha-net" "sys-obs-net" "sys-zeta-net" ];
+      netVmNames = [ "sys-alpha-net" "sys-empty-net" "sys-obs-net" "sys-zeta-net" ];
       workloadNamesByEnv = {
         alpha = [ "app" "media" ];
+        empty = [ ];
         obs = [ "sys-obs" ];
         zeta = [ "zed" ];
       };
@@ -178,6 +190,7 @@ in
       usbipEnvNames = index.usbip.envNames;
       activeUsbipEnvNames = index.usbip.activeEnvNames;
       usbipVmNamesByEnv = index.usbip.vmNamesByEnv;
+      usbipBackendPorts = index.usbip.backendPorts;
       zetaBusidLocks = index.usbip.busidLocksByEnv.zeta;
       zetaHostBlocklist = index.envMeta.zeta.hostBlocklist;
     };
@@ -191,8 +204,15 @@ in
       activeUsbipEnvNames = [ "alpha" "zeta" ];
       usbipVmNamesByEnv = {
         alpha = [ "media" ];
+        empty = [ ];
         obs = [ ];
         zeta = [ "zed" ];
+      };
+      usbipBackendPorts = {
+        alpha = 3241;
+        empty = 3242;
+        obs = 3243;
+        zeta = 3244;
       };
       zetaBusidLocks = [{
         vm = "zed";

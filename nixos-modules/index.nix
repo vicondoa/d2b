@@ -80,6 +80,12 @@ let
     (sortedAttrNames enabledEnvs);
   activeUsbipEnvNames =
     if cfg.site.yubikey.enable then usbipEnvNames else [ ];
+  usbipBackendPorts = lib.listToAttrs (lib.imap0
+    (i: envName: {
+      name = envName;
+      value = 3241 + i;
+    })
+    (sortedAttrNames enabledEnvs));
 
   obsOtlpPort = nl.observabilityOtlpVsockPort;
   observedVmNames = sortedAttrNames observedVms;
@@ -204,6 +210,7 @@ let
       vmNamesByEnv = usbipVmNamesByEnv;
       envNames = usbipEnvNames;
       activeEnvNames = activeUsbipEnvNames;
+      backendPorts = usbipBackendPorts;
       envMeta = lib.filterAttrs (envName: _: builtins.elem envName activeUsbipEnvNames) envMeta;
       busidLocksByEnv = lib.mapAttrs
         (envName: vmNames:

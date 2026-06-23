@@ -309,6 +309,10 @@ pub struct NetEnv {
     pub ipv6_sysctls: Vec<Ipv6SysctlEntry>,
     /// USBIP-capable VMs in this env; daemon owns the runtime per-busid locks.
     pub usbip_busid_locks: Vec<UsbipBusidLock>,
+    /// Deterministic per-env backend listener port for usbipd when this env has
+    /// USBIP-capable workloads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usbip_backend_port: Option<u16>,
 }
 
 /// LAN policy inputs and effective result.

@@ -645,6 +645,15 @@
             "type": "string"
           }
         },
+        "usbipBackendPort": {
+          "description": "Deterministic per-env backend listener port for usbipd when this env has USBIP-capable workloads.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0.0
+        },
         "usbipBusidLocks": {
           "description": "USBIP-capable VMs in this env; daemon owns the runtime per-busid locks.",
           "type": "array",

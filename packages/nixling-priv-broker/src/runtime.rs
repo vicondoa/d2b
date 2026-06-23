@@ -7245,6 +7245,7 @@ mod tests {
                     bus_ids: vec!["1-2.3".to_owned()],
                     vendor_product_allowlist: Vec::new(),
                 }],
+                usbip_backend_port: Some(3241),
             }],
             nftables: NftablesModel {
                 family: "inet".to_owned(),
