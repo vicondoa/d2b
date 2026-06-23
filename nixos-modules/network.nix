@@ -60,6 +60,7 @@ let
   # carry a YubiKey-enabled workload VM, and only when host-side
   # YubiKey support is enabled at all.
   usbipMeta = index.usbip.envMeta;
+  enabledVms = index.enabledVms;
 in
 {
   # ---------------------------------------------------------------------------
@@ -93,7 +94,7 @@ in
           + "but nixling.envs has no such ENABLED env (have enabled: "
           + lib.concatStringsSep ", " (lib.attrNames envs) + ").";
       })
-      cfg.vms)
+      enabledVms)
     # `staticIp` and `env` are mutually exclusive.
     ++ (lib.mapAttrsToList
       (vmName: vm: {
@@ -101,7 +102,7 @@ in
         message = "nixling.vms.${vmName}: set EITHER `env`/`index` "
           + "OR the deprecated `staticIp`, not both.";
       })
-      cfg.vms)
+      enabledVms)
     # Unique indices within an env.
     ++ (lib.mapAttrsToList
       (envName: _:

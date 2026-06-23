@@ -8,41 +8,7 @@
 
 let
   cfg = config.nixling.observability;
-  observedVmNames = lib.attrNames (lib.filterAttrs
-    (name: vm: vm.enable && name != cfg.vmName && vm.observability.enable)
-    config.nixling.vms);
-  hostVsockPort = 14317;
-  hostGrpcPort = cfg.signoz.otlpGrpcPort;
-  observedSources = lib.listToAttrs (lib.imap0
-    (i: name:
-      let
-        vm = config.nixling.vms.${name};
-      in {
-        inherit name;
-        value = {
-          vmName = name;
-          envName = if vm.env == null then "none" else vm.env;
-          role = "workload";
-          vsockPort = hostVsockPort + 1 + i;
-          receiverGrpcPort = hostVsockPort + 1 + i;
-          receiverHttpPort = null;
-        };
-      })
-    observedVmNames);
-  obsIngressSources = {
-    host = {
-      # Host-origin telemetry identity is assigned here, at the trusted
-      # per-source ingress boundary (ADR 0026/0033), from the host option
-      # (this module evaluates in the host config context). vm.role stays
-      # "host" so host streams remain selectable as a class.
-      vmName = cfg.host.identityName;
-      envName = "host";
-      role = "host";
-      vsockPort = hostVsockPort;
-      receiverGrpcPort = hostGrpcPort;
-      receiverHttpPort = cfg.signoz.otlpHttpPort;
-    };
-  } // observedSources;
+  obsIngressSources = config.nixling._index.observability.sources;
 in
 {
   config = lib.mkIf cfg.enable {

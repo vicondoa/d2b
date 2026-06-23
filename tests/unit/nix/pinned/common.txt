@@ -267,6 +267,7 @@ index/env-meta-compat-alias
 index/observability-and-shell-subsets
 index/qemu-media-and-runtime-subsets
 index/shape-and-sorting
+index/site-yubikey-disabled-suppresses-runtime-usbip
 multi-env-daemon/daemon-personal-app-unit-count
 multi-env-daemon/daemon-work-app-unit-count
 multi-env-daemon/demo-personal-app-unit-count

@@ -12,21 +12,8 @@ let
   nl = import ./lib.nix { inherit lib pkgs; };
   normalNixosVms = nl.normalNixosVms cfg.vms;
   qemuMediaVms = nl.qemuMediaVms cfg.vms;
-  observedVmNames = lib.attrNames (lib.filterAttrs
-    (name: vm: vm.enable && name != cfg.observability.vmName && vm.observability.enable)
-    cfg.vms);
-  usbipEnvNames = lib.sort lib.lessThan (lib.unique (lib.concatMap
-    (vm: lib.optional (cfg.site.yubikey.enable && vm.enable && vm.usbip.yubikey && vm.env != null) vm.env)
-    (lib.attrValues cfg.vms)));
-  usbipMeta = lib.filterAttrs (envName: _: lib.elem envName usbipEnvNames) cfg._envMeta;
-  obsOtlpPort = 14317;
-  obsSourcePortMap = lib.listToAttrs (lib.imap0
-    (i: name: {
-      inherit name;
-      value = obsOtlpPort + 1 + i;
-    })
-    observedVmNames);
-  obsSourcePort = name: obsSourcePortMap.${name} or obsOtlpPort;
+  obsOtlpPort = cfg._index.observability.sourceBasePort;
+  obsSourcePort = name: cfg._index.observability.sourcePorts.${name} or obsOtlpPort;
   waylandUid =
     if cfg.site.waylandUser != null
     then toString (config.users.users.${cfg.site.waylandUser}.uid or 0)
@@ -1168,7 +1155,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     vms =
       (lib.mapAttrsToList vmDag normalNixosVms)
       ++ (lib.mapAttrsToList qemuMediaDag qemuMediaVms)
-      ++ (lib.mapAttrsToList usbipdDag usbipMeta);
+      ++ (lib.mapAttrsToList usbipdDag cfg._index.usbip.envMeta);
   };
 
   jsonText = builtins.toJSON data;

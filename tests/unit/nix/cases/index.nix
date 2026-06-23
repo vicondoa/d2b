@@ -104,6 +104,9 @@ let
   };
 
   cfg = (mkEval [ fixture ]).config;
+  cfgYubikeyDisabled = (mkEval [ fixture ({ lib, ... }: {
+    nixling.site.yubikey.enable = lib.mkForce false;
+  }) ]).config;
   index = cfg.nixling._index;
   expectedVmNames = [
     "app"
@@ -194,6 +197,7 @@ in
       zetaBusidLocks = index.usbip.busidLocksByEnv.zeta;
       zetaHostBlocklist = index.envMeta.zeta.hostBlocklist;
     };
+
     expected = {
       graphics = lib.optional x86 "app";
       audio = lib.optional x86 "zed";
@@ -230,6 +234,44 @@ in
         "203.0.113.0/24"
         "203.0.113.0/30"
       ];
+    };
+  };
+
+  "index/site-yubikey-disabled-suppresses-runtime-usbip" = {
+    expr = {
+      declaredVmOptIns = cfgYubikeyDisabled.nixling._index.usbip.vmNames;
+      declaredEnvOptIns = cfgYubikeyDisabled.nixling._index.usbip.envNames;
+      activeEnvNames = cfgYubikeyDisabled.nixling._index.usbip.activeEnvNames;
+      busidLocksByEnv = cfgYubikeyDisabled.nixling._index.usbip.busidLocksByEnv;
+      hostJsonLocks = lib.listToAttrs (map
+        (env: { name = env.env; value = env.usbipBusidLocks; })
+        cfgYubikeyDisabled.nixling._bundle.hostJson.data.environments);
+      hostJsonBackendPorts = lib.listToAttrs (map
+        (env: { name = env.env; value = env.usbipBackendPort or null; })
+        cfgYubikeyDisabled.nixling._bundle.hostJson.data.environments);
+    };
+    expected = {
+      declaredVmOptIns = [ "media" "zed" ];
+      declaredEnvOptIns = [ "alpha" "zeta" ];
+      activeEnvNames = [ ];
+      busidLocksByEnv = {
+        alpha = [ ];
+        empty = [ ];
+        obs = [ ];
+        zeta = [ ];
+      };
+      hostJsonLocks = {
+        alpha = [ ];
+        empty = [ ];
+        obs = [ ];
+        zeta = [ ];
+      };
+      hostJsonBackendPorts = {
+        alpha = null;
+        empty = null;
+        obs = null;
+        zeta = null;
+      };
     };
   };
 

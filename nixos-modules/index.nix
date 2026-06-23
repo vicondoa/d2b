@@ -80,6 +80,10 @@ let
     (sortedAttrNames enabledEnvs);
   activeUsbipEnvNames =
     if cfg.site.yubikey.enable then usbipEnvNames else [ ];
+  activeUsbipVmNamesByEnv = lib.mapAttrs
+    (envName: vmNames:
+      if builtins.elem envName activeUsbipEnvNames then vmNames else [ ])
+    usbipVmNamesByEnv;
   usbipBackendPorts = lib.listToAttrs (lib.imap0
     (i: envName: {
       name = envName;
@@ -208,6 +212,7 @@ let
       vms = usbipVms;
       vmNames = sortedAttrNames usbipVms;
       vmNamesByEnv = usbipVmNamesByEnv;
+      activeVmNamesByEnv = activeUsbipVmNamesByEnv;
       envNames = usbipEnvNames;
       activeEnvNames = activeUsbipEnvNames;
       backendPorts = usbipBackendPorts;
@@ -221,7 +226,7 @@ let
             busIds = sortNames enabledVms.${vmName}.usbip.busids;
           })
           vmNames)
-        usbipVmNamesByEnv;
+        activeUsbipVmNamesByEnv;
     };
 
     observability = {
