@@ -38,25 +38,17 @@ let
       (vmName: _: { vm = vmName; tap = cfg.manifest.${vmName}.tap; })
       (lib.filterAttrs (_: vm: vm.enable && vm.env == envName) cfg.vms);
 
-  usbipVmNamesForEnv = envName:
-    lib.sort lib.lessThan (lib.attrNames (lib.filterAttrs (_: vm: vm.enable && vm.env == envName && vm.usbip.yubikey) cfg.vms));
-
   usbipVendorProductAllowlist = map (entry: {
     vendor = lib.fromHexString (lib.removePrefix "0x" entry.vendor);
     product = lib.fromHexString (lib.removePrefix "0x" entry.product);
   }) cfg.host.usbip.allowlist;
 
   usbipBusidLocksForEnv = envName:
-    map (vmName:
-      {
-        vm = vmName;
-        lockOwner = "daemon";
-        scope = "per-busid";
-        busIds = cfg.vms.${vmName}.usbip.busids;
-      }
+    map (lock:
+      lock
       // lib.optionalAttrs (usbipVendorProductAllowlist != [ ]) {
         vendorProductAllowlist = usbipVendorProductAllowlist;
-      }) (usbipVmNamesForEnv envName);
+      }) (cfg._index.usbip.busidLocksByEnv.${envName} or [ ]);
 
   ipv6SysctlEntry = ifName: {
     inherit ifName;

@@ -1060,7 +1060,9 @@ mod tests {
         let spec = test_spec(target.clone(), 4096, true);
         let tool = fake_mkfs_tool(&scratch);
 
-        let outcome = validate_or_repair_existing_with(&spec, &tool).expect("sparse image repairs");
+        let outcome =
+            retry_on_transient_lease_contention(|| validate_or_repair_existing_with(&spec, &tool))
+                .expect("sparse image repairs");
         assert_eq!(outcome, DiskInitOutcome::Repaired);
         assert!(has_ext4_superblock(&fs::File::open(&target).unwrap(), &target).unwrap());
 
@@ -1077,7 +1079,8 @@ mod tests {
         let tool = fake_mkfs_tool(&scratch);
 
         let outcome =
-            validate_or_repair_existing_with(&spec, &tool).expect("zero-length image repairs");
+            retry_on_transient_lease_contention(|| validate_or_repair_existing_with(&spec, &tool))
+                .expect("zero-length image repairs");
         assert_eq!(outcome, DiskInitOutcome::Repaired);
         let meta = fs::metadata(&target).expect("stat repaired image");
         assert_eq!(meta.len(), 4096);
@@ -1143,8 +1146,9 @@ mod tests {
         let spec = test_spec(target.clone(), 4096, true);
         let tool = fake_mkfs_tool(&scratch);
 
-        let outcome = validate_or_repair_existing_with(&spec, &tool)
-            .expect("sparse stale posture repairs and formats");
+        let outcome =
+            retry_on_transient_lease_contention(|| validate_or_repair_existing_with(&spec, &tool))
+                .expect("sparse stale posture repairs and formats");
         assert_eq!(outcome, DiskInitOutcome::RepairedWithPosture);
         let meta = fs::metadata(&target).unwrap();
         assert_eq!(meta.mode() & 0o777, 0o600);
