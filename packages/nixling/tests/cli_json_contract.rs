@@ -6,14 +6,14 @@
 //! `status`, `services`, `runnerParity`, `livePoolIntegrity`) are now covered by
 //! the strict `deny_unknown_fields` DTO deserializes in `cli_contract.rs` and
 //! `status_contract.rs` — a successful typed deserialize into
-//! `nixling::{ListOutputV2, StatusVmOutputV2}` IS the exact-key-set check.
+//! `nixling_ipc::cli_output::{ListOutputV2, StatusVmOutputV2}` IS the exact-key-set check.
 //!
 //! This module covers only the behaviours unique to the cli-json gate:
 //!   * `pending-restart`: when a VM's `booted != current` AND it counts as
 //!     running, `list --json` reports `status == "pending-restart"` and
 //!     `status <vm> --json` reports `pendingRestart == true` with running
 //!     services and consistent `current`/`booted` (deserialized strictly into
-//!     `nixling::{ListOutputV2, StatusVmOutputV2}`);
+//!     `nixling_ipc::cli_output::{ListOutputV2, StatusVmOutputV2}`);
 //!   * `keys list --json` with no daemon: exit 1, empty stderr, and the
 //!     structured daemon-down envelope on stdout with
 //!     `kind == "nixling keys list requires nixlingd"`;
@@ -34,7 +34,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use nixling::{ListOutputV2, StatusVmOutputV2};
+use nixling_ipc::cli_output::{ListOutputV2, StatusVmOutputV2};
 use serde_json::Value;
 
 /// The exact key set of the structured host-error (`daemon-down`) envelope,

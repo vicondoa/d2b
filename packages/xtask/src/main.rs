@@ -9,13 +9,6 @@ use clap_complete::{
     shells::{Bash, Fish, Zsh},
 };
 use clap_mangen::Man;
-use nixling::{
-    AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, ListOutputV2, OpInspectOutputV1,
-    RealmInspectOutputV1, RealmListOutputV1, ShellDetachOutputV1, ShellKillOutputV1,
-    ShellListOutputV1, StatusOutputV2, StoreVerifyOutputV2, UsbProbeOutputV1,
-    VmDisplayCloseOutputV1, VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1,
-    VmExecListOutputV1, VmExecLogsOutputV1, VmExecStatusOutputV1,
-};
 use nixling_constellation_core::{
     AdmissionAuditRecord, AuditEnvelope, Capability, CapabilityNegotiation, CapabilitySet,
     ConstellationError, ConstellationFrame, ExecAttachMode, ExecAttachRequest, ExecCancelRequest,
@@ -39,7 +32,17 @@ use nixling_core::{
     processes::ProcessesJson, storage::StorageJson, storage_lifecycle::StorageLifecycleReport,
     sync::SyncJson,
 };
-use nixling_ipc::{WireProtocolSchema, guest_wire::GuestControlSchema};
+use nixling_ipc::guest_wire::GuestControlSchema;
+use nixling_ipc::{
+    WireProtocolSchema,
+    cli_output::{
+        AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, ListOutputV2, OpInspectOutputV1,
+        RealmInspectOutputV1, RealmListOutputV1, ShellDetachOutputV1, ShellKillOutputV1,
+        ShellListOutputV1, StatusOutputV2, StoreVerifyOutputV2, UsbProbeOutputV1,
+        VmDisplayCloseOutputV1, VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1,
+        VmExecListOutputV1, VmExecLogsOutputV1, VmExecStatusOutputV1,
+    },
+};
 use schemars::schema::RootSchema;
 
 mod inventory;
@@ -654,6 +657,7 @@ fn parse_ipc_items(repo_root: &Path) -> Result<Vec<RustItem>, Box<dyn std::error
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("rs"))
+        .filter(|path| path.file_name().and_then(|name| name.to_str()) != Some("cli_output.rs"))
         .collect::<Vec<_>>();
     files.sort();
 

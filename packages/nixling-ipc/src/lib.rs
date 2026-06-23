@@ -319,6 +319,8 @@ where
     serde_json::from_slice(body).map_err(|error| classify_deserialize_error(type_name, &error))
 }
 
+pub mod cli_output;
+
 fn classify_deserialize_error(type_name: &'static str, error: &serde_json::Error) -> Error {
     let message = error.to_string();
     if let Some(field) = extract_unknown_field(&message) {

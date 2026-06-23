@@ -20,7 +20,7 @@ use std::process::{Command, Output};
 use nix::sys::socket::{
     AddressFamily, Backlog, SockFlag, SockType, UnixAddr, accept, bind, listen, socket,
 };
-use nixling::UsbProbeOutputV1;
+use nixling_ipc::cli_output::UsbProbeOutputV1;
 use serde_json::{Value, json};
 
 const SYSTEM_STATE_JSON: &str = r#"{

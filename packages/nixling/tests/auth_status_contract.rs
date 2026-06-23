@@ -6,7 +6,7 @@
 //! contract (`NIXLING_AUTH_STATUS_FIXTURE` + `NIXLING_TEST_{LAUNCHER,ADMIN}_UIDS`
 //! + `--test-uid`). It asserts that:
 //!   * `auth status --json` deserializes strictly into
-//!     `nixling::AuthStatusOutputV2` (`deny_unknown_fields` makes a successful
+//!     `nixling_ipc::cli_output::AuthStatusOutputV2` (`deny_unknown_fields` makes a successful
 //!     typed deserialize equivalent to the schema check the bash gate did via
 //!     docs/reference/cli-output/auth-status.schema.json);
 //!   * the per-role allowed/denied subcommand authz surface matches the binary's
@@ -20,7 +20,7 @@
 
 use std::process::Command;
 
-use nixling::{AuthRoleV2, AuthStatusOutputV2};
+use nixling_ipc::cli_output::{AuthRoleV2, AuthStatusOutputV2};
 
 // Fixture JSON shapes, reproduced from tests/cli-rust-native-common.sh's
 // nl_write_auth_status_fixture. They drive the public/broker socket probes;
