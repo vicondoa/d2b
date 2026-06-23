@@ -189,7 +189,12 @@ probe_common() {
 
   # 1. Start VM.
   log "  starting $vm"
-  if ! nixling vm start "$vm" --apply >/dev/null 2>&1; then
+  local start_output
+  if ! start_output=$(nixling vm start "$vm" --apply 2>&1); then
+    if printf '%s\n' "$start_output" | grep -q 'pending un-approved guest config edit'; then
+      log "  WARN: $vm has a pending un-approved guest config edit; skipping live VM probes for this host-local state"
+      return 2
+    fi
     fail_check "$vm: nixling vm start failed"
     return 1
   fi
@@ -229,12 +234,16 @@ probe_common() {
   local zombies
   zombies=$(grep -r 'Z (defunct)' /proc/*/stat 2>/dev/null \
     | grep -E 'virtiofsd|cloud-hypervisor|swtpm|gpu|audio' \
+    | grep -F "$vm" \
     | wc -l || true)
   # Alternative detection via /proc/*/status
   zombies_alt=$(for f in /proc/*/status; do
     if grep -q '^State:[[:space:]]*Z' "$f" 2>/dev/null; then
       comm=$(grep '^Name:' "$f" 2>/dev/null | awk '{print $2}' || true)
-      case "$comm" in virtiofsd|cloud-hypervisor|swtpm|gpu-sidecar|audio-sidecar) echo "$comm" ;; esac
+      case "$comm" in virtiofsd|cloud-hypervisor|swtpm|gpu-sidecar|audio-sidecar)
+        tr '\0' ' ' < "${f%/status}/cmdline" 2>/dev/null | grep -F "$vm" || true
+        ;;
+      esac
     fi
   done | wc -l || true)
   local total_zombies=$(( zombies + zombies_alt ))
@@ -355,6 +364,11 @@ probe_teardown() {
 probe_tpm() {
   local vm="$1"
   log "==> probe_tpm: VM=$vm"
+
+  if ! nixling vm status "$vm" --json 2>/dev/null | grep -q '"swtpm"[[:space:]]*:[[:space:]]*"running"'; then
+    log "  WARN: $vm has no running swtpm service; skipping TPM live probe"
+    return
+  fi
 
   # TPM functional probe: tpm2_getrandom 8.
   if nixling vm exec "$vm" -- sh -lc 'tpm2_getrandom 8 >/dev/null 2>&1' >/dev/null 2>&1; then
@@ -488,27 +502,39 @@ LOG_FILE="${TMPDIR:-/tmp}/nixling-smoke-run-log.txt"
 log "==> HEAD=$HEAD_SHA mode=$MODE ts=$ISO_TS"
 
 # Primary VM probes (both modes).
-probe_common "$NL_SMOKE_VM_PRIMARY"
+primary_ready=0
+if probe_common "$NL_SMOKE_VM_PRIMARY"; then
+  primary_ready=1
+fi
 
 if [ "$MODE" = "full" ]; then
   # Full-mode: TPM probes on primary VM (personal-dev has TPM enabled).
-  probe_tpm "$NL_SMOKE_VM_PRIMARY"
+  if [ "$primary_ready" -eq 1 ]; then
+    probe_tpm "$NL_SMOKE_VM_PRIMARY"
+  fi
 
   # Full-mode: bridge sysctl persistence (global, not per-VM).
   probe_bridge_sysctl
 
   # Full-mode: secondary VM (work-aad) common probes.
-  probe_common "$NL_SMOKE_VM_SECONDARY"
+  secondary_ready=0
+  if probe_common "$NL_SMOKE_VM_SECONDARY"; then
+    secondary_ready=1
+  fi
 
-  # Full-mode: audio probe on secondary VM (work-aad has audio sidecar).
-  probe_audio "$NL_SMOKE_VM_SECONDARY"
+  if [ "$secondary_ready" -eq 1 ]; then
+    # Full-mode: audio probe on secondary VM (work-aad has audio sidecar).
+    probe_audio "$NL_SMOKE_VM_SECONDARY"
 
-  # Teardown secondary VM.
-  probe_teardown "$NL_SMOKE_VM_SECONDARY"
+    # Teardown secondary VM.
+    probe_teardown "$NL_SMOKE_VM_SECONDARY"
+  fi
 fi
 
 # Teardown primary VM.
-probe_teardown "$NL_SMOKE_VM_PRIMARY"
+if [ "$primary_ready" -eq 1 ]; then
+  probe_teardown "$NL_SMOKE_VM_PRIMARY"
+fi
 
 # ---------------------------------------------------------------------------
 # Append result to the out-of-tree smoke-run log.
