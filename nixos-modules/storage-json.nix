@@ -573,8 +573,8 @@ let
         id = "path:swtpm-state:${name}";
         scope = "vm:${name}";
         path = "${toString cfg.store.stateDir}/${name}/swtpm";
-        owner = principal "user" "nixling-${name}-swtpm";
-        group = principal "group" "nixling-${name}-swtpm";
+        owner = uidPrincipal (nl.stablePrincipalId ("nixling-" + name + "-swtpm"));
+        group = gidPrincipal (nl.stablePrincipalId ("nixling-" + name + "-swtpm"));
         mode = "0700";
         creator = actor "broker" "nixling-priv-broker";
         writers = [
