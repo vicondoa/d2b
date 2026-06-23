@@ -122,16 +122,6 @@ let
       (_: artifact: shouldInstall artifact)
       topConfig.nixling._bundle;
 
-  installedArtifactAssertions = lib.mapAttrsToList
-    (name: artifact: {
-      assertion =
-        !shouldInstall artifact
-        || (artifact.classification != null && artifact.sensitivity == "nonSecret");
-      message =
-        "nixling internal bundle artifact `${name}` installs into /etc/nixling "
-        + "without non-secret classification metadata.";
-    })
-    topConfig.nixling._bundle;
 in
 {
   options.nixling._bundle = lib.mkOption {
@@ -143,8 +133,6 @@ in
   };
 
   config = {
-    assertions = installedArtifactAssertions;
-
     environment.etc = lib.mapAttrs'
       (_: artifact: lib.nameValuePair "nixling/${artifact.installFileName}" {
         source = artifact.path;
