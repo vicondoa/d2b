@@ -154,7 +154,11 @@ wait_for_api_ready() {
   while [ "$elapsed" -lt "$budget" ]; do
     local status
     status=$(nixling vm status "$vm" --json 2>/dev/null || true)
-    if printf '%s\n' "$status" | grep -q '"api_ready"[[:space:]]*:[[:space:]]*"yes"'; then
+    if printf '%s\n' "$status" | grep -Eq '"api_ready"[[:space:]]*:[[:space:]]*"yes"|"apiReady"[[:space:]]*:[[:space:]]*"yes"'; then
+      return 0
+    fi
+    if printf '%s\n' "$status" | grep -q '"runtime"[[:space:]]*:[[:space:]]*"running"' \
+       && printf '%s\n' "$status" | grep -q '"guest-control-health"'; then
       return 0
     fi
     sleep "$interval"
