@@ -593,6 +593,18 @@ let
         '';
       }
       {
+        assertion =
+          let timeout = vm.lifecycle.gracefulShutdown.timeoutSeconds;
+          in !(vm.enable && timeout != null && (timeout < 1 || timeout > 600));
+        message = ''
+          nixling.vms.${name}.lifecycle.gracefulShutdown.timeoutSeconds must be
+          null or an integer between 1 and 600 seconds. The upper bound keeps
+          host shutdown and reboot bounded; use the global
+          nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds default when
+          this VM does not need a different wait.
+        '';
+      }
+      {
         # Graphics VMs CANNOT be autostart. The
         # `nixling@<vm>` wrapper template starts `microvm@<vm>`,
         # which is the upstream microvm.nix runner — but graphics

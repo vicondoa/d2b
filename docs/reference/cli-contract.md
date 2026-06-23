@@ -24,6 +24,8 @@ than literal byte-for-byte goldens unless the corresponding
 > for the multi-line block format used on those envelopes. `nixling
 > up/down/restart/list` are first-class top-level aliases for `vm
 > start/stop/restart/list` and route through the same daemon path.
+> Stop-like aliases accept the same `--force` / `-f` flag as the
+> corresponding `vm` command.
 
 - Command headings use the dispatched **leaf** form (`keys list`,
   `audio mic`, `status --check-bridges`) because disposition is
@@ -284,7 +286,7 @@ vm start corp-vm: spawned pid=4242 start_time_ticks=123456789
 - There is no bash execution path for this verb.
 ### `vm stop`
 
-**Synopsis:** `nixling vm stop <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `nixling vm stop <vm> [--force | -f] [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
@@ -299,6 +301,7 @@ through the daemon.
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the 5-node per-VM DAG without spawning any role. |
 | `--apply` | boolean | `false` | Perform the lifecycle mutation. |
+| `--force`, `-f` | boolean | `false` | Skip provider-aware graceful guest shutdown and begin the standard SIGTERM/SIGKILL VMM cleanup path. This is not an immediate SIGKILL shortcut. |
 | `--json` | boolean | `false` | Emit the dry-run DAG or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -321,6 +324,16 @@ There is no bash fallback. Daemon-unreachable returns `daemon-down`
 (exit 1), and the old `nixling down` exit table is preserved in this
 file as history.
 
+Normal `vm stop --apply` asks supported local providers to shut the guest
+down before host-side VMM cleanup: Cloud Hypervisor receives
+`PUT /api/v1/vm.shutdown`, and qemu-media receives broker-mediated QMP
+`system_powerdown`. The wait is bounded by
+`nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds` or the per-VM
+manifest override. Human output prints progress such as
+`Waiting for guest to shut down (up to 90s)...`; the maximum command wait is
+that graceful timeout plus the standard forced-cleanup signal windows.
+`--force` / `-f` bypasses only the graceful wait.
+
 Pidfd `EPERM` while stopping a per-VM-UID runner used to surface as
 typed `broker-error` exit 78. Current `--apply` recovers that specific
 case by asking the broker to run `SignalRunner`; if the broker reports
@@ -332,25 +345,31 @@ still surface as `broker-error` / exit 78.
 
 ```text
 $ nixling vm stop corp-vm --apply
-vm stop corp-vm: broker recorded the audited SignalRunner request for role ch-runner (signal=term, signaled=true)
+Waiting for guest to shut down (up to 90s)...
+vm stop corp-vm: clean guest shutdown
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable
+- `--apply`: routes through `nixlingd` → provider graceful shutdown
+  (when enabled) → broker cleanup as needed. Daemon-unreachable
   surfaces `daemon-down` exit 1; native-handler-deferred surfaces
   `not-yet-implemented` exit 78; `broker-error` exit 78.
+- `--force` / `-f`: available on both `vm stop` and the top-level
+  `down` alias. It is an explicit stop override, not a shortcut around
+  the existing forced cleanup policy.
 - `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` are
   unrecognised. Broker failures surface on stderr with the redacted
   public-safe remediation and exit `78`.
-- Live path: `nixlingd` → broker `SignalRunner`.
+- Live path: `nixlingd` → CH API or broker-mediated QMP for guest
+  shutdown → broker `SignalRunner` / cgroup cleanup fallback.
 
 **Bash**
 
 - There is no bash execution path for this verb.
 ### `vm restart`
 
-**Synopsis:** `nixling vm restart <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `nixling vm restart <vm> [--force | -f] [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
@@ -365,6 +384,7 @@ through the daemon.
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the 5-node per-VM DAG without spawning any role. |
 | `--apply` | boolean | `false` | Perform the lifecycle mutation. |
+| `--force`, `-f` | boolean | `false` | Apply force only to the stop phase: skip graceful guest shutdown, then run the usual cleanup before the unchanged start phase. |
 | `--json` | boolean | `false` | Emit the dry-run DAG or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -391,7 +411,7 @@ this file as history.
 
 ```text
 $ nixling vm restart corp-vm --apply
-vm restart corp-vm: vm stop corp-vm: broker recorded the audited SignalRunner request for role ch-runner (signal=term, signaled=true); vm start corp-vm: spawned pid=4242 start_time_ticks=123456789
+vm restart corp-vm: vm stop corp-vm: clean guest shutdown; vm start corp-vm: spawned pid=4242 start_time_ticks=123456789
 ```
 
 **Native**
@@ -399,11 +419,13 @@ vm restart corp-vm: vm stop corp-vm: broker recorded the audited SignalRunner re
 - `--apply`: routes through `nixlingd` → broker. Daemon-unreachable
   surfaces `daemon-down` exit 1; native-handler-deferred surfaces
   `not-yet-implemented` exit 78; `broker-error` exit 78.
+- `--force` / `-f`: available on both `vm restart` and the top-level
+  `restart` alias. It affects only the stop phase.
 - `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` are
   unrecognised. Broker failures surface on stderr with the redacted
   public-safe remediation and exit `78`.
-- Live path: `nixlingd` → broker `SignalRunner` for the stop phase,
-  then `SpawnRunner` for the start phase.
+- Live path: same as `vm stop` for the stop phase, then broker
+  `SpawnRunner` for the start phase.
 
 **Bash**
 
@@ -2489,26 +2511,38 @@ never perturb a `--json` stdout envelope.
 
 ### `shell`
 
-**Synopsis:** `nixling shell <vm> [ACTION] [--name NAME] [--force] [--json|--human]`
+**Synopsis:** `nixling shell <target> [ACTION] [--name NAME] [--force] [--json|--human]`
 
 `ACTION` is one of:
 
-- omitted or `attach` — attach to the VM's configured default shell session, or
-  to `--name NAME`;
+- omitted or `attach` — attach to the target's configured default shell session,
+  or to `--name NAME`;
 - `list` — list persistent shell sessions;
 - `detach` — detach a live/stale client without killing the shell;
 - `kill` — terminate a named shell session.
 
-The first positional after `shell` is always the VM name. A VM named `list`,
-`attach`, `detach`, or `kill` attaches by default; use
-`nixling shell <vm> <ACTION>` for management. Command-like trailing words such as
+The first positional after `shell` is always a nixling target address. Current
+local-shell-only generations accept declared local VM names as target addresses.
+A local VM named `list`, `attach`, `detach`, or `kill` attaches by default; use
+`nixling shell <target> <ACTION>` for management. Command-like trailing words such as
 `nixling shell work htop` are rejected with a hint to use
-`nixling vm exec <vm> -- <cmd>` for one-off commands.
+`nixling vm exec <target> -- <cmd>` for one-off commands.
 
-`shell` uses the local daemon public socket and the authenticated guest-control
-terminal transport. The host daemon does not proxy shell operations into
-gateway-backed realm targets; gateway-backed shells must be managed by running
-the command against the realm gateway's `nixlingd`.
+`shell` keeps declared local VM names on the local daemon public socket and the
+authenticated guest-control terminal transport. Gateway-backed management forms
+(`list`, `detach`, `kill`) resolve the local realm entrypoint, verify the gateway
+VM is running, and run the same `nixling shell <target> ...` command inside the
+gateway VM over the typed `vm exec` guest-control path. The host does not load
+realm credentials, provider transports, raw guest-control frames, SSH, or
+provider-native shell APIs.
+
+Interactive gateway `attach` is fail-closed in this generation with an
+actionable `gateway-shell-attach-unavailable` error. Use
+`nixling realm enter <realm>` and run `nixling shell <target>` inside the
+gateway until semantic ADR 0039 shell attach is implemented. [ADR
+0039](../adr/0039-constellation-persistent-shell-routing.md) defines the final
+constellation route: gateway-backed targets forward through the selected gateway
+and require the remote node or provider agent to advertise `persistent-shell`.
 
 **Flags**
 
@@ -2576,13 +2610,19 @@ default detached  false     true
 }
 ```
 
+The JSON field remains named `vm` for the current schema. For local targets it
+contains the resolved local routed VM name. Gateway-backed management commands
+forward the requested target through the selected gateway; the in-gateway
+response keeps its own current schema until a future output-version bump can
+rename this field to `target`.
+
 **Exit codes**
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Success, including idempotent detach/kill no-op results. |
 | `1` | Unexpected daemon reply or local protocol/serialization failure. |
-| `2` | Usage error, invalid flag combination, missing required `--name` for kill, invalid shell name, non-TTY attach, or gateway-backed target on the host daemon. |
+| `2` | Usage error, invalid flag combination, missing required `--name` for kill, invalid shell name, non-TTY attach, or gateway-backed interactive attach before semantic shell attach support lands. |
 | `69` | Local daemon public socket unavailable for shell dispatch. |
 | `70` | Daemon generation does not support persistent shell operations. |
 | `75` | Daemon admin authorization failed before guest contact. |
@@ -2855,8 +2895,8 @@ detached state lives in guestd's detached registry).
 | --- | --- | --- |
 | `list` | `rust-native` | Pure read-only inventory query; the daemon answers it without mutating host or guest state. |
 | `vm start` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed `SpawnRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
-| `vm stop` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed `SignalRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
-| `vm restart` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed stop+start sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `vm stop` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output, including explicit `--force` / `-f` stop intent; `--apply` routes through the daemon-backed `SignalRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `vm restart` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output, including explicit `--force` / `-f` stop-phase intent; `--apply` routes through the daemon-backed stop+start sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `vm list` | `rust-native` | Daemon-side runtime inventory from nixlingd's public socket; daemon-unavailable returns an explicit empty inventory with remediation text. |
 | `status` | `rust-native` | Status is a read-only daemon RPC, including the frozen per-VM JSON shape. |
 | `status --check-bridges` | `rust-native` | The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred. |

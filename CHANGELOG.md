@@ -12,6 +12,11 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- VM stop/restart now has the Nix and manifest configuration surface for
+  provider-aware graceful guest shutdown, including global/per-VM enable and
+  1–600 second timeout controls, `manifestVersion = 7`, daemon-config
+  rendering, and host-shutdown `nixlingd.service` ordering/timeout budgeting.
+- Host shutdown and reboot now gracefully stop workload VMs before env net VMs.
 - Broker disk initialization now validates existing nixling-owned ext4 raw
   images before treating `ifAbsent` as satisfied, safely formats only
   proven-empty images, and fails closed before VM spawn for malformed or
@@ -36,6 +41,27 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- Persistent shell CLI routing now sends gateway-backed `list`, `detach`, and
+  `kill` management forms through the configured realm gateway over the typed
+  guest-control exec path, while interactive gateway attach fails closed until
+  semantic ADR 0039 attach support lands.
+- Constellation persistent shell routing: extended remote full-host routing and
+  provider trait seams so ADR 0039 `Shell*` operations require
+  `persistent-shell`, target workloads explicitly, preserve mutating
+  idempotency semantics, round-trip through the protobuf codec, and stay
+  separate from provider exec/durable execution.
+- Constellation persistent shell runtime alignment: guestd now gates shell
+  capability advertisement on the usable exec/workload-user/helper/shpool
+  runtime, reports configured shell limits, uses opaque shell ids, exposes
+  core DTO adapters for shell summaries/events, and documents the fail-closed
+  provider guestd bootstrap contract.
+- Constellation persistent shell contracts: promoted ADR 0039's reserved
+  `persistent-shell` capability, `Shell*` operation kinds, shell-authorized PTY
+  stream kind, and bounded shell DTOs into the generated core schema contract.
+- Constellation persistent shell routing: added ADR 0039 and reference stubs
+  reserving the provider/remote contract for ADR 0038 shells, including the
+  guestd-compatible provider-agent requirement and the rule that
+  `executeShellCommand` is not a persistent-shell channel.
 - Persistent shell daemon: started nixlingd-side shell control-plane routing with
   admin-gated management operations, guest-control capability checks, shell
   response framing, and attached-owner terminal proxying scaffolding.
@@ -62,6 +88,15 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- VM lifecycle CLI: added explicit `--force` / `-f` stop intent for
+  `vm stop`, `down`, `vm restart`, and `restart`, with backward-compatible
+  public wire serialization that omits `force = false`.
+- Broker QMP lifecycle operations for qemu-media now expose typed
+  `system_powerdown`, `query-status`, and `quit` requests, with bounded QMP
+  parsing and audit-safe lifecycle fields.
+- VM shutdowns now attempt provider-aware graceful guest shutdown for supported
+  Cloud Hypervisor/qemu-media VMs before forced pidfd cleanup, with bounded
+  daemon audit and metrics outcomes.
 - Persistent shell CLI: added top-level `nixling shell <vm>` attach and
   management forms for persistent named guest shell sessions.
 

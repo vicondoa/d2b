@@ -203,7 +203,7 @@ complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_s
 complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "enter" -d 'Open an interactive shell inside the realm gateway VM'
 complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "run" -d 'Run a one-shot command inside the realm gateway VM'
 complete -c nixling -n "__fish_nixling_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c nixling -n "__fish_nixling_using_subcommand shell" -l name -d 'Persistent shell session name. Omit to use the VM\'s configured default' -r
+complete -c nixling -n "__fish_nixling_using_subcommand shell" -l name -d 'Persistent shell session name. Omit to use the target\'s configured default' -r
 complete -c nixling -n "__fish_nixling_using_subcommand shell" -l force -d 'Detach an existing attached client before attaching to this session'
 complete -c nixling -n "__fish_nixling_using_subcommand shell" -l json -d 'Render machine-readable JSON'
 complete -c nixling -n "__fish_nixling_using_subcommand shell" -l human -d 'Render human-readable output'
@@ -235,11 +235,13 @@ complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subc
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from start" -s h -l help -d 'Print help'
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from stop" -l dry-run
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from stop" -l apply
+complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from stop" -s f -l force -d 'Skip provider graceful shutdown and use the forced cleanup path'
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from stop" -l json
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from stop" -l human
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from stop" -s h -l help -d 'Print help'
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from restart" -l dry-run
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from restart" -l apply
+complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from restart" -s f -l force -d 'Apply force only to the stop phase before starting again'
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from restart" -l json
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from restart" -l human
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from restart" -s h -l help -d 'Print help'
@@ -282,11 +284,13 @@ complete -c nixling -n "__fish_nixling_using_subcommand up" -l human
 complete -c nixling -n "__fish_nixling_using_subcommand up" -s h -l help -d 'Print help'
 complete -c nixling -n "__fish_nixling_using_subcommand down" -l dry-run
 complete -c nixling -n "__fish_nixling_using_subcommand down" -l apply
+complete -c nixling -n "__fish_nixling_using_subcommand down" -s f -l force -d 'Skip provider graceful shutdown and use the forced cleanup path'
 complete -c nixling -n "__fish_nixling_using_subcommand down" -l json
 complete -c nixling -n "__fish_nixling_using_subcommand down" -l human
 complete -c nixling -n "__fish_nixling_using_subcommand down" -s h -l help -d 'Print help'
 complete -c nixling -n "__fish_nixling_using_subcommand restart" -l dry-run
 complete -c nixling -n "__fish_nixling_using_subcommand restart" -l apply
+complete -c nixling -n "__fish_nixling_using_subcommand restart" -s f -l force -d 'Apply force only to the stop phase before starting again'
 complete -c nixling -n "__fish_nixling_using_subcommand restart" -l json
 complete -c nixling -n "__fish_nixling_using_subcommand restart" -l human
 complete -c nixling -n "__fish_nixling_using_subcommand restart" -s h -l help -d 'Print help'

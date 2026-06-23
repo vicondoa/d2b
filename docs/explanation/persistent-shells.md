@@ -2,15 +2,18 @@
 
 > Diataxis: explanation. Conceptual model for `nixling shell`.
 
-`nixling shell` attaches an admin's terminal to a named shell session inside a
-running guest. The user-facing surface is:
+`nixling shell` attaches an admin's terminal to a named shell session for a
+target workload. The user-facing surface is:
 
 ```text
-nixling shell <vm> [ACTION]
+nixling shell <target> [ACTION]
 ```
 
 where `ACTION` is `attach`, `list`, `detach`, or `kill`. Omitting `ACTION`
-attaches to the VM's configured default session.
+attaches to the target's configured default session. Local VM names stay on the
+local daemon fast path. Gateway-backed management actions route through the
+configured realm gateway; interactive gateway attach remains fail-closed until
+semantic ADR 0039 attach support lands.
 
 ## Persistence boundary
 
@@ -23,9 +26,9 @@ CLI process. A session is expected to survive:
 
 It is not expected to survive:
 
-- VM reboot;
+- VM reboot or target workload recreation;
 - shell-pool daemon restart or loss;
-- explicit `nixling shell <vm> kill --name <name>`;
+- explicit `nixling shell <target> kill --name <name>`;
 - `exit` or `Ctrl-D` inside the shell.
 
 This is intentionally different from `nixling vm exec -it`, whose command is
@@ -33,9 +36,13 @@ connection-owned and exits with the command's status.
 
 ## Local dispatch and network surface
 
-The host CLI connects to the local `nixlingd` public socket. It rejects
-gateway-backed realm targets locally; operators manage those guests by running
-the command against the realm gateway's `nixlingd`.
+The host CLI connects to the local `nixlingd` public socket for local targets.
+For gateway-backed `list`, `detach`, and `kill`, it enters the realm trust
+boundary by running the same `nixling shell <target> ...` command inside the
+gateway VM over the typed guest-control exec path. The host still does not load
+realm credentials or provider transports. Gateway-backed interactive attach
+fails closed on the host facade; operators can enter the realm gateway and run
+`nixling shell <target>` there until the semantic ADR 0039 attach stream lands.
 
 Persistent shells do not add TCP or UDP listeners, network ports, or
 network-bound debug/metrics surfaces. The host-to-guest path reuses the existing

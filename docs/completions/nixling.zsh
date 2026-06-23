@@ -529,15 +529,15 @@ esac
 ;;
 (shell)
 _arguments "${_arguments_options[@]}" : \
-'--name=[Persistent shell session name. Omit to use the VM'\''s configured default]:NAME:_default' \
+'--name=[Persistent shell session name. Omit to use the target'\''s configured default]:NAME:_default' \
 '--force[Detach an existing attached client before attaching to this session]' \
 '(--human)--json[Render machine-readable JSON]' \
 '(--json)--human[Render human-readable output]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':vm -- VM name as declared in `nixling.vms.<name>`:_default' \
+':vm -- Target address. Local VMs use the fast path; gateway-backed targets route through the realm gateway where supported:_default' \
 '::action -- Shell action. Omit to attach to the configured default session:((attach\:"Attach to a persistent shell"
-list\:"List persistent shell sessions on a VM"
+list\:"List persistent shell sessions on a target"
 detach\:"Detach a persistent shell session without killing it"
 kill\:"Kill a persistent shell session by name"))' \
 && ret=0
@@ -624,6 +624,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '(--apply)--dry-run[]' \
 '(--dry-run)--apply[]' \
+'-f[Skip provider graceful shutdown and use the forced cleanup path]' \
+'--force[Skip provider graceful shutdown and use the forced cleanup path]' \
 '(--human)--json[]' \
 '(--json)--human[]' \
 '-h[Print help]' \
@@ -635,6 +637,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '(--apply)--dry-run[]' \
 '(--dry-run)--apply[]' \
+'-f[Apply force only to the stop phase before starting again]' \
+'--force[Apply force only to the stop phase before starting again]' \
 '(--human)--json[]' \
 '(--json)--human[]' \
 '-h[Print help]' \
@@ -831,6 +835,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '(--apply)--dry-run[]' \
 '(--dry-run)--apply[]' \
+'-f[Skip provider graceful shutdown and use the forced cleanup path]' \
+'--force[Skip provider graceful shutdown and use the forced cleanup path]' \
 '(--human)--json[]' \
 '(--json)--human[]' \
 '-h[Print help]' \
@@ -842,6 +848,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '(--apply)--dry-run[]' \
 '(--dry-run)--apply[]' \
+'-f[Apply force only to the stop phase before starting again]' \
+'--force[Apply force only to the stop phase before starting again]' \
 '(--human)--json[]' \
 '(--json)--human[]' \
 '-h[Print help]' \

@@ -46,6 +46,14 @@ const PIDFD_TABLE_JSON: &str = r#"{
   ]
 }"#;
 
+const PIDFD_TABLE_PRIMARY_VMS_JSON: &str = r#"{
+  "entries": [
+    { "vm": "corp-vm",   "role": "ch-runner",  "pid": 2001, "startTimeTicks": 7 },
+    { "vm": "media-vm",  "role": "qemu-media", "pid": 2002, "startTimeTicks": 8 },
+    { "vm": "media-vm",  "role": "virtiofsd",  "pid": 2003, "startTimeTicks": 8 }
+  ]
+}"#;
+
 const KERNEL_MODULE_CLEAN_JSON: &str = r#"{
   "required": ["kvm_intel"],
   "present": ["kvm_intel"],
@@ -71,6 +79,39 @@ const AUTOSTART_DEGRADED_JSON: &str = r#"{
   "outcomes": [
     { "vm": "obs-net",  "env": "obs",  "is_net_vm": true,  "outcome": { "kind": "started" } },
     { "vm": "work-vm",  "env": "work", "is_net_vm": false, "outcome": { "kind": "degraded", "reason": "net-vm down" } }
+  ]
+}"#;
+
+const SHUTDOWN_DEGRADED_WARN_JSON: &str = r#"{
+  "schemaVersion": 1,
+  "markers": [
+    {
+      "vm": "corp-vm",
+      "outcome": "api_unavailable",
+      "severity": "warn",
+      "remediation": "provider shutdown API was unavailable; verify provider socket health before the next stop",
+      "elapsedMs": 250
+    }
+  ]
+}"#;
+
+const SHUTDOWN_DEGRADED_FAIL_JSON: &str = r#"{
+  "schemaVersion": 1,
+  "markers": [
+    {
+      "vm": "corp-vm",
+      "outcome": "timeout_exceeded",
+      "severity": "fail",
+      "remediation": "fix the in-guest shutdown path and retry nixling vm stop",
+      "elapsedMs": 90000
+    },
+    {
+      "vm": "media-vm",
+      "outcome": "force_requested",
+      "severity": "warn",
+      "remediation": "explicit force stop requested by operator",
+      "elapsedMs": 100
+    }
   ]
 }"#;
 
@@ -240,6 +281,7 @@ fn host_doctor_baseline_no_state_reports_broker_fail_exit_2() {
             "broker-ready",
             "broker-reap-health",
             "daemon-ready",
+            "graceful-shutdown-status",
             "kernel-module-matrix",
             "metrics-endpoint",
             "otel-host-bridge-runner",
@@ -285,6 +327,109 @@ fn host_doctor_pidfd_table_reports_otel_and_usbipd_runners() {
         usbipd["data"]["count"].as_u64(),
         Some(2),
         "two per-env usbipd runners expected"
+    );
+}
+
+#[test]
+fn host_doctor_graceful_shutdown_reports_live_primary_vmm_inventory() {
+    let sandbox = Sandbox::new();
+    sandbox.write_state("pidfd-table.json", PIDFD_TABLE_PRIMARY_VMS_JSON);
+
+    let (_code, env) = sandbox.run_doctor_json();
+    let graceful = check(&env, "graceful-shutdown-status");
+    assert_eq!(
+        graceful["status"], "pass",
+        "absent degraded marker should still be pass while reporting live primary VMMs"
+    );
+    assert_eq!(
+        graceful["data"]["livePrimaryVmmCount"], 2,
+        "graceful-shutdown-status must inspect pidfd-table primary VMM state"
+    );
+    let live_vms = graceful["data"]["livePrimaryVms"]
+        .as_array()
+        .expect("livePrimaryVms array");
+    assert!(
+        live_vms.iter().any(|entry| entry["vm"] == "corp-vm"
+            && entry["role"] == "ch-runner"
+            && entry["pid"] == 2001),
+        "livePrimaryVms missing ch-runner entry: {live_vms:#?}"
+    );
+    assert!(
+        live_vms.iter().any(|entry| entry["vm"] == "media-vm"
+            && entry["role"] == "qemu-media"
+            && entry["pid"] == 2002),
+        "livePrimaryVms missing qemu-media entry: {live_vms:#?}"
+    );
+    assert!(
+        live_vms.iter().all(|entry| entry["role"] != "virtiofsd"),
+        "livePrimaryVms must not include sidecars: {live_vms:#?}"
+    );
+}
+
+#[test]
+fn host_doctor_graceful_shutdown_warn_marker_reports_warn() {
+    let sandbox = Sandbox::new();
+    sandbox.write_state("shutdown-degraded.json", SHUTDOWN_DEGRADED_WARN_JSON);
+
+    let (_code, env) = sandbox.run_doctor_json();
+    let graceful = check(&env, "graceful-shutdown-status");
+    assert_eq!(
+        graceful["status"], "warn",
+        "warn-only shutdown marker must report graceful-shutdown-status=warn"
+    );
+    assert_eq!(graceful["data"]["warn"], 1);
+    assert_eq!(graceful["data"]["fail"], 0);
+    assert_eq!(
+        graceful["data"]["markers"][0]["outcome"], "api_unavailable",
+        "marker outcome must be preserved for remediation"
+    );
+}
+
+#[test]
+fn host_doctor_graceful_shutdown_fail_marker_reports_fail() {
+    let sandbox = Sandbox::new();
+    sandbox.write_state("shutdown-degraded.json", SHUTDOWN_DEGRADED_FAIL_JSON);
+
+    let (code, env) = sandbox.run_doctor_json();
+    let graceful = check(&env, "graceful-shutdown-status");
+    assert_eq!(
+        graceful["status"], "fail",
+        "any fail shutdown marker must report graceful-shutdown-status=fail"
+    );
+    assert_eq!(graceful["data"]["fail"], 1);
+    assert_eq!(graceful["data"]["warn"], 1);
+    assert!(
+        graceful["detail"]
+            .as_str()
+            .expect("detail")
+            .contains("corp-vm, media-vm"),
+        "detail should name affected VMs: {graceful:#}"
+    );
+    assert_eq!(
+        code, 2,
+        "fail marker should contribute to host doctor exit code 2"
+    );
+}
+
+#[test]
+fn host_doctor_graceful_shutdown_fail_marker_wins_over_pidfd_parse_error() {
+    let sandbox = Sandbox::new();
+    sandbox.write_state("pidfd-table.json", "{not json");
+    sandbox.write_state("shutdown-degraded.json", SHUTDOWN_DEGRADED_FAIL_JSON);
+
+    let (_code, env) = sandbox.run_doctor_json();
+    let graceful = check(&env, "graceful-shutdown-status");
+    assert_eq!(
+        graceful["status"], "fail",
+        "pidfd-table parse errors must not hide fail shutdown markers"
+    );
+    assert_eq!(graceful["data"]["fail"], 1);
+    assert!(
+        graceful["data"]["pidfdInspectionError"]
+            .as_str()
+            .expect("pidfd inspection error")
+            .contains("parse"),
+        "pidfd inspection error should remain visible: {graceful:#}"
     );
 }
 

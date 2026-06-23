@@ -709,12 +709,27 @@ fn reopen_persisted_entry(record: &PersistedPidfdEntry) -> Result<Option<PidfdEn
 fn read_proc_start_time(pid: i32) -> Result<Option<u64>, String> {
     let path = format!("/proc/{pid}/stat");
     match fs::read_to_string(&path) {
-        Ok(content) => parse_proc_stat_starttime(&content)
-            .map(Some)
-            .map_err(|err| err.to_string()),
+        Ok(content) => proc_stat_live_start_time(&content),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err.to_string()),
     }
+}
+
+fn proc_stat_live_start_time(content: &str) -> Result<Option<u64>, String> {
+    if proc_stat_state(content).is_some_and(|state| matches!(state, 'Z' | 'X')) {
+        return Ok(None);
+    }
+    parse_proc_stat_starttime(content)
+        .map(Some)
+        .map_err(|err| err.to_string())
+}
+
+fn proc_stat_state(content: &str) -> Option<char> {
+    let close = content.trim_end_matches('\n').rfind(')')?;
+    content[close + 1..]
+        .split_whitespace()
+        .next()
+        .and_then(|state| state.chars().next())
 }
 
 /// Public read-only `/proc/<pid>/stat` start-time read used by the
@@ -806,6 +821,23 @@ mod tests {
         read_proc_start_time(child.id() as i32)
             .expect("read proc start time")
             .expect("child still present")
+    }
+
+    #[test]
+    fn proc_stat_live_start_time_treats_zombie_and_dead_as_gone() {
+        let zombie =
+            "1234 (cloud-hyperv) Z 1 1234 1234 0 -1 0 0 0 0 0 10 20 0 0 20 0 1 0 987654321 0";
+        let dead =
+            "1234 (cloud-hyperv) X 1 1234 1234 0 -1 0 0 0 0 0 10 20 0 0 20 0 1 0 987654321 0";
+        let sleeping =
+            "1234 (cloud-hyperv) S 1 1234 1234 0 -1 0 0 0 0 0 10 20 0 0 20 0 1 0 987654321 0";
+
+        assert_eq!(proc_stat_live_start_time(zombie).expect("zombie"), None);
+        assert_eq!(proc_stat_live_start_time(dead).expect("dead"), None);
+        assert_eq!(
+            proc_stat_live_start_time(sleeping).expect("sleeping"),
+            Some(987_654_321)
+        );
     }
 
     fn open_child_pidfd(child: &Child) -> OwnedFd {

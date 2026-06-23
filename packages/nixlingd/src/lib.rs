@@ -7,14 +7,14 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry};
 use std::fs::{self, File, OpenOptions};
 use std::future::Future;
-use std::io::{IoSliceMut, Read, Write};
+use std::io::{self, IoSliceMut, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -170,12 +170,14 @@ pub mod usbipd_perenv_autostart;
 // `docs/reference/daemon-metrics.md`) and a minimal HTTP/1.1
 // `GET /metrics` handler. The registry is process-local; serving is
 // wired through the daemon's public socket accept loop.
+pub mod ch_api;
 pub mod metrics;
 // Per-VM Cloud Hypervisor stats scraper folded into the daemon's
 // `/metrics` endpoint. Replaces the host-side `nixling-ch-exporter.service`
 // singleton (retired in v1.0). See `docs/reference/daemon-metrics.md` for
 // the metric inventory.
 pub mod ch_stats;
+pub mod provider_shutdown;
 // In-daemon replacement for the
 // `nixling-audit-check.{service,timer}` host singleton + timer that
 // previously sanity-checked broker audit log shape on a daily cadence.
@@ -213,6 +215,10 @@ pub const DEFAULT_ACCEPTED_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 pub const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/nixling/daemon-state";
 const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 const VM_STOP_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS: u64 = 90;
+const PROVIDER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const EMPTY_VMM_CLEANUP_GRACE: Duration = Duration::from_secs(5);
+const CGROUP_EMPTY_POST_KILL_WAIT: Duration = Duration::from_secs(5);
 const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
 
 /// Default cap on concurrent in-flight connection-handler threads.
@@ -306,10 +312,17 @@ pub struct DaemonConfig {
     /// Mirrors `nixling.daemon.autostart.parallelism`.
     #[serde(default = "default_autostart_parallelism")]
     pub autostart_parallelism: usize,
+    /// Default provider graceful-shutdown wait before forced cleanup.
+    #[serde(default = "default_graceful_shutdown_timeout_seconds")]
+    pub graceful_shutdown_timeout_seconds: u64,
 }
 
 fn default_autostart_parallelism() -> usize {
     autostart::DEFAULT_PARALLELISM
+}
+
+fn default_graceful_shutdown_timeout_seconds() -> u64 {
+    DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
 }
 
 fn default_gateway_config_path() -> PathBuf {
@@ -333,6 +346,7 @@ impl Default for DaemonConfig {
             artifacts: ArtifactPaths::default(),
             gateway_config_path: default_gateway_config_path(),
             autostart_parallelism: autostart::DEFAULT_PARALLELISM,
+            graceful_shutdown_timeout_seconds: DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
         }
     }
 }
@@ -593,6 +607,11 @@ pub fn autostart_report_path(daemon_state_dir: &Path) -> PathBuf {
 /// Path of the persisted storage/restart/sync startup contract report.
 pub fn storage_lifecycle_report_path(daemon_state_dir: &Path) -> PathBuf {
     daemon_state_dir.join("storage-lifecycle-report.json")
+}
+
+/// Path of the persisted graceful-shutdown degraded marker report.
+pub fn shutdown_degraded_report_path(daemon_state_dir: &Path) -> PathBuf {
+    daemon_state_dir.join("shutdown-degraded.json")
 }
 
 fn persist_json_report(path: &Path, json: &[u8]) -> std::io::Result<()> {
@@ -1510,6 +1529,7 @@ impl autostart::VmStarter for BrokerVmStarter {
                 dry_run: false,
                 json: true,
             },
+            force: false,
             // Opt-IN to relaxed semantics so api-ready timeout (common
             // during cold boot of net VMs) does not
             // cascade-degrade every workload VM in the env. The
@@ -2529,6 +2549,14 @@ fn dispatch_request(
             verb: verb.to_owned(),
         });
     }
+    match &request {
+        wire::Request::VmStop(lifecycle) | wire::Request::VmRestart(lifecycle)
+            if vm_lifecycle_force_requested(lifecycle) =>
+        {
+            note_force_shutdown_request(&lifecycle.vm);
+        }
+        _ => {}
+    }
     // Acquire the op lock for this verb ONCE, here at the dispatch
     // boundary on the worker thread (never the accept loop). Read-only
     // verbs take no lock; per-VM mutating verbs serialize on the VM; a
@@ -2733,7 +2761,7 @@ fn dispatch_gateway_display(
                 if let Err(err) =
                     block_on_future(state.gateway_display.orchestrator.close(&session.open))
                 {
-                    tracing::warn!(error = %err, session_id = %args.session_id, "gateway display close cleanup failed");
+                    tracing::warn!(error = %err, "gateway display close cleanup failed");
                 }
                 true
             } else {
@@ -2903,9 +2931,9 @@ fn close_gateway_sessions_for_target(state: &ServerState, target: &str) -> Resul
         })?
         .extract_if(|_, session| session.target == target)
         .collect();
-    for (id, session) in sessions {
+    for (_id, session) in sessions {
         if let Err(err) = block_on_future(state.gateway_display.orchestrator.close(&session.open)) {
-            tracing::warn!(error = %err, session_id = %id, target = %target, "gateway display target cleanup failed");
+            tracing::warn!(error = %err, target = %target, "gateway display target cleanup failed");
         }
     }
     Ok(())
@@ -2935,9 +2963,9 @@ fn gateway_display_gc(state: &ServerState) {
             return;
         }
     };
-    for (id, session) in expired {
+    for (_id, session) in expired {
         if let Err(err) = block_on_future(state.gateway_display.orchestrator.close(&session.open)) {
-            tracing::warn!(error = %err, session_id = %id, "gateway display GC cleanup failed");
+            tracing::warn!(error = %err, "gateway display GC cleanup failed");
         }
     }
 }
@@ -9095,6 +9123,260 @@ fn cleanup_stale_qemu_media_dependencies_before_start(
 struct VmStopRoleReport {
     role_id: String,
     required_sigkill: bool,
+    shutdown_outcome: Option<VmShutdownOutcome>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VmShutdownOutcome {
+    CleanGuestShutdown,
+    CleanVmmCleanup,
+    ApiUnavailable,
+    TimeoutExceeded,
+    ForceRequested,
+    Disabled,
+    ForcedCleanup,
+    CleanupFailed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShutdownDegradedReport {
+    schema_version: u32,
+    markers: Vec<ShutdownDegradedMarker>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShutdownDegradedMarker {
+    vm: String,
+    outcome: String,
+    severity: String,
+    remediation: String,
+    elapsed_ms: u64,
+}
+
+static FORCE_SHUTDOWN_GENERATIONS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+
+fn force_shutdown_generations() -> &'static Mutex<HashMap<String, u64>> {
+    FORCE_SHUTDOWN_GENERATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn force_shutdown_generation(vm: &str) -> u64 {
+    force_shutdown_generations()
+        .lock()
+        .expect("force shutdown generation lock")
+        .get(vm)
+        .copied()
+        .unwrap_or(0)
+}
+
+fn note_force_shutdown_request(vm: &str) {
+    let mut generations = force_shutdown_generations()
+        .lock()
+        .expect("force shutdown generation lock");
+    let entry = generations.entry(vm.to_owned()).or_default();
+    *entry = entry.saturating_add(1);
+}
+
+fn force_shutdown_interrupted(vm: &str, baseline: u64) -> bool {
+    force_shutdown_generation(vm) > baseline
+}
+
+impl VmShutdownOutcome {
+    fn label(self) -> &'static str {
+        match self {
+            Self::CleanGuestShutdown => "clean_guest_shutdown",
+            Self::CleanVmmCleanup => "clean_vmm_cleanup",
+            Self::ApiUnavailable => "api_unavailable",
+            Self::TimeoutExceeded => "timeout_exceeded",
+            Self::ForceRequested => "force_requested",
+            Self::Disabled => "disabled",
+            Self::ForcedCleanup => "forced_cleanup",
+            Self::CleanupFailed => "cleanup_failed",
+        }
+    }
+
+    fn audit(self) -> daemon_audit::VmShutdownOutcome {
+        match self {
+            Self::CleanGuestShutdown => daemon_audit::VmShutdownOutcome::CleanGuestShutdown,
+            Self::CleanVmmCleanup => daemon_audit::VmShutdownOutcome::CleanVmmCleanup,
+            Self::ApiUnavailable => daemon_audit::VmShutdownOutcome::ApiUnavailable,
+            Self::TimeoutExceeded => daemon_audit::VmShutdownOutcome::TimeoutExceeded,
+            Self::ForceRequested => daemon_audit::VmShutdownOutcome::ForceRequested,
+            Self::Disabled => daemon_audit::VmShutdownOutcome::Disabled,
+            Self::ForcedCleanup => daemon_audit::VmShutdownOutcome::ForcedCleanup,
+            Self::CleanupFailed => daemon_audit::VmShutdownOutcome::CleanupFailed,
+        }
+    }
+
+    fn degraded_severity(self) -> Option<&'static str> {
+        match self {
+            Self::CleanGuestShutdown | Self::CleanVmmCleanup | Self::Disabled => None,
+            Self::ForceRequested | Self::ApiUnavailable => Some("warn"),
+            Self::TimeoutExceeded | Self::ForcedCleanup | Self::CleanupFailed => Some("fail"),
+        }
+    }
+
+    fn remediation(self) -> &'static str {
+        match self {
+            Self::TimeoutExceeded => {
+                "fix the in-guest shutdown path and retry `nixling vm stop <vm> --apply`, or intentionally bypass with `nixling vm stop <vm> --force --apply`"
+            }
+            Self::CleanupFailed => {
+                "host-side empty-VMM cleanup failed; inspect nixlingd logs and retry a focused force stop"
+            }
+            Self::ForcedCleanup => {
+                "forced cleanup was required; verify the VM is stopped and inspect nixlingd logs if resources remain"
+            }
+            Self::ApiUnavailable => {
+                "provider shutdown API was unavailable; verify provider socket health before the next stop"
+            }
+            Self::ForceRequested => "explicit force stop requested by operator",
+            Self::Disabled => "graceful shutdown disabled by configuration",
+            Self::CleanGuestShutdown | Self::CleanVmmCleanup => "no remediation required",
+        }
+    }
+}
+
+fn provider_audit_label(
+    kind: Option<provider_shutdown::ProviderKind>,
+) -> daemon_audit::VmShutdownProvider {
+    match kind {
+        Some(provider_shutdown::ProviderKind::CloudHypervisor) => {
+            daemon_audit::VmShutdownProvider::CloudHypervisor
+        }
+        Some(provider_shutdown::ProviderKind::QemuMedia) => {
+            daemon_audit::VmShutdownProvider::QemuMedia
+        }
+        None => daemon_audit::VmShutdownProvider::Unknown,
+    }
+}
+
+fn provider_metric_label(kind: Option<provider_shutdown::ProviderKind>) -> &'static str {
+    kind.map(provider_shutdown::ProviderKind::as_str)
+        .unwrap_or("unknown")
+}
+
+fn record_vm_shutdown_metric(
+    state: &ServerState,
+    vm: &str,
+    provider: Option<provider_shutdown::ProviderKind>,
+    outcome: VmShutdownOutcome,
+    elapsed: Duration,
+) {
+    let vmm = provider_metric_label(provider);
+    let outcome = outcome.label();
+    state.metrics_registry.counter_inc(
+        "nixling_daemon_vm_shutdown_total",
+        &[("vm", vm), ("vmm", vmm), ("outcome", outcome)],
+    );
+    state.metrics_registry.histogram_observe(
+        "nixling_daemon_vm_shutdown_duration_seconds",
+        &[("vm", vm), ("vmm", vmm), ("outcome", outcome)],
+        elapsed.as_secs_f64(),
+    );
+}
+
+fn emit_vm_shutdown_intent_audit(
+    state: &ServerState,
+    vm: &str,
+    caller_role: &BrokerCallerRole,
+    provider: Option<provider_shutdown::ProviderKind>,
+    force_requested: bool,
+    timeout_secs: u64,
+) {
+    let peer_uid = broker_caller_uid(caller_role);
+    if let Err(err) = state
+        .daemon_audit
+        .write_event(&daemon_audit::DaemonEvent::VmShutdownIntent {
+            vm: vm.to_owned(),
+            peer_uid,
+            provider: provider_audit_label(provider),
+            force_requested,
+            timeout_secs,
+        })
+    {
+        tracing::warn!(error = %err, vm = %vm, "failed to write vm shutdown intent audit event");
+    }
+}
+
+fn emit_vm_shutdown_outcome_audit(
+    state: &ServerState,
+    vm: &str,
+    caller_role: &BrokerCallerRole,
+    provider: Option<provider_shutdown::ProviderKind>,
+    outcome: VmShutdownOutcome,
+    elapsed: Duration,
+) {
+    let peer_uid = broker_caller_uid(caller_role);
+    if let Err(err) =
+        state
+            .daemon_audit
+            .write_event(&daemon_audit::DaemonEvent::VmShutdownOutcome {
+                vm: vm.to_owned(),
+                peer_uid,
+                provider: provider_audit_label(provider),
+                outcome: outcome.audit(),
+                elapsed_ms: elapsed.as_millis() as u64,
+            })
+    {
+        tracing::warn!(error = %err, vm = %vm, "failed to write vm shutdown outcome audit event");
+    }
+    persist_vm_shutdown_marker(state, vm, outcome, elapsed);
+}
+
+fn persist_vm_shutdown_marker(
+    state: &ServerState,
+    vm: &str,
+    outcome: VmShutdownOutcome,
+    elapsed: Duration,
+) {
+    let path = shutdown_degraded_report_path(&state.daemon_state_dir);
+    let mut report = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<ShutdownDegradedReport>(&bytes).ok())
+        .unwrap_or(ShutdownDegradedReport {
+            schema_version: 1,
+            markers: Vec::new(),
+        });
+    report.markers.retain(|marker| marker.vm != vm);
+    if let Some(severity) = outcome.degraded_severity() {
+        report.markers.push(ShutdownDegradedMarker {
+            vm: vm.to_owned(),
+            outcome: outcome.label().to_owned(),
+            severity: severity.to_owned(),
+            remediation: outcome.remediation().replace("<vm>", vm),
+            elapsed_ms: elapsed.as_millis() as u64,
+        });
+    }
+    if report.markers.is_empty() {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                tracing::warn!(error = %err, path = %path.display(), "failed to clear shutdown degraded marker");
+            }
+        }
+        return;
+    }
+    match serde_json::to_vec_pretty(&report)
+        .map_err(io::Error::other)
+        .and_then(|json| persist_json_report(&path, &json))
+    {
+        Ok(()) => {}
+        Err(err) => {
+            tracing::warn!(error = %err, path = %path.display(), "failed to persist shutdown degraded marker");
+        }
+    }
+}
+
+fn broker_caller_uid(caller_role: &BrokerCallerRole) -> u32 {
+    match caller_role {
+        BrokerCallerRole::AdminUid { uid }
+        | BrokerCallerRole::LauncherUid { uid }
+        | BrokerCallerRole::RootUid { uid } => *uid,
+        BrokerCallerRole::NotAuthorized => 0,
+    }
 }
 
 fn load_vm_stop_role_index(state: &ServerState, vm: &str) -> HashMap<String, RunnerRole> {
@@ -9298,6 +9580,7 @@ fn deregister_runner_pidfd_via_broker(
                 );
             }
         }
+
         Ok(other) => tracing::warn!(
             vm = %vm,
             role = %role_id,
@@ -9311,6 +9594,811 @@ fn deregister_runner_pidfd_via_broker(
             "broker runner pidfd deregister failed"
         ),
     }
+}
+
+fn finish_terminated_runner(
+    state: &ServerState,
+    caller_role: BrokerCallerRole,
+    vm: &str,
+    role_id: &str,
+) {
+    let _ = state.pidfd_table.deregister(vm, role_id);
+    deregister_runner_pidfd_via_broker(state, caller_role, vm, role_id);
+    remove_runner_snapshot(state, vm, role_id);
+}
+
+fn cgroup_events_populated_at(path: &Path) -> Result<Option<bool>, std::io::Error> {
+    let events = path.join("cgroup.events");
+    if !events.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(events)?;
+    for line in content.lines() {
+        let mut parts = line.split_whitespace();
+        if parts.next() == Some("populated") {
+            return Ok(Some(parts.next() != Some("0")));
+        }
+    }
+    Ok(None)
+}
+
+fn role_cgroup_path(state: &ServerState, vm: &str, role_id: &str) -> Option<PathBuf> {
+    let processes = load_json::<ProcessesJson>(&state.config.artifacts.processes_path).ok()?;
+    let process_vm = processes.vms.iter().find(|entry| entry.vm == vm)?;
+    let node = process_vm
+        .nodes
+        .iter()
+        .find(|node| node.id.0 == role_id)
+        .or_else(|| {
+            let wanted = infer_runner_role_for_vm_stop(role_id)?;
+            process_vm.nodes.iter().find(|node| {
+                matches!(
+                    (wanted, &node.role),
+                    (
+                        RunnerRole::CloudHypervisor,
+                        ProcessRole::CloudHypervisorRunner
+                    ) | (RunnerRole::QemuMedia, ProcessRole::QemuMediaRunner)
+                        | (RunnerRole::Virtiofsd, ProcessRole::Virtiofsd)
+                        | (RunnerRole::Swtpm, ProcessRole::Swtpm)
+                        | (RunnerRole::Gpu, ProcessRole::Gpu)
+                        | (RunnerRole::Audio, ProcessRole::Audio)
+                        | (RunnerRole::Video, ProcessRole::Video)
+                        | (RunnerRole::WaylandProxy, ProcessRole::WaylandProxy)
+                        | (RunnerRole::Usbip, ProcessRole::Usbip)
+                        | (RunnerRole::VsockRelay, ProcessRole::VsockRelay)
+                        | (RunnerRole::OtelHostBridge, ProcessRole::OtelHostBridge)
+                )
+            })
+        })?;
+    let subtree = Path::new(&node.profile.cgroup_placement.subtree);
+    Some(if subtree.is_absolute() {
+        subtree.to_path_buf()
+    } else {
+        PathBuf::from("/sys/fs/cgroup").join(subtree)
+    })
+}
+
+fn dispatch_raw_broker_value_with_timeout(
+    state: &ServerState,
+    request: Value,
+    caller_role: BrokerCallerRole,
+    timeout: Duration,
+) -> Result<Value, TypedError> {
+    let socket_path = broker_socket_path(state);
+    let deadline = Instant::now() + timeout;
+    let remaining = broker_remaining_before_op(deadline, &socket_path)?;
+    let socket = Socket::from(connect_seqpacket_with_timeout(
+        &socket_path,
+        Some(remaining),
+    )?);
+    let envelope = json!({
+        "request": request,
+        "callerRole": caller_role,
+        "testPeerUid": Value::Null,
+    });
+    let remaining = broker_remaining_before_op(deadline, &socket_path)?;
+    socket
+        .set_write_timeout(Some(remaining))
+        .map_err(|err| TypedError::InternalIo {
+            context: format!("set raw broker write timeout to {remaining:?}"),
+            detail: err.to_string(),
+        })?;
+    write_json_frame(&socket, &envelope)?;
+    let remaining = broker_remaining_before_op(deadline, &socket_path)?;
+    socket
+        .set_read_timeout(Some(remaining))
+        .map_err(|err| TypedError::InternalIo {
+            context: format!("set raw broker read timeout to {remaining:?}"),
+            detail: err.to_string(),
+        })?;
+    let response = read_frame(&socket)?;
+    serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
+        path: socket_path,
+        detail: err.to_string(),
+    })
+}
+
+fn request_cgroup_kill_if_populated(
+    state: &ServerState,
+    caller_role: BrokerCallerRole,
+    vm: &str,
+    role_id: &str,
+) {
+    let request = json!({
+        "kind": "CgroupKill",
+        "payload": {
+            "vmId": vm,
+            "roleId": role_id,
+            "tracingSpanId": Value::Null,
+        }
+    });
+    match dispatch_raw_broker_value_with_timeout(
+        state,
+        request,
+        caller_role,
+        Duration::from_secs(5),
+    ) {
+        Ok(response) => {
+            tracing::info!(vm = %vm, role = %role_id, response = ?response, "broker CgroupKill requested for populated runner leaf")
+        }
+        Err(err) => {
+            tracing::warn!(vm = %vm, role = %role_id, error = ?err, "broker CgroupKill request failed")
+        }
+    }
+}
+
+fn prove_role_cgroup_empty_or_escalate(
+    state: &ServerState,
+    caller_role: BrokerCallerRole,
+    vm: &str,
+    role_id: &str,
+) -> bool {
+    let Some(path) = role_cgroup_path(state, vm, role_id) else {
+        return true;
+    };
+    match cgroup_events_populated_at(&path) {
+        Ok(Some(false)) | Ok(None) => true,
+        Ok(Some(true)) => {
+            request_cgroup_kill_if_populated(state, caller_role, vm, role_id);
+            let deadline = Instant::now() + CGROUP_EMPTY_POST_KILL_WAIT;
+            while Instant::now() < deadline {
+                match cgroup_events_populated_at(&path) {
+                    Ok(Some(false)) | Ok(None) => return true,
+                    Ok(Some(true)) => std::thread::sleep(Duration::from_millis(100)),
+                    Err(err) => {
+                        tracing::warn!(vm = %vm, role = %role_id, error = %err, "read cgroup.events failed after CgroupKill");
+                        return false;
+                    }
+                }
+            }
+            tracing::warn!(vm = %vm, role = %role_id, path = %path.display(), "runner cgroup still populated after bounded CgroupKill wait");
+            false
+        }
+        Err(err) => {
+            tracing::warn!(vm = %vm, role = %role_id, error = %err, "read cgroup.events failed");
+            false
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct QemuBrokerShutdownProvider {
+    socket_path: PathBuf,
+    caller_role: BrokerCallerRole,
+    timeout: Duration,
+}
+
+#[async_trait]
+impl provider_shutdown::GracefulVmShutdown for QemuBrokerShutdownProvider {
+    async fn request_shutdown(
+        &self,
+        target: &provider_shutdown::ProviderShutdownTarget,
+    ) -> provider_shutdown::ProviderRequestOutcome {
+        let request = json!({
+            "kind": "QemuMediaSystemPowerdown",
+            "payload": { "vmId": target.vm, "tracingSpanId": Value::Null }
+        });
+        match raw_broker_round_trip_async(
+            self.socket_path.clone(),
+            request,
+            self.caller_role.clone(),
+            self.timeout,
+        )
+        .await
+        {
+            Ok(value)
+                if value.get("kind").and_then(Value::as_str)
+                    == Some("QemuMediaSystemPowerdown") =>
+            {
+                provider_shutdown::ProviderRequestOutcome::Requested
+            }
+            Ok(value) if value.get("kind").and_then(Value::as_str) == Some("Error") => {
+                provider_shutdown::ProviderRequestOutcome::Unavailable {
+                    reason: "api_unavailable",
+                }
+            }
+            Ok(_) => provider_shutdown::ProviderRequestOutcome::Rejected {
+                reason: "api_rejected",
+            },
+            Err(_) => provider_shutdown::ProviderRequestOutcome::Unavailable {
+                reason: "api_unavailable",
+            },
+        }
+    }
+
+    async fn poll_state(
+        &self,
+        target: &provider_shutdown::ProviderShutdownTarget,
+    ) -> provider_shutdown::ProviderGuestState {
+        let request = json!({
+            "kind": "QemuMediaQueryStatus",
+            "payload": {
+                "vmId": target.vm,
+                "shutdownContext": true,
+                "tracingSpanId": Value::Null
+            }
+        });
+        match raw_broker_round_trip_async(
+            self.socket_path.clone(),
+            request,
+            self.caller_role.clone(),
+            self.timeout,
+        )
+        .await
+        {
+            Ok(value)
+                if value.get("kind").and_then(Value::as_str) == Some("QemuMediaQueryStatus") =>
+            {
+                match value
+                    .get("payload")
+                    .and_then(|payload| payload.get("status"))
+                    .and_then(Value::as_str)
+                {
+                    Some("shutdown" | "connection-lost-during-shutdown") => {
+                        provider_shutdown::ProviderGuestState::GuestStopped
+                    }
+                    Some("running" | "paused") => provider_shutdown::ProviderGuestState::Running,
+                    _ => provider_shutdown::ProviderGuestState::Unknown {
+                        reason: "unknown_state",
+                    },
+                }
+            }
+            Ok(_) | Err(_) => provider_shutdown::ProviderGuestState::Unknown {
+                reason: "api_unavailable",
+            },
+        }
+    }
+
+    async fn request_vmm_exit(
+        &self,
+        target: &provider_shutdown::ProviderShutdownTarget,
+    ) -> provider_shutdown::ProviderVmmExitOutcome {
+        let request = json!({
+            "kind": "QemuMediaQuit",
+            "payload": { "vmId": target.vm, "tracingSpanId": Value::Null }
+        });
+        match raw_broker_round_trip_async(
+            self.socket_path.clone(),
+            request,
+            self.caller_role.clone(),
+            self.timeout,
+        )
+        .await
+        {
+            Ok(value) if value.get("kind").and_then(Value::as_str) == Some("QemuMediaQuit") => {
+                provider_shutdown::ProviderVmmExitOutcome::Requested
+            }
+            Ok(_) | Err(_) => provider_shutdown::ProviderVmmExitOutcome::Unavailable {
+                reason: "api_unavailable",
+            },
+        }
+    }
+}
+
+async fn raw_broker_round_trip_async(
+    socket_path: PathBuf,
+    request: Value,
+    caller_role: BrokerCallerRole,
+    timeout: Duration,
+) -> Result<Value, TypedError> {
+    tokio::task::spawn_blocking(move || {
+        dispatch_raw_broker_value_to_socket(&socket_path, request, caller_role, timeout)
+    })
+    .await
+    .map_err(|err| TypedError::InternalIo {
+        context: "join raw broker round trip".to_owned(),
+        detail: err.to_string(),
+    })?
+}
+
+fn dispatch_raw_broker_value_to_socket(
+    socket_path: &Path,
+    request: Value,
+    caller_role: BrokerCallerRole,
+    timeout: Duration,
+) -> Result<Value, TypedError> {
+    let deadline = Instant::now() + timeout;
+    let remaining = broker_remaining_before_op(deadline, socket_path)?;
+    let socket = Socket::from(connect_seqpacket_with_timeout(
+        socket_path,
+        Some(remaining),
+    )?);
+    let envelope = json!({
+        "request": request,
+        "callerRole": caller_role,
+        "testPeerUid": Value::Null,
+    });
+    let remaining = broker_remaining_before_op(deadline, socket_path)?;
+    socket
+        .set_write_timeout(Some(remaining))
+        .map_err(|err| TypedError::InternalIo {
+            context: format!("set raw broker write timeout to {remaining:?}"),
+            detail: err.to_string(),
+        })?;
+    write_json_frame(&socket, &envelope)?;
+    let remaining = broker_remaining_before_op(deadline, socket_path)?;
+    socket
+        .set_read_timeout(Some(remaining))
+        .map_err(|err| TypedError::InternalIo {
+            context: format!("set raw broker read timeout to {remaining:?}"),
+            detail: err.to_string(),
+        })?;
+    let response = read_frame(&socket)?;
+    serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
+        path: socket_path.to_path_buf(),
+        detail: err.to_string(),
+    })
+}
+
+fn vm_lifecycle_force_requested(request: &public_wire::VmLifecycleRequest) -> bool {
+    serde_json::to_value(request)
+        .ok()
+        .and_then(|value| value.get("force").and_then(Value::as_bool).or(Some(false)))
+        .unwrap_or(false)
+}
+
+fn graceful_shutdown_timeout_for(state: &ServerState, manifest_entry: &Value) -> Duration {
+    let secs = manifest_entry
+        .pointer("/lifecycle/gracefulShutdown/timeoutSeconds")
+        .and_then(Value::as_u64)
+        .unwrap_or(state.config.graceful_shutdown_timeout_seconds)
+        .clamp(1, 600);
+    Duration::from_secs(secs)
+}
+
+fn graceful_shutdown_enabled(manifest_entry: &Value) -> bool {
+    manifest_entry
+        .pointer("/lifecycle/gracefulShutdown/enable")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+fn provider_shutdown_target_for_role(
+    manifest_entry: &Value,
+    vm: &str,
+    role_id: &str,
+) -> Option<provider_shutdown::ProviderShutdownTarget> {
+    if role_id == VM_RUNNER_ROLE_ID
+        && manifest_entry
+            .pointer("/runtime/provider/driver")
+            .and_then(Value::as_str)
+            == Some("cloud-hypervisor")
+    {
+        return Some(provider_shutdown::ProviderShutdownTarget {
+            vm: vm.to_owned(),
+            kind: provider_shutdown::ProviderKind::CloudHypervisor,
+            api_socket: manifest_entry
+                .get("apiSocket")
+                .and_then(Value::as_str)
+                .map(PathBuf::from),
+        });
+    }
+    if role_id == RunnerRole::QemuMedia.as_str()
+        || (role_id.contains("qemu-media")
+            && manifest_entry
+                .pointer("/runtime/kind")
+                .and_then(Value::as_str)
+                == Some("qemu-media"))
+    {
+        return Some(provider_shutdown::ProviderShutdownTarget {
+            vm: vm.to_owned(),
+            kind: provider_shutdown::ProviderKind::QemuMedia,
+            api_socket: None,
+        });
+    }
+    None
+}
+
+fn manifest_entry_for_vm(state: &ServerState, vm: &str) -> Option<Value> {
+    load_manifest(&state.config.artifacts.public_manifest_path)
+        .ok()
+        .and_then(|manifest| manifest.get(vm).cloned())
+}
+
+fn required_sidecars_for_graceful_wait(entries: &[PidfdRegistration]) -> Vec<PidfdRegistration> {
+    entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                infer_runner_role_for_vm_stop(&entry.role),
+                Some(
+                    RunnerRole::Virtiofsd
+                        | RunnerRole::Swtpm
+                        | RunnerRole::Gpu
+                        | RunnerRole::Audio
+                        | RunnerRole::Video
+                        | RunnerRole::WaylandProxy
+                        | RunnerRole::VsockRelay
+                )
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+async fn wait_registered_pidfd_exit(
+    state: &ServerState,
+    vm: &str,
+    role_id: &str,
+    timeout: Duration,
+) -> bool {
+    let Some((fd, _, _)) = state.pidfd_table.dup_pidfd_for(vm, role_id) else {
+        return true;
+    };
+    let Ok(async_fd) = async_pidfd(fd) else {
+        return false;
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        match tokio::time::timeout(remaining, async_fd.readable()).await {
+            Ok(Ok(mut guard)) => {
+                if state.pidfd_table.still_alive_same_start_time(vm, role_id) {
+                    guard.clear_ready();
+                    continue;
+                }
+                return true;
+            }
+            Ok(Err(_)) | Err(_) => return false,
+        }
+    }
+}
+
+fn async_pidfd(fd: OwnedFd) -> io::Result<tokio::io::unix::AsyncFd<OwnedFd>> {
+    let flags = rustix::fs::fcntl_getfl(&fd)
+        .map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
+    if !flags.contains(rustix::fs::OFlags::NONBLOCK) {
+        rustix::fs::fcntl_setfl(&fd, flags | rustix::fs::OFlags::NONBLOCK)
+            .map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
+    }
+    tokio::io::unix::AsyncFd::new(fd)
+}
+
+fn sidecar_interrupted(state: &ServerState, sidecars: &[PidfdRegistration]) -> Option<String> {
+    sidecars.iter().find_map(|entry| {
+        (!state
+            .pidfd_table
+            .still_alive_same_start_time(&entry.vm, &entry.role))
+        .then(|| entry.role.clone())
+    })
+}
+
+struct ProviderGracefulInputs<'a> {
+    provider: &'a dyn provider_shutdown::GracefulVmShutdown,
+    target: &'a provider_shutdown::ProviderShutdownTarget,
+    role_id: &'a str,
+    sidecars: &'a [PidfdRegistration],
+    timeout: Duration,
+    force_generation_baseline: u64,
+    caller_role: BrokerCallerRole,
+}
+
+async fn run_provider_graceful_shutdown(
+    state: &ServerState,
+    input: ProviderGracefulInputs<'_>,
+) -> (VmShutdownOutcome, Option<VmStopRoleReport>) {
+    let request_outcome = input.provider.request_shutdown(input.target).await;
+    if !matches!(
+        request_outcome,
+        provider_shutdown::ProviderRequestOutcome::Requested
+    ) {
+        return (VmShutdownOutcome::ApiUnavailable, None);
+    }
+
+    let Some((pidfd, _pid, _start_ticks)) = state
+        .pidfd_table
+        .dup_pidfd_for(&input.target.vm, input.role_id)
+    else {
+        finish_terminated_runner(
+            state,
+            input.caller_role.clone(),
+            &input.target.vm,
+            input.role_id,
+        );
+        let cgroup_empty = prove_role_cgroup_empty_or_escalate(
+            state,
+            input.caller_role,
+            &input.target.vm,
+            input.role_id,
+        );
+        let outcome = if cgroup_empty {
+            VmShutdownOutcome::CleanGuestShutdown
+        } else {
+            VmShutdownOutcome::CleanupFailed
+        };
+        return (
+            outcome,
+            Some(VmStopRoleReport {
+                role_id: input.role_id.to_owned(),
+                required_sigkill: false,
+                shutdown_outcome: Some(outcome),
+            }),
+        );
+    };
+    let Ok(async_fd) = async_pidfd(pidfd) else {
+        return (VmShutdownOutcome::ApiUnavailable, None);
+    };
+    let deadline = Instant::now() + input.timeout;
+    loop {
+        if force_shutdown_interrupted(&input.target.vm, input.force_generation_baseline) {
+            tracing::warn!(vm = %input.target.vm, "force stop requested during graceful shutdown; forcing cleanup");
+            return (VmShutdownOutcome::ForceRequested, None);
+        }
+        if let Some(role) = sidecar_interrupted(state, input.sidecars) {
+            tracing::warn!(vm = %input.target.vm, role = %role, "sidecar exited during graceful shutdown; forcing cleanup");
+            return (VmShutdownOutcome::ForcedCleanup, None);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return (VmShutdownOutcome::TimeoutExceeded, None);
+        }
+        let tick = PROVIDER_SHUTDOWN_POLL_INTERVAL.min(remaining);
+        tokio::select! {
+            readable = async_fd.readable() => {
+                if let Ok(mut guard) = readable {
+                    if state
+                        .pidfd_table
+                        .still_alive_same_start_time(&input.target.vm, input.role_id)
+                    {
+                        guard.clear_ready();
+                        continue;
+                    }
+                    finish_terminated_runner(state, input.caller_role.clone(), &input.target.vm, input.role_id);
+                    let cgroup_empty = prove_role_cgroup_empty_or_escalate(
+                        state,
+                        input.caller_role,
+                        &input.target.vm,
+                        input.role_id,
+                    );
+                    let outcome = if cgroup_empty {
+                        VmShutdownOutcome::CleanGuestShutdown
+                    } else {
+                        VmShutdownOutcome::CleanupFailed
+                    };
+                    return (
+                        outcome,
+                        Some(VmStopRoleReport {
+                            role_id: input.role_id.to_owned(),
+                            required_sigkill: false,
+                            shutdown_outcome: Some(outcome),
+                        }),
+                    );
+                }
+                return (VmShutdownOutcome::ApiUnavailable, None);
+            }
+            _ = tokio::time::sleep(tick) => {}
+        }
+        match input.provider.poll_state(input.target).await {
+            provider_shutdown::ProviderGuestState::GuestStopped => {
+                let _ = input.provider.request_vmm_exit(input.target).await;
+                if wait_registered_pidfd_exit(
+                    state,
+                    &input.target.vm,
+                    input.role_id,
+                    EMPTY_VMM_CLEANUP_GRACE,
+                )
+                .await
+                {
+                    finish_terminated_runner(
+                        state,
+                        input.caller_role.clone(),
+                        &input.target.vm,
+                        input.role_id,
+                    );
+                    let cgroup_empty = prove_role_cgroup_empty_or_escalate(
+                        state,
+                        input.caller_role,
+                        &input.target.vm,
+                        input.role_id,
+                    );
+                    let outcome = if cgroup_empty {
+                        VmShutdownOutcome::CleanVmmCleanup
+                    } else {
+                        VmShutdownOutcome::CleanupFailed
+                    };
+                    return (
+                        outcome,
+                        Some(VmStopRoleReport {
+                            role_id: input.role_id.to_owned(),
+                            required_sigkill: false,
+                            shutdown_outcome: Some(outcome),
+                        }),
+                    );
+                }
+                return (VmShutdownOutcome::ForcedCleanup, None);
+            }
+            provider_shutdown::ProviderGuestState::Running
+            | provider_shutdown::ProviderGuestState::Unknown { .. } => {}
+        }
+    }
+}
+
+struct ProviderStopInputs<'a> {
+    caller_role: BrokerCallerRole,
+    verb: &'a str,
+    vm: &'a str,
+    role_id: &'a str,
+    stop_entries: &'a [PidfdRegistration],
+    term_timeout: Duration,
+    kill_timeout: Duration,
+    force_requested: bool,
+}
+
+fn stop_vmm_runner_with_provider(
+    state: &ServerState,
+    input: ProviderStopInputs<'_>,
+) -> Option<Result<VmStopRoleReport, Value>> {
+    let manifest_entry = manifest_entry_for_vm(state, input.vm)?;
+    let target = provider_shutdown_target_for_role(&manifest_entry, input.vm, input.role_id)?;
+    let graceful_timeout = graceful_shutdown_timeout_for(state, &manifest_entry);
+    emit_vm_shutdown_intent_audit(
+        state,
+        input.vm,
+        &input.caller_role,
+        Some(target.kind),
+        input.force_requested,
+        graceful_timeout.as_secs(),
+    );
+    let started = Instant::now();
+    if input.force_requested {
+        let report = stop_vm_pidfd_role(
+            state,
+            input.caller_role.clone(),
+            input.verb,
+            input.vm,
+            input.role_id,
+            input.term_timeout,
+            input.kill_timeout,
+        );
+        let audit_outcome = report
+            .as_ref()
+            .ok()
+            .and_then(|report| report.shutdown_outcome)
+            .unwrap_or(VmShutdownOutcome::ForceRequested);
+        record_vm_shutdown_metric(
+            state,
+            input.vm,
+            Some(target.kind),
+            audit_outcome,
+            started.elapsed(),
+        );
+        emit_vm_shutdown_outcome_audit(
+            state,
+            input.vm,
+            &input.caller_role,
+            Some(target.kind),
+            audit_outcome,
+            started.elapsed(),
+        );
+        return Some(report.map(|mut report| {
+            if report.shutdown_outcome != Some(VmShutdownOutcome::CleanupFailed) {
+                report.shutdown_outcome = Some(VmShutdownOutcome::ForceRequested);
+            }
+            report
+        }));
+    }
+    if !graceful_shutdown_enabled(&manifest_entry) {
+        let report = stop_vm_pidfd_role(
+            state,
+            input.caller_role.clone(),
+            input.verb,
+            input.vm,
+            input.role_id,
+            input.term_timeout,
+            input.kill_timeout,
+        );
+        let audit_outcome = report
+            .as_ref()
+            .ok()
+            .and_then(|report| report.shutdown_outcome)
+            .unwrap_or(VmShutdownOutcome::Disabled);
+        record_vm_shutdown_metric(
+            state,
+            input.vm,
+            Some(target.kind),
+            audit_outcome,
+            started.elapsed(),
+        );
+        emit_vm_shutdown_outcome_audit(
+            state,
+            input.vm,
+            &input.caller_role,
+            Some(target.kind),
+            audit_outcome,
+            started.elapsed(),
+        );
+        return Some(report.map(|mut report| {
+            if report.shutdown_outcome != Some(VmShutdownOutcome::CleanupFailed) {
+                report.shutdown_outcome = Some(VmShutdownOutcome::Disabled);
+            }
+            report
+        }));
+    }
+
+    let sidecars = required_sidecars_for_graceful_wait(input.stop_entries);
+    let force_generation_baseline = force_shutdown_generation(input.vm);
+    let provider: Box<dyn provider_shutdown::GracefulVmShutdown> = match target.kind {
+        provider_shutdown::ProviderKind::CloudHypervisor => {
+            Box::new(provider_shutdown::CloudHypervisorShutdown::default())
+        }
+        provider_shutdown::ProviderKind::QemuMedia => Box::new(QemuBrokerShutdownProvider {
+            socket_path: broker_socket_path(state),
+            caller_role: input.caller_role.clone(),
+            timeout: ch_api::DEFAULT_TIMEOUT,
+        }),
+    };
+    let (outcome, report) = block_on_future(run_provider_graceful_shutdown(
+        state,
+        ProviderGracefulInputs {
+            provider: provider.as_ref(),
+            target: &target,
+            role_id: input.role_id,
+            sidecars: &sidecars,
+            timeout: graceful_timeout,
+            force_generation_baseline,
+            caller_role: input.caller_role.clone(),
+        },
+    ));
+    if let Some(report) = report {
+        record_vm_shutdown_metric(
+            state,
+            input.vm,
+            Some(target.kind),
+            outcome,
+            started.elapsed(),
+        );
+        emit_vm_shutdown_outcome_audit(
+            state,
+            input.vm,
+            &input.caller_role,
+            Some(target.kind),
+            outcome,
+            started.elapsed(),
+        );
+        return Some(Ok(report));
+    }
+
+    let fallback = stop_vm_pidfd_role(
+        state,
+        input.caller_role.clone(),
+        input.verb,
+        input.vm,
+        input.role_id,
+        input.term_timeout,
+        input.kill_timeout,
+    );
+    let fallback = fallback.map(|mut report| {
+        let final_outcome = match report.shutdown_outcome {
+            Some(VmShutdownOutcome::CleanupFailed) => VmShutdownOutcome::CleanupFailed,
+            _ => outcome,
+        };
+        report.shutdown_outcome = Some(final_outcome);
+        report
+    });
+    let audit_outcome = fallback
+        .as_ref()
+        .ok()
+        .and_then(|report| report.shutdown_outcome)
+        .unwrap_or(outcome);
+    record_vm_shutdown_metric(
+        state,
+        input.vm,
+        Some(target.kind),
+        audit_outcome,
+        started.elapsed(),
+    );
+    emit_vm_shutdown_outcome_audit(
+        state,
+        input.vm,
+        &input.caller_role,
+        Some(target.kind),
+        audit_outcome,
+        started.elapsed(),
+    );
+    Some(fallback)
 }
 
 fn wait_terminated_with_broker_poll(
@@ -9443,12 +10531,13 @@ fn stop_vm_pidfd_role(
                 outcome = "terminated",
                 "role terminated after SIGTERM"
             );
-            let _ = state.pidfd_table.deregister(vm, role_id);
-            deregister_runner_pidfd_via_broker(state, caller_role.clone(), vm, role_id);
-            remove_runner_snapshot(state, vm, role_id);
+            finish_terminated_runner(state, caller_role.clone(), vm, role_id);
+            let cgroup_empty =
+                prove_role_cgroup_empty_or_escalate(state, caller_role.clone(), vm, role_id);
             return Ok(VmStopRoleReport {
                 role_id: role_id.to_owned(),
                 required_sigkill: false,
+                shutdown_outcome: (!cgroup_empty).then_some(VmShutdownOutcome::CleanupFailed),
             });
         }
         Ok(WaitTermination::TimedOut) => {
@@ -9535,12 +10624,12 @@ fn stop_vm_pidfd_role(
                 outcome = "terminated",
                 "role terminated after SIGKILL"
             );
-            let _ = state.pidfd_table.deregister(vm, role_id);
-            deregister_runner_pidfd_via_broker(state, caller_role, vm, role_id);
-            remove_runner_snapshot(state, vm, role_id);
+            finish_terminated_runner(state, caller_role.clone(), vm, role_id);
+            let cgroup_empty = prove_role_cgroup_empty_or_escalate(state, caller_role, vm, role_id);
             Ok(VmStopRoleReport {
                 role_id: role_id.to_owned(),
                 required_sigkill: true,
+                shutdown_outcome: (!cgroup_empty).then_some(VmShutdownOutcome::CleanupFailed),
             })
         }
         Ok(WaitTermination::TimedOut) => Err(daemon_failure_response(
@@ -10761,20 +11850,40 @@ fn dispatch_broker_vm_stop_with_timeout_as(
 
     let mut drained_roles = Vec::with_capacity(stop_entries.len());
     let mut sigkill_roles = Vec::new();
+    let mut shutdown_outcomes = Vec::new();
+    let force_requested = vm_lifecycle_force_requested(&request);
     for entry in &stop_entries {
-        let report = match stop_vm_pidfd_role(
+        let provider_report = stop_vmm_runner_with_provider(
             state,
-            caller_role.clone(),
-            VERB,
-            &request.vm,
-            &entry.role,
-            term_timeout,
-            kill_timeout,
-        ) {
+            ProviderStopInputs {
+                caller_role: caller_role.clone(),
+                verb: VERB,
+                vm: &request.vm,
+                role_id: &entry.role,
+                stop_entries: &stop_entries,
+                term_timeout,
+                kill_timeout,
+                force_requested,
+            },
+        );
+        let report = match provider_report.unwrap_or_else(|| {
+            stop_vm_pidfd_role(
+                state,
+                caller_role.clone(),
+                VERB,
+                &request.vm,
+                &entry.role,
+                term_timeout,
+                kill_timeout,
+            )
+        }) {
             Ok(report) => report,
             Err(response) => return Ok(response),
         };
         drained_roles.push(report.role_id.clone());
+        if let Some(outcome) = report.shutdown_outcome {
+            shutdown_outcomes.push((report.role_id.clone(), outcome));
+        }
         if report.required_sigkill {
             sigkill_roles.push(report.role_id);
         }
@@ -10809,6 +11918,14 @@ fn dispatch_broker_vm_stop_with_timeout_as(
             " after SIGTERM timeout on {}",
             sigkill_roles.join(", ")
         ));
+    }
+    if !shutdown_outcomes.is_empty() {
+        let labels = shutdown_outcomes
+            .iter()
+            .map(|(role, outcome)| format!("{role}:{}", outcome.label()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        summary.push_str(&format!("; provider shutdown outcomes: {labels}"));
     }
     summary.push_str(&format!(" ({})", drained_roles.join(", ")));
     Ok(applied_response(VERB, summary))
@@ -11931,7 +13048,12 @@ fn public_vm_lifecycle(
         .collect::<Vec<_>>();
 
     let runner_role = public_vm_runner_role_id(process_vm, manifest_entry);
-    let lifecycle_state = if live_roles.iter().any(|role| role == &runner_role) {
+    let primary_alive = live_roles.iter().any(|role| role == &runner_role);
+    let guest_stopped =
+        primary_alive && provider_guest_stopped_for_status(state, vm, manifest_entry, &runner_role);
+    let lifecycle_state = if guest_stopped {
+        "Failed"
+    } else if primary_alive {
         "Running"
     } else if live_roles.is_empty() {
         "Stopped"
@@ -11945,6 +13067,65 @@ fn public_vm_lifecycle(
         "pendingRestart": running && public_pending_restart(manifest_entry),
         "state": lifecycle_state,
     })
+}
+
+fn provider_guest_stopped_for_status(
+    state: &ServerState,
+    vm: &str,
+    manifest_entry: &Value,
+    runner_role: &str,
+) -> bool {
+    let Some(target) = provider_shutdown_target_for_role(manifest_entry, vm, runner_role) else {
+        return false;
+    };
+    match target.kind {
+        provider_shutdown::ProviderKind::CloudHypervisor => {
+            let Some(socket) = target.api_socket.as_deref() else {
+                return false;
+            };
+            ch_api::blocking_get_json(socket, "/api/v1/vm.info", ch_api::DEFAULT_TIMEOUT)
+                .ok()
+                .and_then(|body| ch_api::parse_vm_info(&body).ok())
+                .and_then(|info| info.state)
+                .is_some_and(|state| matches!(state.as_str(), "Created" | "Shutdown"))
+        }
+        provider_shutdown::ProviderKind::QemuMedia => {
+            let request = json!({
+                "kind": "QemuMediaQueryStatus",
+                "payload": {
+                    "vmId": vm,
+                    "shutdownContext": true,
+                    "tracingSpanId": Value::Null
+                }
+            });
+            dispatch_raw_broker_value_with_timeout(
+                state,
+                request,
+                BrokerCallerRole::RootUid {
+                    uid: state.daemon_uid,
+                },
+                ch_api::DEFAULT_TIMEOUT,
+            )
+            .ok()
+            .and_then(|value| {
+                (value.get("kind").and_then(Value::as_str) == Some("QemuMediaQueryStatus"))
+                    .then_some(value)
+            })
+            .and_then(|value| {
+                value
+                    .get("payload")
+                    .and_then(|payload| payload.get("status"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .is_some_and(|status| {
+                matches!(
+                    status.as_str(),
+                    "shutdown" | "connection-lost-during-shutdown"
+                )
+            })
+        }
+    }
 }
 
 fn public_pending_restart(manifest_entry: &Value) -> bool {
@@ -13307,6 +14488,7 @@ mod public_status_tests {
                 vsock_host_socket: None,
             },
             runtime,
+            lifecycle: Default::default(),
             shell: None,
             ssh_user: None,
             state_dir: "/var/lib/nixling/vms/installer".to_owned(),
@@ -15773,6 +16955,7 @@ mod accept_loop_concurrency_tests {
 
 #[cfg(test)]
 mod broker_dispatch_tests {
+    use std::collections::VecDeque;
     use std::fs::File;
     use std::io::{self, IoSlice, Read, Write};
     use std::net::TcpListener;
@@ -15793,9 +16976,10 @@ mod broker_dispatch_tests {
     use nix::unistd::close;
     use nixling_core::processes::ProcessRole;
     use nixling_ipc::broker_wire::{
-        BrokerRequest, BrokerRequestEnvelope, BrokerResponse, ChildExitKind, ChildExitStatus,
-        ChildReapedNotification, DeregisterRunnerPidfdResponse, PollChildReapedResponse,
-        RunnerRole, RunnerSignal, SignalRunnerResponse, SpawnRunnerResponse,
+        BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, ChildExitKind,
+        ChildExitStatus, ChildReapedNotification, DeregisterRunnerPidfdResponse,
+        PollChildReapedResponse, RunnerRole, RunnerSignal, SignalRunnerResponse,
+        SpawnRunnerResponse,
     };
     use nixling_ipc::guest_proto as pb;
     use nixling_ipc::public_wire::{
@@ -15805,8 +16989,9 @@ mod broker_dispatch_tests {
     };
     use nixling_ipc::types::{RoleId, VmId};
     use serde::Serialize;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
+    use super::provider_shutdown::GracefulVmShutdown;
     use super::supervisor::pidfd_table::{
         BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, WaitTermination,
         force_signal_eperm_for_tests,
@@ -15816,17 +17001,20 @@ mod broker_dispatch_tests {
         parse_proc_stat_starttime,
     };
     use super::{
-        ArtifactPaths, DaemonConfig, PeerIdentity, PeerRole, ServerState, VM_RUNNER_ROLE_ID,
-        VmStartNodeMode, adopt_orphaned_runners_on_startup_with, daemon_audit,
+        ArtifactPaths, DaemonConfig, PeerIdentity, PeerRole, ProviderGracefulInputs,
+        QemuBrokerShutdownProvider, ServerState, VM_RUNNER_ROLE_ID, VmShutdownOutcome,
+        VmStartNodeMode, adopt_orphaned_runners_on_startup_with, block_on_future, daemon_audit,
         dispatch_broker_boot, dispatch_broker_gc, dispatch_broker_host_destroy,
         dispatch_broker_host_prepare, dispatch_broker_keys_rotate, dispatch_broker_rollback,
         dispatch_broker_rotate_known_host, dispatch_broker_run_host_install,
         dispatch_broker_run_migrate, dispatch_broker_switch, dispatch_broker_test,
         dispatch_broker_trust, dispatch_broker_vm_restart, dispatch_broker_vm_start,
         dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout, dispatch_request,
-        map_shell_attach_response, map_shell_detach_response, map_shell_kill_response,
-        map_shell_list_response, redact_broker_dispatch_failure_for_launcher,
-        redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
+        force_shutdown_generation, map_shell_attach_response, map_shell_detach_response,
+        map_shell_kill_response, map_shell_list_response, note_force_shutdown_request,
+        prove_role_cgroup_empty_or_escalate, provider_shutdown,
+        redact_broker_dispatch_failure_for_launcher, redact_broker_error_for_launcher,
+        resolve_store_view_intent_for_vm, rollback_failed_vm_start, run_provider_graceful_shutdown,
         stale_qemu_media_dependency_roles_from_entries, vm_start_node_mode,
     };
 
@@ -16795,6 +17983,7 @@ mod broker_dispatch_tests {
                         dry_run: true,
                         ..MutationFlags::default()
                     },
+                    force: false,
                     no_wait_api: false,
                 }),
             ),
@@ -16806,6 +17995,7 @@ mod broker_dispatch_tests {
                         dry_run: true,
                         ..MutationFlags::default()
                     },
+                    force: false,
                     no_wait_api: false,
                 }),
             ),
@@ -16817,6 +18007,7 @@ mod broker_dispatch_tests {
                         dry_run: true,
                         ..MutationFlags::default()
                     },
+                    force: false,
                     no_wait_api: false,
                 }),
             ),
@@ -17286,6 +18477,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -17396,6 +18588,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -17671,6 +18864,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -17830,6 +19024,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -17855,6 +19050,369 @@ mod broker_dispatch_tests {
         );
         let status = child.wait();
         assert!(!status.success());
+    }
+
+    #[test]
+    fn vm_shutdown_target_uses_manifest_provider_metadata() {
+        let manifest_entry = json!({
+            "apiSocket": "/run/nixling/vms/work/ch.sock",
+            "runtime": {
+                "kind": "nixos",
+                "provider": { "driver": "cloud-hypervisor" }
+            },
+            "lifecycle": {
+                "gracefulShutdown": {
+                    "enable": true,
+                    "timeoutSeconds": 45
+                }
+            }
+        });
+
+        let target =
+            super::provider_shutdown_target_for_role(&manifest_entry, "work", VM_RUNNER_ROLE_ID)
+                .expect("cloud-hypervisor target");
+        assert_eq!(target.vm, "work");
+        assert_eq!(
+            target.kind,
+            crate::provider_shutdown::ProviderKind::CloudHypervisor
+        );
+        assert_eq!(
+            target.api_socket.as_deref(),
+            Some(Path::new("/run/nixling/vms/work/ch.sock"))
+        );
+        assert!(super::graceful_shutdown_enabled(&manifest_entry));
+    }
+
+    #[test]
+    fn vm_shutdown_force_generation_interrupts_existing_waiters() {
+        let vm = format!(
+            "force-generation-{}",
+            NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        let baseline = super::force_shutdown_generation(&vm);
+        assert!(!super::force_shutdown_interrupted(&vm, baseline));
+
+        super::note_force_shutdown_request(&vm);
+        assert!(super::force_shutdown_interrupted(&vm, baseline));
+    }
+
+    #[test]
+    fn vm_shutdown_manifest_disable_and_timeout_override_are_honored() {
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "vm-shutdown-manifest-policy",
+        ));
+        let manifest_entry = json!({
+            "runtime": {
+                "kind": "nixos",
+                "provider": { "driver": "cloud-hypervisor" }
+            },
+            "lifecycle": {
+                "gracefulShutdown": {
+                    "enable": false,
+                    "timeoutSeconds": 17
+                }
+            }
+        });
+
+        assert!(!super::graceful_shutdown_enabled(&manifest_entry));
+        assert_eq!(
+            super::graceful_shutdown_timeout_for(&state, &manifest_entry),
+            Duration::from_secs(17)
+        );
+    }
+
+    #[derive(Clone)]
+    struct ScriptedShutdownProvider {
+        states: Arc<Mutex<VecDeque<provider_shutdown::ProviderGuestState>>>,
+        vmm_exit_requests: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl provider_shutdown::GracefulVmShutdown for ScriptedShutdownProvider {
+        async fn request_shutdown(
+            &self,
+            _target: &provider_shutdown::ProviderShutdownTarget,
+        ) -> provider_shutdown::ProviderRequestOutcome {
+            provider_shutdown::ProviderRequestOutcome::Requested
+        }
+
+        async fn poll_state(
+            &self,
+            _target: &provider_shutdown::ProviderShutdownTarget,
+        ) -> provider_shutdown::ProviderGuestState {
+            self.states
+                .lock()
+                .expect("scripted states")
+                .pop_front()
+                .unwrap_or(provider_shutdown::ProviderGuestState::Running)
+        }
+
+        async fn request_vmm_exit(
+            &self,
+            _target: &provider_shutdown::ProviderShutdownTarget,
+        ) -> provider_shutdown::ProviderVmmExitOutcome {
+            self.vmm_exit_requests
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            provider_shutdown::ProviderVmmExitOutcome::Requested
+        }
+    }
+
+    #[test]
+    fn provider_graceful_shutdown_observes_concurrent_force_request() {
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "provider-force-interrupt",
+        ));
+        let child = register_sleep_runner(&state, "vm-force", false);
+        let target = provider_shutdown::ProviderShutdownTarget {
+            vm: "vm-force".to_owned(),
+            kind: provider_shutdown::ProviderKind::CloudHypervisor,
+            api_socket: None,
+        };
+        let baseline = force_shutdown_generation("vm-force");
+        note_force_shutdown_request("vm-force");
+        let provider = ScriptedShutdownProvider {
+            states: Arc::new(Mutex::new(VecDeque::from([
+                provider_shutdown::ProviderGuestState::Running,
+            ]))),
+            vmm_exit_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+
+        let (outcome, report) = block_on_future(run_provider_graceful_shutdown(
+            &state,
+            ProviderGracefulInputs {
+                provider: &provider,
+                target: &target,
+                role_id: VM_RUNNER_ROLE_ID,
+                sidecars: &[],
+                timeout: Duration::from_secs(30),
+                force_generation_baseline: baseline,
+                caller_role: BrokerCallerRole::LauncherUid { uid: 0 },
+            },
+        ));
+
+        assert_eq!(outcome, VmShutdownOutcome::ForceRequested);
+        assert!(
+            report.is_none(),
+            "force interrupt must fall back to standard pidfd cleanup"
+        );
+        state
+            .pidfd_table
+            .signal("vm-force", VM_RUNNER_ROLE_ID, libc::SIGKILL)
+            .ok();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn failed_start_rollback_uses_pidfd_cleanup_not_provider_graceful_wait() {
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("rollback-force-cleanup"));
+        let child = register_sleep_runner(&state, "vm-a", false);
+
+        rollback_failed_vm_start(&state, "vm-a", &[VM_RUNNER_ROLE_ID.to_owned()])
+            .expect("rollback stops spawned primary VMM without provider wait");
+
+        assert!(!state.pidfd_table.contains("vm-a", VM_RUNNER_ROLE_ID));
+        let status = child.wait();
+        assert!(!status.success());
+    }
+
+    fn start_raw_value_broker_server<F>(
+        test_name: &str,
+        requests: usize,
+        mut handler: F,
+    ) -> (PathBuf, thread::JoinHandle<()>)
+    where
+        F: FnMut(usize, Value, RawFd) + Send + 'static,
+    {
+        let socket_path = unreachable_broker_socket_path(test_name);
+        if let Some(parent) = socket_path.parent() {
+            fs::create_dir_all(parent).expect("create raw broker socket parent");
+        }
+        fs::remove_file(&socket_path).ok();
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("create raw broker listener");
+        let address = UnixAddr::new(&socket_path).expect("raw broker socket address");
+        bind(listener.as_raw_fd(), &address).expect("bind raw broker listener");
+        listen(&listener, Backlog::new(16).expect("listener backlog")).expect("listen raw broker");
+        let server_socket_path = socket_path.clone();
+        let join = thread::spawn(move || {
+            for index in 0..requests {
+                let accepted_fd = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC)
+                    .expect("accept raw broker peer");
+                let frame = read_test_frame(accepted_fd).expect("read raw broker request");
+                let envelope: Value =
+                    serde_json::from_slice(&frame).expect("decode raw broker request");
+                handler(index, envelope, accepted_fd);
+                close(accepted_fd).expect("close raw broker peer");
+            }
+            fs::remove_file(&server_socket_path).ok();
+        });
+        (socket_path, join)
+    }
+
+    #[test]
+    fn qemu_broker_shutdown_provider_drives_powerdown_status_and_quit() {
+        let (socket_path, broker) = start_raw_value_broker_server(
+            "qemu-shutdown-state-machine",
+            3,
+            |index, envelope, fd| {
+                let request = envelope.get("request").expect("request");
+                match index {
+                    0 => {
+                        assert_eq!(
+                            request.get("kind").and_then(Value::as_str),
+                            Some("QemuMediaSystemPowerdown")
+                        );
+                        write_test_json_frame(
+                            fd,
+                            &json!({
+                                "kind": "QemuMediaSystemPowerdown",
+                                "payload": {
+                                    "vmId": "media-vm",
+                                    "command": "system-powerdown"
+                                }
+                            }),
+                        )
+                        .expect("write powerdown response");
+                    }
+                    1 => {
+                        assert_eq!(
+                            request.get("kind").and_then(Value::as_str),
+                            Some("QemuMediaQueryStatus")
+                        );
+                        assert_eq!(
+                            request
+                                .pointer("/payload/shutdownContext")
+                                .and_then(Value::as_bool),
+                            Some(true)
+                        );
+                        write_test_json_frame(
+                            fd,
+                            &json!({
+                                "kind": "QemuMediaQueryStatus",
+                                "payload": {
+                                    "vmId": "media-vm",
+                                    "status": "shutdown"
+                                }
+                            }),
+                        )
+                        .expect("write query-status response");
+                    }
+                    2 => {
+                        assert_eq!(
+                            request.get("kind").and_then(Value::as_str),
+                            Some("QemuMediaQuit")
+                        );
+                        write_test_json_frame(
+                            fd,
+                            &json!({
+                                "kind": "QemuMediaQuit",
+                                "payload": {
+                                    "vmId": "media-vm",
+                                    "command": "quit"
+                                }
+                            }),
+                        )
+                        .expect("write quit response");
+                    }
+                    other => panic!("unexpected request index {other}"),
+                }
+            },
+        );
+        let provider = QemuBrokerShutdownProvider {
+            socket_path,
+            caller_role: BrokerCallerRole::LauncherUid { uid: 0 },
+            timeout: Duration::from_secs(2),
+        };
+        let target = provider_shutdown::ProviderShutdownTarget {
+            vm: "media-vm".to_owned(),
+            kind: provider_shutdown::ProviderKind::QemuMedia,
+            api_socket: None,
+        };
+
+        assert_eq!(
+            block_on_future(provider.request_shutdown(&target)),
+            provider_shutdown::ProviderRequestOutcome::Requested
+        );
+        assert_eq!(
+            block_on_future(provider.poll_state(&target)),
+            provider_shutdown::ProviderGuestState::GuestStopped
+        );
+        assert_eq!(
+            block_on_future(provider.request_vmm_exit(&target)),
+            provider_shutdown::ProviderVmmExitOutcome::Requested
+        );
+        broker.join().expect("broker join");
+    }
+
+    #[test]
+    fn populated_runner_cgroup_requests_broker_cgroup_kill_before_restart() {
+        let root = test_daemon_state_dir("cgroup-kill-escalation");
+        let cgroup = root.join("cgroup");
+        fs::create_dir_all(&cgroup).expect("create cgroup dir");
+        fs::write(cgroup.join("cgroup.events"), "populated 1\n").expect("write cgroup.events");
+        let cgroup_for_broker = cgroup.clone();
+        let (socket_path, broker) =
+            start_raw_value_broker_server("cgroup-kill-escalation", 1, move |_, envelope, fd| {
+                let request = envelope.get("request").expect("request");
+                assert_eq!(
+                    request.get("kind").and_then(Value::as_str),
+                    Some("CgroupKill")
+                );
+                assert_eq!(
+                    request.pointer("/payload/vmId").and_then(Value::as_str),
+                    Some("vm-a")
+                );
+                assert_eq!(
+                    request.pointer("/payload/roleId").and_then(Value::as_str),
+                    Some(VM_RUNNER_ROLE_ID)
+                );
+                fs::write(cgroup_for_broker.join("cgroup.events"), "populated 0\n")
+                    .expect("clear populated state");
+                write_test_json_frame(fd, &json!({"kind": "Ack", "payload": {}}))
+                    .expect("write cgroup kill ack");
+            });
+        let mut state = test_state_with_broker_socket(socket_path);
+        state.config.artifacts = write_custom_vm_start_bundle_artifacts(
+            &root,
+            &root.join("vm-a.api.sock"),
+            json!({
+                "schemaVersion": "v2",
+                "vms": [{
+                    "vm": "vm-a",
+                    "nodes": [{
+                        "id": "ch-runner",
+                        "role": "cloud-hypervisor-runner",
+                        "unit": null,
+                        "profile": minimal_role_profile("vm-vm-a-cloud-hypervisor", &cgroup.display().to_string()),
+                        "readiness": []
+                    }],
+                    "edges": [],
+                    "invariants": {
+                        "swtpmPreStartFlush": true,
+                        "perVmAuditPipeline": true,
+                        "usbipGating": true,
+                        "tpmOwnershipMigrationWithoutRunningVmMutation": true
+                    }
+                }]
+            }),
+        );
+
+        assert!(
+            prove_role_cgroup_empty_or_escalate(
+                &state,
+                BrokerCallerRole::LauncherUid { uid: 0 },
+                "vm-a",
+                VM_RUNNER_ROLE_ID
+            ),
+            "broker CgroupKill should clear the populated leaf before restart proceeds"
+        );
+        broker.join().expect("broker join");
     }
 
     #[test]
@@ -17887,6 +19445,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -17932,6 +19491,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
             std::time::Duration::from_millis(100),
@@ -18072,6 +19632,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18266,6 +19827,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
             Duration::from_millis(100),
@@ -18396,6 +19958,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18494,6 +20057,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18508,6 +20072,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18544,6 +20109,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18583,6 +20149,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18614,6 +20181,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18646,6 +20214,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18686,6 +20255,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18788,6 +20358,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )
@@ -18915,6 +20486,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                force: false,
                 no_wait_api: false,
             },
         )

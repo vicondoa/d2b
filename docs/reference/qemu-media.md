@@ -20,6 +20,7 @@ not selected as a full VM runtime, see
 | Process DAG | `host-reconcile` → `qemu-media`. The runner starts paused with a QMP socket under `/run/nixling/vms/<vm>/qmp.sock`. |
 | Boot media | After the runner is alive, `nixlingd` asks the broker to run `QemuMediaBoot`; the broker opens the declared boot source, sends the fd to QEMU over QMP, attaches USB storage, waits for QMP success responses, then continues QEMU. |
 | Hotplug | `nixling usb attach` / `detach` route to `QemuMediaAttach` / `QemuMediaDetach`, not USBIP. |
+| Shutdown | `nixling vm stop <vm> --apply` sends broker-mediated QMP `system_powerdown`, waits for `query-status` to report a stopped guest or the VMM pidfd to exit, then uses QMP `quit` / forced pidfd cleanup only as needed. |
 | Unsupported capabilities | guest-control, exec, config-sync, SSH, store-sync, keys, and in-guest observability. |
 
 ## Options
@@ -33,8 +34,15 @@ nixling.vms.dark-live = {
   env = "dark";
   index = 10;
   autostart = false;
+  lifecycle.gracefulShutdown.timeoutSeconds = null;
 };
 ```
+
+`qemu-media` inherits `nixling.daemon.lifecycle.gracefulShutdown.enable`
+and the daemon default timeout. Set
+`nixling.vms.<vm>.lifecycle.gracefulShutdown.enable = false` only for
+guests that intentionally cannot react to ACPI powerdown, or set
+`timeoutSeconds = 1..600` to override the site default for one VM.
 
 ### Resources
 
@@ -137,7 +145,8 @@ artifacts and is not echoed by successful attach/detach output.
 | --- | --- |
 | `nixling vm start <vm> --dry-run` | Reports the 2-node qemu-media DAG. |
 | `nixling vm start <vm> --apply` | Spawns the QEMU runner, waits for QMP readiness, runs `QemuMediaBoot`, and continues QEMU after boot media is attached. |
-| `nixling vm stop <vm> --apply` | Stops the daemon-supervised qemu-media runner through the same pidfd/broker path as other runners. |
+| `nixling vm stop <vm> --apply` | Sends QMP `system_powerdown`, waits up to the configured graceful shutdown timeout, polls `query-status`, and cleans up an empty QEMU process with QMP `quit` before falling back to pidfd/broker cleanup. |
+| `nixling vm stop <vm> --force --apply` | Skips the QMP guest-powerdown wait and immediately enters the standard SIGTERM/SIGKILL cleanup path. |
 | `nixling list` / `nixling vm list` | Marks qemu-media rows as `manual-only` and includes QMP readiness when available. JSON may include `runtimeKind`, `autostart`, `runtimeCapabilities`, `serviceCapabilities`, `unsupportedCapabilities`, and `qemuMedia`. |
 | `nixling status <vm>` | Shows qemu-media runner state, QMP readiness, source refs, source kind, format, read-only policy, and registry state. |
 | `nixling usb attach <vm> <busid> --apply` | Resolves the current USB identity against configured physical refs, preflights that the block device is unused, opens the fd in the broker, sends it to QEMU over QMP, and returns only after QMP accepts the fd/block/device commands. |

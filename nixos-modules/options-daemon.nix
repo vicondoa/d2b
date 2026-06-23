@@ -244,6 +244,31 @@ in
     };
   };
 
+  options.nixling.daemon.lifecycle.gracefulShutdown = {
+    enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Whether nixlingd should ask supported local VM providers to shut
+        the guest OS down before falling back to host-side VMM
+        termination. Enabled by default for Cloud Hypervisor/NixOS VMs
+        and qemu-media VMs; per-VM options can opt a VM out or back in.
+      '';
+    };
+
+    timeoutSeconds = lib.mkOption {
+      type = lib.types.int;
+      default = 90;
+      example = 120;
+      description = ''
+        Default bounded wait, in seconds, for provider-aware graceful guest
+        shutdown before nixlingd uses the standard SIGTERM/SIGKILL VMM
+        cleanup path. Values must be between 1 and 600 seconds so a typo
+        cannot stretch host shutdown or reboot for hours.
+      '';
+    };
+  };
+
   config = {
     assertions =
       (map (
@@ -273,6 +298,17 @@ in
         }
       ) readinessWaves)
       ++ [
+        {
+          assertion =
+            cfg.daemon.lifecycle.gracefulShutdown.timeoutSeconds >= 1
+            && cfg.daemon.lifecycle.gracefulShutdown.timeoutSeconds <= 600;
+          message = ''
+            nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds must be
+            between 1 and 600 seconds. The upper bound keeps host shutdown
+            and reboot bounded; use per-VM timeout overrides only within the
+            same range.
+          '';
+        }
         {
           assertion =
             (!cfg.defaultSwitchReadiness.w5Fu.implemented)

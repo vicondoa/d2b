@@ -53,6 +53,7 @@ pub const PUBLIC_MANIFEST_FIELDS: &[&str] = &[
     // predated this field. The path-bearing key/secret invariant separately
     // guards the observability block against host-path leaks.
     "enabled",
+    "enable",
     "vsockCid",
     "vsockHostSocket",
     "agentSocket",
@@ -68,6 +69,7 @@ pub const PUBLIC_MANIFEST_FIELDS: &[&str] = &[
     "apiSocket",
     "gpuSocket",
     "tpmSocket",
+    "timeoutSeconds",
     "audioStateFile",
     "audioService",
     "staticIp",
@@ -93,6 +95,7 @@ pub const PUBLIC_MANIFEST_FIELDS: &[&str] = &[
     "exec",
     "guest",
     "guestControl",
+    "gracefulShutdown",
     "hostPrepare",
     "inGuestObservability",
     "keys",

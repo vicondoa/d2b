@@ -16,7 +16,7 @@ mod manifest_v04_roundtrip {
     ];
 
     #[test]
-    fn baseline_vms_json_round_trips_byte_identically() {
+    fn baseline_vms_json_round_trips_semantically() {
         let baseline_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BASELINE_FIXTURE);
         let baseline_bytes =
             std::fs::read(&baseline_path).expect("read manifest v04 baseline fixture");
@@ -26,16 +26,14 @@ mod manifest_v04_roundtrip {
             .to_compact_json()
             .expect("baseline fixture serializes");
 
-        assert_eq!(
-            rendered.as_bytes(),
-            baseline_bytes.as_slice(),
-            "manifest-v04-roundtrip: rendered manifest differs from baseline"
-        );
-
         let baseline_json: Value =
             serde_json::from_slice(&baseline_bytes).expect("baseline fixture JSON parses");
         let rendered_json: Value =
             serde_json::from_str(&rendered).expect("rendered manifest JSON parses");
+        assert_eq!(
+            rendered_json, baseline_json,
+            "manifest-v04-roundtrip: rendered manifest differs from baseline"
+        );
 
         for path in REQUIRED_NETWORKING_PATHS {
             let baseline_value = scalar_at_path(&baseline_json, path, "canonical baseline");

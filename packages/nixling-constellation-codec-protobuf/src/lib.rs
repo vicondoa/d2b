@@ -17,7 +17,7 @@ use prost::Message;
 pub const CODEC_ID: &str = "protobuf.v1";
 
 /// Deterministic fingerprint for the hand-authored prost schema in this crate.
-pub const SCHEMA_FINGERPRINT: &str = "pb.v1:f12:h6:op14:sk12:err19:audit11:cap1";
+pub const SCHEMA_FINGERPRINT: &str = "pb.v1:f12:h6:op18:sk13:err19:audit11:cap21";
 
 /// A prost-backed constellation frame codec.
 #[derive(Debug, Clone, Copy, Default)]
@@ -394,16 +394,28 @@ fn decode_proto_frame(frame: ProtoFrame) -> Result<ConstellationFrame, Constella
 }
 
 fn encode_handshake(frame: &Handshake) -> Result<ProtoHandshake, ConstellationError> {
+    let mut capabilities = frame
+        .capabilities
+        .capabilities
+        .iter()
+        .map(encode_capability)
+        .collect::<Result<Vec<_>, _>>()?;
+    for token in frame.capabilities.capabilities.unknown_iter() {
+        if let Some(raw) = token
+            .as_str()
+            .strip_prefix("unknown-protobuf-capability-")
+            .and_then(|raw| raw.parse::<i32>().ok())
+        {
+            capabilities.push(raw);
+        }
+    }
+    capabilities.sort_unstable();
+    capabilities.dedup();
     Ok(ProtoHandshake {
         protocol_version: Some(frame.protocol_version),
         codec_id: frame.codec_id.as_str().to_owned(),
         schema_fingerprint: frame.schema_fingerprint.as_str().to_owned(),
-        capabilities: frame
-            .capabilities
-            .capabilities
-            .iter()
-            .map(encode_capability)
-            .collect::<Result<Vec<_>, _>>()?,
+        capabilities,
         capability_schema_version: frame.capabilities.schema_version,
         capability_fingerprint: frame.capabilities.fingerprint.clone(),
         peer: frame.peer.as_ref().map(encode_peer_context),
@@ -435,16 +447,21 @@ fn decode_capability_negotiation(
     fingerprint: String,
 ) -> Result<CapabilityNegotiation, ConstellationError> {
     let wire_fingerprint = parse_protocol_token(fingerprint, "handshake capability_fingerprint")?;
-    let mut saw_unknown = false;
-    let caps = capabilities.into_iter().filter_map(|raw| {
-        let decoded = decode_capability(raw);
-        if decoded.is_none() {
-            saw_unknown = true;
-        }
-        decoded
-    });
-    let capabilities = CapabilitySet::from_caps(caps);
+    let caps =
+        capabilities
+            .into_iter()
+            .map(|raw| match decode_capability(raw) {
+                Some(capability) => ProtocolToken::parse(capability.code()).map_err(|_| {
+                    malformed("failed to encode known protobuf capability as protocol token")
+                }),
+                None => ProtocolToken::parse(format!("unknown-protobuf-capability-{raw}")).map_err(
+                    |err| malformed(format!("unknown protobuf capability token invalid: {err}")),
+                ),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+    let capabilities = CapabilitySet::from_tokens(caps);
     let expected = capabilities.stable_fingerprint();
+    let has_unknown = capabilities.unknown_iter().next().is_some();
     if schema_version
         != nixling_constellation_core::capability::CAPABILITY_NEGOTIATION_SCHEMA_VERSION
     {
@@ -452,7 +469,7 @@ fn decode_capability_negotiation(
             "handshake capability negotiation schema version mismatch",
         ));
     }
-    if !saw_unknown && wire_fingerprint.as_str() != expected {
+    if !has_unknown && wire_fingerprint.as_str() != expected {
         return Err(malformed(
             "handshake capability negotiation fingerprint mismatch",
         ));
@@ -958,6 +975,10 @@ fn encode_operation_kind(kind: OperationKind) -> Result<i32, ConstellationError>
         OperationKind::FileCopyStart => 12,
         OperationKind::PortForwardOpen => 13,
         OperationKind::DisplaySessionOpen => 14,
+        OperationKind::ShellList => 15,
+        OperationKind::ShellAttach => 16,
+        OperationKind::ShellDetach => 17,
+        OperationKind::ShellKill => 18,
     })
 }
 
@@ -977,6 +998,10 @@ fn decode_operation_kind(raw: i32) -> Result<OperationKind, ConstellationError> 
         12 => Ok(OperationKind::FileCopyStart),
         13 => Ok(OperationKind::PortForwardOpen),
         14 => Ok(OperationKind::DisplaySessionOpen),
+        15 => Ok(OperationKind::ShellList),
+        16 => Ok(OperationKind::ShellAttach),
+        17 => Ok(OperationKind::ShellDetach),
+        18 => Ok(OperationKind::ShellKill),
         _ => Err(malformed(format!("unknown operation kind value {raw}"))),
     }
 }
@@ -995,6 +1020,7 @@ fn encode_stream_kind(kind: StreamKind) -> Result<i32, ConstellationError> {
         StreamKind::AudioCapture => 10,
         StreamKind::DeviceHid => 11,
         StreamKind::DeviceUsb => 12,
+        StreamKind::ShellPty => 13,
         _ => return Err(malformed("unsupported stream kind")),
     })
 }
@@ -1013,6 +1039,7 @@ fn decode_stream_kind(raw: i32) -> Result<StreamKind, ConstellationError> {
         10 => Ok(StreamKind::AudioCapture),
         11 => Ok(StreamKind::DeviceHid),
         12 => Ok(StreamKind::DeviceUsb),
+        13 => Ok(StreamKind::ShellPty),
         _ => Err(malformed(format!("unknown stream kind value {raw}"))),
     }
 }
@@ -1081,6 +1108,7 @@ fn encode_capability(capability: Capability) -> Result<i32, ConstellationError> 
         Capability::Hotplug => 18,
         Capability::EphemeralSessions => 19,
         Capability::ProviderManagedIsolation => 20,
+        Capability::PersistentShell => 21,
     })
 }
 
@@ -1106,6 +1134,7 @@ fn decode_capability(raw: i32) -> Option<Capability> {
         18 => Some(Capability::Hotplug),
         19 => Some(Capability::EphemeralSessions),
         20 => Some(Capability::ProviderManagedIsolation),
+        21 => Some(Capability::PersistentShell),
         _ => None,
     }
 }
@@ -1275,8 +1304,43 @@ mod tests {
     }
 
     #[test]
+    fn shell_enum_integer_mappings_are_stable() {
+        assert_eq!(encode_operation_kind(OperationKind::ShellList).unwrap(), 15);
+        assert_eq!(
+            encode_operation_kind(OperationKind::ShellAttach).unwrap(),
+            16
+        );
+        assert_eq!(
+            encode_operation_kind(OperationKind::ShellDetach).unwrap(),
+            17
+        );
+        assert_eq!(encode_operation_kind(OperationKind::ShellKill).unwrap(), 18);
+        assert_eq!(decode_operation_kind(15).unwrap(), OperationKind::ShellList);
+        assert_eq!(
+            decode_operation_kind(16).unwrap(),
+            OperationKind::ShellAttach
+        );
+        assert_eq!(
+            decode_operation_kind(17).unwrap(),
+            OperationKind::ShellDetach
+        );
+        assert_eq!(decode_operation_kind(18).unwrap(), OperationKind::ShellKill);
+
+        assert_eq!(encode_stream_kind(StreamKind::ShellPty).unwrap(), 13);
+        assert_eq!(decode_stream_kind(13).unwrap(), StreamKind::ShellPty);
+
+        assert_eq!(encode_capability(Capability::PersistentShell).unwrap(), 21);
+        assert_eq!(
+            decode_capability_strict(21).unwrap(),
+            Capability::PersistentShell
+        );
+    }
+
+    #[test]
     fn protobuf_decode_ignores_unknown_advertised_capabilities() {
         let codec = ProtobufCodec::new();
+        let expected_caps: CapabilitySet =
+            serde_json::from_str("[\"exec\",\"unknown-protobuf-capability-999\"]").unwrap();
         let encoded = ProtoFrame {
             body: Some(proto_frame::Body::Handshake(ProtoHandshake {
                 protocol_version: Some(1),
@@ -1285,7 +1349,7 @@ mod tests {
                 capabilities: vec![encode_capability(Capability::Exec).unwrap(), 999],
                 capability_schema_version:
                     nixling_constellation_core::capability::CAPABILITY_NEGOTIATION_SCHEMA_VERSION,
-                capability_fingerprint: "cap-v1-future999".to_owned(),
+                capability_fingerprint: expected_caps.stable_fingerprint(),
                 peer: None,
             })),
         }
@@ -1298,11 +1362,21 @@ mod tests {
         assert!(handshake.capabilities.capabilities.has(Capability::Exec));
         assert!(!handshake.capabilities.capabilities.has(Capability::Logs));
         assert_eq!(
-            handshake.capabilities.fingerprint,
-            CapabilitySet::empty()
-                .with(Capability::Exec)
-                .stable_fingerprint()
+            handshake
+                .capabilities
+                .capabilities
+                .unknown_iter()
+                .map(ProtocolToken::as_str)
+                .collect::<Vec<_>>(),
+            ["unknown-protobuf-capability-999"]
         );
+        assert!(
+            serde_json::to_string(&handshake.capabilities.capabilities)
+                .unwrap()
+                .contains("unknown-protobuf-capability-999")
+        );
+        let reencoded = encode_handshake(&handshake).unwrap();
+        assert!(reencoded.capabilities.contains(&999));
     }
 
     #[test]

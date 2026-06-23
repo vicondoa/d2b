@@ -32,7 +32,7 @@
           "description": "Manifest schema version. Must equal the parser's supported version.",
           "type": "integer",
           "enum": [
-            6
+            7
           ]
         }
       },
@@ -493,6 +493,19 @@
             }
           ]
         },
+        "lifecycle": {
+          "default": {
+            "gracefulShutdown": {
+              "enable": true,
+              "timeoutSeconds": null
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/VmLifecycle"
+            }
+          ]
+        },
         "mssClamp": {
           "type": [
             "integer",
@@ -573,6 +586,26 @@
       },
       "additionalProperties": false
     },
+    "VmGracefulShutdown": {
+      "type": "object",
+      "required": [
+        "enable"
+      ],
+      "properties": {
+        "enable": {
+          "type": "boolean"
+        },
+        "timeoutSeconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
     "VmLanPolicy": {
       "type": "object",
       "required": [
@@ -585,6 +618,18 @@
         },
         "effectiveEastWest": {
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmLifecycle": {
+      "type": "object",
+      "required": [
+        "gracefulShutdown"
+      ],
+      "properties": {
+        "gracefulShutdown": {
+          "$ref": "#/definitions/VmGracefulShutdown"
         }
       },
       "additionalProperties": false

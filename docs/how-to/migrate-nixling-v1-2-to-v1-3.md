@@ -78,6 +78,31 @@ example a host status feed). A required per-VM runner that dies during
 start now fails the start fast with an actionable, typed error instead
 of hanging.
 
+### VM stop is graceful by default
+
+Normal `nixling vm stop <vm> --apply`, `down`, and `restart` now ask
+supported local guests to shut down before host-side VMM termination.
+Cloud Hypervisor VMs use the CH shutdown API; qemu-media VMs use
+broker-mediated QMP `system_powerdown`. The default wait is 90 seconds,
+then nixling falls back to the previous SIGTERM/SIGKILL cleanup path.
+
+No configuration change is required. If a guest intentionally cannot
+respond to graceful shutdown, opt out globally:
+
+```nix
+nixling.daemon.lifecycle.gracefulShutdown.enable = false;
+```
+
+or for one VM:
+
+```nix
+nixling.vms.<vm>.lifecycle.gracefulShutdown.enable = false;
+```
+
+Use `timeoutSeconds = 1..600` globally or per VM to tune slow shutdowns.
+For emergency operations, `nixling vm stop <vm> --force --apply` skips
+only the graceful wait; it is not an immediate SIGKILL shortcut.
+
 ## What consumers must change
 
 Nothing required. Remove any manual swtpm-directory provisioning

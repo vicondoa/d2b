@@ -4,7 +4,7 @@
 
 Persistent shells let you reconnect to a named interactive shell inside a
 running guest. Use them for long-lived interactive work. Use
-`nixling vm exec <vm> -- <cmd>` for one-off commands.
+`nixling vm exec <target> -- <cmd>` for one-off commands.
 
 For the persistence model, local IPC boundary, and same-UID trust model,
 see [Persistent shell sessions](../explanation/persistent-shells.md).
@@ -79,7 +79,7 @@ The human output marks the configured default session. JSON output includes
 
 ## Detach a stale client
 
-Detach defaults to the VM's configured default name when `--name` is omitted:
+Detach defaults to the target's configured default name when `--name` is omitted:
 
 ```bash
 nixling shell work detach
@@ -101,9 +101,16 @@ Use `list` first if you need to discover the configured default name.
 
 ## Gateway-backed targets
 
-`nixling shell` talks to the local host daemon's public socket. The host daemon
-does not dispatch persistent shell requests into gateway-backed realm targets.
-Run the command against the realm gateway's `nixlingd` instead.
+`nixling shell list`, `detach`, and `kill` route gateway-backed realm targets
+through the selected gateway in current generations. Interactive gateway-backed
+`attach` still fails closed on the host facade until semantic gateway attach
+lands; for that case, enter the realm gateway first, then run the shell command
+from inside that gateway boundary:
+
+```bash
+nixling realm enter work
+work-gw$ nixling shell <target>
+```
 
 ## Avoid co-locating untrusted same-UID services
 

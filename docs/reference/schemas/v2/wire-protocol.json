@@ -922,6 +922,63 @@
           }
         },
         {
+          "description": "Ask the qemu-media guest to shut down through QMP `system_powerdown`. The daemon supplies only the VM id; raw QMP JSON never crosses the broker boundary.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaSystemPowerdown"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaLifecycleRequest"
+            }
+          }
+        },
+        {
+          "description": "Read the qemu-media guest/VMM status through QMP `query-status`. Returns a closed typed enum so polling never leaks raw QMP JSON back to the daemon.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaQueryStatus"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaQueryStatusRequest"
+            }
+          }
+        },
+        {
+          "description": "Ask the qemu-media VMM to exit through QMP `quit` after the guest is no longer running.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaQuit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaLifecycleRequest"
+            }
+          }
+        },
+        {
           "description": "Resolve an enrolled physical USB selector and execute qemu-media QMP attach. The busid is a runtime selector only and is redacted from every success response/audit field.",
           "type": "object",
           "required": [
@@ -1949,6 +2006,60 @@
             },
             "payload": {
               "$ref": "#/definitions/QemuMediaHotplugResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaSystemPowerdown"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaLifecycleResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaQueryStatus"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaQueryStatusResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "QemuMediaQuit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/QemuMediaLifecycleResponse"
             }
           }
         },
@@ -6560,6 +6671,88 @@
         "vm-continued"
       ]
     },
+    "QemuMediaLifecycleAction": {
+      "type": "string",
+      "enum": [
+        "system-powerdown",
+        "quit"
+      ]
+    },
+    "QemuMediaLifecycleRequest": {
+      "type": "object",
+      "required": [
+        "vmId"
+      ],
+      "properties": {
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaLifecycleResponse": {
+      "type": "object",
+      "required": [
+        "command",
+        "vmId"
+      ],
+      "properties": {
+        "command": {
+          "$ref": "#/definitions/QemuMediaLifecycleAction"
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaQueryStatusRequest": {
+      "type": "object",
+      "required": [
+        "vmId"
+      ],
+      "properties": {
+        "shutdownContext": {
+          "description": "True while daemon shutdown polling is already in progress. EOF, ECONNRESET, ENOENT, and similar disconnects are then returned as the closed status `connection-lost-during-shutdown` instead of as noisy broker errors.",
+          "default": false,
+          "type": "boolean"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QemuMediaQueryStatusResponse": {
+      "type": "object",
+      "required": [
+        "status",
+        "vmId"
+      ],
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/QemuMediaVmStatus"
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "QemuMediaRefreshRegistryRequest": {
       "type": "object",
       "properties": {
@@ -6697,6 +6890,30 @@
         }
       },
       "additionalProperties": false
+    },
+    "QemuMediaVmStatus": {
+      "type": "string",
+      "enum": [
+        "running",
+        "paused",
+        "shutdown",
+        "suspended",
+        "watchdog",
+        "debug",
+        "inmigrate",
+        "internal-error",
+        "io-error",
+        "postmigrate",
+        "prelaunch",
+        "finish-migrate",
+        "restore-vm",
+        "save-vm",
+        "guest-panicked",
+        "colo",
+        "preconfig",
+        "unknown",
+        "connection-lost-during-shutdown"
+      ]
     },
     "ReadGuestConfigRequest": {
       "description": "`read guest config` request payload. The daemon resolves the per-VM vsock socket + peer credentials from the trusted bundle; the client supplies only the VM name.",
@@ -9445,6 +9662,10 @@
         },
         "dryRun": {
           "default": false,
+          "type": "boolean"
+        },
+        "force": {
+          "description": "Bypass provider graceful-shutdown and use the existing forced cleanup path.",
           "type": "boolean"
         },
         "json": {

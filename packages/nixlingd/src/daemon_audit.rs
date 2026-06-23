@@ -90,6 +90,29 @@ pub enum RunnerExitKind {
     Killed,
 }
 
+/// Closed provider labels for daemon-side VM shutdown audit.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VmShutdownProvider {
+    CloudHypervisor,
+    QemuMedia,
+    Unknown,
+}
+
+/// Closed final outcome for provider-aware VM shutdown.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VmShutdownOutcome {
+    CleanGuestShutdown,
+    CleanVmmCleanup,
+    ApiUnavailable,
+    TimeoutExceeded,
+    ForceRequested,
+    Disabled,
+    ForcedCleanup,
+    CleanupFailed,
+}
+
 /// Daemon-side audit event variants.
 ///
 /// Additive-only: new variants may be added; existing ones must not be
@@ -225,6 +248,23 @@ pub enum DaemonEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         exit_signal: Option<i32>,
         /// Wall-clock milliseconds from DAG dispatch to fast-fail.
+        elapsed_ms: u64,
+    },
+    /// Emitted before a VM stop sends a provider shutdown request or force
+    /// cleanup signal.
+    VmShutdownIntent {
+        vm: String,
+        peer_uid: u32,
+        provider: VmShutdownProvider,
+        force_requested: bool,
+        timeout_secs: u64,
+    },
+    /// Emitted after a VM stop reaches a terminal graceful/fallback outcome.
+    VmShutdownOutcome {
+        vm: String,
+        peer_uid: u32,
+        provider: VmShutdownProvider,
+        outcome: VmShutdownOutcome,
         elapsed_ms: u64,
     },
 }

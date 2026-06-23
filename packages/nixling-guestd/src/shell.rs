@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::fs::File;
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use nixling_constellation_core as constellation;
 use nixling_ipc::guest_proto as pb;
 use protobuf::{EnumOrUnknown, MessageField};
 
@@ -22,6 +25,15 @@ pub struct ShellRuntimeConfig {
     pub runner_path: PathBuf,
     pub systemctl_path: PathBuf,
     pub socket_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellCoreAdaptError {
+    Disabled,
+    InvalidGeneration,
+    InvalidName,
+    InvalidOpaqueId,
+    InvalidCursor,
 }
 
 impl ShellRuntimeConfig {
@@ -79,6 +91,7 @@ pub enum ShellRuntimeError {
     AlreadyAttached,
     NotFound,
     Disabled,
+    PoolUnavailable,
 }
 
 impl ShellRuntimeError {
@@ -100,12 +113,17 @@ impl ShellRuntimeError {
             Self::Disabled => {
                 pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED
             }
+            Self::PoolUnavailable => {
+                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE
+            }
         }
     }
 
     fn remediation(self) -> pb::HealthRemediation {
         match self {
-            Self::Disabled => pb::HealthRemediation::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE,
+            Self::Disabled | Self::PoolUnavailable => {
+                pb::HealthRemediation::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE
+            }
             Self::CapacityExceeded | Self::AttachCapacityExceeded => {
                 pb::HealthRemediation::HEALTH_REMEDIATION_REDUCE_LOAD
             }
@@ -118,6 +136,7 @@ impl ShellRuntimeError {
     fn shell_state(self) -> pb::ShellState {
         match self {
             Self::Disabled => pb::ShellState::SHELL_STATE_FEATURE_DISABLED,
+            Self::PoolUnavailable => pb::ShellState::SHELL_STATE_POOL_UNAVAILABLE,
             Self::AlreadyAttached => pb::ShellState::SHELL_STATE_ATTACHED,
             Self::InvalidName
             | Self::CapacityExceeded
@@ -461,10 +480,13 @@ impl ShellRuntime {
             }
         }
         state.next_session = state.next_session.saturating_add(1);
+        let session_id = generate_opaque_id("shell").ok_or(ShellRuntimeError::PoolUnavailable)?;
+        let shell_session_instance_id =
+            generate_opaque_id("shinst").ok_or(ShellRuntimeError::PoolUnavailable)?;
         let session = ShellSession {
             name: name.clone(),
-            session_id: format!("shell-{:016x}", state.next_session),
-            shell_session_instance_id: format!("shell-instance-{:016x}", state.next_session),
+            session_id,
+            shell_session_instance_id,
             guestd_instance_id: self.config.guestd_instance_id.clone(),
             daemon_instance_id: self.config.daemon_instance_id.clone(),
             guest_boot_id: self.config.guest_boot_id.clone(),
@@ -656,6 +678,57 @@ impl ShellRuntime {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.read_events_since(after_seq, limit)
     }
+
+    pub fn core_generation(&self) -> Result<constellation::ShellGeneration, ShellCoreAdaptError> {
+        if !self.enabled {
+            return Err(ShellCoreAdaptError::Disabled);
+        }
+        shell_generation_from_config(&self.config)
+    }
+
+    pub fn list_core(&self) -> Result<constellation::ShellListResponse, ShellCoreAdaptError> {
+        let generation = self.core_generation()?;
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let summaries = state
+            .sessions
+            .values()
+            .map(|session| shell_summary_to_core(session, &self.config.default_name))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(constellation::ShellListResponse {
+            generation,
+            summaries,
+        })
+    }
+
+    pub fn events_core_since(
+        &self,
+        after_seq: u64,
+        limit: usize,
+    ) -> Result<constellation::ShellEventBatch, ShellCoreAdaptError> {
+        let generation = self.core_generation()?;
+        let batch = self.read_events_since(after_seq, limit);
+        let mut reconciliation_gap = false;
+        let events = batch
+            .events
+            .iter()
+            .map(|event| {
+                if event.kind == ShellEventKind::ReconciliationGap {
+                    reconciliation_gap = true;
+                }
+                shell_event_to_core(*event, &generation)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(constellation::ShellEventBatch {
+            generation,
+            events,
+            cursor: shell_event_cursor(batch.cursor)?,
+            dropped_events: batch.dropped_events,
+            reconciliation_gap,
+        })
+    }
 }
 
 impl ShellRuntimeState {
@@ -708,6 +781,109 @@ fn shell_error(error: ShellRuntimeError) -> pb::GuestControlError {
     wire.kind = EnumOrUnknown::new(error.wire());
     wire.remediation = EnumOrUnknown::new(error.remediation());
     wire
+}
+
+fn generate_opaque_id(prefix: &str) -> Option<String> {
+    let mut bytes = [0_u8; 16];
+    File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut bytes))
+        .ok()?;
+    let mut out = String::with_capacity(prefix.len() + 1 + bytes.len() * 2);
+    out.push_str(prefix);
+    out.push('-');
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+    }
+    Some(out)
+}
+
+fn shell_generation_from_config(
+    config: &ShellRuntimeConfig,
+) -> Result<constellation::ShellGeneration, ShellCoreAdaptError> {
+    Ok(constellation::ShellGeneration {
+        guest_boot_id: constellation::ProtocolToken::parse(config.guest_boot_id.clone())
+            .map_err(|_| ShellCoreAdaptError::InvalidGeneration)?,
+        guestd_instance_id: constellation::ProtocolToken::parse(config.guestd_instance_id.clone())
+            .map_err(|_| ShellCoreAdaptError::InvalidGeneration)?,
+        shell_daemon_instance_id: constellation::ProtocolToken::parse(
+            config.daemon_instance_id.clone(),
+        )
+        .map_err(|_| ShellCoreAdaptError::InvalidGeneration)?,
+    })
+}
+
+fn shell_summary_to_core(
+    session: &ShellSession,
+    default_name: &str,
+) -> Result<constellation::ShellSummary, ShellCoreAdaptError> {
+    Ok(constellation::ShellSummary {
+        name: constellation::ShellName::parse(session.name.clone())
+            .map_err(|_| ShellCoreAdaptError::InvalidName)?,
+        state: if session.attached {
+            constellation::ShellState::Attached
+        } else {
+            constellation::ShellState::Detached
+        },
+        generation: constellation::ShellGeneration {
+            guest_boot_id: constellation::ProtocolToken::parse(session.guest_boot_id.clone())
+                .map_err(|_| ShellCoreAdaptError::InvalidGeneration)?,
+            guestd_instance_id: constellation::ProtocolToken::parse(
+                session.guestd_instance_id.clone(),
+            )
+            .map_err(|_| ShellCoreAdaptError::InvalidGeneration)?,
+            shell_daemon_instance_id: constellation::ProtocolToken::parse(
+                session.daemon_instance_id.clone(),
+            )
+            .map_err(|_| ShellCoreAdaptError::InvalidGeneration)?,
+        },
+        session_instance_id: Some(
+            constellation::ShellSessionInstanceId::parse(session.shell_session_instance_id.clone())
+                .map_err(|_| ShellCoreAdaptError::InvalidOpaqueId)?,
+        ),
+        attached: session.attached,
+        is_default: session.name == default_name,
+        last_cause: None,
+    })
+}
+
+fn shell_event_cursor(seq: u64) -> Result<constellation::StreamCursor, ShellCoreAdaptError> {
+    constellation::StreamCursor::parse(format!("shell-event-{seq}"))
+        .map_err(|_| ShellCoreAdaptError::InvalidCursor)
+}
+
+fn shell_event_to_core(
+    event: ShellEvent,
+    generation: &constellation::ShellGeneration,
+) -> Result<constellation::ShellEventSummary, ShellCoreAdaptError> {
+    let (state, cause) = match event.kind {
+        ShellEventKind::AttachCreated | ShellEventKind::AttachReused => (
+            constellation::ShellState::Attached,
+            constellation::ShellCause::Unknown,
+        ),
+        ShellEventKind::ForceEvicted => (
+            constellation::ShellState::Detached,
+            constellation::ShellCause::ForceDetach,
+        ),
+        ShellEventKind::Detached => (
+            constellation::ShellState::Detached,
+            constellation::ShellCause::AdminDetach,
+        ),
+        ShellEventKind::Killed => (
+            constellation::ShellState::Exited,
+            constellation::ShellCause::AdminKill,
+        ),
+        ShellEventKind::ReconciliationGap => (
+            constellation::ShellState::Lost,
+            constellation::ShellCause::ReconciliationGap,
+        ),
+    };
+    Ok(constellation::ShellEventSummary {
+        cursor: shell_event_cursor(event.seq)?,
+        generation: generation.clone(),
+        state,
+        cause,
+    })
 }
 
 fn validate_shell_name(name: &str) -> Result<(), ()> {
@@ -768,6 +944,26 @@ mod tests {
         assert_eq!(listed.sessions.len(), 1);
         assert!(listed.sessions[0].attached);
         assert!(listed.sessions[0].is_default);
+    }
+
+    #[test]
+    fn attach_uses_opaque_unpredictable_session_ids() {
+        let runtime = enabled_runtime();
+        let first = runtime
+            .attach(pb::ShellAttachRequest::new())
+            .session_id
+            .expect("first session id");
+        assert!(first.starts_with("shell-"));
+        assert_ne!(first, "shell-0000000000000001");
+        assert!(constellation::ShellAttachId::parse(first.clone()).is_ok());
+
+        let _ = runtime.detach(None);
+        let mut other = pb::ShellAttachRequest::new();
+        other.name = Some("other".to_owned());
+        let second = runtime.attach(other).session_id.expect("second session id");
+        assert!(second.starts_with("shell-"));
+        assert_ne!(first, second);
+        assert_ne!(second, "shell-0000000000000002");
     }
 
     #[test]
@@ -1065,6 +1261,67 @@ mod tests {
             vec![ShellEventKind::Killed]
         );
         assert_eq!(next.cursor, 3);
+    }
+
+    #[test]
+    fn core_shell_adapter_maps_generation_summaries_and_event_gaps() {
+        let runtime = enabled_runtime();
+        let attached = runtime.attach(pb::ShellAttachRequest::new());
+        assert!(attached.error.is_none());
+
+        let listed = runtime.list_core().expect("core list");
+        assert_eq!(
+            listed.generation.guest_boot_id,
+            constellation::ProtocolToken::parse("boot-1").unwrap()
+        );
+        assert_eq!(listed.summaries.len(), 1);
+        assert!(listed.summaries[0].attached);
+        assert!(listed.summaries[0].session_instance_id.is_some());
+
+        let mut queue = ShellEventQueue::new(1);
+        queue.push(ShellEventKind::AttachCreated);
+        queue.push(ShellEventKind::Killed);
+        let state = ShellRuntimeState {
+            sessions: BTreeMap::new(),
+            next_session: 0,
+            events: queue,
+        };
+        let gap = state.read_events_since(0, 8);
+        let generation = runtime.core_generation().unwrap();
+        let events = gap
+            .events
+            .iter()
+            .map(|event| shell_event_to_core(*event, &generation))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            events[0].cause,
+            constellation::ShellCause::ReconciliationGap
+        );
+        assert_eq!(events[0].state, constellation::ShellState::Lost);
+
+        let core_batch = runtime.events_core_since(0, 16).expect("core event batch");
+        assert_eq!(core_batch.cursor.as_str(), "shell-event-1");
+        assert!(!core_batch.reconciliation_gap);
+    }
+
+    #[test]
+    fn core_shell_adapter_fails_closed_for_disabled_or_bad_generation() {
+        assert_eq!(
+            ShellRuntime::disabled().list_core().unwrap_err(),
+            ShellCoreAdaptError::Disabled
+        );
+        let mut config = ShellRuntimeConfig::disabled();
+        config.workload_user = Some("alice".to_owned());
+        config.workload_uid = Some(1000);
+        config.guest_boot_id = "bad token with spaces".to_owned();
+        config.guestd_instance_id = "guestd-1".to_owned();
+        config.daemon_instance_id = "daemon-1".to_owned();
+        let runtime = ShellRuntime::enabled(config);
+        assert_eq!(
+            runtime.core_generation().unwrap_err(),
+            ShellCoreAdaptError::InvalidGeneration
+        );
     }
 
     #[test]

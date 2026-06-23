@@ -114,6 +114,27 @@ declared schema; see "Cardinality bounds" below.
 - **Meaning:** Round-trip latency of a single broker request
   (send → receive → typed-decode) as measured by the daemon.
 
+### `nixling_daemon_vm_shutdown_total`
+
+- **Type:** counter
+- **Labels:** `vm`, `vmm`, `outcome`
+- **VMM values:** `cloud_hypervisor`, `qemu_media`, `unknown`
+- **Outcome values:** bounded daemon enum such as `clean_guest_shutdown`,
+  `clean_vmm_cleanup`, `api_unavailable`, `timeout_exceeded`,
+  `force_requested`, `disabled`, and `forced_cleanup`.
+- **Meaning:** Cumulative count of VM stop attempts by provider graceful
+  shutdown outcome. Labels never include human summaries or provider error
+  text.
+
+### `nixling_daemon_vm_shutdown_duration_seconds`
+
+- **Type:** histogram
+- **Labels:** `vm`, `vmm`, `outcome`
+- **Buckets (seconds):** `0.5, 1, 2, 5, 10, 30, 60, 90, 120, 300, 600`
+- **Meaning:** Elapsed provider graceful-shutdown wait time. Explicit
+  force and config-disabled paths record near-zero observations with their
+  bounded outcomes.
+
 ### `nixling_daemon_ownership_drift_total`
 
 - **Type:** counter
@@ -163,8 +184,10 @@ declared schema; see "Cardinality bounds" below.
 - **Type:** counter
 - **Labels:** `subsystem`, `outcome`, `error_kind`
 - **Meaning:** Cumulative count of guest-control persistent-shell management and
-  attached-owner outcomes. Shell names, terminal session handles, attach ids,
-  helper diagnostics, and terminal bytes are never metric labels.
+  attached-owner outcomes. Shell names, session ids, terminal session handles, attach ids,
+  terminal stream ids, provider/resource ids, provider endpoints,
+  provider credentials, process environments, working directories, helper
+  diagnostics, and terminal bytes are never metric labels.
 
 ## Cardinality bounds
 
@@ -176,12 +199,15 @@ declared schema; see "Cardinality bounds" below.
 | `step` | closed enum (host-prep DAG step IDs) | bounded by [`host-prep-dag.md`](./host-prep-dag.md) |
 | `op` | closed enum (broker wire op names) | bounded by [`daemon-api.md`](./daemon-api.md) |
 | `outcome` (broker) | closed enum | 3 |
+| `vmm` | closed VM shutdown runtime enum | 3 |
+| `outcome` (VM shutdown) | closed daemon enum | bounded by daemon code |
 | `subsystem` | closed guest-control subsystem enum | bounded by daemon code |
 | `outcome` (guest-control) | closed enum | bounded by daemon code |
 | `error_kind` | normalized daemon error bucket | bounded by daemon code |
 
 No label carries free-form text (no error messages, no store paths,
-no command output, no shell session names, no terminal handles). The
+no command output, no shell session names, no terminal handles,
+no terminal stream ids, and no provider resource ids). The
 [observability panel's cardinality + PII rules](../../AGENTS.md#default-observability-panel)
 apply.
 
