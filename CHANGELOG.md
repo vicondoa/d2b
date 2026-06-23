@@ -44,6 +44,9 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- ADR 0035 Wave 0 internal cleanup removed the unused `ssh_router` test
+  helper compatibility alias after confirming `ssh_net_vm` has no in-tree
+  callers through the retired name.
 - Persistent shell CLI routing now sends gateway-backed `list`, `detach`, and
   `kill` management forms through the configured realm gateway over the typed
   guest-control exec path, while interactive gateway attach fails closed until

@@ -371,15 +371,6 @@ ssh_net_vm() {
       "root@$ip" "$@"
 }
 
-# DEPRECATED back-compat alias. Older test scripts and ad-hoc tooling
-# call `ssh_router <vm>`; new code should call `ssh_net_vm`. The
-# rename of the per-env auto-VM (\`<env>-router\` → \`sys-<env>-net\`)
-# and of the manifest field (\`isRouter\` → \`isNetVm\`) means the
-# old name is misleading, but a hard rename in this commit would
-# break any caller carried over from the pre- era. Remove after
-# all in-tree call sites have switched.
-ssh_router() { ssh_net_vm "$@"; }
-
 # ---------- cleanup ----------
 
 # Per-process cleanup bookkeeping files MUST live outside $(nl_repo_root)

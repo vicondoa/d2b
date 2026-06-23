@@ -36,26 +36,4 @@
     description = "Internal: per-env computed metadata (set by network.nix).";
   };
 
-  # ---------------------------------------------------------------------------
-  # the following internal options were
-  # retired together with the bash CLI consumer surface
-  #
-  #   nixling.cliBin             — set by cli.nix to point at the
-  #                                bash CLI; consumed by
-  #                                host-audit.nix (deleted in the
-  #                                same commit; the audit-check
-  #                                service is on the  denylist).
-  #   nixling.audioStateHelperPath — set by cli.nix to point at
-  #                                nixling-read-audio-state.sh; the
-  #                                only consumer (tests/integration/live/audio.sh)
-  #                                now discovers the helper at the
-  #                                daemon-managed path.
-  #   nixling._desktopWrappers   — set by cli.nix to pin the per-VM
-  #.desktop launcher contract. The
-  #                                daemon-native launcher module
-  #                                will re-introduce this option
-  #                                when it lands; until then no
-  #                                graphics VM gets a .desktop
-  #                                wrapper through the framework.
-  # ---------------------------------------------------------------------------
 }
