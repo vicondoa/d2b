@@ -138,7 +138,16 @@ pub fn primary_group_name() -> String {
 }
 
 pub fn write_daemon_config(fixture: &DaemonFixture, launcher_users: &[&str], admin_users: &[&str]) {
-    let config = serde_json::json!({
+    write_daemon_config_with_artifacts(fixture, launcher_users, admin_users, None);
+}
+
+pub fn write_daemon_config_with_artifacts(
+    fixture: &DaemonFixture,
+    launcher_users: &[&str],
+    admin_users: &[&str],
+    artifacts: Option<serde_json::Value>,
+) {
+    let mut config = serde_json::json!({
         "publicSocketPath": path_string(&fixture.socket_path),
         "brokerSocketPath": path_string(&fixture.broker_socket_path),
         "stateLockPath": path_string(&fixture.state_lock_path),
@@ -152,6 +161,12 @@ pub fn write_daemon_config(fixture: &DaemonFixture, launcher_users: &[&str], adm
         "acceptedClientVersionRange": ">=0.4.0, <0.5.0",
         "gatewayConfigPath": path_string(&fixture.root().join("gateway.json"))
     });
+    if let Some(artifacts) = artifacts {
+        config
+            .as_object_mut()
+            .expect("daemon config JSON object")
+            .insert("artifacts".to_owned(), artifacts);
+    }
     let mut file = fs::File::create(&fixture.config_path).expect("create daemon config");
     file.write_all(
         serde_json::to_string_pretty(&config)

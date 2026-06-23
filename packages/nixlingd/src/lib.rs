@@ -16104,6 +16104,81 @@ mod public_status_tests {
     }
 
     #[test]
+    fn dispatch_list_and_status_without_filters_preserve_all_vm_order() {
+        let root = tempfile::tempdir().expect("artifact root");
+        let artifacts = write_public_status_artifacts(root.path());
+        let (state, _dir) = test_state_with_config(DaemonConfig {
+            artifacts,
+            ..DaemonConfig::default()
+        });
+        state
+            .pidfd_table
+            .register(
+                "vm-b".to_owned(),
+                VM_RUNNER_ROLE_ID.to_owned(),
+                current_process_entry(),
+            )
+            .expect("register vm-b runner");
+
+        let list = dispatch_list(
+            &state,
+            public_wire::ListRequest {
+                env: None,
+                vm: None,
+            },
+        )
+        .expect("unfiltered list dispatch");
+        let list_names = list
+            .get("vms")
+            .and_then(Value::as_array)
+            .expect("list vms")
+            .iter()
+            .map(|entry| {
+                entry
+                    .get("vm")
+                    .and_then(Value::as_str)
+                    .expect("list vm name")
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(list_names, vec!["vm-a", "vm-b"]);
+        assert_eq!(
+            list.pointer("/vms/1/lifecycle/state")
+                .and_then(Value::as_str),
+            Some("Running")
+        );
+
+        let status = dispatch_status(
+            &state,
+            public_wire::StatusRequest {
+                check_bridges: false,
+                vm: None,
+            },
+        )
+        .expect("unfiltered status dispatch");
+        let status_names = status
+            .pointer("/status/entries")
+            .and_then(Value::as_array)
+            .expect("status entries")
+            .iter()
+            .map(|entry| {
+                entry
+                    .get("vm")
+                    .and_then(Value::as_str)
+                    .expect("status vm name")
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(status_names, vec!["vm-a", "vm-b"]);
+        assert_eq!(
+            status
+                .pointer("/status/entries/1/lifecycle/state")
+                .and_then(Value::as_str),
+            Some("Running")
+        );
+    }
+
+    #[test]
     fn dispatch_status_pending_restart_requires_running_vm() {
         let root = tempfile::tempdir().expect("artifact root");
         let state_dir =
