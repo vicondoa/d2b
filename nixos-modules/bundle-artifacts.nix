@@ -5,11 +5,9 @@ let
   types = lib.types;
 
   artifactModule = types.submodule ({ name, config, ... }: {
-    freeformType = types.attrsOf types.unspecified;
-
     options = {
       data = lib.mkOption {
-        type = types.unspecified;
+        type = types.attrsOf types.anything;
         default = { };
         internal = true;
         visible = false;
@@ -25,7 +23,7 @@ let
       };
 
       path = lib.mkOption {
-        type = types.nullOr types.unspecified;
+        type = types.nullOr (types.oneOf [ types.path types.str types.package ]);
         default =
           if config.installFileName == null
           then null
