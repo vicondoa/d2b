@@ -417,13 +417,21 @@ const STRICT_CLI_OUTPUT_OBJECT_TYPES: &[&str] = &[
 
 fn cli_defines_type(src: &str, type_name: &str) -> bool {
     src.lines().any(|line| {
-        let line = line.trim_start();
-        line == format!("pub struct {type_name}")
-            || line.starts_with(&format!("pub struct {type_name} "))
-            || line.starts_with(&format!("pub struct {type_name}("))
-            || line == format!("pub enum {type_name}")
-            || line.starts_with(&format!("pub enum {type_name} "))
+        line_defines_pub_type(line, "struct", type_name)
+            || line_defines_pub_type(line, "enum", type_name)
     })
+}
+
+fn line_defines_pub_type(line: &str, kind: &str, type_name: &str) -> bool {
+    let prefix = format!("pub {kind} ");
+    let Some(rest) = line.trim_start().strip_prefix(&prefix) else {
+        return false;
+    };
+    let ident = rest
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+        .next()
+        .unwrap_or_default();
+    ident == type_name
 }
 
 fn xtask_imports_nixling_type(src: &str, type_name: &str) -> bool {
@@ -443,11 +451,10 @@ fn nixling_use_blocks(src: &str) -> impl Iterator<Item = &str> {
 }
 
 fn struct_has_deny_unknown_fields(src: &str, type_name: &str) -> bool {
-    let needle = format!("pub struct {type_name}");
     let lines = src.lines().collect::<Vec<_>>();
     let Some(struct_line) = lines
         .iter()
-        .position(|line| line.trim_start().starts_with(&needle))
+        .position(|line| line_defines_pub_type(line, "struct", type_name))
     else {
         return false;
     };
