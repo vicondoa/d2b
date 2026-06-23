@@ -105,13 +105,13 @@ pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
     MetricDescriptor {
         name: "nixling_daemon_vm_shutdown_total",
         kind: MetricKind::Counter,
-        labels: &["vm", "provider", "outcome"],
+        labels: &["vm", "vmm", "outcome"],
         buckets_seconds: &[],
     },
     MetricDescriptor {
         name: "nixling_daemon_vm_shutdown_duration_seconds",
         kind: MetricKind::Histogram,
-        labels: &["vm", "provider", "outcome"],
+        labels: &["vm", "vmm", "outcome"],
         buckets_seconds: VM_SHUTDOWN_BUCKETS_SECONDS,
     },
     MetricDescriptor {
@@ -641,7 +641,7 @@ mod tests {
             "outcome",
             "step",
             "op",
-            "provider",
+            "vmm",
             "le",
             "subsystem",
             "error_kind",

@@ -9197,15 +9197,15 @@ fn record_vm_shutdown_metric(
     outcome: VmShutdownOutcome,
     elapsed: Duration,
 ) {
-    let provider = provider_metric_label(provider);
+    let vmm = provider_metric_label(provider);
     let outcome = outcome.label();
     state.metrics_registry.counter_inc(
         "nixling_daemon_vm_shutdown_total",
-        &[("vm", vm), ("provider", provider), ("outcome", outcome)],
+        &[("vm", vm), ("vmm", vmm), ("outcome", outcome)],
     );
     state.metrics_registry.histogram_observe(
         "nixling_daemon_vm_shutdown_duration_seconds",
-        &[("vm", vm), ("provider", provider), ("outcome", outcome)],
+        &[("vm", vm), ("vmm", vmm), ("outcome", outcome)],
         elapsed.as_secs_f64(),
     );
 }

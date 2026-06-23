@@ -117,8 +117,8 @@ declared schema; see "Cardinality bounds" below.
 ### `nixling_daemon_vm_shutdown_total`
 
 - **Type:** counter
-- **Labels:** `vm`, `provider`, `outcome`
-- **Provider values:** `cloud_hypervisor`, `qemu_media`, `unknown`
+- **Labels:** `vm`, `vmm`, `outcome`
+- **VMM values:** `cloud_hypervisor`, `qemu_media`, `unknown`
 - **Outcome values:** bounded daemon enum such as `clean_guest_shutdown`,
   `clean_vmm_cleanup`, `api_unavailable`, `timeout_exceeded`,
   `force_requested`, `disabled`, and `forced_cleanup`.
@@ -129,7 +129,7 @@ declared schema; see "Cardinality bounds" below.
 ### `nixling_daemon_vm_shutdown_duration_seconds`
 
 - **Type:** histogram
-- **Labels:** `vm`, `provider`, `outcome`
+- **Labels:** `vm`, `vmm`, `outcome`
 - **Buckets (seconds):** `0.5, 1, 2, 5, 10, 30, 60, 90, 120, 300, 600`
 - **Meaning:** Elapsed provider graceful-shutdown wait time. Explicit
   force and config-disabled paths record near-zero observations with their
@@ -199,7 +199,7 @@ declared schema; see "Cardinality bounds" below.
 | `step` | closed enum (host-prep DAG step IDs) | bounded by [`host-prep-dag.md`](./host-prep-dag.md) |
 | `op` | closed enum (broker wire op names) | bounded by [`daemon-api.md`](./daemon-api.md) |
 | `outcome` (broker) | closed enum | 3 |
-| `provider` | closed VM shutdown provider enum | 3 |
+| `vmm` | closed VM shutdown runtime enum | 3 |
 | `outcome` (VM shutdown) | closed daemon enum | bounded by daemon code |
 | `subsystem` | closed guest-control subsystem enum | bounded by daemon code |
 | `outcome` (guest-control) | closed enum | bounded by daemon code |
