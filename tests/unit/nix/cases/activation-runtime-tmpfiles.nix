@@ -33,6 +33,25 @@ let
         users.users.alice = { isNormalUser = true; uid = 1000; };
       };
     };
+    nixling.daemonExperimental.enable = true;
+  };
+  qemuMediaFixture = { lib, ... }: {
+    boot.loader.grub.enable = false;
+    boot.loader.systemd-boot.enable = false;
+    boot.initrd.includeDefaultModules = false;
+    fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
+    environment.etc."machine-id".text = "00000000000000000000000000000000";
+    system.stateVersion = "25.11";
+    users.users.alice = { isNormalUser = true; uid = 1000; };
+    nixling.site = {
+      waylandUser = "alice";
+      launcherUsers = [ "alice" ];
+      yubikey.enable = false;
+    };
+    nixling.envs.work = {
+      lanSubnet = "10.20.0.0/24";
+      uplinkSubnet = "192.0.2.0/30";
+    };
     nixling.vms.media = {
       runtime.kind = "qemu-media";
       env = "work";
@@ -47,7 +66,9 @@ let
   };
 
   cfg = (mkEval [ fixture ]).config;
+  qemuMediaCfg = (mkEval [ qemuMediaFixture ]).config;
   tmpfiles = cfg.systemd.tmpfiles.rules;
+  qemuMediaTmpfiles = qemuMediaCfg.systemd.tmpfiles.rules;
   roleAclText = cfg.system.activationScripts.nixlingRoleUidAcls.text or "";
   runtimePostureText = cfg.system.activationScripts.nixlingRuntimeDirPosture.text or "";
   stateDirAclText = cfg.system.activationScripts.nixlingStateDirAcl.text or "";
@@ -143,8 +164,6 @@ in
       "z /run/nixling-wlproxy 0750 root nixling -"
       "a+ /run/nixling-wlproxy - - - - u:nixling-corp-vm-gpu:--x"
       "a+ /run/nixling-wlproxy - - - - u:nixling-corp-vm-wlproxy:--x"
-      "a+ /run/nixling-wlproxy - - - - u:nixling-media-qemu-media:--x"
-      "a+ /run/nixling-wlproxy - - - - u:nixling-media-wlproxy:--x"
     ];
     expected = true;
   };
@@ -234,7 +253,11 @@ in
   };
 
   "activation-runtime-tmpfiles/qemu-media-runtime-dirs" = {
-    expr = lib.all (rule: builtins.elem rule tmpfiles) [
+    expr = lib.all (rule: builtins.elem rule qemuMediaTmpfiles) [
+      "a+ /run/nixling - - - - u:nixling-media-qemu-media:--x"
+      "a+ /run/nixling/vms - - - - u:nixling-media-qemu-media:--x"
+      "a+ /run/nixling-wlproxy - - - - u:nixling-media-qemu-media:--x"
+      "a+ /run/nixling-wlproxy - - - - u:nixling-media-wlproxy:--x"
       "d /run/nixling/vms/media 0770 nixlingd nixling -"
       "z /run/nixling/vms/media 0770 nixlingd nixling -"
       "a+ /run/nixling/vms/media - - - - m::rwx"
