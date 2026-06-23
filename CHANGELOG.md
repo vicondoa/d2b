@@ -87,6 +87,9 @@ deprecations ship one minor release before removal.
 - USBIP bind now revokes the backend device ACL and unbinds the host carrier if
   the terminal broker success audit record cannot be written, avoiding
   unaudited bind state after audit rate limiting or write failures.
+- USBIP bind/unbind error paths now release busid locks after failed bind
+  convergence, ACL grant rollback, or post-unbind ACL revoke failures unless the
+  device is still proven bound to `usbip-host` for manual recovery.
 - VM start now reconciles same-host-session same-VM USBIP claims after guest-control
   readiness by replaying host bind/proxy state and re-importing in-guest
   devices; stop/restart cleanup now preserves the session claim and refuses

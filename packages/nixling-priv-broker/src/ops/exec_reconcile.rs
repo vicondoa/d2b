@@ -1321,6 +1321,7 @@ mod fake {
         file_values: Mutex<BTreeMap<PathBuf, Vec<u8>>>,
         wait_usbip_stream_fd_release_error: Mutex<Option<ReconcileExecError>>,
         run_usbip_error: Mutex<Option<ReconcileExecError>>,
+        bind_creates_regular_driver: Mutex<Option<(PathBuf, String)>>,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1400,6 +1401,9 @@ mod fake {
         }
         pub fn fail_run_usbip(&self, error: ReconcileExecError) {
             *self.run_usbip_error.lock().unwrap() = Some(error);
+        }
+        pub fn bind_creates_regular_driver(&self, sysfs_root: PathBuf, bus_id: String) {
+            *self.bind_creates_regular_driver.lock().unwrap() = Some((sysfs_root, bus_id));
         }
     }
 
@@ -1521,6 +1525,13 @@ mod fake {
             subcommand: UsbipSubcommand,
             bus_id: &str,
         ) -> Result<(), ReconcileExecError> {
+            if subcommand == UsbipSubcommand::Bind
+                && let Some((sysfs_root, expected_bus_id)) =
+                    self.bind_creates_regular_driver.lock().unwrap().clone()
+                && expected_bus_id == bus_id
+            {
+                let _ = std::fs::write(sysfs_root.join(bus_id).join("driver"), b"not-a-symlink");
+            }
             if subcommand == UsbipSubcommand::Unbind {
                 let prior = self.log.lock().unwrap();
                 if let Some(ReconcileOp::WaitUsbipStreamFdRelease { sysfs_root, .. }) =

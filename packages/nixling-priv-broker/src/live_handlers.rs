@@ -802,8 +802,9 @@ where
 /// 2. If sysfs already reports `usbip-host`, treat same-VM replay as
 ///    converged without shelling out.
 /// 3. Otherwise run `usbip bind --busid <bus_id>` via the executor and
-///    verify sysfs converged to `usbip-host`. On bind failure, release
-///    the lock so a retried `UsbipBind` from the same VM can succeed.
+///    verify sysfs converged to `usbip-host`. On bind failure or failed
+///    convergence inspection, release the lock so a retried `UsbipBind`
+///    from the same VM can succeed.
 pub fn live_usbip_bind(
     executor: &dyn ReconcileExecutor,
     usbip_binary: &Path,
@@ -816,14 +817,16 @@ pub fn live_usbip_bind(
 ) -> Result<(), LiveHandlerError> {
     crate::ops::usbip_lock::acquire_lock(lock_path, vm_name, daemon_uid, daemon_gid)
         .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?;
-    match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id)
-        .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?
-    {
-        crate::ops::usbip_host::UsbipDriverBinding::BoundToUsbipHost => {
+    match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id) {
+        Err(e) => {
+            let _ = crate::ops::usbip_lock::release_lock(lock_path, vm_name);
+            return Err(LiveHandlerError::UsbipLock(e.to_string()));
+        }
+        Ok(crate::ops::usbip_host::UsbipDriverBinding::BoundToUsbipHost) => {
             return Ok(());
         }
-        crate::ops::usbip_host::UsbipDriverBinding::Unbound
-        | crate::ops::usbip_host::UsbipDriverBinding::BoundToOtherDriver { .. } => {}
+        Ok(crate::ops::usbip_host::UsbipDriverBinding::Unbound)
+        | Ok(crate::ops::usbip_host::UsbipDriverBinding::BoundToOtherDriver { .. }) => {}
     }
     if let Err(e) = executor.run_usbip(
         usbip_binary,
@@ -833,13 +836,18 @@ pub fn live_usbip_bind(
         let _ = crate::ops::usbip_lock::release_lock(lock_path, vm_name);
         return Err(LiveHandlerError::ReconcileExec(e));
     }
-    match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id)
-        .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?
-    {
-        crate::ops::usbip_host::UsbipDriverBinding::BoundToUsbipHost => Ok(()),
-        observed => Err(LiveHandlerError::UsbipLock(format!(
-            "usbip bind did not converge to usbip-host for bus_id={bus_id}: observed {observed:?}"
-        ))),
+    match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id) {
+        Err(e) => {
+            let _ = crate::ops::usbip_lock::release_lock(lock_path, vm_name);
+            Err(LiveHandlerError::UsbipLock(e.to_string()))
+        }
+        Ok(crate::ops::usbip_host::UsbipDriverBinding::BoundToUsbipHost) => Ok(()),
+        Ok(observed) => {
+            let _ = crate::ops::usbip_lock::release_lock(lock_path, vm_name);
+            Err(LiveHandlerError::UsbipLock(format!(
+                "usbip bind did not converge to usbip-host for bus_id={bus_id}: observed {observed:?}"
+            )))
+        }
     }
 }
 
@@ -3905,6 +3913,115 @@ mod tests {
             crate::ops::usbip_lock::peek_owner(&lock_path),
             None,
             "failed first bind must release the claim so same VM can retry"
+        );
+    }
+
+    #[test]
+    fn usbip_bind_initial_driver_inspection_failure_releases_claim() {
+        let root = TestDir::new("usbip-bind-initial-inspect-failure");
+        let lock_dir = root.join("locks");
+        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        let lock_path = lock_dir.join("1-2");
+        let sysfs_root = fake_unbound_usbip_sysfs(&root, "1-2");
+        let exec = FakeReconcileExecutor::new();
+
+        let err = live_usbip_bind(
+            &exec,
+            Path::new("/run/current-system/sw/bin/usbip"),
+            &sysfs_root,
+            "invalid/busid",
+            &lock_path,
+            "corp-vm",
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        )
+        .expect_err("invalid busid fails initial driver inspection");
+
+        assert!(matches!(err, LiveHandlerError::UsbipLock(_)));
+        assert_eq!(
+            exec.take_log(),
+            Vec::<ReconcileOp>::new(),
+            "bind shellout must not run after initial inspection failure"
+        );
+        assert_eq!(
+            crate::ops::usbip_lock::peek_owner(&lock_path),
+            None,
+            "initial inspection failure after lock acquisition must release the claim"
+        );
+    }
+
+    #[test]
+    fn usbip_bind_post_bind_driver_inspection_failure_releases_claim() {
+        let root = TestDir::new("usbip-bind-post-inspect-failure");
+        let lock_dir = root.join("locks");
+        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        let lock_path = lock_dir.join("1-2");
+        let sysfs_root = fake_unbound_usbip_sysfs(&root, "1-2");
+        let exec = FakeReconcileExecutor::new();
+        exec.bind_creates_regular_driver(sysfs_root.clone(), "1-2".to_owned());
+
+        let err = live_usbip_bind(
+            &exec,
+            Path::new("/run/current-system/sw/bin/usbip"),
+            &sysfs_root,
+            "1-2",
+            &lock_path,
+            "corp-vm",
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        )
+        .expect_err("post-bind driver inspection failure fails closed");
+
+        assert!(matches!(err, LiveHandlerError::UsbipLock(_)));
+        assert_eq!(
+            exec.take_log(),
+            vec![ReconcileOp::RunUsbip {
+                binary: PathBuf::from("/run/current-system/sw/bin/usbip"),
+                subcommand: crate::ops::exec_reconcile::UsbipSubcommand::Bind,
+                bus_id: "1-2".to_owned(),
+            }]
+        );
+        assert_eq!(
+            crate::ops::usbip_lock::peek_owner(&lock_path),
+            None,
+            "post-bind inspection failure must release the claim"
+        );
+    }
+
+    #[test]
+    fn usbip_bind_non_converged_driver_releases_claim() {
+        let root = TestDir::new("usbip-bind-non-converged-releases-claim");
+        let lock_dir = root.join("locks");
+        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        let lock_path = lock_dir.join("1-2");
+        let sysfs_root = fake_unbound_usbip_sysfs(&root, "1-2");
+        let exec = FakeReconcileExecutor::new();
+
+        let err = live_usbip_bind(
+            &exec,
+            Path::new("/run/current-system/sw/bin/usbip"),
+            &sysfs_root,
+            "1-2",
+            &lock_path,
+            "corp-vm",
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        )
+        .expect_err("bind that does not converge fails closed");
+
+        assert!(matches!(err, LiveHandlerError::UsbipLock(_)));
+        assert_eq!(
+            exec.take_log(),
+            vec![ReconcileOp::RunUsbip {
+                binary: PathBuf::from("/run/current-system/sw/bin/usbip"),
+                subcommand: crate::ops::exec_reconcile::UsbipSubcommand::Bind,
+                bus_id: "1-2".to_owned(),
+            }]
+        );
+        assert_eq!(
+            crate::ops::usbip_lock::peek_owner(&lock_path),
+            None,
+            "non-converged bind must release the claim"
         );
     }
 

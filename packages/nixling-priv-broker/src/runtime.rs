@@ -3677,16 +3677,12 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 expected_identity,
                 expected_device_node,
             ) {
-                if !same_vm_replay && let Err(rollback_error) = backend.usbip_unbind(&intent) {
-                    warn!(
-                        bus_id = %intent.bus_id,
-                        vm = %intent.vm_name,
-                        grant_error = ?grant_error,
-                        rollback_error = ?rollback_error,
-                        "UsbipBind ACL grant failed and rollback unbind also failed"
-                    );
-                }
-                return Err(grant_error);
+                return Err(rollback_usbip_bind_after_acl_grant_failure(
+                    backend,
+                    &intent,
+                    same_vm_replay,
+                    grant_error,
+                ));
             }
             let scope_id = format!("env:{}", intent.env);
             let audit_result = write_success_op_record!(
@@ -3734,7 +3730,13 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             };
             backend.usbip_unbind(&intent)?;
             if had_matching_lock {
-                revoke_usbip_backend_device_acl(resolver, &intent)?;
+                if let Err(revoke_error) = revoke_usbip_backend_device_acl(resolver, &intent) {
+                    return Err(handle_usbip_acl_revoke_failure_after_unbind(
+                        &intent,
+                        req.preserve_durable_claim,
+                        revoke_error,
+                    ));
+                }
                 if !req.preserve_durable_claim {
                     crate::ops::usbip_lock::release_lock(&intent.lock_path, &intent.vm_name)
                         .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
@@ -5938,6 +5940,101 @@ fn rollback_usbip_bind_after_audit_failure<B: DispatchBackend>(
             );
         }
     }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn rollback_usbip_bind_after_acl_grant_failure<B: DispatchBackend>(
+    backend: &B,
+    intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+    same_vm_replay: bool,
+    grant_error: BrokerError,
+) -> BrokerError {
+    if same_vm_replay {
+        return grant_error;
+    }
+    match backend.usbip_unbind(intent) {
+        Ok(()) => {
+            if let Err(lock_error) =
+                crate::ops::usbip_lock::release_lock(&intent.lock_path, &intent.vm_name)
+            {
+                warn!(
+                    bus_id = %intent.bus_id,
+                    vm = %intent.vm_name,
+                    grant_error = ?grant_error,
+                    error = %lock_error,
+                    "UsbipBind ACL grant failed, rollback unbind succeeded, but lock rollback failed"
+                );
+            }
+        }
+        Err(rollback_error) => {
+            warn!(
+                bus_id = %intent.bus_id,
+                vm = %intent.vm_name,
+                grant_error = ?grant_error,
+                rollback_error = ?rollback_error,
+                "UsbipBind ACL grant failed and rollback unbind also failed"
+            );
+        }
+    }
+    grant_error
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn handle_usbip_acl_revoke_failure_after_unbind(
+    intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+    preserve_durable_claim: bool,
+    revoke_error: BrokerError,
+) -> BrokerError {
+    if preserve_durable_claim {
+        return revoke_error;
+    }
+
+    // `backend.usbip_unbind` succeeded before the ACL revoke was attempted.
+    // Release the host-session claim on revoke failure unless a best-effort
+    // live recheck proves the device is still attached to usbip-host. If the
+    // recheck itself fails, trust the successful unbind result and release to
+    // avoid converting an ACL cleanup error into a stale busid lock.
+    match crate::ops::usbip_host::inspect_usbip_driver_binding(
+        usb_device_sysfs_root(),
+        &intent.bus_id,
+    ) {
+        Ok(crate::ops::usbip_host::UsbipDriverBinding::BoundToUsbipHost) => {
+            warn!(
+                bus_id = %intent.bus_id,
+                vm = %intent.vm_name,
+                revoke_error = ?revoke_error,
+                "UsbipUnbind ACL revoke failed after unbind, but device still appears bound to usbip-host; preserving lock for manual recovery"
+            );
+            return revoke_error;
+        }
+        Ok(observed) => {
+            warn!(
+                bus_id = %intent.bus_id,
+                vm = %intent.vm_name,
+                observed = ?observed,
+                revoke_error = ?revoke_error,
+                "UsbipUnbind ACL revoke failed after unbind; releasing lock because device is no longer bound to usbip-host"
+            );
+        }
+        Err(inspect_error) => {
+            warn!(
+                bus_id = %intent.bus_id,
+                vm = %intent.vm_name,
+                inspect_error = %inspect_error,
+                revoke_error = ?revoke_error,
+                "UsbipUnbind ACL revoke failed after unbind and post-unbind inspection failed; releasing lock based on successful unbind"
+            );
+        }
+    }
+
+    if let Err(lock_error) =
+        crate::ops::usbip_lock::release_lock(&intent.lock_path, &intent.vm_name)
+    {
+        return BrokerError::LiveHandler(format!(
+            "USBIP ACL revoke failed after successful unbind and lock release failed: revoke_error={revoke_error:?}; lock_error={lock_error}"
+        ));
+    }
+    revoke_error
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -8950,6 +9047,19 @@ mod tests {
             store_sync_export_dir: root.join("observability").join("store-sync"),
             test_mode: true,
         }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn test_usbip_intent_with_lock(
+        root: &Path,
+        bundle: &TestBundle,
+    ) -> nixling_core::bundle_resolver::ResolvedUsbipBindIntent {
+        let mut intent = find_usbip_bind_intent_for(&bundle.resolver, "corp-vm", "1-2.3")
+            .expect("bundle usbip bind intent");
+        let lock_dir = root.join("locks");
+        fs::create_dir_all(&lock_dir).expect("create USBIP lock dir");
+        intent.lock_path = lock_dir.join("1-2.3");
+        intent
     }
 
     /// Read the StoreSync observability export lines the dispatch arm
@@ -11981,6 +12091,127 @@ mod tests {
         assert!(
             !audit.contains(r#""operation":"UsbipBind""#),
             "rate-limited terminal record must not be partially written: {audit}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usbip_bind_acl_grant_failure_releases_lock_after_successful_rollback_unbind() {
+        let root = test_audit_dir("usbip-bind-acl-grant-failure-lock-release");
+        let bundle = build_test_bundle(&root);
+        let intent = test_usbip_intent_with_lock(&root, &bundle);
+        crate::ops::usbip_lock::acquire_lock(
+            &intent.lock_path,
+            &intent.vm_name,
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        )
+        .expect("seed post-bind lock");
+        let backend = FakeDispatchBackend::default();
+
+        let error = rollback_usbip_bind_after_acl_grant_failure(
+            &backend,
+            &intent,
+            false,
+            BrokerError::LiveHandler("grant failed".to_owned()),
+        );
+
+        assert!(matches!(
+            error,
+            BrokerError::LiveHandler(ref message) if message == "grant failed"
+        ));
+        assert_eq!(
+            backend.take_usbip_events(),
+            vec![FakeUsbipEvent::Unbind {
+                intent_id: intent.intent_id.clone()
+            }],
+            "grant failure rollback must unbind a fresh backend bind"
+        );
+        assert_eq!(
+            crate::ops::usbip_lock::peek_owner(&intent.lock_path),
+            None,
+            "grant failure with successful rollback unbind must release the busid lock"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usbip_unbind_acl_revoke_failure_releases_lock_when_device_is_unbound() {
+        let _usb_sysfs_guard = usb_sysfs_test_lock();
+        let root = test_audit_dir("usbip-unbind-acl-revoke-failure-release");
+        let bundle = build_test_bundle(&root);
+        let intent = test_usbip_intent_with_lock(&root, &bundle);
+        prepare_test_usb_sysfs_device("1050", "0407", "2.3");
+        crate::ops::usbip_lock::acquire_lock(
+            &intent.lock_path,
+            &intent.vm_name,
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        )
+        .expect("seed lock");
+
+        let error = handle_usbip_acl_revoke_failure_after_unbind(
+            &intent,
+            false,
+            BrokerError::LiveHandler("revoke failed".to_owned()),
+        );
+
+        assert!(matches!(
+            error,
+            BrokerError::LiveHandler(ref message) if message == "revoke failed"
+        ));
+        assert_eq!(
+            crate::ops::usbip_lock::peek_owner(&intent.lock_path),
+            None,
+            "after successful unbind, an ACL revoke error must not leak the busid lock when the device is no longer bound"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usbip_unbind_acl_revoke_failure_preserves_lock_when_device_still_bound() {
+        use std::os::unix::fs::symlink;
+
+        let _usb_sysfs_guard = usb_sysfs_test_lock();
+        let root = test_audit_dir("usbip-unbind-acl-revoke-failure-preserve-bound");
+        let bundle = build_test_bundle(&root);
+        let intent = test_usbip_intent_with_lock(&root, &bundle);
+        let sysfs_root = prepare_test_usb_sysfs_device("1050", "0407", "2.3");
+        let driver_root = sysfs_root
+            .parent()
+            .expect("USB sysfs root has bus parent")
+            .join("drivers")
+            .join("usbip-host");
+        fs::create_dir_all(&driver_root).expect("create usbip-host driver root");
+        symlink(&driver_root, sysfs_root.join("1-2.3").join("driver")).expect("driver symlink");
+        crate::ops::usbip_lock::acquire_lock(
+            &intent.lock_path,
+            &intent.vm_name,
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        )
+        .expect("seed lock");
+
+        let error = handle_usbip_acl_revoke_failure_after_unbind(
+            &intent,
+            false,
+            BrokerError::LiveHandler("revoke failed".to_owned()),
+        );
+
+        assert!(matches!(
+            error,
+            BrokerError::LiveHandler(ref message) if message == "revoke failed"
+        ));
+        assert_eq!(
+            crate::ops::usbip_lock::peek_owner(&intent.lock_path),
+            Some(intent.vm_name.clone()),
+            "if post-unbind inspection still sees usbip-host, preserve the lock for manual recovery"
         );
 
         let _ = fs::remove_dir_all(&root);
