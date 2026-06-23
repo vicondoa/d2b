@@ -858,32 +858,33 @@ fn check_graceful_shutdown_status(
 ) {
     let path = daemon_state_dir.join("shutdown-degraded.json");
     let live_primary_vmm = live_primary_vmm_entries(pidfd_entries);
-    if matches!(
-        pidfd_entries.state,
-        PidfdState::ParseError(_) | PidfdState::UnreadableDir
-    ) {
-        report.push_with_data(
-            "graceful-shutdown-status",
-            DoctorStatus::Warn,
-            "pidfd-table inspection failed; graceful-shutdown live state not fully verifiable",
-            json!({
-                "livePrimaryVmmCount": live_primary_vmm.len(),
-                "livePrimaryVms": live_primary_vmm,
-            }),
-        );
-        return;
-    }
+    let pidfd_inspection_error = match &pidfd_entries.state {
+        PidfdState::ParseError(detail) => Some(detail.clone()),
+        PidfdState::UnreadableDir => Some("daemon state dir unreadable".to_owned()),
+        PidfdState::Loaded | PidfdState::Missing => None,
+    };
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let status = if pidfd_inspection_error.is_some() {
+                DoctorStatus::Warn
+            } else {
+                DoctorStatus::Pass
+            };
+            let detail = if pidfd_inspection_error.is_some() {
+                "no graceful-shutdown degraded marker present; pidfd-table inspection failed"
+            } else {
+                "no graceful-shutdown degraded marker present"
+            };
             report.push_with_data(
                 "graceful-shutdown-status",
-                DoctorStatus::Pass,
-                "no graceful-shutdown degraded marker present",
+                status,
+                detail,
                 json!({
                     "livePrimaryVmmCount": live_primary_vmm.len(),
                     "livePrimaryVms": live_primary_vmm,
                     "markers": [],
+                    "pidfdInspectionError": pidfd_inspection_error,
                 }),
             );
             return;
@@ -909,15 +910,26 @@ fn check_graceful_shutdown_status(
         }
     };
     if parsed.markers.is_empty() {
+        let status = if pidfd_inspection_error.is_some() {
+            DoctorStatus::Warn
+        } else {
+            DoctorStatus::Pass
+        };
+        let detail = if pidfd_inspection_error.is_some() {
+            "graceful-shutdown degraded marker report is empty; pidfd-table inspection failed"
+        } else {
+            "graceful-shutdown degraded marker report is empty"
+        };
         report.push_with_data(
             "graceful-shutdown-status",
-            DoctorStatus::Pass,
-            "graceful-shutdown degraded marker report is empty",
+            status,
+            detail,
             json!({
                 "schemaVersion": parsed.schema_version,
                 "livePrimaryVmmCount": live_primary_vmm.len(),
                 "livePrimaryVms": live_primary_vmm,
                 "markers": [],
+                "pidfdInspectionError": pidfd_inspection_error,
             }),
         );
         return;
@@ -954,6 +966,7 @@ fn check_graceful_shutdown_status(
             "markers": parsed.markers,
             "livePrimaryVmmCount": live_primary_vmm.len(),
             "livePrimaryVms": live_primary_vmm,
+            "pidfdInspectionError": pidfd_inspection_error,
         }),
     );
 }

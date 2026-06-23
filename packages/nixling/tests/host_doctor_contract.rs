@@ -411,6 +411,28 @@ fn host_doctor_graceful_shutdown_fail_marker_reports_fail() {
     );
 }
 
+#[test]
+fn host_doctor_graceful_shutdown_fail_marker_wins_over_pidfd_parse_error() {
+    let sandbox = Sandbox::new();
+    sandbox.write_state("pidfd-table.json", "{not json");
+    sandbox.write_state("shutdown-degraded.json", SHUTDOWN_DEGRADED_FAIL_JSON);
+
+    let (_code, env) = sandbox.run_doctor_json();
+    let graceful = check(&env, "graceful-shutdown-status");
+    assert_eq!(
+        graceful["status"], "fail",
+        "pidfd-table parse errors must not hide fail shutdown markers"
+    );
+    assert_eq!(graceful["data"]["fail"], 1);
+    assert!(
+        graceful["data"]["pidfdInspectionError"]
+            .as_str()
+            .expect("pidfd inspection error")
+            .contains("parse"),
+        "pidfd inspection error should remain visible: {graceful:#}"
+    );
+}
+
 // --- 4a. kernel-module-report.json clean → pass --------------------
 
 #[test]

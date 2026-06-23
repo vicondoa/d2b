@@ -152,8 +152,8 @@
     {
       "id": 5,
       "type": "stat",
-      "title": "Degraded shutdown markers",
-      "description": "VMs with uncleared graceful-shutdown degraded markers by bounded reason enum.",
+      "title": "Shutdown failure attempts",
+      "description": "Historical graceful-shutdown degraded outcomes by VM and bounded reason enum.",
       "gridPos": {"h": 6, "w": 12, "x": 0, "y": 18},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "fieldConfig": {

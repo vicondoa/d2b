@@ -4804,7 +4804,14 @@ fn cmd_host_shutdown_hook(
                 .collect::<Vec<_>>()
         });
         for (vm, outcome) in phase_results {
-            match outcome? {
+            let outcome = match outcome {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    failures.push(format!("{vm}: {}", err.message));
+                    continue;
+                }
+            };
+            match outcome {
                 DaemonVerbOutcome::Applied { .. } => stopped.push(vm.clone()),
                 DaemonVerbOutcome::InvalidRequest { .. } => skipped.push(vm.clone()),
                 DaemonVerbOutcome::Unreachable => {

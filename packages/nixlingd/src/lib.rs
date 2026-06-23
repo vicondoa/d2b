@@ -9958,7 +9958,7 @@ async fn wait_registered_pidfd_exit(
     let Some((fd, _, _)) = state.pidfd_table.dup_pidfd_for(vm, role_id) else {
         return true;
     };
-    let Ok(async_fd) = tokio::io::unix::AsyncFd::new(fd) else {
+    let Ok(async_fd) = async_pidfd(fd) else {
         return false;
     };
     let deadline = Instant::now() + timeout;
@@ -9978,6 +9978,16 @@ async fn wait_registered_pidfd_exit(
             Ok(Err(_)) | Err(_) => return false,
         }
     }
+}
+
+fn async_pidfd(fd: OwnedFd) -> io::Result<tokio::io::unix::AsyncFd<OwnedFd>> {
+    let flags = rustix::fs::fcntl_getfl(&fd)
+        .map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
+    if !flags.contains(rustix::fs::OFlags::NONBLOCK) {
+        rustix::fs::fcntl_setfl(&fd, flags | rustix::fs::OFlags::NONBLOCK)
+            .map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
+    }
+    tokio::io::unix::AsyncFd::new(fd)
 }
 
 fn sidecar_interrupted(state: &ServerState, sidecars: &[PidfdRegistration]) -> Option<String> {
@@ -10041,7 +10051,7 @@ async fn run_provider_graceful_shutdown(
             }),
         );
     };
-    let Ok(async_fd) = tokio::io::unix::AsyncFd::new(pidfd) else {
+    let Ok(async_fd) = async_pidfd(pidfd) else {
         return (VmShutdownOutcome::ApiUnavailable, None);
     };
     let deadline = Instant::now() + input.timeout;

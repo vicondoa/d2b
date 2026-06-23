@@ -37,8 +37,9 @@ attributes use bounded outcome enums such as `clean_guest_shutdown`,
 `clean_vmm_cleanup`, `api_unavailable`, `timeout_exceeded`, and
 `force_requested`; human summary strings and raw CH/QMP errors are not label
 values. The applied graceful shutdown timeout and elapsed wait are numeric
-`*_seconds` values, and degraded shutdown markers are exported as bounded
-state metrics for dashboards and `nixling op inspect`.
+`*_seconds` values, and historical degraded shutdown outcomes are exported as
+bounded counter metrics for dashboards. Current uncleared degraded markers remain
+available through `nixling host doctor`.
 
 Observer/ops realm export is opt-in. Exporters must reuse existing
 observability configuration and must not acquire new fd, pidfd, cgroup,

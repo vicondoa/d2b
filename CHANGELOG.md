@@ -16,8 +16,7 @@ deprecations ship one minor release before removal.
   provider-aware graceful guest shutdown, including global/per-VM enable and
   1–600 second timeout controls, `manifestVersion = 7`, daemon-config
   rendering, and host-shutdown `nixlingd.service` ordering/timeout budgeting.
-- The hidden systemd `nixling host shutdown-hook --apply` entrypoint now exists
-  and stops workload VMs before env net VMs during host shutdown/reboot.
+- Host shutdown and reboot now gracefully stop workload VMs before env net VMs.
 - Broker disk initialization now validates existing nixling-owned ext4 raw
   images before treating `ifAbsent` as satisfied, safely formats only
   proven-empty images, and fails closed before VM spawn for malformed or
