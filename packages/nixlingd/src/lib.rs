@@ -217,6 +217,7 @@ const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 const VM_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS: u64 = 90;
 const PROVIDER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const PUBLIC_STATUS_PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 const EMPTY_VMM_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 const CGROUP_EMPTY_POST_KILL_WAIT: Duration = Duration::from_secs(5);
 const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
@@ -13083,11 +13084,15 @@ fn provider_guest_stopped_for_status(
             let Some(socket) = target.api_socket.as_deref() else {
                 return false;
             };
-            ch_api::blocking_get_json(socket, "/api/v1/vm.info", ch_api::DEFAULT_TIMEOUT)
-                .ok()
-                .and_then(|body| ch_api::parse_vm_info(&body).ok())
-                .and_then(|info| info.state)
-                .is_some_and(|state| matches!(state.as_str(), "Created" | "Shutdown"))
+            ch_api::blocking_get_json(
+                socket,
+                "/api/v1/vm.info",
+                PUBLIC_STATUS_PROVIDER_PROBE_TIMEOUT,
+            )
+            .ok()
+            .and_then(|body| ch_api::parse_vm_info(&body).ok())
+            .and_then(|info| info.state)
+            .is_some_and(|state| matches!(state.as_str(), "Created" | "Shutdown"))
         }
         provider_shutdown::ProviderKind::QemuMedia => {
             let request = json!({
@@ -13104,7 +13109,7 @@ fn provider_guest_stopped_for_status(
                 BrokerCallerRole::RootUid {
                     uid: state.daemon_uid,
                 },
-                ch_api::DEFAULT_TIMEOUT,
+                PUBLIC_STATUS_PROVIDER_PROBE_TIMEOUT,
             )
             .ok()
             .and_then(|value| {
@@ -14543,6 +14548,46 @@ mod public_status_tests {
                 .get("detail")
                 .and_then(Value::as_str),
             Some("running")
+        );
+    }
+
+    #[test]
+    fn public_lifecycle_status_probe_does_not_use_shutdown_timeout() {
+        let (state, _dir) = test_state();
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                VM_RUNNER_ROLE_ID.to_owned(),
+                current_process_entry(),
+            )
+            .expect("register ch runner");
+        let socket_dir = tempfile::tempdir().expect("socket dir");
+        let socket_path = socket_dir.path().join("ch-api.sock");
+        let listener =
+            std::os::unix::net::UnixListener::bind(&socket_path).expect("bind hanging ch socket");
+        let _server = std::thread::spawn(move || {
+            if let Ok((_stream, _addr)) = listener.accept() {
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        });
+        let manifest_entry = json!({
+            "stateDir": "/nonexistent/nixling-public-status-test",
+            "apiSocket": socket_path,
+            "runtime": {
+                "provider": {
+                    "driver": "cloud-hypervisor"
+                }
+            }
+        });
+
+        let started = Instant::now();
+        let lifecycle = public_vm_lifecycle(&state, "vm-a", &manifest_entry, None);
+
+        assert_eq!(lifecycle_state(&lifecycle), "Running");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "status/list provider probes must not inherit the graceful shutdown API timeout"
         );
     }
 
