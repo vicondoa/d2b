@@ -5,7 +5,6 @@
 > passthrough device is attached to a target VM.
 >
 > Source: [`packages/nixlingd/src/usbip_state_machine.rs`](../../packages/nixlingd/src/usbip_state_machine.rs).
-> Plan row: USBIP state-machine hardening.
 > Canonical-order anchor: [AGENTS.md "Critical subsystems"](../../AGENTS.md#critical-subsystems--handle-with-care).
 
 ## Why a state machine
@@ -31,6 +30,26 @@ itself. Any step out of order silently corrupts state:
 
 The state machine pins the order so call sites can't shuffle it.
 
+## Prerequisites
+
+The executor may run only after `nixlingd` has resolved the trusted bundle for
+the target VM/env/busid. Required preconditions are:
+
+- a USBIP bind intent and firewall intent exist for the VM/busid;
+- VM apply paths that need guest import have a running VM and authenticated
+  guest-control USBIP capability;
+- `nixling.site.yubikey.enable = true` and at least one enabled VM in the env
+  opts into `usbip.yubikey = true` before host YubiKey machinery is expected;
+- the broker can prepare `usbip-host`, the host-session busid lock,
+  backend/export carrier, and per-env proxy; and
+- physical topology/policy checks allow the observed device before exposure.
+
+Public remediation stays on the lifecycle surface: start the VM with
+`nixling vm start <vm> --apply`, reconcile with
+`nixling usb attach <vm> <busid> --apply`, or release with
+`nixling usb detach <vm> <busid> --apply`. Operators must not edit lock files
+or sysfs driver links directly.
+
 ## Canonical order
 
 The bring-up order is:
@@ -39,25 +58,37 @@ The bring-up order is:
 modprobe → lock → withhold → firewall → backend → bind → proxy
 ```
 
-The stop path is the same list reversed:
+`backend` and `proxy` are per-env sidecar readiness checks. They are
+not per-busid resources, and the current proxy is a generic L4 TCP
+forwarder (`socat TCP-LISTEN ... TCP:127.0.0.1:<backendPort>`), not a
+USBIP protocol or busid-aware process.
+
+Single-busid teardown therefore reverses only per-busid mutable state:
 
 ```text
-proxy → bind → backend → firewall → withhold → lock → modprobe
+bind → firewall → withhold → lock → modprobe
 ```
 
 `modprobe` at the tail of the stop path is intentionally a no-op
-— the kernel module stays loaded — but the executor's stop-side
-dispatch table stays aligned with the bring-up table.
+— the kernel module stays loaded. The per-env backend/proxy sidecars
+remain running during a single-VM restart or detach so active same-env
+streams are not bounced. Before the `bind` stop step writes the
+usbip-host driver unbind control, the broker asks the per-device
+`usbip_sockfd` control to shut down any socket-backed stream and treats
+only already-gone/already-disconnected socket races as benign. The
+implementation does not claim a generic sysfs revoke: missing driver
+unbind support, a stuck helper, or ACL-revoke failure is surfaced with
+manual recovery guidance while the session busid claim remains in place.
 
 | Step | Step kind | Backing broker op / daemon action | Why this position |
 | --- | --- | --- | --- |
 | 1 | `modprobe` | `ModprobeIfAllowed { module: "usbip-host" }` against the trusted-bundle kernel-module matrix | Every later step silently no-ops without the kernel symbol surface. |
-| 2 | `lock` | daemon-side `flock` on `/run/nixling/locks/usbip/<busid>` for the target env | Single owner per busid, regardless of env. |
+| 2 | `lock` | broker-written owner record at `/run/nixling/locks/usbip/<busid>` for the target VM, read by the daemon for status/reconcile | Single owner per busid, regardless of env. |
 | 3 | `withhold` | daemon-side admission gate that refuses non-owner-env `SpawnRunner` requests for the same busid | Closes the race window before the firewall opens. |
 | 4 | `firewall` | `UsbipBindFirewallRule { bundle_usbip_firewall_intent_ref }` | Per-env `inet nixling` carve-out so the per-env proxy can accept the bind. |
-| 5 | `backend` | `SpawnRunner { role: RunnerRole::Usbip, vm_id: sys-<env>-usbipd, … }` | Per-env usbipd backend runner. Idempotent. |
+| 5 | `backend` | `SpawnRunner { role: RunnerRole::Usbip, vm_id: sys-<env>-usbipd, … }` | Ensure the per-env usbipd backend runner is up. Idempotent; not stopped for one busid. |
 | 6 | `bind` | `UsbipBind { bus_id, vm }` | Kernel binds the physical device to the per-env usbipd backend. |
-| 7 | `proxy` | per-env usbipd proxy listen socket open | Target VM can now attach to the bound device. |
+| 7 | `proxy` | generic per-env TCP proxy listen socket open | Target VM can now attach to the bound device. Idempotent; not busid-aware and not stopped for one busid. |
 
 ## Typed surface
 
@@ -86,6 +117,9 @@ use nixlingd::usbip_state_machine::{
   step.
 * [`execute_usbip_plan(plan, executor)`] — drives the plan
   top-to-bottom, fail-fast on the first error.
+* `UsbipExecutionReport::failure_rollback_order()` — returns only
+  successful per-busid steps in reverse order for failure rollback,
+  filtering out shared per-env backend/proxy sidecar checks.
 
 ## Failure mode
 
@@ -105,8 +139,8 @@ with these envelope fields:
 | --- | --- |
 | `kind` | `usbip-step-failed` |
 | `exit_code` | `67` |
-| `message` | `usbip per-busid state machine refused at step '<step>' for busid '<busid>': <reason>` |
-| `remediation` | Names the canonical order verbatim, plus the per-step recovery hint. |
+| `message` | `usbip busid '<busid>' refused at step '<step>': <reason>` |
+| `remediation` | Names the busid and gives a concise probe/fix/retry recovery step. |
 
 Exit code 67 is distinct from the adjacent surfaces:
 
@@ -130,30 +164,89 @@ net-route-degraded paths.
 * `Err((UsbipExecutionReport, TypedError))` — `report.completed`
   holds every step that succeeded before the failure;
   `report.failed = Some((step, reason))` matches the typed
-  error. The stop-path / reconciler uses `report.completed` (in
-  reverse) to undo the partial bring-up.
+  error. The stop-path / reconciler uses
+  `report.failure_rollback_order()` rather than a raw reverse of
+  `report.completed`, preserving per-env backend/proxy sidecars.
 
 The executor MUST treat each step as idempotent so retries after
 a partial failure are safe.
 
-## Operator remediation
+## Per-env proxy synchronization
 
-| Failing step | First thing to check |
-| --- | --- |
-| `modprobe` | `usbip-host` is in the trusted-bundle kernel-module matrix and `ModprobeIfAllowed` is permitted. |
-| `lock` | Another env already owns `/run/nixling/locks/usbip/<busid>` — stop the owner first, then retry. |
-| `withhold` | A non-owner-env `SpawnRunner` for the same busid is in flight; let it drain or stop the offending env's VM. |
-| `firewall` | Re-render the trusted bundle so `UsbipBindFirewallRule` exists for this env/busid. |
-| `backend` | The per-env usbipd backend `SpawnRunner` failed — inspect the broker audit log (`/var/lib/nixling/audit/broker-<utc-date>.jsonl`). |
-| `bind` | The kernel `UsbipBind` op refused — confirm the bundle's `vendor_product_allowlist` matches the physical device. |
-| `proxy` | The per-env usbipd proxy listen socket failed to open; almost always a stale backend from a previous run that the stop path didn't unwind. |
+The daemon encodes the current generic L4 proxy strategy in
+`UsbipProxySynchronizationPlan`
+([`packages/nixlingd/src/usbip_reconcile_state.rs`](../../packages/nixlingd/src/usbip_reconcile_state.rs)).
+The encoded strategy deliberately avoids busid-aware claims that the current
+`socat` proxy cannot satisfy:
+
+* **Attach / single-VM restart:** optimistically refresh backend/export
+  readiness and verify the per-env proxy listener. Do not stop, rebind, or
+  recycle the proxy, so unrelated same-env streams stay up.
+* **Single-busid release:** before host stream shutdown or `usbip unbind`, prove
+  that the firewall carve-out can be blocked/withdrawn and that any established
+  stream can be terminated by exact VM/proxy tuple cleanup whose source identity
+  is not hidden by SNAT and whose anti-spoofing posture is proven. If the
+  reconciler cannot prove that ordering and tuple,
+  `usbip-revocation-not-isolated` includes the target VM and busid, fails closed,
+  and   preserves the broker-owned session busid lock for manual drain/recovery rather than
+  pretending the generic proxy selectively closed that busid.
+* **Targeted cleanup (future/explicit):** only after a proven stream tuple or a
+  busid-aware proxy implementation exists may the daemon run targeted cleanup.
+  The firewall carve-out is withdrawn before any flow kill, so a killed TCP
+  stream cannot immediately reconnect. TCP may use exact conntrack deletion
+  and/or exact established-socket kill by VM/proxy tuple; UDP may use exact
+  conntrack deletion only. SNAT-obscured sources, unproven anti-spoofing, shared
+  listeners, and ambiguous same-env streams are never killed for a single busid.
+* **Proxy recycle:** bouncing same-env active streams is allowed only through an
+  explicit bounded-drain or force policy. Any implementation that rebinds the
+  proxy socket must hold an exclusive socket lifecycle lock (or use socket
+  activation) and perform fd-relative socket-path handling before the rebind.
+
+## VM lifecycle carrier cleanup
+
+VM stop/restart uses `UsbipVmCarrierCleanupPlan` to detach any guest import and
+drain host-side active carrier state only when the selected stream can first be
+isolated. The host-session per-busid claim is preserved on VM stop/restart so
+the same VM can start again and reattach through the normal bind path during the
+current host boot/session. It is not preserved across host reboot because the
+lock is under `/run/nixling/locks/usbip`. Only an explicit USB detach may revoke
+backend ACLs and release the claim during a host session, and only after
+firewall withdrawal/targeted flow cleanup and host unbind succeed. A
+dead/unreachable VM guest-detach failure stays visible as degraded cleanup but
+does not block host-side firewall withdrawal or unbind.
+
+The cleanup plan never stops or rebinds the per-env backend/proxy sidecars. If a
+selected stream cannot be isolated from unrelated same-env traffic, cleanup fails
+closed before sysfs `usbip-host` unbind, keeps the session claim, and surfaces
+manual recovery instead of killing the shared listener.
+
+VM start treats same-host-session same-VM USBIP session claims as required until an explicit
+optional-device policy exists. Runtime absence, guest-control import failure, or
+per-env proxy/backend unavailability degrades the USB row and lets boot continue
+without exposing the device. Required policy failures — missing or mismatched
+vendor/product allowlists, undeclared physical topology, or topology mismatch —
+fail before device exposure and roll back the VM start with remediation to fix
+the declaration or bind the approved physical device.
+
+`nixling usb probe` and `nixling status` project this split directly: session
+claim, host bind/carrier/proxy, guest import, topology/policy, degraded
+reasons, and remediation commands are separate fields. A same-VM session claim
+that has not reconverged its active carriers is degraded, not `bound`.
+
+## Recovery pointers
+
+This page is the state-machine reference. Operator procedures live in
+[Troubleshoot USBIP passthrough](../how-to/troubleshoot-usbip.md), which maps
+probe/status symptoms to lifecycle commands without asking operators to mutate
+locks, sysfs driver links, nftables rules, or per-env sidecars directly.
 
 ## Tests
 
 | Layer | Path | What it asserts |
 | --- | --- | --- |
-| Unit | `packages/nixlingd/src/usbip_state_machine.rs` (`mod tests`) | `CANONICAL_STEPS` is pinned, `stop_order()` reverses it, every step's failure surfaces as `TypedError::UsbipStepFailed`, and the typed-error envelope carries exit code 67. |
-| Integration (eval) | [`tests/usbip-state-machine-eval.sh`](../../tests/usbip-state-machine-eval.sh) | Module is wired into `lib.rs`; canonical order is pinned in source; typed-error variant + exit code 67 are wired; this doc names the canonical order verbatim. |
+| Unit | `packages/nixlingd/src/usbip_state_machine.rs` (`mod tests`) | `CANONICAL_STEPS` is pinned, `stop_order()` and failure rollback preserve per-env backend/proxy sidecars, every step's failure surfaces as `TypedError::UsbipStepFailed`, and the typed-error envelope carries exit code 67. |
+| Unit | `packages/nixlingd/src/usbip_reconcile_state.rs` (`mod tests`) | VM stop/restart carrier cleanup preserves session claims, explicit detach releases only after successful cleanup, failures preserve claims/manual recovery, firewall-before-flow-kill ordering holds, and same-env sidecars are not bounced. |
+| Contract | [`packages/nixling-contract-tests/tests/policy_supervisor.rs`](../../packages/nixling-contract-tests/tests/policy_supervisor.rs) (`usbip_state_machine_surface`) | Module is wired into `lib.rs`; canonical order is pinned in source; typed-error variant + exit code 67 are wired; this doc names the canonical order verbatim. |
 
 ## See also
 
@@ -163,6 +256,6 @@ a partial failure are safe.
   per-env runner / broker op surface that backs each step.
 * [`docs/reference/components-usbip.md`](./components-usbip.md)
   — operator-facing USBIP component reference.
-* [`tests/usbip-gating-eval.sh`](../../tests/usbip-gating-eval.sh)
-  — eval-time gate that the host-side USBIP units are only
-  emitted when both host and per-VM opt-ins are set.
+* [`tests/unit/nix/cases/usbip-gating.nix`](../../tests/unit/nix/cases/usbip-gating.nix)
+  — eval-time gate that host-side USBIP artifacts require both
+  host and per-VM opt-ins.

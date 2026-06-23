@@ -96,7 +96,7 @@ the rebuild, on the host you will find:
 | `br-personal-lan`                                      | /24 LAN bridge: net VM `.1` ↔ workload VMs `.10–.250`. **Host has no IP on this bridge.** |
 | `sys-personal-net` (microVM)                           | Auto-declared headless net VM. Runs NAT, dnsmasq, and the per-env firewall blocklist. Set to `autostart = true`. |
 | `personal-dev` (microVM)                                | Your declared workload VM. Tap on `br-personal-lan`, IP `10.99.0.10`, DHCP-driven inside the guest. |
-| `nixling-sys-personal-usbipd-proxy.service`            | Per-env USBIP proxy bound to the uplink host IP. Idle while no workload VM opts in. |
+| USBIP runners                                           | Not materialised by this headless starter unless a VM opts into `usbip.yubikey = true`; see the USBIP reference/how-to before adding YubiKey passthrough. |
 | `nixling-store-sync@*.service` + per-VM timers     | Hardlink farms under `/var/lib/nixling/<vm>/store/` mirroring each VM's closure. |
 | `/var/lib/nixling/keys/personal-dev_ed25519`            | Framework-managed Ed25519 key for SSH into `personal-dev`. Regenerated on activation if missing. |
 | `nixling` CLI on `$PATH`                           | `nixling list` shows declared VMs + env metadata; `nixling switch personal-dev` rebuilds and live-applies inside the running VM. |

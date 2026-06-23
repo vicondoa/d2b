@@ -509,6 +509,25 @@ mod tests {
     }
 
     #[test]
+    fn derive_keeps_proxy_sidecars_per_env_not_shared() {
+        let m = manifest_with(&[
+            ("vm-a", Some("work"), true, Some("192.0.2.1")),
+            ("vm-b", Some("obs"), true, Some("192.0.2.2")),
+        ]);
+        let specs =
+            derive_per_env_usbipd_specs_with_ports(&m, &ports(&[("obs", 3241), ("work", 3242)]));
+        let proxies = specs
+            .iter()
+            .filter(|s| s.role == PerEnvUsbipdRole::Proxy)
+            .collect::<Vec<_>>();
+        assert_eq!(proxies.len(), 2);
+        assert_ne!(proxies[0].vm_id, proxies[1].vm_id);
+        assert_ne!(proxies[0].backend_port, proxies[1].backend_port);
+        assert!(proxies.iter().any(|s| s.vm_id == "sys-obs-usbipd"));
+        assert!(proxies.iter().any(|s| s.vm_id == "sys-work-usbipd"));
+    }
+
+    #[test]
     fn intent_id_is_stable_per_vm_role() {
         let spec = PerEnvUsbipdSpec {
             env: "work".to_owned(),

@@ -48,7 +48,7 @@
       }
     },
     "firewallCoexistencePolicy": {
-      "description": "W4a-H3: per-host firewall coexistence policy emitted by the Nix `host-json.nix` module. The broker reads this at runtime to decide whether `ApplyNftables` runs (Coexist), refuses (Refuse), or demands an explicit unmanaged drop-in (RequireUnmanaged). Optional for backward compatibility with pre-W4a host.json fixtures; the broker treats `None` as the implicit \"no managed firewall detected\" Coexist default.",
+      "description": "Per-host firewall coexistence policy emitted by the Nix `host-json.nix` module. The broker reads this at runtime to decide whether `ApplyNftables` runs (Coexist), refuses (Refuse), or demands an explicit unmanaged drop-in (RequireUnmanaged). Optional for backward compatibility with older host.json fixtures; the broker treats `None` as the implicit \"no managed firewall detected\" Coexist default.",
       "anyOf": [
         {
           "$ref": "#/definitions/FirewallCoexistencePolicy"
@@ -303,7 +303,7 @@
       "additionalProperties": false
     },
     "FirewallCoexistencePolicy": {
-      "description": "Per-host firewall coexistence policy row owned by scope s3. Mirrors plan.md §\"W3 firewall coexistence policy matrix\" ADR.",
+      "description": "Per-host firewall coexistence policy row emitted in host.json.",
       "type": "object",
       "required": [
         "manager",
@@ -335,7 +335,7 @@
       "additionalProperties": false
     },
     "FirewallManager": {
-      "description": "Detected host firewall manager. Detection lives in scope s3.",
+      "description": "Detected host firewall manager.",
       "type": "string",
       "enum": [
         "firewalld",
@@ -608,6 +608,13 @@
           "description": "Environment name from the public manifest.",
           "type": "string"
         },
+        "hostUplinkIp": {
+          "description": "Host-side IP on the env uplink bridge. Required for scoped USBIP proxy firewall carve-outs; absent legacy bundles fail closed for USBIP.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ipv6Sysctls": {
           "description": "Per-link IPv6-off sysctl contract.",
           "type": "array",
@@ -637,6 +644,13 @@
           "type": "integer",
           "format": "uint16",
           "minimum": 0.0
+        },
+        "netUplinkIp": {
+          "description": "Net-VM-side IP on the env uplink bridge. Because the net VM currently SNATs workload-to-host USBIP traffic, this is the host-visible source identity used for USBIP proxy firewall carve-outs.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "netVmForwardBlocklist": {
           "description": "Forwarding blocklist derived from env config and host LAN CIDRs.",

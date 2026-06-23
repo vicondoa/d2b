@@ -39,9 +39,9 @@ the same physical host".
    │   │                                  ├─ work-app (10.20.0.10)
    │   │                                  └─ … future work-* VMs
    │   │
-   │   └─ nixling-sys-work-usbipd-proxy.service
+   │   └─ broker-spawned usbipd proxy runner
    │      bound to 192.0.2.1:3240
-   │      → backend 127.0.0.1:3242
+   │      → per-env backend 127.0.0.1:3242
    │
    └─ br-personal-up (192.0.2.4/30) ── sys-personal-net VM
        │   .5 (host)                       .6 (uplink)
@@ -52,9 +52,9 @@ the same physical host".
        │                                   ├─ personal-app (10.30.0.10)
        │                                   └─ … future personal-* VMs
        │
-       └─ nixling-sys-personal-usbipd-proxy.service
+       └─ broker-spawned usbipd proxy runner
           bound to 192.0.2.5:3240
-          → backend 127.0.0.1:3241
+          → per-env backend 127.0.0.1:3241
 ```
 
 Three things worth noticing on the diagram:
@@ -224,16 +224,16 @@ changing behaviour.
 
 Each env's USBIP path is fully isolated:
 
-1. **Uplink proxy** — `nixling-sys-<env>-usbipd-proxy.service` binds
-   to the env's host uplink IP on TCP/3240. Workload VMs in `work`
+1. **Uplink proxy** — the broker-spawned per-env proxy runner binds to
+   the env's host uplink IP on TCP/3240. Workload VMs in `work`
    `usbip attach` to `192.0.2.1`; in `personal` they hit `192.0.2.5`.
    A VM addressing the wrong env's uplink IP is firewalled off by
    that env's net VM.
 2. **Backend port** — the proxy forwards to a per-env loopback port
-   (`3241 + alphabetical-index`). Each env runs its own
-   `nixling-sys-<env>-usbipd-backend.service`, so the underlying
-   usbipd processes are also separated. Attaching a YubiKey to the
-   `work` env never exposes it on the `personal` env's path.
+   (`3241 + alphabetical-index`). Each env has its own broker-spawned
+   usbipd backend runner, so the underlying usbipd processes are also
+   separated. Attaching a YubiKey to the `work` env never exposes it
+   on the `personal` env's path.
 3. **Net-VM nftables** — the LAN-to-uplink-IP carve-out names the
    env's own uplink IP. A `work` VM cannot reach the `personal`
    env's uplink IP via the routing fabric, because the `work` net
@@ -491,8 +491,8 @@ nix eval ./examples/multi-env#nixosConfigurations.demo.config.system.build.tople
 nix eval ./examples/multi-env#nixosConfigurations.multi-env-daemon-experimental.config.system.build.toplevel.drvPath
 ```
 
-The dedicated Layer-1 gate
-[`tests/multi-env-daemon-backed.sh`](../../tests/multi-env-daemon-backed.sh)
+The dedicated Layer-1 nix-unit case
+[`tests/unit/nix/cases/multi-env-daemon-backed.nix`](../../tests/unit/nix/cases/multi-env-daemon-backed.nix)
 asserts the env-level propagation, the `bridgePortFlags`
 double-opt-in, and that the daemon-supervised VMs surface no
 `microvm@<vm>` / `nixling@<vm>` systemd unit references in the emitted

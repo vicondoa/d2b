@@ -14,5 +14,6 @@ serde = { workspace = true }
 serde_json.workspace = true
 
 [dev-dependencies]
+nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
 nixling-host = { path = "../nixling-host", version = "0.0.0-bootstrap" }
 regex = "1"

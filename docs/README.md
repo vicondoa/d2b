@@ -59,8 +59,8 @@ The contracts. Stable interfaces a consumer can depend on.
   capability gating, and why crosvm/QEMU/Firecracker do not silently
   replace the default VM runtime.
 - [`reference/security-runbook.md`](./reference/security-runbook.md) —
-  operator incident-response, USBIP emergency containment, and
-  compromise-recovery steps.
+  security-response contract, incident classes, USBIP emergency
+  containment boundaries, and compromise-recovery invariants.
 - [`reference/error-envelope-guidance.md`](./reference/error-envelope-guidance.md) —
   daemon/broker/CLI envelope alignment, including broker-error
   remediation rules.
@@ -96,7 +96,7 @@ The contracts. Stable interfaces a consumer can depend on.
     `nixling.vms.<vm>.tpm.*` (per-VM swtpm 2.0).
   - [`reference/components-usbip.md`](./reference/components-usbip.md) —
     `nixling.vms.<vm>.usbip.*` (YubiKey USBIP passthrough) plus the
-    per-env host-side backend/proxy units.
+    per-env host-side backend/proxy runners.
   - [`reference/components-audio.md`](./reference/components-audio.md) —
     `nixling.vms.<vm>.audio.*` (vhost-user-sound + PipeWire) plus
     the `nixling audio` CLI surface.
@@ -135,6 +135,9 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
   operator procedure for the manual hardware/platform smokes.
 - [`how-to/qemu-media.md`](./how-to/qemu-media.md) —
   configure, enroll, start, hotplug, and validate a qemu-media VM.
+- [`how-to/troubleshoot-usbip.md`](./how-to/troubleshoot-usbip.md) —
+  configure USBIP prerequisites, interpret degraded probe/status rows, and
+  recover claimed YubiKeys after VM restart.
 - [`how-to/migrating-from-microvm.md`](./how-to/migrating-from-microvm.md) —
   port an existing `microvm.nix` deployment onto `nixling`: option
   mapping, step-by-step procedure, troubleshooting.
@@ -170,8 +173,8 @@ Understanding-oriented prose. The "why" behind the design choices.
   records for load-bearing design choices that complement the
   explanation narrative.
 
-Operator runbooks that used to live under Explanation now live under
-Reference so the day-2 procedures sit next to the stable CLI and
-error contracts they rely on.
+Operator runbooks and troubleshooting procedures live under How-to.
+Reference pages should describe contracts, schemas, and invariants, then
+link to the relevant how-to for day-2 procedures.
 
 [Diataxis]: https://diataxis.fr/

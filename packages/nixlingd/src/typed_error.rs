@@ -493,6 +493,16 @@ pub enum TypedError {
         step: crate::usbip_state_machine::UsbipBusidStep,
         reason: String,
     },
+    /// Returned by USB detach/revocation when the daemon cannot prove an exact
+    /// VM→proxy flow tuple for the target busid that can be terminated with
+    /// targeted conntrack deletion and/or TCP socket kill. The daemon must
+    /// refuse instead of killing the shared per-env proxy listener and
+    /// disrupting unrelated same-env streams.
+    UsbipRevocationNotIsolated {
+        vm: String,
+        busid: String,
+        reason: crate::usbip_reconcile_state::UsbipRevocationFlowFailure,
+    },
     /// The selected VM runtime does not implement a capability required by the
     /// requested verb. Payload is limited to public VM/runtime/capability names;
     /// no guest data, argv, paths, or registry identities are included.
@@ -559,6 +569,14 @@ fn redact_path_like_tokens(detail: &str) -> String {
         .join(" ")
 }
 
+fn public_usb_busid(busid: &str) -> &str {
+    if nixling_ipc::usbip::validate_bus_id(busid).is_ok() {
+        busid
+    } else {
+        "<invalid-busid>"
+    }
+}
+
 impl TypedError {
     pub fn kind(&self) -> &'static str {
         match self {
@@ -588,6 +606,7 @@ impl TypedError {
             Self::OtelHostBridgeReadinessTimeout { .. } => "otel-host-bridge-readiness-timeout",
             Self::NetRoutePreflightDegraded { .. } => "net-route-preflight-degraded",
             Self::UsbipStepFailed { .. } => "usbip-step-failed",
+            Self::UsbipRevocationNotIsolated { .. } => "usbip-revocation-not-isolated",
             Self::RuntimeCapabilityUnsupported { .. } => "runtime-capability-unsupported",
             Self::GuestControlReadFailed { kind } => kind.wire_kind(),
             Self::GuestControlExecFailed { kind } => kind.wire_kind(),
@@ -633,6 +652,7 @@ impl TypedError {
             // (64), otel-bridge (65), or net-route-degraded (66)
             // adjacent surfaces.
             Self::UsbipStepFailed { .. } => 67,
+            Self::UsbipRevocationNotIsolated { .. } => 67,
             Self::RuntimeCapabilityUnsupported { .. } => 70,
             // Guest-control config read failures share one exit code; the
             // distinct `kind` slug carries the sub-class.
@@ -735,8 +755,21 @@ impl TypedError {
                 step,
                 reason,
             } => {
+                let busid = public_usb_busid(busid);
+                let kind = crate::usbip_reconcile_state::classify_usbip_step_failure(
+                    step.as_str(),
+                    reason,
+                );
                 format!(
-                    "usbip per-busid state machine refused at step '{step}' for busid '{busid}': {reason}"
+                    "usbip busid '{busid}' refused at step '{step}': {}",
+                    kind.summary()
+                )
+            }
+            Self::UsbipRevocationNotIsolated { vm, busid, reason } => {
+                let busid = public_usb_busid(busid);
+                format!(
+                    "usb detach for vm '{vm}' busid '{busid}' refused: {}",
+                    reason.summary()
                 )
             }
             Self::RuntimeCapabilityUnsupported {
@@ -844,9 +877,26 @@ impl TypedError {
             Self::NetRoutePreflightDegraded { .. } => {
                 "the SOLE mutating recovery verb is `nixling host reconcile --network --apply`. It re-runs the per-env nftables / route / sysctl reconcile through the broker without starting any VM and clears the operator-only-mode counter on success. Read-only verbs (`status`, `host doctor --read-only`, `audit`) remain available. See docs/explanation/host-prepare.md § \"Net-route preflight & operator-only mode\".".to_owned()
             }
-            Self::UsbipStepFailed { step, .. } => {
+            Self::UsbipStepFailed {
+                busid,
+                step,
+                reason,
+            } => {
+                let busid = public_usb_busid(busid);
+                let kind = crate::usbip_reconcile_state::classify_usbip_step_failure(
+                    step.as_str(),
+                    reason,
+                );
                 format!(
-                    "the per-busid USBIP state machine refused at step '{step}'. The canonical bring-up order is `modprobe → lock → withhold → firewall → backend → bind → proxy`; the stop path reverses it. Inspect the daemon log for the typed `usbip-step-failed` record (carries busid + step + reason) and re-run the lifecycle verb that triggered the bring-up. If `modprobe` failed, confirm `usbip-host` is in the trusted-bundle kernel-module matrix and that `ModprobeIfAllowed` is permitted. If `lock` failed, another env already owns `/run/nixling/locks/usbip/<busid>` — stop the owner first. If `firewall` failed, re-render the trusted bundle so `UsbipBindFirewallRule` exists for this env/busid. See docs/reference/usbip-state-machine.md."
+                    "For busid '{busid}', {}. Run `nixling usb probe`, fix the reported USB posture, then retry the lifecycle verb.",
+                    kind.remediation()
+                )
+            }
+            Self::UsbipRevocationNotIsolated { vm, busid, reason } => {
+                let busid = public_usb_busid(busid);
+                format!(
+                    "For busid '{busid}', {}. Then retry `nixling usb detach {vm} {busid} --apply`.",
+                    reason.remediation()
                 )
             }
             Self::RuntimeCapabilityUnsupported {
@@ -951,6 +1001,34 @@ impl TypedError {
                     "bundle tamper-resistance check failed"
                 );
             }
+            Self::UsbipStepFailed {
+                busid,
+                step,
+                reason,
+            } => {
+                let busid = public_usb_busid(busid);
+                let reason_kind = crate::usbip_reconcile_state::classify_usbip_step_failure(
+                    step.as_str(),
+                    reason,
+                );
+                tracing::warn!(
+                    kind = self.kind(),
+                    busid = %busid,
+                    step = %step,
+                    reason_kind = reason_kind.telemetry_label(),
+                    "usbip step failed"
+                );
+            }
+            Self::UsbipRevocationNotIsolated { vm, busid, reason } => {
+                let busid = public_usb_busid(busid);
+                tracing::warn!(
+                    kind = self.kind(),
+                    vm = %vm,
+                    busid = %busid,
+                    reason = reason.telemetry_label(),
+                    "usbip revocation refused because selected stream is not isolated"
+                );
+            }
             // Remaining variants already carry only safe values in
             // their public messages (UIDs, version ranges, frame
             // sizes, field names) — no extra logging needed.
@@ -986,6 +1064,7 @@ impl TypedError {
             | Self::OtelHostBridgeReadinessTimeout { .. }
             | Self::NetRoutePreflightDegraded { .. }
             | Self::UsbipStepFailed { .. }
+            | Self::UsbipRevocationNotIsolated { .. }
             | Self::RuntimeCapabilityUnsupported { .. }
             | Self::GuestControlReadFailed { .. }
             | Self::GuestControlExecFailed { .. }
@@ -1084,6 +1163,88 @@ mod tests {
         assert!(err.remediation().contains("guest.shell"));
         assert_no_path_leak("GuestShellDisabled", &err.message());
         assert_no_path_leak("GuestShellDisabled", &err.remediation());
+    }
+
+    #[test]
+    fn usbip_step_failed_public_envelope_redacts_sensitive_values() {
+        let err = TypedError::UsbipStepFailed {
+            busid: "1-2.4".to_owned(),
+            step: crate::usbip_state_machine::UsbipBusidStep::Bind,
+            reason: "raw stderr for /sys/devices/pci0000:00/usb1/1-2/1-2.4 traceparent=0123456789abcdef0123456789abcdef timed out".to_owned(),
+        };
+
+        let envelope = err.to_envelope();
+        assert_eq!(envelope.kind, "usbip-step-failed");
+        assert_eq!(envelope.exit_code, 67);
+        assert!(envelope.message.contains("1-2.4"));
+        assert!(envelope.remediation.contains("1-2.4"));
+        assert!(envelope.message.contains("bind"));
+        assert!(envelope.message.contains("timed out"));
+        assert!(envelope.remediation.contains("nixling usb probe"));
+        for surface in [&envelope.message, &envelope.remediation] {
+            for forbidden in [
+                "/sys/",
+                "stderr",
+                "traceparent",
+                "0123456789abcdef0123456789abcdef",
+            ] {
+                assert!(
+                    !surface.contains(forbidden),
+                    "usbip envelope leaked {forbidden:?}: {surface:?}"
+                );
+            }
+        }
+
+        let malformed_busid = TypedError::UsbipStepFailed {
+            busid: "/sys/devices/pci0000:00/usb1/1-2".to_owned(),
+            step: crate::usbip_state_machine::UsbipBusidStep::Bind,
+            reason: "invalid persisted claim".to_owned(),
+        }
+        .to_envelope();
+        assert!(malformed_busid.message.contains("<invalid-busid>"));
+        assert!(malformed_busid.remediation.contains("<invalid-busid>"));
+        assert_no_path_leak("UsbipStepFailed", &malformed_busid.message);
+        assert_no_path_leak("UsbipStepFailed", &malformed_busid.remediation);
+    }
+
+    #[test]
+    fn usbip_revocation_not_isolated_is_fail_secure_and_actionable() {
+        let err = TypedError::UsbipRevocationNotIsolated {
+            vm: "work-vm".to_owned(),
+            busid: "1-2.4".to_owned(),
+            reason: crate::usbip_reconcile_state::UsbipRevocationFlowFailure::SharedListeningSocket,
+        };
+
+        let envelope = err.to_envelope();
+        assert_eq!(envelope.kind, "usbip-revocation-not-isolated");
+        assert_eq!(envelope.exit_code, 67);
+        assert!(envelope.message.contains("work-vm"));
+        assert!(envelope.message.contains("1-2.4"));
+        assert!(envelope.remediation.contains("1-2.4"));
+        assert!(
+            envelope
+                .message
+                .contains("shared per-env USBIP proxy listener")
+        );
+        assert!(envelope.remediation.contains("stop the VM"));
+        assert!(
+            envelope
+                .remediation
+                .contains("nixling usb detach work-vm 1-2.4 --apply")
+        );
+        assert_no_path_leak("UsbipRevocationNotIsolated", &envelope.message);
+        assert_no_path_leak("UsbipRevocationNotIsolated", &envelope.remediation);
+
+        let malformed_busid = TypedError::UsbipRevocationNotIsolated {
+            vm: "work-vm".to_owned(),
+            busid: "/sys/devices/pci0000:00/usb1/1-2".to_owned(),
+            reason: crate::usbip_reconcile_state::UsbipRevocationFlowFailure::MissingExactTuple,
+        }
+        .to_envelope();
+        assert!(malformed_busid.message.contains("<invalid-busid>"));
+        assert!(malformed_busid.remediation.contains("<invalid-busid>"));
+        assert_no_path_leak("UsbipRevocationNotIsolated", &malformed_busid.message);
+        assert_no_path_leak("UsbipRevocationNotIsolated", &malformed_busid.remediation);
     }
 
     #[test]

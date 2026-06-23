@@ -44,6 +44,10 @@ service GuestControl {
   // host bind/unbind through the broker and calls this authenticated RPC for the
   // guest attach/detach half; the CLI never SSHes into the guest for USBIP.
   rpc UsbipImport(UsbipImportRequest) returns (UsbipImportResponse);
+
+  // Framework op: side-effect-free guest-side USBIP import observation. Auth
+  // gated like UsbipImport; runs only the host-declared guest usbip binary.
+  rpc UsbipStatus(UsbipStatusRequest) returns (UsbipStatusResponse);
 }
 
 message RequestMetadata {
@@ -375,6 +379,24 @@ message UsbipImportResponse {
   GuestControlError error = 4;
 }
 
+message UsbipStatusRequest {
+  RequestMetadata metadata = 1;
+  optional string host = 2;
+  optional string bus_id = 3;
+}
+
+message UsbipStatusResponse {
+  repeated UsbipStatusEntry imports = 1;
+  GuestControlError error = 2;
+}
+
+message UsbipStatusEntry {
+  uint32 port = 1;
+  string host = 2;
+  uint32 tcp_port = 3;
+  string bus_id = 4;
+}
+
 message ShellAttachRequest {
   RequestMetadata metadata = 1;
   optional string name = 2;
@@ -497,6 +519,7 @@ enum GuestCapability {
   GUEST_CAPABILITY_SHELL_ATTACHED = 11;
   GUEST_CAPABILITY_SHELL_MANAGEMENT = 12;
   GUEST_CAPABILITY_SHELL_FORCE_ATTACH = 13;
+  GUEST_CAPABILITY_USBIP_STATUS = 14;
 }
 
 enum GuestSubsystem {
@@ -708,4 +731,6 @@ enum GuestControlErrorKind {
   GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE = 53;
   GUEST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMATCH = 54;
   GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP = 55;
+  GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT = 56;
+  GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT = 57;
 }

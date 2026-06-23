@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nix::libc;
 use nix::unistd::{Gid, Uid};
@@ -33,6 +33,64 @@ pub(crate) fn result_for_decision(decision: &str) -> &'static str {
         "denied"
     } else {
         "error"
+    }
+}
+
+const DEFAULT_AUDIT_WRITES_PER_SECOND: u32 = 4096;
+const AUDIT_WRITE_WINDOW: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuditWriteClass {
+    Privileged,
+    Unprivileged,
+}
+
+impl AuditWriteClass {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Privileged => "privileged",
+            Self::Unprivileged => "unprivileged",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AuditDropSummary {
+    pub privileged_rate_limited: u64,
+    pub unprivileged_rate_limited: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AuditDropWarning {
+    dropped_total: u64,
+    dropped_since_previous_warning: u64,
+}
+
+#[derive(Debug, Default)]
+struct AuditDropWarningState {
+    privileged_reported: u64,
+    unprivileged_reported: u64,
+}
+
+impl AuditDropWarningState {
+    fn observe(
+        &mut self,
+        audit_class: AuditWriteClass,
+        dropped_total: u64,
+    ) -> Option<AuditDropWarning> {
+        if dropped_total == 0 || !dropped_total.is_power_of_two() {
+            return None;
+        }
+        let previous = match audit_class {
+            AuditWriteClass::Privileged => &mut self.privileged_reported,
+            AuditWriteClass::Unprivileged => &mut self.unprivileged_reported,
+        };
+        let warning = AuditDropWarning {
+            dropped_total,
+            dropped_since_previous_warning: dropped_total.saturating_sub(*previous),
+        };
+        *previous = dropped_total;
+        Some(warning)
     }
 }
 
@@ -80,6 +138,9 @@ pub struct AuditLog {
     /// `open()`. Pruning is best-effort — errors are logged via the
     /// broker tracing but do not fail the write path.
     retention_days: u32,
+    write_limiter: Mutex<AuditWriteLimiter>,
+    drop_summary: Mutex<AuditDropSummary>,
+    drop_warning_state: Mutex<AuditDropWarningState>,
     #[cfg(test)]
     captured_records: Option<Arc<Mutex<Vec<OwnedOpAuditRecord>>>>,
 }
@@ -134,6 +195,9 @@ impl AuditLog {
             expected_gid,
             test_mode,
             retention_days,
+            write_limiter: Mutex::new(AuditWriteLimiter::new(DEFAULT_AUDIT_WRITES_PER_SECOND)),
+            drop_summary: Mutex::new(AuditDropSummary::default()),
+            drop_warning_state: Mutex::new(AuditDropWarningState::default()),
             #[cfg(test)]
             captured_records: None,
         };
@@ -162,6 +226,22 @@ impl AuditLog {
         let mut log = Self::open(audit_dir, expected_gid, test_mode, retention_days)?;
         log.captured_records = Some(Arc::clone(&capture));
         Ok((log, capture))
+    }
+
+    #[cfg(test)]
+    pub fn open_with_write_limit(
+        audit_dir: &Path,
+        expected_gid: u32,
+        test_mode: bool,
+        retention_days: u32,
+        writes_per_second: u32,
+    ) -> io::Result<Self> {
+        let log = Self::open(audit_dir, expected_gid, test_mode, retention_days)?;
+        *log.write_limiter
+            .lock()
+            .map_err(|_| io::Error::other("audit limiter mutex poisoned"))? =
+            AuditWriteLimiter::new(writes_per_second);
+        Ok(log)
     }
 
     /// Returns the path of the audit directory holding daily
@@ -202,6 +282,25 @@ impl AuditLog {
         opaque_target_id: &str,
         outcome: &str,
     ) -> io::Result<()> {
+        self.write_entry_with_class(
+            AuditWriteClass::Privileged,
+            op,
+            caller_uid,
+            disposition,
+            opaque_target_id,
+            outcome,
+        )
+    }
+
+    pub(crate) fn write_entry_with_class(
+        &self,
+        audit_class: AuditWriteClass,
+        op: &str,
+        caller_uid: u32,
+        disposition: &str,
+        opaque_target_id: &str,
+        outcome: &str,
+    ) -> io::Result<()> {
         let entry = AuditEntry {
             ts: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -215,7 +314,7 @@ impl AuditLog {
             error_kind: None,
             error_message: None,
         };
-        self.append_json_line(&entry)
+        self.append_json_line(audit_class, op, &entry)
     }
 
     /// Legacy short-record writer for errored outcomes that need
@@ -244,14 +343,19 @@ impl AuditLog {
             error_kind: Some(error_kind),
             error_message: Some(error_message),
         };
-        self.append_json_line(&entry)
+        self.append_json_line(AuditWriteClass::Privileged, operation, &entry)
     }
 
-    fn append_json_line<T: Serialize>(&self, value: &T) -> io::Result<()> {
+    fn append_json_line<T: Serialize>(
+        &self,
+        audit_class: AuditWriteClass,
+        operation: &str,
+        value: &T,
+    ) -> io::Result<()> {
         let mut line = serde_json::to_string(value)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         line.push('\n');
-        self.append_to_daily(line.as_bytes())
+        self.append_to_daily(audit_class, operation, line.as_bytes())
     }
 
     /// Append one [`OpAuditRecord`] to the day's daily file.
@@ -264,7 +368,11 @@ impl AuditLog {
                 .push(OwnedOpAuditRecord::from(record));
         }
         let line = record.to_jsonl();
-        self.append_to_daily(line.as_bytes())?;
+        self.append_to_daily(
+            AuditWriteClass::Privileged,
+            record.operation,
+            line.as_bytes(),
+        )?;
         Ok(())
     }
 
@@ -289,14 +397,18 @@ impl AuditLog {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
-        self.append_json_line(&ChildReapedAuditEntry {
-            ts,
-            op: "ChildReaped",
-            runner_id: &notif.runner_id,
-            pid: notif.pid,
-            exit_status: &notif.exit_status,
-            reaped_at_ms: notif.reaped_at_ms,
-        })
+        self.append_json_line(
+            AuditWriteClass::Privileged,
+            "ChildReaped",
+            &ChildReapedAuditEntry {
+                ts,
+                op: "ChildReaped",
+                runner_id: &notif.runner_id,
+                pid: notif.pid,
+                exit_status: &notif.exit_status,
+                reaped_at_ms: notif.reaped_at_ms,
+            },
+        )
     }
 
     /// Convenience helper used by error paths that still build their
@@ -355,7 +467,28 @@ impl AuditLog {
         self.write_op_record(&record)
     }
 
-    fn append_to_daily(&self, bytes: &[u8]) -> io::Result<()> {
+    pub fn audit_drop_summary(&self) -> io::Result<AuditDropSummary> {
+        self.drop_summary
+            .lock()
+            .map(|summary| *summary)
+            .map_err(|_| io::Error::other("audit drop summary mutex poisoned"))
+    }
+
+    fn append_to_daily(
+        &self,
+        audit_class: AuditWriteClass,
+        operation: &str,
+        bytes: &[u8],
+    ) -> io::Result<()> {
+        if let Err(err) = self
+            .write_limiter
+            .lock()
+            .map_err(|_| io::Error::other("audit limiter mutex poisoned"))?
+            .check(audit_class)
+        {
+            self.record_rate_limited_drop(audit_class, operation);
+            return Err(err);
+        }
         let mut guard = self
             .daily
             .lock()
@@ -384,6 +517,35 @@ impl AuditLog {
             let _ = err;
         }
         Ok(())
+    }
+
+    fn record_rate_limited_drop(&self, audit_class: AuditWriteClass, operation: &str) {
+        let Ok(mut summary) = self.drop_summary.lock() else {
+            return;
+        };
+        let counter = match audit_class {
+            AuditWriteClass::Privileged => &mut summary.privileged_rate_limited,
+            AuditWriteClass::Unprivileged => &mut summary.unprivileged_rate_limited,
+        };
+        *counter = counter.saturating_add(1);
+        let dropped_total = *counter;
+        drop(summary);
+
+        let warning = self
+            .drop_warning_state
+            .lock()
+            .ok()
+            .and_then(|mut state| state.observe(audit_class, dropped_total));
+        if let Some(warning) = warning {
+            tracing::warn!(
+                audit_drop_reason = "rate_limited",
+                audit_class = audit_class.as_str(),
+                operation = %operation,
+                dropped_total = warning.dropped_total,
+                dropped_since_previous_warning = warning.dropped_since_previous_warning,
+                "broker audit records dropped by write limiter"
+            );
+        }
     }
 
     /// Delete any `broker-YYYY-MM-DD.jsonl` files whose date stamp is
@@ -537,6 +699,72 @@ impl AuditLog {
     }
 }
 
+#[derive(Debug)]
+struct AuditWriteLimiter {
+    privileged: AuditWriteBucket,
+    unprivileged: AuditWriteBucket,
+}
+
+#[derive(Debug)]
+struct AuditWriteBucket {
+    window_start: Instant,
+    writes_this_window: u32,
+    max_writes_per_window: u32,
+}
+
+impl AuditWriteLimiter {
+    fn new(max_writes_per_window: u32) -> Self {
+        let unprivileged_max = if max_writes_per_window <= 1 {
+            0
+        } else {
+            (max_writes_per_window / 4).max(1)
+        };
+        let privileged_max = max_writes_per_window.saturating_sub(unprivileged_max);
+        Self {
+            privileged: AuditWriteBucket::new(privileged_max),
+            unprivileged: AuditWriteBucket::new(unprivileged_max),
+        }
+    }
+
+    fn check(&mut self, audit_class: AuditWriteClass) -> io::Result<()> {
+        match audit_class {
+            AuditWriteClass::Privileged => self.privileged.check(),
+            AuditWriteClass::Unprivileged => self.unprivileged.check(),
+        }
+    }
+}
+
+impl AuditWriteBucket {
+    fn new(max_writes_per_window: u32) -> Self {
+        Self {
+            window_start: Instant::now(),
+            writes_this_window: 0,
+            max_writes_per_window,
+        }
+    }
+
+    fn check(&mut self) -> io::Result<()> {
+        if self.max_writes_per_window == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "audit write rate limit exceeded",
+            ));
+        }
+        if self.window_start.elapsed() >= AUDIT_WRITE_WINDOW {
+            self.window_start = Instant::now();
+            self.writes_this_window = 0;
+        }
+        if self.writes_this_window >= self.max_writes_per_window {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "audit write rate limit exceeded",
+            ));
+        }
+        self.writes_this_window += 1;
+        Ok(())
+    }
+}
+
 fn open_append_cloexec(path: &Path, expected_gid: u32, test_mode: bool) -> io::Result<File> {
     let file = OpenOptions::new()
         .create(true)
@@ -670,6 +898,20 @@ fn ts_at_least(line: &str, since: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn target_scratch_root(prefix: &str) -> PathBuf {
+        let base = std::env::var_os("CARGO_TARGET_TMPDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+        base.join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        ))
+    }
+
     #[test]
     fn ymd_decodes_known_epoch() {
         assert_eq!(ymd_from_unix(0), (1970, 1, 1));
@@ -755,14 +997,7 @@ mod tests {
     }
 
     fn make_audit_with_files(retention_days: u32, file_dates: &[(i32, u32, u32)]) -> AuditLog {
-        let dir = std::env::temp_dir().join(format!(
-            "nixlingd-broker-audit-prune-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or_default()
-        ));
+        let dir = target_scratch_root("nixlingd-broker-audit-prune");
         let audit_dir = dir.join("audit");
         fs::create_dir_all(&dir).expect("create scratch state dir");
         let log = AuditLog::open(&audit_dir, Gid::current().as_raw(), true, retention_days)
@@ -853,5 +1088,226 @@ mod tests {
         assert!(stray.exists(), "non-date-matching jsonl must survive prune");
 
         let _ = fs::remove_dir_all(log.audit_dir.parent().unwrap());
+    }
+
+    #[test]
+    fn audit_write_rate_limit_refuses_excess_records() {
+        let root = target_scratch_root("audit-rate-limit");
+        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 1)
+            .expect("open audit log with low write limit");
+        log.write_entry("UsbipBind", 1000, "allowed", "operation", "ok")
+            .expect("first write allowed");
+        let err = log
+            .write_entry("UsbipBind", 1000, "allowed", "operation", "ok")
+            .expect_err("second write in same window must be rate-limited");
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn audit_drop_warning_state_geometrically_summarizes_drops() {
+        let mut state = AuditDropWarningState::default();
+        let warnings: Vec<_> = (1..=16)
+            .filter_map(|dropped_total| state.observe(AuditWriteClass::Privileged, dropped_total))
+            .collect();
+        assert_eq!(
+            warnings,
+            vec![
+                AuditDropWarning {
+                    dropped_total: 1,
+                    dropped_since_previous_warning: 1,
+                },
+                AuditDropWarning {
+                    dropped_total: 2,
+                    dropped_since_previous_warning: 1,
+                },
+                AuditDropWarning {
+                    dropped_total: 4,
+                    dropped_since_previous_warning: 2,
+                },
+                AuditDropWarning {
+                    dropped_total: 8,
+                    dropped_since_previous_warning: 4,
+                },
+                AuditDropWarning {
+                    dropped_total: 16,
+                    dropped_since_previous_warning: 8,
+                },
+            ],
+            "warnings should be emitted only at power-of-two totals"
+        );
+
+        assert_eq!(
+            state.observe(AuditWriteClass::Unprivileged, 1),
+            Some(AuditDropWarning {
+                dropped_total: 1,
+                dropped_since_previous_warning: 1,
+            }),
+            "each audit class keeps an independent warning cursor"
+        );
+    }
+
+    #[test]
+    fn rate_limited_drop_counters_remain_exact_when_warnings_are_suppressed() {
+        let root = target_scratch_root("audit-drop-summary-aggregate");
+        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 1)
+            .expect("open audit log with low write limit");
+        log.write_entry("UsbipBind", 1000, "allowed", "operation", "ok")
+            .expect("first write allowed");
+
+        for _ in 0..8 {
+            let err = log
+                .write_entry("UsbipBind", 1000, "allowed", "operation", "ok")
+                .expect_err("excess write in same window must be rate-limited");
+            assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        }
+
+        let summary = log.audit_drop_summary().expect("drop summary");
+        assert_eq!(summary.privileged_rate_limited, 8);
+        assert_eq!(summary.unprivileged_rate_limited, 0);
+        let warning_state = log.drop_warning_state.lock().expect("drop warning state");
+        assert_eq!(warning_state.privileged_reported, 8);
+        assert_eq!(warning_state.unprivileged_reported, 0);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn audit_write_rate_limit_applies_to_usb_op_records() {
+        let root = target_scratch_root("audit-usb-op-rate-limit");
+        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 1)
+            .expect("open audit log with low write limit");
+        log.record(
+            "UsbipBind",
+            "usbip-bind",
+            1000,
+            1000,
+            42,
+            "nixling-admin",
+            "admin",
+            "vm:work",
+            "usbip",
+            "bind",
+            serde_json::json!({"bus_id": "redacted"}),
+            "allowed",
+            None,
+            None,
+            "v2",
+            "fnv1a64:test",
+            10,
+            Some(serde_json::json!({
+                "bus_id": "1-2",
+                "vm": "work",
+                "device_identity": {
+                    "vendorId": "1050",
+                    "productId": "0407",
+                    "serialObserved": false
+                }
+            })),
+        )
+        .expect("first USB op record allowed");
+        let err = log
+            .record(
+                "UsbipBind",
+                "usbip-bind",
+                1000,
+                1000,
+                42,
+                "nixling-admin",
+                "admin",
+                "vm:work",
+                "usbip",
+                "bind",
+                serde_json::json!({"bus_id": "redacted"}),
+                "allowed",
+                None,
+                None,
+                "v2",
+                "fnv1a64:test",
+                10,
+                Some(serde_json::json!({
+                    "bus_id": "1-2",
+                    "vm": "work",
+                    "device_identity": {
+                        "vendorId": "1050",
+                        "productId": "0407",
+                        "serialObserved": false
+                    }
+                })),
+            )
+            .expect_err("second USB op record in same window must be rate-limited");
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unprivileged_audit_drops_do_not_starve_privileged_usb_records() {
+        let root = target_scratch_root("audit-unprivileged-drop-reserve");
+        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 4)
+            .expect("open audit log with low write limit");
+
+        log.write_entry_with_class(
+            AuditWriteClass::Unprivileged,
+            "UsbipBind",
+            2000,
+            "peer-refused",
+            "operation",
+            "closed",
+        )
+        .expect("first unprivileged refusal allowed");
+        let err = log
+            .write_entry_with_class(
+                AuditWriteClass::Unprivileged,
+                "UsbipBind",
+                2000,
+                "peer-refused",
+                "operation",
+                "closed",
+            )
+            .expect_err("second unprivileged refusal must be dropped");
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+
+        log.record(
+            "UsbipBind",
+            "usbip-bind",
+            0,
+            0,
+            42,
+            "nixling-admin",
+            "admin",
+            "vm:work",
+            "usbip",
+            "bind",
+            serde_json::json!({"bus_id": "redacted"}),
+            "allowed",
+            None,
+            None,
+            "v2",
+            "fnv1a64:test",
+            10,
+            Some(serde_json::json!({
+                "bus_id": "1-2",
+                "vm": "work",
+                "device_identity": {
+                    "vendorId": "1050",
+                    "productId": "0407",
+                    "serialObserved": false
+                }
+            })),
+        )
+        .expect("privileged USB op record must retain reserved capacity");
+
+        let summary = log.audit_drop_summary().expect("drop summary");
+        assert_eq!(summary.unprivileged_rate_limited, 1);
+        assert_eq!(summary.privileged_rate_limited, 0);
+
+        let audit = fs::read_to_string(log.current_daily_path()).expect("read audit log");
+        assert_eq!(audit.matches(r#""disposition":"peer-refused""#).count(), 1);
+        assert!(audit.contains(r#""operation":"UsbipBind""#), "{audit}");
+        assert!(audit.contains(r#""decision":"allowed""#), "{audit}");
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

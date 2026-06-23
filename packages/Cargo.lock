@@ -1669,6 +1669,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "nixling-core",
  "nixling-host",
+ "nixling-ipc",
  "regex",
  "serde",
  "serde_json",

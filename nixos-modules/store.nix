@@ -762,6 +762,11 @@ in
     # retired bash store writer in the host profile.
     environment.systemPackages = [ spectrumCh ];
 
+    systemd.tmpfiles.rules =
+      lib.mapAttrsToList
+        (name: _: "d /run/nixling/${name} 0755 root root -")
+        normalNixosVms;
+
     # Force every VM's nix-store share to point at its per-VM hardlink
     # farm instead of the host's full /nix/store. microvm.nix's
     # mounts.nix REQUIRES one share with literal `source =
@@ -834,7 +839,8 @@ in
     # ---------------------------------------------------------------------------
     # Host activation hook.
     # On every `nixos-rebuild switch`, drop the per-VM next-generation
-    # pointer into /run/nixling/<vm>/next-generation. The daemon-native
+    # pointer into /run/nixling/<vm>/next-generation. The leaf directory is
+    # tmpfiles-owned so activation only updates the pointer. The daemon-native
     # Rust StoreSync broker op is the canonical writer for store-view;
     # activation must not build/sweep/activate per-VM store closures.
     #
@@ -848,7 +854,6 @@ in
       set -u
       ${lib.concatStringsSep "\n" (lib.mapAttrsToList
         (name: gen: ''
-          install -d -m 0755 /run/nixling/${name}
           ln -sfT ${gen} /run/nixling/${name}/next-generation
         '')
         vmGenPaths)}

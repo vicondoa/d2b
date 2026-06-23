@@ -17,13 +17,13 @@ fn socket_acl_rejects_non_nixlingd_peers_and_accepts_daemon() {
         ("admin", admin_uid),
     ] {
         let output = broker.probe_hello(denied_uid);
-        output.assert_exit_code(3);
+        output.assert_success();
         assert!(
             output
-                .stderr()
-                .contains("broker protocol error: connection closed before response"),
-            "{label} peer stderr did not report closed response: {}",
-            output.stderr()
+                .stdout()
+                .contains("\"kind\":\"Broker.PeerCredentialRefused\""),
+            "{label} peer stdout did not report typed peer refusal: {}",
+            output.stdout()
         );
     }
 

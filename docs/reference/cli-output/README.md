@@ -17,6 +17,7 @@ JSON envelopes.
 | --- | --- | --- |
 | `list` | `list.schema.json` | [list.md](./list.md) |
 | `status` | `status.schema.json` | [status.md](./status.md) |
+| `usb probe` | `usb-probe.schema.json` | [usb-probe.md](./usb-probe.md) |
 | `audit` | `audit.schema.json` | [audit.md](./audit.md) |
 | `host check` | `host-check.schema.json` | [host-check.md](./host-check.md) |
 | `host doctor` | `host-doctor.schema.json` | [host-doctor.md](./host-doctor.md) |

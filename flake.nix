@@ -665,8 +665,10 @@
         # CLI-compatible with upstream `nix-unit` for local iteration.
         nixUnitShardCaseFiles = {
           nix-unit-daemon = [
+            "activation-runtime-tmpfiles.nix"
             "broker-bundle-path.nix"
             "broker-caps.nix"
+            "broker-service-posture.nix"
             "broker-socket-activation.nix"
             "bundle-artifacts.nix"
             "daemon-autostart.nix"

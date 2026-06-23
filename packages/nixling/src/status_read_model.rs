@@ -491,6 +491,7 @@ pub(crate) fn build_vm_status_output(
         service_capabilities,
         unsupported_capabilities: output_unsupported_capabilities(vm),
         qemu_media,
+        usb: None,
         declared_roles,
         readiness,
         api_ready: read_vm_api_ready(&context.daemon_state_dir, &vm.name),
@@ -575,6 +576,7 @@ pub(crate) fn build_vm_status_output_from_public(
             .qemu_media
             .clone()
             .or_else(|| qemu_media_status(context, vm, bundle, process_vm, &services)),
+        usb: public.usb.clone(),
         declared_roles,
         readiness,
         api_ready: read_vm_api_ready(&context.daemon_state_dir, &vm.name),

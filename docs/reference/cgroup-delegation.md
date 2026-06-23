@@ -30,11 +30,13 @@ split into two categories:
   `populated` field for liveness queries, per-leaf state for the
   `nixling status` verb) are accessed via dedicated cgroup-dir
   fds returned by `OpenCgroupDir`. The daemon does NOT perform
-  process placement (`cgroup.procs` write), leaf mkdir, leaf
+  process placement, leaf mkdir, leaf
   rmdir, kill, or any other mutation — all mutations are
   broker-mediated per the table below. **The daemon NEVER writes
   to `cgroup.procs`** (the broker uses `clone3(CLONE_INTO_CGROUP)`
-  for process placement at spawn time per
+  for process placement at spawn time when the kernel supports it,
+  with a broker-child `cgroup.procs` write retained only for the
+  documented `fork` fallback per
   [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md)
   Decision item 8 "Process-into-cgroup placement primitive";
   there is no daemon-side attach codepath in the current source).
@@ -42,8 +44,18 @@ split into two categories:
   cross-trust-boundary mutations on the cgroup tree are exposed
   as audited broker operations. The broker performs leaf mkdir
   (one-shot at Phase A), process placement (atomic on each
-  `SpawnRunner` via `clone3(CLONE_INTO_CGROUP)`), leaf-only kill
-  via `CgroupKill`, and any subsequent runtime state changes.
+  `SpawnRunner` via `clone3(CLONE_INTO_CGROUP)` when available,
+  with broker-child `cgroup.procs` attach only on the legacy fork
+  fallback), leaf-only kill via `CgroupKill`, and any subsequent
+  runtime state changes.
+
+The host systemd posture is part of that contract:
+`nixling.slice` is delegated by systemd with the `cpu`, `memory`,
+`pids`, `io`, and `cpuset` controllers, and
+`nixling-priv-broker.service` runs inside that slice with
+`Delegate=true` and `KillMode=process`. Broker restarts therefore stop
+only the broker process; runner teardown stays on the audited
+pidfd/`CgroupKill` path instead of a service-wide systemd kill.
 
 **Broker ops on the cgroup tree:**
 

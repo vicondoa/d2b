@@ -24,11 +24,22 @@ use nixling_core::bundle_resolver::ResolvedStoreViewIntent;
 use nixling_host::hardlink_farm::{self, GenerationMarker, HardlinkFarmError};
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::io::{self, Read};
 use std::os::fd::AsFd;
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::mpsc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const USBIP_UNBIND_HELPER_TIMEOUT: Duration = Duration::from_secs(10);
+const USBIP_UNBIND_MAX_ATTEMPTS: usize = 4;
+const USBIP_UNBIND_RETRY_BASE: Duration = Duration::from_millis(40);
+const USBIP_UNBIND_STDERR_LIMIT: usize = 8 * 1024;
+const USBIP_UNBIND_STDERR_DRAIN_GRACE: Duration = Duration::from_millis(250);
+const USBIP_STREAM_FD_RELEASE_GRACE: Duration = Duration::from_millis(750);
+const USBIP_STATUS_USED: &str = "2";
 
 /// Errors any executor can return. Maps cleanly onto the broker
 /// runtime's typed error catalog.
@@ -42,6 +53,12 @@ pub enum ReconcileExecError {
         which: String,
         exit_code: i32,
         stderr: String,
+    },
+    /// A helper that may block in a kernel/sysfs path exceeded its bounded wait.
+    TimedOut {
+        which: String,
+        timeout_ms: u64,
+        remediation: String,
     },
     /// The store-view farm root and source closure live on different
     /// filesystems, so hardlinks are impossible.
@@ -80,6 +97,11 @@ impl std::fmt::Display for ReconcileExecError {
                 exit_code,
                 stderr,
             } => write!(f, "{which} exited {exit_code}: {stderr}"),
+            Self::TimedOut {
+                which,
+                timeout_ms,
+                remediation,
+            } => write!(f, "{which} timed out after {timeout_ms}ms; {remediation}"),
             Self::DifferentFilesystem { a, a_dev, b, b_dev } => write!(
                 f,
                 "paths on different filesystems: {a} (dev={a_dev}) vs {b} (dev={b_dev})"
@@ -137,6 +159,34 @@ pub trait ReconcileExecutor: Send + Sync {
 
     /// Path-safe direct read used for live readback verification.
     fn read_path_value(&self, path: &Path) -> Result<String, ReconcileExecError>;
+
+    /// Best-effort host-side USBIP stream abort before driver unbind.
+    ///
+    /// Implementations MUST only target the usbip-host per-device stream
+    /// control surface (`<sysfs_root>/<bus_id>/usbip_sockfd`) and MUST NOT
+    /// claim or implement a generic sysfs revoke primitive. The default no-op
+    /// exists for narrow tests; production overrides it.
+    fn shutdown_usbip_streams(
+        &self,
+        _sysfs_root: &Path,
+        _bus_id: &str,
+    ) -> Result<(), ReconcileExecError> {
+        Ok(())
+    }
+
+    /// Wait for the usbip-host per-device stream fd to be released after
+    /// [`Self::shutdown_usbip_streams`].
+    ///
+    /// Production polls the kernel-owned `usbip_status` liveness surface before
+    /// the sysfs driver-unbind helper runs. Tests may use the default no-op when
+    /// exercising unrelated executor paths.
+    fn wait_usbip_stream_fd_release(
+        &self,
+        _sysfs_root: &Path,
+        _bus_id: &str,
+    ) -> Result<(), ReconcileExecError> {
+        Ok(())
+    }
 
     /// Run `ip route <verb> <route_spec>` (verb = "add" / "del" /
     /// "replace"). Refuses non-absolute `ip_binary`.
@@ -504,6 +554,14 @@ impl ReconcileExecutor for SystemReconcileExecutor {
                 detail: "usbip bus_id is empty".to_owned(),
             });
         }
+        nixling_host::usbip_argv::validate_bus_id(bus_id).map_err(|err| {
+            ReconcileExecError::InvalidInput {
+                detail: format!("invalid usbip bus_id {bus_id:?}: {err:?}"),
+            }
+        })?;
+        if subcommand == UsbipSubcommand::Unbind {
+            return run_usbip_unbind_isolated(usbip_binary, bus_id);
+        }
         let output = Command::new(usbip_binary)
             .arg(subcommand.as_str())
             .arg("--busid")
@@ -525,6 +583,54 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         Ok(())
     }
 
+    fn shutdown_usbip_streams(
+        &self,
+        sysfs_root: &Path,
+        bus_id: &str,
+    ) -> Result<(), ReconcileExecError> {
+        nixling_host::usbip_argv::validate_bus_id(bus_id).map_err(|err| {
+            ReconcileExecError::InvalidInput {
+                detail: format!("invalid usbip bus_id {bus_id:?}: {err:?}"),
+            }
+        })?;
+        let device_dir = sysfs_root.join(bus_id);
+        let status_path = device_dir.join("usbip_status");
+        let sockfd_path = device_dir.join("usbip_sockfd");
+        let status = read_usbip_status(&status_path)?;
+        if status != USBIP_STATUS_USED {
+            return Ok(());
+        }
+
+        match std::fs::write(&sockfd_path, b"-1\n") {
+            Ok(()) => Ok(()),
+            Err(error) if usbip_stream_shutdown_error_is_ignorable(&error) => Ok(()),
+            Err(error) => {
+                if read_usbip_status(&status_path).is_ok_and(|latest| latest != USBIP_STATUS_USED) {
+                    return Ok(());
+                }
+                Err(ReconcileExecError::Io {
+                    path: sockfd_path.display().to_string(),
+                    detail: format!(
+                        "usbip-host stream shutdown before driver unbind failed: {error}; operator must detach or recover the USBIP stream manually before retrying"
+                    ),
+                })
+            }
+        }
+    }
+
+    fn wait_usbip_stream_fd_release(
+        &self,
+        sysfs_root: &Path,
+        bus_id: &str,
+    ) -> Result<(), ReconcileExecError> {
+        nixling_host::usbip_argv::validate_bus_id(bus_id).map_err(|err| {
+            ReconcileExecError::InvalidInput {
+                detail: format!("invalid usbip bus_id {bus_id:?}: {err:?}"),
+            }
+        })?;
+        wait_usbip_stream_fd_release(sysfs_root, bus_id, USBIP_STREAM_FD_RELEASE_GRACE)
+    }
+
     fn prepare_store_view(
         &self,
         intent: &ResolvedStoreViewIntent,
@@ -534,6 +640,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
                 detail: "store-view vm is empty".to_owned(),
             });
         }
+
         if !intent.hardlink_farm_path.is_absolute() || !intent.target_view_path.is_absolute() {
             return Err(ReconcileExecError::InvalidInput {
                 detail: format!(
@@ -908,6 +1015,221 @@ fn map_hardlink_farm_error(error: HardlinkFarmError) -> ReconcileExecError {
     }
 }
 
+fn run_usbip_unbind_isolated(usbip_binary: &Path, bus_id: &str) -> Result<(), ReconcileExecError> {
+    let deadline = Instant::now() + USBIP_UNBIND_HELPER_TIMEOUT;
+    let mut last_error = None;
+
+    for attempt in 0..USBIP_UNBIND_MAX_ATTEMPTS {
+        let result = run_usbip_unbind_helper_once(usbip_binary, bus_id, deadline);
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if usbip_unbind_error_is_transient(&error)
+                    && attempt + 1 < USBIP_UNBIND_MAX_ATTEMPTS =>
+            {
+                last_error = Some(error);
+                let delay = usbip_unbind_retry_delay(bus_id, attempt);
+                let now = Instant::now();
+                if now + delay >= deadline {
+                    break;
+                }
+                std::thread::sleep(delay);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| ReconcileExecError::TimedOut {
+        which: "usbip unbind".to_owned(),
+        timeout_ms: USBIP_UNBIND_HELPER_TIMEOUT.as_millis() as u64,
+        remediation:
+            "driver detach did not complete before the retry budget expired; the broker kept the USBIP session claim for manual recovery"
+                .to_owned(),
+    }))
+}
+
+fn run_usbip_unbind_helper_once(
+    usbip_binary: &Path,
+    bus_id: &str,
+    deadline: Instant,
+) -> Result<(), ReconcileExecError> {
+    let mut child = Command::new(usbip_binary)
+        .arg(UsbipSubcommand::Unbind.as_str())
+        .arg("--busid")
+        .arg(bus_id)
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .map_err(|e| ReconcileExecError::BinaryMissing {
+            which: "usbip".to_owned(),
+            detail: e.to_string(),
+        })?;
+    let stderr_rx = child.stderr.take().map(spawn_bounded_stderr_reader);
+
+    loop {
+        match child.try_wait().map_err(|e| ReconcileExecError::Io {
+            path: "<usbip unbind wait>".to_owned(),
+            detail: e.to_string(),
+        })? {
+            Some(status) => {
+                let stderr = collect_bounded_child_stderr(stderr_rx);
+                if !status.success() {
+                    return Err(ReconcileExecError::NonZeroExit {
+                        which: "usbip unbind".to_owned(),
+                        exit_code: status.code().unwrap_or(-1),
+                        stderr,
+                    });
+                }
+                return Ok(());
+            }
+            None if Instant::now() >= deadline => {
+                if let Ok(pid) = i32::try_from(child.id()) {
+                    let _ = nix::sys::signal::killpg(
+                        nix::unistd::Pid::from_raw(pid),
+                        nix::sys::signal::Signal::SIGKILL,
+                    );
+                } else {
+                    let _ = child.kill();
+                }
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Err(ReconcileExecError::TimedOut {
+                    which: "usbip unbind".to_owned(),
+                    timeout_ms: USBIP_UNBIND_HELPER_TIMEOUT.as_millis() as u64,
+                    remediation:
+                        "driver detach may be stuck in sysfs; the broker kept the USBIP session claim, so verify the device and clear it manually before retrying"
+                            .to_owned(),
+                });
+            }
+            None => std::thread::sleep(Duration::from_millis(25)),
+        }
+    }
+}
+
+fn spawn_bounded_stderr_reader(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut captured = Vec::with_capacity(USBIP_UNBIND_STDERR_LIMIT.min(4096));
+        let mut buf = [0u8; 4096];
+        loop {
+            match pipe.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let remaining = USBIP_UNBIND_STDERR_LIMIT.saturating_sub(captured.len());
+                    if remaining > 0 {
+                        captured.extend_from_slice(&buf[..n.min(remaining)]);
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+        let _ = tx.send(String::from_utf8_lossy(&captured).trim().to_owned());
+    });
+    rx
+}
+
+fn collect_bounded_child_stderr(stderr_rx: Option<mpsc::Receiver<String>>) -> String {
+    stderr_rx
+        .and_then(|rx| rx.recv_timeout(USBIP_UNBIND_STDERR_DRAIN_GRACE).ok())
+        .unwrap_or_default()
+}
+
+fn read_usbip_status(path: &Path) -> Result<String, ReconcileExecError> {
+    match std::fs::read_to_string(path) {
+        Ok(raw) => Ok(raw.trim().to_owned()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Err(ReconcileExecError::InvalidInput {
+                detail: format!(
+                    "usbip-host stream status {} is missing; cannot prove stream shutdown before unbind, so manual recovery is required",
+                    path.display()
+                ),
+            })
+        }
+        Err(error) => Err(ReconcileExecError::Io {
+            path: path.display().to_string(),
+            detail: error.to_string(),
+        }),
+    }
+}
+
+fn wait_usbip_stream_fd_release(
+    sysfs_root: &Path,
+    bus_id: &str,
+    grace: Duration,
+) -> Result<(), ReconcileExecError> {
+    let status_path = sysfs_root.join(bus_id).join("usbip_status");
+    let deadline = Instant::now() + grace;
+    loop {
+        let status = read_usbip_status(&status_path)?;
+        if status != USBIP_STATUS_USED {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(ReconcileExecError::TimedOut {
+                which: "usbip stream fd release".to_owned(),
+                timeout_ms: grace.as_millis() as u64,
+                remediation:
+                    "usbip-host still reports an in-use stream after sockfd shutdown; the broker kept the USBIP session claim so the operator can drain or recover the device manually before retrying driver unbind"
+                        .to_owned(),
+            });
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn usbip_stream_shutdown_error_is_ignorable(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(code)
+            if code == nix::libc::ENOTSOCK
+                || code == nix::libc::ENOTCONN
+                || code == nix::libc::EOPNOTSUPP
+                || code == nix::libc::EBADF
+    )
+}
+
+fn usbip_unbind_error_is_transient(error: &ReconcileExecError) -> bool {
+    match error {
+        ReconcileExecError::NonZeroExit { stderr, .. } => {
+            let stderr = stderr.to_ascii_lowercase();
+            stderr.contains("ebusy")
+                || stderr.contains("busy")
+                || stderr.contains("eagain")
+                || stderr.contains("temporarily unavailable")
+                || stderr.contains("interrupted")
+                || stderr.contains("eintr")
+        }
+        ReconcileExecError::Io { detail, .. } => {
+            let detail = detail.to_ascii_lowercase();
+            detail.contains("ebusy")
+                || detail.contains("busy")
+                || detail.contains("eagain")
+                || detail.contains("temporarily unavailable")
+                || detail.contains("interrupted")
+                || detail.contains("eintr")
+        }
+        _ => false,
+    }
+}
+
+fn usbip_unbind_retry_delay(bus_id: &str, attempt: usize) -> Duration {
+    let shift = attempt.min(5) as u32;
+    let base = USBIP_UNBIND_RETRY_BASE
+        .checked_mul(1u32 << shift)
+        .unwrap_or(Duration::from_millis(500));
+    let jitter_seed = bus_id
+        .bytes()
+        .fold(attempt as u64 + 0x9e37_79b9, |acc, byte| {
+            acc.wrapping_mul(33).wrapping_add(u64::from(byte))
+        });
+    base + Duration::from_millis(jitter_seed % 37)
+}
+
 fn current_unix_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -997,6 +1319,9 @@ mod fake {
     pub struct FakeReconcileExecutor {
         log: Mutex<Vec<ReconcileOp>>,
         file_values: Mutex<BTreeMap<PathBuf, Vec<u8>>>,
+        wait_usbip_stream_fd_release_error: Mutex<Option<ReconcileExecError>>,
+        run_usbip_error: Mutex<Option<ReconcileExecError>>,
+        bind_creates_regular_driver: Mutex<Option<(PathBuf, String)>>,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1017,6 +1342,14 @@ mod fake {
         WritePathValue {
             path: PathBuf,
             value: String,
+        },
+        ShutdownUsbipStreams {
+            sysfs_root: PathBuf,
+            bus_id: String,
+        },
+        WaitUsbipStreamFdRelease {
+            sysfs_root: PathBuf,
+            bus_id: String,
         },
         IpRoute {
             binary: PathBuf,
@@ -1062,6 +1395,15 @@ mod fake {
         }
         pub fn take_log(&self) -> Vec<ReconcileOp> {
             std::mem::take(&mut *self.log.lock().unwrap())
+        }
+        pub fn fail_wait_usbip_stream_fd_release(&self, error: ReconcileExecError) {
+            *self.wait_usbip_stream_fd_release_error.lock().unwrap() = Some(error);
+        }
+        pub fn fail_run_usbip(&self, error: ReconcileExecError) {
+            *self.run_usbip_error.lock().unwrap() = Some(error);
+        }
+        pub fn bind_creates_regular_driver(&self, sysfs_root: PathBuf, bus_id: String) {
+            *self.bind_creates_regular_driver.lock().unwrap() = Some((sysfs_root, bus_id));
         }
     }
 
@@ -1128,6 +1470,42 @@ mod fake {
                 detail: err.to_string(),
             })
         }
+        fn shutdown_usbip_streams(
+            &self,
+            sysfs_root: &Path,
+            bus_id: &str,
+        ) -> Result<(), ReconcileExecError> {
+            self.log
+                .lock()
+                .unwrap()
+                .push(ReconcileOp::ShutdownUsbipStreams {
+                    sysfs_root: sysfs_root.to_path_buf(),
+                    bus_id: bus_id.to_owned(),
+                });
+            Ok(())
+        }
+        fn wait_usbip_stream_fd_release(
+            &self,
+            sysfs_root: &Path,
+            bus_id: &str,
+        ) -> Result<(), ReconcileExecError> {
+            self.log
+                .lock()
+                .unwrap()
+                .push(ReconcileOp::WaitUsbipStreamFdRelease {
+                    sysfs_root: sysfs_root.to_path_buf(),
+                    bus_id: bus_id.to_owned(),
+                });
+            if let Some(error) = self
+                .wait_usbip_stream_fd_release_error
+                .lock()
+                .unwrap()
+                .clone()
+            {
+                return Err(error);
+            }
+            Ok(())
+        }
         fn ip_route(
             &self,
             ip_binary: &Path,
@@ -1147,11 +1525,38 @@ mod fake {
             subcommand: UsbipSubcommand,
             bus_id: &str,
         ) -> Result<(), ReconcileExecError> {
+            if subcommand == UsbipSubcommand::Bind
+                && let Some((sysfs_root, expected_bus_id)) =
+                    self.bind_creates_regular_driver.lock().unwrap().clone()
+                && expected_bus_id == bus_id
+            {
+                let _ = std::fs::write(sysfs_root.join(bus_id).join("driver"), b"not-a-symlink");
+            }
+            if subcommand == UsbipSubcommand::Unbind {
+                let prior = self.log.lock().unwrap();
+                if let Some(ReconcileOp::WaitUsbipStreamFdRelease { sysfs_root, .. }) =
+                    prior.iter().rev().find(|op| {
+                        matches!(
+                            op,
+                            ReconcileOp::WaitUsbipStreamFdRelease {
+                                bus_id: recorded,
+                                ..
+                            } if recorded == bus_id
+                        )
+                    })
+                {
+                    let _ = std::fs::remove_file(sysfs_root.join(bus_id).join("driver"));
+                }
+                drop(prior);
+            }
             self.log.lock().unwrap().push(ReconcileOp::RunUsbip {
                 binary: usbip_binary.to_path_buf(),
                 subcommand,
                 bus_id: bus_id.to_owned(),
             });
+            if let Some(error) = self.run_usbip_error.lock().unwrap().clone() {
+                return Err(error);
+            }
             Ok(())
         }
 
@@ -1381,6 +1786,190 @@ mod tests {
         assert_eq!(IpRouteVerb::Add.as_str(), "add");
         assert_eq!(IpRouteVerb::Del.as_str(), "del");
         assert_eq!(IpRouteVerb::Replace.as_str(), "replace");
+    }
+
+    fn usbip_stream_test_root(name: &str) -> PathBuf {
+        let root = std::env::current_dir()
+            .expect("cwd")
+            .join("target")
+            .join(format!("usbip-stream-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create root");
+        root
+    }
+
+    fn usbip_unbind_helper_script(name: &str, body: &str) -> PathBuf {
+        let root = std::env::current_dir()
+            .expect("cwd")
+            .join("target")
+            .join(format!(
+                "usbip-unbind-helper-{name}-{}-{}",
+                std::process::id(),
+                current_unix_ms()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create helper root");
+        let helper = root.join("usbip");
+        std::fs::write(&helper, body).expect("write helper");
+        let mut permissions = std::fs::metadata(&helper).unwrap().permissions();
+        use std::os::unix::fs::PermissionsExt;
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&helper, permissions).expect("chmod helper");
+        helper
+    }
+
+    #[test]
+    fn system_shutdown_usbip_streams_writes_sockfd_down_when_used() {
+        let root = usbip_stream_test_root("used");
+        let device = root.join("1-2");
+        std::fs::create_dir_all(&device).expect("device");
+        std::fs::write(device.join("usbip_status"), b"2\n").expect("status");
+        std::fs::write(device.join("usbip_sockfd"), b"7\n").expect("sockfd");
+
+        SystemReconcileExecutor
+            .shutdown_usbip_streams(&root, "1-2")
+            .expect("shutdown succeeds");
+
+        assert_eq!(
+            std::fs::read_to_string(device.join("usbip_sockfd")).unwrap(),
+            "-1\n"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn system_shutdown_usbip_streams_skips_available_device() {
+        let root = usbip_stream_test_root("available");
+        let device = root.join("1-2");
+        std::fs::create_dir_all(&device).expect("device");
+        std::fs::write(device.join("usbip_status"), b"1\n").expect("status");
+        std::fs::write(device.join("usbip_sockfd"), b"7\n").expect("sockfd");
+
+        SystemReconcileExecutor
+            .shutdown_usbip_streams(&root, "1-2")
+            .expect("available has no stream");
+
+        assert_eq!(
+            std::fs::read_to_string(device.join("usbip_sockfd")).unwrap(),
+            "7\n"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn system_waits_for_usbip_stream_fd_release_before_unbind() {
+        let root = usbip_stream_test_root("release");
+        let device = root.join("1-2");
+        std::fs::create_dir_all(&device).expect("device");
+        std::fs::write(device.join("usbip_status"), b"1\n").expect("status");
+
+        SystemReconcileExecutor
+            .wait_usbip_stream_fd_release(&root, "1-2")
+            .expect("available status proves fd release");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn usbip_stream_fd_release_timeout_is_fail_closed() {
+        let root = usbip_stream_test_root("release-timeout");
+        let device = root.join("1-2");
+        std::fs::create_dir_all(&device).expect("device");
+        std::fs::write(device.join("usbip_status"), b"2\n").expect("status");
+
+        let err = super::wait_usbip_stream_fd_release(&root, "1-2", Duration::from_millis(1))
+            .expect_err("still-used stream must time out");
+        match err {
+            ReconcileExecError::TimedOut {
+                which, remediation, ..
+            } => {
+                assert_eq!(which, "usbip stream fd release");
+                assert!(remediation.contains("kept the USBIP session claim"));
+            }
+            other => panic!("expected TimedOut, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn usbip_stream_shutdown_ignores_socket_race_errnos() {
+        for errno in [
+            nix::libc::ENOTSOCK,
+            nix::libc::ENOTCONN,
+            nix::libc::EOPNOTSUPP,
+            nix::libc::EBADF,
+        ] {
+            assert!(usbip_stream_shutdown_error_is_ignorable(
+                &io::Error::from_raw_os_error(errno)
+            ));
+        }
+        assert!(!usbip_stream_shutdown_error_is_ignorable(
+            &io::Error::from_raw_os_error(nix::libc::EACCES)
+        ));
+    }
+
+    #[test]
+    fn usbip_unbind_retry_classifier_and_delay_are_bounded_with_jitter() {
+        assert!(usbip_unbind_error_is_transient(
+            &ReconcileExecError::NonZeroExit {
+                which: "usbip unbind".to_owned(),
+                exit_code: 1,
+                stderr: "write: Device or resource busy (EBUSY)".to_owned(),
+            }
+        ));
+        assert!(!usbip_unbind_error_is_transient(
+            &ReconcileExecError::NonZeroExit {
+                which: "usbip unbind".to_owned(),
+                exit_code: 1,
+                stderr: "device is not bound to usbip-host driver".to_owned(),
+            }
+        ));
+        let first = usbip_unbind_retry_delay("1-2", 0);
+        let second = usbip_unbind_retry_delay("1-3", 0);
+        assert_ne!(first, second, "busid-derived jitter should vary delay");
+        assert!(first >= USBIP_UNBIND_RETRY_BASE);
+        assert!(first < Duration::from_millis(100));
+    }
+
+    #[test]
+    fn usbip_unbind_helper_drains_large_stderr_without_timeout() {
+        let helper = usbip_unbind_helper_script(
+            "large-stderr",
+            r#"#!/bin/sh
+i=0
+while [ "$i" -lt 4096 ]; do
+  printf 'busy usbip stderr line %s abcdefghijklmnopqrstuvwxyz0123456789\n' "$i" >&2
+  i=$((i + 1))
+done
+exit 7
+"#,
+        );
+
+        let err =
+            run_usbip_unbind_helper_once(&helper, "1-2", Instant::now() + Duration::from_secs(2))
+                .expect_err("large stderr should drain and preserve helper exit status");
+        match err {
+            ReconcileExecError::NonZeroExit {
+                which,
+                exit_code,
+                stderr,
+            } => {
+                assert_eq!(which, "usbip unbind");
+                assert_eq!(exit_code, 7);
+                assert!(stderr.contains("busy usbip stderr line"));
+                assert!(
+                    stderr.len() <= USBIP_UNBIND_STDERR_LIMIT,
+                    "stderr was not bounded: {} bytes",
+                    stderr.len()
+                );
+            }
+            other => panic!("expected NonZeroExit, got {other:?}"),
+        }
+
+        if let Some(root) = helper.parent() {
+            let _ = std::fs::remove_dir_all(root);
+        }
     }
 
     #[test]

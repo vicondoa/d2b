@@ -1,12 +1,12 @@
 //! Per-busid USBIP lock helper.
 //!
 //! Per `nixling_core::host::UsbipBusidLock`, every USBIP-capable VM
-//! claims its busid via a daemon-owned exclusivity lock at
+//! claims its busid via a broker-owned exclusivity record at
 //! `/run/nixling/locks/usbip/<bus_id>`. The broker is the single
-//! writer of that file; the daemon may read it for status display
-//! but cannot mutate it. The lock file body records the owning VM
-//! name so post-restart reconciliation can verify ownership without
-//! re-running the bind.
+//! writer of that file; the daemon may read it via the `nixlingd`
+//! group for status display but cannot mutate it. The lock file body
+//! records the owning VM name so post-restart reconciliation can
+//! verify ownership without re-running the bind.
 //!
 //! Lock semantics:
 //!
@@ -77,107 +77,19 @@ impl std::fmt::Display for UsbipLockError {
 
 impl std::error::Error for UsbipLockError {}
 
-/// Create the parent dir for a busid lock file.
+/// Open the pre-created parent dir for a busid lock file.
 pub fn ensure_lock_root(parent: &Path) -> Result<OwnedFd, UsbipLockError> {
-    use rustix::fs::OFlags;
-
-    let full_parent = if parent.is_absolute() {
-        parent.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map(|cwd| cwd.join(parent))
-            .map_err(|e| UsbipLockError::Io {
-                path: parent.to_path_buf(),
-                detail: e.to_string(),
-            })?
-    };
-    let current_uid = nix::unistd::Uid::current().as_raw();
-    let current_gid = nix::unistd::Gid::current().as_raw();
-    let mut current_fd =
-        crate::sys::path_safe::open_dir_path_safe(Path::new("/")).map_err(|e| {
-            UsbipLockError::Io {
-                path: PathBuf::from("/"),
-                detail: e.to_string(),
-            }
-        })?;
-    let mut saw_component = false;
-    let mut components = full_parent.components().peekable();
-    while let Some(component) = components.next() {
-        match component {
-            std::path::Component::RootDir | std::path::Component::CurDir => continue,
-            std::path::Component::ParentDir => {
-                return Err(UsbipLockError::Io {
-                    path: full_parent.clone(),
-                    detail: format!(
-                        "path-safety-violation: lock root must not contain ..: {}",
-                        full_parent.display()
-                    ),
-                });
-            }
-            std::path::Component::Normal(part) => {
-                saw_component = true;
-                let name = part.to_str().ok_or_else(|| UsbipLockError::Io {
-                    path: full_parent.clone(),
-                    detail: format!(
-                        "lock root component is not valid UTF-8: {}",
-                        full_parent.display()
-                    ),
-                })?;
-                let is_final = components.peek().is_none();
-                current_fd = match crate::sys::path_safe::open_at(
-                    current_fd.as_fd(),
-                    Path::new(name),
-                    OFlags::RDONLY | OFlags::DIRECTORY,
-                ) {
-                    Ok(fd) => {
-                        if is_final {
-                            crate::sys::path_safe::fchmod(fd.as_fd(), 0o755).map_err(|e| {
-                                UsbipLockError::Io {
-                                    path: full_parent.clone(),
-                                    detail: e.to_string(),
-                                }
-                            })?;
-                        }
-                        fd
-                    }
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                        crate::sys::path_safe::ensure_dir_path_safe(
-                            &current_fd,
-                            name,
-                            0o755,
-                            current_uid,
-                            current_gid,
-                        )
-                        .map_err(|e| UsbipLockError::Io {
-                            path: full_parent.clone(),
-                            detail: e.to_string(),
-                        })?
-                    }
-                    Err(err) => {
-                        return Err(UsbipLockError::Io {
-                            path: full_parent.clone(),
-                            detail: err.to_string(),
-                        });
-                    }
-                };
-            }
-            std::path::Component::Prefix(_) => unreachable!("unix paths never contain prefixes"),
-        }
-    }
-    if !saw_component {
-        return Err(UsbipLockError::Io {
-            path: full_parent,
-            detail: "path-safety-violation: lock root has no components".to_owned(),
-        });
-    }
-    Ok(current_fd)
+    open_existing_lock_parent(parent).map_err(|e| UsbipLockError::Io {
+        path: parent.to_path_buf(),
+        detail: e.to_string(),
+    })
 }
 
 /// Acquire a per-busid lock; refuses if already held.
 pub fn acquire_lock(
     lock_path: &Path,
     owner_vm: &str,
-    daemon_uid: u32,
+    _daemon_uid: u32,
     daemon_gid: u32,
 ) -> Result<(), UsbipLockError> {
     let full_lock_path = resolve_lock_path(lock_path).map_err(|e| UsbipLockError::Io {
@@ -208,7 +120,8 @@ pub fn acquire_lock(
                 path: full_lock_path.clone(),
                 detail: e.to_string(),
             })?;
-            crate::sys::path_safe::fchown(f.as_fd(), Some(daemon_uid), Some(daemon_gid)).map_err(
+            let broker_uid = nix::unistd::Uid::current().as_raw();
+            crate::sys::path_safe::fchown(f.as_fd(), Some(broker_uid), Some(daemon_gid)).map_err(
                 |e| UsbipLockError::Io {
                     path: full_lock_path.clone(),
                     detail: e.to_string(),
@@ -432,6 +345,44 @@ mod tests {
         assert_eq!(mode, 0o640);
         assert_eq!(metadata.uid(), uid);
         assert_eq!(metadata.gid(), gid);
+    }
+
+    #[test]
+    fn acquire_uses_broker_uid_and_daemon_gid_for_record() {
+        let tmp = temp_lock_dir();
+        let lock = tmp.path().join("1-2.3");
+        let broker_uid = nix::unistd::Uid::current().as_raw();
+        let daemon_uid = if broker_uid == 0 { 1 } else { 0 };
+        let daemon_gid = nix::unistd::Gid::current().as_raw();
+        acquire_lock(&lock, "work-vm", daemon_uid, daemon_gid).unwrap();
+        let metadata = fs::symlink_metadata(&lock).expect("lock metadata");
+        assert_eq!(metadata.uid(), broker_uid);
+        assert_eq!(metadata.gid(), daemon_gid);
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o640);
+    }
+
+    #[test]
+    fn acquire_preserves_precreated_lock_root_mode() {
+        let tmp = temp_lock_dir();
+        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o750))
+            .expect("chmod lock root");
+        let lock = tmp.path().join("1-2.4");
+        let uid = nix::unistd::Uid::current().as_raw();
+        let gid = nix::unistd::Gid::current().as_raw();
+        acquire_lock(&lock, "work-vm", uid, gid).unwrap();
+        let metadata = fs::symlink_metadata(tmp.path()).expect("lock root metadata");
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o750);
+    }
+
+    #[test]
+    fn acquire_requires_precreated_lock_root() {
+        let tmp = temp_lock_dir();
+        let lock = tmp.path().join("missing").join("1-2.5");
+        let uid = nix::unistd::Uid::current().as_raw();
+        let gid = nix::unistd::Gid::current().as_raw();
+        let err = acquire_lock(&lock, "work-vm", uid, gid).unwrap_err();
+        assert!(matches!(err, UsbipLockError::Io { .. }));
+        assert!(!tmp.path().join("missing").exists());
     }
 
     #[test]

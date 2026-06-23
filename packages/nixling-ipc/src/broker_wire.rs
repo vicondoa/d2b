@@ -1214,13 +1214,15 @@ pub struct UpdateHostsFileRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// USBIP live device routing is refused with `unknown-operation` audit
-/// until the broker supports these variants.
+/// USBIP live device routing. The daemon supplies only the opaque bind intent
+/// id; the broker resolves busid, VM, env, lock path, and physical allowlist
+/// from its trusted bundle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipBindRequest {
-    pub bus_id: String,
-    pub vm_id: VmId,
+    pub bundle_usbip_bind_intent_ref: BundleOpId,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
 }
 
 /// USBIP firewall-rule skeleton. The rule body and the bus_id are
@@ -1244,12 +1246,22 @@ pub struct UsbipBindFirewallRuleRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipProxyReconcileRequest {
     pub scope_id: ScopeId,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipUnbindRequest {
-    pub bus_id: String,
+    pub bundle_usbip_bind_intent_ref: BundleOpId,
+    /// VM stop/restart tears down active host carrier state while preserving the
+    /// host-session same-VM claim so the next start can replay it in the current
+    /// host boot. Explicit detach leaves this false and releases the claim after
+    /// unbind/ACL revoke.
+    #[serde(default)]
+    pub preserve_durable_claim: bool,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1928,6 +1940,29 @@ mod tests {
                 );
             }
             other => panic!("expected UsbipBindFirewallRule, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn usbip_proxy_reconcile_carries_optional_trace_context() {
+        let frame = encode_frame(&serde_json::json!({
+            "kind": "UsbipProxyReconcile",
+            "payload": {
+                "scopeId": "vm:corp-vm",
+                "tracingSpanId": "usb-start-0000000000000001"
+            }
+        }))
+        .expect("encodes");
+        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
+        match decoded {
+            BrokerRequest::UsbipProxyReconcile(req) => {
+                assert_eq!(req.scope_id.as_str(), "vm:corp-vm");
+                assert_eq!(
+                    req.tracing_span_id.as_ref().map(TracingSpanId::as_str),
+                    Some("usb-start-0000000000000001")
+                );
+            }
+            other => panic!("expected UsbipProxyReconcile, got {other:?}"),
         }
     }
 

@@ -173,7 +173,8 @@ let
     assert vsockValues (chArgv name) == [ (expectedVsockArg name) ];
     true;
   assertStateDirTmpfile = name:
-    assert builtins.elem "d /var/lib/nixling/vms/${name} 3770 microvm kvm -" tmpfilesRules;
+    assert builtins.elem "d /var/lib/nixling/vms/${name} 3770 nixlingd users -" tmpfilesRules;
+    assert builtins.elem "z /var/lib/nixling/vms/${name} 3770 nixlingd users -" tmpfilesRules;
     true;
   alphaReadiness = processNode "alpha-vm" "guest-control-health";
   legacyExpectedCid = nl.guestControlVsockCid {

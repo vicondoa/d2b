@@ -141,7 +141,7 @@
     # Do not enable this for VMs that run privileged Docker/container workloads.
     graphics.crossDomainTrusted = true;
     audio.enable    = true;         # vhost-user-sound → host PipeWire
-    usbip.yubikey   = true;         # `nixling usb corp-desktop` attaches a YubiKey
+    usbip.yubikey   = true;         # `nixling usb attach corp-desktop <busid> --apply`
     guest.control.enable = true;    # guestd owns guest-side USBIP import
 
     # Audio grants are OFF by default. The host-side audio sidecar

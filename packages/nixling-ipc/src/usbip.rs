@@ -16,6 +16,24 @@ pub enum BusIdError {
 /// so the printable busid is at most 31 chars.
 pub const SYSFS_BUS_ID_MAX: usize = 31;
 
+/// Normalize a USB `idVendor` / `idProduct` string for redacted status or audit
+/// projections. Only exact four-hex descriptors survive; malformed or
+/// device-private strings collapse to `None`.
+pub fn sanitize_usb_hex_id(value: Option<&str>) -> Option<String> {
+    let value = value?;
+    if value.len() == 4 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Some(value.to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
+/// Render a kernel-read USB vendor/product integer as the canonical four-hex
+/// descriptor used in privileged audit records.
+pub fn format_usb_hex_id(value: u16) -> String {
+    format!("{value:04x}")
+}
+
 /// Validate a USB bus id shape. Accepted forms:
 ///
 /// - `B` (root hub bus, rare): digits, no leading zeros except `0`.
@@ -68,6 +86,23 @@ mod tests {
     fn rejects_non_canonical_bus_ids() {
         for bus_id in ["", "01", "1-", "1-.2", "1-02", "1-2.", "1-2/a", "1-٢"] {
             assert!(validate_bus_id(bus_id).is_err(), "{bus_id:?} should fail");
+        }
+    }
+
+    #[test]
+    fn sanitizes_usb_hex_ids_for_projection() {
+        assert_eq!(sanitize_usb_hex_id(Some("1050")), Some("1050".to_owned()));
+        assert_eq!(sanitize_usb_hex_id(Some("ABCD")), Some("abcd".to_owned()));
+        assert_eq!(format_usb_hex_id(0x0407), "0407");
+
+        for rejected in [
+            None,
+            Some(""),
+            Some("1050\n"),
+            Some("serial"),
+            Some("12345"),
+        ] {
+            assert_eq!(sanitize_usb_hex_id(rejected), None);
         }
     }
 }

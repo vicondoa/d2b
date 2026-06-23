@@ -36,6 +36,13 @@ pub struct ListItemOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbProbeOutputV1 {
+    pub command: String,
+    pub entries: Vec<crate::public_wire::UsbipProbeEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmExecCreateOutputV1 {
     pub command: String,
     pub vm: String,
@@ -337,6 +344,8 @@ pub struct StatusVmOutputV2 {
     pub runner_parity: Option<RunnerParityOutputV2>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub live_pool_integrity: Option<LivePoolIntegrityOutputV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usb: Option<crate::public_wire::UsbipVmStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

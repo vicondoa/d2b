@@ -51,6 +51,8 @@
     "ttyWinResize",
     "usbipImport",
     "usbipImportResult",
+    "usbipStatus",
+    "usbipStatusResult",
     "writeStdin",
     "writeStdinResult"
   ],
@@ -200,6 +202,12 @@
     },
     "usbipImportResult": {
       "$ref": "#/definitions/UsbipImportResponse"
+    },
+    "usbipStatus": {
+      "$ref": "#/definitions/UsbipStatusRequest"
+    },
+    "usbipStatusResult": {
+      "$ref": "#/definitions/UsbipStatusResponse"
     },
     "writeStdin": {
       "$ref": "#/definitions/WriteStdinRequest"
@@ -1081,7 +1089,8 @@
         "usbip-import",
         "shell-attached",
         "shell-management",
-        "shell-force-attach"
+        "shell-force-attach",
+        "usbip-status"
       ]
     },
     "GuestConnectAckLine": {
@@ -1181,7 +1190,9 @@
         "shell-already-attached",
         "shell-pool-unavailable",
         "shell-daemon-epoch-mismatch",
-        "shell-output-gap"
+        "shell-output-gap",
+        "usbip-command-timeout",
+        "usbip-invalid-output"
       ]
     },
     "GuestCwd": {
@@ -2611,6 +2622,95 @@
               "type": "null"
             }
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipStatusEntry": {
+      "type": "object",
+      "required": [
+        "busId",
+        "host",
+        "port",
+        "tcpPort"
+      ],
+      "properties": {
+        "busId": {
+          "$ref": "#/definitions/GuestUsbipBusId"
+        },
+        "host": {
+          "$ref": "#/definitions/GuestUsbipHost"
+        },
+        "port": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 65535.0,
+          "minimum": 0.0
+        },
+        "tcpPort": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 65535.0,
+          "minimum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipStatusRequest": {
+      "description": "Side-effect-free guest USBIP import observation. Optional filters are validated with the same closed host/bus-id rules as `UsbipImport`.",
+      "type": "object",
+      "required": [
+        "metadata"
+      ],
+      "properties": {
+        "busId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestUsbipBusId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestUsbipHost"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipStatusResponse": {
+      "type": "object",
+      "required": [
+        "imports"
+      ],
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "imports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/UsbipStatusEntry"
+          },
+          "maxItems": 64
         }
       },
       "additionalProperties": false

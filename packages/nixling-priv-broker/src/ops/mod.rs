@@ -34,6 +34,8 @@ pub mod nft;
 pub mod usbip_firewall;
 // Per-busid USBIP exclusivity lock helper.
 pub mod usbip_lock;
+// Broker-side USBIP host inspection and physical-policy enforcement.
+pub mod usbip_host;
 
 // Kernel-module + device-fd handoff ops.
 pub mod device;

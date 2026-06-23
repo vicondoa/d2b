@@ -21,11 +21,12 @@
 #                             consumers should use the migration script.
 #
 # What remains here
-#   - nixlingVmStatePerms       — per-graphics-VM ACLs on the state dir
-#                                 + var.img + every *.img disk so the
+#   - nixlingVmStatePerms       — per-graphics-VM ACLs on the state dir so the
 #                                 nixling-<vm>-gpu sidecar user (not
-#                                 microvm) can read/write them.
-#   - nixlingNetVmVarImgPerms   — net VMs use microvm:kvm 0660 on var.img.
+#                                 microvm) can read/write it. Directory
+#                                 posture is tmpfiles-owned.
+#   - nixlingNetVmVarImgPerms   — compatibility tombstone; net-VM var.img
+#                                 creation/posture is broker DiskInit-owned.
 #   - nixlingMigrateOwnership   — repair orphan swtpm-state UIDs after
 #                                 service-user renames, gated on
 #                                 `tpm.enable` and skipped for running VMs.
@@ -103,8 +104,70 @@ EOF
       [ (if legacyLauncherGid == null then null else toString legacyLauncherGid)
         (if legacyLaunchersGid == null then null else toString legacyLaunchersGid)
       ]);
+  tmpfilesDir = path: mode: user: group: [
+    "d ${path} ${mode} ${user} ${group} -"
+    "z ${path} ${mode} ${user} ${group} -"
+  ];
+  tmpfilesAcl = path: acl: [
+    "a+ ${path} - - - - ${acl}"
+  ];
+  perVmNamedStateTraversalAcls = lib.concatLists [
+    (lib.concatLists (lib.mapAttrsToList (name: _: tmpfilesAcl "/var/lib/nixling" "u:nixling-${name}-gpu:--x")
+      (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms)))
+    (lib.concatLists (lib.mapAttrsToList (name: _: tmpfilesAcl "/var/lib/nixling" "u:nixling-${name}-video:--x")
+      (lib.filterAttrs (_: vm: vm.graphics.enable && vm.graphics.videoSidecar) normalNixosVms)))
+    (lib.concatLists (lib.mapAttrsToList (name: _: tmpfilesAcl "/var/lib/nixling" "u:nixling-${name}-wlproxy:--x")
+      ((lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms) // qemuMediaVms)))
+    (lib.concatLists (lib.mapAttrsToList (name: _: tmpfilesAcl "/var/lib/nixling" "u:nixling-${name}-snd:--x")
+      (lib.filterAttrs (_: vm: vm.audio.enable) normalNixosVms)))
+    (lib.concatLists (lib.mapAttrsToList (name: _: tmpfilesAcl "/var/lib/nixling" "u:nixling-${name}-swtpm:--x")
+      (lib.filterAttrs (_: vm: vm.tpm.enable) normalNixosVms)))
+    (lib.concatLists (lib.mapAttrsToList (name: _: tmpfilesAcl "/var/lib/nixling" "u:nixling-${name}-qemu-media:--x")
+      qemuMediaVms))
+  ];
+  perNormalVmPostureTmpfiles = lib.concatLists (lib.mapAttrsToList
+    (name: vm: lib.concatLists [
+      (tmpfilesDir "/var/lib/nixling/vms/${name}" "3770" "nixlingd" "users")
+      (tmpfilesDir "/run/nixling/vms/${name}" "0750" "nixlingd" "nixling")
+      (tmpfilesDir "/run/nixling/vms/${name}/guest-control" "0750" "nixlingd" "nixling")
+      (tmpfilesDir "/run/nixling-gpu/${name}" "0750" "nixlingd" "nixling")
+      (tmpfilesDir "/run/nixling-video/${name}" "0750" "nixlingd" "nixling")
+      (tmpfilesDir "/run/nixling-wlproxy/${name}" "0750" "nixlingd" "nixling")
+      (tmpfilesDir "/var/lib/nixling/vms/${name}/store-view" "0755" "nixlingd" "users")
+      (tmpfilesDir "/var/lib/nixling/vms/${name}/store-view/live" "0755" "nixlingd" "users")
+      (tmpfilesDir "/var/lib/nixling/vms/${name}/store-view/meta" "0755" "nixlingd" "users")
+      (lib.optionals vm.tpm.enable (tmpfilesAcl "/var/lib/nixling/vms/${name}" "u:nixling-${name}-swtpm:--x"))
+      (lib.optionals vm.graphics.enable (tmpfilesAcl "/var/lib/nixling/vms/${name}" "u:nixling-${name}-gpu:rwx"))
+      (lib.optionals vm.graphics.enable (tmpfilesAcl "/var/lib/nixling/vms/${name}" "default:u:nixling-${name}-gpu:rw"))
+      (lib.optionals vm.graphics.enable (tmpfilesAcl "/var/lib/nixling/vms/${name}" "default:g::r-x"))
+    ])
+    normalNixosVms);
+  perQemuMediaPostureTmpfiles = lib.concatLists (lib.mapAttrsToList
+    (name: _: lib.concatLists [
+      (tmpfilesDir "/var/lib/nixling/vms/${name}" "0750" "nixling-${name}-qemu-media" "nixling-${name}-qemu-media")
+      (tmpfilesDir "/run/nixling/vms/${name}" "0750" "nixlingd" "nixling")
+      (tmpfilesDir "/run/nixling-wlproxy/${name}" "0750" "nixlingd" "nixling")
+    ])
+    qemuMediaVms);
 in
 {
+  systemd.tmpfiles.rules = lib.concatLists [
+    [
+      "z /var/lib/nixling 0750 root nixlingd -"
+    ]
+    (tmpfilesAcl "/var/lib/nixling" "u:microvm:--x")
+    (tmpfilesAcl "/var/lib/nixling" "g:kvm:--x")
+    (tmpfilesAcl "/var/lib/nixling" "g:nixling:--x")
+    perVmNamedStateTraversalAcls
+    (tmpfilesDir "/run/nixling/vms" "0750" "nixlingd" "nixling")
+    (tmpfilesDir "/run/nixling/otel" "0750" "nixlingd" "nixling")
+    (tmpfilesDir "/run/nixling-gpu" "0750" "nixlingd" "nixling")
+    (tmpfilesDir "/run/nixling-video" "0750" "nixlingd" "nixling")
+    (tmpfilesDir "/run/nixling-wlproxy" "0750" "nixlingd" "nixling")
+    perNormalVmPostureTmpfiles
+    perQemuMediaPostureTmpfiles
+  ];
+
   system.activationScripts.nixlingGroupMigration =
     lib.stringAfter [ "users" ] ''
       target_gid="$(${pkgs.getent}/bin/getent group nixling | ${pkgs.coreutils}/bin/cut -d: -f3)"
@@ -162,24 +225,9 @@ in
     if [ ! -d "$state_dir" ]; then
       exit 0
     fi
-    # Re-assert canonical mode + ownership (defense-in-depth
-    # against any 0755 chmod workaround a previous v0.x install
-    # may have left behind).
-    chown root "$state_dir" || true
-    chgrp nixlingd "$state_dir" || true
-    chmod 0750 "$state_dir" || true
-    # Per-sidecar-user traversal grants. Each grant is `--x`
-    # (chdir only); the per-VM subdir under it owns its own
-    # read/write ACL.
-    # `microvm` is a system user (created by host.nix /
-    # nixos.users); grant `u:microvm:--x`.
-    ${pkgs.acl}/bin/setfacl -m "u:microvm:--x" "$state_dir" 2>/dev/null || true
-    # `kvm` is a Linux GROUP (not a user) — every sidecar that
-    # opens /dev/kvm is in this group. Grant `g:kvm:--x` so any
-    # group member can traverse the state-dir parent. Treating
-    # `kvm` as a user (the v1.1-rc1 bug) silently grants nothing
-    # because no `kvm` user exists.
-    ${pkgs.acl}/bin/setfacl -m "g:kvm:--x" "$state_dir" 2>/dev/null || true
+    # Canonical root posture and static traversal ACLs are declared as
+    # tmpfiles rules above. This activation script is retained only as a
+    # compatibility fallback for hosts whose switch did not run tmpfiles.
     # `nixling` is the lifecycle group whose
     # members can call the public daemon socket AND read per-VM
     # SSH keys from `${cfg.site.keysDir}` (each key file is mode
@@ -204,20 +252,7 @@ in
       LAUNCHER_GROUP=nixling \
       SETFACL_BIN=${pkgs.acl}/bin/setfacl \
       . ${./host-activation.d/state-dir-acl.sh}
-    # Per-VM sidecar users: enumerated by mapAttrs over enabled
-    # nixos/qemu-media runtime VMs. Each VM contributes only the
-    # users that exist on this host; qemu-media uses the qemu-media
-    # suffix and normal NixOS VMs use gpu/swtpm/audio/video/wlproxy.
-  '' + lib.concatStringsSep "\n" (lib.mapAttrsToList
-    (name: _: ''
-      for suffix in gpu swtpm audio video wlproxy qemu-media; do
-        user="nixling-${name}-$suffix"
-        if id "$user" >/dev/null 2>&1; then
-          ${pkgs.acl}/bin/setfacl -m "u:$user:--x" /var/lib/nixling 2>/dev/null || true
-        fi
-      done
-    '')
-    roleAclVms));
+  '');
 
   # Per-graphics-VM state-dir ownership and ACLs.
   # update: ownership matches the per-VM ownership matrix
@@ -233,9 +268,6 @@ in
     (lib.concatStringsSep "\n" (lib.mapAttrsToList
       (name: _: ''
         if [ -d /var/lib/nixling/vms/${name} ]; then
-          chown nixlingd /var/lib/nixling/vms/${name} || true
-          chgrp users /var/lib/nixling/vms/${name} || true
-          chmod 3770 /var/lib/nixling/vms/${name} || true
           ${pkgs.acl}/bin/setfacl -m "g::r-x" /var/lib/nixling/vms/${name} || true
           ${pkgs.acl}/bin/setfacl -m "u:nixling-${name}-gpu:rwx" /var/lib/nixling/vms/${name} || true
           ${pkgs.acl}/bin/setfacl -d -m "g::r-x" /var/lib/nixling/vms/${name} || true
@@ -244,39 +276,21 @@ in
       '')
       (lib.filterAttrs (_: vm: vm.graphics.enable) (nl.normalNixosVms cfg.vms))));
 
-  # TPM VMs need an explicit traverse ACL for the dedicated swtpm user on
-  # the parent VM state dir, regardless of whether the VM is graphics-backed
-  # or headless. The swtpm subdir itself is broker-provisioned at VM start
-  # (issue #64); this parent-dir grant is only for the path walk into `swtpm/`.
+  # TPM parent traversal ACLs are tmpfiles-owned. The swtpm subdir itself is
+  # broker-provisioned at VM start (issue #64).
   system.activationScripts.nixlingTpmStatePerms = lib.stringAfter [ "users" ]
-    (lib.concatStringsSep "\n" (lib.mapAttrsToList
-      (name: _: ''
-        if [ -d /var/lib/nixling/vms/${name} ]; then
-          # nixling-${name}-swtpm needs +x on the parent state dir to
-          # traverse into its `swtpm/` subdir. The swtpm dir is
-          # provisioned by the broker before the swtpm runner spawns
-          # (not by systemd StateDirectory=). Without this traverse
-          # grant the swtpm runner fails to open tpm2-00.permall with
-          # EACCES, libtpms enters failure mode, and the VM boots with
-          # a freshly-initialised TPM — triggering Entra/Intune
-          # device-tampering alerts for tenant-enrolled VMs.
-          ${pkgs.acl}/bin/setfacl -m "u:nixling-${name}-swtpm:--x" /var/lib/nixling/vms/${name} || true
-        fi
-      '')
-      (lib.filterAttrs (_: vm: vm.tpm.enable) (nl.normalNixosVms cfg.vms))));
+    ''
+      true
+    '';
 
-  # Non-graphics VMs (net VMs) also need the parent state-dir posture.
-  # Disk-image ownership/mode repair belongs to broker DiskInit, not activation:
-  # the broker has the bundle-declared image path, size, owner, mode, and
-  # fd-safe validation immediately before cloud-hypervisor spawn.
+  # Non-graphics VM volume image creation/posture is broker DiskInit-owned via
+  # the cloud-hypervisor node's planOps. Keep this activation snippet as an
+  # empty compatibility tombstone so existing script-order references do not
+  # break, but do not mutate var.img from activation.
   system.activationScripts.nixlingNetVmVarImgPerms = lib.stringAfter [ "users" ]
     (lib.concatStringsSep "\n" (lib.mapAttrsToList
       (name: _: ''
-          if [ -d /var/lib/nixling/vms/${name} ]; then
-            chown nixlingd /var/lib/nixling/vms/${name} || true
-            chgrp users /var/lib/nixling/vms/${name} || true
-            chmod 3770 /var/lib/nixling/vms/${name} || true
-          fi
+          : # var.img ownership/creation is broker DiskInit-owned.
       '')
       (lib.filterAttrs (_: vm: !vm.graphics.enable) (nl.normalNixosVms cfg.vms))));
 
@@ -350,17 +364,10 @@ in
           ${activationHelper} clear-acl-on-path --path "/var/lib/nixling/guest-control-${name}/token" --require-kind regular --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
           for uid in $qemu_media_session_uids; do
             [ "$uid" = "0" ] && continue
-            ${pkgs.coreutils}/bin/mkdir -p /var/lib/nixling/vms/${name} 2>/dev/null || true
-            ${pkgs.coreutils}/bin/chown "$uid:$uid" /var/lib/nixling/vms/${name} 2>/dev/null || true
-            ${pkgs.coreutils}/bin/chmod 0750 /var/lib/nixling/vms/${name} 2>/dev/null || true
-            ${pkgs.coreutils}/bin/chmod g-s /var/lib/nixling/vms/${name} 2>/dev/null || true
             ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
             ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
             ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/nixling 2>/dev/null || true
-            ${pkgs.coreutils}/bin/mkdir -p /run/nixling/vms/${name} 2>/dev/null || true
             ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/nixling/vms 2>/dev/null || true
-            ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/vms/${name} 2>/dev/null || true
-            ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/vms/${name} 2>/dev/null || true
             ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/vms/${name} 2>/dev/null || true
             ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/vms/${name} 2>/dev/null || true
           done
@@ -382,7 +389,6 @@ in
               --require-kind regular \
               --setfacl-bin "${pkgs.acl}/bin/setfacl" \
               2>/dev/null || true
-            ${pkgs.coreutils}/bin/mkdir -p /run/nixling/vms/${name}/guest-control 2>/dev/null || true
             nixlingd_uid=$(${pkgs.getent}/bin/getent passwd nixlingd | ${pkgs.coreutils}/bin/cut -d: -f3)
             nixling_gid=$(${pkgs.getent}/bin/getent group nixling | ${pkgs.coreutils}/bin/cut -d: -f3)
             if [ -n "$nixlingd_uid" ] && [ -n "$nixling_gid" ]; then
@@ -499,7 +505,6 @@ in
                   --require-kind regular \
                   --setfacl-bin "${pkgs.acl}/bin/setfacl" \
                   2>/dev/null || true
-                ${pkgs.coreutils}/bin/mkdir -p /run/nixling/vms/${name}/guest-control 2>/dev/null || true
                 nixlingd_uid=$(${pkgs.getent}/bin/getent passwd nixlingd | ${pkgs.coreutils}/bin/cut -d: -f3)
                 nixling_gid=$(${pkgs.getent}/bin/getent group nixling | ${pkgs.coreutils}/bin/cut -d: -f3)
                 if [ -n "$nixlingd_uid" ] && [ -n "$nixling_gid" ]; then
@@ -533,9 +538,6 @@ in
                 continue
               fi
               if echo "$otel_host_bridge_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
-                ${pkgs.coreutils}/bin/mkdir -p /run/nixling/otel 2>/dev/null || true
-                ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/otel 2>/dev/null || true
-                ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/otel 2>/dev/null || true
                 ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/otel 2>/dev/null || true
                 ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/otel 2>/dev/null || true
               fi
@@ -625,9 +627,6 @@ in
                   --setfacl-bin "${pkgs.acl}/bin/setfacl" \
                   2>/dev/null || true
               done
-              ${pkgs.coreutils}/bin/mkdir -p /run/nixling/vms/${name} 2>/dev/null || true
-              ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/vms/${name} 2>/dev/null || true
-              ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/vms/${name} 2>/dev/null || true
               ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/vms/${name} 2>/dev/null || true
               # DEFAULT ACL so sockets created by any
               # per-VM ephemeral UID inherit cross-UID rw. CH
@@ -639,9 +638,6 @@ in
               # Used as bind-mount destinations by the broker
               # (cross-domain bind for the Wayland socket, etc).
               # Mode 0750 with ACL grants for ephemeral UIDs.
-              ${pkgs.coreutils}/bin/mkdir -p /run/nixling-gpu/${name} /run/nixling-video/${name} 2>/dev/null || true
-              ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling-gpu/${name} /run/nixling-video/${name} 2>/dev/null || true
-              ${pkgs.coreutils}/bin/chmod 0750 /run/nixling-gpu/${name} /run/nixling-video/${name} 2>/dev/null || true
               ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling-gpu/${name} 2>/dev/null || true
               if echo "$video_media_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
                 ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling-video/${name} 2>/dev/null || true
@@ -653,9 +649,6 @@ in
               # Per-VM Wayland filter proxy runtime dir.
               # wlproxy UID gets rwx (binds the listen socket);
               # all other UIDs get --x (traverse to connect-by-path).
-              ${pkgs.coreutils}/bin/mkdir -p /run/nixling-wlproxy/${name} 2>/dev/null || true
-              ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling-wlproxy/${name} 2>/dev/null || true
-              ${pkgs.coreutils}/bin/chmod 0750 /run/nixling-wlproxy/${name} 2>/dev/null || true
               if echo "$wlproxy_wayland_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
                 ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling-wlproxy/${name} 2>/dev/null || true
                 ${pkgs.acl}/bin/setfacl -d -x "u:$uid" /run/nixling-wlproxy/${name} 2>/dev/null || true
@@ -982,7 +975,6 @@ in
           # only the runner-readable top-level paths here.
           for sub in store-view store-view/live store-view/meta; do
             path="$vm_dir/$sub"
-            ${pkgs.coreutils}/bin/mkdir -p "$path" 2>/dev/null || true
             [ -d "$path" ] && ${pkgs.acl}/bin/setfacl -k "$path" 2>/dev/null || true
             ${activationHelper} enforce-dir-posture \
               --path "$path" \

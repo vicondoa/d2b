@@ -223,6 +223,8 @@ let
     in {
       env = envName;
       bridge = m.lanBridge;
+      hostUplinkIp = m.hostUplinkIp;
+      netUplinkIp = m.netUplinkIp;
       bridgePortFlags = [
       {
         role = "net-vm-lan";

@@ -369,9 +369,14 @@ in
       # LOCK_NB)` files taken by the daemon for the entire `up` /
       # `prepare` / `destroy` mutation window. Mode 0700 nixlingd
       # nixlingd so only the daemon (and root) can open the lock file.
-      # Cleared on every boot via the standard
-      # tmpfiles `d` rule semantics.
+      # Cleared on every boot via the standard tmpfiles `d` rule
+      # semantics.
       "d /run/nixling/locks 0700 nixlingd nixlingd -"
+      # USBIP busid lock claims are broker-written records read by the
+      # daemon. Keep the claim root root-owned so nixlingd can read
+      # and traverse it via the nixlingd group but cannot create or
+      # replace lock claims itself.
+      "d /run/nixling/locks/usbip 0750 root nixlingd -"
       "d /run/nixling/state 0700 nixlingd nixlingd -"
       "d /var/lib/nixling 0750 root nixlingd -"
       "d /var/lib/nixling/daemon-state 0700 nixlingd nixlingd -"
@@ -384,8 +389,12 @@ in
       # and the restarted daemon re-adopts broker-spawned runners by identity.
       description = "nixling daemon skeleton";
       wantedBy = [ "multi-user.target" ];
-      wants = [ "nixling-priv-broker.socket" ];
+      wants = [
+        "nixling-priv-broker.socket"
+        "systemd-tmpfiles-setup.service"
+      ];
       after = [
+        "systemd-tmpfiles-setup.service"
         "network.target"
         "nixling-priv-broker.socket"
         "nixling-priv-broker.service"

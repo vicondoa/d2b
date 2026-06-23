@@ -2215,7 +2215,7 @@ _nixling__subcmd__help__subcmd__usb_commands() {
     local commands; commands=(
 'attach:Bind a host USB busid to a VM via the native daemon path' \
 'detach:Unbind a host USB busid from a VM via the native daemon path' \
-'probe:List daemon-declared USBIP claims and qemu-media USB candidates' \
+'probe:List daemon-declared USBIP session claims and qemu-media USB candidates' \
     )
     _describe -t commands 'nixling help usb commands' commands "$@"
 }
@@ -2654,7 +2654,7 @@ _nixling__subcmd__usb_commands() {
     local commands; commands=(
 'attach:Bind a host USB busid to a VM via the native daemon path' \
 'detach:Unbind a host USB busid from a VM via the native daemon path' \
-'probe:List daemon-declared USBIP claims and qemu-media USB candidates' \
+'probe:List daemon-declared USBIP session claims and qemu-media USB candidates' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling usb commands' commands "$@"
@@ -2674,7 +2674,7 @@ _nixling__subcmd__usb__subcmd__help_commands() {
     local commands; commands=(
 'attach:Bind a host USB busid to a VM via the native daemon path' \
 'detach:Unbind a host USB busid from a VM via the native daemon path' \
-'probe:List daemon-declared USBIP claims and qemu-media USB candidates' \
+'probe:List daemon-declared USBIP session claims and qemu-media USB candidates' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling usb help commands' commands "$@"

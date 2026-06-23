@@ -1558,15 +1558,183 @@ pub struct KeysShowResponse {
     pub known_hosts_entry: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum UsbipProbeStatus {
     Bound,
+    #[default]
     Unbound,
+    Degraded,
     Enrollable,
     Enrolled,
     Stale,
     DirectConfig,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+/// Wire-compatible state name for the USBIP host-session claim. The backing
+/// lock lives under `/run/nixling/locks/usbip`, so the claim survives VM
+/// stop/restart and daemon restart during one host boot, but not host reboot.
+pub enum UsbipDurableClaimState {
+    #[default]
+    Missing,
+    HeldByDesiredOwner,
+    HeldByOtherOwner,
+    StaleOwner,
+    Corrupt,
+    NotApplicable,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Wire-compatible status object for the USBIP host-session claim. The JSON
+/// field is still named `durableClaim` for compatibility; treat it as durable
+/// only within the current host boot/session.
+pub struct UsbipDurableClaimStatus {
+    pub state: UsbipDurableClaimState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_vm: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum UsbipHostBindState {
+    Unbound,
+    BoundToUsbipHost,
+    BoundToUnexpectedDriver,
+    DeviceMissing,
+    NotApplicable,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum UsbipHostCarrierState {
+    Absent,
+    Unavailable,
+    WithheldForOwner,
+    Ready,
+    DepartedDuringProbe,
+    NotApplicable,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum UsbipProxyState {
+    NotDeclared,
+    Stopped,
+    Starting,
+    Listening,
+    Stale,
+    Failed,
+    NotApplicable,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbipHostProbeStatus {
+    pub bind: UsbipHostBindState,
+    pub carrier: UsbipHostCarrierState,
+    pub proxy: UsbipProxyState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum UsbipGuestImportState {
+    Detached,
+    Imported,
+    Unavailable,
+    NotApplicable,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbipGuestProbeStatus {
+    pub import: UsbipGuestImportState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum UsbipTopologyState {
+    Match,
+    Mismatch,
+    Incomplete,
+    NotObserved,
+    NotApplicable,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum UsbipPolicyState {
+    Allowed,
+    Denied,
+    Missing,
+    NotApplicable,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbipTopologyPolicyStatus {
+    pub topology: UsbipTopologyState,
+    pub policy: UsbipPolicyState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum UsbipProbeDegradedReasonCode {
+    PolicyFailed,
+    DeviceDepartedBeforeClaim,
+    DeviceDepartedAfterLock,
+    DeviceDepartedDuringMutation,
+    DeviceReappearedWithDifferentTopology,
+    LockHeldByOtherOwner,
+    InvalidPersistedLockClaim,
+    CarrierUnavailable,
+    HostBindUnavailable,
+    ProxyUnavailable,
+    GuestImportUnavailable,
+    StaleHostState,
+    StaleGuestState,
+    ProbeIncomplete,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbipProbeDegradedReason {
+    pub code: UsbipProbeDegradedReasonCode,
+    pub summary: String,
+    pub remediation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbipVmStatus {
+    pub degraded: bool,
+    pub entries: Vec<UsbipProbeEntry>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
@@ -1581,7 +1749,7 @@ fn is_default_usb_probe_entry_kind(kind: &UsbProbeEntryKind) -> bool {
     matches!(kind, UsbProbeEntryKind::Usbip)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipProbeEntry {
     #[serde(default, skip_serializing_if = "is_default_usb_probe_entry_kind")]
@@ -1603,6 +1771,20 @@ pub struct UsbipProbeEntry {
     pub candidate_bus_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_up_command: Option<String>,
+    #[serde(default)]
+    /// USBIP host-session claim status. Serialized as `durableClaim` for
+    /// compatibility with existing clients.
+    pub durable_claim: UsbipDurableClaimStatus,
+    #[serde(default)]
+    pub host: UsbipHostProbeStatus,
+    #[serde(default)]
+    pub guest: UsbipGuestProbeStatus,
+    #[serde(default)]
+    pub topology_policy: UsbipTopologyPolicyStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub degraded_reasons: Vec<UsbipProbeDegradedReason>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remediation_commands: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1701,6 +1883,8 @@ pub struct VmStatus {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unsupported_capabilities: Vec<String>,
     pub usbip: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usb: Option<UsbipVmStatus>,
     pub vm: String,
 }
 
