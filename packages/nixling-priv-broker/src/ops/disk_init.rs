@@ -1104,7 +1104,8 @@ mod tests {
         let message = err.to_string();
         assert!(
             message.contains("has data but no ext4 superblock")
-                || message.contains("automatic posture repair bypassed"),
+                || message.contains("automatic posture repair bypassed")
+                || message.contains("is not exclusively available for repair"),
             "unexpected error: {message}"
         );
         assert!(err.to_string().contains("inspect and back up"));
