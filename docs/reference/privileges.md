@@ -144,6 +144,7 @@ The currently implemented broker operation catalog. Every row carries
 | `GuestControlSign` | guest-control token | per VM | live | no | redacted-only | `nixlingd` | yes | deny | `vm_id`, `role`, `purpose`, `transcript_len`, `peer_cid_present`, `capabilities_hash_present` |
 | `SetupMountNamespace` | mount ns | per VM / role | live | partial (mount-root prep + bind target) | no | `nixling-launcher` + `nixling-admin` | yes | deny | `role_id`, `mount_root`, `mount_view_path`, `source_view_path` |
 | `DeregisterRunnerPidfd` | process registry | per VM / role | live | no | no | `nixling-launcher` + `nixling-admin` | yes | deny | `vm_id`, `role_id`, `removed` |
+| `DiskInit` | disk image | per VM | live | yes (create/format declared images; repair safe declared posture drift) | no | `nixlingd` | yes | deny | `vm_id`, `ops_total`, `ops_created`, `ops_skipped`, `ops_repaired`, `ops_posture_repaired`, `target_paths_hash` |
 
 ## Variants reserved on the wire (`unknown-operation`)
 
@@ -250,6 +251,7 @@ non-bootstrap dispatch surface as typed per-op payloads:
 - `UsbipUnbind { bus_id }`
 - `UsbipProxyReconcile {}`
 - `UsbipBindFirewallRule { bundle_usbip_firewall_intent_ref }`
+- `DiskInit { vm_id, ops_total, ops_created, ops_skipped, ops_repaired, ops_posture_repaired, target_paths_hash }`
 
 ### Runner roles (selected via `SpawnRunner.role`)
 
