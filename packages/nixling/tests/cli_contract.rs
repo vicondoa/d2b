@@ -4,7 +4,7 @@
 //! Spawns the real `nixling` binary against the rendered fixture-smoke bundle
 //! (NL_FIXTURES) + a synthetic systemd/bridge state fixture, and asserts that
 //! `list --json`:
-//!   * deserializes strictly into `nixling::ListOutputV2`
+//!   * deserializes strictly into `nixling_ipc::cli_output::ListOutputV2`
 //!     (`deny_unknown_fields` on `ListItemOutputV2` makes this the schema
 //!     check the bash gate did via docs/reference/cli-output/list.schema.json);
 //!   * returns the expected smoke inventory (2 VMs; corp-vm is the workload
@@ -19,7 +19,7 @@
 
 use std::process::Command;
 
-use nixling::ListOutputV2;
+use nixling_ipc::cli_output::ListOutputV2;
 
 // Mirrors tests/cli-rust-native-common.sh nl_write_system_state_fixture, but
 // also pins nixlingd.service (the bash helper omitted it, so the CLI fell back

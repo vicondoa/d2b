@@ -8,7 +8,7 @@
 //!     binary with every probe pinned through `NIXLING_HOST_CHECK_FIXTURE`,
 //!     covering the full exit-code lattice (0 pass / 1 warn / 2 fail /
 //!     3 usage), strict deserialization of `--json` into
-//!     `nixling::HostCheckOutputV2` (the `deny_unknown_fields` DTOs make this
+//!     `nixling_ipc::cli_output::HostCheckOutputV2` (the `deny_unknown_fields` DTOs make this
 //!     the schema check the bash gate ran against
 //!     docs/reference/cli-output/host-check.schema.json), the operator
 //!     `internal-io` error envelope for forced probe failures, and `--human`
@@ -41,7 +41,7 @@ use std::process::{Command, Output};
 
 use serde_json::{Map, Value, json};
 
-use nixling::{HostCheckOutputV2, HostCheckSeverityV2};
+use nixling_ipc::cli_output::{HostCheckOutputV2, HostCheckSeverityV2};
 
 use common::TestPeer;
 

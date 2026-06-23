@@ -48,6 +48,9 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- ADR 0035 Wave 3 moved stable CLI JSON output DTOs into the shared IPC contract
+  crate, keeping CLI presentation and schema generation on the same strict
+  deserialization contract.
 - ADR 0035 Wave 2 normalized internal NixOS VM/env indexing for network and host
   consumers, preserving network isolation semantics while making per-env USBIP
   backend ports an explicit generated host contract.
