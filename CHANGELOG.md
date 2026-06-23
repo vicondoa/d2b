@@ -141,6 +141,9 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- ADR 0035 Wave 5 added a contract-test policy that classifies every
+  `ProcessRole` and requires runner roles to carry Rust argv-builder plus
+  runner matrix/contract coverage before new roles land.
 - ADR 0035 Wave 4 decomposed CLI read-model/rendering helpers and daemon
   admission helpers into focused Rust modules while preserving output and
   authorization contracts.

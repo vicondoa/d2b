@@ -408,6 +408,12 @@ for the DAG node taxonomy and
 [`docs/reference/privileges.md`](./docs/reference/privileges.md) for
 the broker op catalogue.
 
+Adding or reclassifying a spawned runner `ProcessRole` also requires
+matching process-builder and runner-matrix coverage: add/extend the
+typed Rust argv builder in `packages/nixling-host/src/*_argv.rs` and
+the role coverage policy/contract tests under
+`packages/nixling-contract-tests/tests/` in the same change.
+
 ## Panel review
 
 ### Phase gate

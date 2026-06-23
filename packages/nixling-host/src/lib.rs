@@ -36,6 +36,8 @@ pub mod routes;
 pub mod seccomp;
 // Runner-shape preflight + CH net-handoff probe.
 pub mod runner_shape;
+// Static runner lifecycle metadata used by host-side argv dispatch.
+pub mod runner_process;
 // Pure CH argv generator. Consumed by nixlingd via the SpawnRunner
 // broker wire.
 pub mod ch_argv;
