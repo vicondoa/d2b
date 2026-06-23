@@ -186,6 +186,14 @@ in
       && lib.hasInfix "nixling-host-shutdown-hook" lifecycleCfg.systemd.services.nixlingd.serviceConfig.ExecStop;
     expected = true;
   };
+  "daemon-lifecycle/execstop-gates-on-system-manager-stopping" = {
+    expr =
+      lib.any (l: lib.hasInfix "SystemState" l) hostDaemonNix
+      && lib.any (l: lib.hasInfix ''[ "$manager_state" != 's "stopping"' ]'' l) hostDaemonNix
+      && lib.any (l: lib.hasInfix "systemctl is-system-running" l) hostDaemonNix
+      && lib.any (l: lib.hasInfix ''[ "$system_state" != "stopping" ]'' l) hostDaemonNix;
+    expected = true;
+  };
   "daemon-lifecycle/broker-shutdown-ordering" = {
     expr =
       builtins.elem "nixling-priv-broker.service" lifecycleCfg.systemd.services.nixlingd.after
