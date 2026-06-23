@@ -4,7 +4,7 @@ use nixling_ipc::public_wire;
 use socket2::Socket;
 use uzers::{get_user_by_uid, get_user_groups};
 
-use crate::{ServerState, typed_error::TypedError};
+use crate::{ServerState, io_wrap, typed_error::TypedError};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PeerIdentity {
@@ -222,11 +222,4 @@ fn peer_override_from_env() -> Result<Option<PeerOverride>, TypedError> {
         username,
         groups,
     }))
-}
-
-fn io_wrap(context: &'static str) -> impl FnOnce(nix::errno::Errno) -> TypedError {
-    move |err| TypedError::InternalIo {
-        context: context.to_owned(),
-        detail: err.to_string(),
-    }
 }
