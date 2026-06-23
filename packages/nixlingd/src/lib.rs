@@ -4297,6 +4297,57 @@ fn cleanup_usbip_before_vm_stop(
     Some(report)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UsbipClaimLockProbe {
+    None,
+    Present,
+    Unknown(String),
+}
+
+fn probe_usbip_claim_locks_for_vm_without_bundle(
+    state: &ServerState,
+    vm: &str,
+) -> UsbipClaimLockProbe {
+    let usbip_locks_dir = state.config.locks_dir.join("usbip");
+    let entries = match fs::read_dir(&usbip_locks_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return UsbipClaimLockProbe::None,
+        Err(error) => {
+            return UsbipClaimLockProbe::Unknown(format!(
+                "could not inspect USBIP lock directory {}: {error}",
+                usbip_locks_dir.display()
+            ));
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                return UsbipClaimLockProbe::Unknown(format!(
+                    "could not inspect USBIP lock directory {}: {error}",
+                    usbip_locks_dir.display()
+                ));
+            }
+        };
+        let owner = match fs::read_to_string(entry.path()) {
+            Ok(owner) => owner,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return UsbipClaimLockProbe::Unknown(format!(
+                    "could not inspect USBIP claim lock {}: {error}",
+                    entry.path().display()
+                ));
+            }
+        };
+        if owner.trim() == vm {
+            return UsbipClaimLockProbe::Present;
+        }
+    }
+
+    UsbipClaimLockProbe::None
+}
+
 fn guest_usbip_import_error_summary(
     vm: &str,
     error: guest_control_health::GuestUsbipImportError,
@@ -12986,16 +13037,37 @@ fn dispatch_broker_vm_stop_with_timeout_as(
     let usb_lifecycle_summary = match load_bundle_resolver(state) {
         Ok(resolver) => cleanup_usbip_before_vm_stop(state, &resolver, &request.vm)
             .and_then(|report| usbip_lifecycle_report_summary("stop", &report)),
-        Err(error) => {
-            tracing::warn!(
-                vm = %request.vm,
-                error = ?error,
-                "vm stop: USBIP carrier cleanup skipped because bundle resolver could not load"
-            );
-            Some(format!(
-                "USBIP cleanup degraded: could not load trusted bundle; host-session claims were left unchanged ({error:?})"
-            ))
-        }
+        Err(error) => match probe_usbip_claim_locks_for_vm_without_bundle(state, &request.vm) {
+            UsbipClaimLockProbe::None => {
+                tracing::warn!(
+                    vm = %request.vm,
+                    error = ?error,
+                    "vm stop: USBIP carrier cleanup skipped because bundle resolver could not load and no host-session claim locks matched the VM"
+                );
+                None
+            }
+            UsbipClaimLockProbe::Present => {
+                tracing::warn!(
+                    vm = %request.vm,
+                    error = ?error,
+                    "vm stop: USBIP carrier cleanup degraded because bundle resolver could not load while a host-session claim lock matched the VM"
+                );
+                Some(format!(
+                    "USBIP cleanup degraded: could not load trusted bundle; host-session claims were left unchanged ({error:?})"
+                ))
+            }
+            UsbipClaimLockProbe::Unknown(detail) => {
+                tracing::warn!(
+                    vm = %request.vm,
+                    error = ?error,
+                    detail = %detail,
+                    "vm stop: USBIP carrier cleanup degraded because bundle resolver and host-session claim lock probing failed"
+                );
+                Some(format!(
+                    "USBIP cleanup degraded: could not load trusted bundle or inspect host-session claims; claims may be left unchanged ({error:?}; {detail})"
+                ))
+            }
+        },
     };
 
     let mut drained_roles = Vec::with_capacity(stop_entries.len());
@@ -20298,6 +20370,80 @@ mod broker_dispatch_tests {
             SnapshotStore::list(&store)
                 .expect("list runner snapshots")
                 .is_empty()
+        );
+        let status = child.wait();
+        assert!(!status.success());
+    }
+
+    #[test]
+    fn vm_stop_skips_usbip_degradation_when_bundle_missing_and_no_claim_locks() {
+        let mut state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("vm-stop-no-usbip"));
+        state.config.artifacts.bundle_path = state.daemon_state_dir.join("missing-bundle.json");
+        state.config.locks_dir = state.daemon_state_dir.join("locks-without-usbip");
+        fs::create_dir_all(&state.config.locks_dir).expect("create locks dir");
+        let child = register_sleep_runner(&state, "vm-a", false);
+
+        let response = dispatch_broker_vm_stop(
+            &state,
+            VmLifecycleRequest {
+                vm: "vm-a".to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                force: false,
+                no_wait_api: false,
+            },
+        )
+        .expect("vm stop response");
+
+        assert_applied(&response);
+        let summary = response
+            .get("summary")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            !summary.contains("USBIP cleanup degraded"),
+            "unexpected USBIP degradation in summary: {summary}"
+        );
+        let status = child.wait();
+        assert!(!status.success());
+    }
+
+    #[test]
+    fn vm_stop_reports_usbip_degradation_when_bundle_missing_and_claim_lock_matches() {
+        let mut state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("vm-stop-usbip-lock"));
+        state.config.artifacts.bundle_path = state.daemon_state_dir.join("missing-bundle.json");
+        state.config.locks_dir = state.daemon_state_dir.join("locks-with-usbip");
+        let usbip_locks = state.config.locks_dir.join("usbip");
+        fs::create_dir_all(&usbip_locks).expect("create usbip locks dir");
+        fs::write(usbip_locks.join("1-2"), "vm-a\n").expect("write usbip claim lock");
+        let child = register_sleep_runner(&state, "vm-a", false);
+
+        let response = dispatch_broker_vm_stop(
+            &state,
+            VmLifecycleRequest {
+                vm: "vm-a".to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                force: false,
+                no_wait_api: false,
+            },
+        )
+        .expect("vm stop response");
+
+        assert_applied(&response);
+        let summary = response
+            .get("summary")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            summary.contains("USBIP cleanup degraded: could not load trusted bundle"),
+            "missing USBIP degradation in summary: {summary}"
         );
         let status = child.wait();
         assert!(!status.success());

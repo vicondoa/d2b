@@ -92,6 +92,9 @@ deprecations ship one minor release before removal.
   devices; stop/restart cleanup now preserves the session claim and refuses
   sysfs host unbind unless firewall withdrawal plus targeted stream cleanup can
   be proven first.
+- VM stop/restart now suppresses USBIP cleanup degradation when the trusted
+  bundle is unavailable and no matching host-session lock exists, while still
+  warning if a matching lock exists or lock probing fails.
 - USB serial-correlation HMAC key rotation windows now emit a broker audit
   record with only key IDs and rotation metadata, preserving the forensic trail
   without logging key material or raw serials.
