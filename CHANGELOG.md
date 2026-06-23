@@ -44,6 +44,9 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- ADR 0035 Wave 0 internal cleanup added deterministic inventory tooling and
+  `compat-ADR` bridge-key policy coverage, removed caller-free test/Make
+  compatibility aliases, and dropped stale retired bash-CLI option comments.
 - Persistent shell CLI routing now sends gateway-backed `list`, `detach`, and
   `kill` management forms through the configured realm gateway over the typed
   guest-control exec path, while interactive gateway attach fails closed until

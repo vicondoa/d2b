@@ -10,7 +10,7 @@
         test-flake-list \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
         layer1-workflow layer1-workflow-check \
-        ledger ledger-regen check-inventory pr-checklist-gate ci-uses-make nix-unit-pin flake-matrix-pin
+        ledger-regen check-inventory pr-checklist-gate ci-uses-make nix-unit-pin flake-matrix-pin
 
 # Current Nix system double, used to address per-system flake.checks attrs.
 # Falls back to x86_64-linux if `nix` is unavailable (e.g. a docs-only host).
@@ -146,9 +146,6 @@ layer1-workflow-check:
 ## check-inventory — fail-closed ledger drift check for CI.
 check-inventory:
 	bash tests/tools/gen-migration-ledger.sh --check
-
-## ledger — compatibility alias for the fail-closed check.
-ledger: check-inventory
 
 ## ledger-regen — regenerate tests/migration-ledger.toml in place for humans.
 ledger-regen:

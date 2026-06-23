@@ -42,6 +42,8 @@ use nixling_core::{
 use nixling_ipc::{WireProtocolSchema, guest_wire::GuestControlSchema};
 use schemars::schema::RootSchema;
 
+mod inventory;
+
 const SCHEMA_VERSION: &str = "v2";
 const DAEMON_API_DOC: &str = "docs/reference/daemon-api.md";
 
@@ -142,26 +144,42 @@ struct RustItem {
 }
 
 fn main() -> std::process::ExitCode {
-    let mut args = env::args().skip(1);
-    match (args.next().as_deref(), args.next(), args.next()) {
-        (Some("gen-schemas"), None, None) => run_task("gen-schemas", gen_schemas),
-        (Some("gen-cli-schemas"), None, None) => run_task("gen-cli-schemas", gen_cli_schemas),
-        (Some("gen-error-codes"), None, None) => run_task("gen-error-codes", gen_error_codes),
-        (Some("gen-cli-shell-artifacts"), None, None) => {
+    let args: Vec<String> = env::args().skip(1).collect();
+    match args.as_slice() {
+        [command] if command == "gen-schemas" => run_task("gen-schemas", gen_schemas),
+        [command] if command == "gen-cli-schemas" => run_task("gen-cli-schemas", gen_cli_schemas),
+        [command] if command == "gen-error-codes" => run_task("gen-error-codes", gen_error_codes),
+        [command] if command == "gen-cli-shell-artifacts" => {
             run_task("gen-cli-shell-artifacts", gen_cli_shell_artifacts)
         }
-        (Some("gen-guest-proto"), None, None) => run_task("gen-guest-proto", gen_guest_proto),
-        (Some("gen-guest-ttrpc"), None, None) => run_task("gen-guest-ttrpc", gen_guest_ttrpc),
-        (Some("gen-daemon-api"), None, None) => {
+        [command] if command == "gen-guest-proto" => run_task("gen-guest-proto", gen_guest_proto),
+        [command] if command == "gen-guest-ttrpc" => run_task("gen-guest-ttrpc", gen_guest_ttrpc),
+        [command] if command == "gen-daemon-api" => {
             run_task("gen-daemon-api", || gen_daemon_api().map(|p| vec![p]))
         }
-        (Some("release-notes"), Some(version), None) => run_task("release-notes", move || {
-            gen_release_notes(&version).map(|p| vec![p])
+        [command, version] if command == "release-notes" => run_task("release-notes", move || {
+            gen_release_notes(version).map(|p| vec![p])
         }),
+        [command] if command == "adr0035-inventory" => run_inventory(None),
+        [command, flag, output]
+            if command == "adr0035-inventory" && (flag == "--output" || flag == "-o") =>
+        {
+            run_inventory(Some(PathBuf::from(output.as_str())))
+        }
         _ => {
             eprintln!(
-                "usage: cargo xtask <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>>"
+                "usage: cargo xtask <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]>"
             );
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_inventory(output_path: Option<PathBuf>) -> std::process::ExitCode {
+    match inventory::emit_adr0035_inventory(output_path.as_deref()) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("adr0035-inventory failed: {err}");
             std::process::ExitCode::FAILURE
         }
     }
