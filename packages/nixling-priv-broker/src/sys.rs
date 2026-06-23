@@ -960,6 +960,27 @@ pub mod path_safe {
         )
     }
 
+    /// Open a single existing file beneath an already-open safe parent
+    /// dirfd. `name` must be a single path component; callers pass
+    /// access flags such as `O_RDWR | O_NONBLOCK`. This refuses final
+    /// symlinks, magic links, and mount escapes before the caller binds
+    /// identity with `fstat`.
+    pub fn open_file_at_safe(
+        parent_fd: &OwnedFd,
+        name: &str,
+        flags: libc::c_int,
+    ) -> io::Result<OwnedFd> {
+        validate_target_name(name)?;
+        let name = cstring_from_name(name)?;
+        openat2_raw(
+            parent_fd.as_raw_fd(),
+            &name,
+            flags | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            0,
+            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV,
+        )
+    }
+
     /// fd-based `fchmod` wrapper around rustix; replaces every
     /// path-string `chmod` call site in broker fs ops.
     pub fn fchmod(fd: BorrowedFd<'_>, mode: u32) -> io::Result<()> {

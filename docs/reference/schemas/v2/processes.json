@@ -683,7 +683,7 @@
       "description": "v1.2 additive plan operation emitted by `processes.json` for runner nodes that require broker-side pre-spawn work.\n\nTag-dispatched via `#[serde(tag = \"kind\")]` so the manifest JSON uses `{ \"kind\": \"diskInit\", ... }` shape (camelCase per bundle schema conventions).\n\nBackward-compatible per invariant I4: the field is absent from JSON when empty (`skip_serializing_if = \"Vec::is_empty\"` on `ProcessNode::plan_ops`), so older bundles always deserialize cleanly.",
       "oneOf": [
         {
-          "description": "Create and pre-allocate a disk image file if absent; validate and safely repair a trusted empty image when present.\n\nUsed for nixling-owned raw ext4 volumes and the per-VM writable store overlay disk (`store-overlay.img`). The broker validates `target_path` is under `/var/lib/nixling/vms/`, creates absent files with `O_CREAT|O_EXCL`, pre-allocates `size_bytes` via `fallocate`, formats them as ext4, and sets mode + ownership. Existing files are not accepted on path existence alone: they must match the declared posture and carry an ext4 superblock, or be proven empty before broker-side repair.",
+          "description": "Create and pre-allocate a disk image file if absent; validate and safely repair declared owner/mode posture drift or a trusted empty image when present.\n\nUsed for nixling-owned raw ext4 volumes and the per-VM writable store overlay disk (`store-overlay.img`). The broker validates `target_path` is under `/var/lib/nixling/vms/`, creates absent files with `O_CREAT|O_EXCL`, pre-allocates `size_bytes` via `fallocate`, formats them as ext4, and sets mode + ownership. Existing files are not accepted on path existence alone: they must carry an ext4 superblock or be proven empty before broker-side repair, and stale owner/mode posture is repaired only after fd-bound identity checks.",
           "type": "object",
           "required": [
             "ifAbsent",
@@ -696,7 +696,7 @@
           ],
           "properties": {
             "ifAbsent": {
-              "description": "When `true`, make re-runs idempotent by validating an existing file before skipping; a present but unformatted file is repaired only when it is proven empty, otherwise the broker fails closed.",
+              "description": "When `true`, make re-runs idempotent by validating an existing file before skipping; declared posture drift is repaired only for a safe held fd, and a present but unformatted file is repaired only when it is proven empty. Otherwise the broker fails closed.",
               "type": "boolean"
             },
             "kind": {

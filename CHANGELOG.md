@@ -18,9 +18,9 @@ deprecations ship one minor release before removal.
   rendering, and host-shutdown `nixlingd.service` ordering/timeout budgeting.
 - Host shutdown and reboot now gracefully stop workload VMs before env net VMs.
 - Broker disk initialization now validates existing nixling-owned ext4 raw
-  images before treating `ifAbsent` as satisfied, safely formats only
-  proven-empty images, and fails closed before VM spawn for malformed or
-  ambiguous image data.
+  images before treating `ifAbsent` as satisfied, automatically repairs safe
+  declared owner/mode drift, safely formats only proven-empty images, and fails
+  closed before VM spawn for malformed or ambiguous image data.
 - Persistent shell guests now render the shpool daemon unit with a store-backed
   start script instead of an inline multi-line `ExecStart` command, avoiding
   systemd quote parsing failures.
