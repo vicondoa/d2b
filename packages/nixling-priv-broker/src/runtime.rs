@@ -12141,6 +12141,90 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    fn usbip_bind_acl_grant_failure_does_not_rollback_same_vm_replay() {
+        let root = test_audit_dir("usbip-bind-acl-grant-failure-replay-preserve");
+        let bundle = build_test_bundle(&root);
+        let intent = test_usbip_intent_with_lock(&root, &bundle);
+        crate::ops::usbip_lock::acquire_lock(
+            &intent.lock_path,
+            &intent.vm_name,
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        )
+        .expect("seed same-VM replay lock");
+        let backend = FakeDispatchBackend::default();
+
+        let error = rollback_usbip_bind_after_acl_grant_failure(
+            &backend,
+            &intent,
+            true,
+            BrokerError::LiveHandler("grant failed".to_owned()),
+        );
+
+        assert!(matches!(
+            error,
+            BrokerError::LiveHandler(ref message) if message == "grant failed"
+        ));
+        assert_eq!(
+            backend.take_usbip_events(),
+            Vec::new(),
+            "same-VM replay grant failure must not unbind an already-active claim"
+        );
+        assert_eq!(
+            crate::ops::usbip_lock::peek_owner(&intent.lock_path),
+            Some(intent.vm_name.clone()),
+            "same-VM replay grant failure must preserve the durable claim"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usbip_bind_audit_failure_does_not_rollback_same_vm_replay() {
+        let root = test_audit_dir("usbip-bind-audit-failure-replay-preserve");
+        let bundle = build_test_bundle(&root);
+        let intent = test_usbip_intent_with_lock(&root, &bundle);
+        let _ = take_test_usbip_backend_acl_events();
+        crate::ops::usbip_lock::acquire_lock(
+            &intent.lock_path,
+            &intent.vm_name,
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        )
+        .expect("seed same-VM replay lock");
+        grant_usbip_backend_device_acl(
+            &bundle.resolver,
+            &intent,
+            (0x1050, 0x0407),
+            PathBuf::from("/dev/bus/usb/001/002"),
+        )
+        .expect("seed same-VM replay ACL grant");
+        let backend = FakeDispatchBackend::default();
+
+        rollback_usbip_bind_after_audit_failure(&backend, &bundle.resolver, &intent, true);
+
+        assert_eq!(
+            backend.take_usbip_events(),
+            Vec::new(),
+            "same-VM replay audit failure must not unbind an already-active claim"
+        );
+        assert_eq!(
+            take_test_usbip_backend_acl_events(),
+            vec![TestUsbipBackendAclEvent::Grant { uid: 1002 }],
+            "same-VM replay audit failure must not revoke an existing backend ACL"
+        );
+        assert_eq!(
+            crate::ops::usbip_lock::peek_owner(&intent.lock_path),
+            Some(intent.vm_name.clone()),
+            "same-VM replay audit failure must preserve the durable claim"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
     fn usbip_unbind_acl_revoke_failure_releases_lock_when_device_is_unbound() {
         let _usb_sysfs_guard = usb_sysfs_test_lock();
         let root = test_audit_dir("usbip-unbind-acl-revoke-failure-release");

@@ -1569,6 +1569,8 @@ pub enum UsbipProbeStatus {
     Enrolled,
     Stale,
     DirectConfig,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
@@ -1584,6 +1586,8 @@ pub enum UsbipDurableClaimState {
     StaleOwner,
     Corrupt,
     NotApplicable,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
@@ -1604,9 +1608,10 @@ pub enum UsbipHostBindState {
     BoundToUsbipHost,
     BoundToUnexpectedDriver,
     DeviceMissing,
-    #[default]
-    Unknown,
     NotApplicable,
+    #[default]
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
@@ -1617,9 +1622,10 @@ pub enum UsbipHostCarrierState {
     WithheldForOwner,
     Ready,
     DepartedDuringProbe,
-    #[default]
-    Unknown,
     NotApplicable,
+    #[default]
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
@@ -1631,9 +1637,10 @@ pub enum UsbipProxyState {
     Listening,
     Stale,
     Failed,
-    #[default]
-    Unknown,
     NotApplicable,
+    #[default]
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
@@ -1650,9 +1657,10 @@ pub enum UsbipGuestImportState {
     Detached,
     Imported,
     Unavailable,
-    #[default]
-    Unknown,
     NotApplicable,
+    #[default]
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
@@ -1670,6 +1678,7 @@ pub enum UsbipTopologyState {
     NotObserved,
     NotApplicable,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -1681,6 +1690,7 @@ pub enum UsbipPolicyState {
     Missing,
     NotApplicable,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -1708,6 +1718,8 @@ pub enum UsbipProbeDegradedReasonCode {
     StaleHostState,
     StaleGuestState,
     ProbeIncomplete,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

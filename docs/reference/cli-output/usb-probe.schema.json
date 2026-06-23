@@ -35,7 +35,8 @@
         "held-by-other-owner",
         "stale-owner",
         "corrupt",
-        "not-applicable"
+        "not-applicable",
+        "unknown"
       ]
     },
     "UsbipDurableClaimStatus": {
@@ -63,8 +64,8 @@
         "detached",
         "imported",
         "unavailable",
-        "unknown",
-        "not-applicable"
+        "not-applicable",
+        "unknown"
       ]
     },
     "UsbipGuestProbeStatus": {
@@ -86,8 +87,8 @@
         "bound-to-usbip-host",
         "bound-to-unexpected-driver",
         "device-missing",
-        "unknown",
-        "not-applicable"
+        "not-applicable",
+        "unknown"
       ]
     },
     "UsbipHostCarrierState": {
@@ -98,8 +99,8 @@
         "withheld-for-owner",
         "ready",
         "departed-during-probe",
-        "unknown",
-        "not-applicable"
+        "not-applicable",
+        "unknown"
       ]
     },
     "UsbipHostProbeStatus": {
@@ -168,7 +169,8 @@
         "guest-import-unavailable",
         "stale-host-state",
         "stale-guest-state",
-        "probe-incomplete"
+        "probe-incomplete",
+        "unknown"
       ]
     },
     "UsbipProbeEntry": {
@@ -303,7 +305,8 @@
         "enrollable",
         "enrolled",
         "stale",
-        "direct-config"
+        "direct-config",
+        "unknown"
       ]
     },
     "UsbipProxyState": {
@@ -315,8 +318,8 @@
         "listening",
         "stale",
         "failed",
-        "unknown",
-        "not-applicable"
+        "not-applicable",
+        "unknown"
       ]
     },
     "UsbipTopologyPolicyStatus": {

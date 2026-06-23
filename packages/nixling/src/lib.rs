@@ -7648,6 +7648,7 @@ fn usb_probe_status_label(status: IpcUsbipProbeStatus) -> &'static str {
         IpcUsbipProbeStatus::Enrolled => "enrolled",
         IpcUsbipProbeStatus::Stale => "stale",
         IpcUsbipProbeStatus::DirectConfig => "direct-config",
+        IpcUsbipProbeStatus::Unknown => "unknown",
     }
 }
 
@@ -7659,6 +7660,7 @@ fn durable_claim_label(state: public_wire::UsbipDurableClaimState) -> &'static s
         public_wire::UsbipDurableClaimState::StaleOwner => "stale-owner",
         public_wire::UsbipDurableClaimState::Corrupt => "corrupt",
         public_wire::UsbipDurableClaimState::NotApplicable => "not-applicable",
+        public_wire::UsbipDurableClaimState::Unknown => "unknown",
     }
 }
 
@@ -7759,6 +7761,7 @@ fn reason_code_label(code: public_wire::UsbipProbeDegradedReasonCode) -> &'stati
         public_wire::UsbipProbeDegradedReasonCode::StaleHostState => "stale-host-state",
         public_wire::UsbipProbeDegradedReasonCode::StaleGuestState => "stale-guest-state",
         public_wire::UsbipProbeDegradedReasonCode::ProbeIncomplete => "probe-incomplete",
+        public_wire::UsbipProbeDegradedReasonCode::Unknown => "unknown",
     }
 }
 
