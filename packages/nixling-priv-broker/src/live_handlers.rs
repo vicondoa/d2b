@@ -1155,6 +1155,7 @@ fn systemctl_invoke(args: &[&str]) -> Result<(), String> {
 
     let output = Command::new("/usr/bin/systemctl")
         .args(args)
+        .env_remove("NOTIFY_SOCKET")
         .output()
         .map_err(|e| format!("systemctl spawn failed: {e}"))?;
     if !output.status.success() {
@@ -1196,6 +1197,7 @@ fn networkmanager_reload_via_dbus() -> Result<(), String> {
             "u",
             "0",
         ])
+        .env_remove("NOTIFY_SOCKET")
         .output()
         .map_err(|e| format!("busctl Reload(0) spawn failed via {busctl}: {e}"))?;
     if !output.status.success() {
@@ -2050,6 +2052,7 @@ fn setfacl_verified_device(
         .arg(operation)
         .arg(acl_spec)
         .arg(path)
+        .env_remove("NOTIFY_SOCKET")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -2082,6 +2085,7 @@ fn setfacl_verified_device(
                     .arg("-x")
                     .arg(revoke_spec)
                     .arg(path)
+                    .env_remove("NOTIFY_SOCKET")
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())

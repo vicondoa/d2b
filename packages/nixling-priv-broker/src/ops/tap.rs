@@ -297,6 +297,7 @@ fn attach_tap_to_bridge(
 fn run_ip_link(ip: &Path, args: &[&str]) -> Result<(), super::OpError> {
     let output = Command::new(ip)
         .args(args)
+        .env_remove("NOTIFY_SOCKET")
         .stdin(Stdio::null())
         .output()
         .map_err(|err| super::OpError::Io {
@@ -569,6 +570,7 @@ fn apply_bridge_port_flags_via_ip(
     let args = build_bridge_port_ip_args(port, flags);
     let output = Command::new(ip_binary)
         .args(&args)
+        .env_remove("NOTIFY_SOCKET")
         .stdin(Stdio::null())
         .output()
         .map_err(|err| ReconcileExecError::BinaryMissing {
@@ -596,6 +598,7 @@ fn read_bridge_port_flags_via_ip(
     }
     let output = Command::new(ip_binary)
         .args(["-d", "-j", "link", "show", "dev", port])
+        .env_remove("NOTIFY_SOCKET")
         .stdin(Stdio::null())
         .output()
         .map_err(|err| ReconcileExecError::BinaryMissing {

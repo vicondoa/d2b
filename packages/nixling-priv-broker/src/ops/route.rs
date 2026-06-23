@@ -231,6 +231,7 @@ fn read_existing_routes(
     let family_flag = if route_uses_ipv6(intent) { "-6" } else { "-4" };
     let output = Command::new(ip_binary)
         .args([family_flag, "-j", "route", "show", "table", "all"])
+        .env_remove("NOTIFY_SOCKET")
         .stdin(Stdio::null())
         .output()
         .map_err(|err| {

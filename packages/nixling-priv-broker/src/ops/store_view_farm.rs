@@ -120,6 +120,7 @@ fn build_farm_via_namespace(
     let argv = farm_build_argv(HELPER_BIN);
     let mut child = Command::new(&argv[0])
         .args(&argv[1..])
+        .env_remove("NOTIFY_SOCKET")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -250,6 +251,7 @@ fn build_store_view_via_namespace(
     let argv = store_view_build_argv(HELPER_BIN);
     let mut child = Command::new(&argv[0])
         .args(&argv[1..])
+        .env_remove("NOTIFY_SOCKET")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -332,6 +334,7 @@ fn replace_live_paths_via_namespace(
     let argv = replace_store_view_argv(HELPER_BIN);
     let mut child = Command::new(&argv[0])
         .args(&argv[1..])
+        .env_remove("NOTIFY_SOCKET")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

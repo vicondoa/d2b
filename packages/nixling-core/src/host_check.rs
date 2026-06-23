@@ -327,6 +327,7 @@ impl ProbeSource {
         }
         let output = Command::new("nft")
             .args(["list", "ruleset", "--json"])
+            .env_remove("NOTIFY_SOCKET")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
@@ -393,6 +394,7 @@ impl ProbeSource {
         }
         let output = Command::new("systemctl")
             .args(["is-active", kind.unit()])
+            .env_remove("NOTIFY_SOCKET")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output();

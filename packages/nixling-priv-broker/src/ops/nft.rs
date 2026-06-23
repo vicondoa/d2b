@@ -350,6 +350,7 @@ pub fn read_live_table_json_optional(
     }
     let output = Command::new(nft_binary)
         .args(["-j", "list", "table", family, table])
+        .env_remove("NOTIFY_SOCKET")
         .output()
         .map_err(|err| ReconcileExecError::BinaryMissing {
             which: "nft".to_owned(),
