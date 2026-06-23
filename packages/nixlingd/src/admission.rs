@@ -1,0 +1,232 @@
+use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
+use nixling_constellation_core::PrincipalId;
+use nixling_ipc::public_wire;
+use socket2::Socket;
+use uzers::{get_user_by_uid, get_user_groups};
+
+use crate::{ServerState, typed_error::TypedError};
+
+#[derive(Debug, Clone)]
+pub(crate) struct PeerIdentity {
+    pub(crate) role: PeerRole,
+    pub(crate) uid: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PeerRole {
+    Launcher,
+    Admin,
+}
+
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct PeerOverride {
+    pub(crate) uid: u32,
+    pub(crate) gid: u32,
+    pub(crate) username: Option<String>,
+    pub(crate) groups: Option<Vec<String>>,
+}
+
+pub(crate) fn authorize_peer(
+    stream: &Socket,
+    state: &ServerState,
+) -> Result<PeerIdentity, TypedError> {
+    // Peer-identity resolution order:
+    //   1. the `#[cfg(test)]` in-process injection slot (lib unit tests that
+    //      drive `handle_connection` directly),
+    //   2. the `NIXLINGD_TEST_PEER_*` env vars (integration tests that spawn
+    //      the real daemon binary and pass them via `Command::env`; reading
+    //      env is safe under edition 2024),
+    //   3. the real `SO_PEERCRED` of the connected socket (production).
+    let peer_override = match peer_override_injected() {
+        Some(peer) => peer,
+        None => match peer_override_from_env()? {
+            Some(peer) => peer,
+            None => {
+                let peer =
+                    getsockopt(stream, PeerCredentials).map_err(io_wrap("read SO_PEERCRED"))?;
+                PeerOverride {
+                    uid: peer.uid() as u32,
+                    gid: peer.gid() as u32,
+                    username: None,
+                    groups: None,
+                }
+            }
+        },
+    };
+    let uid = peer_override.uid;
+    let _gid = peer_override.gid;
+    let username = peer_override
+        .username
+        .or_else(|| get_user_by_uid(uid).map(|user| user.name().to_string_lossy().into_owned()));
+    let _supplementary_groups = if let Some(groups) = peer_override.groups {
+        groups
+    } else if let Some(user) = get_user_by_uid(uid) {
+        get_user_groups(user.name(), user.primary_group_id())
+            .into_iter()
+            .flatten()
+            .map(|group| group.name().to_string_lossy().into_owned())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    if uid == state.daemon_uid {
+        return Err(TypedError::AuthzNotALauncher { peer_uid: uid });
+    }
+
+    let is_launcher = username
+        .as_ref()
+        .map(|name| {
+            state
+                .config
+                .launcher_users
+                .iter()
+                .any(|launcher| launcher == name)
+        })
+        .unwrap_or(false);
+    if !is_launcher {
+        return Err(TypedError::AuthzNotALauncher { peer_uid: uid });
+    }
+
+    let role = if username
+        .as_ref()
+        .map(|name| state.config.admin_users.iter().any(|admin| admin == name))
+        .unwrap_or(false)
+    {
+        PeerRole::Admin
+    } else {
+        PeerRole::Launcher
+    };
+
+    Ok(PeerIdentity { role, uid })
+}
+
+pub(crate) fn verb_requires_admin(verb: &str) -> bool {
+    matches!(
+        verb,
+        "vmStart"
+            | "vmStop"
+            | "vmRestart"
+            | "switch"
+            | "boot"
+            | "test"
+            | "rollback"
+            | "gc"
+            | "keysRotate"
+            | "trust"
+            | "rotateKnownHost"
+            | "usbipBind"
+            | "usbipUnbind"
+            | "storeVerify"
+            | "migrate"
+            | "hostPrepare"
+            | "hostDestroy"
+            | "hostInstall"
+            | "hostReconcile"
+            | "readGuestConfig"
+            | "exec"
+            | "shell"
+    )
+}
+
+pub(crate) fn gateway_display_op_requires_admin(op: &public_wire::GatewayDisplayOp) -> bool {
+    matches!(
+        op,
+        public_wire::GatewayDisplayOp::Start(_) | public_wire::GatewayDisplayOp::Stop(_)
+    )
+}
+
+pub(crate) fn gateway_display_peer_principal(peer: &PeerIdentity) -> PrincipalId {
+    PrincipalId::parse(format!("uid-{}", peer.uid))
+        .expect("trusted display principal derived from numeric uid is valid")
+}
+
+pub(crate) fn gateway_display_peer_principal_string(peer: &PeerIdentity) -> String {
+    gateway_display_peer_principal(peer).to_string()
+}
+
+/// Test-only peer-credential injection. The accept path
+/// ([`authorize_peer`]) reads the connecting peer's identity from
+/// `SO_PEERCRED`; the accept-loop tests need to drive `handle_connection`
+/// over an in-process socketpair while pretending the peer is a specific
+/// launcher/admin uid. Rather than mutate process-global env (which is
+/// `unsafe` under edition 2024) this is injected through a `#[cfg(test)]`
+/// `Mutex`. In non-test builds it is compiled out and always `None`, so the
+/// production accept path has no test backdoor at all.
+#[cfg(test)]
+pub(crate) static TEST_PEER_OVERRIDE: std::sync::Mutex<Option<PeerOverride>> =
+    std::sync::Mutex::new(None);
+
+/// Serializes the accept-loop tests that inject a [`PeerOverride`] so two of
+/// them cannot interleave on the process-global injection slot.
+#[cfg(test)]
+pub(crate) static TEST_PEER_OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+fn peer_override_injected() -> Option<PeerOverride> {
+    TEST_PEER_OVERRIDE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+}
+
+#[cfg(not(test))]
+fn peer_override_injected() -> Option<PeerOverride> {
+    None
+}
+
+/// Read a peer-credential override from the `NIXLINGD_TEST_PEER_*` env vars.
+/// Used by integration tests that spawn the real daemon binary and pass these
+/// via `Command::env`; reading env is safe under edition 2024. Returns `None`
+/// (the normal production case) when `NIXLINGD_TEST_PEER_UID` is unset.
+fn peer_override_from_env() -> Result<Option<PeerOverride>, TypedError> {
+    let uid = match std::env::var("NIXLINGD_TEST_PEER_UID") {
+        Ok(value) => value
+            .parse::<u32>()
+            .map_err(|err| TypedError::InternalConfig {
+                detail: format!("NIXLINGD_TEST_PEER_UID: {err}"),
+            })?,
+        Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(err) => {
+            return Err(TypedError::InternalConfig {
+                detail: format!("NIXLINGD_TEST_PEER_UID: {err}"),
+            });
+        }
+    };
+    let gid = match std::env::var("NIXLINGD_TEST_PEER_GID") {
+        Ok(value) => value
+            .parse::<u32>()
+            .map_err(|err| TypedError::InternalConfig {
+                detail: format!("NIXLINGD_TEST_PEER_GID: {err}"),
+            })?,
+        Err(std::env::VarError::NotPresent) => uid,
+        Err(err) => {
+            return Err(TypedError::InternalConfig {
+                detail: format!("NIXLINGD_TEST_PEER_GID: {err}"),
+            });
+        }
+    };
+    let username = std::env::var("NIXLINGD_TEST_PEER_USERNAME").ok();
+    let groups = std::env::var("NIXLINGD_TEST_PEER_GROUPS")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .filter(|part| !part.is_empty())
+                .map(|part| part.to_owned())
+                .collect::<Vec<_>>()
+        });
+    Ok(Some(PeerOverride {
+        uid,
+        gid,
+        username,
+        groups,
+    }))
+}
+
+fn io_wrap(context: &'static str) -> impl FnOnce(nix::errno::Errno) -> TypedError {
+    move |err| TypedError::InternalIo {
+        context: context.to_owned(),
+        detail: err.to_string(),
+    }
+}
