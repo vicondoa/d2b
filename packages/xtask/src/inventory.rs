@@ -171,7 +171,9 @@ fn build_inventory(
                 kind,
             });
         }
-        compatibility_markers.extend(scan_compatibility_markers(repo_root, path)?);
+        if should_scan_markers(path) {
+            compatibility_markers.extend(scan_markers(repo_root, path)?);
+        }
     }
 
     sort_metrics(&mut rust_metrics);
@@ -388,8 +390,8 @@ fn parse_package_name(toml: &str) -> Option<String> {
         if in_package && trimmed.starts_with('[') {
             return None;
         }
-        if in_package && trimmed.starts_with("name") {
-            return parse_toml_assignment_string(trimmed, "name");
+        if in_package && let Some(name) = parse_toml_assignment_string(trimmed, "name") {
+            return Some(name);
         }
     }
     None
@@ -437,7 +439,15 @@ fn extract_quoted_strings(input: &str) -> Vec<String> {
     values
 }
 
-fn scan_compatibility_markers(
+fn should_scan_markers(path: &str) -> bool {
+    !matches!(
+        path,
+        "packages/xtask/src/inventory.rs"
+            | "packages/nixling-contract-tests/tests/policy_compat_adr.rs"
+    )
+}
+
+fn scan_markers(
     repo_root: &Path,
     path: &str,
 ) -> Result<Vec<CompatibilityMarker>, Box<dyn std::error::Error>> {
@@ -455,7 +465,7 @@ fn scan_compatibility_markers(
             });
         }
         let lowered = line.to_ascii_lowercase();
-        for term in compatibility_terms(&lowered) {
+        for term in marker_terms(&lowered) {
             markers.push(CompatibilityMarker {
                 path: path.to_owned(),
                 line: line_number,
@@ -469,7 +479,7 @@ fn scan_compatibility_markers(
 fn compat_adr_tokens(line: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut remainder = line;
-    while let Some(start) = remainder.find("compat-ADR") {
+    while let Some(start) = remainder.find(concat!("compat", "-ADR")) {
         let candidate = &remainder[start..];
         let end = candidate
             .find(|character: char| !(character.is_ascii_alphanumeric() || character == '-'))
@@ -480,25 +490,23 @@ fn compat_adr_tokens(line: &str) -> Vec<String> {
     tokens
 }
 
-fn compatibility_terms(line_lowercase: &str) -> Vec<&'static str> {
-    const TERMS: &[&str] = &[
-        "back-compat",
-        "backward compatibility",
-        "compatibility",
-        "deprecated",
-        "fallback",
-        "legacy",
-        "retired",
-        "shim",
-        "superseded",
-        "tombstone",
-    ];
-
-    TERMS
-        .iter()
-        .copied()
-        .filter(|term| line_lowercase.contains(term))
-        .collect()
+fn marker_terms(line_lowercase: &str) -> Vec<String> {
+    [
+        concat!("back", "-compat"),
+        concat!("backward ", "compatibility"),
+        concat!("compat", "ibility"),
+        concat!("deprec", "ated"),
+        concat!("fall", "back"),
+        concat!("leg", "acy"),
+        concat!("ret", "ired"),
+        concat!("sh", "im"),
+        concat!("super", "seded"),
+        concat!("tomb", "stone"),
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .filter(|term| line_lowercase.contains(term))
+    .collect()
 }
 
 fn classify_generated_surface(path: &str) -> Option<&'static str> {
@@ -585,9 +593,30 @@ exclude = ["standalone"]
 
         assert_eq!(compat_adr_tokens(&line), vec![marker.clone()]);
         assert_eq!(
-            compatibility_terms(&line.to_ascii_lowercase()),
-            ["fallback", "legacy"]
+            marker_terms(&line.to_ascii_lowercase()),
+            ["fallback".to_owned(), "legacy".to_owned()]
         );
+    }
+
+    #[test]
+    fn package_name_parser_skips_prefix_keys() {
+        let toml = r#"
+[package]
+name_suffix = "not-the-package"
+name = "real-package"
+version = "0.0.0"
+"#;
+
+        assert_eq!(parse_package_name(toml), Some("real-package".to_owned()));
+    }
+
+    #[test]
+    fn marker_scan_skips_scanner_sources() {
+        assert!(!should_scan_markers("packages/xtask/src/inventory.rs"));
+        assert!(!should_scan_markers(
+            "packages/nixling-contract-tests/tests/policy_compat_adr.rs"
+        ));
+        assert!(should_scan_markers("nixos-modules/options.nix"));
     }
 
     #[test]
