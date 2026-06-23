@@ -514,7 +514,8 @@ mod tests {
             ("vm-a", Some("work"), true, Some("192.0.2.1")),
             ("vm-b", Some("obs"), true, Some("192.0.2.2")),
         ]);
-        let specs = derive_per_env_usbipd_specs(&m);
+        let specs =
+            derive_per_env_usbipd_specs_with_ports(&m, &ports(&[("obs", 3241), ("work", 3242)]));
         let proxies = specs
             .iter()
             .filter(|s| s.role == PerEnvUsbipdRole::Proxy)
