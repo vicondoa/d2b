@@ -367,10 +367,10 @@ nixling vm exec personal-dev -- id
 
 For the v1.1 migration generation, `nixlingd.service` was declared with
 `restartIfChanged = false`; restarting the daemon mid-VM-flight would have
-disrupted pidfd supervision on that generation. The new daemon-side
-pidfd-prune logic (v1.1.2fu14c) only takes effect after an explicit daemon
-restart. After `nixos-rebuild switch` completes on that historical generation,
-drain running VMs and restart the daemon + broker:
+disrupted pidfd supervision on that generation. The daemon-side pidfd-prune
+logic only takes effect after an explicit daemon restart. After
+`nixos-rebuild switch` completes on that historical generation, drain running
+VMs and restart the daemon + broker:
 
 ```
 nixling vm stop --apply personal-dev

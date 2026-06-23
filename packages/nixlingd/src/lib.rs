@@ -886,7 +886,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     sd_notify_status(
         notify_socket.as_deref(),
         "nixlingd public socket bound; restoring state",
-    )?;
+    );
 
     // Write /run/nixling/version on daemon startup so the CLI's
     // [pending restart] machinery has
@@ -909,7 +909,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     sd_notify_status(
         notify_socket.as_deref(),
         "nixlingd restored runner state; checking startup contracts",
-    )?;
+    );
 
     let gateway_display =
         if let Some(gateway_config) = load_gateway_file_config(&config.gateway_config_path)? {
@@ -1148,10 +1148,10 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         sd_notify_status(
             notify_socket.as_deref(),
             "nixlingd running startup autostart reconciliation",
-        )?;
+        );
         run_startup_autostart(&state, &combined_pre_degraded).await;
     }
-    sd_notify_ready(notify_socket.as_deref())?;
+    sd_notify_ready(notify_socket.as_deref());
     tracing::info!(
         socket = %state.config.public_socket_path.display(),
         "nixlingd public socket ready; accepting connections",
@@ -2074,70 +2074,82 @@ fn bind_public_socket(path: &Path, identity: &RuntimeIdentity) -> Result<Socket,
     Ok(socket)
 }
 
-fn sd_notify_address(notify_socket: &OsStr) -> Result<Option<UnixAddr>, TypedError> {
+fn sd_notify_address(notify_socket: &OsStr) -> Option<UnixAddr> {
     let bytes = notify_socket.as_bytes();
     if bytes.is_empty() {
-        return Ok(None);
+        return None;
     }
     if let Some(abstract_name) = bytes.strip_prefix(b"@") {
-        return UnixAddr::new_abstract(abstract_name)
-            .map(Some)
-            .map_err(|err| TypedError::InternalIo {
-                context: "parse NOTIFY_SOCKET abstract address".to_owned(),
-                detail: err.to_string(),
-            });
+        return match UnixAddr::new_abstract(abstract_name) {
+            Ok(address) => Some(address),
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "sd_notify: invalid abstract NOTIFY_SOCKET address; notification skipped"
+                );
+                None
+            }
+        };
     }
-    UnixAddr::new(Path::new(notify_socket))
-        .map(Some)
-        .map_err(|err| TypedError::InternalIo {
-            context: "parse NOTIFY_SOCKET path".to_owned(),
-            detail: err.to_string(),
-        })
+    match UnixAddr::new(Path::new(notify_socket)) {
+        Ok(address) => Some(address),
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "sd_notify: invalid NOTIFY_SOCKET path; notification skipped"
+            );
+            None
+        }
+    }
 }
 
-fn sd_notify_payload(
-    notify_socket: Option<&OsStr>,
-    payload: &str,
-    context: &'static str,
-) -> Result<(), TypedError> {
+fn sd_notify_payload(notify_socket: Option<&OsStr>, payload: &str, context: &'static str) {
     let Some(notify_socket) = notify_socket else {
-        return Ok(());
+        return;
     };
-    let Some(address) = sd_notify_address(notify_socket)? else {
-        return Ok(());
+    let Some(address) = sd_notify_address(notify_socket) else {
+        return;
     };
     let sock = socket(
         AddressFamily::Unix,
         SockType::Datagram,
-        SockFlag::SOCK_CLOEXEC,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
         None,
-    )
-    .map_err(|err| TypedError::InternalIo {
-        context: format!("{context}: create notify socket"),
-        detail: err.to_string(),
-    })?;
+    );
+    let sock = match sock {
+        Ok(sock) => sock,
+        Err(err) => {
+            tracing::warn!(error = %err, context, "sd_notify: create datagram socket failed");
+            return;
+        }
+    };
     let bytes = payload.as_bytes();
     loop {
-        match sendto(sock.as_raw_fd(), bytes, &address, MsgFlags::empty()) {
-            Ok(written) if written == bytes.len() => return Ok(()),
+        match sendto(sock.as_raw_fd(), bytes, &address, MsgFlags::MSG_DONTWAIT) {
+            Ok(written) if written == bytes.len() => return,
             Ok(written) => {
-                return Err(TypedError::InternalIo {
-                    context: context.to_owned(),
-                    detail: format!("short sd_notify datagram write: {written}/{}", bytes.len()),
-                });
+                tracing::warn!(
+                    written,
+                    expected = bytes.len(),
+                    context,
+                    "sd_notify: short datagram write"
+                );
+                return;
             }
             Err(nix::errno::Errno::EINTR) => continue,
+            Err(nix::errno::Errno::EAGAIN) => {
+                tracing::warn!(context, "sd_notify: datagram socket would block");
+                return;
+            }
             Err(err) => {
-                return Err(TypedError::InternalIo {
-                    context: context.to_owned(),
-                    detail: err.to_string(),
-                });
+                tracing::warn!(error = %err, context, "sd_notify: sendto failed");
+                return;
             }
         }
     }
 }
 
-fn sd_notify_status(notify_socket: Option<&OsStr>, status: &'static str) -> Result<(), TypedError> {
+fn sd_notify_status(notify_socket: Option<&OsStr>, status: &'static str) {
     sd_notify_payload(
         notify_socket,
         &format!("STATUS={status}"),
@@ -2145,7 +2157,7 @@ fn sd_notify_status(notify_socket: Option<&OsStr>, status: &'static str) -> Resu
     )
 }
 
-fn sd_notify_ready(notify_socket: Option<&OsStr>) -> Result<(), TypedError> {
+fn sd_notify_ready(notify_socket: Option<&OsStr>) {
     let payload = format!(
         "READY=1\nMAINPID={}\nSTATUS=nixlingd public socket ready",
         std::process::id()
@@ -8652,7 +8664,7 @@ mod sd_notify_tests {
 
     #[test]
     fn sd_notify_ready_noops_without_notify_socket() {
-        sd_notify_ready(None).expect("absent NOTIFY_SOCKET is a no-op");
+        sd_notify_ready(None);
     }
 
     #[test]
@@ -8661,7 +8673,7 @@ mod sd_notify_tests {
         let path = dir.path().join("notify.sock");
         let listener = UnixDatagram::bind(&path).expect("bind notify datagram");
 
-        sd_notify_ready(Some(path.as_os_str())).expect("send READY");
+        sd_notify_ready(Some(path.as_os_str()));
 
         let mut buf = [0u8; 256];
         let len = listener.recv(&mut buf).expect("recv notify payload");
@@ -8688,7 +8700,7 @@ mod sd_notify_tests {
         env_value.push(b'@');
         env_value.extend_from_slice(&name);
         let env_value = OsStr::from_bytes(&env_value);
-        sd_notify_status(Some(env_value), "nixlingd test status").expect("send STATUS");
+        sd_notify_status(Some(env_value), "nixlingd test status");
 
         let mut buf = [0u8; 256];
         let len = recv(fd.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv status payload");
@@ -8699,8 +8711,7 @@ mod sd_notify_tests {
     fn sd_notify_ready_errors_when_socket_is_unreachable() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("missing").join("notify.sock");
-        let err = sd_notify_ready(Some(path.as_os_str())).expect_err("unreachable socket errors");
-        assert_eq!(err.kind(), "internal-io");
+        sd_notify_ready(Some(path.as_os_str()));
     }
 }
 

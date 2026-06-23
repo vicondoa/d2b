@@ -69,6 +69,7 @@ pkgs.testers.runNixOSTest {
     # daemon-restart-vm-survival.nix.
     survivor_pid = machine.succeed(
         "set -euo pipefail; "
+        "cg=$(systemctl show -P ControlGroup nixlingd.service); "
         "rm -f /run/nixling-smoke-survivor.pid; "
         "setsid -f sh -c 'echo $$ > /run/nixling-smoke-survivor.pid; exec sleep 3600' "
         "</dev/null >/dev/null 2>&1; "
@@ -76,7 +77,9 @@ pkgs.testers.runNixOSTest {
         "  test -s /run/nixling-smoke-survivor.pid && break; "
         "  sleep 0.1; "
         "done; "
-        "cat /run/nixling-smoke-survivor.pid"
+        "pid=$(cat /run/nixling-smoke-survivor.pid); "
+        "echo \"$pid\" > \"/sys/fs/cgroup$cg/cgroup.procs\"; "
+        "echo \"$pid\""
     ).strip()
     machine.succeed("systemctl restart nixlingd.service")
     machine.wait_for_unit("nixlingd.service")
