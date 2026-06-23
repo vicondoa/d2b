@@ -48,6 +48,8 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- Normalized internal NixOS VM/env indexing for network and host consumers while
+  preserving generated artifact bytes and network isolation semantics.
 - Consolidated internal NixOS bundle artifact definitions behind a typed central
   model while preserving generated artifact bytes and private install metadata.
 - ADR 0035 Wave 0 internal cleanup added deterministic inventory tooling and
