@@ -418,7 +418,9 @@ in
   #
   # `/run/nixling/vms/` is the parent for per-VM runtime sockets. In the
   # daemon path host-activation.nix owns its tmpfiles posture
-  # (nixlingd:nixling 0750); the legacy pre-daemon path keeps the old
+  # (root:nixling 0750 parent, nixlingd:nixling per-VM leaves) so broker
+  # path-safety can create/reconcile children without trusting a
+  # daemon-writable parent. The legacy pre-daemon path keeps the old
   # root-owned 0755 parent for retired RuntimeDirectory users.
   # `/run/nixling/alloy/` is a private subtree for observability sockets so
   # Alloy no longer needs write access to the shared launcher/audio lock root.

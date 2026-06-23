@@ -26,6 +26,7 @@ let
       ssh.user = "alice";
       audio.enable = true;
       tpm.enable = true;
+      graphics.enable = true;
       config = { lib, ... }: {
         networking.hostName = lib.mkDefault "corp-vm";
         users.users.alice = { isNormalUser = true; uid = 1000; };
@@ -92,33 +93,58 @@ in
   "activation-runtime-tmpfiles/run-vms-parent" = {
     expr = rulesForPath "/run/nixling/vms";
     expected = [
-      "d /run/nixling/vms 0750 nixlingd nixling -"
-      "z /run/nixling/vms 0750 nixlingd nixling -"
+      "d /run/nixling/vms 0750 root nixling -"
+      "z /run/nixling/vms 0750 root nixling -"
     ];
   };
 
   "activation-runtime-tmpfiles/gpu-parent" = {
     expr = rulesForPath "/run/nixling-gpu";
     expected = [
-      "d /run/nixling-gpu 0750 nixlingd nixling -"
-      "z /run/nixling-gpu 0750 nixlingd nixling -"
+      "d /run/nixling-gpu 0750 root nixling -"
+      "z /run/nixling-gpu 0750 root nixling -"
+    ];
+  };
+
+  "activation-runtime-tmpfiles/video-parent" = {
+    expr = rulesForPath "/run/nixling-video";
+    expected = [
+      "d /run/nixling-video 0750 root nixling -"
+      "z /run/nixling-video 0750 root nixling -"
+    ];
+  };
+
+  "activation-runtime-tmpfiles/wlproxy-parent" = {
+    expr = rulesForPath "/run/nixling-wlproxy";
+    expected = [
+      "d /run/nixling-wlproxy 0750 root nixling -"
+      "z /run/nixling-wlproxy 0750 root nixling -"
+      "a+ /run/nixling-wlproxy - - - - u:nixling-corp-vm-gpu:--x"
+      "a+ /run/nixling-wlproxy - - - - u:nixling-corp-vm-wlproxy:--x"
     ];
   };
 
   "activation-runtime-tmpfiles/run-vm-dir" = {
-    expr = rulesForPath "/run/nixling/vms/corp-vm";
-    expected = [
+    expr = lib.all (rule: builtins.elem rule tmpfiles) [
       "d /run/nixling/vms/corp-vm 0750 nixlingd nixling -"
       "z /run/nixling/vms/corp-vm 0750 nixlingd nixling -"
+      "a+ /run/nixling/vms/corp-vm - - - - m::rwx"
+      "a+ /run/nixling/vms/corp-vm - - - - default:m::rwx"
+      "a+ /run/nixling/vms/corp-vm - - - - u:nixling-corp-vm-swtpm:rwx"
+      "a+ /run/nixling/vms/corp-vm - - - - u:nixling-corp-vm-gpu:rwx"
+      "a+ /run/nixling/vms/corp-vm - - - - u:nixling-corp-vm-snd:rwx"
     ];
+    expected = true;
   };
 
   "activation-runtime-tmpfiles/run-guest-control-dir" = {
-    expr = rulesForPath "/run/nixling/vms/corp-vm/guest-control";
-    expected = [
+    expr = lib.all (rule: builtins.elem rule tmpfiles) [
       "d /run/nixling/vms/corp-vm/guest-control 0750 nixlingd nixling -"
       "z /run/nixling/vms/corp-vm/guest-control 0750 nixlingd nixling -"
+      "a+ /run/nixling/vms/corp-vm/guest-control - - - - m::rwx"
+      "a+ /run/nixling/vms/corp-vm/guest-control - - - - default:m::rwx"
     ];
+    expected = true;
   };
 
   "activation-runtime-tmpfiles/run-store-sync-dir" = {
@@ -129,11 +155,13 @@ in
   };
 
   "activation-runtime-tmpfiles/gpu-dir" = {
-    expr = rulesForPath "/run/nixling-gpu/corp-vm";
-    expected = [
+    expr = lib.all (rule: builtins.elem rule tmpfiles) [
       "d /run/nixling-gpu/corp-vm 0750 nixlingd nixling -"
       "z /run/nixling-gpu/corp-vm 0750 nixlingd nixling -"
+      "a+ /run/nixling-gpu/corp-vm - - - - m::rwx"
+      "a+ /run/nixling-gpu/corp-vm - - - - u:nixling-corp-vm-gpu:rwx"
     ];
+    expected = true;
   };
 
   "activation-runtime-tmpfiles/video-dir" = {
@@ -145,11 +173,16 @@ in
   };
 
   "activation-runtime-tmpfiles/wlproxy-dir" = {
-    expr = rulesForPath "/run/nixling-wlproxy/corp-vm";
-    expected = [
+    expr = lib.all (rule: builtins.elem rule tmpfiles) [
       "d /run/nixling-wlproxy/corp-vm 0750 nixlingd nixling -"
       "z /run/nixling-wlproxy/corp-vm 0750 nixlingd nixling -"
+      "a+ /run/nixling-wlproxy/corp-vm - - - - m::rwx"
+      "a+ /run/nixling-wlproxy/corp-vm - - - - default:m::rwx"
+      "a+ /run/nixling-wlproxy/corp-vm - - - - u:nixling-corp-vm-wlproxy:rwx"
+      "a+ /run/nixling-wlproxy/corp-vm - - - - u:nixling-corp-vm-gpu:--x"
+      "a+ /run/nixling-wlproxy/corp-vm - - - - default:u:nixling-corp-vm-gpu:rwx"
     ];
+    expected = true;
   };
 
   "activation-runtime-tmpfiles/store-view-live-dir" = {
