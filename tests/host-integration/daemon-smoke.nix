@@ -19,7 +19,11 @@ in
 pkgs.testers.runNixOSTest {
   name = "nixling-daemon-smoke";
 
-  nodes.machine = nixlingLib.nixlingDaemonNode { };
+  nodes.machine = nixlingLib.nixlingDaemonNode {
+    extra = { pkgs, ... }: {
+      environment.systemPackages = [ pkgs.jq ];
+    };
+  };
 
   # The daemon-only end-state contract (ADR 0015): the framework declares
   # EXACTLY three root-visible units. The broker socket is socket-activated, so
@@ -45,6 +49,17 @@ pkgs.testers.runNixOSTest {
     # 3. The live public wire surface: nixlingd binds its AF_UNIX socket.
     machine.wait_for_file("/run/nixling/public.sock")
     machine.succeed("test -S /run/nixling/public.sock")
+    machine.succeed(
+        "tmp=$(mktemp) && "
+        "jq --arg path \"$NIXLING_MANIFEST_PATH\" "
+        "'.artifacts.publicManifestPath = $path' "
+        "/etc/nixling/daemon-config.json > \"$tmp\" && "
+        "install -m 0640 -o root -g nixlingd \"$tmp\" /etc/nixling/daemon-config.json && "
+        "rm -f \"$tmp\" && "
+        "systemctl restart nixlingd.service"
+    )
+    machine.wait_for_unit("nixlingd.service")
+    machine.succeed("test -S /run/nixling/public.sock")
     machine.succeed("runuser -u alice -- nixling list --json >/dev/null")
 
     # 3b. Service restart readiness + cgroup survival. The synthetic process is
@@ -54,10 +69,14 @@ pkgs.testers.runNixOSTest {
     # daemon-restart-vm-survival.nix.
     survivor_pid = machine.succeed(
         "set -euo pipefail; "
-        "cg=$(systemctl show -P ControlGroup nixlingd.service); "
-        "sleep 600 & pid=$!; "
-        "echo \"$pid\" > \"/sys/fs/cgroup$cg/cgroup.procs\"; "
-        "echo \"$pid\""
+        "rm -f /run/nixling-smoke-survivor.pid; "
+        "setsid -f sh -c 'echo $$ > /run/nixling-smoke-survivor.pid; exec sleep 3600' "
+        "</dev/null >/dev/null 2>&1; "
+        "for _ in $(seq 1 50); do "
+        "  test -s /run/nixling-smoke-survivor.pid && break; "
+        "  sleep 0.1; "
+        "done; "
+        "cat /run/nixling-smoke-survivor.pid"
     ).strip()
     machine.succeed("systemctl restart nixlingd.service")
     machine.wait_for_unit("nixlingd.service")
