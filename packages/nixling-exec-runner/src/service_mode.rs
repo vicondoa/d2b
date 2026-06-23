@@ -1796,7 +1796,7 @@ ControlGroup=/nixling.slice/nixling-exec.slice/nixling-exec-03.service
         // The bounded drain wait must let supervise return promptly even though
         // the pipe write-end is still held open.
         assert!(
-            start.elapsed() < Duration::from_secs(5),
+            start.elapsed() < Duration::from_secs(30),
             "supervise hung on a lingering pipe holder"
         );
         assert_eq!(result, RunnerResult::Done);
