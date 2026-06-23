@@ -141,6 +141,9 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- ADR 0035 Wave 6 extended generated `sync.json` coverage for daemon lock
+  roots, per-VM lifecycle locks, store-view sync locks, and USBIP lock claims
+  without changing live lock implementations.
 - ADR 0035 Wave 5 added a contract-test policy that classifies every
   `ProcessRole` and requires runner roles to carry Rust argv-builder plus
   runner matrix/contract coverage before new roles land.

@@ -18,7 +18,7 @@ let
     lockId = id;
   };
 
-  ofdLock = { id, scope, path, owner ? actor "daemon" "nixlingd", scopeClass ? "host", root ? "run" }: {
+  ofdLock = { id, scope, path, owner ? actor "daemon" "nixlingd", scopeClass ? "host", root ? "run", normalizedPath ? id }: {
     inherit id scope;
     pathTemplate = path;
     resourceId = null;
@@ -27,7 +27,7 @@ let
     allowedHolders = [ owner ];
     inheritancePolicy = "close-on-exec";
     fdPassingPolicy = fdNone;
-    acquireOrder = order scopeClass root id id;
+    acquireOrder = order scopeClass root normalizedPath id;
     timeoutPolicy = {
       kind = "fail-fast";
       timeoutMs = null;
@@ -40,6 +40,53 @@ let
     degradeScope = if scopeClass == "vm" then "vm" else "host";
     releaseAuthority = owner;
     cloexecRequired = true;
+  };
+
+  kernelLock = { id, scope, path, owner, scopeClass ? "host", root ? "run", normalizedPath ? id, staleKind ? "pidfd-proof-required", adoptionPolicy ? "reacquire-after-proof", timeoutKind ? "fail-fast", timeoutMs ? null, degradeScope ? "host" }: {
+    inherit id scope;
+    pathTemplate = path;
+    resourceId = null;
+    kind = "kernel-object";
+    ownerProcess = owner;
+    allowedHolders = [ owner ];
+    inheritancePolicy = "close-on-exec";
+    fdPassingPolicy = fdNone;
+    acquireOrder = order scopeClass root normalizedPath id;
+    timeoutPolicy = {
+      kind = timeoutKind;
+      inherit timeoutMs;
+    };
+    stalePolicy = {
+      kind = staleKind;
+      degradedReason = "lock-owner-ambiguous";
+    };
+    inherit adoptionPolicy degradeScope;
+    releaseAuthority = owner;
+    cloexecRequired = true;
+  };
+
+  lockRoot = { id, scope, path, owner, root ? "run", normalizedPath, scopeClass ? "host", readers ? [ ] }: {
+    inherit id scope;
+    pathTemplate = path;
+    resourceId = id;
+    kind = "kernel-object";
+    ownerProcess = owner;
+    allowedHolders = [ owner ] ++ readers;
+    inheritancePolicy = "not-applicable";
+    fdPassingPolicy = fdNone;
+    acquireOrder = order scopeClass root normalizedPath id;
+    timeoutPolicy = {
+      kind = "fail-fast";
+      timeoutMs = null;
+    };
+    stalePolicy = {
+      kind = "manual-recovery";
+      degradedReason = "lock-owner-ambiguous";
+    };
+    adoptionPolicy = "not-adoptable";
+    degradeScope = if scopeClass == "vm" then "vm" else "host";
+    releaseAuthority = owner;
+    cloexecRequired = false;
   };
 
   inProcessLock = vm: {
@@ -64,16 +111,29 @@ let
     adoptionPolicy = "quarantine-on-ambiguity";
     degradeScope = "vm";
     releaseAuthority = actor "daemon" "nixlingd";
-    cloexecRequired = true;
+    cloexecRequired = false;
   };
 
-  storeSyncLock = vm: ofdLock {
+  vmStartLock = vm: kernelLock {
+    id = "lock:vm-start:${vm}";
+    scope = "vm:${vm}";
+    path = "/run/nixling/locks/vm-start-${vm}.lock";
+    owner = actor "daemon" "nixlingd";
+    scopeClass = "vm";
+    root = "run";
+    normalizedPath = "locks/vm-start-${vm}.lock";
+    degradeScope = "vm";
+  };
+
+  storeSyncLock = vm: kernelLock {
     id = "lock:store-sync:${vm}";
     scope = "vm:${vm}";
     path = "${toString cfg.store.stateDir}/${vm}/store-view/sync.lock";
     owner = actor "broker" "nixling-priv-broker";
     scopeClass = "vm";
     root = "state";
+    normalizedPath = "vms/${vm}/store-view/sync.lock";
+    degradeScope = "vm";
   };
 
   usbipLock = vm: busid:
@@ -104,7 +164,7 @@ let
       adoptionPolicy = "reacquire-after-proof";
       degradeScope = "vm";
       releaseAuthority = actor "broker" "nixling-priv-broker";
-      cloexecRequired = true;
+      cloexecRequired = false;
     };
 
   usbipLocks = lib.flatten (lib.mapAttrsToList
@@ -114,6 +174,44 @@ let
   data = {
     schemaVersion = "v2";
     locks = [
+      (lockRoot {
+        id = "lock-root:run";
+        scope = "host";
+        path = "/run/nixling";
+        owner = actor "nix-module" "tmpfiles";
+        normalizedPath = "run/nixling";
+        readers = [
+          (actor "daemon" "nixlingd")
+          (actor "broker" "nixling-priv-broker")
+        ];
+      })
+      (lockRoot {
+        id = "lock-root:daemon-state";
+        scope = "host";
+        path = "/run/nixling/state";
+        owner = actor "nix-module" "tmpfiles";
+        normalizedPath = "run/nixling/state";
+        readers = [ (actor "daemon" "nixlingd") ];
+      })
+      (lockRoot {
+        id = "lock-root:vm-locks";
+        scope = "host";
+        path = "/run/nixling/locks";
+        owner = actor "nix-module" "tmpfiles";
+        normalizedPath = "run/nixling/locks";
+        readers = [ (actor "daemon" "nixlingd") ];
+      })
+      (lockRoot {
+        id = "lock-root:usbip";
+        scope = "host";
+        path = "/run/nixling/locks/usbip";
+        owner = actor "nix-module" "tmpfiles";
+        normalizedPath = "run/nixling/locks/usbip";
+        readers = [
+          (actor "broker" "nixling-priv-broker")
+          (actor "daemon" "nixlingd")
+        ];
+      })
       (ofdLock {
         id = "lock:daemon";
         scope = "host";
@@ -121,9 +219,11 @@ let
         owner = actor "daemon" "nixlingd";
         scopeClass = "global";
         root = "run";
+        normalizedPath = "daemon.lock";
       })
     ]
     ++ (lib.mapAttrsToList (vm: _: inProcessLock vm) enabledVms)
+    ++ (lib.mapAttrsToList (vm: _: vmStartLock vm) enabledVms)
     ++ (lib.mapAttrsToList (vm: _: storeSyncLock vm) enabledVms)
     ++ usbipLocks;
   };
