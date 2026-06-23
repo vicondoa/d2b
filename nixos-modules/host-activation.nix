@@ -111,6 +111,17 @@ EOF
   tmpfilesAcl = path: acl: [
     "a+ ${path} - - - - ${acl}"
   ];
+  runtimeLeafDir = path: mode: user: group:
+    tmpfilesDir path mode user group
+    ++ tmpfilesAcl path "g::r-x"
+    ++ tmpfilesAcl path "default:g::r-x";
+  runtimeAclMask = path: [
+    "a+ ${path} - - - - m::rwx"
+    "a+ ${path} - - - - default:m::rwx"
+  ];
+  runtimeAclUser = path: principal: perms: tmpfilesAcl path "u:${principal}:${perms}";
+  runtimeDefaultAclUser = path: principal: perms: tmpfilesAcl path "default:u:${principal}:${perms}";
+  stablePrincipal = principal: toString (nl.stablePrincipalId principal);
   perVmNamedStateTraversalAcls = lib.concatLists [
     (lib.concatLists (lib.mapAttrsToList (name: _: tmpfilesAcl "/var/lib/nixling" "u:nixling-${name}-gpu:--x")
       (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms)))
@@ -125,28 +136,111 @@ EOF
     (lib.concatLists (lib.mapAttrsToList (name: _: tmpfilesAcl "/var/lib/nixling" "u:nixling-${name}-qemu-media:--x")
       qemuMediaVms))
   ];
+  perVmRuntimeTraversalAcls = lib.concatLists (lib.mapAttrsToList
+    (name: vm:
+      let
+        runnerPrincipal = stablePrincipal "nixling-${name}-runner";
+        gctlfsPrincipal = stablePrincipal "nixling-${name}-gctlfs";
+      in
+      lib.concatLists [
+        (runtimeAclUser "/run/nixling" runnerPrincipal "--x")
+        (runtimeAclUser "/run/nixling" gctlfsPrincipal "--x")
+        (runtimeAclUser "/run/nixling/vms" runnerPrincipal "--x")
+        (runtimeAclUser "/run/nixling/vms" gctlfsPrincipal "--x")
+        (lib.optionals vm.tpm.enable (runtimeAclUser "/run/nixling" "nixling-${name}-swtpm" "--x"))
+        (lib.optionals vm.tpm.enable (runtimeAclUser "/run/nixling/vms" "nixling-${name}-swtpm" "--x"))
+        (lib.optionals vm.audio.enable (runtimeAclUser "/run/nixling" "nixling-${name}-snd" "--x"))
+        (lib.optionals vm.audio.enable (runtimeAclUser "/run/nixling/vms" "nixling-${name}-snd" "--x"))
+        (lib.optionals vm.graphics.enable (runtimeAclUser "/run/nixling" "nixling-${name}-gpu" "--x"))
+        (lib.optionals vm.graphics.enable (runtimeAclUser "/run/nixling/vms" "nixling-${name}-gpu" "--x"))
+        (lib.optionals vm.graphics.enable (runtimeAclUser "/run/nixling-gpu" "nixling-${name}-gpu" "--x"))
+        (lib.optionals vm.graphics.enable (runtimeAclUser "/run/nixling-wlproxy" "nixling-${name}-gpu" "--x"))
+        (lib.optionals vm.graphics.enable (runtimeAclUser "/run/nixling-wlproxy" "nixling-${name}-wlproxy" "--x"))
+        (lib.optionals (vm.graphics.enable && vm.graphics.videoSidecar) (runtimeAclUser "/run/nixling-video" runnerPrincipal "--x"))
+        (lib.optionals (vm.graphics.enable && vm.graphics.videoSidecar) (runtimeAclUser "/run/nixling-video" "nixling-${name}-video" "--x"))
+      ])
+    normalNixosVms);
+  perQemuMediaRuntimeTraversalAcls = lib.concatLists (lib.mapAttrsToList
+    (name: _:
+      let
+        qemuMediaPrincipal = "nixling-${name}-qemu-media";
+        wlproxyPrincipal = "nixling-${name}-wlproxy";
+      in
+      lib.concatLists [
+        (runtimeAclUser "/run/nixling" qemuMediaPrincipal "--x")
+        (runtimeAclUser "/run/nixling/vms" qemuMediaPrincipal "--x")
+        (runtimeAclUser "/run/nixling-wlproxy" qemuMediaPrincipal "--x")
+        (runtimeAclUser "/run/nixling-wlproxy" wlproxyPrincipal "--x")
+      ])
+    qemuMediaVms);
   perNormalVmPostureTmpfiles = lib.concatLists (lib.mapAttrsToList
-    (name: vm: lib.concatLists [
+    (name: vm:
+      let
+        vmRunDir = "/run/nixling/vms/${name}";
+        guestControlRunDir = "${vmRunDir}/guest-control";
+        gpuRunDir = "/run/nixling-gpu/${name}";
+        videoRunDir = "/run/nixling-video/${name}";
+        wlproxyRunDir = "/run/nixling-wlproxy/${name}";
+        runnerPrincipal = stablePrincipal "nixling-${name}-runner";
+        gctlfsPrincipal = stablePrincipal "nixling-${name}-gctlfs";
+      in
+      lib.concatLists [
       (tmpfilesDir "/var/lib/nixling/vms/${name}" "3770" "nixlingd" "users")
-      (tmpfilesDir "/run/nixling/vms/${name}" "0750" "nixlingd" "nixling")
-      (tmpfilesDir "/run/nixling/vms/${name}/guest-control" "0750" "nixlingd" "nixling")
-      (tmpfilesDir "/run/nixling-gpu/${name}" "0750" "nixlingd" "nixling")
-      (tmpfilesDir "/run/nixling-video/${name}" "0750" "nixlingd" "nixling")
-      (tmpfilesDir "/run/nixling-wlproxy/${name}" "0750" "nixlingd" "nixling")
+      (runtimeLeafDir vmRunDir "1770" "nixlingd" "nixling")
+      (runtimeLeafDir guestControlRunDir "0770" "nixlingd" "nixling")
+      (runtimeLeafDir gpuRunDir "0770" "nixlingd" "nixling")
+      (runtimeLeafDir videoRunDir "0770" "nixlingd" "nixling")
+      (runtimeLeafDir wlproxyRunDir "0770" "nixlingd" "nixling")
       (tmpfilesDir "/var/lib/nixling/vms/${name}/store-view" "0755" "nixlingd" "users")
       (tmpfilesDir "/var/lib/nixling/vms/${name}/store-view/live" "0755" "nixlingd" "users")
       (tmpfilesDir "/var/lib/nixling/vms/${name}/store-view/meta" "0755" "nixlingd" "users")
+      (runtimeAclMask vmRunDir)
+      (runtimeAclUser vmRunDir runnerPrincipal "rwx")
+      (runtimeAclUser vmRunDir gctlfsPrincipal "--x")
+      (runtimeDefaultAclUser vmRunDir runnerPrincipal "rwx")
+      (runtimeAclMask guestControlRunDir)
+      (runtimeAclUser guestControlRunDir runnerPrincipal "--x")
+      (runtimeAclUser guestControlRunDir gctlfsPrincipal "rwx")
+      (runtimeDefaultAclUser guestControlRunDir runnerPrincipal "rwx")
+      (runtimeDefaultAclUser guestControlRunDir gctlfsPrincipal "rwx")
       (lib.optionals vm.tpm.enable (tmpfilesAcl "/var/lib/nixling/vms/${name}" "u:nixling-${name}-swtpm:--x"))
+      (lib.optionals vm.tpm.enable (runtimeAclUser vmRunDir "nixling-${name}-swtpm" "rwx"))
       (lib.optionals vm.graphics.enable (tmpfilesAcl "/var/lib/nixling/vms/${name}" "u:nixling-${name}-gpu:rwx"))
       (lib.optionals vm.graphics.enable (tmpfilesAcl "/var/lib/nixling/vms/${name}" "default:u:nixling-${name}-gpu:rw"))
       (lib.optionals vm.graphics.enable (tmpfilesAcl "/var/lib/nixling/vms/${name}" "default:g::r-x"))
+      (lib.optionals vm.graphics.enable (runtimeAclUser vmRunDir "nixling-${name}-gpu" "rwx"))
+      (lib.optionals vm.graphics.enable (runtimeAclUser gpuRunDir "nixling-${name}-gpu" "rwx"))
+      (lib.optionals vm.graphics.enable (runtimeAclMask gpuRunDir))
+      (lib.optionals vm.graphics.enable (runtimeAclUser wlproxyRunDir "nixling-${name}-wlproxy" "rwx"))
+      (lib.optionals vm.graphics.enable (runtimeAclUser wlproxyRunDir "nixling-${name}-gpu" "--x"))
+      (lib.optionals vm.graphics.enable (runtimeDefaultAclUser wlproxyRunDir "nixling-${name}-gpu" "rwx"))
+      (lib.optionals vm.graphics.enable (runtimeAclMask wlproxyRunDir))
+      (lib.optionals (vm.graphics.enable && vm.graphics.videoSidecar) (runtimeAclUser videoRunDir "nixling-${name}-video" "rwx"))
+      (lib.optionals (vm.graphics.enable && vm.graphics.videoSidecar) (runtimeAclUser videoRunDir runnerPrincipal "--x"))
+      (lib.optionals (vm.graphics.enable && vm.graphics.videoSidecar) (runtimeDefaultAclUser videoRunDir runnerPrincipal "rwx"))
+      (lib.optionals (vm.graphics.enable && vm.graphics.videoSidecar) (runtimeDefaultAclUser videoRunDir "nixling-${name}-video" "rwx"))
+      (lib.optionals (vm.graphics.enable && vm.graphics.videoSidecar) (runtimeAclMask videoRunDir))
+      (lib.optionals vm.audio.enable (runtimeAclUser vmRunDir "nixling-${name}-snd" "rwx"))
     ])
     normalNixosVms);
   perQemuMediaPostureTmpfiles = lib.concatLists (lib.mapAttrsToList
-    (name: _: lib.concatLists [
+    (name: _:
+      let
+        qemuMediaPrincipal = "nixling-${name}-qemu-media";
+        wlproxyPrincipal = "nixling-${name}-wlproxy";
+        vmRunDir = "/run/nixling/vms/${name}";
+        wlproxyRunDir = "/run/nixling-wlproxy/${name}";
+      in
+      lib.concatLists [
       (tmpfilesDir "/var/lib/nixling/vms/${name}" "0750" "nixling-${name}-qemu-media" "nixling-${name}-qemu-media")
-      (tmpfilesDir "/run/nixling/vms/${name}" "0750" "nixlingd" "nixling")
-      (tmpfilesDir "/run/nixling-wlproxy/${name}" "0750" "nixlingd" "nixling")
+      (runtimeLeafDir vmRunDir "0770" "nixlingd" "nixling")
+      (runtimeAclMask vmRunDir)
+      (runtimeAclUser vmRunDir qemuMediaPrincipal "rwx")
+      (runtimeLeafDir wlproxyRunDir "0770" "nixlingd" "nixling")
+      (runtimeAclMask wlproxyRunDir)
+      (runtimeAclUser wlproxyRunDir wlproxyPrincipal "rwx")
+      (runtimeAclUser wlproxyRunDir qemuMediaPrincipal "--x")
+      (runtimeDefaultAclUser wlproxyRunDir qemuMediaPrincipal "rwx")
     ])
     qemuMediaVms);
 in
@@ -159,11 +253,17 @@ in
     (tmpfilesAcl "/var/lib/nixling" "g:kvm:--x")
     (tmpfilesAcl "/var/lib/nixling" "g:nixling:--x")
     perVmNamedStateTraversalAcls
-    (tmpfilesDir "/run/nixling/vms" "0750" "nixlingd" "nixling")
+    # Shared runtime parents stay root-owned so broker path-safety checks can
+    # create or reconcile per-VM children without trusting a daemon-writable
+    # parent. The per-VM leaves below remain nixlingd:nixling for daemon-owned
+    # sockets and guest-control artifacts.
+    (tmpfilesDir "/run/nixling/vms" "0750" "root" "nixling")
     (tmpfilesDir "/run/nixling/otel" "0750" "nixlingd" "nixling")
-    (tmpfilesDir "/run/nixling-gpu" "0750" "nixlingd" "nixling")
-    (tmpfilesDir "/run/nixling-video" "0750" "nixlingd" "nixling")
-    (tmpfilesDir "/run/nixling-wlproxy" "0750" "nixlingd" "nixling")
+    (tmpfilesDir "/run/nixling-gpu" "0750" "root" "nixling")
+    (tmpfilesDir "/run/nixling-video" "0750" "root" "nixling")
+    (tmpfilesDir "/run/nixling-wlproxy" "0750" "root" "nixling")
+    perVmRuntimeTraversalAcls
+    perQemuMediaRuntimeTraversalAcls
     perNormalVmPostureTmpfiles
     perQemuMediaPostureTmpfiles
   ];
