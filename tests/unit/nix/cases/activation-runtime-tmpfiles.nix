@@ -82,28 +82,32 @@ in
   };
 
   "activation-runtime-tmpfiles/vm-state-dir" = {
-    expr = rulesForPath "/var/lib/nixling/vms/corp-vm";
-    expected = [
+    expr = lib.all (rule: builtins.elem rule tmpfiles) [
       "d /var/lib/nixling/vms/corp-vm 3770 nixlingd users -"
       "z /var/lib/nixling/vms/corp-vm 3770 nixlingd users -"
       "a+ /var/lib/nixling/vms/corp-vm - - - - u:nixling-corp-vm-swtpm:--x"
     ];
+    expected = true;
   };
 
   "activation-runtime-tmpfiles/run-vms-parent" = {
-    expr = rulesForPath "/run/nixling/vms";
-    expected = [
+    expr = lib.all (rule: builtins.elem rule tmpfiles) [
       "d /run/nixling/vms 0750 root nixling -"
       "z /run/nixling/vms 0750 root nixling -"
+      "a+ /run/nixling/vms - - - - u:nixling-corp-vm-swtpm:--x"
+      "a+ /run/nixling/vms - - - - u:nixling-corp-vm-snd:--x"
+      "a+ /run/nixling/vms - - - - u:nixling-corp-vm-gpu:--x"
     ];
+    expected = true;
   };
 
   "activation-runtime-tmpfiles/gpu-parent" = {
-    expr = rulesForPath "/run/nixling-gpu";
-    expected = [
+    expr = lib.all (rule: builtins.elem rule tmpfiles) [
       "d /run/nixling-gpu 0750 root nixling -"
       "z /run/nixling-gpu 0750 root nixling -"
+      "a+ /run/nixling-gpu - - - - u:nixling-corp-vm-gpu:--x"
     ];
+    expected = true;
   };
 
   "activation-runtime-tmpfiles/video-parent" = {
