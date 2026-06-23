@@ -58,6 +58,17 @@ pub enum BrokerRequest {
     /// direct image-file policy from the trusted bundle; the daemon supplies
     /// only the VM id.
     QemuMediaBoot(QemuMediaBootRequest),
+    /// Ask the qemu-media guest to shut down through QMP `system_powerdown`.
+    /// The daemon supplies only the VM id; raw QMP JSON never crosses the
+    /// broker boundary.
+    QemuMediaSystemPowerdown(QemuMediaLifecycleRequest),
+    /// Read the qemu-media guest/VMM status through QMP `query-status`.
+    /// Returns a closed typed enum so polling never leaks raw QMP JSON back to
+    /// the daemon.
+    QemuMediaQueryStatus(QemuMediaQueryStatusRequest),
+    /// Ask the qemu-media VMM to exit through QMP `quit` after the guest is no
+    /// longer running.
+    QemuMediaQuit(QemuMediaLifecycleRequest),
     /// Resolve an enrolled physical USB selector and execute qemu-media QMP
     /// attach. The busid is a runtime selector only and is redacted from every
     /// success response/audit field.
@@ -199,6 +210,9 @@ impl BrokerRequest {
             Self::QemuMediaEnroll(_) => "QemuMediaEnroll",
             Self::QemuMediaRefreshRegistry(_) => "QemuMediaRefreshRegistry",
             Self::QemuMediaBoot(_) => "QemuMediaBoot",
+            Self::QemuMediaSystemPowerdown(_) => "QemuMediaSystemPowerdown",
+            Self::QemuMediaQueryStatus(_) => "QemuMediaQueryStatus",
+            Self::QemuMediaQuit(_) => "QemuMediaQuit",
             Self::QemuMediaAttach(_) => "QemuMediaAttach",
             Self::QemuMediaDetach(_) => "QemuMediaDetach",
             Self::OpenPidfd(_) => "OpenPidfd",
@@ -448,6 +462,9 @@ pub enum BrokerResponse {
     QemuMediaEnroll(QemuMediaEnrollResponse),
     QemuMediaRefreshRegistry(QemuMediaRefreshRegistryResponse),
     QemuMediaBoot(QemuMediaHotplugResponse),
+    QemuMediaSystemPowerdown(QemuMediaLifecycleResponse),
+    QemuMediaQueryStatus(QemuMediaQueryStatusResponse),
+    QemuMediaQuit(QemuMediaLifecycleResponse),
     QemuMediaAttach(QemuMediaHotplugResponse),
     QemuMediaDetach(QemuMediaHotplugResponse),
     /// OpenPidfd response. The pidfd itself is returned via SCM_RIGHTS
@@ -844,6 +861,73 @@ pub struct QemuMediaBootRequest {
     pub vm_id: VmId,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaLifecycleRequest {
+    pub vm_id: VmId,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaQueryStatusRequest {
+    pub vm_id: VmId,
+    /// True while daemon shutdown polling is already in progress. EOF,
+    /// ECONNRESET, ENOENT, and similar disconnects are then returned as the
+    /// closed status `connection-lost-during-shutdown` instead of as noisy
+    /// broker errors.
+    #[serde(default)]
+    pub shutdown_context: bool,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum QemuMediaLifecycleAction {
+    SystemPowerdown,
+    Quit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum QemuMediaVmStatus {
+    Running,
+    Paused,
+    Shutdown,
+    Suspended,
+    Watchdog,
+    Debug,
+    Inmigrate,
+    InternalError,
+    IoError,
+    Postmigrate,
+    Prelaunch,
+    FinishMigrate,
+    RestoreVm,
+    SaveVm,
+    GuestPanicked,
+    Colo,
+    Preconfig,
+    Unknown,
+    ConnectionLostDuringShutdown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaLifecycleResponse {
+    pub vm_id: VmId,
+    pub command: QemuMediaLifecycleAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QemuMediaQueryStatusResponse {
+    pub vm_id: VmId,
+    pub status: QemuMediaVmStatus,
 }
 
 /// qemu-media hotplug request keyed by a runtime USB busid selector.

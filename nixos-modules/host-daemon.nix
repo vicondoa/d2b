@@ -69,6 +69,51 @@ EOF
   };
   nixlingCliPackage = if prebuilt ? nixling then prebuilt.nixling else nixlingCliSourcePackage;
 
+  netVmNames = map
+    (envName: cfg.envs.${envName}.netName or "sys-${envName}-net")
+    (lib.attrNames cfg.envs);
+  gracefulTimeoutFor = vm:
+    if vm.enable && vm.lifecycle.gracefulShutdown.enable then
+      if vm.lifecycle.gracefulShutdown.timeoutSeconds == null
+      then cfg.daemon.lifecycle.gracefulShutdown.timeoutSeconds
+      else vm.lifecycle.gracefulShutdown.timeoutSeconds
+    else
+      0;
+  maxSeconds = values: lib.foldl' (acc: value: lib.max acc value) 0 values;
+  maxWorkloadShutdownTimeoutSeconds = maxSeconds (lib.mapAttrsToList
+    (name: vm: if builtins.elem name netVmNames then 0 else gracefulTimeoutFor vm)
+    cfg.vms);
+  maxNetVmShutdownTimeoutSeconds = maxSeconds (lib.mapAttrsToList
+    (name: vm: if builtins.elem name netVmNames then gracefulTimeoutFor vm else 0)
+    cfg.vms);
+  forceFallbackTimeoutSeconds = 30;
+  sidecarCleanupGraceSeconds = 120;
+  nixlingdStopTimeoutSeconds = lib.max 90 (
+    maxWorkloadShutdownTimeoutSeconds
+    + maxNetVmShutdownTimeoutSeconds
+    + 2 * forceFallbackTimeoutSeconds
+    + sidecarCleanupGraceSeconds
+  );
+
+  hostShutdownHook = pkgs.writeShellScript "nixling-host-shutdown-hook" ''
+    set -eu
+
+    manager_state="$(${pkgs.systemd}/bin/busctl get-property \
+      org.freedesktop.systemd1 \
+      /org/freedesktop/systemd1 \
+      org.freedesktop.systemd1.Manager \
+      SystemState 2>/dev/null || true)"
+
+    if [ "$manager_state" != 's "stopping"' ]; then
+      system_state="$(${pkgs.systemd}/bin/systemctl is-system-running 2>/dev/null || true)"
+      if [ "$system_state" != "stopping" ]; then
+        exit 0
+      fi
+    fi
+
+    exec ${nixlingCliPackage}/bin/nixling host shutdown-hook --apply
+  '';
+
   # Small fd-safe activation helper that the host activation snippets
   # call instead of `[ -L ] / [ -f ] / find -type f` shell
   # check-then-act patterns. Lives in nixling-host because it
@@ -144,6 +189,8 @@ EOF
     serverVersion = "0.4.0";
     acceptedClientVersionRange = ">=0.4.0, <0.5.0";
     gatewayConfigPath = "/etc/nixling/gateway.json";
+    autostartParallelism = cfg.daemon.autostart.parallelism;
+    gracefulShutdownTimeoutSeconds = cfg.daemon.lifecycle.gracefulShutdown.timeoutSeconds;
     artifacts = {
       publicManifestPath = "/run/current-system/sw/share/nixling/vms.json";
       bundlePath = "/etc/nixling/bundle.json";
@@ -348,7 +395,15 @@ in
       restartIfChanged = false;
       description = "nixling daemon skeleton";
       wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" ];
+      wants = [ "nixling-priv-broker.socket" ];
+      after = [
+        "network.target"
+        "nixling-priv-broker.socket"
+        "nixling-priv-broker.service"
+        "dbus.socket"
+        "dbus.service"
+        "nixling.slice"
+      ];
       # Bypass the kernel-module fatal check because this host's kernel
       # (linux-7.0.5) has the guest-side
       # virtio modules (virtio_console, virtio_net, virtio_fs,
@@ -369,6 +424,8 @@ in
         User = "nixlingd";
         Group = "nixlingd";
         ExecStart = "${nixlingdPackage}/bin/nixlingd serve --config /etc/nixling/daemon-config.json";
+        ExecStop = "+${hostShutdownHook}";
+        TimeoutStopSec = lib.mkDefault "${toString nixlingdStopTimeoutSeconds}s";
         Restart = "on-failure";
         RestartSec = "2s";
         NoNewPrivileges = true;

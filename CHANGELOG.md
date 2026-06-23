@@ -12,6 +12,11 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- VM stop/restart now has the Nix and manifest configuration surface for
+  provider-aware graceful guest shutdown, including global/per-VM enable and
+  1–600 second timeout controls, `manifestVersion = 7`, daemon-config
+  rendering, and host-shutdown `nixlingd.service` ordering/timeout budgeting.
+- Host shutdown and reboot now gracefully stop workload VMs before env net VMs.
 - Broker disk initialization now validates existing nixling-owned ext4 raw
   images before treating `ifAbsent` as satisfied, safely formats only
   proven-empty images, and fails closed before VM spawn for malformed or
@@ -80,6 +85,15 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- VM lifecycle CLI: added explicit `--force` / `-f` stop intent for
+  `vm stop`, `down`, `vm restart`, and `restart`, with backward-compatible
+  public wire serialization that omits `force = false`.
+- Broker QMP lifecycle operations for qemu-media now expose typed
+  `system_powerdown`, `query-status`, and `quit` requests, with bounded QMP
+  parsing and audit-safe lifecycle fields.
+- VM shutdowns now attempt provider-aware graceful guest shutdown for supported
+  Cloud Hypervisor/qemu-media VMs before forced pidfd cleanup, with bounded
+  daemon audit and metrics outcomes.
 - Persistent shell CLI: added top-level `nixling shell <vm>` attach and
   management forms for persistent named guest shell sessions.
 

@@ -955,6 +955,23 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
         }));
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
+    if let BrokerRequest::QemuMediaSystemPowerdown(req) | BrokerRequest::QemuMediaQuit(req) =
+        request
+    {
+        return Ok(serde_json::json!({
+            "vmId": req.vm_id.as_str(),
+            "tracingSpanIdPresent": req.tracing_span_id.is_some(),
+        }));
+    }
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    if let BrokerRequest::QemuMediaQueryStatus(req) = request {
+        return Ok(serde_json::json!({
+            "vmId": req.vm_id.as_str(),
+            "shutdownContext": req.shutdown_context,
+            "tracingSpanIdPresent": req.tracing_span_id.is_some(),
+        }));
+    }
+    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaAttach(req) | BrokerRequest::QemuMediaDetach(req) = request {
         return Ok(serde_json::json!({
             "vmId": req.vm_id.as_str(),
@@ -2326,6 +2343,56 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             )?;
             Ok(DispatchResult::no_fds(BrokerResponse::QemuMediaBoot(
                 outcome.response,
+            )))
+        }
+        RealBrokerRequest::QemuMediaSystemPowerdown(req) => {
+            let response = backend.qemu_media_system_powerdown(&req)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "QemuMediaSystemPowerdown",
+                response.vm_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                response.vm_id.as_str(),
+                response.vm_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::QemuMediaSystemPowerdown {
+                    vm_id: response.vm_id.as_str().to_owned(),
+                    qmp_command: "system_powerdown".to_owned(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::QemuMediaSystemPowerdown(response),
+            ))
+        }
+        RealBrokerRequest::QemuMediaQueryStatus(req) => {
+            let response = backend.qemu_media_query_status(&req)?;
+            Ok(DispatchResult::no_fds(BrokerResponse::QemuMediaQueryStatus(
+                response,
+            )))
+        }
+        RealBrokerRequest::QemuMediaQuit(req) => {
+            let response = backend.qemu_media_quit(&req)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "QemuMediaQuit",
+                response.vm_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                response.vm_id.as_str(),
+                response.vm_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::QemuMediaQuit {
+                    vm_id: response.vm_id.as_str().to_owned(),
+                    qmp_command: "quit".to_owned(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(BrokerResponse::QemuMediaQuit(
+                response,
             )))
         }
         RealBrokerRequest::QemuMediaAttach(req) => {
@@ -4040,6 +4107,21 @@ trait DispatchBackend {
         &self,
         expectations: &[(String, String, PathBuf)],
     ) -> Result<(), BrokerError>;
+
+    fn qemu_media_system_powerdown(
+        &self,
+        req: &nixling_ipc::broker_wire::QemuMediaLifecycleRequest,
+    ) -> Result<nixling_ipc::broker_wire::QemuMediaLifecycleResponse, BrokerError>;
+
+    fn qemu_media_query_status(
+        &self,
+        req: &nixling_ipc::broker_wire::QemuMediaQueryStatusRequest,
+    ) -> Result<nixling_ipc::broker_wire::QemuMediaQueryStatusResponse, BrokerError>;
+
+    fn qemu_media_quit(
+        &self,
+        req: &nixling_ipc::broker_wire::QemuMediaLifecycleRequest,
+    ) -> Result<nixling_ipc::broker_wire::QemuMediaLifecycleResponse, BrokerError>;
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -4505,6 +4587,29 @@ impl DispatchBackend for LiveDispatchBackend {
     ) -> Result<(), BrokerError> {
         crate::live_handlers::live_usbip_proxy_reconcile(expectations)
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    }
+
+    fn qemu_media_system_powerdown(
+        &self,
+        req: &nixling_ipc::broker_wire::QemuMediaLifecycleRequest,
+    ) -> Result<nixling_ipc::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
+        crate::ops::media::system_powerdown(req)
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    }
+
+    fn qemu_media_query_status(
+        &self,
+        req: &nixling_ipc::broker_wire::QemuMediaQueryStatusRequest,
+    ) -> Result<nixling_ipc::broker_wire::QemuMediaQueryStatusResponse, BrokerError> {
+        crate::ops::media::query_status(req)
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    }
+
+    fn qemu_media_quit(
+        &self,
+        req: &nixling_ipc::broker_wire::QemuMediaLifecycleRequest,
+    ) -> Result<nixling_ipc::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
+        crate::ops::media::quit(req).map_err(|err| BrokerError::LiveHandler(err.to_string()))
     }
 }
 
@@ -7005,6 +7110,26 @@ mod tests {
         assert!(!rendered.contains("usb-Vendor_SecretSerial"));
     }
 
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn qemu_media_lifecycle_request_fields_are_bounded() {
+        let request = BrokerRequest::QemuMediaQueryStatus(
+            nixling_ipc::broker_wire::QemuMediaQueryStatusRequest {
+                vm_id: nixling_ipc::types::VmId::new("media"),
+                shutdown_context: true,
+                tracing_span_id: None,
+            },
+        );
+
+        let fields = request_fields_value(&request).expect("bounded fields");
+        assert_eq!(fields["vmId"], "media");
+        assert_eq!(fields["shutdownContext"], true);
+        let rendered = fields.to_string();
+        assert!(!rendered.contains("return"));
+        assert!(!rendered.contains("status\":\""));
+        assert!(!rendered.contains("/dev/"));
+    }
+
     struct AuditCase {
         error: BrokerError,
         operation: &'static str,
@@ -7248,6 +7373,7 @@ mod tests {
                         ),
                     },
                     runtime: RuntimeMetadata::local_nixos(),
+                    lifecycle: Default::default(),
                     shell: None,
                     ssh_user: Some("alice".to_owned()),
                     state_dir: "/var/lib/nixling/vms/corp-vm".to_owned(),
@@ -7939,6 +8065,137 @@ mod tests {
         ) -> Result<(), BrokerError> {
             Ok(())
         }
+
+        fn qemu_media_system_powerdown(
+            &self,
+            req: &nixling_ipc::broker_wire::QemuMediaLifecycleRequest,
+        ) -> Result<nixling_ipc::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
+            Ok(nixling_ipc::broker_wire::QemuMediaLifecycleResponse {
+                vm_id: req.vm_id.clone(),
+                command: nixling_ipc::broker_wire::QemuMediaLifecycleAction::SystemPowerdown,
+            })
+        }
+
+        fn qemu_media_query_status(
+            &self,
+            req: &nixling_ipc::broker_wire::QemuMediaQueryStatusRequest,
+        ) -> Result<nixling_ipc::broker_wire::QemuMediaQueryStatusResponse, BrokerError> {
+            let status = if req.shutdown_context {
+                nixling_ipc::broker_wire::QemuMediaVmStatus::ConnectionLostDuringShutdown
+            } else {
+                nixling_ipc::broker_wire::QemuMediaVmStatus::Running
+            };
+            Ok(nixling_ipc::broker_wire::QemuMediaQueryStatusResponse {
+                vm_id: req.vm_id.clone(),
+                status,
+            })
+        }
+
+        fn qemu_media_quit(
+            &self,
+            req: &nixling_ipc::broker_wire::QemuMediaLifecycleRequest,
+        ) -> Result<nixling_ipc::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
+            Ok(nixling_ipc::broker_wire::QemuMediaLifecycleResponse {
+                vm_id: req.vm_id.clone(),
+                command: nixling_ipc::broker_wire::QemuMediaLifecycleAction::Quit,
+            })
+        }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn qemu_media_lifecycle_dispatch_audits_mutations_but_not_status_poll() {
+        use nixling_ipc::broker_wire::{
+            BrokerCallerRole, BrokerRequest, QemuMediaLifecycleAction, QemuMediaLifecycleRequest,
+            QemuMediaQueryStatusRequest, QemuMediaVmStatus,
+        };
+        use nixling_ipc::types::{TracingSpanId, VmId};
+
+        let root = test_audit_dir("qemu-lifecycle-dispatch-audit");
+        let bundle = build_test_bundle(&root);
+        let config = test_server_config(&root, &bundle.manifest_path);
+        let (log, capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let backend = FakeDispatchBackend::default();
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let caller_gid = Gid::current().as_raw();
+
+        let dispatch = |request: BrokerRequest| {
+            let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+                .expect("audit context");
+            dispatch_request_with_backend(
+                request,
+                1000,
+                caller_gid,
+                caller_role.clone(),
+                &audit_context,
+                &config,
+                &log,
+                Some(&bundle.resolver),
+                &backend,
+            )
+            .expect("dispatch succeeds")
+        };
+
+        let powerdown = dispatch(BrokerRequest::QemuMediaSystemPowerdown(
+            QemuMediaLifecycleRequest {
+                vm_id: VmId::new("media"),
+                tracing_span_id: Some(TracingSpanId::new("span-powerdown")),
+            },
+        ));
+        match powerdown.response {
+            BrokerResponse::QemuMediaSystemPowerdown(response) => {
+                assert_eq!(response.command, QemuMediaLifecycleAction::SystemPowerdown);
+            }
+            other => panic!("expected QemuMediaSystemPowerdown, got {other:?}"),
+        }
+
+        let before_query = capture.lock().expect("capture before query").len();
+        let query = dispatch(BrokerRequest::QemuMediaQueryStatus(
+            QemuMediaQueryStatusRequest {
+                vm_id: VmId::new("media"),
+                shutdown_context: true,
+                tracing_span_id: Some(TracingSpanId::new("span-query")),
+            },
+        ));
+        match query.response {
+            BrokerResponse::QemuMediaQueryStatus(response) => {
+                assert_eq!(response.status, QemuMediaVmStatus::ConnectionLostDuringShutdown);
+            }
+            other => panic!("expected QemuMediaQueryStatus, got {other:?}"),
+        }
+        assert_eq!(
+            capture.lock().expect("capture after query").len(),
+            before_query,
+            "query-status polling must not emit success audit records"
+        );
+
+        let quit = dispatch(BrokerRequest::QemuMediaQuit(QemuMediaLifecycleRequest {
+            vm_id: VmId::new("media"),
+            tracing_span_id: Some(TracingSpanId::new("span-quit")),
+        }));
+        match quit.response {
+            BrokerResponse::QemuMediaQuit(response) => {
+                assert_eq!(response.command, QemuMediaLifecycleAction::Quit);
+            }
+            other => panic!("expected QemuMediaQuit, got {other:?}"),
+        }
+
+        let records = capture.lock().expect("capture final");
+        let qmp_records: Vec<_> = records
+            .iter()
+            .filter(|record| record.operation.starts_with("QemuMedia"))
+            .collect();
+        assert_eq!(qmp_records.len(), 2);
+        assert_eq!(qmp_records[0].operation, "QemuMediaSystemPowerdown");
+        assert_eq!(qmp_records[1].operation, "QemuMediaQuit");
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -8658,6 +8915,98 @@ mod tests {
             "UsbipBindFirewallRule",
         );
 
+        let qemu_powerdown = assert_dispatch(
+            BrokerRequest::QemuMediaSystemPowerdown(
+                nixling_ipc::broker_wire::QemuMediaLifecycleRequest {
+                    vm_id: VmId::new("media"),
+                    tracing_span_id: Some(TracingSpanId::new("span-qmp-powerdown")),
+                },
+            ),
+            "QemuMediaSystemPowerdown",
+            OperationFields::QemuMediaSystemPowerdown {
+                vm_id: "media".to_owned(),
+                qmp_command: "system_powerdown".to_owned(),
+            },
+            Some("span-qmp-powerdown"),
+        );
+        match qemu_powerdown.response {
+            BrokerResponse::QemuMediaSystemPowerdown(response) => {
+                assert_eq!(
+                    response.command,
+                    nixling_ipc::broker_wire::QemuMediaLifecycleAction::SystemPowerdown
+                );
+            }
+            other => panic!("expected QemuMediaSystemPowerdown response, got {other:?}"),
+        }
+
+        let before_query = capture.lock().expect("capture before query").len();
+        let query_context = DispatchAuditContext::from_request(
+            &BrokerRequest::QemuMediaQueryStatus(
+                nixling_ipc::broker_wire::QemuMediaQueryStatusRequest {
+                    vm_id: VmId::new("media"),
+                    shutdown_context: true,
+                    tracing_span_id: Some(TracingSpanId::new("span-qmp-status")),
+                },
+            ),
+            peer_pid,
+            &caller_role,
+        )
+        .expect("query audit context");
+        let query_result = dispatch_request_with_backend(
+            BrokerRequest::QemuMediaQueryStatus(
+                nixling_ipc::broker_wire::QemuMediaQueryStatusRequest {
+                    vm_id: VmId::new("media"),
+                    shutdown_context: true,
+                    tracing_span_id: Some(TracingSpanId::new("span-qmp-status")),
+                },
+            ),
+            1000,
+            caller_gid,
+            caller_role.clone(),
+            &query_context,
+            &config,
+            &log,
+            Some(&bundle.resolver),
+            &backend,
+        )
+        .expect("query status succeeds without success audit");
+        match query_result.response {
+            BrokerResponse::QemuMediaQueryStatus(response) => {
+                assert_eq!(
+                    response.status,
+                    nixling_ipc::broker_wire::QemuMediaVmStatus::ConnectionLostDuringShutdown
+                );
+            }
+            other => panic!("expected QemuMediaQueryStatus response, got {other:?}"),
+        }
+        assert_eq!(
+            capture.lock().expect("capture after query").len(),
+            before_query,
+            "read-only query-status must suppress success audit"
+        );
+
+        let qemu_quit = assert_dispatch(
+            BrokerRequest::QemuMediaQuit(nixling_ipc::broker_wire::QemuMediaLifecycleRequest {
+                vm_id: VmId::new("media"),
+                tracing_span_id: Some(TracingSpanId::new("span-qmp-quit")),
+            }),
+            "QemuMediaQuit",
+            OperationFields::QemuMediaQuit {
+                vm_id: "media".to_owned(),
+                qmp_command: "quit".to_owned(),
+            },
+            Some("span-qmp-quit"),
+        );
+        match qemu_quit.response {
+            BrokerResponse::QemuMediaQuit(response) => {
+                assert_eq!(
+                    response.command,
+                    nixling_ipc::broker_wire::QemuMediaLifecycleAction::Quit
+                );
+            }
+            other => panic!("expected QemuMediaQuit response, got {other:?}"),
+        }
+
         assert_ack(
             assert_dispatch(
                 BrokerRequest::SeedDnsmasqLease(
@@ -8699,7 +9048,7 @@ mod tests {
 
         assert_eq!(
             capture.lock().expect("capture final lock").len(),
-            27,
+            29,
             "expected one typed audit record per live dispatch arm"
         );
 

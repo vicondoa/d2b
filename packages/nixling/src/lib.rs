@@ -870,6 +870,15 @@ enum HostCommand {
     Validate(HostValidateArgs),
 }
 
+#[derive(Debug)]
+struct HostShutdownHookArgs {
+    /// Plan the host-shutdown stop phases without contacting nixlingd.
+    dry_run: bool,
+    /// Apply the host-shutdown stop phases.
+    apply: bool,
+    json: bool,
+}
+
 #[derive(Debug, Args)]
 struct HostValidateArgs {
     /// Plan: report which readiness validators WOULD be attested.
@@ -1303,6 +1312,9 @@ struct VmStopArgs {
     dry_run: bool,
     #[arg(long, conflicts_with = "dry_run")]
     apply: bool,
+    /// Skip provider graceful shutdown and use the forced cleanup path.
+    #[arg(short = 'f', long)]
+    force: bool,
     #[arg(long, conflicts_with = "human")]
     json: bool,
     #[arg(long, conflicts_with = "json")]
@@ -1316,6 +1328,9 @@ struct VmRestartArgs {
     dry_run: bool,
     #[arg(long, conflicts_with = "dry_run")]
     apply: bool,
+    /// Apply force only to the stop phase before starting again.
+    #[arg(short = 'f', long)]
+    force: bool,
     #[arg(long, conflicts_with = "human")]
     json: bool,
     #[arg(long, conflicts_with = "json")]
@@ -2840,6 +2855,21 @@ where
         return report_failure(failure);
     }
 
+    if is_host_shutdown_hook_invocation(&raw_args) {
+        let context = match Context::from_env() {
+            Ok(context) => context,
+            Err(err) => return report_failure(err),
+        };
+        let args = match parse_host_shutdown_hook_args(&raw_args) {
+            Ok(args) => args,
+            Err(err) => return report_failure(err),
+        };
+        return match cmd_host_shutdown_hook(&context, &args) {
+            Ok(code) => code,
+            Err(err) => report_failure(err),
+        };
+    }
+
     let cli = match NativeCli::try_parse_from(raw_args.clone()) {
         Ok(cli) => cli,
         Err(err) => {
@@ -2870,6 +2900,47 @@ where
         Ok(code) => code,
         Err(err) => report_failure(err),
     }
+}
+
+fn is_host_shutdown_hook_invocation(raw_args: &[OsString]) -> bool {
+    raw_args.get(1).and_then(|arg| arg.to_str()) == Some("host")
+        && raw_args.get(2).and_then(|arg| arg.to_str()) == Some("shutdown-hook")
+}
+
+fn parse_host_shutdown_hook_args(
+    raw_args: &[OsString],
+) -> Result<HostShutdownHookArgs, CliFailure> {
+    let mut args = HostShutdownHookArgs {
+        dry_run: false,
+        apply: false,
+        json: false,
+    };
+    for arg in raw_args.iter().skip(3) {
+        match arg.to_str() {
+            Some("--dry-run") => args.dry_run = true,
+            Some("--apply") => args.apply = true,
+            Some("--json") => args.json = true,
+            Some(other) => {
+                return Err(CliFailure::new(
+                    2,
+                    format!("nixling host shutdown-hook does not accept {other}"),
+                ));
+            }
+            None => {
+                return Err(CliFailure::new(
+                    2,
+                    "nixling host shutdown-hook received a non-UTF-8 argument",
+                ));
+            }
+        }
+    }
+    if args.dry_run && args.apply {
+        return Err(CliFailure::new(
+            2,
+            "nixling host shutdown-hook accepts only one of --dry-run or --apply",
+        ));
+    }
+    Ok(args)
 }
 
 fn dispatch(
@@ -4732,6 +4803,154 @@ fn cmd_host_destroy(context: &Context, args: &HostDestroyArgs) -> Result<i32, Cl
     Ok(0)
 }
 
+fn host_shutdown_vm_phases(manifest: &ManifestDocument) -> Vec<Vec<String>> {
+    let mut workloads = Vec::new();
+    let mut net_vms = Vec::new();
+    for vm in manifest.vms() {
+        let item = (vm.env.clone().unwrap_or_default(), vm.name.clone());
+        if vm.is_net_vm {
+            net_vms.push(item);
+        } else {
+            workloads.push(item);
+        }
+    }
+    workloads.sort();
+    net_vms.sort();
+    vec![
+        workloads.into_iter().map(|(_, name)| name).collect(),
+        net_vms.into_iter().map(|(_, name)| name).collect(),
+    ]
+}
+
+fn render_host_shutdown_hook_plan(phases: &[Vec<String>], json: bool) -> Result<(), CliFailure> {
+    if json {
+        let mut rendered = serde_json::to_string_pretty(&serde_json::json!({
+            "command": "host shutdown-hook",
+            "mode": "dry-run",
+            "phases": phases,
+            "notes": "workload VMs stop before env net VMs; systemd invokes --apply only while the host manager is stopping",
+        }))
+        .map_err(|err| CliFailure::new(1, format!("failed to serialize shutdown plan: {err}")))?;
+        rendered.push('\n');
+        print_stdout(&rendered);
+    } else {
+        print_stdout(&format!(
+            "host shutdown-hook --dry-run: would stop {} workload VM(s), then {} net VM(s)\n",
+            phases.first().map(Vec::len).unwrap_or(0),
+            phases.get(1).map(Vec::len).unwrap_or(0),
+        ));
+    }
+    Ok(())
+}
+
+fn cmd_host_shutdown_hook(
+    context: &Context,
+    args: &HostShutdownHookArgs,
+) -> Result<i32, CliFailure> {
+    let flags =
+        require_explicit_mutation_flag("host shutdown-hook", args.dry_run, args.apply, args.json)?;
+    let manifest = context.load_manifest()?;
+    let phases = host_shutdown_vm_phases(&manifest);
+    if !flags.apply {
+        render_host_shutdown_hook_plan(&phases, args.json)?;
+        return Ok(0);
+    }
+
+    let mut stopped = Vec::new();
+    let mut skipped = Vec::new();
+    let mut failures = Vec::new();
+    for phase in &phases {
+        let phase_results = std::thread::scope(|scope| {
+            let handles = phase
+                .iter()
+                .map(|vm| {
+                    let context = context.clone();
+                    let vm = vm.clone();
+                    scope.spawn(move || {
+                        let result = try_daemon_mutating_verb(
+                            &context,
+                            "vmStop",
+                            serde_json::json!({ "vm": vm }),
+                            false,
+                            true,
+                            true,
+                        );
+                        (vm, result)
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("shutdown hook worker panicked"))
+                .collect::<Vec<_>>()
+        });
+        for (vm, outcome) in phase_results {
+            let outcome = match outcome {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    failures.push(format!("{vm}: {}", err.message));
+                    continue;
+                }
+            };
+            match outcome {
+                DaemonVerbOutcome::Applied { .. } => stopped.push(vm.clone()),
+                DaemonVerbOutcome::InvalidRequest { .. } => skipped.push(vm.clone()),
+                DaemonVerbOutcome::Unreachable => {
+                    failures.push(format!("{vm}: daemon unreachable"));
+                }
+                DaemonVerbOutcome::BrokerError { summary, .. } => {
+                    failures.push(format!(
+                        "{vm}: {}",
+                        summary.unwrap_or_else(|| "broker error".to_owned())
+                    ));
+                }
+                DaemonVerbOutcome::NotYetImplemented { verb, .. } => {
+                    failures.push(format!("{vm}: {verb} not implemented"));
+                }
+                DaemonVerbOutcome::ApiReadyTimeout { summary } => {
+                    failures.push(format!(
+                        "{vm}: {}",
+                        summary.unwrap_or_else(|| "api-ready timeout".to_owned())
+                    ));
+                }
+                DaemonVerbOutcome::DryRunPlanned { .. } => {
+                    failures.push(format!("{vm}: daemon returned dry-run for apply request"));
+                }
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        return Err(CliFailure::new(
+            1,
+            format!(
+                "host shutdown-hook failed after stopping {} VM(s), skipping {} already-stopped VM(s): {}",
+                stopped.len(),
+                skipped.len(),
+                failures.join("; ")
+            ),
+        ));
+    }
+    if args.json {
+        let mut rendered = serde_json::to_string_pretty(&serde_json::json!({
+            "command": "host shutdown-hook",
+            "mode": "apply",
+            "stopped": stopped,
+            "skipped": skipped,
+        }))
+        .map_err(|err| CliFailure::new(1, format!("failed to serialize shutdown result: {err}")))?;
+        rendered.push('\n');
+        print_stdout(&rendered);
+    } else {
+        print_stdout(&format!(
+            "host shutdown-hook --apply: stopped {} VM(s), skipped {} already-stopped VM(s)\n",
+            stopped.len(),
+            skipped.len()
+        ));
+    }
+    Ok(0)
+}
+
 fn cmd_host_doctor(context: &Context, args: &HostDoctorArgs) -> Result<i32, CliFailure> {
     if !args.read_only {
         return emit_host_error(
@@ -6339,7 +6558,12 @@ fn vm_is_qemu_media_runtime(context: &Context, vm: &str) -> Result<bool, CliFail
         .is_some_and(|runtime| runtime.kind == "qemu-media"))
 }
 
-fn vm_dag_dry_run_summary(verb: &str, vm: &str, qemu_media: bool) -> serde_json::Value {
+fn vm_dag_dry_run_summary(
+    verb: &str,
+    vm: &str,
+    qemu_media: bool,
+    force: bool,
+) -> serde_json::Value {
     // The DAG the supervisor would drive. Mirrors the structure emitted
     // by the processes::VmProcessDag exporter — for the headless alpha
     // shape (host-reconcile → store-preflight → virtiofsd-ro-store → ch
@@ -6390,7 +6614,7 @@ fn vm_dag_dry_run_summary(verb: &str, vm: &str, qemu_media: bool) -> serde_json:
             "vm dry-run reports the DAG the supervisor would drive (start: topo order; stop: reverse topo). --apply routes through nixlingd → broker (v1.0 daemon-only per ADR 0015).",
         )
     };
-    serde_json::json!({
+    let mut summary = serde_json::json!({
         "command": format!("vm {verb}"),
         "mode": "dry-run",
         "vm": vm,
@@ -6400,18 +6624,39 @@ fn vm_dag_dry_run_summary(verb: &str, vm: &str, qemu_media: bool) -> serde_json:
         },
         "stopOrder": if stopping || restarting { Some(stop_order) } else { None::<serde_json::Value> },
         "notes": notes,
-    })
+    });
+    if force
+        && (stopping || restarting)
+        && let Some(object) = summary.as_object_mut()
+    {
+        object.insert("force".to_owned(), serde_json::Value::Bool(true));
+    }
+    summary
+}
+
+struct VmLifecycleInvocation<'a> {
+    verb: &'a str,
+    vm: &'a str,
+    dry_run: bool,
+    apply: bool,
+    no_wait_api: bool,
+    force: bool,
+    json: bool,
 }
 
 fn cmd_vm_lifecycle_verb(
     context: &Context,
-    verb: &str,
-    vm: &str,
-    dry_run: bool,
-    apply: bool,
-    no_wait_api: bool,
-    json: bool,
+    invocation: VmLifecycleInvocation<'_>,
 ) -> Result<i32, CliFailure> {
+    let VmLifecycleInvocation {
+        verb,
+        vm,
+        dry_run,
+        apply,
+        no_wait_api,
+        force,
+        json,
+    } = invocation;
     let flags = require_explicit_mutation_flag(&format!("vm {verb}"), dry_run, apply, json)?;
     let route = route_vm_target(context, vm, json)?;
     let vm = match route {
@@ -6422,6 +6667,12 @@ fn cmd_vm_lifecycle_verb(
             gateway,
             target,
         } => {
+            if force {
+                return Err(CliFailure::new(
+                    2,
+                    format!("--force is not supported for gateway-routed vm {verb} targets"),
+                ));
+            }
             if flags.apply {
                 return match verb {
                     "start" => cmd_gateway_vm_start(context, target),
@@ -6470,22 +6721,25 @@ fn cmd_vm_lifecycle_verb(
             "restart" => "vmRestart",
             other => other,
         };
-        let extra_fields = if no_wait_api {
-            serde_json::json!({ "vm": vm, "noWaitApi": true })
-        } else {
-            serde_json::json!({ "vm": vm })
-        };
+        let mut extra_fields = serde_json::Map::new();
+        extra_fields.insert("vm".to_owned(), serde_json::Value::String(vm));
+        if no_wait_api {
+            extra_fields.insert("noWaitApi".to_owned(), serde_json::Value::Bool(true));
+        }
+        if force {
+            extra_fields.insert("force".to_owned(), serde_json::Value::Bool(true));
+        }
         return dispatch_mutating_verb(
             context,
             request_type,
-            extra_fields,
+            serde_json::Value::Object(extra_fields),
             flags.dry_run,
             flags.apply,
             json,
         );
     }
     let qemu_media = vm_is_qemu_media_runtime(context, &vm)?;
-    let summary = vm_dag_dry_run_summary(verb, &vm, qemu_media);
+    let summary = vm_dag_dry_run_summary(verb, &vm, qemu_media, force);
     if json {
         let mut rendered = serde_json::to_string_pretty(&summary).map_err(|err| {
             CliFailure::new(1, format!("failed to serialize vm dry-run summary: {err}"))
@@ -6494,12 +6748,22 @@ fn cmd_vm_lifecycle_verb(
         print_stdout(&rendered);
     } else {
         if qemu_media {
+            let force_note = if force && (verb == "stop" || verb == "restart") {
+                " with forced stop cleanup"
+            } else {
+                ""
+            };
             print_stdout(&format!(
-                "vm {verb} --dry-run: would drive the qemu-media DAG for vm '{vm}' (host-reconcile → qemu-media → QemuMediaBoot)\n"
+                "vm {verb} --dry-run: would drive the qemu-media DAG for vm '{vm}'{force_note} (host-reconcile → qemu-media → QemuMediaBoot)\n"
             ));
         } else {
+            let force_note = if force && (verb == "stop" || verb == "restart") {
+                " with forced stop cleanup"
+            } else {
+                ""
+            };
             print_stdout(&format!(
-                "vm {verb} --dry-run: would drive the 5-node DAG for vm '{vm}' (host-reconcile → store-preflight → virtiofsd-ro-store → ch → guest-control-health)\n"
+                "vm {verb} --dry-run: would drive the 5-node DAG for vm '{vm}'{force_note} (host-reconcile → store-preflight → virtiofsd-ro-store → ch → guest-control-health)\n"
             ));
         }
     }
@@ -6509,36 +6773,45 @@ fn cmd_vm_lifecycle_verb(
 fn cmd_vm_start(context: &Context, args: &VmStartArgs) -> Result<i32, CliFailure> {
     cmd_vm_lifecycle_verb(
         context,
-        "start",
-        &args.vm,
-        args.dry_run,
-        args.apply,
-        args.no_wait_api,
-        args.json,
+        VmLifecycleInvocation {
+            verb: "start",
+            vm: &args.vm,
+            dry_run: args.dry_run,
+            apply: args.apply,
+            no_wait_api: args.no_wait_api,
+            force: false,
+            json: args.json,
+        },
     )
 }
 
 fn cmd_vm_stop(context: &Context, args: &VmStopArgs) -> Result<i32, CliFailure> {
     cmd_vm_lifecycle_verb(
         context,
-        "stop",
-        &args.vm,
-        args.dry_run,
-        args.apply,
-        false,
-        args.json,
+        VmLifecycleInvocation {
+            verb: "stop",
+            vm: &args.vm,
+            dry_run: args.dry_run,
+            apply: args.apply,
+            no_wait_api: false,
+            force: args.force,
+            json: args.json,
+        },
     )
 }
 
 fn cmd_vm_restart(context: &Context, args: &VmRestartArgs) -> Result<i32, CliFailure> {
     cmd_vm_lifecycle_verb(
         context,
-        "restart",
-        &args.vm,
-        args.dry_run,
-        args.apply,
-        false,
-        args.json,
+        VmLifecycleInvocation {
+            verb: "restart",
+            vm: &args.vm,
+            dry_run: args.dry_run,
+            apply: args.apply,
+            no_wait_api: false,
+            force: args.force,
+            json: args.json,
+        },
     )
 }
 
@@ -11012,12 +11285,14 @@ mod host_install_dispatch_tests {
     use super::{
         AddressFamily, ApiReadySimple, ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk,
         IpcUsbProbeEntryKind, IpcUsbipProbeEntry, IpcUsbipProbeStatus, MAX_FRAME_BYTES,
-        ManifestDocument, ManifestVm, MediaRef, MsgFlags, NativeCli, SockFlag, SockType,
-        StatusServicesOutputV2, UnixAddr, UsbAttachArgs, UsbDetachArgs, VmExecArgs, VmStartArgs,
-        broker_error_envelope, build_storage_migration_plan, cmd_host_install, cmd_vm_exec,
-        cmd_vm_start, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
-        output_service_capabilities, parse_vm_exec_action, public_wire, render_usb_probe_human,
-        send, socket, storage_migration_checkpoint_id,
+        ManifestDocument, ManifestVm, MediaRef, MsgFlags, NativeCli, NativeCommand, SockFlag,
+        SockType, StatusServicesOutputV2, UnixAddr, UsbAttachArgs, UsbDetachArgs, VmArgs,
+        VmCommand, VmExecArgs, VmRestartArgs, VmStartArgs, VmStopArgs, broker_error_envelope,
+        build_storage_migration_plan, cmd_host_install, cmd_vm_exec, cmd_vm_restart, cmd_vm_start,
+        cmd_vm_stop, daemon_supported_features, encode_type_tagged_message,
+        host_shutdown_vm_phases, is_host_shutdown_hook_invocation, nix_err_to_io,
+        output_service_capabilities, parse_host_shutdown_hook_args, parse_vm_exec_action,
+        public_wire, render_usb_probe_human, send, socket, storage_migration_checkpoint_id,
     };
     use nixling_ipc::Version;
 
@@ -14962,7 +15237,18 @@ mod host_install_dispatch_tests {
         };
 
         let (result, stdout) = super::with_test_stdout_capture(|| {
-            super::cmd_vm_lifecycle_verb(&context, "start", vm, true, false, false, true)
+            super::cmd_vm_lifecycle_verb(
+                &context,
+                super::VmLifecycleInvocation {
+                    verb: "start",
+                    vm,
+                    dry_run: true,
+                    apply: false,
+                    no_wait_api: false,
+                    force: false,
+                    json: true,
+                },
+            )
         });
         assert_eq!(result.expect("qemu-media start dry-run"), 0);
         let rendered = String::from_utf8(stdout).expect("stdout utf8");
@@ -14971,7 +15257,18 @@ mod host_install_dispatch_tests {
         assert!(!rendered.contains("virtiofsd-ro-store"));
 
         let (result, stdout) = super::with_test_stdout_capture(|| {
-            super::cmd_vm_lifecycle_verb(&context, "stop", vm, true, false, false, false)
+            super::cmd_vm_lifecycle_verb(
+                &context,
+                super::VmLifecycleInvocation {
+                    verb: "stop",
+                    vm,
+                    dry_run: true,
+                    apply: false,
+                    no_wait_api: false,
+                    force: false,
+                    json: false,
+                },
+            )
         });
         assert_eq!(result.expect("qemu-media stop dry-run"), 0);
         let rendered = String::from_utf8(stdout).expect("stdout utf8");
@@ -15165,6 +15462,225 @@ mod host_install_dispatch_tests {
         assert_eq!(result.expect("vm start result"), super::EXIT_API_TIMEOUT);
         assert_eq!(request.get("type").and_then(Value::as_str), Some("vmStart"));
         assert!(request.get("noWaitApi").is_none());
+    }
+
+    #[test]
+    fn stop_and_restart_force_flags_parse_for_primary_and_alias_forms() {
+        let stop = NativeCli::try_parse_from(["nixling", "vm", "stop", "vm-a", "--force"])
+            .expect("vm stop --force parses");
+        assert!(matches!(
+            stop.command,
+            NativeCommand::Vm(VmArgs {
+                command: VmCommand::Stop(VmStopArgs { force: true, .. })
+            })
+        ));
+
+        let stop_short = NativeCli::try_parse_from(["nixling", "vm", "stop", "vm-a", "-f"])
+            .expect("vm stop -f parses");
+        assert!(matches!(
+            stop_short.command,
+            NativeCommand::Vm(VmArgs {
+                command: VmCommand::Stop(VmStopArgs { force: true, .. })
+            })
+        ));
+
+        let down =
+            NativeCli::try_parse_from(["nixling", "down", "vm-a", "-f"]).expect("down -f parses");
+        assert!(matches!(
+            down.command,
+            NativeCommand::Down(VmStopArgs { force: true, .. })
+        ));
+
+        let restart = NativeCli::try_parse_from(["nixling", "vm", "restart", "vm-a", "--force"])
+            .expect("vm restart --force parses");
+        assert!(matches!(
+            restart.command,
+            NativeCommand::Vm(VmArgs {
+                command: VmCommand::Restart(VmRestartArgs { force: true, .. })
+            })
+        ));
+
+        let restart_alias = NativeCli::try_parse_from(["nixling", "restart", "vm-a", "-f"])
+            .expect("restart -f parses");
+        assert!(matches!(
+            restart_alias.command,
+            NativeCommand::Restart(VmRestartArgs { force: true, .. })
+        ));
+    }
+
+    #[test]
+    fn host_shutdown_hook_uses_raw_hidden_parse_path() {
+        let argv = ["nixling", "host", "shutdown-hook", "--apply"]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        assert!(is_host_shutdown_hook_invocation(&argv));
+        let args = parse_host_shutdown_hook_args(&argv).expect("shutdown-hook args parse");
+        assert!(args.apply);
+        assert!(!args.dry_run);
+        assert!(
+            NativeCli::try_parse_from(["nixling", "host", "shutdown-hook", "--apply"]).is_err(),
+            "shutdown-hook must stay out of the public clap/completion surface"
+        );
+    }
+
+    #[test]
+    fn host_shutdown_hook_orders_workloads_before_env_net_vms() {
+        let manifest: ManifestDocument = serde_json::from_value(json!({
+            "sys-work-net": {
+                "name": "sys-work-net",
+                "env": "work",
+                "graphics": false,
+                "tpm": false,
+                "audio": false,
+                "usbipYubikey": false,
+                "staticIp": null,
+                "isNetVm": true,
+                "stateDir": "/var/lib/nixling/vms/sys-work-net",
+                "bridge": "nl-work",
+                "sshUser": null
+            },
+            "work-app": {
+                "name": "work-app",
+                "env": "work",
+                "graphics": false,
+                "tpm": false,
+                "audio": false,
+                "usbipYubikey": false,
+                "staticIp": null,
+                "isNetVm": false,
+                "stateDir": "/var/lib/nixling/vms/work-app",
+                "bridge": "nl-work",
+                "sshUser": "alice"
+            },
+            "personal-dev": {
+                "name": "personal-dev",
+                "env": "personal",
+                "graphics": false,
+                "tpm": false,
+                "audio": false,
+                "usbipYubikey": false,
+                "staticIp": null,
+                "isNetVm": false,
+                "stateDir": "/var/lib/nixling/vms/personal-dev",
+                "bridge": "nl-personal",
+                "sshUser": "alice"
+            },
+            "sys-personal-net": {
+                "name": "sys-personal-net",
+                "env": "personal",
+                "graphics": false,
+                "tpm": false,
+                "audio": false,
+                "usbipYubikey": false,
+                "staticIp": null,
+                "isNetVm": true,
+                "stateDir": "/var/lib/nixling/vms/sys-personal-net",
+                "bridge": "nl-personal",
+                "sshUser": null
+            }
+        }))
+        .expect("manifest fixture parses");
+
+        assert_eq!(
+            host_shutdown_vm_phases(&manifest),
+            vec![
+                vec!["personal-dev".to_owned(), "work-app".to_owned()],
+                vec!["sys-personal-net".to_owned(), "sys-work-net".to_owned()]
+            ],
+            "host shutdown must stop all workload VMs before any env net VM"
+        );
+    }
+
+    #[test]
+    fn stop_apply_sends_force_only_when_requested() {
+        let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
+        let response = json!({
+            "type": "mutatingVerbResponse",
+            "verb": "vm stop",
+            "outcome": "applied",
+            "summary": "vm stop ok",
+        });
+
+        let (forced_result, forced_request, _) = run_public_command_with_mock_daemon(
+            "vm-stop-force",
+            "vm-a",
+            response.clone(),
+            |context| {
+                cmd_vm_stop(
+                    context,
+                    &VmStopArgs {
+                        vm: "vm-a".to_owned(),
+                        dry_run: false,
+                        apply: true,
+                        force: true,
+                        json: false,
+                        human: false,
+                    },
+                )
+            },
+        );
+        assert_eq!(forced_result.expect("forced vm stop result"), 0);
+        assert_eq!(
+            forced_request.get("type").and_then(Value::as_str),
+            Some("vmStop")
+        );
+        assert_eq!(
+            forced_request.get("force").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let (normal_result, normal_request, _) =
+            run_public_command_with_mock_daemon("vm-stop-normal", "vm-a", response, |context| {
+                cmd_vm_stop(
+                    context,
+                    &VmStopArgs {
+                        vm: "vm-a".to_owned(),
+                        dry_run: false,
+                        apply: true,
+                        force: false,
+                        json: false,
+                        human: false,
+                    },
+                )
+            });
+        assert_eq!(normal_result.expect("normal vm stop result"), 0);
+        assert!(normal_request.get("force").is_none());
+    }
+
+    #[test]
+    fn restart_apply_sends_force_for_stop_phase() {
+        let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
+        let (result, request, _) = run_public_command_with_mock_daemon(
+            "vm-restart-force",
+            "vm-a",
+            json!({
+                "type": "mutatingVerbResponse",
+                "verb": "vm restart",
+                "outcome": "applied",
+                "summary": "vm restart ok",
+            }),
+            |context| {
+                cmd_vm_restart(
+                    context,
+                    &VmRestartArgs {
+                        vm: "vm-a".to_owned(),
+                        dry_run: false,
+                        apply: true,
+                        force: true,
+                        json: false,
+                        human: false,
+                    },
+                )
+            },
+        );
+
+        assert_eq!(result.expect("vm restart result"), 0);
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("vmRestart")
+        );
+        assert_eq!(request.get("force").and_then(Value::as_bool), Some(true));
     }
 
     #[test]

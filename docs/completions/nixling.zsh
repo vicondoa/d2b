@@ -624,6 +624,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '(--apply)--dry-run[]' \
 '(--dry-run)--apply[]' \
+'-f[Skip provider graceful shutdown and use the forced cleanup path]' \
+'--force[Skip provider graceful shutdown and use the forced cleanup path]' \
 '(--human)--json[]' \
 '(--json)--human[]' \
 '-h[Print help]' \
@@ -635,6 +637,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '(--apply)--dry-run[]' \
 '(--dry-run)--apply[]' \
+'-f[Apply force only to the stop phase before starting again]' \
+'--force[Apply force only to the stop phase before starting again]' \
 '(--human)--json[]' \
 '(--json)--human[]' \
 '-h[Print help]' \
@@ -831,6 +835,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '(--apply)--dry-run[]' \
 '(--dry-run)--apply[]' \
+'-f[Skip provider graceful shutdown and use the forced cleanup path]' \
+'--force[Skip provider graceful shutdown and use the forced cleanup path]' \
 '(--human)--json[]' \
 '(--json)--human[]' \
 '-h[Print help]' \
@@ -842,6 +848,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '(--apply)--dry-run[]' \
 '(--dry-run)--apply[]' \
+'-f[Apply force only to the stop phase before starting again]' \
+'--force[Apply force only to the stop phase before starting again]' \
 '(--human)--json[]' \
 '(--json)--human[]' \
 '-h[Print help]' \

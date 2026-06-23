@@ -26,10 +26,10 @@
 //! `tests/daemon-metrics-eval.sh` gate scoped to daemon-internal
 //! metrics; the CH series are documented inline here.
 
-use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
+
+use crate::ch_api;
 
 /// One VM the scraper should attempt to query on a scrape cycle.
 /// Built from the host manifest. Only the three label values
@@ -113,89 +113,23 @@ impl ChStatsSource for UnixSocketChStatsSource {
         if !socket.exists() {
             return out;
         }
-        if ch_get_json(socket, "/api/v1/vmm.ping").is_err() {
+        if ch_api::blocking_get_json(socket, "/api/v1/vmm.ping", CH_HTTP_TIMEOUT).is_err() {
             return out;
         }
         out.api_up = true;
-        match ch_get_json(socket, "/api/v1/vm.info") {
-            Ok(body) => {
-                if let Some((state, vcpus, memory)) = parse_vm_info(&body) {
-                    out.state = state;
-                    out.vcpu_count = vcpus;
-                    out.memory_bytes = memory;
+        match ch_api::blocking_get_json(socket, "/api/v1/vm.info", CH_HTTP_TIMEOUT) {
+            Ok(body) => match ch_api::parse_vm_info(&body) {
+                Ok(info) => {
+                    out.state = info.state;
+                    out.vcpu_count = info.vcpu_count;
+                    out.memory_bytes = info.memory_mib;
                 }
-            }
+                Err(_) => return out,
+            },
             Err(_) => return out,
         }
         out
     }
-}
-
-/// Send one HTTP/1.0 GET to a CH unix socket and return the body
-/// bytes (without headers). Errors on socket I/O, timeout, or
-/// any non-2xx status. Intentionally minimal — the CH API is
-/// well-formed JSON over `Connection: close` so we don't need
-/// chunked decoding or keep-alive.
-fn ch_get_json(socket: &Path, path: &str) -> Result<Vec<u8>, std::io::Error> {
-    let mut stream = UnixStream::connect(socket)?;
-    stream.set_read_timeout(Some(CH_HTTP_TIMEOUT))?;
-    stream.set_write_timeout(Some(CH_HTTP_TIMEOUT))?;
-    let req = format!(
-        "GET {path} HTTP/1.0\r\nHost: localhost\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
-    );
-    stream.write_all(req.as_bytes())?;
-    let mut raw = Vec::with_capacity(2048);
-    stream.read_to_end(&mut raw)?;
-    split_http_body(&raw).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "ch: malformed http response",
-        )
-    })
-}
-
-/// Split an HTTP/1.0 response into the body, returning `None` if
-/// the status line is not 2xx or the header terminator is missing.
-fn split_http_body(raw: &[u8]) -> Option<Vec<u8>> {
-    let status_end = raw.iter().position(|b| *b == b'\n')?;
-    let status_line = std::str::from_utf8(&raw[..status_end]).ok()?.trim_end();
-    let mut parts = status_line.split_whitespace();
-    let _version = parts.next()?;
-    let code: u16 = parts.next()?.parse().ok()?;
-    if !(200..300).contains(&code) {
-        return None;
-    }
-    let sep = find_subslice(raw, b"\r\n\r\n")
-        .map(|i| i + 4)
-        .or_else(|| find_subslice(raw, b"\n\n").map(|i| i + 2))?;
-    Some(raw[sep..].to_vec())
-}
-
-fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|w| w == needle)
-}
-
-/// Extract `(state, vcpu_count, memory_bytes)` from a CH
-/// `/api/v1/vm.info` response. Returns `None` on any structural
-/// surprise — callers treat that as "stats unavailable" and
-/// still emit `api_up=1` if the ping succeeded.
-fn parse_vm_info(body: &[u8]) -> Option<(Option<String>, Option<u64>, Option<u64>)> {
-    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
-    let state = v
-        .get("state")
-        .and_then(|s| s.as_str())
-        .map(|s| s.to_owned());
-    let vcpus = v
-        .get("config")
-        .and_then(|c| c.get("cpus"))
-        .and_then(|c| c.get("boot_vcpus"))
-        .and_then(|n| n.as_u64());
-    let memory_mib = v
-        .get("config")
-        .and_then(|c| c.get("memory"))
-        .and_then(|m| m.get("size"))
-        .and_then(|n| n.as_u64());
-    Some((state, vcpus, memory_mib))
 }
 
 /// Render the full Prometheus text-format block for a set of VMs.
@@ -466,31 +400,31 @@ mod tests {
                 "memory": {"size": 1073741824}
             }
         }"#;
-        let (state, vcpus, memory) = parse_vm_info(body).expect("parse");
-        assert_eq!(state.as_deref(), Some("Running"));
-        assert_eq!(vcpus, Some(2));
-        assert_eq!(memory, Some(1073741824));
+        let info = ch_api::parse_vm_info(body).expect("parse");
+        assert_eq!(info.state.as_deref(), Some("Running"));
+        assert_eq!(info.vcpu_count, Some(2));
+        assert_eq!(info.memory_mib, Some(1073741824));
     }
 
     #[test]
     fn parse_vm_info_tolerates_missing_fields() {
         let body = br#"{"state":"Shutdown"}"#;
-        let (state, vcpus, memory) = parse_vm_info(body).expect("parse");
-        assert_eq!(state.as_deref(), Some("Shutdown"));
-        assert_eq!(vcpus, None);
-        assert_eq!(memory, None);
+        let info = ch_api::parse_vm_info(body).expect("parse");
+        assert_eq!(info.state.as_deref(), Some("Shutdown"));
+        assert_eq!(info.vcpu_count, None);
+        assert_eq!(info.memory_mib, None);
     }
 
     #[test]
     fn split_http_body_rejects_5xx() {
         let raw = b"HTTP/1.0 500 Internal Server Error\r\n\r\noops";
-        assert!(split_http_body(raw).is_none());
+        assert!(ch_api::split_http_body(raw).is_err());
     }
 
     #[test]
     fn split_http_body_returns_body_after_double_crlf() {
         let raw = b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":1}";
-        let body = split_http_body(raw).expect("body");
+        let body = ch_api::split_http_body(raw).expect("body");
         assert_eq!(body, b"{\"ok\":1}");
     }
 

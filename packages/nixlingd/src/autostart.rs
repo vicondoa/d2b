@@ -548,6 +548,7 @@ mod tests {
                 vsock_host_socket: None,
             },
             runtime,
+            lifecycle: Default::default(),
             shell: None,
             ssh_user: None,
             state_dir: "/var/lib/nixling/vms/installer".to_owned(),

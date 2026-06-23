@@ -1329,6 +1329,42 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "QemuMediaSystemPowerdown",
+    "subject": "qemu-media lifecycle",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "redacted-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "QemuMediaQueryStatus",
+    "subject": "qemu-media lifecycle status",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": false,
+    "secretAccess": "redacted-only",
+    "brokerRequired": "yes",
+    "auditMode": "errors"
+  },
+  {
+    "operation": "QemuMediaQuit",
+    "subject": "qemu-media lifecycle",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "redacted-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "QemuMediaDetach",
     "subject": "qemu-media hotplug",
     "scope": "per-VM/per-media-ref",

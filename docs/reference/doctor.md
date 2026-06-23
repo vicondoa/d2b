@@ -103,6 +103,23 @@ Every non-pass detail includes a safe remediation command. The JSON
 `data.issueKinds` field is a bounded, deduplicated taxonomy string; dynamic
 VM/role details remain in `data.issues[]` only.
 
+### `graceful-shutdown-status`
+
+| Field | Value |
+|-------|-------|
+| Invariant | No VM has an uncleared degraded shutdown marker |
+| Source | `<daemon-state-dir>/shutdown-degraded.json` plus primary VMM entries from `<daemon-state-dir>/pidfd-table.json` |
+| Pass | No marker exists; JSON output includes any live primary VMM inventory in `livePrimaryVms[]` for follow-up inspection |
+| Warn | Last stop used explicit `--force` (operator intent) or a provider API was unavailable but cleanup completed |
+| Fail | Graceful shutdown timed out, empty-VMM cleanup failed, or a resource-holding runner/cgroup stayed populated after bounded cleanup |
+
+Remediation distinguishes guest-level and host-level failures. Guest shutdown
+timeouts point to fixing the in-guest OS and retrying `nixling vm stop <vm>
+--apply`, or intentionally bypassing the wait with `nixling vm stop <vm>
+--force --apply`. Empty-VMM cleanup failures point to host runner cleanup and
+may require `nixling host doctor` plus a focused force stop; they are not
+reported as guest OS failures.
+
 ---
 
 ## v1.2 invariant probes

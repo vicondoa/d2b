@@ -358,6 +358,16 @@ back to `nixlingd` over `SCM_RIGHTS` as pidfds, and reconciled
 against the persisted DAG state under
 `/var/lib/nixling/supervisor/state.json`.
 
+Stop is provider-aware for local primary VMM runners. Normal
+`nixling vm stop` asks Cloud Hypervisor guests to shut down via the CH
+API and qemu-media guests via broker-mediated QMP before pidfd signal
+cleanup. `--force` is an explicit operator override that skips only
+that graceful guest wait and then uses the standard SIGTERM/SIGKILL
+cleanup path. `nixling.daemon.lifecycle.gracefulShutdown.*` and
+`nixling.vms.<vm>.lifecycle.gracefulShutdown.*` configure the bounded
+wait; disabled VMs bypass the graceful phase without being marked
+degraded.
+
 The `restartIfChanged = false` invariant applies to the two daemon
 units themselves (no per-VM units are emitted):
 
