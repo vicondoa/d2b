@@ -38,6 +38,9 @@ deprecations ship one minor release before removal.
   attach helper instead of returning disabled shell I/O.
 - `nixling list --json` now preserves daemon-reported failed lifecycle state as
   `status = "failed"` instead of collapsing it to `unknown`.
+- `nixling list` and `nixling status` now use a short provider-status probe
+  timeout instead of the graceful shutdown operation timeout, keeping status
+  queries responsive when a VM's provider API socket is slow.
 
 ### Internal
 
