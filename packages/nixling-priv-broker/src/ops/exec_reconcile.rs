@@ -289,6 +289,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         let mut child = Command::new(nft_binary)
             .arg("-f")
             .arg("-")
+            .env_remove("NOTIFY_SOCKET")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -460,6 +461,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         }
         let output = Command::new(ip_binary)
             .args(&args)
+            .env_remove("NOTIFY_SOCKET")
             .stdin(Stdio::null())
             .output()
             .map_err(|e| ReconcileExecError::BinaryMissing {
@@ -506,6 +508,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
             .arg(subcommand.as_str())
             .arg("--busid")
             .arg(bus_id)
+            .env_remove("NOTIFY_SOCKET")
             .stdin(Stdio::null())
             .output()
             .map_err(|e| ReconcileExecError::BinaryMissing {
@@ -671,6 +674,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
             .arg(source_view_path)
             .arg(mount_view_path)
             .arg(mode_arg)
+            .env_remove("NOTIFY_SOCKET")
             .stdin(Stdio::null())
             .output()
             .map_err(|e| ReconcileExecError::BinaryMissing {
@@ -706,6 +710,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         }
         let output = Command::new("/run/current-system/sw/bin/nix-collect-garbage")
             .arg("-d")
+            .env_remove("NOTIFY_SOCKET")
             .stdin(Stdio::null())
             .output()
             .map_err(|e| ReconcileExecError::BinaryMissing {
@@ -776,6 +781,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
                 .arg(comment)
                 .arg("-f")
                 .arg(&staging)
+                .env_remove("NOTIFY_SOCKET")
                 .stdin(Stdio::null())
                 .output()
                 .map_err(|e| ReconcileExecError::BinaryMissing {
@@ -792,6 +798,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
             let fingerprint_output = Command::new("/run/current-system/sw/bin/ssh-keygen")
                 .arg("-lf")
                 .arg(&staging_pub)
+                .env_remove("NOTIFY_SOCKET")
                 .stdin(Stdio::null())
                 .output()
                 .map_err(|e| ReconcileExecError::BinaryMissing {
@@ -839,6 +846,7 @@ fn run_modprobe(module: &str) -> Result<(), ReconcileExecError> {
         .unwrap_or_else(|_| "/run/current-system/sw/bin/modprobe".to_owned());
     let output = Command::new(&modprobe)
         .arg(module)
+        .env_remove("NOTIFY_SOCKET")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()

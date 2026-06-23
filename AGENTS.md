@@ -214,10 +214,11 @@ Only after the merge lands does the agent call `task_complete`.
 
 When a host configuration switches to a new nixling checkout (for
 example a local `path:/home/paydro/projects/nixling` input), the host
-switch updates `/etc/nixling/*` and the system packages but does **not**
-restart `nixlingd` (`restartIfChanged = false`). Before runtime
-validation, restart the daemon explicitly so it reloads the updated
-bundle/process contract and binary paths:
+switch updates `/etc/nixling/*` and the system packages and may restart
+`nixlingd`. That daemon restart is a continuation event: VMs must stay
+running, protected by `KillMode=process`, and the restarted daemon
+re-adopts their runner pidfds. Before runtime validation, make sure the
+notify-ready daemon is active on the updated generation:
 
 ```bash
 sudo systemctl restart nixlingd.service
@@ -368,14 +369,16 @@ cleanup path. `nixling.daemon.lifecycle.gracefulShutdown.*` and
 wait; disabled VMs bypass the graceful phase without being marked
 degraded.
 
-The `restartIfChanged = false` invariant applies to the two daemon
-units themselves (no per-VM units are emitted):
+The restart policy applies differently to the two daemon units (no
+per-VM units are emitted):
 
-- `nixlingd.service` carries `restartIfChanged = false`; rebuilds
-  do not cycle a running daemon. Operators apply pending daemon
-  changes explicitly via `nixling host doctor` (reports the
-  pending-restart state) and `systemctl restart nixlingd` once the
-  supervisor reconciliation window is acceptable.
+- `nixlingd.service` is `Type=notify` and may restart on switch/update.
+  Systemd does not report it ready until the public socket is bound and
+  the daemon has completed startup/adoption. `KillMode=process` ensures a
+  daemon restart kills only the daemon main PID, not VM runner
+  descendants; the restarted daemon re-adopts existing runners. The
+  existing guarded `ExecStop` host-shutdown hook remains the all-VM
+  teardown path and runs only when the system manager is stopping.
 - `nixling-priv-broker.service` is socket-activated. It reloads the
   current bundle resolver for each accepted request so a running broker
   does not dispatch stale runner intents after a switch, and it never

@@ -311,6 +311,7 @@ fn io_to_live_handler(path: &Path, err: io::Error) -> crate::live_handlers::Live
 fn systemctl_invoke(args: &[&str]) -> Result<(), String> {
     let output = Command::new("/usr/bin/systemctl")
         .args(args)
+        .env_remove("NOTIFY_SOCKET")
         .output()
         .map_err(|err| format!("systemctl spawn failed: {err}"))?;
     if !output.status.success() {

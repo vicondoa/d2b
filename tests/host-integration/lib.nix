@@ -56,6 +56,7 @@ in
   # exist").
   nixlingDaemonNode =
     { extra ? { }, writableStore ? false }:
+    { config, ... }:
     {
       imports = [
         self.nixosModules.default
@@ -72,6 +73,8 @@ in
             isNormalUser = true;
             uid = 1000;
           };
+
+          environment.variables.NIXLING_MANIFEST_PATH = config.nixling._manifestJsonPath;
 
           # runNixOSTest runs first-boot activation before systemd-tmpfiles has
           # materialized the nixling state tree. Pre-create the key directory so

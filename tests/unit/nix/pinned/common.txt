@@ -341,8 +341,13 @@ nixlingd-startup-smoke/broker-caps-exact-canonical-set
 nixlingd-startup-smoke/broker-group
 nixlingd-startup-smoke/broker-type
 nixlingd-startup-smoke/broker-user
+nixlingd-startup-smoke/daemon-execstop-hook
+nixlingd-startup-smoke/daemon-killmode-process
+nixlingd-startup-smoke/daemon-notify-access-main
 nixlingd-startup-smoke/daemon-restart-if-changed
 nixlingd-startup-smoke/daemon-restrict-address-families
+nixlingd-startup-smoke/daemon-timeout-start
+nixlingd-startup-smoke/daemon-type-notify
 nixlingd-startup-smoke/daemon-user
 nixlingd-startup-smoke/daemon-wants-broker-socket
 nixlingd-startup-smoke/evidence-record-shape
@@ -353,6 +358,7 @@ nixlingd-startup-smoke/socket-mode
 nixlingd-startup-smoke/socket-user
 nixlingd-startup-smoke/tmpfiles-audit
 nixlingd-startup-smoke/tmpfiles-current-bundle
+nixlingd-startup-smoke/tmpfiles-daemon-state
 nixlingd-startup-smoke/tmpfiles-run-nixling
 observability/obs-alerting-surface
 observability/obs-audit-surface
@@ -463,8 +469,9 @@ restart-policy/gpu
 restart-policy/guest-otel-vsock-out
 restart-policy/microvm-template
 restart-policy/microvm-virtiofsd-full-vm
-restart-policy/nixlingd-no-restart
+restart-policy/nixlingd-killmode-process
 restart-policy/nixlingd-present
+restart-policy/nixlingd-restarts-on-update
 restart-policy/nixling-template
 restart-policy/obs-otel-vsock-in-host
 restart-policy/otel-host-bridge

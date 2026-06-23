@@ -388,8 +388,8 @@ The Rust `nixling` CLI is the only operator surface. Run
 To enable guest exec on a VM: set `nixling.vms.<vm>.guest.control.enable
 = true` and `guest.exec.enable = true` (the VM must have a workload user
 via `ssh.user`); add your operator account to `nixling.site.adminUsers`;
-rebuild and restart the daemon into the new generation (`sudo systemctl
-restart nixlingd`, since `nixlingd` carries `restartIfChanged = false`);
+rebuild and let the notify-ready daemon restart into the new generation
+(or run `sudo systemctl restart nixlingd` explicitly);
 then start the VM on the guest-control generation and run the verbs.
 Every exec runs the requested command as the VM's workload user
 (`ssh.user`) — **never root** — inside a real PAM login session, so

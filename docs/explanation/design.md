@@ -1622,9 +1622,10 @@ portability work splits that into three layers:
   treated as TPM identity and is never wiped casually; the v0.4.0
   pre-start flush stays in `processes.json` for the daemon
   supervisor.
-- The `restartIfChanged = false` invariant is preserved in spirit:
-  `nixlingd` never auto-restarts a running child on config change;
-  drift surfaces as `[pending restart]` in `nixling list`/`status`.
+- The VM no-surprise-restart invariant is preserved: `nixlingd` may restart
+  on host switch/update, but running VM children are not restarted by that
+  daemon restart. Per-VM drift surfaces as `[pending restart]` in
+  `nixling list`/`status`.
 - v0.4.0 `vms.json` `manifestVersion = 2` is preserved unchanged;
   new bundle artifacts are layered beside it without mutating the
   existing schema (ADR 0006).

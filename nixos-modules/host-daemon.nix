@@ -374,25 +374,14 @@ in
       "d /run/nixling/locks 0700 nixlingd nixlingd -"
       "d /run/nixling/state 0700 nixlingd nixlingd -"
       "d /var/lib/nixling 0750 root nixlingd -"
+      "d /var/lib/nixling/daemon-state 0700 nixlingd nixlingd -"
       "d /etc/nixling 0750 root nixlingd -"
     ];
 
     systemd.services.nixlingd = {
-      # restartIfChanged = false is
-      # required at the TOP LEVEL of systemd.services.<name> — NOT inside
-      # serviceConfig or unitConfig. NixOS's switch-to-configuration only
-      # reads the top-level NixOS option; the unitConfig.X-RestartIfChanged
-      # form emits under [Unit] where switch-to-configuration silently
-      # ignores it (same bug that was fixed for per-VM sidecars in v0.1.7).
-      #
-      # Why: nixlingd is the long-lived supervisor whose pidfd handle owns
-      # the child runner DAG. A rebuild-triggered restart would atomically
-      # tear down all in-flight VM processes — identical blast radius to the
-      # per-VM sidecar restartIfChanged bug. The VM lifecycle policy
-      # (AGENTS.md "VM lifecycle policy") extends to the daemon itself.
-      # Operators apply daemon updates explicitly via `nixling daemon restart`
-      # or a manual `systemctl restart nixlingd` after verifying quiescence.
-      restartIfChanged = false;
+      # nixlingd is allowed to restart on switch/update. Running VMs survive
+      # because systemd stops only the daemon main process (KillMode=process)
+      # and the restarted daemon re-adopts broker-spawned runners by identity.
       description = "nixling daemon skeleton";
       wantedBy = [ "multi-user.target" ];
       wants = [ "nixling-priv-broker.socket" ];
@@ -413,7 +402,17 @@ in
       # env var.
       environment.NIXLING_SKIP_KERNEL_MODULE_CHECK = "1";
       serviceConfig = {
-        Type = "simple";
+        # Type=notify makes systemd hold nixlingd.service in "activating"
+        # until the daemon has completed startup/adoption and is about to
+        # accept public.sock frames. This prevents post-switch validation from
+        # racing a successful `systemctl restart nixlingd.service`.
+        Type = "notify";
+        NotifyAccess = "main";
+        TimeoutStartSec = "5min";
+        # A daemon restart is a continuation event: broker-spawned VM runners
+        # must survive so the restarted daemon can re-adopt them. The guarded
+        # ExecStop hook below still handles host shutdown/reboot teardown.
+        KillMode = "process";
         # cgroup v2 delegation requires the long-lived daemon to be
         # non-root so the broker can fchown
         # the nixling.slice subtree to the daemon's uid/gid. Running
