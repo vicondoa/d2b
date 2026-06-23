@@ -580,6 +580,7 @@ impl PtyProcessSpawner for NullPtySpawner {
 /// halves plus a control surface and a `/proc`-scanning session reaper.
 pub mod linux {
     use std::os::fd::OwnedFd;
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::process::ExitStatusExt;
     use std::path::PathBuf;
     use std::pin::Pin;
@@ -611,6 +612,38 @@ pub mod linux {
     /// `EIO` raw value (Linux): a PTY master read returns it once the last slave
     /// closes. Treated as a clean EOF. Pinned to avoid a libc dependency.
     const EIO: i32 = 5;
+
+    #[derive(Clone, Copy)]
+    struct WorkloadIds {
+        uid: u32,
+        gid: u32,
+    }
+
+    async fn resolve_workload_ids(user: &str) -> Result<WorkloadIds, ExecError> {
+        async fn id_field(flag: &str, user: &str) -> Result<u32, ExecError> {
+            let output = Command::new("/run/current-system/sw/bin/id")
+                .arg(flag)
+                .arg(user)
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .await
+                .map_err(|_| ExecError::UserDenied)?;
+            if !output.status.success() {
+                return Err(ExecError::UserDenied);
+            }
+            std::str::from_utf8(&output.stdout)
+                .map_err(|_| ExecError::UserDenied)?
+                .trim()
+                .parse()
+                .map_err(|_| ExecError::UserDenied)
+        }
+
+        Ok(WorkloadIds {
+            uid: id_field("-u", user).await?,
+            gid: id_field("-g", user).await?,
+        })
+    }
 
     /// Production PTY spawner. Constructed with the absolute path to the
     /// `nixling-exec-runner` binary (invoked in `--tty-exec` mode), the
@@ -659,6 +692,25 @@ pub mod linux {
             grantpt(&master).map_err(|_| ExecError::SpawnFailed)?;
             unlockpt(&master).map_err(|_| ExecError::SpawnFailed)?;
             let slave_path = ptsname(&master, Vec::new()).map_err(|_| ExecError::SpawnFailed)?;
+            let direct_identity = if command.direct_workload_tty {
+                Some(resolve_workload_ids(&self.exec_user).await?)
+            } else {
+                None
+            };
+            if let Some(ids) = direct_identity {
+                let status = Command::new("/run/current-system/sw/bin/chown")
+                    .arg(format!("{}:{}", ids.uid, ids.gid))
+                    .arg(std::ffi::OsStr::from_bytes(slave_path.as_bytes()))
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .await
+                    .map_err(|_| ExecError::UserDenied)?;
+                if !status.success() {
+                    return Err(ExecError::UserDenied);
+                }
+            }
             // Open the slave O_NOCTTY|O_CLOEXEC: NOCTTY so this open does not make
             // guestd acquire a controlling terminal (the helper's TIOCSCTTY does
             // that in the child session), and CLOEXEC so a concurrent fork/exec
@@ -701,27 +753,44 @@ pub mod linux {
             let unit_name = crate::login_session::unique_exec_unit_name();
             let systemctl_path =
                 crate::login_session::sibling_systemctl_path(&self.systemd_run_path);
-            let session_args = crate::login_session::login_session_systemd_run_args(
-                &self.login_shell_path,
-                &self.exec_user,
-                &unit_name,
-                crate::login_session::SessionMode::Pty,
-                &command,
-            );
+            let session_command = command.clone();
             cmd.arg("--tty-exec")
                 .arg("--rows")
                 .arg(initial_size.rows.to_string())
                 .arg("--cols")
                 .arg(initial_size.cols.to_string())
-                .arg("--")
-                .arg(&self.systemd_run_path)
-                .args(&session_args)
-                .current_dir("/")
-                .env_clear()
-                .env("TERM", term)
-                // Safe fd handoff: no arbitrary pass_fds, no process_group(0),
-                // no pre_exec. The slave is stdin; the status pipe is stdout.
-                .stdin(Stdio::from(slave))
+                .arg("--");
+            if let Some(ids) = direct_identity {
+                cmd.arg("/run/current-system/sw/bin/setpriv")
+                    .arg("--reuid")
+                    .arg(ids.uid.to_string())
+                    .arg("--regid")
+                    .arg(ids.gid.to_string())
+                    .arg("--init-groups")
+                    .arg("--")
+                    .arg(&session_command.program)
+                    .args(&session_command.args);
+            } else {
+                let session_args = crate::login_session::login_session_systemd_run_args(
+                    &self.login_shell_path,
+                    &self.exec_user,
+                    &unit_name,
+                    crate::login_session::SessionMode::Pty,
+                    &session_command,
+                );
+                cmd.arg(&self.systemd_run_path).args(&session_args);
+            }
+            cmd.current_dir("/").env_clear().env("TERM", term);
+            if let Some(ids) = direct_identity {
+                let home = format!("/home/{}", self.exec_user);
+                cmd.env("USER", &self.exec_user)
+                    .env("LOGNAME", &self.exec_user)
+                    .env("HOME", &home)
+                    .env("XDG_RUNTIME_DIR", format!("/run/user/{}", ids.uid))
+                    .env("XDG_CONFIG_HOME", format!("{home}/.config"))
+                    .env("PATH", "/run/current-system/sw/bin:/run/wrappers/bin");
+            }
+            cmd.stdin(Stdio::from(slave))
                 .stdout(Stdio::from(status_w))
                 .stderr(Stdio::null())
                 .kill_on_drop(false);
@@ -752,7 +821,7 @@ pub mod linux {
                 child: Some(child),
                 sid: pid,
                 systemctl_path: systemctl_path.clone(),
-                unit_name: unit_name.clone(),
+                unit_name: (!command.direct_workload_tty).then(|| unit_name.clone()),
             };
 
             // Await the helper handshake: EOF == exec succeeded; one byte == a
@@ -791,7 +860,7 @@ pub mod linux {
                 reaper: Arc::new(ProcSessionReaper {
                     sid: pid,
                     systemctl_path,
-                    unit_name,
+                    unit_name: (!command.direct_workload_tty).then_some(unit_name),
                 }),
             })
         }
@@ -806,7 +875,7 @@ pub mod linux {
         child: Option<Child>,
         sid: i32,
         systemctl_path: PathBuf,
-        unit_name: String,
+        unit_name: Option<String>,
     }
 
     impl SpawnGuard {
@@ -989,17 +1058,17 @@ pub mod linux {
     }
 
     /// `/proc`-scanning session reaper: SIGKILLs every process whose session id
-    /// equals the helper-created session leader, then SIGKILLs the workload's
-    /// named transient unit cgroup (the workload runs in a PID 1-owned
-    /// `systemd-run --pty` unit, NOT in the helper's session, so the `/proc`
-    /// sweep alone never reaches it), repeating the session sweep until empty
-    /// (bounded).
+    /// equals the helper-created session leader. For the normal `systemd-run
+    /// --pty` path it also SIGKILLs the named transient unit cgroup because the
+    /// workload runs outside the helper's session. Direct shell-attach clients
+    /// run in the helper session and intentionally have no transient unit.
     struct ProcSessionReaper {
         sid: i32,
         /// Path to `systemctl`, used to SIGKILL the named transient unit's cgroup.
         systemctl_path: PathBuf,
-        /// The `--unit=` name of the workload's transient unit.
-        unit_name: String,
+        /// The `--unit=` name of the workload's transient unit, absent for
+        /// direct shell-attach clients.
+        unit_name: Option<String>,
     }
 
     impl SessionReaper for ProcSessionReaper {
@@ -1013,13 +1082,13 @@ pub mod linux {
                     let _ = kill_process(pid, Signal::Kill);
                 }
             }
-            // 2. SYSTEMD: SIGKILL the whole transient-unit cgroup by name. This is
-            //    the only step that reaches the actual workload (a quiet non-TTY
-            //    child such as `sleep 3600` survives owner-disconnect otherwise).
-            //    Always runs, even if the helper session is already empty — never
-            //    gate it behind the empty-session early-out below. Bounded +
-            //    idempotent (see `systemctl_kill_unit`).
-            systemctl_kill_unit(&self.systemctl_path, &self.unit_name);
+            // 2. SYSTEMD: SIGKILL the whole transient-unit cgroup by name when
+            //    the workload was launched via `systemd-run --pty`. Direct
+            //    shell-attach clients run inside the helper session above and
+            //    deliberately skip this non-existent unit cleanup.
+            if let Some(unit_name) = &self.unit_name {
+                systemctl_kill_unit(&self.systemctl_path, unit_name);
+            }
             // 3. Finish: bounded sweep until the helper session is empty, reaping
             //    any late-joining session members. The unit-cgroup kill above
             //    already handled the workload.

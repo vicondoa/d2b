@@ -218,6 +218,12 @@ in
       guestPackages.nixling-exec-runner-static
     ];
 
+    environment.etc."shpool/config.toml" = lib.mkIf cfg.shell.enable {
+      text = ''
+        prompt_prefix = ""
+      '';
+    };
+
     systemd.services = {
       nixling-guestd = lib.mkIf cfg.enable {
         description = "nixling guest control daemon";

@@ -33,6 +33,9 @@ deprecations ship one minor release before removal.
 - Persistent shell detach now treats the known close-attach transport-unavailable
   response as a successful local detach, matching the daemon's owner-disconnect
   cleanup semantics.
+- Persistent shell attach now starts the guest shpool daemon, probes readiness
+  through the workload helper, and wires shell terminal RPCs to the PTY-backed
+  attach helper instead of returning disabled shell I/O.
 - `nixling list --json` now preserves daemon-reported failed lifecycle state as
   `status = "failed"` instead of collapsing it to `unknown`.
 

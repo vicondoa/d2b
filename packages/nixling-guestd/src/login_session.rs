@@ -312,6 +312,7 @@ mod tests {
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect(),
+            direct_workload_tty: false,
         }
     }
 

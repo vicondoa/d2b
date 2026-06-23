@@ -50,7 +50,7 @@ use crate::{
     exec_linux::LinuxProcessSpawner,
     exec_pty::linux::LinuxPtyProcessSpawner,
     generated::guest_control_ttrpc::{GuestControl, create_guest_control},
-    shell::{ShellRuntime, ShellRuntimeConfig},
+    shell::{ShellRuntime, ShellRuntimeConfig, ShellRuntimeError},
 };
 
 /// Absolute path to the guest login shell (NixOS system profile). Interactive
@@ -90,6 +90,8 @@ const MAX_TOKEN_BYTES: usize = 4096;
 /// vanished units + terminal-record TTL/GC).
 const DETACHED_REAPER_INTERVAL_MS: u64 = 30_000;
 const USBIP_COMMAND_TIMEOUT_MS: u64 = 10_000;
+const SHELL_DAEMON_READY_TIMEOUT_MS: u64 = 5_000;
+const SHELL_DAEMON_READY_POLL_MS: u64 = 50;
 /// Maximum concurrent in-flight `WriteStdin` handlers per connection. A
 /// fifth concurrent handler is shed with `StdinBackpressure`.
 const WRITE_STDIN_HANDLERS_PER_CONNECTION: u64 = 4;
@@ -591,6 +593,7 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
     let exec: SharedExec = Arc::new(exec_runtime);
     let shell: SharedShell = if shell_runtime_usable {
         let guest_boot_id = probe.guest_boot_id().map_err(|_| GuestdServiceError::Io)?;
+        let workload_uid = exec_uid.expect("shell_runtime_usable requires a workload uid");
         let guestd_instance_id = generate_protocol_instance_id("guestd")?;
         let shell_daemon_instance_id = generate_protocol_instance_id("shpool")?;
         Arc::new(ShellRuntime::enabled(ShellRuntimeConfig {
@@ -598,10 +601,17 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
             max_sessions: config.shell_policy.max_sessions,
             max_attached: config.shell_policy.max_attached,
             workload_user: exec_user.clone(),
-            workload_uid: exec_uid,
+            workload_uid: Some(workload_uid),
             guest_boot_id,
             guestd_instance_id,
             daemon_instance_id: shell_daemon_instance_id,
+            runner_path: config.shell_policy.runner_path.clone().unwrap_or_default(),
+            systemctl_path: config
+                .shell_policy
+                .systemctl_path
+                .clone()
+                .unwrap_or_default(),
+            socket_path: PathBuf::from(format!("/run/user/{workload_uid}/nixling-shpool.sock")),
         }))
     } else {
         Arc::new(ShellRuntime::disabled())
@@ -1045,6 +1055,182 @@ impl GuestControlService {
         Ok((&metadata.exec_id, &metadata.guest_boot_id))
     }
 
+    fn validate_shell_terminal_metadata<'a>(
+        &self,
+        metadata: Option<&'a pb::TerminalRequestMetadata>,
+    ) -> Result<(&'a str, String), ttrpc::Error> {
+        let metadata = metadata.ok_or_else(|| {
+            rpc_status(
+                ttrpc::Code::INVALID_ARGUMENT,
+                "guest-control-metadata-invalid",
+            )
+        })?;
+        self.validate_metadata(metadata.common.as_ref())?;
+        if metadata.session_id.is_empty()
+            || metadata.guest_boot_id.is_empty()
+            || metadata
+                .kind
+                .enum_value()
+                .ok()
+                .filter(|kind| *kind == pb::TerminalKind::TERMINAL_KIND_SHELL)
+                .is_none()
+        {
+            return Err(rpc_status(
+                ttrpc::Code::INVALID_ARGUMENT,
+                "guest-control-metadata-invalid",
+            ));
+        }
+        let expected_boot = self.shell.guest_boot_id().ok_or_else(|| {
+            rpc_status(
+                ttrpc::Code::FAILED_PRECONDITION,
+                "guest-control-shell-disabled",
+            )
+        })?;
+        if metadata.guest_boot_id != expected_boot {
+            return Err(rpc_status(
+                ttrpc::Code::FAILED_PRECONDITION,
+                "guest-control-shell-stale-session",
+            ));
+        }
+        Ok((&metadata.session_id, expected_boot))
+    }
+
+    async fn ensure_shell_daemon_ready(&self) -> Result<(), pb::GuestControlError> {
+        let systemctl = self
+            .shell
+            .systemctl_path()
+            .ok_or_else(shell_disabled_error)?;
+        if systemctl.as_os_str().is_empty() {
+            return Ok(());
+        }
+        let status = TokioCommand::new(systemctl)
+            .arg("start")
+            .arg("nixling-shpool-daemon.service")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map_err(|_| {
+                guest_error(
+                    pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE,
+                )
+            })?;
+        if !status.success() {
+            return Err(guest_error(
+                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE,
+            ));
+        }
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_millis(SHELL_DAEMON_READY_TIMEOUT_MS);
+        loop {
+            if self.run_shell_helper("list", None).await.is_ok() {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(guest_error(
+                    pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE,
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(SHELL_DAEMON_READY_POLL_MS)).await;
+        }
+    }
+
+    fn shell_exec_id(&self, session_id: &str) -> Result<String, pb::GuestControlError> {
+        self.shell
+            .terminal_exec_id(session_id)
+            .map_err(|error| match error {
+                ShellRuntimeError::NotFound => {
+                    guest_error(pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND)
+                }
+                _ => shell_disabled_error(),
+            })
+    }
+
+    async fn run_shell_management_helper(
+        &self,
+        subcommand: &str,
+        name: &str,
+    ) -> Result<(), pb::GuestControlError> {
+        self.run_shell_helper(subcommand, Some(name)).await
+    }
+
+    async fn run_shell_helper(
+        &self,
+        subcommand: &str,
+        name: Option<&str>,
+    ) -> Result<(), pb::GuestControlError> {
+        let runner = self.shell.runner_path().ok_or_else(shell_disabled_error)?;
+        let socket = self.shell.socket_path().ok_or_else(shell_disabled_error)?;
+        let guest_boot_id = self
+            .shell
+            .guest_boot_id()
+            .ok_or_else(shell_disabled_error)?;
+        if runner.as_os_str().is_empty() || socket.as_os_str().is_empty() {
+            return Err(shell_disabled_error());
+        }
+        let mut argv = vec![
+            runner.to_string_lossy().into_owned(),
+            subcommand.to_owned(),
+            "--socket".to_owned(),
+            socket.to_string_lossy().into_owned(),
+        ];
+        if let Some(name) = name {
+            argv.extend(["--name".to_owned(), name.to_owned()]);
+        }
+        argv.push("--json".to_owned());
+        let input = ExecCreateInput {
+            argv,
+            user: None,
+            cwd: None,
+            env: Vec::new(),
+            tty: false,
+            stdin_open: false,
+            detached: false,
+            has_terminal_size: false,
+            max_chunk_bytes: HARD_MAX_CHUNK_BYTES,
+            direct_workload_tty: false,
+        };
+        let (exec_id, snapshot) = self
+            .exec
+            .create(self.connection_key(), guest_boot_id.clone(), input)
+            .await
+            .map_err(guest_error_kind)?;
+        let mut known_generation = Some(snapshot.state_generation);
+        for _ in 0..20 {
+            let (snapshot, timed_out) = self
+                .exec
+                .wait(
+                    &self.connection_key(),
+                    &exec_id,
+                    &guest_boot_id,
+                    known_generation,
+                    250,
+                )
+                .await
+                .map_err(guest_error_kind)?;
+            if !timed_out {
+                match snapshot.outcome {
+                    Some(ExitOutcome::Exited(0)) => return Ok(()),
+                    Some(_) => {
+                        return Err(guest_error(
+                            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE,
+                        ));
+                    }
+                    None if !matches!(snapshot.state, RtExecState::Running) => {
+                        return Err(guest_error(
+                            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE,
+                        ));
+                    }
+                    None => known_generation = Some(snapshot.state_generation),
+                }
+            }
+        }
+        Err(guest_error(
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE,
+        ))
+    }
+
     /// Handle a `detached = true` create: validate (allowing detached, rejecting
     /// interactive flags), then route to the cross-connection detached registry.
     /// When detached exec is unconfigured/unusable, return a typed disabled
@@ -1452,6 +1638,7 @@ impl GuestControl for GuestControlService {
                 .as_ref()
                 .map(|policy| policy.max_chunk_bytes)
                 .unwrap_or(0),
+            direct_workload_tty: false,
         };
 
         // The exec is bound to the guest's current boot id so a stale client
@@ -1480,10 +1667,9 @@ impl GuestControl for GuestControlService {
         // mode (no new wire kind) — it is rejected by the detached validator
         // above; this branch only handles the supported interactive create.
         if input.tty {
-            let initial_size = request
-                .initial_terminal_size
-                .as_ref()
-                .map(|size| (size.rows, size.cols));
+            let initial_size = request.initial_terminal_size.as_ref().and_then(|size| {
+                (size.rows > 0 && size.cols > 0).then_some((size.rows, size.cols))
+            });
             return match self
                 .exec
                 .create_tty(self.connection_key(), guest_boot_id, input, initial_size)
@@ -1706,7 +1892,110 @@ impl GuestControl for GuestControlService {
     ) -> ttrpc::Result<pb::ShellAttachResponse> {
         self.require_authenticated()?;
         self.validate_metadata(request.metadata.as_ref())?;
-        Ok(self.shell.attach_with_owner(request, self.connection_key()))
+        if let Err(error) = self.ensure_shell_daemon_ready().await {
+            let mut response = pb::ShellAttachResponse::new();
+            response.state = EnumOrUnknown::new(pb::ShellState::SHELL_STATE_FEATURE_DISABLED);
+            response.error = MessageField::some(error);
+            return Ok(response);
+        }
+        let initial_size = request
+            .initial_terminal_size
+            .as_ref()
+            .filter(|size| size.rows > 0 && size.cols > 0)
+            .map(|size| (size.rows, size.cols))
+            .or(Some((24, 80)));
+        let force = request.force;
+        let Some(runner) = self.shell.runner_path() else {
+            let mut response = pb::ShellAttachResponse::new();
+            response.error = MessageField::some(shell_disabled_error());
+            return Ok(response);
+        };
+        let Some(socket) = self.shell.socket_path() else {
+            let mut response = pb::ShellAttachResponse::new();
+            response.error = MessageField::some(shell_disabled_error());
+            return Ok(response);
+        };
+        let Some(guest_boot_id) = self.shell.guest_boot_id() else {
+            let mut response = pb::ShellAttachResponse::new();
+            response.error = MessageField::some(shell_disabled_error());
+            return Ok(response);
+        };
+        if runner.as_os_str().is_empty() || socket.as_os_str().is_empty() {
+            let mut response = pb::ShellAttachResponse::new();
+            response.error = MessageField::some(shell_disabled_error());
+            return Ok(response);
+        }
+        let requested_name = request.name.clone();
+        let resolved_for_rollback = match self.shell.resolve_name(requested_name.clone()) {
+            Ok(name) => name,
+            Err(_) => return Ok(self.shell.attach_with_owner(request, self.connection_key())),
+        };
+        let existed_before = self.shell.session_exists(&resolved_for_rollback);
+        let attached_before = self.shell.attached_snapshot();
+        let mut response = self.shell.attach_with_owner(request, self.connection_key());
+        if response.error.is_some() {
+            return Ok(response);
+        }
+        let Some(session_id) = response.session_id.clone() else {
+            response.error = MessageField::some(guest_error(
+                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+            ));
+            return Ok(response);
+        };
+        let mut argv = vec![
+            runner.to_string_lossy().into_owned(),
+            "attach".to_owned(),
+            "--socket".to_owned(),
+            socket.to_string_lossy().into_owned(),
+            "--name".to_owned(),
+            response.resolved_name.clone(),
+        ];
+        if force {
+            argv.push("--force".to_owned());
+        }
+        let input = ExecCreateInput {
+            argv,
+            user: None,
+            cwd: None,
+            env: Vec::new(),
+            tty: true,
+            stdin_open: true,
+            detached: false,
+            has_terminal_size: true,
+            max_chunk_bytes: HARD_MAX_CHUNK_BYTES,
+            direct_workload_tty: true,
+        };
+        match self
+            .exec
+            .create_tty(self.connection_key(), guest_boot_id, input, initial_size)
+            .await
+        {
+            Ok((exec_id, snapshot, control_seq)) => {
+                if let Err(error) = self.shell.set_terminal_exec_id(&session_id, exec_id) {
+                    response.error = MessageField::some(match error {
+                        ShellRuntimeError::NotFound => guest_error(
+                            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND,
+                        ),
+                        _ => shell_disabled_error(),
+                    });
+                    return Ok(response);
+                }
+                response.control_seq = control_seq;
+                response.output_cursor = snapshot.stdout_start_offset;
+                Ok(response)
+            }
+            Err(error) => {
+                eprintln!("nixling-guestd: shell attach helper spawn failed: {error:?}");
+                self.shell.restore_failed_attach(
+                    &resolved_for_rollback,
+                    &session_id,
+                    existed_before,
+                    &attached_before,
+                );
+                response.error = MessageField::some(guest_error_kind(error));
+                Ok(response)
+            }
+        }
     }
 
     async fn shell_list(
@@ -1726,7 +2015,19 @@ impl GuestControl for GuestControlService {
     ) -> ttrpc::Result<pb::ShellDetachResponse> {
         self.require_authenticated()?;
         self.validate_metadata(request.metadata.as_ref())?;
-        Ok(self.shell.detach(request.name))
+        let resolved = match self.shell.resolve_name(request.name.clone()) {
+            Ok(name) => name,
+            Err(_) => return Ok(self.shell.detach(request.name)),
+        };
+        if self.shell.session_attached(&resolved)
+            && let Err(error) = self.run_shell_management_helper("detach", &resolved).await
+        {
+            let mut response = pb::ShellDetachResponse::new();
+            response.resolved_name = resolved;
+            response.error = MessageField::some(error);
+            return Ok(response);
+        }
+        Ok(self.shell.detach(Some(resolved)))
     }
 
     async fn shell_kill(
@@ -1736,6 +2037,14 @@ impl GuestControl for GuestControlService {
     ) -> ttrpc::Result<pb::ShellKillResponse> {
         self.require_authenticated()?;
         self.validate_metadata(request.metadata.as_ref())?;
+        let name = request.name.clone();
+        if self.shell.session_exists(&name)
+            && let Err(error) = self.run_shell_management_helper("kill", &name).await
+        {
+            let mut response = self.shell.kill(name);
+            response.error = MessageField::some(error);
+            return Ok(response);
+        }
         Ok(self.shell.kill(request.name))
     }
 
@@ -1751,6 +2060,7 @@ impl GuestControl for GuestControlService {
             .as_ref()
             .map(|metadata| metadata.session_id.as_str())
             .unwrap_or("");
+        self.exec.close_connection(&self.connection_key());
         Ok(self.shell.close_attach(session_id))
     }
 
@@ -1760,6 +2070,54 @@ impl GuestControl for GuestControlService {
         request: pb::TerminalWriteStdinRequest,
     ) -> ttrpc::Result<pb::WriteStdinResponse> {
         self.require_authenticated()?;
+        if terminal_metadata_is_shell(request.metadata.as_ref()) {
+            let (session_id, guest_boot_id) =
+                self.validate_shell_terminal_metadata(request.metadata.as_ref())?;
+            let exec_id = match self.shell_exec_id(session_id) {
+                Ok(exec_id) => exec_id,
+                Err(error) => {
+                    let mut response = pb::WriteStdinResponse::new();
+                    response.stdin_state = EnumOrUnknown::new(pb::StdinState::STDIN_STATE_OPEN);
+                    response.disposition =
+                        EnumOrUnknown::new(pb::WriteDisposition::WRITE_DISPOSITION_REJECTED);
+                    response.error = MessageField::some(error);
+                    return Ok(response);
+                }
+            };
+            let len = request.data.len() as u64;
+            let _budget = match self.acquire_write_stdin_slot(len) {
+                Ok(guard) => guard,
+                Err(error) => return Ok(write_stdin_error(error)),
+            };
+            return match self
+                .exec
+                .write_stdin(
+                    &self.connection_key(),
+                    &exec_id,
+                    &guest_boot_id,
+                    request.offset,
+                    &request.data,
+                    request.close_after,
+                )
+                .await
+            {
+                Ok(out) => {
+                    let mut response = pb::WriteStdinResponse::new();
+                    response.accepted_offset = request.offset;
+                    response.accepted_len = out.accepted_len;
+                    response.next_offset = out.next_offset;
+                    response.stdin_state = EnumOrUnknown::new(if out.closed {
+                        pb::StdinState::STDIN_STATE_CLOSED
+                    } else {
+                        pb::StdinState::STDIN_STATE_OPEN
+                    });
+                    response.disposition =
+                        EnumOrUnknown::new(pb::WriteDisposition::WRITE_DISPOSITION_ACCEPTED);
+                    Ok(response)
+                }
+                Err(error) => Ok(write_stdin_error(error)),
+            };
+        }
         self.validate_metadata(terminal_metadata_common(request.metadata.as_ref()))?;
         Ok(terminal_write_disabled_response(request.metadata.as_ref()))
     }
@@ -1770,6 +2128,63 @@ impl GuestControl for GuestControlService {
         request: pb::TerminalReadOutputRequest,
     ) -> ttrpc::Result<pb::ReadOutputResponse> {
         self.require_authenticated()?;
+        if terminal_metadata_is_shell(request.metadata.as_ref()) {
+            let (session_id, guest_boot_id) =
+                self.validate_shell_terminal_metadata(request.metadata.as_ref())?;
+            let exec_id = match self.shell_exec_id(session_id) {
+                Ok(exec_id) => exec_id,
+                Err(error) => {
+                    let mut response = pb::ReadOutputResponse::new();
+                    response.stream = request.stream;
+                    response.error = MessageField::some(error);
+                    return Ok(response);
+                }
+            };
+            let stream = match request.stream.enum_value() {
+                Ok(stream) => rt_stream(stream)?,
+                Err(_) => {
+                    return Err(rpc_status(
+                        ttrpc::Code::INVALID_ARGUMENT,
+                        "guest-control-stream-invalid",
+                    ));
+                }
+            };
+            return match self
+                .exec
+                .read_output(
+                    &self.connection_key(),
+                    &exec_id,
+                    &guest_boot_id,
+                    stream,
+                    request.offset,
+                    request.max_len,
+                    request.wait,
+                    request.timeout_ms,
+                )
+                .await
+            {
+                Ok((chunk, timed_out)) => {
+                    let mut response = pb::ReadOutputResponse::new();
+                    response.stream = EnumOrUnknown::new(wire_stream(stream));
+                    response.offset = request.offset;
+                    response.end_offset = chunk.end_offset;
+                    response.data = chunk.data;
+                    response.next_offset = chunk.next_offset;
+                    response.eof = chunk.eof;
+                    response.start_offset = chunk.start_offset;
+                    response.dropped_bytes = chunk.dropped_bytes;
+                    response.truncated = chunk.truncated;
+                    response.timed_out = timed_out;
+                    Ok(response)
+                }
+                Err(error) => {
+                    let mut response = pb::ReadOutputResponse::new();
+                    response.stream = request.stream;
+                    response.error = MessageField::some(guest_error_kind(error));
+                    Ok(response)
+                }
+            };
+        }
         self.validate_metadata(terminal_metadata_common(request.metadata.as_ref()))?;
         let mut response = pb::ReadOutputResponse::new();
         response.stream = request.stream;
@@ -1788,6 +2203,49 @@ impl GuestControl for GuestControlService {
         request: pb::TerminalCloseStdinRequest,
     ) -> ttrpc::Result<pb::CloseStdinResponse> {
         self.require_authenticated()?;
+        if terminal_metadata_is_shell(request.metadata.as_ref()) {
+            let (session_id, guest_boot_id) =
+                self.validate_shell_terminal_metadata(request.metadata.as_ref())?;
+            let exec_id = match self.shell_exec_id(session_id) {
+                Ok(exec_id) => exec_id,
+                Err(error) => {
+                    let mut response = pb::CloseStdinResponse::new();
+                    response.disposition =
+                        EnumOrUnknown::new(pb::WriteDisposition::WRITE_DISPOSITION_REJECTED);
+                    response.error = MessageField::some(error);
+                    return Ok(response);
+                }
+            };
+            return match self
+                .exec
+                .close_stdin(
+                    &self.connection_key(),
+                    &exec_id,
+                    &guest_boot_id,
+                    request.offset,
+                )
+                .await
+            {
+                Ok((final_offset, duplicate)) => {
+                    let mut response = pb::CloseStdinResponse::new();
+                    response.stdin_state = EnumOrUnknown::new(pb::StdinState::STDIN_STATE_CLOSED);
+                    response.final_offset = final_offset;
+                    response.disposition = EnumOrUnknown::new(if duplicate {
+                        pb::WriteDisposition::WRITE_DISPOSITION_DUPLICATE
+                    } else {
+                        pb::WriteDisposition::WRITE_DISPOSITION_ACCEPTED
+                    });
+                    Ok(response)
+                }
+                Err(error) => {
+                    let mut response = pb::CloseStdinResponse::new();
+                    response.disposition =
+                        EnumOrUnknown::new(pb::WriteDisposition::WRITE_DISPOSITION_REJECTED);
+                    response.error = MessageField::some(guest_error_kind(error));
+                    Ok(response)
+                }
+            };
+        }
         self.validate_metadata(terminal_metadata_common(request.metadata.as_ref()))?;
         let mut response = pb::CloseStdinResponse::new();
         response.disposition = EnumOrUnknown::new(pb::WriteDisposition::WRITE_DISPOSITION_REJECTED);
@@ -1806,6 +2264,32 @@ impl GuestControl for GuestControlService {
         request: pb::TerminalTtyWinResizeRequest,
     ) -> ttrpc::Result<pb::ControlAck> {
         self.require_authenticated()?;
+        if terminal_metadata_is_shell(request.metadata.as_ref()) {
+            let (session_id, guest_boot_id) =
+                self.validate_shell_terminal_metadata(request.metadata.as_ref())?;
+            let exec_id = match self.shell_exec_id(session_id) {
+                Ok(exec_id) => exec_id,
+                Err(error) => {
+                    let mut response = pb::ControlAck::new();
+                    response.control_seq = request.control_seq;
+                    response.error = MessageField::some(error);
+                    return Ok(response);
+                }
+            };
+            let mut ack = pb::ControlAck::new();
+            ack.control_seq = request.control_seq;
+            if let Err(error) = self.exec.tty_resize(
+                &self.connection_key(),
+                &exec_id,
+                &guest_boot_id,
+                request.control_seq,
+                request.rows,
+                request.cols,
+            ) {
+                ack.error = MessageField::some(guest_error_kind(error));
+            }
+            return Ok(ack);
+        }
         self.validate_metadata(terminal_metadata_common(request.metadata.as_ref()))?;
         let mut response = pb::ControlAck::new();
         response.control_seq = request.control_seq;
@@ -2391,6 +2875,7 @@ fn validate_detached_command(
         args: input.argv[1..].to_vec(),
         cwd,
         env: input.env.clone(),
+        direct_workload_tty: false,
     })
 }
 
@@ -2749,6 +3234,7 @@ mod tests {
             detached: true,
             has_terminal_size: false,
             max_chunk_bytes: 64 * 1024,
+            direct_workload_tty: false,
         }
     }
 
@@ -3880,6 +4366,7 @@ mod tests {
             args: vec![format!("entry-{index}")],
             cwd: "/".into(),
             env: Vec::new(),
+            direct_workload_tty: false,
         }
     }
 
@@ -4609,7 +5096,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shell_rpcs_attach_list_detach_and_kill_when_runtime_enabled() {
+    async fn shell_attach_requires_configured_runtime_paths() {
         let runtime = Arc::new(ShellRuntime::enabled(ShellRuntimeConfig {
             default_name: "default".to_owned(),
             max_sessions: 2,
@@ -4619,6 +5106,9 @@ mod tests {
             guest_boot_id: "boot-1".to_owned(),
             guestd_instance_id: "guestd-1".to_owned(),
             daemon_instance_id: "daemon-1".to_owned(),
+            runner_path: PathBuf::new(),
+            systemctl_path: PathBuf::new(),
+            socket_path: PathBuf::new(),
         }));
         let service = test_service(61).with_shell_runtime(runtime);
         authenticate(&service).await;
@@ -4627,46 +5117,55 @@ mod tests {
         let mut attach = pb::ShellAttachRequest::new();
         attach.metadata = metadata();
         let attached = service.shell_attach(&ctx, attach).await.unwrap();
-        assert!(attached.error.is_none());
-        assert_eq!(attached.resolved_name, "default");
-        let session_id = attached.session_id.expect("session id");
+        assert_shell_disabled(attached.error);
 
         let mut list = pb::ShellListRequest::new();
         list.metadata = metadata();
         let listed = service.shell_list(&ctx, list).await.unwrap();
         assert!(listed.error.is_none());
         assert_eq!(listed.default_name, "default");
-        assert_eq!(listed.sessions.len(), 1);
-        assert!(listed.sessions[0].attached);
+        assert!(listed.sessions.is_empty());
+    }
 
-        let mut detach = pb::ShellDetachRequest::new();
-        detach.metadata = metadata();
-        let detached = service.shell_detach(&ctx, detach).await.unwrap();
-        assert!(detached.error.is_none());
-        assert!(detached.detached);
+    #[tokio::test]
+    async fn shell_terminal_rpc_is_not_disabled_when_runtime_enabled() {
+        let runtime = Arc::new(ShellRuntime::enabled(ShellRuntimeConfig {
+            default_name: "default".to_owned(),
+            max_sessions: 2,
+            max_attached: 1,
+            workload_user: Some("alice".to_owned()),
+            workload_uid: Some(1000),
+            guest_boot_id: "boot-1".to_owned(),
+            guestd_instance_id: "guestd-1".to_owned(),
+            daemon_instance_id: "daemon-1".to_owned(),
+            runner_path: PathBuf::new(),
+            systemctl_path: PathBuf::new(),
+            socket_path: PathBuf::new(),
+        }));
+        let attached = runtime.attach(pb::ShellAttachRequest::new());
+        let session_id = attached.session_id.expect("session id");
+        runtime
+            .set_terminal_exec_id(&session_id, "missing-exec".to_owned())
+            .expect("session exists");
+        let service = test_service(64).with_shell_runtime(runtime);
+        authenticate(&service).await;
+        let ctx = ttrpc_context();
 
-        let mut attach_again = pb::ShellAttachRequest::new();
-        attach_again.metadata = metadata();
-        let attached_again = service.shell_attach(&ctx, attach_again).await.unwrap();
-        assert!(attached_again.error.is_none());
-
-        let mut close = pb::ShellCloseAttachRequest::new();
         let mut term = pb::TerminalRequestMetadata::new();
         term.common = metadata();
         term.session_id = session_id;
         term.guest_boot_id = "boot-1".to_owned();
         term.kind = EnumOrUnknown::new(pb::TerminalKind::TERMINAL_KIND_SHELL);
-        close.metadata = MessageField::some(term);
-        let closed = service.shell_close_attach(&ctx, close).await.unwrap();
-        assert!(closed.error.is_none());
-        assert!(closed.detached);
+        let mut write = pb::TerminalWriteStdinRequest::new();
+        write.metadata = MessageField::some(term);
+        write.data = b"echo ready\n".to_vec();
 
-        let mut kill = pb::ShellKillRequest::new();
-        kill.metadata = metadata();
-        kill.name = "default".to_owned();
-        let killed = service.shell_kill(&ctx, kill).await.unwrap();
-        assert!(killed.error.is_none());
-        assert!(killed.killed);
+        let response = service.terminal_write_stdin(&ctx, write).await.unwrap();
+        let error = response.error.as_ref().expect("terminal error");
+        assert_eq!(
+            error.kind.enum_value().unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND
+        );
     }
 
     #[tokio::test]
@@ -4713,14 +5212,16 @@ mod tests {
             guest_boot_id: "boot-1".to_owned(),
             guestd_instance_id: "guestd-1".to_owned(),
             daemon_instance_id: "daemon-1".to_owned(),
+            runner_path: PathBuf::new(),
+            systemctl_path: PathBuf::new(),
+            socket_path: PathBuf::new(),
         }));
         let service = test_service(63).with_shell_runtime(Arc::clone(&runtime));
         authenticate(&service).await;
-        let ctx = ttrpc_context();
-        let mut attach = pb::ShellAttachRequest::new();
-        attach.metadata = metadata();
-        let response = service.shell_attach(&ctx, attach).await.unwrap();
-        assert!(response.error.is_none());
+        let _response = runtime.attach_with_owner(
+            pb::ShellAttachRequest::new(),
+            [63; CONNECTION_INSTANCE_LEN].to_vec(),
+        );
 
         let cleanup = ConnectionCleanup::new(test_auth(), test_exec(), runtime, test_context(63));
         cleanup.close();

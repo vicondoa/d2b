@@ -2704,6 +2704,7 @@ mod tests {
             args: vec!["3600".to_owned()],
             cwd: "/".into(),
             env: Vec::new(),
+            direct_workload_tty: false,
         }
     }
 
