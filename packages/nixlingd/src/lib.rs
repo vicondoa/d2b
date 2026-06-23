@@ -16878,6 +16878,7 @@ mod accept_loop_concurrency_tests {
 
 #[cfg(test)]
 mod broker_dispatch_tests {
+    use std::collections::VecDeque;
     use std::fs::File;
     use std::io::{self, IoSlice, Read, Write};
     use std::net::TcpListener;
@@ -16898,9 +16899,10 @@ mod broker_dispatch_tests {
     use nix::unistd::close;
     use nixling_core::processes::ProcessRole;
     use nixling_ipc::broker_wire::{
-        BrokerRequest, BrokerRequestEnvelope, BrokerResponse, ChildExitKind, ChildExitStatus,
-        ChildReapedNotification, DeregisterRunnerPidfdResponse, PollChildReapedResponse,
-        RunnerRole, RunnerSignal, SignalRunnerResponse, SpawnRunnerResponse,
+        BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, ChildExitKind,
+        ChildExitStatus, ChildReapedNotification, DeregisterRunnerPidfdResponse,
+        PollChildReapedResponse, RunnerRole, RunnerSignal, SignalRunnerResponse,
+        SpawnRunnerResponse,
     };
     use nixling_ipc::guest_proto as pb;
     use nixling_ipc::public_wire::{
@@ -16910,8 +16912,9 @@ mod broker_dispatch_tests {
     };
     use nixling_ipc::types::{RoleId, VmId};
     use serde::Serialize;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
+    use super::provider_shutdown::GracefulVmShutdown;
     use super::supervisor::pidfd_table::{
         BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, WaitTermination,
         force_signal_eperm_for_tests,
@@ -16921,17 +16924,20 @@ mod broker_dispatch_tests {
         parse_proc_stat_starttime,
     };
     use super::{
-        ArtifactPaths, DaemonConfig, PeerIdentity, PeerRole, ServerState, VM_RUNNER_ROLE_ID,
-        VmStartNodeMode, adopt_orphaned_runners_on_startup_with, daemon_audit,
+        ArtifactPaths, DaemonConfig, PeerIdentity, PeerRole, ProviderGracefulInputs,
+        QemuBrokerShutdownProvider, ServerState, VM_RUNNER_ROLE_ID, VmShutdownOutcome,
+        VmStartNodeMode, adopt_orphaned_runners_on_startup_with, block_on_future, daemon_audit,
         dispatch_broker_boot, dispatch_broker_gc, dispatch_broker_host_destroy,
         dispatch_broker_host_prepare, dispatch_broker_keys_rotate, dispatch_broker_rollback,
         dispatch_broker_rotate_known_host, dispatch_broker_run_host_install,
         dispatch_broker_run_migrate, dispatch_broker_switch, dispatch_broker_test,
         dispatch_broker_trust, dispatch_broker_vm_restart, dispatch_broker_vm_start,
         dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout, dispatch_request,
-        map_shell_attach_response, map_shell_detach_response, map_shell_kill_response,
-        map_shell_list_response, redact_broker_dispatch_failure_for_launcher,
-        redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
+        force_shutdown_generation, map_shell_attach_response, map_shell_detach_response,
+        map_shell_kill_response, map_shell_list_response, note_force_shutdown_request,
+        prove_role_cgroup_empty_or_escalate, provider_shutdown,
+        redact_broker_dispatch_failure_for_launcher, redact_broker_error_for_launcher,
+        resolve_store_view_intent_for_vm, rollback_failed_vm_start, run_provider_graceful_shutdown,
         stale_qemu_media_dependency_roles_from_entries, vm_start_node_mode,
     };
 
@@ -19036,6 +19042,300 @@ mod broker_dispatch_tests {
             super::graceful_shutdown_timeout_for(&state, &manifest_entry),
             Duration::from_secs(17)
         );
+    }
+
+    #[derive(Clone)]
+    struct ScriptedShutdownProvider {
+        states: Arc<Mutex<VecDeque<provider_shutdown::ProviderGuestState>>>,
+        vmm_exit_requests: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl provider_shutdown::GracefulVmShutdown for ScriptedShutdownProvider {
+        async fn request_shutdown(
+            &self,
+            _target: &provider_shutdown::ProviderShutdownTarget,
+        ) -> provider_shutdown::ProviderRequestOutcome {
+            provider_shutdown::ProviderRequestOutcome::Requested
+        }
+
+        async fn poll_state(
+            &self,
+            _target: &provider_shutdown::ProviderShutdownTarget,
+        ) -> provider_shutdown::ProviderGuestState {
+            self.states
+                .lock()
+                .expect("scripted states")
+                .pop_front()
+                .unwrap_or(provider_shutdown::ProviderGuestState::Running)
+        }
+
+        async fn request_vmm_exit(
+            &self,
+            _target: &provider_shutdown::ProviderShutdownTarget,
+        ) -> provider_shutdown::ProviderVmmExitOutcome {
+            self.vmm_exit_requests
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            provider_shutdown::ProviderVmmExitOutcome::Requested
+        }
+    }
+
+    #[test]
+    fn provider_graceful_shutdown_observes_concurrent_force_request() {
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "provider-force-interrupt",
+        ));
+        let child = register_sleep_runner(&state, "vm-force", false);
+        let target = provider_shutdown::ProviderShutdownTarget {
+            vm: "vm-force".to_owned(),
+            kind: provider_shutdown::ProviderKind::CloudHypervisor,
+            api_socket: None,
+        };
+        let baseline = force_shutdown_generation("vm-force");
+        note_force_shutdown_request("vm-force");
+        let provider = ScriptedShutdownProvider {
+            states: Arc::new(Mutex::new(VecDeque::from([
+                provider_shutdown::ProviderGuestState::Running,
+            ]))),
+            vmm_exit_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+
+        let (outcome, report) = block_on_future(run_provider_graceful_shutdown(
+            &state,
+            ProviderGracefulInputs {
+                provider: &provider,
+                target: &target,
+                role_id: VM_RUNNER_ROLE_ID,
+                sidecars: &[],
+                timeout: Duration::from_secs(30),
+                force_generation_baseline: baseline,
+                caller_role: BrokerCallerRole::LauncherUid { uid: 0 },
+            },
+        ));
+
+        assert_eq!(outcome, VmShutdownOutcome::ForceRequested);
+        assert!(
+            report.is_none(),
+            "force interrupt must fall back to standard pidfd cleanup"
+        );
+        state
+            .pidfd_table
+            .signal("vm-force", VM_RUNNER_ROLE_ID, libc::SIGKILL)
+            .ok();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn failed_start_rollback_uses_pidfd_cleanup_not_provider_graceful_wait() {
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("rollback-force-cleanup"));
+        let child = register_sleep_runner(&state, "vm-a", false);
+
+        rollback_failed_vm_start(&state, "vm-a", &[VM_RUNNER_ROLE_ID.to_owned()])
+            .expect("rollback stops spawned primary VMM without provider wait");
+
+        assert!(!state.pidfd_table.contains("vm-a", VM_RUNNER_ROLE_ID));
+        let status = child.wait();
+        assert!(!status.success());
+    }
+
+    fn start_raw_value_broker_server<F>(
+        test_name: &str,
+        requests: usize,
+        mut handler: F,
+    ) -> (PathBuf, thread::JoinHandle<()>)
+    where
+        F: FnMut(usize, Value, RawFd) + Send + 'static,
+    {
+        let socket_path = unreachable_broker_socket_path(test_name);
+        if let Some(parent) = socket_path.parent() {
+            fs::create_dir_all(parent).expect("create raw broker socket parent");
+        }
+        fs::remove_file(&socket_path).ok();
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("create raw broker listener");
+        let address = UnixAddr::new(&socket_path).expect("raw broker socket address");
+        bind(listener.as_raw_fd(), &address).expect("bind raw broker listener");
+        listen(&listener, Backlog::new(16).expect("listener backlog")).expect("listen raw broker");
+        let server_socket_path = socket_path.clone();
+        let join = thread::spawn(move || {
+            for index in 0..requests {
+                let accepted_fd = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC)
+                    .expect("accept raw broker peer");
+                let frame = read_test_frame(accepted_fd).expect("read raw broker request");
+                let envelope: Value =
+                    serde_json::from_slice(&frame).expect("decode raw broker request");
+                handler(index, envelope, accepted_fd);
+                close(accepted_fd).expect("close raw broker peer");
+            }
+            fs::remove_file(&server_socket_path).ok();
+        });
+        (socket_path, join)
+    }
+
+    #[test]
+    fn qemu_broker_shutdown_provider_drives_powerdown_status_and_quit() {
+        let (socket_path, broker) = start_raw_value_broker_server(
+            "qemu-shutdown-state-machine",
+            3,
+            |index, envelope, fd| {
+                let request = envelope.get("request").expect("request");
+                match index {
+                    0 => {
+                        assert_eq!(
+                            request.get("kind").and_then(Value::as_str),
+                            Some("QemuMediaSystemPowerdown")
+                        );
+                        write_test_json_frame(
+                            fd,
+                            &json!({
+                                "kind": "QemuMediaSystemPowerdown",
+                                "payload": {
+                                    "vmId": "media-vm",
+                                    "command": "system-powerdown"
+                                }
+                            }),
+                        )
+                        .expect("write powerdown response");
+                    }
+                    1 => {
+                        assert_eq!(
+                            request.get("kind").and_then(Value::as_str),
+                            Some("QemuMediaQueryStatus")
+                        );
+                        assert_eq!(
+                            request
+                                .pointer("/payload/shutdownContext")
+                                .and_then(Value::as_bool),
+                            Some(true)
+                        );
+                        write_test_json_frame(
+                            fd,
+                            &json!({
+                                "kind": "QemuMediaQueryStatus",
+                                "payload": {
+                                    "vmId": "media-vm",
+                                    "status": "shutdown"
+                                }
+                            }),
+                        )
+                        .expect("write query-status response");
+                    }
+                    2 => {
+                        assert_eq!(
+                            request.get("kind").and_then(Value::as_str),
+                            Some("QemuMediaQuit")
+                        );
+                        write_test_json_frame(
+                            fd,
+                            &json!({
+                                "kind": "QemuMediaQuit",
+                                "payload": {
+                                    "vmId": "media-vm",
+                                    "command": "quit"
+                                }
+                            }),
+                        )
+                        .expect("write quit response");
+                    }
+                    other => panic!("unexpected request index {other}"),
+                }
+            },
+        );
+        let provider = QemuBrokerShutdownProvider {
+            socket_path,
+            caller_role: BrokerCallerRole::LauncherUid { uid: 0 },
+            timeout: Duration::from_secs(2),
+        };
+        let target = provider_shutdown::ProviderShutdownTarget {
+            vm: "media-vm".to_owned(),
+            kind: provider_shutdown::ProviderKind::QemuMedia,
+            api_socket: None,
+        };
+
+        assert_eq!(
+            block_on_future(provider.request_shutdown(&target)),
+            provider_shutdown::ProviderRequestOutcome::Requested
+        );
+        assert_eq!(
+            block_on_future(provider.poll_state(&target)),
+            provider_shutdown::ProviderGuestState::GuestStopped
+        );
+        assert_eq!(
+            block_on_future(provider.request_vmm_exit(&target)),
+            provider_shutdown::ProviderVmmExitOutcome::Requested
+        );
+        broker.join().expect("broker join");
+    }
+
+    #[test]
+    fn populated_runner_cgroup_requests_broker_cgroup_kill_before_restart() {
+        let root = test_daemon_state_dir("cgroup-kill-escalation");
+        let cgroup = root.join("cgroup");
+        fs::create_dir_all(&cgroup).expect("create cgroup dir");
+        fs::write(cgroup.join("cgroup.events"), "populated 1\n").expect("write cgroup.events");
+        let cgroup_for_broker = cgroup.clone();
+        let (socket_path, broker) =
+            start_raw_value_broker_server("cgroup-kill-escalation", 1, move |_, envelope, fd| {
+                let request = envelope.get("request").expect("request");
+                assert_eq!(
+                    request.get("kind").and_then(Value::as_str),
+                    Some("CgroupKill")
+                );
+                assert_eq!(
+                    request.pointer("/payload/vmId").and_then(Value::as_str),
+                    Some("vm-a")
+                );
+                assert_eq!(
+                    request.pointer("/payload/roleId").and_then(Value::as_str),
+                    Some(VM_RUNNER_ROLE_ID)
+                );
+                fs::write(cgroup_for_broker.join("cgroup.events"), "populated 0\n")
+                    .expect("clear populated state");
+                write_test_json_frame(fd, &json!({"kind": "Ack", "payload": {}}))
+                    .expect("write cgroup kill ack");
+            });
+        let mut state = test_state_with_broker_socket(socket_path);
+        state.config.artifacts = write_custom_vm_start_bundle_artifacts(
+            &root,
+            &root.join("vm-a.api.sock"),
+            json!({
+                "schemaVersion": "v2",
+                "vms": [{
+                    "vm": "vm-a",
+                    "nodes": [{
+                        "id": "ch-runner",
+                        "role": "cloud-hypervisor-runner",
+                        "unit": null,
+                        "profile": minimal_role_profile("vm-vm-a-cloud-hypervisor", &cgroup.display().to_string()),
+                        "readiness": []
+                    }],
+                    "edges": [],
+                    "invariants": {
+                        "swtpmPreStartFlush": true,
+                        "perVmAuditPipeline": true,
+                        "usbipGating": true,
+                        "tpmOwnershipMigrationWithoutRunningVmMutation": true
+                    }
+                }]
+            }),
+        );
+
+        assert!(
+            prove_role_cgroup_empty_or_escalate(
+                &state,
+                BrokerCallerRole::LauncherUid { uid: 0 },
+                "vm-a",
+                VM_RUNNER_ROLE_ID
+            ),
+            "broker CgroupKill should clear the populated leaf before restart proceeds"
+        );
+        broker.join().expect("broker join");
     }
 
     #[test]

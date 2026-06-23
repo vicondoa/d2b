@@ -82,6 +82,39 @@ const AUTOSTART_DEGRADED_JSON: &str = r#"{
   ]
 }"#;
 
+const SHUTDOWN_DEGRADED_WARN_JSON: &str = r#"{
+  "schemaVersion": 1,
+  "markers": [
+    {
+      "vm": "corp-vm",
+      "outcome": "api_unavailable",
+      "severity": "warn",
+      "remediation": "provider shutdown API was unavailable; verify provider socket health before the next stop",
+      "elapsedMs": 250
+    }
+  ]
+}"#;
+
+const SHUTDOWN_DEGRADED_FAIL_JSON: &str = r#"{
+  "schemaVersion": 1,
+  "markers": [
+    {
+      "vm": "corp-vm",
+      "outcome": "timeout_exceeded",
+      "severity": "fail",
+      "remediation": "fix the in-guest shutdown path and retry nixling vm stop",
+      "elapsedMs": 90000
+    },
+    {
+      "vm": "media-vm",
+      "outcome": "force_requested",
+      "severity": "warn",
+      "remediation": "explicit force stop requested by operator",
+      "elapsedMs": 100
+    }
+  ]
+}"#;
+
 const STORAGE_LIFECYCLE_CLEAN_JSON: &str = r#"{
   "schemaVersion": "v2",
   "storageContractPresent": true,
@@ -330,6 +363,51 @@ fn host_doctor_graceful_shutdown_reports_live_primary_vmm_inventory() {
     assert!(
         live_vms.iter().all(|entry| entry["role"] != "virtiofsd"),
         "livePrimaryVms must not include sidecars: {live_vms:#?}"
+    );
+}
+
+#[test]
+fn host_doctor_graceful_shutdown_warn_marker_reports_warn() {
+    let sandbox = Sandbox::new();
+    sandbox.write_state("shutdown-degraded.json", SHUTDOWN_DEGRADED_WARN_JSON);
+
+    let (_code, env) = sandbox.run_doctor_json();
+    let graceful = check(&env, "graceful-shutdown-status");
+    assert_eq!(
+        graceful["status"], "warn",
+        "warn-only shutdown marker must report graceful-shutdown-status=warn"
+    );
+    assert_eq!(graceful["data"]["warn"], 1);
+    assert_eq!(graceful["data"]["fail"], 0);
+    assert_eq!(
+        graceful["data"]["markers"][0]["outcome"], "api_unavailable",
+        "marker outcome must be preserved for remediation"
+    );
+}
+
+#[test]
+fn host_doctor_graceful_shutdown_fail_marker_reports_fail() {
+    let sandbox = Sandbox::new();
+    sandbox.write_state("shutdown-degraded.json", SHUTDOWN_DEGRADED_FAIL_JSON);
+
+    let (code, env) = sandbox.run_doctor_json();
+    let graceful = check(&env, "graceful-shutdown-status");
+    assert_eq!(
+        graceful["status"], "fail",
+        "any fail shutdown marker must report graceful-shutdown-status=fail"
+    );
+    assert_eq!(graceful["data"]["fail"], 1);
+    assert_eq!(graceful["data"]["warn"], 1);
+    assert!(
+        graceful["detail"]
+            .as_str()
+            .expect("detail")
+            .contains("corp-vm, media-vm"),
+        "detail should name affected VMs: {graceful:#}"
+    );
+    assert_eq!(
+        code, 2,
+        "fail marker should contribute to host doctor exit code 2"
     );
 }
 
