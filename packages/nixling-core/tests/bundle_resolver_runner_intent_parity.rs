@@ -208,6 +208,19 @@ fn runner_nodes() -> Vec<ProcessNode> {
             &[],
         ),
         runner_node(
+            "vsock-relay",
+            ProcessRole::VsockRelay,
+            "/run/current-system/sw/bin/socat",
+            &[
+                "nixling-otel-relay@test-vm",
+                "-d",
+                "-d",
+                "UNIX-LISTEN:/var/lib/nixling/vms/test-vm/vsock.sock_14317,fork,max-children=16,reuseaddr,mode=0660",
+                "EXEC:/run/current-system/sw/bin/nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs/vsock.sock 14318",
+            ],
+            &[],
+        ),
+        runner_node(
             "usbip",
             ProcessRole::Usbip,
             "/run/current-system/sw/bin/nixling-usbip-proxy",
@@ -217,9 +230,15 @@ fn runner_nodes() -> Vec<ProcessNode> {
         runner_node(
             "otel-host-bridge",
             ProcessRole::OtelHostBridge,
-            "/run/current-system/sw/bin/nixling-otel-host-bridge",
-            &["nixling-otel-host-bridge", "--vm", VM],
-            &["OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317"],
+            "/run/current-system/sw/bin/socat",
+            &[
+                "nixling-otel-host-bridge",
+                "-d",
+                "-d",
+                "UNIX-LISTEN:/run/nixling/otel/host-egress.sock,fork,reuseaddr,mode=0660",
+                "EXEC:\"/run/current-system/sw/bin/nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs/vsock.sock 14317\"",
+            ],
+            &[],
         ),
     ]
 }
