@@ -219,10 +219,12 @@ pub fn tun_set_group(fd: &OwnedFd, gid: u32) -> io::Result<()> {
 /// - [`read_to_string_nofollow`] — symlink-refusing read;
 /// - [`ensure_dir_path_safe`] / [`remove_path_safe`] — fd-relative mkdir / unlink.
 pub mod path_safe {
+    use std::ffi::OsStr;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, Read, Write};
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::path::{Path, PathBuf};
+    use std::process::{Command, Output};
 
     pub fn refuse_symlink(path: &Path) -> io::Result<()> {
         match fs::symlink_metadata(path) {
@@ -1000,6 +1002,66 @@ pub mod path_safe {
             gid.map(nix::unistd::Gid::from_raw),
         );
         res.map_err(|err| io::Error::from_raw_os_error(err as i32))
+    }
+
+    pub struct FileWriteLease {
+        fd: RawFd,
+    }
+
+    impl Drop for FileWriteLease {
+        #[allow(unsafe_code)]
+        fn drop(&mut self) {
+            // SAFETY: releasing a lease on an fd is best-effort cleanup.
+            let _ = unsafe { libc::fcntl(self.fd, libc::F_SETLEASE, libc::F_UNLCK) };
+        }
+    }
+
+    /// Acquire a Linux write lease on `fd`. This fails if another process
+    /// already has the file open, giving DiskInit a kernel-enforced
+    /// exclusivity check stronger than advisory locks before it validates,
+    /// repairs, or formats a declared disk image.
+    #[allow(unsafe_code)]
+    pub fn acquire_write_lease(fd: BorrowedFd<'_>) -> io::Result<FileWriteLease> {
+        // SAFETY: F_SETLEASE mutates only the lease state on this valid fd.
+        let ret = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETLEASE, libc::F_WRLCK) };
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(FileWriteLease { fd: fd.as_raw_fd() })
+    }
+
+    /// Run `program args...` while inheriting `fd` only in the child
+    /// process. The broker parent keeps FD_CLOEXEC set the entire time;
+    /// `pre_exec` clears it after fork and before exec so no concurrent
+    /// spawn in another thread can inherit the descriptor.
+    #[allow(unsafe_code)]
+    pub fn command_output_inheriting_fd(
+        program: &Path,
+        args: &[&OsStr],
+        fd: BorrowedFd<'_>,
+    ) -> io::Result<Output> {
+        use std::os::unix::process::CommandExt;
+
+        let raw_fd = fd.as_raw_fd();
+        let mut command = Command::new(program);
+        command.args(args);
+        // SAFETY: `pre_exec` runs in the child after fork and before exec.
+        // The closure uses only async-signal-safe libc fcntl operations and
+        // returns an io::Error directly on failure.
+        unsafe {
+            command.pre_exec(move || {
+                let flags = libc::fcntl(raw_fd, libc::F_GETFD);
+                if flags < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let ret = libc::fcntl(raw_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+                if ret < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        command.output()
     }
 
     /// Open a directory with `openat2`, hardened with

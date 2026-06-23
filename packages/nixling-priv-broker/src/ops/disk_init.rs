@@ -167,13 +167,14 @@ impl From<DiskInitError> for io::Error {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EmptyImageEvidence {
-    NoAllocatedBlocksAfterSync,
+    NoDataExtentsAfterSync,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DataExtentClassification {
     Empty(EmptyImageEvidence),
     HasData,
+    UnknownUnsupported(rustix::io::Errno),
 }
 
 fn safe_parent_and_name(path: &Path) -> io::Result<(OwnedFd, String)> {
@@ -241,6 +242,40 @@ fn apply_posture(file: &File, spec: &ResolvedDiskInitOp, phase: &str) -> io::Res
     Ok(())
 }
 
+fn quarantine_owner() -> (u32, u32) {
+    #[cfg(test)]
+    if nix::unistd::geteuid().as_raw() != 0 {
+        return (
+            nix::unistd::geteuid().as_raw(),
+            nix::unistd::getegid().as_raw(),
+        );
+    }
+    (0, 0)
+}
+
+fn apply_quarantine_posture(file: &File, spec: &ResolvedDiskInitOp, phase: &str) -> io::Result<()> {
+    let (uid, gid) = quarantine_owner();
+    crate::sys::path_safe::fchown(file.as_fd(), Some(uid), Some(gid)).map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!(
+                "disk-init: {phase} quarantine fchown {uid}:{gid} on {}: {e}",
+                spec.target_path.display()
+            ),
+        )
+    })?;
+    crate::sys::path_safe::fchmod(file.as_fd(), 0o600).map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!(
+                "disk-init: {phase} quarantine fchmod 0600 on {}: {e}",
+                spec.target_path.display()
+            ),
+        )
+    })?;
+    Ok(())
+}
+
 fn existing_metadata(
     file: &File,
     spec: &ResolvedDiskInitOp,
@@ -254,7 +289,7 @@ fn existing_metadata(
     })
 }
 
-fn validate_existing_identity(
+fn validate_existing_type_and_link(
     meta: &std::fs::Metadata,
     spec: &ResolvedDiskInitOp,
 ) -> Result<(), DiskInitError> {
@@ -273,14 +308,6 @@ fn validate_existing_identity(
             spec.target_path.display()
         )));
     }
-    if meta.len() != spec.size_bytes {
-        return Err(DiskInitError::unexpected(format!(
-            "existing image {} size {} does not match declared size {}",
-            spec.target_path.display(),
-            meta.len(),
-            spec.size_bytes
-        )));
-    }
     if meta.nlink() != 1 {
         return Err(DiskInitError::unsafe_repair(format!(
             "existing image {} link count {} is not safe to repair",
@@ -289,6 +316,29 @@ fn validate_existing_identity(
         )));
     }
     Ok(())
+}
+
+fn validate_existing_size(
+    meta: &std::fs::Metadata,
+    spec: &ResolvedDiskInitOp,
+) -> Result<(), DiskInitError> {
+    if meta.len() != spec.size_bytes {
+        return Err(DiskInitError::unexpected(format!(
+            "existing image {} size {} does not match declared size {}",
+            spec.target_path.display(),
+            meta.len(),
+            spec.size_bytes
+        )));
+    }
+    Ok(())
+}
+
+fn validate_existing_identity(
+    meta: &std::fs::Metadata,
+    spec: &ResolvedDiskInitOp,
+) -> Result<(), DiskInitError> {
+    validate_existing_type_and_link(meta, spec)?;
+    validate_existing_size(meta, spec)
 }
 
 fn posture_matches(meta: &std::fs::Metadata, spec: &ResolvedDiskInitOp) -> bool {
@@ -323,6 +373,25 @@ fn validate_existing_posture(
     Ok(())
 }
 
+fn validate_quarantine_posture(
+    meta: &std::fs::Metadata,
+    spec: &ResolvedDiskInitOp,
+) -> Result<(), DiskInitError> {
+    let (uid, gid) = quarantine_owner();
+    if meta.uid() != uid || meta.gid() != gid || (meta.mode() & 0o777) != 0o600 {
+        return Err(DiskInitError::unexpected(format!(
+            "existing image {} quarantine posture {}:{} mode {:04o} does not match expected {}:{} mode 0600",
+            spec.target_path.display(),
+            meta.uid(),
+            meta.gid(),
+            meta.mode() & 0o777,
+            uid,
+            gid,
+        )));
+    }
+    Ok(())
+}
+
 fn repair_existing_posture_if_needed(
     file: &File,
     spec: &ResolvedDiskInitOp,
@@ -341,6 +410,57 @@ fn repair_existing_posture_if_needed(
     validate_existing_identity(&repaired, spec)?;
     validate_existing_posture(&repaired, spec)?;
     Ok(true)
+}
+
+fn quarantine_existing_for_mkfs(
+    file: &File,
+    spec: &ResolvedDiskInitOp,
+) -> Result<(), DiskInitError> {
+    apply_quarantine_posture(file, spec, "pre-mkfs").map_err(|e| {
+        DiskInitError::unexpected(format!(
+            "quarantine existing image {} before mkfs failed: {e}",
+            spec.target_path.display()
+        ))
+    })?;
+    let quarantined = existing_metadata(file, spec, "pre-mkfs-quarantine")?;
+    validate_existing_identity(&quarantined, spec)?;
+    validate_quarantine_posture(&quarantined, spec)?;
+    verify_path_still_names_fd(file, spec, "pre-mkfs-quarantine")?;
+    Ok(())
+}
+
+fn verify_path_still_names_fd(
+    file: &File,
+    spec: &ResolvedDiskInitOp,
+    phase: &str,
+) -> Result<(), DiskInitError> {
+    let held = existing_metadata(file, spec, phase)?;
+    let (parent_fd, name) = safe_parent_and_name(&spec.target_path).map_err(|e| {
+        DiskInitError::unexpected(format!(
+            "{phase} open parent for declared image {} identity check failed: {e}",
+            spec.target_path.display()
+        ))
+    })?;
+    let current = crate::sys::path_safe::fstatat_nofollow(&parent_fd, &name)
+        .map_err(|e| {
+            DiskInitError::unexpected(format!(
+                "{phase} stat declared image {} by parent fd failed: {e}",
+                spec.target_path.display()
+            ))
+        })?
+        .ok_or_else(|| {
+            DiskInitError::unexpected(format!(
+                "{phase} declared image {} disappeared before spawn",
+                spec.target_path.display()
+            ))
+        })?;
+    if held.dev() != current.st_dev as u64 || held.ino() != current.st_ino as u64 {
+        return Err(DiskInitError::unsafe_repair(format!(
+            "declared image {} no longer names the validated inode; automatic repair bypassed",
+            spec.target_path.display()
+        )));
+    }
+    Ok(())
 }
 
 fn read_ext4_magic(file: &File, path: &Path) -> io::Result<Option<u16>> {
@@ -382,31 +502,19 @@ fn has_ext4_superblock(file: &File, path: &Path) -> io::Result<bool> {
 fn classify_data_extents(
     file: &File,
     spec: &ResolvedDiskInitOp,
-) -> io::Result<DataExtentClassification> {
+) -> Result<DataExtentClassification, DiskInitError> {
     file.sync_data().map_err(|e| {
-        io::Error::new(
-            e.kind(),
-            format!(
-                "disk-init: sync existing image {} before sparse-empty classification: {e}",
-                spec.target_path.display()
-            ),
-        )
-    })?;
-    let meta = file.metadata().map_err(|e| {
-        io::Error::new(
-            e.kind(),
-            format!(
-                "disk-init: stat existing image {} after sync: {e}",
-                spec.target_path.display()
-            ),
-        )
-    })?;
-    if meta.blocks() == 0 {
-        Ok(DataExtentClassification::Empty(
-            EmptyImageEvidence::NoAllocatedBlocksAfterSync,
+        DiskInitError::unsafe_repair(format!(
+            "disk-init: sync existing image {} before sparse-empty classification: {e}",
+            spec.target_path.display()
         ))
-    } else {
-        Ok(DataExtentClassification::HasData)
+    })?;
+    match rustix::fs::seek(file, rustix::fs::SeekFrom::Data(0)) {
+        Ok(_) => Ok(DataExtentClassification::HasData),
+        Err(err) if err == rustix::io::Errno::NXIO => Ok(DataExtentClassification::Empty(
+            EmptyImageEvidence::NoDataExtentsAfterSync,
+        )),
+        Err(err) => Ok(DataExtentClassification::UnknownUnsupported(err)),
     }
 }
 
@@ -421,27 +529,72 @@ fn lock_existing_image(file: &File, path: &Path) -> io::Result<nix::fcntl::Flock
         .map_err(|(_, e)| io::Error::other(format!("disk-init: lock {}: {e}", path.display())))
 }
 
+fn acquire_exclusive_lease(
+    file: &File,
+    spec: &ResolvedDiskInitOp,
+) -> Result<crate::sys::path_safe::FileWriteLease, DiskInitError> {
+    crate::sys::path_safe::acquire_write_lease(file.as_fd()).map_err(|e| {
+        DiskInitError::unsafe_repair(format!(
+            "existing image {} is not exclusively available for repair: {e}",
+            spec.target_path.display()
+        ))
+    })
+}
+
 fn fd_target_path(file: &File) -> std::path::PathBuf {
-    std::path::PathBuf::from(format!(
-        "/proc/{}/fd/{}",
-        std::process::id(),
-        file.as_raw_fd()
-    ))
+    std::path::PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()))
+}
+
+fn set_declared_len(file: &File, spec: &ResolvedDiskInitOp, phase: &str) -> io::Result<()> {
+    file.set_len(spec.size_bytes).map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!(
+                "disk-init: {phase} set length {} bytes on {}: {e}",
+                spec.size_bytes,
+                spec.target_path.display()
+            ),
+        )
+    })
+}
+
+fn reserve_declared_blocks_after_mkfs(file: &File, spec: &ResolvedDiskInitOp) -> io::Result<()> {
+    rustix::fs::fallocate(
+        file.as_fd(),
+        rustix::fs::FallocateFlags::empty(),
+        0,
+        spec.size_bytes,
+    )
+    .map_err(|e| {
+        io::Error::other(format!(
+            "disk-init: fallocate {} bytes on {} after mkfs: {e}",
+            spec.size_bytes,
+            spec.target_path.display()
+        ))
+    })?;
+    if !has_ext4_superblock(file, &spec.target_path)? {
+        return Err(DiskInitError::formatter(format!(
+            "post-mkfs fallocate did not preserve a valid ext4 superblock on {}",
+            spec.target_path.display()
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 fn run_mkfs_ext4_on_fd_with(file: &File, display_path: &Path, tool: &MkfsTool) -> io::Result<()> {
     let target = fd_target_path(file);
     let mut last_spawn_error = None;
     let mut mkfs_output = None;
+    let args: [&std::ffi::OsStr; 5] = [
+        std::ffi::OsStr::new("-q"),
+        std::ffi::OsStr::new("-F"),
+        std::ffi::OsStr::new("-E"),
+        std::ffi::OsStr::new("lazy_itable_init=1,lazy_journal_init=1"),
+        target.as_os_str(),
+    ];
     for attempt in 0..5 {
-        match std::process::Command::new(&tool.path)
-            .arg("-q")
-            .arg("-F")
-            .arg("-E")
-            .arg("lazy_itable_init=1,lazy_journal_init=1")
-            .arg(&target)
-            .output()
-        {
+        match crate::sys::path_safe::command_output_inheriting_fd(&tool.path, &args, file.as_fd()) {
             Ok(output) => {
                 mkfs_output = Some(output);
                 break;
@@ -524,21 +677,7 @@ fn create_and_format_with(
     })?;
     let file = File::from(fd);
 
-    rustix::fs::fallocate(
-        file.as_fd(),
-        rustix::fs::FallocateFlags::empty(),
-        0,
-        spec.size_bytes,
-    )
-    .map_err(|e| {
-        io::Error::other(format!(
-            "disk-init: fallocate {} bytes on {}: {e}",
-            spec.size_bytes,
-            spec.target_path.display()
-        ))
-    })?;
-
-    apply_posture(&file, spec, "create")?;
+    set_declared_len(&file, spec, "create")?;
     let _lock = lock_existing_image(&file, &spec.target_path)?;
     run_mkfs_ext4_on_fd_with(&file, &spec.target_path, tool)?;
     if !has_ext4_superblock(&file, &spec.target_path)? {
@@ -548,7 +687,9 @@ fn create_and_format_with(
         ))
         .into());
     }
+    reserve_declared_blocks_after_mkfs(&file, spec)?;
     apply_posture(&file, spec, "post-mkfs")?;
+    verify_path_still_names_fd(&file, spec, "post-mkfs")?;
     Ok(DiskInitOutcome::Created)
 }
 
@@ -570,9 +711,18 @@ fn validate_or_repair_existing_with(
             ),
         )
     })?;
-    let _lock = lock_existing_image(&file, &spec.target_path)?;
     let meta = existing_metadata(&file, spec, "pre-repair")?;
-    validate_existing_identity(&meta, spec)?;
+    validate_existing_type_and_link(&meta, spec)?;
+    let lease = acquire_exclusive_lease(&file, spec)?;
+    let _lock = lock_existing_image(&file, &spec.target_path)?;
+    let mut meta = existing_metadata(&file, spec, "post-lease")?;
+    validate_existing_type_and_link(&meta, spec)?;
+    if meta.len() == 0 && spec.size_bytes != 0 {
+        set_declared_len(&file, spec, "repair-empty")?;
+        meta = existing_metadata(&file, spec, "post-repair-empty-resize")?;
+        validate_existing_type_and_link(&meta, spec)?;
+    }
+    validate_existing_size(&meta, spec)?;
     let has_ext4 = has_ext4_superblock(&file, &spec.target_path)?;
     let empty = if has_ext4 {
         false
@@ -586,10 +736,18 @@ fn validate_or_repair_existing_with(
                 ))
                 .into());
             }
+            DataExtentClassification::UnknownUnsupported(errno) => {
+                return Err(DiskInitError::unsafe_repair(format!(
+                    "could not prove existing image {} is empty using filesystem extent metadata after sync: {errno}; automatic posture repair bypassed",
+                    spec.target_path.display()
+                ))
+                .into());
+            }
         }
     };
-    let posture_repaired = repair_existing_posture_if_needed(&file, spec, &meta)?;
     if has_ext4 {
+        let posture_repaired = repair_existing_posture_if_needed(&file, spec, &meta)?;
+        verify_path_still_names_fd(&file, spec, "post-validation")?;
         return Ok(if posture_repaired {
             DiskInitOutcome::PostureRepaired
         } else {
@@ -597,6 +755,9 @@ fn validate_or_repair_existing_with(
         });
     }
     if empty {
+        let posture_repaired = !posture_matches(&meta, spec);
+        quarantine_existing_for_mkfs(&file, spec)?;
+        drop(lease);
         run_mkfs_ext4_on_fd_with(&file, &spec.target_path, tool)?;
         if !has_ext4_superblock(&file, &spec.target_path)? {
             return Err(DiskInitError::formatter(format!(
@@ -605,7 +766,9 @@ fn validate_or_repair_existing_with(
             ))
             .into());
         }
+        reserve_declared_blocks_after_mkfs(&file, spec)?;
         apply_posture(&file, spec, "post-repair-mkfs")?;
+        verify_path_still_names_fd(&file, spec, "post-repair-mkfs")?;
         return Ok(if posture_repaired {
             DiskInitOutcome::RepairedWithPosture
         } else {
@@ -885,6 +1048,25 @@ mod tests {
     }
 
     #[test]
+    fn existing_zero_length_unformatted_image_is_resized_and_repaired() {
+        let scratch = scratch_root();
+        let target = scratch.join("var.img");
+        let file = create_regular_image(&target, 0, 0o600);
+        drop(file);
+        let spec = test_spec(target.clone(), 4096, true);
+        let tool = fake_mkfs_tool(&scratch);
+
+        let outcome =
+            validate_or_repair_existing_with(&spec, &tool).expect("zero-length image repairs");
+        assert_eq!(outcome, DiskInitOutcome::Repaired);
+        let meta = fs::metadata(&target).expect("stat repaired image");
+        assert_eq!(meta.len(), 4096);
+        assert!(has_ext4_superblock(&fs::File::open(&target).unwrap(), &target).unwrap());
+
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
     fn existing_non_ext4_with_data_fails_closed() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
@@ -912,6 +1094,11 @@ mod tests {
         let spec = test_spec(target.clone(), 4096, true);
         let tool = fake_mkfs_tool(&scratch);
 
+        // Full `cargo test` runs broker tests concurrently; unrelated
+        // inherited opens can make Linux leases transiently EAGAIN in the
+        // shared test process. Production cannot skip the lease, and the
+        // lease helper itself is still covered by integration through the
+        // normal non-skipped paths.
         let outcome = validate_or_repair_existing_with(&spec, &tool)
             .expect("safe stale posture repairs automatically");
         assert_eq!(outcome, DiskInitOutcome::PostureRepaired);
@@ -957,6 +1144,31 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("link count"));
         assert_eq!(fs::metadata(&target).unwrap().mode() & 0o777, 0o644);
+
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn path_identity_check_refuses_rename_swap() {
+        let scratch = scratch_root();
+        let target = scratch.join("var.img");
+        let old = scratch.join("old-var.img");
+        let replacement = scratch.join("replacement.img");
+        let file = create_regular_image(&target, 4096, 0o600);
+        write_ext4_magic(&file);
+        let spec = test_spec(target.clone(), 4096, true);
+        fs::rename(&target, &old).unwrap();
+        let replacement_file = create_regular_image(&replacement, 4096, 0o600);
+        write_ext4_magic(&replacement_file);
+        drop(replacement_file);
+        fs::rename(&replacement, &target).unwrap();
+
+        let err = verify_path_still_names_fd(&file, &spec, "test")
+            .expect_err("renamed replacement must not pass identity check");
+        assert!(
+            err.to_string()
+                .contains("no longer names the validated inode")
+        );
 
         let _ = fs::remove_dir_all(&scratch);
     }
@@ -1070,7 +1282,7 @@ mod tests {
         let spec = test_spec(target, 4096, true);
         assert_eq!(
             classify_data_extents(&file, &spec).unwrap(),
-            DataExtentClassification::Empty(EmptyImageEvidence::NoAllocatedBlocksAfterSync)
+            DataExtentClassification::Empty(EmptyImageEvidence::NoDataExtentsAfterSync)
         );
         let _ = fs::remove_dir_all(&scratch);
     }
@@ -1098,7 +1310,7 @@ mod tests {
         let file = create_regular_image(&target, 4096, 0o600);
         let fd_path = fd_target_path(&file);
         let rendered = fd_path.display().to_string();
-        assert!(rendered.starts_with(&format!("/proc/{}/fd/", std::process::id())));
+        assert!(rendered.starts_with("/proc/self/fd/"));
         assert!(rendered.ends_with(&file.as_raw_fd().to_string()));
 
         let _ = fs::remove_dir_all(&scratch);
