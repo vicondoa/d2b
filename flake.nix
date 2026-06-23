@@ -693,6 +693,7 @@
           ];
           nix-unit-network = [
             "bridge-ipv6-boot-sysctl.nix"
+            "index.nix"
             "multi-env-daemon-backed.nix"
             "net-vm-network.nix"
             "usbip-gating.nix"

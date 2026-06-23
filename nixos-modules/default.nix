@@ -30,6 +30,7 @@
     ./bundle-artifacts.nix
     ./options-observability.nix
     ./options-ownership-matrix.nix
+    ./index.nix
     ./assertions.nix
     ./network.nix
     ./gateway-vm.nix
