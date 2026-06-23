@@ -201,8 +201,7 @@ fn broker_storage_and_sync_requests_stay_opaque_only() {
     let request_re =
         Regex::new(r"(?s)pub struct (\w+Request) \{(?P<body>.*?)\n\}").expect("request regex");
     let field_re =
-        Regex::new(r"(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?([A-Za-z0-9_]+)\s*:")
-            .expect("field regex");
+        Regex::new(r"(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?([A-Za-z0-9_]+)\s*:").expect("field regex");
     let forbidden_fields = BTreeSet::from([
         "acl",
         "cleanup",
@@ -315,10 +314,9 @@ fn host_mutation_sources_are_registered_with_storage_or_sync_policy() {
 
 fn literal_nixling_tmpfiles_paths() -> BTreeSet<String> {
     let mut paths = BTreeSet::new();
-    let rule_re = Regex::new(
-        r#"(?m)^\s*"?[a-zA-Z]\+?\s+((?:/var/lib|/run|/etc)/nixling(?:/[^ "'\t\n]*)?)"#,
-    )
-    .expect("tmpfiles path regex");
+    let rule_re =
+        Regex::new(r#"(?m)^\s*"?[a-zA-Z]\+?\s+((?:/var/lib|/run|/etc)/nixling(?:/[^ "'\t\n]*)?)"#)
+            .expect("tmpfiles path regex");
     for path in collect_repo_files("nixos-modules", "nix") {
         let text = fs::read_to_string(&path)
             .unwrap_or_else(|err| panic!("policy-paths: cannot read {}: {err}", path.display()));
