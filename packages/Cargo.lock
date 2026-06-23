@@ -4071,6 +4071,7 @@ dependencies = [
  "nixling-ipc",
  "protobuf-codegen",
  "schemars",
+ "serde",
  "serde_json",
  "ttrpc-codegen",
 ]
