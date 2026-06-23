@@ -172,7 +172,7 @@ probe_common() {
 
   # 1. Start VM.
   log "  starting $vm"
-  if ! sudo nixling vm start "$vm" >/dev/null 2>&1; then
+  if ! nixling vm start "$vm" --apply >/dev/null 2>&1; then
     fail_check "$vm: nixling vm start failed"
     return 1
   fi
@@ -306,7 +306,7 @@ probe_teardown() {
   local vm="$1"
   log "==> probe_teardown: VM=$vm"
 
-  sudo nixling vm stop "$vm" >/dev/null 2>&1 || true
+  nixling vm stop "$vm" --apply >/dev/null 2>&1 || true
   sleep 3
 
   # Assert no orphan sidecar processes.
@@ -375,9 +375,9 @@ probe_tpm() {
 
   # Restart VM; re-assert SRK handle.
   log "  restarting $vm for TPM persistence check"
-  sudo nixling vm stop "$vm" >/dev/null 2>&1 || true
+  nixling vm stop "$vm" --apply >/dev/null 2>&1 || true
   sleep 2
-  if ! sudo nixling vm start "$vm" >/dev/null 2>&1; then
+  if ! nixling vm start "$vm" --apply >/dev/null 2>&1; then
     fail_check "$vm: nixling vm start (post-stop for TPM persistence) failed"
     return
   fi
@@ -477,9 +477,9 @@ probe_audio() {
 
   # Audio sidecar restart binding.
   log "  audio restart binding: stop + restart $vm"
-  sudo nixling vm stop "$vm" >/dev/null 2>&1 || true
+  nixling vm stop "$vm" --apply >/dev/null 2>&1 || true
   sleep 2
-  if ! sudo nixling vm start "$vm" >/dev/null 2>&1; then
+  if ! nixling vm start "$vm" --apply >/dev/null 2>&1; then
     fail_check "$vm: nixling vm start (audio restart) failed"
     return
   fi
