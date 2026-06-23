@@ -73,12 +73,13 @@ EOF
     else "/run/nixling/vms/${name}/${clean share.tag}.sock";
   volumeHostPath = name: volume: nl.volumeHostPath cfg.store.stateDir name volume;
 
-  componentReady = value: { kind = "component-specific"; inherit value; };
-  apiSocketInfo = value: { kind = "api-socket-info"; inherit value; };
-  unixSocketExists = value: { kind = "unix-socket-exists"; inherit value; };
-  unixSocketListening = value: { kind = "unix-socket-listening"; inherit value; };
-  tcpPort = host: port: { kind = "tcp-port"; value = { inherit host port; }; };
-  commandReady = value: { kind = "command"; inherit value; };
+  mkReadiness = kind: value: { inherit kind value; };
+  componentReady = mkReadiness "component-specific";
+  apiSocketInfo = mkReadiness "api-socket-info";
+  unixSocketExists = mkReadiness "unix-socket-exists";
+  unixSocketListening = mkReadiness "unix-socket-listening";
+  tcpPort = host: port: mkReadiness "tcp-port" { inherit host port; };
+  commandReady = mkReadiness "command";
   # Authenticated guest-control Health readiness. Unlike a raw TCP-22
   # probe this predicate fails CLOSED: the daemon completes a full
   # Hello + token challenge-response + Health over the guest-control vsock
@@ -816,7 +817,14 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     ];
   };
 
-  node = name: { id, role, readiness, unit ? null, binaryPath ? null, argv ? [ ], env ? [ ], planOps ? [ ] }:
+  mkDiskInitPlanOp = { targetPath, sizeBytes, mode, ownerProfile, ifAbsent ? true }: {
+    kind = "diskInit";
+    inherit targetPath sizeBytes mode ifAbsent;
+    ownerUid = ownerProfile.uid;
+    ownerGid = ownerProfile.gid;
+  };
+
+  mkProcessNode = name: { id, role, readiness, unit ? null, binaryPath ? null, argv ? [ ], env ? [ ], planOps ? [ ] }:
     let
       # `vm.supervisor` was removed per ADR 0015; every
       # enabled VM is daemon-supervised. `emitUnit` is permanently
@@ -845,13 +853,19 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       inherit planOps;
     };
 
+  mkRunnerNode = name: args: runner:
+    mkProcessNode name (args // runner);
+
+  node = mkProcessNode;
+
   hypervisorRunnerNode = name: service: args:
-    node name ({
+    mkProcessNode name ({
       id = service.nodeId;
       role = service.runnerRole;
     } // args);
 
-  edge = from: to: reason: { inherit from to reason; };
+  mkEdge = from: to: reason: { inherit from to reason; };
+  edge = mkEdge;
   edgesFromNodes = fromNodes: to: reason:
     builtins.map (from: edge from to reason) fromNodes;
   edgesToNodes = from: toNodes: reason:
@@ -871,12 +885,12 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         (share: (share.proto or "virtiofs") == "virtiofs")
         microvm.shares;
       shareNodes = lib.forEach virtiofsShares (share:
-        node name ({
+        mkRunnerNode name {
           id = shareNodeId share;
           role = "virtiofsd";
           unit = "microvm-virtiofsd@${name}.service";
           readiness = [ (unixSocketExists (shareSocketPath name share)) ];
-        } // virtiofsdRunner name share));
+        } (virtiofsdRunner name share));
       shareNodeIds = builtins.map shareNodeId virtiofsShares;
       postStoreNodeIds = if shareNodeIds != [ ] then shareNodeIds else [ "store-virtiofs-preflight" ];
       preOptionalNodeIds = if vm.tpm.enable then [ "swtpm" ] else postStoreNodeIds;
@@ -919,20 +933,20 @@ use devices::virtio::vhost_user_backend::run_video_device;'
           ];
         })
       ]
-      ++ lib.optional vm.tpm.enable (node name ({
+      ++ lib.optional vm.tpm.enable (mkRunnerNode name {
         id = "swtpm-flush";
         role = "swtpm-pre-start-flush";
         unit = "nixling-${name}-swtpm.service";
         readiness = [ ];
-      } // swtpmFlushRunner name))
-      ++ lib.optional vm.tpm.enable (node name ({
+      } (swtpmFlushRunner name))
+      ++ lib.optional vm.tpm.enable (mkRunnerNode name {
         id = "swtpm";
         role = "swtpm";
         unit = "nixling-${name}-swtpm.service";
         readiness = [ (unixSocketListening manifest.tpmSocket) ];
-      } // swtpmRunner name))
+      } (swtpmRunner name))
       ++ shareNodes
-      ++ lib.optional (vm.graphics.enable && !vm.graphics.renderNodeOnly) (node name ({
+      ++ lib.optional (vm.graphics.enable && !vm.graphics.renderNodeOnly) (mkRunnerNode name {
         id = "gpu";
         role = "gpu";
         unit = "nixling-${name}-gpu.service";
@@ -944,35 +958,35 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       # updating the readiness predicate. Without this fix the DAG
       # times out waiting on a socket that crosvm never creates.
       readiness = graphicsReadiness;
-      } // gpuRunner name vm))
+      } (gpuRunner name vm))
       # (ADR 0021) render-node-only broker-pre-NS GPU sidecar.
       # Emitted when graphics.renderNodeOnly = true. Uses gpuRenderNodeRunner
       # (argv carries --gpu-device-node /proc/self/fd/10) and the
       # gpu-render-node minijail profile (userNamespace, empty deviceBinds).
-      ++ lib.optional (vm.graphics.enable && vm.graphics.renderNodeOnly) (node name ({
+      ++ lib.optional (vm.graphics.enable && vm.graphics.renderNodeOnly) (mkRunnerNode name {
         id = "gpu-render-node";
         role = "gpu-render-node";
         unit = "nixling-${name}-gpu.service";
         readiness = graphicsReadiness;
-      } // gpuRenderNodeRunner name vm))
-      ++ lib.optional (vm.graphics.enable && vm.graphics.videoSidecar) (node name ({
+      } (gpuRenderNodeRunner name vm))
+      ++ lib.optional (vm.graphics.enable && vm.graphics.videoSidecar) (mkRunnerNode name {
         id = "video";
         role = "video";
         readiness = [ (unixSocketListening "/run/nixling-video/${name}/video.sock") ];
-      } // videoRunner name))
-      ++ lib.optional emitWaylandProxy (node name ({
+      } (videoRunner name))
+      ++ lib.optional emitWaylandProxy (mkRunnerNode name {
         id = "wayland-proxy";
         role = "wayland-proxy";
         readiness = [
           (unixSocketListening "/run/nixling-wlproxy/${name}/wayland-0")
         ];
-      } // waylandProxyRunner name vm))
-      ++ lib.optional vm.audio.enable (node name ({
+      } (waylandProxyRunner name vm))
+      ++ lib.optional vm.audio.enable (mkRunnerNode name {
         id = "audio";
         role = "audio";
         unit = "nixling-${name}-snd.service";
         readiness = [ (unixSocketExists "/run/nixling/vms/${name}/snd.sock") ];
-      } // audioRunner name))
+      } (audioRunner name))
       ++ [
         (hypervisorRunnerNode name hypervisorService {
           unit = if vm.graphics.enable then "nixling-${name}-gpu.service" else "microvm@${name}.service";
@@ -998,40 +1012,34 @@ use devices::virtio::vhost_user_backend::run_video_device;'
           #
           # mode 0o660 = 432 decimal for regular VM volumes (CH runner
           # opens them via kvm group); store-overlay keeps 0o600.
-          planOps = (builtins.map (volume: {
-            kind = "diskInit";
+          planOps = (builtins.map (volume: mkDiskInitPlanOp {
             targetPath = volumeHostPath name volume;
             sizeBytes = nl.volumeSizeBytes volume;
             mode = 432;
-            ownerUid = (profileFor name "cloud-hypervisor").uid;
-            ownerGid = (profileFor name "cloud-hypervisor").gid;
-            ifAbsent = true;
+            ownerProfile = profileFor name "cloud-hypervisor";
           }) (builtins.filter nl.volumeDiskInitEligible microvm.volumes))
           ++ lib.optionals (microvm.writableStoreOverlay != null) [
-            {
-              kind = "diskInit";
+            (mkDiskInitPlanOp {
               targetPath = "${toString cfg.store.stateDir}/${name}/store-overlay.img";
               sizeBytes = vm.writableStoreOverlaySize;
               mode = 384;
-              ownerUid = (profileFor name "cloud-hypervisor").uid;
-              ownerGid = (profileFor name "cloud-hypervisor").gid;
-              ifAbsent = true;
-            }
+              ownerProfile = profileFor name "cloud-hypervisor";
+            })
           ];
         })
       ]
-      ++ lib.optional vm.observability.enable (node name ({
+      ++ lib.optional vm.observability.enable (mkRunnerNode name {
         id = "vsock-relay";
         role = "vsock-relay";
         unit = "nixling-otel-relay@${name}.service";
         readiness = [ (unixSocketExists (vsockSocketForPort manifest.observability.vsockHostSocket obsOtlpPort)) ];
-      } // vsockRelayRunner name manifest))
-      ++ lib.optional (cfg.observability.enable && name == cfg.observability.vmName) (node name ({
+      } (vsockRelayRunner name manifest))
+      ++ lib.optional (cfg.observability.enable && name == cfg.observability.vmName) (mkRunnerNode name {
         id = "otel-host-bridge";
         role = "otel-host-bridge";
         unit = "nixling-otel-host-bridge.service";
         readiness = [ (unixSocketExists "/run/nixling/otel/host-egress.sock") ];
-      } // otelHostBridgeRunner manifest))
+      } (otelHostBridgeRunner manifest))
       ++ lib.optional guestControlEnabled (node name {
         id = "guest-control-health";
         role = "guest-control-health";
@@ -1128,16 +1136,16 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     in {
       vm = vmId;
       nodes = [
-        (node vmId ({
+        (mkRunnerNode vmId {
           id = "backend";
           role = "usbip";
           readiness = [ (tcpPort "127.0.0.1" (backendPort envName)) ];
-        } // usbipBackendRunner envName))
-        (node vmId ({
+        } (usbipBackendRunner envName))
+        (mkRunnerNode vmId {
           id = "proxy";
           role = "usbip";
           readiness = [ (tcpPort m.hostUplinkIp 3240) ];
-        } // usbipProxyRunner envName m))
+        } (usbipProxyRunner envName m))
       ];
       edges = [
         (edge "backend" "proxy" "The per-env USBIP proxy starts only after the backend usbipd listener is ready.")
