@@ -49,8 +49,8 @@ deprecations ship one minor release before removal.
 ### Internal
 
 - ADR 0035 Wave 2 normalized internal NixOS VM/env indexing for network and host
-  consumers while preserving generated artifact bytes and network isolation
-  semantics.
+  consumers, preserving network isolation semantics while making per-env USBIP
+  backend ports an explicit generated host contract.
 - ADR 0035 Wave 1 consolidated internal NixOS bundle artifact definitions behind
   a typed central model while preserving generated artifact bytes and private
   install metadata.
