@@ -14,6 +14,7 @@ pub mod manifest_v04;
 pub mod minijail_profile;
 pub mod privileges;
 pub mod privileges_w3;
+pub mod process_builder;
 pub mod processes;
 pub mod runtime;
 pub mod static_invariants;
