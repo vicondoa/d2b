@@ -69,6 +69,12 @@ broker-socket-activation/fd-name
 broker-socket-activation/has-socket
 broker-socket-activation/listen-seq-packet
 broker-socket-activation/no-socket-path-flag
+bundle-artifacts/default-derivation-name
+bundle-artifacts/defaulted-central-etc
+bundle-artifacts/default-json-text
+bundle-artifacts/nested-tables-are-not-artifact-rows
+bundle-artifacts/root-group-compat
+bundle-artifacts/storage-json-central-etc
 daemon-autostart/api-cross-ref
 daemon-autostart/doc-concurrency-cap
 daemon-autostart/doc-degraded

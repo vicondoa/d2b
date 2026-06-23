@@ -4,13 +4,6 @@ let
   cfg = config.nixling;
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
 
-  privateEtc = source: {
-    inherit source;
-    mode = "0640";
-    user = "root";
-    group = if cfg.daemonExperimental.enable then "nixlingd" else "root";
-  };
-
   actor = kind: value: { inherit kind value; };
   lockId = prefix: key: "${prefix}:${builtins.hashString "sha256" key}";
 
@@ -139,18 +132,13 @@ let
   jsonFile = pkgs.writeText "nixling-sync.json" jsonText;
 in
 {
-  options.nixling._bundle.syncJson = lib.mkOption {
-    type = lib.types.unspecified;
-    readOnly = true;
-    internal = true;
-    description = "Internal schema-v2 synchronization and lock artifact metadata.";
-  };
-
   config = {
     nixling._bundle.syncJson = {
       inherit data jsonText;
       path = "${jsonFile}";
+      installFileName = "sync.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
     };
-    environment.etc."nixling/sync.json" = privateEtc jsonFile;
   };
 }

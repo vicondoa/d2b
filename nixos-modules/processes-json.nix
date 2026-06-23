@@ -79,13 +79,6 @@ EOF
   );
   backendPort = envName: envPortMap.${envName};
 
-  privateEtc = source: {
-    inherit source;
-    mode = "0640";
-    user = "root";
-    group = if cfg.daemonExperimental.enable then "nixlingd" else "root";
-  };
-
   profileIdFor = name: nodeId: "vm-${name}-${nodeId}";
   profileFor = name: nodeId:
     if nodeId == "otel-host-bridge"
@@ -1213,19 +1206,14 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     ]) normalNixosVms);
 in
 {
-  options.nixling._bundle.processesJson = lib.mkOption {
-    type = lib.types.unspecified;
-    readOnly = true;
-    internal = true;
-    description = "Internal schema-v1 processes.json artifact metadata.";
-  };
-
   config = {
     assertions = videoAssertions;
     nixling._bundle.processesJson = {
       inherit data jsonText;
       path = "${jsonFile}";
+      installFileName = "processes.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
     };
-    environment.etc."nixling/processes.json" = privateEtc jsonFile;
   };
 }
