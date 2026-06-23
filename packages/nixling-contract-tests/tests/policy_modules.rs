@@ -294,75 +294,152 @@ fn cli_output_contracts_live_in_ipc() {
         .expect("read nixling-ipc cli_output.rs");
     let xtask = read_repo_file_opt("packages/xtask/src/main.rs").expect("read xtask main.rs");
 
-    let forbidden_cli_dto = Regex::new(
-        r"(?m)^pub\s+(struct|enum)\s+[A-Za-z0-9_]*(OutputV[0-9]|ReadyStatusV[0-9]|ReadySimple|AuthRoleV2|HostCheckSeverityV2)\b",
-    )
-    .expect("valid CLI DTO regex");
-    assert!(
-        !forbidden_cli_dto.is_match(&cli),
-        "CLI output contract DTOs must live in nixling-ipc::cli_output, not packages/nixling/src/lib.rs"
-    );
+    for type_name in MIGRATED_CLI_OUTPUT_TYPES {
+        assert!(
+            !cli_defines_type(&cli, type_name),
+            "{type_name} must live in nixling-ipc::cli_output, not packages/nixling/src/lib.rs"
+        );
+        assert!(
+            !xtask_imports_nixling_type(&xtask, type_name),
+            "xtask must import {type_name} from nixling_ipc::cli_output, not the nixling presentation crate"
+        );
+    }
 
     assert!(
         xtask.contains("cli_output::"),
         "gen-cli-schemas must import CLI output schemas from nixling_ipc::cli_output"
     );
-    assert!(
-        !Regex::new(r"use\s+nixling::\s*\{[^}]*OutputV[0-9]")
-            .expect("valid xtask import regex")
-            .is_match(&xtask),
-        "xtask must not import CLI output DTOs from the nixling presentation crate"
-    );
 
-    for type_name in [
-        "ListItemOutputV2",
-        "VmExecCreateOutputV1",
-        "VmExecListOutputV1",
-        "VmExecListEntryOutputV1",
-        "VmExecStatusOutputV1",
-        "VmExecLogsOutputV1",
-        "VmExecKillOutputV1",
-        "ShellListOutputV1",
-        "ShellListSessionOutputV1",
-        "ShellDetachOutputV1",
-        "ShellKillOutputV1",
-        "VmDisplayListOutputV1",
-        "VmDisplaySessionOutputV1",
-        "VmDisplayCloseOutputV1",
-        "RealmListOutputV1",
-        "OpInspectOutputV1",
-        "OpInspectTraceOutputV1",
-        "OpInspectLocalOutputV1",
-        "OpInspectRealmOutputV1",
-        "OpInspectDegradedOutputV1",
-        "RealmPolicyOutputV1",
-        "StatusInventoryOutputV2",
-        "ApiReadyErrorV1",
-        "StatusVmOutputV2",
-        "LivePoolIntegrityOutputV1",
-        "StatusServicesOutputV2",
-        "StatusServicesOutputV3",
-        "RunnerParityOutputV2",
-        "StatusBridgeCheckOutputV2",
-        "AuditOutputV2",
-        "AuditVirtiofsdOutputV2",
-        "AuditSshOutputV2",
-        "AuditBridgeIsolationOutputV2",
-        "AuditSidecarsOutputV2",
-        "AuditUsbipEnvOutputV2",
-        "HostCheckOutputV2",
-        "HostCheckSummaryV2",
-        "HostCheckFindingV2",
-        "AuthStatusOutputV2",
-        "AuthSocketStatusV2",
-        "AuthDeniedSubcommandV2",
-        "StoreVerifyOutputV2",
-    ] {
+    for type_name in STRICT_CLI_OUTPUT_OBJECT_TYPES {
         assert!(
             struct_has_deny_unknown_fields(&ipc, type_name),
             "{type_name} must retain #[serde(... deny_unknown_fields ...)] after relocation"
         );
     }
+}
+
+const MIGRATED_CLI_OUTPUT_TYPES: &[&str] = &[
+    "ListOutputV2",
+    "ListItemOutputV2",
+    "VmExecCreateOutputV1",
+    "VmExecListOutputV1",
+    "VmExecListEntryOutputV1",
+    "VmExecStatusOutputV1",
+    "VmExecLogsOutputV1",
+    "VmExecKillOutputV1",
+    "ShellListOutputV1",
+    "ShellListSessionOutputV1",
+    "ShellDetachOutputV1",
+    "ShellKillOutputV1",
+    "VmDisplayListOutputV1",
+    "VmDisplaySessionOutputV1",
+    "VmDisplayCloseOutputV1",
+    "RealmListOutputV1",
+    "RealmInspectOutputV1",
+    "OpInspectOutputV1",
+    "OpInspectTraceOutputV1",
+    "OpInspectLocalOutputV1",
+    "OpInspectRealmOutputV1",
+    "OpInspectDegradedOutputV1",
+    "RealmPolicyOutputV1",
+    "StatusOutputV2",
+    "StatusInventoryOutputV2",
+    "ApiReadyStatusV1",
+    "ApiReadyErrorV1",
+    "ApiReadySimple",
+    "StatusVmOutputV2",
+    "LivePoolIntegrityOutputV1",
+    "StatusServicesOutputV2",
+    "StatusServicesOutputV3",
+    "RunnerParityOutputV2",
+    "StatusBridgeCheckOutputV2",
+    "AuditOutputV2",
+    "AuditVirtiofsdOutputV2",
+    "AuditSshOutputV2",
+    "AuditBridgeIsolationOutputV2",
+    "AuditSidecarsOutputV2",
+    "AuditUsbipEnvOutputV2",
+    "HostCheckOutputV2",
+    "HostCheckSummaryV2",
+    "HostCheckFindingV2",
+    "HostCheckSeverityV2",
+    "AuthStatusOutputV2",
+    "AuthRoleV2",
+    "AuthSocketStatusV2",
+    "AuthDeniedSubcommandV2",
+    "StoreVerifyOutputV2",
+];
+
+const STRICT_CLI_OUTPUT_OBJECT_TYPES: &[&str] = &[
+    "ListItemOutputV2",
+    "VmExecCreateOutputV1",
+    "VmExecListOutputV1",
+    "VmExecListEntryOutputV1",
+    "VmExecStatusOutputV1",
+    "VmExecLogsOutputV1",
+    "VmExecKillOutputV1",
+    "ShellListOutputV1",
+    "ShellListSessionOutputV1",
+    "ShellDetachOutputV1",
+    "ShellKillOutputV1",
+    "VmDisplayListOutputV1",
+    "VmDisplaySessionOutputV1",
+    "VmDisplayCloseOutputV1",
+    "RealmListOutputV1",
+    "OpInspectOutputV1",
+    "OpInspectTraceOutputV1",
+    "OpInspectLocalOutputV1",
+    "OpInspectRealmOutputV1",
+    "OpInspectDegradedOutputV1",
+    "RealmPolicyOutputV1",
+    "StatusInventoryOutputV2",
+    "ApiReadyErrorV1",
+    "StatusVmOutputV2",
+    "LivePoolIntegrityOutputV1",
+    "StatusServicesOutputV2",
+    "StatusServicesOutputV3",
+    "RunnerParityOutputV2",
+    "StatusBridgeCheckOutputV2",
+    "AuditOutputV2",
+    "AuditVirtiofsdOutputV2",
+    "AuditSshOutputV2",
+    "AuditBridgeIsolationOutputV2",
+    "AuditSidecarsOutputV2",
+    "AuditUsbipEnvOutputV2",
+    "HostCheckOutputV2",
+    "HostCheckSummaryV2",
+    "HostCheckFindingV2",
+    "AuthStatusOutputV2",
+    "AuthSocketStatusV2",
+    "AuthDeniedSubcommandV2",
+    "StoreVerifyOutputV2",
+];
+
+fn cli_defines_type(src: &str, type_name: &str) -> bool {
+    src.lines().any(|line| {
+        let line = line.trim_start();
+        line == format!("pub struct {type_name}")
+            || line.starts_with(&format!("pub struct {type_name} "))
+            || line.starts_with(&format!("pub struct {type_name}("))
+            || line == format!("pub enum {type_name}")
+            || line.starts_with(&format!("pub enum {type_name} "))
+    })
+}
+
+fn xtask_imports_nixling_type(src: &str, type_name: &str) -> bool {
+    src.contains(&format!("nixling::{type_name}"))
+        || nixling_use_blocks(src).any(|block| {
+            block
+                .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                .any(|token| token == type_name)
+        })
+}
+
+fn nixling_use_blocks(src: &str) -> impl Iterator<Item = &str> {
+    src.match_indices("use nixling::").filter_map(|(start, _)| {
+        let tail = &src[start..];
+        tail.find(';').map(|end| &tail[..=end])
+    })
 }
 
 fn struct_has_deny_unknown_fields(src: &str, type_name: &str) -> bool {
