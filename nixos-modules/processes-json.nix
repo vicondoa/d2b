@@ -856,10 +856,15 @@ use devices::virtio::vhost_user_backend::run_video_device;'
   mkRunnerNode = name: args: runner:
     mkProcessNode name (args // runner);
 
+  runnerNode = name: { id, role, readiness, runner, unit ? null, planOps ? [ ] }:
+    mkRunnerNode name {
+      inherit id role readiness unit planOps;
+    } runner;
+
   node = mkProcessNode;
 
   hypervisorRunnerNode = name: service: args:
-    mkProcessNode name ({
+    runnerNode name ({
       id = service.nodeId;
       role = service.runnerRole;
     } // args);
@@ -990,16 +995,18 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       ++ [
         (hypervisorRunnerNode name hypervisorService {
           unit = if vm.graphics.enable then "nixling-${name}-gpu.service" else "microvm@${name}.service";
-          binaryPath = cloudHypervisorBinaryPath microvm;
-          argv = cloudHypervisorArgv name vm manifest;
-          # the cloud-hypervisor binary is a bash
-          # wrapper that calls `dirname` to compute paths; under
-          # the broker spawn (empty PATH) it exits 127 on the
-          # very first line. Provide PATH with coreutils so the
-          # wrapper can find dirname + sed.
-          env = [
-            "PATH=${pkgs.coreutils}/bin:${pkgs.gnused}/bin"
-          ];
+          runner = {
+            binaryPath = cloudHypervisorBinaryPath microvm;
+            argv = cloudHypervisorArgv name vm manifest;
+            # the cloud-hypervisor binary is a bash
+            # wrapper that calls `dirname` to compute paths; under
+            # the broker spawn (empty PATH) it exits 127 on the
+            # very first line. Provide PATH with coreutils so the
+            # wrapper can find dirname + sed.
+            env = [
+              "PATH=${pkgs.coreutils}/bin:${pkgs.gnused}/bin"
+            ];
+          };
           readiness = [ (apiSocketInfo manifest.apiSocket) ];
           # emit DiskInit plan-ops before SpawnRunner.
           # Nixling-owned relative raw/ext4 microvm.volumes are declared by
@@ -1028,18 +1035,20 @@ use devices::virtio::vhost_user_backend::run_video_device;'
           ];
         })
       ]
-      ++ lib.optional vm.observability.enable (mkRunnerNode name {
+      ++ lib.optional vm.observability.enable (runnerNode name {
         id = "vsock-relay";
         role = "vsock-relay";
         unit = "nixling-otel-relay@${name}.service";
         readiness = [ (unixSocketExists (vsockSocketForPort manifest.observability.vsockHostSocket obsOtlpPort)) ];
-      } (vsockRelayRunner name manifest))
-      ++ lib.optional (cfg.observability.enable && name == cfg.observability.vmName) (mkRunnerNode name {
+        runner = vsockRelayRunner name manifest;
+      })
+      ++ lib.optional (cfg.observability.enable && name == cfg.observability.vmName) (runnerNode name {
         id = "otel-host-bridge";
         role = "otel-host-bridge";
         unit = "nixling-otel-host-bridge.service";
         readiness = [ (unixSocketExists "/run/nixling/otel/host-egress.sock") ];
-      } (otelHostBridgeRunner manifest))
+        runner = otelHostBridgeRunner manifest;
+      })
       ++ lib.optional guestControlEnabled (node name {
         id = "guest-control-health";
         role = "guest-control-health";
@@ -1109,9 +1118,11 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       } // waylandProxyRunner name vm))
       ++ [
         (hypervisorRunnerNode name hypervisorService {
-          binaryPath = qemuMediaBinaryPath;
-          argv = qemuMediaArgv name;
-          env = qemuMediaEnv name;
+          runner = {
+            binaryPath = qemuMediaBinaryPath;
+            argv = qemuMediaArgv name;
+            env = qemuMediaEnv name;
+          };
           readiness = [ (unixSocketListening (qemuMediaQmpSocket name)) ];
         })
       ];
@@ -1136,16 +1147,18 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     in {
       vm = vmId;
       nodes = [
-        (mkRunnerNode vmId {
+        (runnerNode vmId {
           id = "backend";
           role = "usbip";
           readiness = [ (tcpPort "127.0.0.1" (backendPort envName)) ];
-        } (usbipBackendRunner envName))
-        (mkRunnerNode vmId {
+          runner = usbipBackendRunner envName;
+        })
+        (runnerNode vmId {
           id = "proxy";
           role = "usbip";
           readiness = [ (tcpPort m.hostUplinkIp 3240) ];
-        } (usbipProxyRunner envName m))
+          runner = usbipProxyRunner envName m;
+        })
       ];
       edges = [
         (edge "backend" "proxy" "The per-env USBIP proxy starts only after the backend usbipd listener is ready.")
