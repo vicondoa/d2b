@@ -6,7 +6,7 @@
 //! `status`:
 //!   * `--vm <name>` and the positional `<name>` form produce byte-identical
 //!     `--json` output;
-//!   * `--json` deserializes strictly into `nixling::StatusVmOutputV2`
+//!   * `--json` deserializes strictly into `nixling_ipc::cli_output::StatusVmOutputV2`
 //!     (`deny_unknown_fields` makes this the schema check the bash gate did via
 //!     docs/reference/cli-output/status.schema.json) and is classified as the
 //!     `StatusOutputV2::Vm` untagged variant;
@@ -37,7 +37,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use nixling::{StatusBridgeCheckOutputV2, StatusOutputV2, StatusVmOutputV2};
+use nixling_ipc::cli_output::{StatusBridgeCheckOutputV2, StatusOutputV2, StatusVmOutputV2};
 
 // corp-vm: all units inactive + an empty daemon-state dir (pidfd-table.json
 // absent -> ch-runner / virtiofsd "stopped"). nixlingd.service is pinned

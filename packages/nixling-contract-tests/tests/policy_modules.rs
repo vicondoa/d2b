@@ -287,6 +287,97 @@ fn static_rust_dependency_direction() {
     }
 }
 
+#[test]
+fn cli_output_contracts_live_in_ipc() {
+    let cli = read_repo_file_opt("packages/nixling/src/lib.rs").expect("read nixling lib.rs");
+    let ipc = read_repo_file_opt("packages/nixling-ipc/src/cli_output.rs")
+        .expect("read nixling-ipc cli_output.rs");
+    let xtask = read_repo_file_opt("packages/xtask/src/main.rs").expect("read xtask main.rs");
+
+    let forbidden_cli_dto = Regex::new(
+        r"(?m)^pub\s+(struct|enum)\s+[A-Za-z0-9_]*(OutputV[0-9]|ReadyStatusV[0-9]|ReadySimple|AuthRoleV2|HostCheckSeverityV2)\b",
+    )
+    .expect("valid CLI DTO regex");
+    assert!(
+        !forbidden_cli_dto.is_match(&cli),
+        "CLI output contract DTOs must live in nixling-ipc::cli_output, not packages/nixling/src/lib.rs"
+    );
+
+    assert!(
+        xtask.contains("cli_output::"),
+        "gen-cli-schemas must import CLI output schemas from nixling_ipc::cli_output"
+    );
+    assert!(
+        !Regex::new(r"use\s+nixling::\s*\{[^}]*OutputV[0-9]")
+            .expect("valid xtask import regex")
+            .is_match(&xtask),
+        "xtask must not import CLI output DTOs from the nixling presentation crate"
+    );
+
+    for type_name in [
+        "ListItemOutputV2",
+        "VmExecCreateOutputV1",
+        "VmExecListOutputV1",
+        "VmExecListEntryOutputV1",
+        "VmExecStatusOutputV1",
+        "VmExecLogsOutputV1",
+        "VmExecKillOutputV1",
+        "ShellListOutputV1",
+        "ShellListSessionOutputV1",
+        "ShellDetachOutputV1",
+        "ShellKillOutputV1",
+        "VmDisplayListOutputV1",
+        "VmDisplaySessionOutputV1",
+        "VmDisplayCloseOutputV1",
+        "RealmListOutputV1",
+        "OpInspectOutputV1",
+        "OpInspectTraceOutputV1",
+        "OpInspectLocalOutputV1",
+        "OpInspectRealmOutputV1",
+        "OpInspectDegradedOutputV1",
+        "RealmPolicyOutputV1",
+        "StatusInventoryOutputV2",
+        "ApiReadyErrorV1",
+        "StatusVmOutputV2",
+        "LivePoolIntegrityOutputV1",
+        "StatusServicesOutputV2",
+        "StatusServicesOutputV3",
+        "RunnerParityOutputV2",
+        "StatusBridgeCheckOutputV2",
+        "AuditOutputV2",
+        "AuditVirtiofsdOutputV2",
+        "AuditSshOutputV2",
+        "AuditBridgeIsolationOutputV2",
+        "AuditSidecarsOutputV2",
+        "AuditUsbipEnvOutputV2",
+        "HostCheckOutputV2",
+        "HostCheckSummaryV2",
+        "HostCheckFindingV2",
+        "AuthStatusOutputV2",
+        "AuthSocketStatusV2",
+        "AuthDeniedSubcommandV2",
+        "StoreVerifyOutputV2",
+    ] {
+        assert!(
+            struct_has_deny_unknown_fields(&ipc, type_name),
+            "{type_name} must retain #[serde(... deny_unknown_fields ...)] after relocation"
+        );
+    }
+}
+
+fn struct_has_deny_unknown_fields(src: &str, type_name: &str) -> bool {
+    let needle = format!("pub struct {type_name}");
+    let Some(start) = src.find(&needle) else {
+        return false;
+    };
+    let prefix = &src[..start];
+    let attrs = prefix
+        .rsplit_once("#[derive")
+        .map(|(_, attrs)| attrs)
+        .unwrap_or(prefix);
+    attrs.contains("deny_unknown_fields")
+}
+
 /// Faithful port of the bash gate's `internal_deps()` awk parser: collect the
 /// first whitespace-delimited token of every entry under a `[dependencies]`,
 /// `[dev-dependencies]`, `[build-dependencies]`, or
