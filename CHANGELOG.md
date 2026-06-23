@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- `nixlingd.service` now reports systemd readiness only after the daemon has
+  rebound its public socket and completed startup adoption, so post-switch
+  scripts no longer race `/run/nixling/public.sock`; daemon updates may restart
+  `nixlingd` without restarting running VMs, which are re-adopted afterward.
 - VM stop/restart now has the Nix and manifest configuration surface for
   provider-aware graceful guest shutdown, including global/per-VM enable and
   1–600 second timeout controls, `manifestVersion = 7`, daemon-config

@@ -30,9 +30,9 @@ let
   # singleton units that operators still drive directly with
   # `systemctl`
   #
-  #   * `nixlingd.service` — the public daemon. Operators occasionally
-  #     restart it after a `nixos-rebuild switch` (it carries
-  #     `restartIfChanged=false` per the daemon-lifecycle invariant).
+  #   * `nixlingd.service` — the public daemon. It may restart after a
+  #     `nixos-rebuild switch`; VM runners survive via KillMode=process
+  #     and daemon re-adoption.
   #   * `nixling-priv-broker.service` + `nixling-priv-broker.socket` —
   #     the privileged broker pair. Socket-activated; operators may
   #     bounce them to recover from a stuck handler.

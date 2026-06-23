@@ -161,6 +161,15 @@ the all-VM shutdown hook only when the system manager is stopping for host
 shutdown or reboot; a manual `systemctl restart nixlingd.service` remains a
 continuation event and does not stop all VMs.
 
+Daemon updates are also continuation events. `nixlingd.service` is a
+`Type=notify` unit: systemd reports the restart complete only after the daemon
+has rebound `/run/nixling/public.sock`, restored/adopted runner state, and sent
+`READY=1`. The unit uses `KillMode=process` so the restart terminates only the
+daemon main process; broker-spawned VM runners remain alive and are re-adopted
+by PID/start-time identity. If startup does not reach readiness within the
+bounded start timeout, systemd fails the unit instead of presenting an active but
+unready public socket.
+
 All-VM host shutdown runs in dependency phases: workload VMs in parallel first,
 then env net VMs in parallel. `TimeoutStopSec` is computed from the maximum
 enabled graceful timeout in each phase, plus bounded forced-fallback and

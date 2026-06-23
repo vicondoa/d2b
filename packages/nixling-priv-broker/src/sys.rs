@@ -1045,6 +1045,7 @@ pub mod path_safe {
         let raw_fd = fd.as_raw_fd();
         let mut command = Command::new(program);
         command.args(args);
+        command.env_remove("NOTIFY_SOCKET");
         // SAFETY: `pre_exec` runs in the child after fork and before exec.
         // The closure uses only async-signal-safe libc fcntl operations and
         // returns an io::Error directly on failure.

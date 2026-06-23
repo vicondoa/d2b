@@ -2369,9 +2369,9 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         }
         RealBrokerRequest::QemuMediaQueryStatus(req) => {
             let response = backend.qemu_media_query_status(&req)?;
-            Ok(DispatchResult::no_fds(BrokerResponse::QemuMediaQueryStatus(
-                response,
-            )))
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::QemuMediaQueryStatus(response),
+            ))
         }
         RealBrokerRequest::QemuMediaQuit(req) => {
             let response = backend.qemu_media_quit(&req)?;
@@ -8166,7 +8166,10 @@ mod tests {
         ));
         match query.response {
             BrokerResponse::QemuMediaQueryStatus(response) => {
-                assert_eq!(response.status, QemuMediaVmStatus::ConnectionLostDuringShutdown);
+                assert_eq!(
+                    response.status,
+                    QemuMediaVmStatus::ConnectionLostDuringShutdown
+                );
             }
             other => panic!("expected QemuMediaQueryStatus, got {other:?}"),
         }
