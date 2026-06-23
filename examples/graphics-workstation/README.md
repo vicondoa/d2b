@@ -148,37 +148,35 @@ talks to PipeWire as a regular client, so:
     nodes carry `GROUP="kvm" MODE="0660" uaccess`.
   - The `usbip-host` kernel module is loaded once an enabled VM opts
     into `usbip.yubikey = true`.
-  - A per-env USBIP proxy: `nixling-sys-desktop-usbipd-proxy.service`
-    bound to the host's uplink IP (here `192.0.2.1`, the host's
-    side of the env's `/30`). Per-env loopback isolation — there's
-    no host-wide singleton — see Spec correction #4 for the
-    rationale.
+  - A broker-spawned per-env USBIP backend and proxy under the
+    daemon-owned lifecycle DAG. The proxy binds the host's uplink IP
+    (here `192.0.2.1`, the host side of the env's `/30`); there is no
+    host-wide USBIP singleton.
 
 - **Guest side** (from `usbip.yubikey = true`):
   - The `vhci_hcd` kernel module is loaded so the guest has a
     virtual USB host controller.
-  - The `usbip` userspace CLI is installed.
+  - The `usbip` userspace CLI is installed for authenticated guestd
+    import/detach operations.
 
-To attach a plugged-in YubiKey to `corp-desktop`:
+Declare the approved busid in the copied example and use the read-only probe to
+confirm host observation:
 
 ```bash
-nixling usb corp-desktop
+nixling usb probe
 ```
 
-That command:
+Then attach the declared device through the daemon:
 
-1. Acquires `/run/nixling/usbipd.lock` so only one VM at a time
-   owns the device.
-2. Detaches the YubiKey from any other env's proxy (the lock
-   guarantees no cross-env race).
-3. Binds the device to the destination env's usbipd proxy.
-4. Inside the VM, runs `usbip attach -r <host-uplink-ip> -b <busid>`
-   so the guest's `vhci_hcd` adopts the device.
+```bash
+nixling vm start corp-desktop --apply
+nixling usb attach corp-desktop 1-2 --apply
+```
 
-Press `Ctrl-C` to detach cleanly; the lock is released and the
-device falls back to the host's xhci driver. PIN, touch, and
-challenge-response work transparently inside the VM after attach
-— it is a real USB endpoint, not an emulated one.
+Replace `1-2` with the busid you declared for your host. To release the claim,
+run `nixling usb detach corp-desktop 1-2 --apply`. For degraded probe rows or
+restart recovery, use the targeted runbook:
+[`docs/how-to/troubleshoot-usbip.md`](../../docs/how-to/troubleshoot-usbip.md).
 
 ## Why this example is `x86_64-linux`-only
 
@@ -237,9 +235,9 @@ implicitly by the host activation script) produces:
     VM, `autostart = true`).
   - `nixling-corp-desktop-gpu.service`    — GPU sidecar.
   - `nixling-corp-desktop-snd.service`    — audio sidecar.
-  - `nixling-sys-desktop-usbipd-backend.service`
-    + `nixling-sys-desktop-usbipd-proxy.service` — per-env USBIP
-    backend (loopback) + uplink-IP-bound proxy.
+  - broker-spawned `usbipd-backend` / `usbipd-proxy` runners under
+    `nixling.slice/sys-desktop/` — per-env USBIP backend (loopback)
+    + uplink-IP-bound proxy.
   - `nixling-net-route-preflight.service` — fail-closed env-route
     sanity check ordered after `network-online.target`.
 
@@ -279,7 +277,7 @@ nixling vm start corp-desktop --apply      # interactive boot from a Plasma term
 ssh -i /var/lib/nixling/keys/corp-desktop_ed25519 alice@10.42.0.10 hostname
 nixling audio mic on corp-desktop         # grant microphone
 nixling audio speaker on corp-desktop     # grant speakers
-nixling usb corp-desktop                  # attach YubiKey (Ctrl-C to detach)
+nixling usb attach corp-desktop 1-2 --apply # attach declared YubiKey busid
 nixling vm stop corp-desktop --apply       # clean shutdown
 ```
 
@@ -325,10 +323,10 @@ Plasma + PipeWire + nixling closure and takes minutes.
   the VM boots, not just be declared. A fresh boot with no Plasma
   login leaves the GPU sidecar idle; `nixling vm start` will block on
   the Wayland socket.
-- **YubiKey USBIP is exclusive across envs.** Only one env's
-  USBIP backend can hold a `usbip bind` at a time — the CLI
-  detaches other env backends before binding. If `nixling usb`
-  hangs, check that no other env's backend has the device.
+- **YubiKey USBIP is exclusive per declared busid.** A durable broker claim
+  names the owning VM. If `nixling usb probe` reports a degraded or
+  other-owner row, follow the command it prints or the USBIP troubleshooting
+  runbook rather than editing locks or sysfs driver links directly.
 - **The fail-closed `nixling-net-route-preflight.service` runs
   before any nixling VM starts.** A stale `ip route` or a
   CIDR-overlap between this env and your host LAN refuses VM
@@ -353,6 +351,7 @@ for the exact predicate.
 - [`examples/multi-env`](../multi-env/) — two isolated envs (work + personal)
 - [`examples/with-entra-id`](../with-entra-id/) — Entra-ID composition via the sibling flake
 - [`templates/default`](../../templates/default/) — scaffold via `nix flake init`
+- [`docs/how-to/troubleshoot-usbip.md`](../../docs/how-to/troubleshoot-usbip.md) — USBIP/YubiKey recovery runbook
 
 > **Note on the in-tree path** — the version of `flake.nix` checked
 > into this directory uses `nixling.url = "path:../..";` so the

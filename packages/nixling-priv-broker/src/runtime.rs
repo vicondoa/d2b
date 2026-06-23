@@ -8,11 +8,12 @@ use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, OnceLock},
+    sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -27,13 +28,18 @@ use nix::unistd::dup;
 use serde_json::Value;
 #[cfg(not(feature = "layer1-bootstrap"))]
 use sha2::Sha256;
+#[cfg(not(feature = "layer1-bootstrap"))]
+use tracing::info;
 use tracing::warn;
 
-use crate::audit::AuditLog;
+use crate::audit::{AuditLog, AuditWriteClass};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use crate::audit::{BROKER_VERSION, new_event_id, result_for_decision};
 #[cfg(not(feature = "layer1-bootstrap"))]
-use crate::ops::audit_op::{OpAuditRecord, OperationFields};
+use crate::ops::audit_op::{
+    OpAuditRecord, OperationFields, UsbAuditDeviceIdentity, UsbSerialCorrelation,
+    UsbSerialCorrelationKeyRotationAudit,
+};
 #[cfg(feature = "layer1-bootstrap")]
 use crate::protocol::{bind_seqpacket, connect_seqpacket, recv_json_frame, send_json_frame};
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -72,6 +78,10 @@ const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 14;
 const DEFAULT_BUNDLE_PATH: &str = "/var/lib/nixling/current-bundle/manifest.json";
 const DEFAULT_STATE_DIR: &str = "/var/lib/nixling";
 const CAPABILITIES: &[&str] = &["Hello", "ValidateBundle", "ExportBrokerAudit"];
+const DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND: u32 = 512;
+const IPC_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
+const DEFAULT_IPC_RATE_LIMIT_MAX_BUCKETS: usize = 4096;
+const MAX_MODULE_NAME_LEN: usize = 64;
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -200,6 +210,11 @@ enum BrokerError {
         vendor: u16,
         product: u16,
     },
+    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    UsbipPolicyMismatch {
+        busid: String,
+        reason: &'static str,
+    },
     /// The live executor reported an error (nft/route/sysctl shellout
     /// failed, pidfd open failed, spawn preflight failed, etc).
     #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
@@ -248,6 +263,9 @@ enum BrokerError {
         message: String,
     },
     Protocol(String),
+    PeerCredentialRefused {
+        operation: &'static str,
+    },
     #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     GuestControlSignRefused {
         reason: &'static str,
@@ -263,6 +281,11 @@ enum BrokerError {
         audit: crate::ops::audit_op::SwtpmDirAudit,
         reason: &'static str,
     },
+    RequestValidation {
+        operation: &'static str,
+        reason: &'static str,
+    },
+    IpcRateLimited,
 }
 
 pub fn parse_command<I>(args: I) -> Result<BrokerMode, RunError>
@@ -651,6 +674,9 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
     // alive for the broker's lifetime.
     #[cfg(not(feature = "layer1-bootstrap"))]
     let _sigchld_reaper_rt = start_sigchld_reaper(Arc::clone(&audit_log));
+    let ipc_rate_limiter = Arc::new(Mutex::new(IpcRateLimiter::new(
+        DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND,
+    )));
 
     loop {
         let accepted = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC)
@@ -685,6 +711,7 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
             resolver.as_ref(),
             #[cfg(not(feature = "layer1-bootstrap"))]
             bundle_tamper,
+            &ipc_rate_limiter,
         ) {
             warn!(error = ?err, "broker request failed");
         }
@@ -766,6 +793,7 @@ fn handle_connection(
     #[cfg(not(feature = "layer1-bootstrap"))] resolver: Option<&Arc<BundleResolver>>,
     #[cfg(feature = "layer1-bootstrap")] _resolver: Option<&()>,
     #[cfg(not(feature = "layer1-bootstrap"))] bundle_tamper: Option<(String, String)>,
+    ipc_rate_limiter: &Arc<Mutex<IpcRateLimiter>>,
 ) -> io::Result<()> {
     let (peer_uid, peer_gid, peer_pid) = peer_credentials(fd.as_raw_fd())?;
     let envelope = match recv_json_frame::<RequestEnvelope>(fd.as_raw_fd())? {
@@ -778,19 +806,90 @@ fn handle_connection(
     } else {
         peer_uid
     };
+    let operation = request.op_name();
+    let opaque_target_id = request.opaque_target_id();
+    let (rate_role, rate_operation) = if effective_uid == config.nixlingd_uid {
+        (envelope.caller_role.for_display(), operation)
+    } else {
+        ("direct-broker-peer", "direct-broker-connect")
+    };
+    let rate_pool = if effective_uid == config.nixlingd_uid {
+        IpcRatePool::Daemon
+    } else {
+        IpcRatePool::Direct
+    };
+    let rate_allowed = ipc_rate_limiter
+        .lock()
+        .map_err(|_| io::Error::other("broker IPC rate limiter mutex poisoned"))?
+        .check(rate_pool, effective_uid, rate_role, rate_operation);
+    if !rate_allowed {
+        write_refusal_audit_bounded(
+            audit_log,
+            if effective_uid == config.nixlingd_uid {
+                AuditWriteClass::Privileged
+            } else {
+                AuditWriteClass::Unprivileged
+            },
+            operation,
+            effective_uid,
+            "ipc-rate-limited",
+            opaque_target_id,
+            "closed",
+        )?;
+        if effective_uid == config.nixlingd_uid {
+            send_json_frame(fd.as_raw_fd(), &BrokerError::IpcRateLimited.into_response())?;
+        }
+        return Ok(());
+    }
     if effective_uid != config.nixlingd_uid {
-        audit_log.write_entry(
-            request.op_name(),
+        write_refusal_audit_bounded(
+            audit_log,
+            AuditWriteClass::Unprivileged,
+            operation,
             effective_uid,
             "peer-refused",
-            request.opaque_target_id(),
+            opaque_target_id,
             "closed",
+        )?;
+        send_json_frame(
+            fd.as_raw_fd(),
+            &BrokerError::PeerCredentialRefused { operation }.into_response(),
         )?;
         return Ok(());
     }
 
-    let operation = request.op_name();
-    let opaque_target_id = request.opaque_target_id();
+    if let Err(error) = validate_broker_request(&request) {
+        let audit_context = DispatchAuditContext {
+            peer_pid,
+            peer_role: envelope.caller_role.for_display().to_owned(),
+            verb: operation.to_owned(),
+            request_fields: serde_json::json!({ "validation": "failed" }),
+            started_at: Instant::now(),
+        };
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        error.audit(
+            audit_log,
+            effective_uid,
+            peer_gid,
+            &envelope.caller_role,
+            &audit_context,
+            resolver.map(std::sync::Arc::as_ref),
+            operation,
+            opaque_target_id,
+        )?;
+        #[cfg(feature = "layer1-bootstrap")]
+        error.audit(
+            audit_log,
+            effective_uid,
+            peer_gid,
+            &envelope.caller_role,
+            &audit_context,
+            operation,
+            opaque_target_id,
+        )?;
+        send_json_frame(fd.as_raw_fd(), &error.into_response())?;
+        return Ok(());
+    }
     let audit_context =
         DispatchAuditContext::from_request(&request, peer_pid, &envelope.caller_role)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{err:?}")))?;
@@ -870,6 +969,29 @@ fn handle_connection(
     Ok(())
 }
 
+fn write_refusal_audit_bounded(
+    audit_log: &AuditLog,
+    audit_class: AuditWriteClass,
+    operation: &str,
+    caller_uid: u32,
+    disposition: &str,
+    opaque_target_id: &str,
+    outcome: &str,
+) -> io::Result<()> {
+    match audit_log.write_entry_with_class(
+        audit_class,
+        operation,
+        caller_uid,
+        disposition,
+        opaque_target_id,
+        outcome,
+    ) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
 /// Real-wire dispatch results can carry zero-or-more `OwnedFd`s
 /// alongside the JSON response (for `OpenPidfd` / `SpawnRunner`).
 /// Bootstrap dispatch never carries fds.
@@ -895,6 +1017,240 @@ impl DispatchResult {
             fds: vec![fd],
         }
     }
+}
+
+#[derive(Debug)]
+struct IpcRateLimiter {
+    max_requests_per_window: u32,
+    max_buckets_per_pool: usize,
+    daemon_buckets: std::collections::HashMap<IpcRateKey, IpcRateBucket>,
+    direct_buckets: std::collections::HashMap<IpcRateKey, IpcRateBucket>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IpcRatePool {
+    Daemon,
+    Direct,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct IpcRateKey {
+    uid: u32,
+    role: &'static str,
+    operation: &'static str,
+}
+
+#[derive(Debug)]
+struct IpcRateBucket {
+    window_start: Instant,
+    requests_this_window: u32,
+}
+
+impl IpcRateLimiter {
+    fn new(max_requests_per_window: u32) -> Self {
+        Self::with_limits(max_requests_per_window, DEFAULT_IPC_RATE_LIMIT_MAX_BUCKETS)
+    }
+
+    fn with_limits(max_requests_per_window: u32, max_buckets: usize) -> Self {
+        Self {
+            max_requests_per_window,
+            max_buckets_per_pool: max_buckets,
+            daemon_buckets: std::collections::HashMap::new(),
+            direct_buckets: std::collections::HashMap::new(),
+        }
+    }
+
+    fn check(
+        &mut self,
+        pool: IpcRatePool,
+        uid: u32,
+        role: &'static str,
+        operation: &'static str,
+    ) -> bool {
+        self.check_at(pool, uid, role, operation, Instant::now())
+    }
+
+    fn check_at(
+        &mut self,
+        pool: IpcRatePool,
+        uid: u32,
+        role: &'static str,
+        operation: &'static str,
+        now: Instant,
+    ) -> bool {
+        let buckets = match pool {
+            IpcRatePool::Daemon => &mut self.daemon_buckets,
+            IpcRatePool::Direct => &mut self.direct_buckets,
+        };
+        Self::check_bucket_map(
+            self.max_requests_per_window,
+            self.max_buckets_per_pool,
+            buckets,
+            uid,
+            role,
+            operation,
+            now,
+        )
+    }
+
+    fn check_bucket_map(
+        max_requests_per_window: u32,
+        max_buckets: usize,
+        buckets: &mut std::collections::HashMap<IpcRateKey, IpcRateBucket>,
+        uid: u32,
+        role: &'static str,
+        operation: &'static str,
+        now: Instant,
+    ) -> bool {
+        if max_requests_per_window == 0 {
+            return false;
+        }
+        let key = IpcRateKey {
+            uid,
+            role,
+            operation,
+        };
+        if !buckets.contains_key(&key) {
+            Self::evict_expired(buckets, now);
+            if buckets.len() >= max_buckets {
+                return false;
+            }
+        }
+        let bucket = buckets.entry(key).or_insert(IpcRateBucket {
+            window_start: now,
+            requests_this_window: 0,
+        });
+        if now.saturating_duration_since(bucket.window_start) >= IPC_RATE_LIMIT_WINDOW {
+            bucket.window_start = now;
+            bucket.requests_this_window = 0;
+        }
+        if bucket.requests_this_window >= max_requests_per_window {
+            return false;
+        }
+        bucket.requests_this_window += 1;
+        true
+    }
+
+    fn evict_expired(
+        buckets: &mut std::collections::HashMap<IpcRateKey, IpcRateBucket>,
+        now: Instant,
+    ) {
+        buckets.retain(|_, bucket| {
+            now.saturating_duration_since(bucket.window_start) < IPC_RATE_LIMIT_WINDOW
+        });
+    }
+}
+
+#[cfg(feature = "layer1-bootstrap")]
+fn validate_broker_request(_request: &BrokerRequest) -> Result<(), BrokerError> {
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
+    // Shape-only defense in depth after nixlingd has accepted and classified
+    // the local peer. Do not add role/bundle authorization here: dispatch must
+    // continue to resolve opaque ids through the trusted bundle, with nixlingd
+    // owning lifecycle authz classification.
+    match request {
+        BrokerRequest::ModprobeIfAllowed(req) => {
+            validate_module_name(&req.module_name).map_err(|reason| {
+                BrokerError::RequestValidation {
+                    operation: "ModprobeIfAllowed",
+                    reason,
+                }
+            })
+        }
+        BrokerRequest::UsbipBind(req) => {
+            validate_bundle_op_id(req.bundle_usbip_bind_intent_ref.as_str()).map_err(|reason| {
+                BrokerError::RequestValidation {
+                    operation: "UsbipBind",
+                    reason,
+                }
+            })
+        }
+        BrokerRequest::UsbipUnbind(req) => {
+            validate_bundle_op_id(req.bundle_usbip_bind_intent_ref.as_str()).map_err(|reason| {
+                BrokerError::RequestValidation {
+                    operation: "UsbipUnbind",
+                    reason,
+                }
+            })
+        }
+        BrokerRequest::UsbipProxyReconcile(req) => validate_scope_like_id(req.scope_id.as_str())
+            .map_err(|reason| BrokerError::RequestValidation {
+                operation: "UsbipProxyReconcile",
+                reason,
+            }),
+        BrokerRequest::UsbipBindFirewallRule(req) => {
+            validate_bundle_op_id(req.bundle_usbip_firewall_intent_ref.as_str()).map_err(|reason| {
+                BrokerError::RequestValidation {
+                    operation: "UsbipBindFirewallRule",
+                    reason,
+                }
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn validate_usbip_busid_wire(bus_id: &str) -> Result<(), &'static str> {
+    nixling_host::usbip_argv::validate_bus_id(bus_id).map_err(|_| "invalid-usbip-busid")
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn validate_module_name(module_name: &str) -> Result<(), &'static str> {
+    if module_name.is_empty() {
+        return Err("empty-module-name");
+    }
+    if module_name.len() > MAX_MODULE_NAME_LEN {
+        return Err("module-name-too-long");
+    }
+    if module_name.contains('/') || module_name.contains('\\') || module_name.contains('\0') {
+        return Err("invalid-module-name");
+    }
+    if module_name == "." || module_name == ".." || module_name.contains("..") {
+        return Err("invalid-module-name");
+    }
+    if !module_name
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        return Err("invalid-module-name");
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn validate_scope_like_id(value: &str) -> Result<(), &'static str> {
+    validate_small_wire_id(value, 128, "invalid-scope-id")
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn validate_bundle_op_id(value: &str) -> Result<(), &'static str> {
+    validate_small_wire_id(value, 192, "invalid-bundle-op-id")
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn validate_small_wire_id(
+    value: &str,
+    max_len: usize,
+    error: &'static str,
+) -> Result<(), &'static str> {
+    if value.is_empty() || value.len() > max_len {
+        return Err(error);
+    }
+    if value.contains('/') || value.contains('\\') || value.contains('\0') || value.contains("..") {
+        return Err(error);
+    }
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_' | b'.'))
+    {
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -976,6 +1332,35 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
         return Ok(serde_json::json!({
             "vmId": req.vm_id.as_str(),
             "busIdProvided": true,
+            "tracingSpanIdPresent": req.tracing_span_id.is_some(),
+        }));
+    }
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    if let BrokerRequest::UsbipBind(req) = request {
+        return Ok(serde_json::json!({
+            "bundleUsbipBindIntentRef": req.bundle_usbip_bind_intent_ref.as_str(),
+            "tracingSpanIdPresent": req.tracing_span_id.is_some(),
+        }));
+    }
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    if let BrokerRequest::UsbipUnbind(req) = request {
+        return Ok(serde_json::json!({
+            "bundleUsbipBindIntentRef": req.bundle_usbip_bind_intent_ref.as_str(),
+            "preserveDurableClaim": req.preserve_durable_claim,
+            "tracingSpanIdPresent": req.tracing_span_id.is_some(),
+        }));
+    }
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    if let BrokerRequest::UsbipBindFirewallRule(req) = request {
+        return Ok(serde_json::json!({
+            "bundleUsbipFirewallIntentRef": req.bundle_usbip_firewall_intent_ref.as_str(),
+            "tracingSpanIdPresent": req.tracing_span_id.is_some(),
+        }));
+    }
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    if let BrokerRequest::UsbipProxyReconcile(req) = request {
+        return Ok(serde_json::json!({
+            "scopeId": req.scope_id.as_str(),
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
@@ -1639,17 +2024,12 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             Ok(DispatchResult::with_fd(response, outcome.pidfd))
         }
         RealBrokerRequest::SignalRunner(req) => {
-            // TODO(broker-authz): enforce the per-op privileges matrix at
-            // the broker boundary. For now, the handler keeps the
-            // pre-existing ADR 0015 trust model: nixlingd is part of the
-            // TCB in the daemon-only end-state, and SO_PEERCRED at accept
-            // time ensures only nixlingd reaches this handler.
-            // `envelope.caller_role` is forwarded from nixlingd from the
-            // operator's group membership for audit recording, not
-            // re-authorized here. Runtime safety for runner control is
-            // constrained by the broker-owned pidfd registry: only
-            // registered runner_ids can be signaled, with unknown ids
-            // rejected as NoPidfd by the backend.
+            // Boundary note: nixlingd owns operator authz classification; the
+            // broker admits only the daemon UID and records the forwarded
+            // caller role for audit. Runtime safety for runner control is
+            // constrained by the broker-owned pidfd registry: only registered
+            // runner_ids can be signaled, with unknown ids rejected as NoPidfd
+            // by the backend.
             let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
             match backend.signal_runner(runner_id.as_str(), req.signal) {
                 Ok(()) => {}
@@ -1692,19 +2072,14 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             )))
         }
         RealBrokerRequest::DeregisterRunnerPidfd(req) => {
-            // TODO(broker-authz): enforce the per-op privileges matrix at
-            // the broker boundary. For now, the handler keeps the
-            // pre-existing ADR 0015 trust model: nixlingd is part of the
-            // TCB in the daemon-only end-state, and SO_PEERCRED at accept
-            // time ensures only nixlingd reaches this handler.
-            // `envelope.caller_role` is forwarded from nixlingd from the
-            // operator's group membership for audit recording, not
-            // re-authorized here. Runtime safety for runner control is
-            // constrained by the broker-owned pidfd registry: only
-            // registered runner_ids can be deregistered. The is_some()
-            // shape below intentionally returns `removed: false` for
-            // unknown ids, preserving idempotent cleanup without widening
-            // the registry surface.
+            // Boundary note: nixlingd owns operator authz classification; the
+            // broker admits only the daemon UID and records the forwarded
+            // caller role for audit. Runtime safety for runner control is
+            // constrained by the broker-owned pidfd registry: only registered
+            // runner_ids can be deregistered. The is_some() shape below
+            // intentionally returns `removed: false` for unknown ids,
+            // preserving idempotent cleanup without widening the registry
+            // surface.
             let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
             let removed = runner_pidfd_registry()
                 .lock()
@@ -2369,9 +2744,9 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         }
         RealBrokerRequest::QemuMediaQueryStatus(req) => {
             let response = backend.qemu_media_query_status(&req)?;
-            Ok(DispatchResult::no_fds(BrokerResponse::QemuMediaQueryStatus(
-                response,
-            )))
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::QemuMediaQueryStatus(response),
+            ))
         }
         RealBrokerRequest::QemuMediaQuit(req) => {
             let response = backend.qemu_media_quit(&req)?;
@@ -3231,21 +3606,70 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         }
         RealBrokerRequest::UsbipBind(req) => {
             let resolver = require_resolver(resolver)?;
-            // The wire request carries the raw bus_id + vm_id; the
-            // broker derives the bundle-trusted lock path + owner
-            // by resolving the matching `usbip-bind:env:*:vm:*:bus:*`
-            // intent from each env the bundle declares.
-            let vm_name = lookup_vm_name(resolver, &req.vm_id);
-            let intent =
-                find_usbip_bind_intent_for(resolver, &vm_name, &req.bus_id).ok_or_else(|| {
-                    BrokerError::BundleIntentMissing {
-                        kind: "usbip-bind",
-                        intent_id: format!("vm={vm_name} bus={}", req.bus_id),
-                    }
-                })?;
-            let expected_identity = enforce_usbip_allowlist(&intent, usb_device_sysfs_root())?;
-            let expected_device_node =
-                usb_device_node_for_busid(usb_device_sysfs_root(), &intent.bus_id)?;
+            let intent = find_usbip_bind_intent_or_wildcard(
+                resolver,
+                req.bundle_usbip_bind_intent_ref.as_str(),
+            )
+            .ok_or_else(|| BrokerError::BundleIntentMissing {
+                kind: "usbip-bind",
+                intent_id: req.bundle_usbip_bind_intent_ref.as_str().to_owned(),
+            })?;
+            let same_vm_replay = match crate::ops::usbip_lock::peek_owner(&intent.lock_path) {
+                Some(owner) if owner == intent.vm_name => true,
+                Some(owner) => {
+                    return Err(BrokerError::LiveHandler(format!(
+                        "usbip foreign lock refused for opaque intent {}: observed owner {owner}",
+                        intent.intent_id
+                    )));
+                }
+                None => false,
+            };
+            let inspection = crate::ops::usbip_host::enforce_usbip_physical_policy(
+                &intent,
+                usb_device_sysfs_root(),
+            )
+            .map_err(|err| map_usbip_host_inspection_error_for_intent(&intent, err))?;
+            let expected_identity = (inspection.vendor, inspection.product);
+            let (audit_device_identity, rotation_audit) = usb_audit_device_identity_for_busid(
+                usb_device_sysfs_root(),
+                &intent.bus_id,
+                expected_identity,
+                &config.state_dir,
+                config.test_mode,
+            )?;
+            if let Some(rotation_audit) = rotation_audit
+                && let Some(rotation_audit_dedupe_key) =
+                    mark_usb_audit_serial_hmac_rotation_audit_logged(&rotation_audit)
+            {
+                let rotation_audit_context = DispatchAuditContext {
+                    peer_pid: audit_context.peer_pid,
+                    peer_role: audit_context.peer_role.clone(),
+                    verb: "UsbSerialCorrelationKeyRotate".to_owned(),
+                    request_fields: serde_json::json!({
+                        "detectedDuring": "UsbipBind",
+                        "tracingSpanIdPresent": req.tracing_span_id.is_some(),
+                    }),
+                    started_at: audit_context.started_at,
+                };
+                if let Err(err) = write_success_op_record_impl(
+                    audit_log,
+                    bundle_metadata,
+                    "UsbSerialCorrelationKeyRotate",
+                    "usb-audit-serial-hmac",
+                    caller_uid,
+                    caller_gid,
+                    &caller_role,
+                    "usb-audit-serial-hmac",
+                    "host",
+                    tracing_span_id_str(req.tracing_span_id.as_ref()),
+                    OperationFields::UsbSerialCorrelationKeyRotate(rotation_audit),
+                    &rotation_audit_context,
+                ) {
+                    unmark_usb_audit_serial_hmac_rotation_audit_logged(&rotation_audit_dedupe_key);
+                    return Err(err);
+                }
+            }
+            let expected_device_node = inspection.device_node;
             backend.usbip_bind(&intent)?;
             if let Err(grant_error) = grant_usbip_backend_device_acl(
                 resolver,
@@ -3253,7 +3677,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 expected_identity,
                 expected_device_node,
             ) {
-                if let Err(rollback_error) = backend.usbip_unbind(&intent) {
+                if !same_vm_replay && let Err(rollback_error) = backend.usbip_unbind(&intent) {
                     warn!(
                         bus_id = %intent.bus_id,
                         vm = %intent.vm_name,
@@ -3265,7 +3689,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 return Err(grant_error);
             }
             let scope_id = format!("env:{}", intent.env);
-            write_success_op_record!(
+            let audit_result = write_success_op_record!(
                 audit_log,
                 bundle_metadata,
                 "UsbipBind",
@@ -3275,29 +3699,47 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 &caller_role,
                 intent.vm_name.as_str(),
                 scope_id.as_str(),
-                None,
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
                 OperationFields::UsbipBind {
                     bus_id: intent.bus_id.clone(),
                     vm: intent.vm_name.clone(),
+                    device_identity: Some(audit_device_identity),
                 },
-            )?;
+            );
+            if let Err(audit_error) = audit_result {
+                rollback_usbip_bind_after_audit_failure(backend, resolver, &intent, same_vm_replay);
+                return Err(audit_error);
+            }
             Ok(DispatchResult::no_fds(ack_response("UsbipBind")))
         }
         RealBrokerRequest::UsbipUnbind(req) => {
             let resolver = require_resolver(resolver)?;
-            // Unbind request does not carry a vm_id; we look up the
-            // current owner from the lock file (the broker is the
-            // sole writer of those files, so the lock owner is the
-            // source of truth for "who claimed this busid").
-            let intent =
-                find_usbip_bind_intent_by_busid(resolver, &req.bus_id).ok_or_else(|| {
-                    BrokerError::BundleIntentMissing {
-                        kind: "usbip-bind",
-                        intent_id: format!("bus={}", req.bus_id),
-                    }
-                })?;
-            revoke_usbip_backend_device_acl(resolver, &intent)?;
+            let intent = find_usbip_bind_intent_or_wildcard(
+                resolver,
+                req.bundle_usbip_bind_intent_ref.as_str(),
+            )
+            .ok_or_else(|| BrokerError::BundleIntentMissing {
+                kind: "usbip-bind",
+                intent_id: req.bundle_usbip_bind_intent_ref.as_str().to_owned(),
+            })?;
+            let had_matching_lock = match crate::ops::usbip_lock::peek_owner(&intent.lock_path) {
+                Some(owner) if owner == intent.vm_name => true,
+                Some(owner) => {
+                    return Err(BrokerError::LiveHandler(format!(
+                        "usbip unbind refused for opaque intent {}: observed foreign owner {owner}",
+                        intent.intent_id
+                    )));
+                }
+                None => false,
+            };
             backend.usbip_unbind(&intent)?;
+            if had_matching_lock {
+                revoke_usbip_backend_device_acl(resolver, &intent)?;
+                if !req.preserve_durable_claim {
+                    crate::ops::usbip_lock::release_lock(&intent.lock_path, &intent.vm_name)
+                        .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+                }
+            }
             let scope_id = format!("env:{}", intent.env);
             write_success_op_record!(
                 audit_log,
@@ -3309,7 +3751,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 &caller_role,
                 intent.vm_name.as_str(),
                 scope_id.as_str(),
-                None,
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
                 OperationFields::UsbipUnbind {
                     bus_id: intent.bus_id.clone(),
                 },
@@ -3366,6 +3808,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 })
                 .collect();
             backend.usbip_proxy_reconcile(&expectations)?;
+            reconcile_active_usbip_backend_acls(resolver)?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3376,7 +3819,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 &caller_role,
                 "usbip-proxy",
                 req.scope_id.as_str(),
-                None,
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
                 OperationFields::UsbipProxyReconcile {},
             )?;
             Ok(DispatchResult::no_fds(ack_response("UsbipProxyReconcile")))
@@ -3720,7 +4163,7 @@ fn read_guest_control_token(state_dir: &Path, vm_id: &str) -> Result<Vec<u8>, Br
     })?;
     let mut file = fs::File::from(owned_fd_from_raw(file));
     let mut token = Vec::new();
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take((MAX_TOKEN_BYTES + 1) as u64)
         .read_to_end(&mut token)
         .map_err(|_| BrokerError::GuestControlSignRefused {
@@ -4497,6 +4940,7 @@ impl DispatchBackend for LiveDispatchBackend {
         crate::live_handlers::live_usbip_bind(
             &exec,
             &usbip_binary,
+            usb_device_sysfs_root(),
             &intent.bus_id,
             &intent.lock_path,
             &intent.vm_name,
@@ -4515,6 +4959,7 @@ impl DispatchBackend for LiveDispatchBackend {
         crate::live_handlers::live_usbip_unbind(
             &exec,
             &usbip_binary,
+            usb_device_sysfs_root(),
             &intent.bus_id,
             &intent.lock_path,
             &intent.vm_name,
@@ -4920,13 +5365,21 @@ fn execute_vm_start_action<B: DispatchBackend>(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[cfg(test)]
+static TEST_USB_SYSFS_ROOT: OnceLock<PathBuf> = OnceLock::new();
+
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_device_sysfs_root() -> &'static Path {
+    #[cfg(test)]
+    if let Some(path) = TEST_USB_SYSFS_ROOT.get() {
+        return path.as_path();
+    }
     Path::new("/sys/bus/usb/devices")
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn read_usb_device_identity(sysfs_root: &Path, bus_id: &str) -> Result<(u16, u16), BrokerError> {
-    if bus_id.is_empty() || bus_id.contains('/') || bus_id.contains('\0') {
+    if nixling_host::usbip_argv::validate_bus_id(bus_id).is_err() {
         return Err(BrokerError::Protocol(format!(
             "invalid USB bus_id for sysfs lookup: {bus_id:?}"
         )));
@@ -4935,6 +5388,464 @@ fn read_usb_device_identity(sysfs_root: &Path, bus_id: &str) -> Result<(u16, u16
     let vendor = read_hex_u16(device_dir.join("idVendor"), bus_id)?;
     let product = read_hex_u16(device_dir.join("idProduct"), bus_id)?;
     Ok((vendor, product))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UsbAuditSerialHmacKeySlot {
+    Current,
+    Previous,
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UsbAuditSerialHmacKey {
+    slot: UsbAuditSerialHmacKeySlot,
+    key_id: String,
+    key: Vec<u8>,
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UsbAuditSerialHmacKeyring {
+    current: UsbAuditSerialHmacKey,
+    previous: Option<UsbAuditSerialHmacKey>,
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn usb_audit_device_identity_for_busid(
+    sysfs_root: &Path,
+    bus_id: &str,
+    identity: (u16, u16),
+    state_dir: &Path,
+    test_mode: bool,
+) -> Result<
+    (
+        UsbAuditDeviceIdentity,
+        Option<UsbSerialCorrelationKeyRotationAudit>,
+    ),
+    BrokerError,
+> {
+    let serial = read_usb_serial_for_audit(sysfs_root, bus_id);
+    let keyring = match serial.as_deref() {
+        Some(_) => Some(usb_audit_serial_hmac_keyring(state_dir, test_mode)?),
+        None => None,
+    };
+    let rotation_audit = keyring
+        .as_ref()
+        .and_then(usb_serial_correlation_key_rotation_audit);
+    Ok((
+        usb_audit_device_identity(identity, serial.as_deref(), keyring.as_ref()),
+        rotation_audit,
+    ))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn usb_audit_device_identity(
+    identity: (u16, u16),
+    serial: Option<&str>,
+    keyring: Option<&UsbAuditSerialHmacKeyring>,
+) -> UsbAuditDeviceIdentity {
+    let serial = serial.map(str::trim).filter(|value| !value.is_empty());
+    UsbAuditDeviceIdentity {
+        vendor_id: Some(nixling_ipc::usbip::format_usb_hex_id(identity.0)),
+        product_id: Some(nixling_ipc::usbip::format_usb_hex_id(identity.1)),
+        serial_observed: serial.is_some(),
+        serial_correlation: serial.and_then(|serial| {
+            keyring.and_then(|keys| usb_serial_correlation(serial, &keys.current))
+        }),
+        previous_serial_correlation: serial.and_then(|serial| {
+            keyring.and_then(|keys| {
+                keys.previous
+                    .as_ref()
+                    .and_then(|key| usb_serial_correlation(serial, key))
+            })
+        }),
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn usb_serial_correlation(
+    serial: &str,
+    key: &UsbAuditSerialHmacKey,
+) -> Option<UsbSerialCorrelation> {
+    if key.key_id.is_empty() || key.key.len() < USB_AUDIT_SERIAL_HMAC_KEY_BYTES {
+        return None;
+    }
+    let mut mac = Hmac::<Sha256>::new_from_slice(&key.key).ok()?;
+    mac.update(b"nixling-usb-audit-serial-v1\0");
+    mac.update(serial.as_bytes());
+    Some(UsbSerialCorrelation {
+        key_id: key.key_id.clone(),
+        hmac_sha256: lower_hex(&mac.finalize().into_bytes()),
+    })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+const USB_AUDIT_SERIAL_HMAC_KEY_BYTES: usize = 32;
+#[cfg(not(feature = "layer1-bootstrap"))]
+const USB_AUDIT_SERIAL_HMAC_RANDOM_BYTES: usize = USB_AUDIT_SERIAL_HMAC_KEY_BYTES + 16;
+#[cfg(not(feature = "layer1-bootstrap"))]
+const USB_AUDIT_SERIAL_HMAC_KEY_DIR: &str = "usb-audit-serial-hmac";
+#[cfg(not(feature = "layer1-bootstrap"))]
+const USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE: &str = "current.key";
+#[cfg(not(feature = "layer1-bootstrap"))]
+const USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_FILE: &str = "previous.key";
+#[cfg(not(feature = "layer1-bootstrap"))]
+const USB_AUDIT_SERIAL_HMAC_KEY_MAGIC: &str = "nixling-usb-audit-serial-hmac-v1";
+#[cfg(not(feature = "layer1-bootstrap"))]
+const USB_AUDIT_SERIAL_CORRELATION_VERSION: &str = "nixling-usb-audit-serial-v1";
+#[cfg(not(feature = "layer1-bootstrap"))]
+const USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_GRACE_WINDOW_SECONDS: u64 = 30 * 24 * 60 * 60;
+#[cfg(not(feature = "layer1-bootstrap"))]
+static USB_AUDIT_SERIAL_HMAC_ROTATION_LOGGED: OnceLock<Mutex<HashMap<String, ()>>> =
+    OnceLock::new();
+#[cfg(not(feature = "layer1-bootstrap"))]
+static USB_AUDIT_SERIAL_HMAC_ROTATION_AUDIT_LOGGED: OnceLock<Mutex<HashMap<String, ()>>> =
+    OnceLock::new();
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn usb_serial_correlation_key_rotation_audit(
+    keyring: &UsbAuditSerialHmacKeyring,
+) -> Option<UsbSerialCorrelationKeyRotationAudit> {
+    keyring
+        .previous
+        .as_ref()
+        .map(|previous| UsbSerialCorrelationKeyRotationAudit {
+            previous_key_id: previous.key_id.clone(),
+            current_key_id: keyring.current.key_id.clone(),
+            active_key_count: 2,
+            grace_window_seconds: USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_GRACE_WINDOW_SECONDS,
+            correlation_version: USB_AUDIT_SERIAL_CORRELATION_VERSION.to_owned(),
+        })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn usb_audit_serial_hmac_rotation_dedupe_key(
+    audit: &UsbSerialCorrelationKeyRotationAudit,
+) -> String {
+    format!("{}|{}", audit.previous_key_id, audit.current_key_id)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn mark_usb_audit_serial_hmac_rotation_audit_logged(
+    audit: &UsbSerialCorrelationKeyRotationAudit,
+) -> Option<String> {
+    let dedupe_key = usb_audit_serial_hmac_rotation_dedupe_key(audit);
+    let logged =
+        USB_AUDIT_SERIAL_HMAC_ROTATION_AUDIT_LOGGED.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut logged) = logged.lock() else {
+        return Some(dedupe_key);
+    };
+    if logged.insert(dedupe_key.clone(), ()).is_some() {
+        return None;
+    }
+    Some(dedupe_key)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn unmark_usb_audit_serial_hmac_rotation_audit_logged(dedupe_key: &str) {
+    let Some(logged) = USB_AUDIT_SERIAL_HMAC_ROTATION_AUDIT_LOGGED.get() else {
+        return;
+    };
+    if let Ok(mut logged) = logged.lock() {
+        logged.remove(dedupe_key);
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn log_usb_audit_serial_hmac_rotation_window(keyring: &UsbAuditSerialHmacKeyring) {
+    let Some(audit) = usb_serial_correlation_key_rotation_audit(keyring) else {
+        return;
+    };
+    let dedupe_key = usb_audit_serial_hmac_rotation_dedupe_key(&audit);
+    let logged = USB_AUDIT_SERIAL_HMAC_ROTATION_LOGGED.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut logged) = logged.lock() else {
+        return;
+    };
+    if logged.insert(dedupe_key, ()).is_some() {
+        return;
+    }
+    info!(
+        event = "usb_serial_correlation_key_rotation_window",
+        previous_key_id = %audit.previous_key_id,
+        current_key_id = %audit.current_key_id,
+        active_key_count = audit.active_key_count,
+        grace_window_seconds = audit.grace_window_seconds,
+        correlation_version = %audit.correlation_version,
+        "USB audit serial HMAC key rotation window active"
+    );
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn usb_audit_serial_hmac_keyring(
+    state_dir: &Path,
+    test_mode: bool,
+) -> Result<UsbAuditSerialHmacKeyring, BrokerError> {
+    let key_dir = usb_audit_serial_hmac_key_dir(state_dir);
+    ensure_usb_audit_serial_hmac_key_dir(&key_dir, test_mode)?;
+    let current = match read_usb_audit_serial_hmac_key_file(
+        &key_dir.join(USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE),
+        UsbAuditSerialHmacKeySlot::Current,
+        test_mode,
+    )? {
+        Some(key) => key,
+        None => create_usb_audit_serial_hmac_key(&key_dir, test_mode)?,
+    };
+    let previous = read_usb_audit_serial_hmac_key_file(
+        &key_dir.join(USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_FILE),
+        UsbAuditSerialHmacKeySlot::Previous,
+        test_mode,
+    )?;
+
+    let keyring = UsbAuditSerialHmacKeyring { current, previous };
+    log_usb_audit_serial_hmac_rotation_window(&keyring);
+    Ok(keyring)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn usb_audit_serial_hmac_key_dir(state_dir: &Path) -> PathBuf {
+    state_dir
+        .join("secrets")
+        .join(USB_AUDIT_SERIAL_HMAC_KEY_DIR)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn ensure_usb_audit_serial_hmac_key_dir(
+    key_dir: &Path,
+    test_mode: bool,
+) -> Result<(), BrokerError> {
+    let state_secrets = key_dir.parent().ok_or_else(|| {
+        BrokerError::LiveHandler("USB audit serial HMAC key directory has no parent".to_owned())
+    })?;
+    let owner = if test_mode { None } else { Some(0) };
+    crate::sys::path_safe::ensure_dir(state_secrets, 0o700, owner, owner).map_err(|err| {
+        BrokerError::LiveHandler(format!(
+            "prepare USB audit serial HMAC secrets directory failed: {err}"
+        ))
+    })?;
+    crate::sys::path_safe::ensure_dir(key_dir, 0o700, owner, owner).map_err(|err| {
+        BrokerError::LiveHandler(format!(
+            "prepare USB audit serial HMAC key directory failed: {err}"
+        ))
+    })?;
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn read_usb_audit_serial_hmac_key_file(
+    path: &Path,
+    slot: UsbAuditSerialHmacKeySlot,
+    test_mode: bool,
+) -> Result<Option<UsbAuditSerialHmacKey>, BrokerError> {
+    let fd = match nix::fcntl::open(
+        path,
+        nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_CLOEXEC | nix::fcntl::OFlag::O_NOFOLLOW,
+        nix::sys::stat::Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(err) if err == nix::errno::Errno::ENOENT => return Ok(None),
+        Err(err) => {
+            return Err(BrokerError::LiveHandler(format!(
+                "open USB audit serial HMAC key failed: {err}"
+            )));
+        }
+    };
+    let mut file = fs::File::from(owned_fd_from_raw(fd));
+    validate_usb_audit_serial_hmac_key_metadata(&file, test_mode)?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).map_err(|err| {
+        BrokerError::LiveHandler(format!("read USB audit serial HMAC key failed: {err}"))
+    })?;
+    parse_usb_audit_serial_hmac_key(&contents, slot).map(Some)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn validate_usb_audit_serial_hmac_key_metadata(
+    file: &fs::File,
+    test_mode: bool,
+) -> Result<(), BrokerError> {
+    let metadata = file.metadata().map_err(|err| {
+        BrokerError::LiveHandler(format!("stat USB audit serial HMAC key failed: {err}"))
+    })?;
+    if !metadata.is_file() || metadata.mode() & 0o077 != 0 || (!test_mode && metadata.uid() != 0) {
+        return Err(BrokerError::LiveHandler(
+            "USB audit serial HMAC key must be a root-only regular file".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn create_usb_audit_serial_hmac_key(
+    key_dir: &Path,
+    test_mode: bool,
+) -> Result<UsbAuditSerialHmacKey, BrokerError> {
+    let key = generate_usb_audit_serial_hmac_key()?;
+    let dir_fd = crate::sys::path_safe::open_dir_path_safe(key_dir).map_err(|err| {
+        BrokerError::LiveHandler(format!(
+            "open USB audit serial HMAC key directory failed: {err}"
+        ))
+    })?;
+    match write_new_usb_audit_serial_hmac_key_file(&dir_fd, &key) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(err) => {
+            return Err(BrokerError::LiveHandler(format!(
+                "create USB audit serial HMAC key failed: {err}"
+            )));
+        }
+    }
+    read_usb_audit_serial_hmac_key_file(
+        &key_dir.join(USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE),
+        UsbAuditSerialHmacKeySlot::Current,
+        test_mode,
+    )?
+    .ok_or_else(|| {
+        BrokerError::LiveHandler("USB audit serial HMAC key disappeared after creation".to_owned())
+    })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn write_new_usb_audit_serial_hmac_key_file(
+    dir_fd: &OwnedFd,
+    key: &UsbAuditSerialHmacKey,
+) -> io::Result<()> {
+    let fd = crate::sys::path_safe::create_file_at_safe(
+        dir_fd,
+        USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE,
+        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+        0o400,
+    )?;
+    let mut file = fs::File::from(fd);
+    std::io::Write::write_all(&mut file, render_usb_audit_serial_hmac_key(key).as_bytes())?;
+    crate::sys::path_safe::fchmod(file.as_fd(), 0o400)?;
+    file.sync_all()?;
+    rustix::fs::fsync(dir_fd).map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn generate_usb_audit_serial_hmac_key() -> Result<UsbAuditSerialHmacKey, BrokerError> {
+    let random = read_high_entropy_bytes(USB_AUDIT_SERIAL_HMAC_RANDOM_BYTES)?;
+    let (key, id_bytes) = random.split_at(USB_AUDIT_SERIAL_HMAC_KEY_BYTES);
+    Ok(UsbAuditSerialHmacKey {
+        slot: UsbAuditSerialHmacKeySlot::Current,
+        key_id: format!("usb-audit-{}", lower_hex(id_bytes)),
+        key: key.to_vec(),
+    })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn read_high_entropy_bytes(len: usize) -> Result<Vec<u8>, BrokerError> {
+    let mut file = fs::File::open("/dev/urandom").map_err(|err| {
+        BrokerError::LiveHandler(format!(
+            "open kernel CSPRNG for USB audit key failed: {err}"
+        ))
+    })?;
+    let mut bytes = vec![0u8; len];
+    file.read_exact(&mut bytes).map_err(|err| {
+        BrokerError::LiveHandler(format!(
+            "read kernel CSPRNG for USB audit key failed: {err}"
+        ))
+    })?;
+    Ok(bytes)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn render_usb_audit_serial_hmac_key(key: &UsbAuditSerialHmacKey) -> String {
+    format!(
+        "{USB_AUDIT_SERIAL_HMAC_KEY_MAGIC}\nkey_id={}\nkey_hex={}\n",
+        key.key_id,
+        lower_hex(&key.key)
+    )
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn parse_usb_audit_serial_hmac_key(
+    contents: &str,
+    slot: UsbAuditSerialHmacKeySlot,
+) -> Result<UsbAuditSerialHmacKey, BrokerError> {
+    let mut lines = contents.lines();
+    if lines.next() != Some(USB_AUDIT_SERIAL_HMAC_KEY_MAGIC) {
+        return Err(BrokerError::LiveHandler(
+            "USB audit serial HMAC key has invalid magic".to_owned(),
+        ));
+    }
+    let mut key_id = None;
+    let mut key_hex = None;
+    for line in lines {
+        if let Some(value) = line.strip_prefix("key_id=") {
+            key_id = Some(value.to_owned());
+        } else if let Some(value) = line.strip_prefix("key_hex=") {
+            key_hex = Some(value.to_owned());
+        }
+    }
+    let key_id = key_id
+        .filter(|value| usb_audit_key_id_is_safe(value))
+        .ok_or_else(|| {
+            BrokerError::LiveHandler("USB audit serial HMAC key id is invalid".to_owned())
+        })?;
+    let key = decode_fixed_hex_key(
+        &key_hex.ok_or_else(|| {
+            BrokerError::LiveHandler("USB audit serial HMAC key material is missing".to_owned())
+        })?,
+        USB_AUDIT_SERIAL_HMAC_KEY_BYTES,
+    )?;
+    Ok(UsbAuditSerialHmacKey { slot, key_id, key })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn usb_audit_key_id_is_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 96
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn decode_fixed_hex_key(value: &str, len: usize) -> Result<Vec<u8>, BrokerError> {
+    if value.len() != len * 2 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(BrokerError::LiveHandler(
+            "USB audit serial HMAC key material is invalid".to_owned(),
+        ));
+    }
+    (0..value.len())
+        .step_by(2)
+        .map(|idx| {
+            u8::from_str_radix(&value[idx..idx + 2], 16).map_err(|err| {
+                BrokerError::LiveHandler(format!("parse USB audit serial HMAC key failed: {err}"))
+            })
+        })
+        .collect()
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let byte = *byte;
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn read_usb_serial_for_audit(sysfs_root: &Path, bus_id: &str) -> Option<String> {
+    if nixling_host::usbip_argv::validate_bus_id(bus_id).is_err() {
+        return None;
+    }
+    let path = sysfs_root.join(bus_id).join("serial");
+    match fs::read_to_string(path) {
+        Ok(raw) => {
+            let trimmed = raw.trim().to_owned();
+            (!trimmed.is_empty()).then_some(trimmed)
+        }
+        Err(_) => None,
+    }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -4966,6 +5877,69 @@ fn read_usb_decimal_attr(device_dir: &Path, attr: &str, bus_id: &str) -> Result<
     })
 }
 
+#[cfg(all(test, not(feature = "layer1-bootstrap")))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TestUsbipBackendAclEvent {
+    Grant { uid: u32 },
+    Revoke { uid: u32 },
+}
+
+#[cfg(all(test, not(feature = "layer1-bootstrap")))]
+fn test_usbip_backend_acl_events() -> &'static Mutex<Vec<TestUsbipBackendAclEvent>> {
+    static EVENTS: OnceLock<Mutex<Vec<TestUsbipBackendAclEvent>>> = OnceLock::new();
+    EVENTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+#[cfg(all(test, not(feature = "layer1-bootstrap")))]
+fn take_test_usbip_backend_acl_events() -> Vec<TestUsbipBackendAclEvent> {
+    let mut events = test_usbip_backend_acl_events()
+        .lock()
+        .expect("test USBIP ACL event lock");
+    std::mem::take(&mut *events)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn rollback_usbip_bind_after_audit_failure<B: DispatchBackend>(
+    backend: &B,
+    resolver: &Arc<BundleResolver>,
+    intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+    same_vm_replay: bool,
+) {
+    if same_vm_replay {
+        return;
+    }
+    if let Err(revoke_error) = revoke_usbip_backend_device_acl(resolver, intent) {
+        warn!(
+            bus_id = %intent.bus_id,
+            vm = %intent.vm_name,
+            error = ?revoke_error,
+            "UsbipBind audit write failed and backend ACL rollback failed"
+        );
+    }
+    match backend.usbip_unbind(intent) {
+        Ok(()) => {
+            if let Err(lock_error) =
+                crate::ops::usbip_lock::release_lock(&intent.lock_path, &intent.vm_name)
+            {
+                warn!(
+                    bus_id = %intent.bus_id,
+                    vm = %intent.vm_name,
+                    error = %lock_error,
+                    "UsbipBind audit write failed and lock rollback failed"
+                );
+            }
+        }
+        Err(unbind_error) => {
+            warn!(
+                bus_id = %intent.bus_id,
+                vm = %intent.vm_name,
+                error = ?unbind_error,
+                "UsbipBind audit write failed and backend unbind rollback failed"
+            );
+        }
+    }
+}
+
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn grant_usbip_backend_device_acl(
     resolver: &Arc<BundleResolver>,
@@ -4974,69 +5948,85 @@ fn grant_usbip_backend_device_acl(
     expected_device_node: PathBuf,
 ) -> Result<(), BrokerError> {
     let runner = usbip_backend_runner_intent(resolver, intent)?;
-    let mut last_error = None;
-    let mut granted = false;
-    for _ in 0..20 {
-        if let Err(error) =
-            verify_usbip_device_unchanged(intent, expected_identity, &expected_device_node)
-        {
-            if granted {
+    #[cfg(test)]
+    {
+        let _ = (expected_identity, expected_device_node);
+        test_usbip_backend_acl_events()
+            .lock()
+            .map_err(|_| BrokerError::Protocol("test USBIP ACL event mutex poisoned".to_owned()))?
+            .push(TestUsbipBackendAclEvent::Grant { uid: runner.uid });
+        Ok(())
+    }
+    #[cfg(not(test))]
+    {
+        let mut last_error = None;
+        let mut granted = false;
+        for _ in 0..20 {
+            if let Err(error) =
+                verify_usbip_device_unchanged(intent, expected_identity, &expected_device_node)
+            {
+                if granted {
+                    let _ = crate::live_handlers::live_revoke_verified_device_acl(
+                        &expected_device_node,
+                        runner.uid,
+                    );
+                }
+                return Err(error);
+            }
+            match crate::live_handlers::live_grant_verified_device_acl(
+                &expected_device_node,
+                runner.uid,
+            ) {
+                Ok(()) => granted = true,
+                Err(err) => {
+                    last_error = Some(err.to_string());
+                }
+            }
+            if granted
+                && let Err(error) =
+                    verify_usbip_device_unchanged(intent, expected_identity, &expected_device_node)
+            {
                 let _ = crate::live_handlers::live_revoke_verified_device_acl(
                     &expected_device_node,
                     runner.uid,
                 );
+                return Err(error);
             }
-            return Err(error);
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        match crate::live_handlers::live_grant_verified_device_acl(
-            &expected_device_node,
-            runner.uid,
-        ) {
-            Ok(()) => granted = true,
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
+        if granted {
+            return Ok(());
         }
-        if granted
-            && let Err(error) =
-                verify_usbip_device_unchanged(intent, expected_identity, &expected_device_node)
-        {
-            let _ = crate::live_handlers::live_revoke_verified_device_acl(
-                &expected_device_node,
-                runner.uid,
-            );
-            return Err(error);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    if granted {
-        return Ok(());
-    }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    fn verify_usbip_device_unchanged(
-        intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
-        expected_identity: (u16, u16),
-        expected_device_node: &Path,
-    ) -> Result<(), BrokerError> {
-        let current_identity = read_usb_device_identity(usb_device_sysfs_root(), &intent.bus_id)?;
-        let current_device_node =
-            usb_device_node_for_busid(usb_device_sysfs_root(), &intent.bus_id)?;
-        if current_identity != expected_identity || current_device_node != expected_device_node {
-            return Err(BrokerError::LiveHandler(format!(
-                "USBIP device identity changed while granting backend ACL for bus_id={}: expected {:?} at {}, observed {:?} at {}",
-                intent.bus_id,
-                expected_identity,
-                expected_device_node.display(),
-                current_identity,
-                current_device_node.display(),
-            )));
+        fn verify_usbip_device_unchanged(
+            intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+            expected_identity: (u16, u16),
+            expected_device_node: &Path,
+        ) -> Result<(), BrokerError> {
+            let inspection = crate::ops::usbip_host::enforce_usbip_physical_policy(
+                intent,
+                usb_device_sysfs_root(),
+            )
+            .map_err(|err| map_usbip_host_inspection_error_for_intent(intent, err))?;
+            let current_identity = (inspection.vendor, inspection.product);
+            let current_device_node = inspection.device_node;
+            if current_identity != expected_identity || current_device_node != expected_device_node
+            {
+                return Err(BrokerError::LiveHandler(format!(
+                    "USBIP device identity changed while granting backend ACL for bus_id={}: expected {:?} at {}, observed {:?} at {}",
+                    intent.bus_id,
+                    expected_identity,
+                    expected_device_node.display(),
+                    current_identity,
+                    current_device_node.display(),
+                )));
+            }
+            Ok(())
         }
-        Ok(())
+        Err(BrokerError::LiveHandler(last_error.unwrap_or_else(|| {
+            "grant USBIP backend device ACL failed".to_owned()
+        })))
     }
-    Err(BrokerError::LiveHandler(last_error.unwrap_or_else(|| {
-        "grant USBIP backend device ACL failed".to_owned()
-    })))
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -5045,9 +6035,39 @@ fn revoke_usbip_backend_device_acl(
     intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
 ) -> Result<(), BrokerError> {
     let runner = usbip_backend_runner_intent(resolver, intent)?;
-    let device_node = usb_device_node_for_busid(usb_device_sysfs_root(), &intent.bus_id)?;
-    crate::live_handlers::live_revoke_verified_device_acl(&device_node, runner.uid)
-        .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    #[cfg(test)]
+    {
+        test_usbip_backend_acl_events()
+            .lock()
+            .map_err(|_| BrokerError::Protocol("test USBIP ACL event mutex poisoned".to_owned()))?
+            .push(TestUsbipBackendAclEvent::Revoke { uid: runner.uid });
+        Ok(())
+    }
+    #[cfg(not(test))]
+    {
+        let inspection =
+            crate::ops::usbip_host::enforce_usbip_physical_policy(intent, usb_device_sysfs_root())
+                .map_err(|err| map_usbip_host_inspection_error_for_intent(intent, err))?;
+        let device_node = inspection.device_node;
+        crate::live_handlers::live_revoke_verified_device_acl(&device_node, runner.uid)
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn reconcile_active_usbip_backend_acls(resolver: &Arc<BundleResolver>) -> Result<(), BrokerError> {
+    for intent in active_locked_usbip_bind_intents(resolver)? {
+        let inspection =
+            crate::ops::usbip_host::enforce_usbip_physical_policy(&intent, usb_device_sysfs_root())
+                .map_err(|err| map_usbip_host_inspection_error_for_intent(&intent, err))?;
+        grant_usbip_backend_device_acl(
+            resolver,
+            &intent,
+            (inspection.vendor, inspection.product),
+            inspection.device_node,
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -5155,28 +6175,45 @@ fn enforce_usbip_allowlist(
     intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
     sysfs_root: &Path,
 ) -> Result<(u16, u16), BrokerError> {
-    nixling_host::usbip_argv::validate_bus_id(&intent.bus_id)
-        .map_err(|err| BrokerError::LiveHandler(format!("invalid usbip bus_id: {err:?}")))?;
-    let (vendor, product) = read_usb_device_identity(sysfs_root, &intent.bus_id)?;
-    if intent.vendor_product_allowlist.is_empty() && !intent.dynamic_bus_id {
-        return Ok((vendor, product));
-    }
-    let allowed = if intent.vendor_product_allowlist.is_empty() {
-        vendor == 0x1050
-    } else {
-        intent
-            .vendor_product_allowlist
-            .iter()
-            .any(|pair| pair.vendor == vendor && pair.product == product)
-    };
-    if allowed {
-        Ok((vendor, product))
-    } else {
-        Err(BrokerError::UsbipDeviceNotAllowed {
-            busid: intent.bus_id.clone(),
+    let inspection = crate::ops::usbip_host::enforce_usbip_physical_policy(intent, sysfs_root)
+        .map_err(|err| map_usbip_host_inspection_error_for_intent(intent, err))?;
+    Ok((inspection.vendor, inspection.product))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn map_usbip_host_inspection_error_for_intent(
+    intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+    err: crate::ops::usbip_host::UsbipHostInspectionError,
+) -> BrokerError {
+    match err {
+        crate::ops::usbip_host::UsbipHostInspectionError::AllowlistMismatch {
+            bus_id,
             vendor,
             product,
-        })
+        } => BrokerError::UsbipDeviceNotAllowed {
+            busid: bus_id,
+            vendor,
+            product,
+        },
+        crate::ops::usbip_host::UsbipHostInspectionError::AllowlistMissing { .. } => {
+            BrokerError::UsbipPolicyMismatch {
+                busid: intent.bus_id.clone(),
+                reason: "vendor/product allowlist is missing",
+            }
+        }
+        crate::ops::usbip_host::UsbipHostInspectionError::TopologyIncomplete { bus_id, .. } => {
+            BrokerError::UsbipPolicyMismatch {
+                busid: bus_id,
+                reason: "declared physical topology is incomplete",
+            }
+        }
+        crate::ops::usbip_host::UsbipHostInspectionError::TopologyMismatch { bus_id, .. } => {
+            BrokerError::UsbipPolicyMismatch {
+                busid: bus_id,
+                reason: "observed physical topology does not match the declaration",
+            }
+        }
+        other => BrokerError::LiveHandler(other.to_string()),
     }
 }
 
@@ -5213,14 +6250,20 @@ fn extend_usbip_backend_device_binds(
         if owner != intent.vm_name {
             continue;
         }
-        let device_node = usb_device_node_for_busid(usb_device_sysfs_root(), &intent.bus_id)?;
+        let inspection =
+            crate::ops::usbip_host::enforce_usbip_physical_policy(intent, usb_device_sysfs_root())
+                .map_err(|err| map_usbip_host_inspection_error_for_intent(intent, err))?;
+        let device_node = inspection.device_node;
         binds.insert(device_node.display().to_string());
     }
     for intent in active_dynamic_usbip_bind_intents(resolver) {
         if intent.env != env {
             continue;
         }
-        let device_node = usb_device_node_for_busid(usb_device_sysfs_root(), &intent.bus_id)?;
+        let inspection =
+            crate::ops::usbip_host::enforce_usbip_physical_policy(&intent, usb_device_sysfs_root())
+                .map_err(|err| map_usbip_host_inspection_error_for_intent(&intent, err))?;
+        let device_node = inspection.device_node;
         binds.insert(device_node.display().to_string());
     }
     if binds.is_empty() {
@@ -5650,6 +6693,60 @@ fn active_dynamic_usbip_bind_intents(
             find_wildcard_usbip_bind_intent_for(resolver, &owner, &bus_id)
         })
         .collect()
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn active_locked_usbip_bind_intents(
+    resolver: &BundleResolver,
+) -> Result<Vec<nixling_core::bundle_resolver::ResolvedUsbipBindIntent>, BrokerError> {
+    let mut out = Vec::new();
+    for id in resolver.usbip_bind_intent_ids() {
+        let Some(intent) = resolver.find_usbip_bind_intent(id) else {
+            continue;
+        };
+        let Some(owner) = crate::ops::usbip_lock::peek_owner(&intent.lock_path) else {
+            continue;
+        };
+        if owner != intent.vm_name {
+            return Err(BrokerError::LiveHandler(format!(
+                "usbip proxy reconcile refused foreign lock for opaque intent {}",
+                intent.intent_id
+            )));
+        }
+        out.push(intent.clone());
+    }
+    out.extend(active_dynamic_usbip_bind_intents(resolver));
+    Ok(out)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn find_usbip_bind_intent_or_wildcard(
+    resolver: &BundleResolver,
+    intent_id: &str,
+) -> Option<nixling_core::bundle_resolver::ResolvedUsbipBindIntent> {
+    if let Some(intent) = resolver.find_usbip_bind_intent(intent_id) {
+        return Some(intent.clone());
+    }
+    let (env, vm, bus_id) = parse_usbip_bind_intent_id(intent_id)?;
+    nixling_host::usbip_argv::validate_bus_id(&bus_id).ok()?;
+    if static_usbip_busid_owner(resolver, &bus_id).is_some() {
+        return None;
+    }
+    let pending_id = nixling_core::bundle_resolver::intent_id_usbip_bind(&env, &vm, "pending");
+    let source = resolver.find_usbip_bind_intent(&pending_id)?;
+    Some(dynamic_usbip_bind_intent(source, &bus_id))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn parse_usbip_bind_intent_id(intent_id: &str) -> Option<(String, String, String)> {
+    let rest = intent_id.strip_prefix("usbip-bind:env:")?;
+    let (env, rest) = rest.split_once(":vm:")?;
+    let (vm, bus_id) = rest.split_once(":bus:")?;
+    if env.is_empty() || vm.is_empty() || bus_id.is_empty() {
+        None
+    } else {
+        Some((env.to_owned(), vm.to_owned(), bus_id.to_owned()))
+    }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -6217,6 +7314,37 @@ impl BrokerError {
                     })),
                 )?;
             }
+            Self::UsbipPolicyMismatch { busid, reason } => {
+                audit_log.write_entry(
+                    operation,
+                    caller_uid,
+                    "usbip-policy-mismatch",
+                    busid,
+                    "denied",
+                )?;
+                audit_log.record(
+                    operation,
+                    busid,
+                    caller_uid,
+                    caller_gid,
+                    audit_context.peer_pid,
+                    audit_context.peer_role.as_str(),
+                    authz_result,
+                    "",
+                    busid,
+                    audit_context.verb.as_str(),
+                    audit_context.request_fields.clone(),
+                    "denied-policy",
+                    Some("usbip-policy-mismatch"),
+                    None,
+                    bundle_metadata.bundle_version,
+                    bundle_metadata.bundle_hash,
+                    audit_context.duration_us(),
+                    Some(serde_json::json!({
+                        "reason": reason,
+                    })),
+                )?;
+            }
             Self::LiveHandler(message) => {
                 // Surface the operator-facing root cause (errno / path /
                 // stderr) in the broker journal, not just the
@@ -6424,6 +7552,47 @@ impl BrokerError {
             // duplicate it, so this is a deliberate no-op (mirrors
             // `StoreSyncFailed`).
             Self::SwtpmDirHardening { .. } => {}
+            Self::RequestValidation {
+                operation: op,
+                reason,
+            } => {
+                audit_log.write_entry(
+                    operation,
+                    caller_uid,
+                    "request-validation-failed",
+                    opaque_target_id,
+                    "denied",
+                )?;
+                audit_log.record(
+                    op,
+                    opaque_target_id,
+                    caller_uid,
+                    caller_gid,
+                    audit_context.peer_pid,
+                    audit_context.peer_role.as_str(),
+                    authz_result,
+                    "",
+                    opaque_target_id,
+                    audit_context.verb.as_str(),
+                    audit_context.request_fields.clone(),
+                    "denied-refused",
+                    Some("request-validation-failed"),
+                    None,
+                    bundle_metadata.bundle_version,
+                    bundle_metadata.bundle_hash,
+                    audit_context.duration_us(),
+                    Some(serde_json::json!({ "reason": reason })),
+                )?;
+            }
+            Self::IpcRateLimited => {
+                audit_log.write_entry(
+                    operation,
+                    caller_uid,
+                    "ipc-rate-limited",
+                    opaque_target_id,
+                    "denied",
+                )?;
+            }
             _ => {}
         }
         Ok(())
@@ -6469,20 +7638,20 @@ impl BrokerError {
                 "BundleResolver",
                 Some("W12"),
                 "Broker started without a loadable bundle at ServerConfig.bundle_path. Bundle-dependent real-wire ops cannot resolve their BundleOpId refs.",
-                "Land the bundle at /var/lib/nixling/current-bundle/manifest.json (or pass --bundle-path) and retry; the broker reloads the bundle on the next request.",
+                "Restore the trusted bundle at the broker-configured bundle path and retry; the broker reloads the bundle on the next request.",
             ),
-            Self::BundleTampered { path, reason } => error_response(
+            Self::BundleTampered { .. } => error_response(
                 "bundle-tampered",
                 "BundleResolver",
                 None,
-                &format!("bundle artifact {path} failed tamper-resistance check: {reason}"),
+                "Trusted bundle failed integrity checks; privileged operations are refused.",
                 "rebuild the bundle from a trusted source (nixos-rebuild switch) and verify ownership root:nixlingd 0640; refuse to run mutating verbs until the bundle is restored",
             ),
-            Self::BundleIntentMissing { kind, intent_id } => error_response(
+            Self::BundleIntentMissing { kind, .. } => error_response(
                 "Broker.BundleIntentMissing",
                 "BundleResolver",
                 Some("W12"),
-                &format!("no {kind} intent in the trusted bundle for opaque id `{intent_id}`"),
+                &format!("trusted bundle does not contain the requested {kind} intent"),
                 "Confirm the daemon emitted the BundleOpId that matches the loaded bundle (nixos-modules/bundle.nix populates the intent table).",
             ),
             Self::StoreViewFilesystemMismatch { a, a_dev, b, b_dev } => error_response(
@@ -6499,24 +7668,27 @@ impl BrokerError {
                 &format!("generation {generation_dir} lacks marker.json"),
                 "Rebuild the store-view generation through the trusted broker/native path, then retry.",
             ),
-            Self::UsbipDeviceNotAllowed {
-                busid,
-                vendor,
-                product,
-            } => error_response(
+            Self::UsbipDeviceNotAllowed { .. } => error_response(
                 "Broker.UsbipDeviceNotAllowed",
                 "UsbipBind",
                 Some("W6"),
-                &format!(
-                    "UsbipBind refused for bus_id `{busid}` because device {vendor:04x}:{product:04x} is outside the bundle allowlist"
-                ),
+                "UsbipBind refused because the selected device is outside the trusted bundle allowlist",
                 "Allow the device's vendor:product in host.json or bind an approved USB device before retrying.",
+            ),
+            Self::UsbipPolicyMismatch { reason, .. } => error_response(
+                "Broker.UsbipPolicyMismatch",
+                "UsbipBind",
+                None,
+                &format!(
+                    "UsbipBind refused before device exposure because the required USB policy check failed: {reason}"
+                ),
+                "Fix the USBIP declaration, physical port/topology, and vendor:product allowlist, rebuild the trusted bundle, then retry.",
             ),
             Self::LiveHandler(message) => error_response(
                 "Broker.LiveHandlerFailed",
                 "LiveHandler",
                 Some("W12"),
-                &message,
+                &public_live_handler_message(&message),
                 "Inspect the broker audit log for the failing live executor's underlying syscall.",
             ),
             Self::CoexistenceRefused { manager, rationale } => error_response(
@@ -6559,8 +7731,15 @@ impl BrokerError {
                 "Broker.Protocol",
                 "Broker",
                 None,
-                &message,
+                &public_protocol_message(&message),
                 "Inspect the private broker socket framing and retry.",
+            ),
+            Self::PeerCredentialRefused { operation } => error_response(
+                "Broker.PeerCredentialRefused",
+                operation,
+                None,
+                "broker peer credential check refused the private request",
+                "Ensure only nixlingd connects to nixling-priv-broker.socket; restart nixlingd after host credential changes.",
             ),
             Self::GuestControlSignRefused { reason } => error_response(
                 "Broker.GuestControlSignRefused",
@@ -6613,7 +7792,43 @@ impl BrokerError {
                 &format!("swtpm-dir hardening refused: {reason}"),
                 "Inspect the signed PrepareSwtpmDir audit record (operation_fields.fail_reason) for the refusal cause; do NOT delete or recreate the per-VM swtpm state dir — that destroys the TPM2 NVRAM and forces IdP re-enrollment.",
             ),
+            Self::RequestValidation { operation, reason } => error_response(
+                "Broker.RequestValidation",
+                operation,
+                None,
+                &format!("broker request validation failed: {reason}"),
+                "Regenerate the daemon request from the trusted nixling bundle and retry.",
+            ),
+            Self::IpcRateLimited => error_response(
+                "Broker.IpcRateLimited",
+                "Broker",
+                None,
+                "broker IPC request rate limit exceeded",
+                "Retry after the current rate-limit window; persistent failures indicate a daemon bug or local DoS.",
+            ),
         }
+    }
+}
+
+fn public_live_handler_message(message: &str) -> String {
+    if message.contains("USB") || message.contains("usb") || message.contains("/sys/") {
+        "privileged USB host operation failed; details are available only in the broker audit log"
+            .to_owned()
+    } else {
+        "privileged host operation failed; details are available only in the broker audit log"
+            .to_owned()
+    }
+}
+
+fn public_protocol_message(message: &str) -> String {
+    if message.contains("usb")
+        || message.contains("USB")
+        || message.contains('/')
+        || message.contains("..")
+    {
+        "broker rejected a malformed private request".to_owned()
+    } else {
+        message.to_owned()
     }
 }
 
@@ -7009,7 +8224,7 @@ mod tests {
     use serde::Serialize;
     use serde_json::Value;
     #[cfg(not(feature = "layer1-bootstrap"))]
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     #[cfg(not(feature = "layer1-bootstrap"))]
     use std::os::fd::OwnedFd;
@@ -7018,7 +8233,20 @@ mod tests {
     use std::path::PathBuf;
     #[cfg(not(feature = "layer1-bootstrap"))]
     use std::sync::Arc;
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    use std::sync::MutexGuard;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    static TEST_USB_SYSFS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn usb_sysfs_test_lock() -> MutexGuard<'static, ()> {
+        TEST_USB_SYSFS_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("usb sysfs test lock")
+    }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
@@ -7062,7 +8290,9 @@ mod tests {
                 vm_id: nixling_ipc::types::VmId::new("media"),
                 media_ref: nixling_ipc::types::MediaRef::new("installer-usb"),
                 bus_id: "1-2.3".to_owned(),
-                tracing_span_id: None,
+                tracing_span_id: Some(nixling_ipc::types::TracingSpanId::new(
+                    "usb-start-0000000000000001",
+                )),
             });
 
         let fields = request_fields_value(&request).expect("redacted fields");
@@ -7092,6 +8322,50 @@ mod tests {
         assert!(!rendered.contains("1-2.3"));
         assert!(!rendered.contains("/dev/"));
         assert!(!rendered.contains("usb-Vendor_SecretSerial"));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usbip_request_fields_project_trace_presence_without_trace_value() {
+        let trace = nixling_ipc::types::TracingSpanId::new("usb-start-0000000000000001");
+        let requests = [
+            BrokerRequest::UsbipBind(nixling_ipc::broker_wire::UsbipBindRequest {
+                bundle_usbip_bind_intent_ref: nixling_ipc::types::BundleOpId::new(
+                    "usbip-bind:env:work:vm:corp-vm:bus:1-2.3",
+                ),
+                tracing_span_id: Some(trace.clone()),
+            }),
+            BrokerRequest::UsbipUnbind(nixling_ipc::broker_wire::UsbipUnbindRequest {
+                bundle_usbip_bind_intent_ref: nixling_ipc::types::BundleOpId::new(
+                    "usbip-bind:env:work:vm:corp-vm:bus:1-2.3",
+                ),
+                preserve_durable_claim: true,
+                tracing_span_id: Some(trace.clone()),
+            }),
+            BrokerRequest::UsbipBindFirewallRule(
+                nixling_ipc::broker_wire::UsbipBindFirewallRuleRequest {
+                    bundle_usbip_firewall_intent_ref: nixling_ipc::types::BundleOpId::new(
+                        "usbip-fw:env:work:bus:1-2.3",
+                    ),
+                    tracing_span_id: Some(trace.clone()),
+                },
+            ),
+            BrokerRequest::UsbipProxyReconcile(
+                nixling_ipc::broker_wire::UsbipProxyReconcileRequest {
+                    scope_id: nixling_ipc::types::ScopeId::new("vm:corp-vm"),
+                    tracing_span_id: Some(trace.clone()),
+                },
+            ),
+        ];
+
+        for request in requests {
+            let fields = request_fields_value(&request).expect("bounded USBIP fields");
+            assert_eq!(fields["tracingSpanIdPresent"], true);
+            assert!(
+                !fields.to_string().contains(trace.as_str()),
+                "request_fields must carry only trace presence"
+            );
+        }
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -7188,7 +8462,7 @@ mod tests {
             HostChConfig, HostJson, HostsFileOwnership, IfName, IfNameMapping, Ipv6SysctlEntry,
             KernelModulesEntry, LanPolicy, NetEnv, NetworkManagerUnmanaged, NftChain,
             NftablesModel, OwnershipRule, SitePolicy, TapRole, UsbipBusidLock, UsbipLockOwner,
-            UsbipLockScope,
+            UsbipLockScope, VendorProductPair,
         };
         use nixling_core::manifest_v04::{
             ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy, VmObservability,
@@ -7215,6 +8489,8 @@ mod tests {
             environments: vec![NetEnv {
                 env: "work".to_owned(),
                 bridge: IfName::new("nlworkbr0").expect("bridge ifname"),
+                host_uplink_ip: Some("192.0.2.1".to_owned()),
+                net_uplink_ip: Some("192.0.2.2".to_owned()),
                 mtu: 1500,
                 mss_clamp: Some(1460),
                 lan: LanPolicy {
@@ -7222,14 +8498,24 @@ mod tests {
                     effective_east_west: false,
                 },
                 net_vm_forward_blocklist: vec!["0.0.0.0/0".to_owned()],
-                bridge_port_flags: vec![BridgePortFlags {
-                    role: TapRole::WorkloadLan,
-                    isolated: true,
-                    neigh_suppress: true,
-                    learning: None,
-                    unicast_flood: None,
-                    rule: "isolated workload bridge port".to_owned(),
-                }],
+                bridge_port_flags: vec![
+                    BridgePortFlags {
+                        role: TapRole::WorkloadLan,
+                        isolated: true,
+                        neigh_suppress: true,
+                        learning: None,
+                        unicast_flood: None,
+                        rule: "isolated workload bridge port".to_owned(),
+                    },
+                    BridgePortFlags {
+                        role: TapRole::Uplink,
+                        isolated: true,
+                        neigh_suppress: true,
+                        learning: Some(false),
+                        unicast_flood: Some(false),
+                        rule: "uplink point-to-point anti-spoofing".to_owned(),
+                    },
+                ],
                 ipv6_sysctls: vec![Ipv6SysctlEntry {
                     if_name: IfName::new("nlworktap0").expect("sysctl ifname"),
                     disable_ipv6: 1,
@@ -7243,7 +8529,10 @@ mod tests {
                     lock_owner: UsbipLockOwner::Daemon,
                     scope: UsbipLockScope::PerBusid,
                     bus_ids: vec!["1-2.3".to_owned()],
-                    vendor_product_allowlist: Vec::new(),
+                    vendor_product_allowlist: vec![VendorProductPair {
+                        vendor: 0x1050,
+                        product: 0x0407,
+                    }],
                 }],
             }],
             nftables: NftablesModel {
@@ -7290,46 +8579,78 @@ mod tests {
 
         let processes = ProcessesJson {
             schema_version: "v2".to_owned(),
-            vms: vec![VmProcessDag {
-                vm: "corp-vm".to_owned(),
-                nodes: vec![ProcessNode {
-                    id: NodeId("ch-runner".to_owned()),
-                    role: ProcessRole::CloudHypervisorRunner,
-                    unit: Some("nixling@corp-vm.service".to_owned()),
-                    binary_path: None,
-                    argv: Vec::new(),
-                    env: Vec::new(),
-                    profile: RoleProfileBuilder::new()
-                        .with_profile_id("profile-ch")
-                        .with_uid(1001)
-                        .with_gid(1001)
-                        .with_namespaces(nixling_core::minijail_profile::NamespaceSet {
-                            mount: true,
-                            pid: false,
-                            net: false,
-                            ipc: false,
-                            uts: false,
-                            user: false,
-                        })
-                        .with_seccomp_policy_ref(Some("profile-ch.seccomp"))
-                        .with_read_only_paths(vec!["/nix/store".to_owned()])
-                        .with_cgroup_placement(CgroupPlacement {
-                            subtree: "nixling.slice/corp-vm/ch-runner".to_owned(),
-                            controllers: vec!["cpu".to_owned(), "memory".to_owned()],
-                            delegated: true,
-                        })
-                        .build(),
-                    readiness: Vec::new(),
-                    plan_ops: Vec::new(),
-                }],
-                edges: Vec::new(),
-                invariants: VmProcessInvariants {
-                    swtpm_pre_start_flush: true,
-                    per_vm_audit_pipeline: true,
-                    usbip_gating: true,
-                    tpm_ownership_migration_without_running_vm_mutation: true,
+            vms: vec![
+                VmProcessDag {
+                    vm: "corp-vm".to_owned(),
+                    nodes: vec![ProcessNode {
+                        id: NodeId("ch-runner".to_owned()),
+                        role: ProcessRole::CloudHypervisorRunner,
+                        unit: Some("nixling@corp-vm.service".to_owned()),
+                        binary_path: None,
+                        argv: Vec::new(),
+                        env: Vec::new(),
+                        profile: RoleProfileBuilder::new()
+                            .with_profile_id("profile-ch")
+                            .with_uid(1001)
+                            .with_gid(1001)
+                            .with_namespaces(nixling_core::minijail_profile::NamespaceSet {
+                                mount: true,
+                                pid: false,
+                                net: false,
+                                ipc: false,
+                                uts: false,
+                                user: false,
+                            })
+                            .with_seccomp_policy_ref(Some("profile-ch.seccomp"))
+                            .with_read_only_paths(vec!["/nix/store".to_owned()])
+                            .with_cgroup_placement(CgroupPlacement {
+                                subtree: "nixling.slice/corp-vm/ch-runner".to_owned(),
+                                controllers: vec!["cpu".to_owned(), "memory".to_owned()],
+                                delegated: true,
+                            })
+                            .build(),
+                        readiness: Vec::new(),
+                        plan_ops: Vec::new(),
+                    }],
+                    edges: Vec::new(),
+                    invariants: VmProcessInvariants {
+                        swtpm_pre_start_flush: true,
+                        per_vm_audit_pipeline: true,
+                        usbip_gating: true,
+                        tpm_ownership_migration_without_running_vm_mutation: true,
+                    },
                 },
-            }],
+                VmProcessDag {
+                    vm: "sys-work-usbipd".to_owned(),
+                    nodes: vec![ProcessNode {
+                        id: NodeId("backend".to_owned()),
+                        role: ProcessRole::Usbip,
+                        unit: None,
+                        binary_path: Some("/run/current-system/sw/bin/usbipd".to_owned()),
+                        argv: vec!["usbipd".to_owned(), "-D".to_owned()],
+                        env: Vec::new(),
+                        profile: RoleProfileBuilder::new()
+                            .with_profile_id("profile-usbip")
+                            .with_uid(1002)
+                            .with_gid(1002)
+                            .with_cgroup_placement(CgroupPlacement {
+                                subtree: "nixling.slice/sys-work-usbipd/backend".to_owned(),
+                                controllers: vec!["cpu".to_owned(), "memory".to_owned()],
+                                delegated: false,
+                            })
+                            .build(),
+                        readiness: Vec::new(),
+                        plan_ops: Vec::new(),
+                    }],
+                    edges: Vec::new(),
+                    invariants: VmProcessInvariants {
+                        swtpm_pre_start_flush: true,
+                        per_vm_audit_pipeline: true,
+                        usbip_gating: true,
+                        tpm_ownership_migration_without_running_vm_mutation: true,
+                    },
+                },
+            ],
         };
 
         let manifest = ManifestV04 {
@@ -7596,6 +8917,27 @@ mod tests {
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
+    fn prepare_test_usb_sysfs_device(vendor: &str, product: &str, devpath: &str) -> PathBuf {
+        let base = std::env::var_os("CARGO_TARGET_TMPDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+        let root = base.join("runtime-usb-sysfs-root");
+        TEST_USB_SYSFS_ROOT
+            .set(root.clone())
+            .unwrap_or_else(|_| assert_eq!(TEST_USB_SYSFS_ROOT.get(), Some(&root)));
+        let device_dir = root.join("1-2.3");
+        fs::create_dir_all(&device_dir).expect("create fake USB sysfs device");
+        fs::write(device_dir.join("idVendor"), format!("{vendor}\n")).expect("write vendor");
+        fs::write(device_dir.join("idProduct"), format!("{product}\n")).expect("write product");
+        fs::write(device_dir.join("busnum"), b"1\n").expect("write busnum");
+        fs::write(device_dir.join("devnum"), b"7\n").expect("write devnum");
+        fs::write(device_dir.join("devpath"), format!("{devpath}\n")).expect("write devpath");
+        let _ = fs::remove_file(device_dir.join("driver"));
+        let _ = fs::remove_file(device_dir.join("serial"));
+        root
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
     fn test_server_config(root: &Path, manifest_path: &Path) -> ServerConfig {
         ServerConfig {
             socket_path: root.join("broker.sock"),
@@ -7777,6 +9119,14 @@ mod tests {
     #[derive(Default)]
     struct FakeDispatchBackend {
         registered_runners: Mutex<std::collections::BTreeSet<String>>,
+        usbip_events: Mutex<Vec<FakeUsbipEvent>>,
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum FakeUsbipEvent {
+        Bind { intent_id: String },
+        Unbind { intent_id: String },
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -7799,6 +9149,19 @@ mod tests {
                     BrokerError::Protocol("fake runner registry mutex poisoned".to_owned())
                 })?
                 .contains(runner_id))
+        }
+
+        fn push_usbip_event(&self, event: FakeUsbipEvent) -> Result<(), BrokerError> {
+            self.usbip_events
+                .lock()
+                .map_err(|_| BrokerError::Protocol("fake USBIP event mutex poisoned".to_owned()))?
+                .push(event);
+            Ok(())
+        }
+
+        fn take_usbip_events(&self) -> Vec<FakeUsbipEvent> {
+            let mut events = self.usbip_events.lock().expect("fake USBIP event lock");
+            std::mem::take(&mut *events)
         }
     }
 
@@ -8040,15 +9403,21 @@ mod tests {
 
         fn usbip_bind(
             &self,
-            _intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+            intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
         ) -> Result<(), BrokerError> {
+            self.push_usbip_event(FakeUsbipEvent::Bind {
+                intent_id: intent.intent_id.clone(),
+            })?;
             Ok(())
         }
 
         fn usbip_unbind(
             &self,
-            _intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+            intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
         ) -> Result<(), BrokerError> {
+            self.push_usbip_event(FakeUsbipEvent::Unbind {
+                intent_id: intent.intent_id.clone(),
+            })?;
             Ok(())
         }
 
@@ -8166,7 +9535,10 @@ mod tests {
         ));
         match query.response {
             BrokerResponse::QemuMediaQueryStatus(response) => {
-                assert_eq!(response.status, QemuMediaVmStatus::ConnectionLostDuringShutdown);
+                assert_eq!(
+                    response.status,
+                    QemuMediaVmStatus::ConnectionLostDuringShutdown
+                );
             }
             other => panic!("expected QemuMediaQueryStatus, got {other:?}"),
         }
@@ -8301,6 +9673,8 @@ mod tests {
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
         let peer_pid = 4242;
+        let _usb_sysfs_guard = usb_sysfs_test_lock();
+        prepare_test_usb_sysfs_device("1050", "0407", "2.3");
 
         let assert_dispatch = |request: BrokerRequest,
                                operation: &str,
@@ -8381,7 +9755,7 @@ mod tests {
             OperationFields::Hello {
                 client_version: "1.2.3".to_owned(),
             },
-            None,
+            Some("usb-start-0000000000000001"),
         );
         match hello.response {
             BrokerResponse::Hello(response) => {
@@ -8856,15 +10230,26 @@ mod tests {
         assert_ack(
             assert_dispatch(
                 BrokerRequest::UsbipBind(nixling_ipc::broker_wire::UsbipBindRequest {
-                    bus_id: "1-2.3".to_owned(),
-                    vm_id: VmId::new("corp-vm"),
+                    bundle_usbip_bind_intent_ref: BundleOpId::new(
+                        nixling_core::bundle_resolver::intent_id_usbip_bind(
+                            "work", "corp-vm", "1-2.3",
+                        ),
+                    ),
+                    tracing_span_id: Some(TracingSpanId::new("usb-start-0000000000000001")),
                 }),
                 "UsbipBind",
                 OperationFields::UsbipBind {
                     bus_id: "1-2.3".to_owned(),
                     vm: "corp-vm".to_owned(),
+                    device_identity: Some(UsbAuditDeviceIdentity {
+                        vendor_id: Some("1050".to_owned()),
+                        product_id: Some("0407".to_owned()),
+                        serial_observed: false,
+                        serial_correlation: None,
+                        previous_serial_correlation: None,
+                    }),
                 },
-                None,
+                Some("usb-start-0000000000000001"),
             ),
             "UsbipBind",
         );
@@ -8872,13 +10257,19 @@ mod tests {
         assert_ack(
             assert_dispatch(
                 BrokerRequest::UsbipUnbind(nixling_ipc::broker_wire::UsbipUnbindRequest {
-                    bus_id: "1-2.3".to_owned(),
+                    bundle_usbip_bind_intent_ref: BundleOpId::new(
+                        nixling_core::bundle_resolver::intent_id_usbip_bind(
+                            "work", "corp-vm", "1-2.3",
+                        ),
+                    ),
+                    preserve_durable_claim: false,
+                    tracing_span_id: Some(TracingSpanId::new("usb-stop-0000000000000002")),
                 }),
                 "UsbipUnbind",
                 OperationFields::UsbipUnbind {
                     bus_id: "1-2.3".to_owned(),
                 },
-                None,
+                Some("usb-stop-0000000000000002"),
             ),
             "UsbipUnbind",
         );
@@ -8888,11 +10279,12 @@ mod tests {
                 BrokerRequest::UsbipProxyReconcile(
                     nixling_ipc::broker_wire::UsbipProxyReconcileRequest {
                         scope_id: ScopeId::new("global"),
+                        tracing_span_id: Some(TracingSpanId::new("usb-proxy-0000000000000003")),
                     },
                 ),
                 "UsbipProxyReconcile",
                 OperationFields::UsbipProxyReconcile {},
-                None,
+                Some("usb-proxy-0000000000000003"),
             ),
             "UsbipProxyReconcile",
         );
@@ -10012,6 +11404,9 @@ mod tests {
         fs::create_dir_all(&device_dir).expect("create fake usb sysfs dir");
         fs::write(device_dir.join("idVendor"), b"abcd\n").expect("write fake vendor id");
         fs::write(device_dir.join("idProduct"), b"1234\n").expect("write fake product id");
+        fs::write(device_dir.join("busnum"), b"1\n").expect("write fake bus number");
+        fs::write(device_dir.join("devnum"), b"7\n").expect("write fake device number");
+        fs::write(device_dir.join("devpath"), b"2.3\n").expect("write fake port path");
 
         let intent = find_usbip_bind_intent_for(&bundle.resolver, "corp-vm", "1-2.3")
             .expect("bundle usbip bind intent");
@@ -10031,6 +11426,963 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usbip_bind_rejects_missing_allowlist_as_required_policy() {
+        let root = test_audit_dir("usbip-missing-allowlist");
+        let mut bundle = build_test_bundle(&root);
+        set_usbip_allowlist(&mut bundle, Vec::new());
+        let sysfs_root = root.join("usb-sysfs");
+        let device_dir = sysfs_root.join("1-2.3");
+        fs::create_dir_all(&device_dir).expect("create fake usb sysfs dir");
+        fs::write(device_dir.join("idVendor"), b"1050\n").expect("write fake vendor id");
+        fs::write(device_dir.join("idProduct"), b"0407\n").expect("write fake product id");
+        fs::write(device_dir.join("busnum"), b"1\n").expect("write fake bus number");
+        fs::write(device_dir.join("devnum"), b"7\n").expect("write fake device number");
+        fs::write(device_dir.join("devpath"), b"2.3\n").expect("write fake port path");
+
+        let intent = find_usbip_bind_intent_for(&bundle.resolver, "corp-vm", "1-2.3")
+            .expect("bundle usbip bind intent");
+        let err = enforce_usbip_allowlist(&intent, &sysfs_root)
+            .expect_err("missing required allowlist must fail closed");
+        match err {
+            BrokerError::UsbipPolicyMismatch { busid, reason } => {
+                assert_eq!(busid, "1-2.3");
+                assert!(reason.contains("allowlist"));
+            }
+            other => panic!("expected UsbipPolicyMismatch, got {other:?}"),
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usbip_bind_rejects_topology_mismatch_as_required_policy() {
+        let root = test_audit_dir("usbip-topology-policy");
+        let mut bundle = build_test_bundle(&root);
+        set_usbip_allowlist(
+            &mut bundle,
+            vec![nixling_core::host::VendorProductPair {
+                vendor: 0x1050,
+                product: 0x0407,
+            }],
+        );
+        let sysfs_root = root.join("usb-sysfs");
+        let device_dir = sysfs_root.join("1-2.3");
+        fs::create_dir_all(&device_dir).expect("create fake usb sysfs dir");
+        fs::write(device_dir.join("idVendor"), b"1050\n").expect("write fake vendor id");
+        fs::write(device_dir.join("idProduct"), b"0407\n").expect("write fake product id");
+        fs::write(device_dir.join("busnum"), b"1\n").expect("write fake bus number");
+        fs::write(device_dir.join("devnum"), b"7\n").expect("write fake device number");
+        fs::write(device_dir.join("devpath"), b"2.4\n").expect("write fake mismatched port path");
+
+        let intent = find_usbip_bind_intent_for(&bundle.resolver, "corp-vm", "1-2.3")
+            .expect("bundle usbip bind intent");
+        let err = enforce_usbip_allowlist(&intent, &sysfs_root)
+            .expect_err("topology mismatch must fail closed as policy");
+        match &err {
+            BrokerError::UsbipPolicyMismatch { busid, reason } => {
+                assert_eq!(busid, "1-2.3");
+                assert!(reason.contains("topology"));
+            }
+            other => panic!("expected UsbipPolicyMismatch, got {other:?}"),
+        }
+
+        let BrokerResponse::Error(response) = err.into_response() else {
+            panic!("expected broker error response");
+        };
+        let rendered = format!("{} {}", response.message, response.action);
+        assert!(response.kind.contains("PolicyMismatch"));
+        assert!(rendered.contains("policy"));
+        assert!(!rendered.contains("1-2.3"), "{rendered}");
+        assert!(!rendered.contains("/sys/"), "{rendered}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usb_broker_ipc_refuses_non_daemon_so_peercred_before_dispatch() {
+        use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
+        use nix::unistd::Uid;
+        use nixling_ipc::broker_wire::{
+            BrokerCallerRole, BrokerRequestEnvelope, UsbipBindFirewallRuleRequest,
+            UsbipBindRequest, UsbipProxyReconcileRequest, UsbipUnbindRequest,
+        };
+        use nixling_ipc::types::{BundleOpId, ScopeId};
+        use std::os::fd::AsRawFd;
+        use std::sync::Mutex;
+
+        let root = test_audit_dir("usb-peercred-refused");
+        fs::create_dir_all(&root).expect("create audit test dir");
+        let actual_uid = Uid::current().as_raw();
+        let configured_daemon_uid = if actual_uid == 0 { 1 } else { 0 };
+        let mut config = test_server_config(&root, &root.join("unused-bundle.json"));
+        config.test_mode = false;
+        config.nixlingd_uid = configured_daemon_uid;
+        let log = AuditLog::open(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open audit log");
+        let limiter = Arc::new(Mutex::new(IpcRateLimiter::new(64)));
+
+        let requests = vec![
+            BrokerRequest::UsbipBind(UsbipBindRequest {
+                bundle_usbip_bind_intent_ref: BundleOpId::new(
+                    "usbip-bind:env:work:vm:corp-vm:bus:1-2.3",
+                ),
+                tracing_span_id: None,
+            }),
+            BrokerRequest::UsbipUnbind(UsbipUnbindRequest {
+                bundle_usbip_bind_intent_ref: BundleOpId::new(
+                    "usbip-bind:env:work:vm:corp-vm:bus:1-2.3",
+                ),
+                preserve_durable_claim: false,
+                tracing_span_id: None,
+            }),
+            BrokerRequest::UsbipBindFirewallRule(UsbipBindFirewallRuleRequest {
+                bundle_usbip_firewall_intent_ref: BundleOpId::new("usbip-fw:env:work:bus:1-2.3"),
+                tracing_span_id: None,
+            }),
+            BrokerRequest::UsbipProxyReconcile(UsbipProxyReconcileRequest {
+                scope_id: ScopeId::new("env:work"),
+                tracing_span_id: None,
+            }),
+        ];
+        let mut operations = Vec::new();
+
+        for request in requests {
+            let operation = request.op_name();
+            operations.push(operation);
+            let envelope = BrokerRequestEnvelope {
+                request,
+                caller_role: BrokerCallerRole::AdminUid {
+                    uid: configured_daemon_uid,
+                },
+                // Ignored because config.test_mode=false: the broker must use the
+                // kernel SO_PEERCRED uid, not a caller-supplied envelope field.
+                test_peer_uid: Some(configured_daemon_uid),
+            };
+            let (client, server) = socketpair(
+                AddressFamily::Unix,
+                SockType::SeqPacket,
+                None,
+                SockFlag::SOCK_CLOEXEC,
+            )
+            .expect("socketpair");
+            crate::protocol::send_json_frame(client.as_raw_fd(), &envelope)
+                .expect("send broker request");
+            handle_connection(server, &config, &log, None, None, &limiter)
+                .expect("handle refused peer");
+            let response = crate::protocol::recv_json_frame::<BrokerResponse>(client.as_raw_fd())
+                .expect("receive refusal response")
+                .expect("broker sends typed refusal");
+            let BrokerResponse::Error(error) = response else {
+                panic!("expected peer credential refusal for {operation}");
+            };
+            assert_eq!(error.kind, "Broker.PeerCredentialRefused");
+            assert_eq!(error.operation, operation);
+            let rendered = format!("{} {}", error.message, error.action);
+            assert!(!rendered.contains(&actual_uid.to_string()), "{rendered}");
+            assert!(!rendered.contains("1-2.3"), "{rendered}");
+            assert!(!rendered.contains("/"), "{rendered}");
+        }
+
+        let audit = fs::read_to_string(log.current_daily_path()).expect("read audit log");
+        for operation in operations {
+            assert!(audit.contains(&format!(r#""op":"{operation}""#)), "{audit}");
+        }
+        assert_eq!(
+            audit.matches(r#""disposition":"peer-refused""#).count(),
+            4,
+            "{audit}"
+        );
+        assert!(
+            audit.contains(&format!(r#""caller_uid":{actual_uid}"#)),
+            "{audit}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usb_broker_ipc_validation_rejects_traversal_and_oversized_inputs() {
+        use nixling_ipc::broker_wire::{
+            ModprobeIfAllowedRequest, UsbipBindFirewallRuleRequest, UsbipBindRequest,
+            UsbipProxyReconcileRequest, UsbipUnbindRequest,
+        };
+        use nixling_ipc::types::{BundleOpId, ScopeId};
+
+        let cases = vec![
+            (
+                BrokerRequest::UsbipBind(UsbipBindRequest {
+                    bundle_usbip_bind_intent_ref: BundleOpId::new(
+                        "usbip-bind:env:work:vm:corp-vm:bus:../1-2",
+                    ),
+                    tracing_span_id: None,
+                }),
+                "UsbipBind",
+                "invalid-bundle-op-id",
+            ),
+            (
+                BrokerRequest::UsbipUnbind(UsbipUnbindRequest {
+                    bundle_usbip_bind_intent_ref: BundleOpId::new(
+                        "usbip-bind:env:work:vm:corp-vm:bus:1-2/serial",
+                    ),
+                    preserve_durable_claim: false,
+                    tracing_span_id: None,
+                }),
+                "UsbipUnbind",
+                "invalid-bundle-op-id",
+            ),
+            (
+                BrokerRequest::ModprobeIfAllowed(ModprobeIfAllowedRequest {
+                    module_name: "../usbip-host".to_owned(),
+                    tracing_span_id: None,
+                }),
+                "ModprobeIfAllowed",
+                "invalid-module-name",
+            ),
+            (
+                BrokerRequest::ModprobeIfAllowed(ModprobeIfAllowedRequest {
+                    module_name: "x".repeat(MAX_MODULE_NAME_LEN + 1),
+                    tracing_span_id: None,
+                }),
+                "ModprobeIfAllowed",
+                "module-name-too-long",
+            ),
+            (
+                BrokerRequest::UsbipProxyReconcile(UsbipProxyReconcileRequest {
+                    scope_id: ScopeId::new("../global"),
+                    tracing_span_id: None,
+                }),
+                "UsbipProxyReconcile",
+                "invalid-scope-id",
+            ),
+            (
+                BrokerRequest::UsbipBindFirewallRule(UsbipBindFirewallRuleRequest {
+                    bundle_usbip_firewall_intent_ref: BundleOpId::new(
+                        "usbip-fw:env:work:bus:../1-2",
+                    ),
+                    tracing_span_id: None,
+                }),
+                "UsbipBindFirewallRule",
+                "invalid-bundle-op-id",
+            ),
+        ];
+
+        for (request, expected_operation, expected_reason) in cases {
+            match validate_broker_request(&request) {
+                Err(BrokerError::RequestValidation { operation, reason }) => {
+                    assert_eq!(operation, expected_operation);
+                    assert_eq!(reason, expected_reason);
+                }
+                other => {
+                    panic!("expected RequestValidation for {expected_operation}, got {other:?}")
+                }
+            }
+        }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usb_broker_ipc_validation_is_shape_only_not_authorization() {
+        use nixling_ipc::broker_wire::{
+            UsbipBindFirewallRuleRequest, UsbipBindRequest, UsbipProxyReconcileRequest,
+        };
+        use nixling_ipc::types::{BundleOpId, ScopeId};
+
+        let requests = [
+            BrokerRequest::UsbipBind(UsbipBindRequest {
+                bundle_usbip_bind_intent_ref: BundleOpId::new(
+                    "usbip-bind:env:not-in-this-bundle:vm:not-in-this-bundle:bus:1-2.3",
+                ),
+                tracing_span_id: None,
+            }),
+            BrokerRequest::UsbipProxyReconcile(UsbipProxyReconcileRequest {
+                scope_id: ScopeId::new("env:not-in-this-bundle"),
+                tracing_span_id: None,
+            }),
+            BrokerRequest::UsbipBindFirewallRule(UsbipBindFirewallRuleRequest {
+                bundle_usbip_firewall_intent_ref: BundleOpId::new(
+                    "usbip-fw:env:not-in-this-bundle:bus:1-2.3",
+                ),
+                tracing_span_id: None,
+            }),
+        ];
+
+        for request in requests {
+            validate_broker_request(&request).expect(
+                "broker IPC validation must remain shape-only; bundle/lifecycle authorization is enforced by daemon classification plus resolver dispatch",
+            );
+        }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usb_broker_public_errors_are_fail_secure() {
+        let sensitive = [
+            BrokerError::LiveHandler(
+                "read USB identity for bus_id=1-2.3 at /sys/bus/usb/devices/1-2.3/idVendor failed: serial ABC"
+                    .to_owned(),
+            ),
+            BrokerError::BundleTampered {
+                path: "/var/lib/nixling/current-bundle/manifest.json".to_owned(),
+                reason: "mode 0666".to_owned(),
+            },
+            BrokerError::BundleResolverUnavailable,
+            BrokerError::BundleIntentMissing {
+                kind: "usbip-bind",
+                intent_id: "vm=corp-vm bus=1-2.3".to_owned(),
+            },
+            BrokerError::UsbipDeviceNotAllowed {
+                busid: "1-2.3".to_owned(),
+                vendor: 0xabcd,
+                product: 0x1234,
+            },
+            BrokerError::UsbipPolicyMismatch {
+                busid: "1-2.3".to_owned(),
+                reason: "observed physical topology does not match the declaration",
+            },
+            BrokerError::PeerCredentialRefused {
+                operation: "UsbipBind",
+            },
+        ];
+
+        for error in sensitive {
+            let BrokerResponse::Error(response) = error.into_response() else {
+                panic!("expected broker error response");
+            };
+            let rendered = format!("{} {}", response.message, response.action);
+            assert!(!rendered.contains("/sys/"), "{rendered}");
+            assert!(
+                !rendered.contains("/var/lib/nixling/current-bundle"),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("1-2.3"), "{rendered}");
+            assert!(!rendered.contains("abcd"), "{rendered}");
+            assert!(!rendered.contains("1234"), "{rendered}");
+            assert!(!rendered.contains("ABC"), "{rendered}");
+        }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usb_audit_identity_keeps_vid_pid_and_redacts_raw_serial() {
+        let identity = usb_audit_device_identity(
+            (0x1050, 0x0407),
+            Some("serial-should-never-serialize"),
+            None,
+        );
+
+        assert_eq!(identity.vendor_id.as_deref(), Some("1050"));
+        assert_eq!(identity.product_id.as_deref(), Some("0407"));
+        assert!(identity.serial_observed);
+        assert_eq!(identity.serial_correlation, None);
+        assert_eq!(identity.previous_serial_correlation, None);
+
+        let encoded = serde_json::to_string(&identity).expect("audit identity serializes");
+        assert!(encoded.contains("1050"));
+        assert!(encoded.contains("0407"));
+        assert!(encoded.contains("serialObserved"));
+        assert!(!encoded.contains("serial-should-never-serialize"));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usb_audit_identity_uses_deterministic_hmac_serial_correlation() {
+        let keyring = UsbAuditSerialHmacKeyring {
+            current: UsbAuditSerialHmacKey {
+                slot: UsbAuditSerialHmacKeySlot::Current,
+                key_id: "audit-key-v1".to_owned(),
+                key: b"0123456789abcdef0123456789abcdef".to_vec(),
+            },
+            previous: None,
+        };
+        let left = usb_audit_device_identity((0x1050, 0x0407), Some("serial-a"), Some(&keyring))
+            .serial_correlation
+            .expect("serial correlation present");
+        let same = usb_audit_device_identity((0x1050, 0x0407), Some("serial-a"), Some(&keyring))
+            .serial_correlation
+            .expect("serial correlation present");
+        let right = usb_audit_device_identity((0x1050, 0x0407), Some("serial-b"), Some(&keyring))
+            .serial_correlation
+            .expect("serial correlation present");
+
+        assert_eq!(left.key_id, "audit-key-v1");
+        assert_eq!(left, same);
+        assert_ne!(left.hmac_sha256, right.hmac_sha256);
+        assert_eq!(left.hmac_sha256.len(), 64);
+        assert!(
+            left.hmac_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        );
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usb_audit_identity_emits_current_and_previous_key_correlations() {
+        let keyring = UsbAuditSerialHmacKeyring {
+            current: UsbAuditSerialHmacKey {
+                slot: UsbAuditSerialHmacKeySlot::Current,
+                key_id: "audit-key-current".to_owned(),
+                key: b"current-current-current-current-32".to_vec(),
+            },
+            previous: Some(UsbAuditSerialHmacKey {
+                slot: UsbAuditSerialHmacKeySlot::Previous,
+                key_id: "audit-key-previous".to_owned(),
+                key: b"fedcba9876543210fedcba9876543210".to_vec(),
+            }),
+        };
+
+        let identity =
+            usb_audit_device_identity((0x1050, 0x0407), Some("same-serial"), Some(&keyring));
+        let current = identity
+            .serial_correlation
+            .expect("current correlation present");
+        let previous = identity
+            .previous_serial_correlation
+            .expect("previous correlation present");
+
+        assert_eq!(current.key_id, "audit-key-current");
+        assert_eq!(previous.key_id, "audit-key-previous");
+        assert_ne!(current.hmac_sha256, previous.hmac_sha256);
+        assert_eq!(current.hmac_sha256.len(), 64);
+        assert_eq!(previous.hmac_sha256.len(), 64);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usb_audit_rotation_event_is_scrubbed_and_bounded() {
+        let keyring = UsbAuditSerialHmacKeyring {
+            current: UsbAuditSerialHmacKey {
+                slot: UsbAuditSerialHmacKeySlot::Current,
+                key_id: "audit-key-current".to_owned(),
+                key: b"current-secret-material-never-log".to_vec(),
+            },
+            previous: Some(UsbAuditSerialHmacKey {
+                slot: UsbAuditSerialHmacKeySlot::Previous,
+                key_id: "audit-key-previous".to_owned(),
+                key: b"previous-secret-material-never-log".to_vec(),
+            }),
+        };
+
+        let audit = usb_serial_correlation_key_rotation_audit(&keyring)
+            .expect("previous slot opens a rotation window");
+        assert_eq!(audit.previous_key_id, "audit-key-previous");
+        assert_eq!(audit.current_key_id, "audit-key-current");
+        assert_eq!(audit.active_key_count, 2);
+        assert_eq!(audit.grace_window_seconds, 30 * 24 * 60 * 60);
+        assert_eq!(audit.correlation_version, "nixling-usb-audit-serial-v1");
+
+        let encoded = serde_json::to_value(OperationFields::UsbSerialCorrelationKeyRotate(audit))
+            .expect("rotation event serializes");
+        let obj = encoded.as_object().expect("object fields");
+        let observed: BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            observed,
+            [
+                "activeKeyCount",
+                "correlationVersion",
+                "currentKeyId",
+                "graceWindowSeconds",
+                "previousKeyId",
+            ]
+            .into_iter()
+            .collect()
+        );
+        let rendered = encoded.to_string();
+        assert!(rendered.contains("audit-key-current"));
+        assert!(rendered.contains("audit-key-previous"));
+        assert!(!rendered.contains("secret-material"));
+        assert!(!rendered.contains("key_hex"));
+        assert!(!rendered.contains("same-serial"));
+        assert!(!rendered.contains("1-2.3"));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usbip_bind_audit_failure_rolls_back_backend_bind_and_acl() {
+        use nixling_ipc::broker_wire::{BrokerCallerRole, BrokerRequest};
+
+        let root = test_audit_dir("usbip-bind-audit-failure-rollback");
+        let bundle = build_test_bundle(&root);
+        let config = test_server_config(&root, &bundle.manifest_path);
+        let _usb_sysfs_guard = usb_sysfs_test_lock();
+        let _ = take_test_usbip_backend_acl_events();
+        prepare_test_usb_sysfs_device("1050", "0407", "2.3");
+
+        let log = AuditLog::open_with_write_limit(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+            0,
+        )
+        .expect("open rate-limited audit log");
+        let backend = FakeDispatchBackend::default();
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let caller_gid = Gid::current().as_raw();
+        let intent_id =
+            nixling_core::bundle_resolver::intent_id_usbip_bind("work", "corp-vm", "1-2.3");
+        let request = BrokerRequest::UsbipBind(nixling_ipc::broker_wire::UsbipBindRequest {
+            bundle_usbip_bind_intent_ref: BundleOpId::new(intent_id.as_str()),
+            tracing_span_id: None,
+        });
+        let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+            .expect("audit context");
+
+        let error = dispatch_request_with_backend(
+            request,
+            1000,
+            caller_gid,
+            caller_role,
+            &audit_context,
+            &config,
+            &log,
+            Some(&bundle.resolver),
+            &backend,
+        )
+        .expect_err("rate-limited final audit write must fail dispatch");
+
+        assert!(matches!(
+            error,
+            BrokerError::Protocol(ref message)
+                if message.contains("audit write rate limit exceeded")
+        ));
+        assert_eq!(
+            backend.take_usbip_events(),
+            vec![
+                FakeUsbipEvent::Bind {
+                    intent_id: intent_id.clone()
+                },
+                FakeUsbipEvent::Unbind { intent_id },
+            ],
+            "fresh UsbipBind must unbind the backend when its terminal success audit cannot be written"
+        );
+        assert_eq!(
+            take_test_usbip_backend_acl_events(),
+            vec![
+                TestUsbipBackendAclEvent::Grant { uid: 1002 },
+                TestUsbipBackendAclEvent::Revoke { uid: 1002 },
+            ],
+            "backend device ACL must not remain granted without a terminal UsbipBind audit record"
+        );
+
+        let audit = fs::read_to_string(log.current_daily_path()).expect("read audit log");
+        assert!(
+            !audit.contains(r#""operation":"UsbipBind""#),
+            "rate-limited terminal record must not be partially written: {audit}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usb_audit_rotation_audit_dedupe_suppresses_repeats_and_allows_retry() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let audit = UsbSerialCorrelationKeyRotationAudit {
+            previous_key_id: format!("audit-key-previous-dedupe-{unique}"),
+            current_key_id: format!("audit-key-current-dedupe-{unique}"),
+            active_key_count: 2,
+            grace_window_seconds: USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_GRACE_WINDOW_SECONDS,
+            correlation_version: USB_AUDIT_SERIAL_CORRELATION_VERSION.to_owned(),
+        };
+
+        let dedupe_key = mark_usb_audit_serial_hmac_rotation_audit_logged(&audit)
+            .expect("first rotation audit for key pair is allowed");
+        assert!(mark_usb_audit_serial_hmac_rotation_audit_logged(&audit).is_none());
+
+        unmark_usb_audit_serial_hmac_rotation_audit_logged(&dedupe_key);
+        let retry_dedupe_key = mark_usb_audit_serial_hmac_rotation_audit_logged(&audit)
+            .expect("failed audit write can clear the marker and retry");
+        assert_eq!(retry_dedupe_key, dedupe_key);
+        unmark_usb_audit_serial_hmac_rotation_audit_logged(&retry_dedupe_key);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usbip_bind_with_previous_serial_hmac_key_emits_one_rotation_audit_record_per_key_pair() {
+        use nixling_ipc::broker_wire::{BrokerCallerRole, BrokerRequest};
+        use nixling_ipc::types::TracingSpanId;
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = test_audit_dir("usb-serial-hmac-rotation-audit");
+        let bundle = build_test_bundle(&root);
+        let config = test_server_config(&root, &bundle.manifest_path);
+        let key_dir = usb_audit_serial_hmac_key_dir(&config.state_dir);
+        fs::create_dir_all(&key_dir).expect("create key dir");
+
+        let current_secret = b"current-secret-material-12345678";
+        let previous_secret = b"previous-secret-material-1234567";
+        assert_eq!(current_secret.len(), USB_AUDIT_SERIAL_HMAC_KEY_BYTES);
+        assert_eq!(previous_secret.len(), USB_AUDIT_SERIAL_HMAC_KEY_BYTES);
+        let _usb_sysfs_guard = usb_sysfs_test_lock();
+
+        let write_key = |file_name: &str, key: &UsbAuditSerialHmacKey| {
+            let path = key_dir.join(file_name);
+            fs::write(&path, render_usb_audit_serial_hmac_key(key)).expect("write key");
+            let mut perms = fs::metadata(&path).expect("stat key").permissions();
+            perms.set_mode(0o400);
+            fs::set_permissions(&path, perms).expect("chmod key");
+        };
+        write_key(
+            USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE,
+            &UsbAuditSerialHmacKey {
+                slot: UsbAuditSerialHmacKeySlot::Current,
+                key_id: "audit-key-current".to_owned(),
+                key: current_secret.to_vec(),
+            },
+        );
+        write_key(
+            USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_FILE,
+            &UsbAuditSerialHmacKey {
+                slot: UsbAuditSerialHmacKeySlot::Previous,
+                key_id: "audit-key-previous".to_owned(),
+                key: previous_secret.to_vec(),
+            },
+        );
+
+        let sysfs_root = prepare_test_usb_sysfs_device("1050", "0407", "2.3");
+        fs::write(
+            sysfs_root.join("1-2.3").join("serial"),
+            "raw-usb-serial-never-log\n",
+        )
+        .expect("write fake serial");
+
+        let (log, capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let backend = FakeDispatchBackend::default();
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let caller_gid = Gid::current().as_raw();
+        let make_request = |span_id: &str| {
+            BrokerRequest::UsbipBind(nixling_ipc::broker_wire::UsbipBindRequest {
+                bundle_usbip_bind_intent_ref: BundleOpId::new(
+                    nixling_core::bundle_resolver::intent_id_usbip_bind("work", "corp-vm", "1-2.3"),
+                ),
+                tracing_span_id: Some(TracingSpanId::new(span_id)),
+            })
+        };
+        let request = make_request("span-usb-rotate");
+        let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+            .expect("audit context");
+
+        let dispatch = dispatch_request_with_backend(
+            request,
+            1000,
+            caller_gid,
+            caller_role.clone(),
+            &audit_context,
+            &config,
+            &log,
+            Some(&bundle.resolver),
+            &backend,
+        )
+        .expect("dispatch succeeds");
+        match dispatch.response {
+            BrokerResponse::Ack(response) => {
+                assert!(response.accepted);
+                assert_eq!(response.operation, "UsbipBind");
+            }
+            other => panic!("expected UsbipBind ack, got {other:?}"),
+        }
+
+        let records = capture.lock().expect("capture lock").clone();
+        assert_eq!(records.len(), 2);
+        let rotation_record = records
+            .iter()
+            .find(|record| record.operation == "UsbSerialCorrelationKeyRotate")
+            .expect("rotation audit record");
+        assert_eq!(rotation_record.public_operation_id, "usb-audit-serial-hmac");
+        assert_eq!(rotation_record.subject_id, "usb-audit-serial-hmac");
+        assert_eq!(rotation_record.scope_id, "host");
+        assert_eq!(rotation_record.verb, "UsbSerialCorrelationKeyRotate");
+        assert_eq!(
+            rotation_record.request_fields,
+            serde_json::json!({
+                "detectedDuring": "UsbipBind",
+                "tracingSpanIdPresent": true,
+            })
+        );
+        assert_eq!(
+            rotation_record.tracing_span_id.as_deref(),
+            Some("span-usb-rotate")
+        );
+        let rotation_fields = OperationFields::from_operation_value(
+            "UsbSerialCorrelationKeyRotate",
+            rotation_record
+                .operation_fields
+                .clone()
+                .expect("rotation fields"),
+        )
+        .expect("parse rotation fields");
+        assert_eq!(
+            rotation_fields,
+            OperationFields::UsbSerialCorrelationKeyRotate(UsbSerialCorrelationKeyRotationAudit {
+                previous_key_id: "audit-key-previous".to_owned(),
+                current_key_id: "audit-key-current".to_owned(),
+                active_key_count: 2,
+                grace_window_seconds: 30 * 24 * 60 * 60,
+                correlation_version: "nixling-usb-audit-serial-v1".to_owned(),
+            })
+        );
+
+        let bind_record = records
+            .iter()
+            .find(|record| record.operation == "UsbipBind")
+            .expect("bind audit record");
+        let bind_fields = OperationFields::from_operation_value(
+            "UsbipBind",
+            bind_record.operation_fields.clone().expect("bind fields"),
+        )
+        .expect("parse bind fields");
+        let OperationFields::UsbipBind {
+            device_identity: Some(device_identity),
+            ..
+        } = bind_fields
+        else {
+            panic!("expected UsbipBind device identity");
+        };
+        assert!(device_identity.serial_observed);
+        assert!(device_identity.serial_correlation.is_some());
+        assert!(device_identity.previous_serial_correlation.is_some());
+
+        let rotation_json = serde_json::to_string(rotation_record).expect("serialize rotation");
+        assert!(!rotation_json.contains("raw-usb-serial-never-log"));
+        assert!(!rotation_json.contains("1-2.3"));
+        assert!(!rotation_json.contains("key_hex"));
+
+        let exported = log.export_lines(None, None).expect("export audit lines");
+        let rendered = exported.join("\n");
+        assert!(rendered.contains("UsbSerialCorrelationKeyRotate"));
+        assert!(!rendered.contains("raw-usb-serial-never-log"));
+        assert!(!rendered.contains("current-secret-material-12345678"));
+        assert!(!rendered.contains("previous-secret-material-1234567"));
+        assert!(!rendered.contains(&lower_hex(current_secret)));
+        assert!(!rendered.contains(&lower_hex(previous_secret)));
+        assert!(!rendered.contains("key_hex"));
+
+        let repeat_request = make_request("span-usb-rotate-repeat");
+        let repeat_audit_context =
+            DispatchAuditContext::from_request(&repeat_request, 4242, &caller_role)
+                .expect("repeat audit context");
+        dispatch_request_with_backend(
+            repeat_request,
+            1000,
+            caller_gid,
+            caller_role,
+            &repeat_audit_context,
+            &config,
+            &log,
+            Some(&bundle.resolver),
+            &backend,
+        )
+        .expect("repeat dispatch succeeds");
+
+        let records_after_repeat = capture.lock().expect("capture lock").clone();
+        assert_eq!(records_after_repeat.len(), 3);
+        assert_eq!(
+            records_after_repeat
+                .iter()
+                .filter(|record| record.operation == "UsbSerialCorrelationKeyRotate")
+                .count(),
+            1
+        );
+        assert_eq!(
+            records_after_repeat
+                .iter()
+                .filter(|record| record.operation == "UsbipBind")
+                .count(),
+            2
+        );
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usb_audit_serial_hmac_keyring_creates_root_only_current_key_and_reads_previous() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let state_dir = test_audit_dir("usb-audit-hmac-keyring");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let key_dir = usb_audit_serial_hmac_key_dir(&state_dir);
+        fs::create_dir_all(&key_dir).expect("create key dir");
+        let previous = UsbAuditSerialHmacKey {
+            slot: UsbAuditSerialHmacKeySlot::Previous,
+            key_id: "audit-key-previous".to_owned(),
+            key: b"fedcba9876543210fedcba9876543210".to_vec(),
+        };
+        let previous_path = key_dir.join(USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_FILE);
+        fs::write(&previous_path, render_usb_audit_serial_hmac_key(&previous))
+            .expect("write previous key");
+        let mut perms = fs::metadata(&previous_path)
+            .expect("stat previous key")
+            .permissions();
+        perms.set_mode(0o400);
+        fs::set_permissions(&previous_path, perms).expect("chmod previous key");
+
+        let keyring = usb_audit_serial_hmac_keyring(&state_dir, true).expect("keyring loads");
+        assert_eq!(keyring.current.slot, UsbAuditSerialHmacKeySlot::Current);
+        assert!(keyring.current.key_id.starts_with("usb-audit-"));
+        assert_eq!(keyring.current.key.len(), USB_AUDIT_SERIAL_HMAC_KEY_BYTES);
+        assert_eq!(keyring.previous, Some(previous));
+
+        let current_path = key_dir.join(USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE);
+        let mode = fs::metadata(&current_path)
+            .expect("stat current key")
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o400);
+
+        let first_current = keyring.current.clone();
+        let loaded_again =
+            usb_audit_serial_hmac_keyring(&state_dir, true).expect("keyring loads again");
+        assert_eq!(loaded_again.current, first_current);
+    }
+
+    #[test]
+    fn broker_ipc_rate_limiter_refuses_excess_uid_requests() {
+        let mut limiter = IpcRateLimiter::new(2);
+        assert!(limiter.check(IpcRatePool::Daemon, 1000, "nixling-admin", "UsbipBind"));
+        assert!(limiter.check(IpcRatePool::Daemon, 1000, "nixling-admin", "UsbipBind"));
+        assert!(!limiter.check(IpcRatePool::Daemon, 1000, "nixling-admin", "UsbipBind"));
+        assert!(
+            limiter.check(IpcRatePool::Daemon, 1001, "nixling-admin", "UsbipBind"),
+            "other UIDs have independent buckets"
+        );
+    }
+
+    #[test]
+    fn broker_ipc_rate_limiter_keys_on_stable_role_and_operation() {
+        let mut limiter = IpcRateLimiter::new(1);
+        assert!(limiter.check(IpcRatePool::Daemon, 1000, "nixling-admin", "UsbipBind"));
+        assert!(
+            !limiter.check(IpcRatePool::Daemon, 1000, "nixling-admin", "UsbipBind"),
+            "same stable uid/role/op bucket must be limited"
+        );
+        assert!(
+            limiter.check(IpcRatePool::Daemon, 1000, "nixling-admin", "UsbipUnbind"),
+            "distinct USB operations have independent stable buckets"
+        );
+        assert!(
+            limiter.check(IpcRatePool::Daemon, 1000, "launcher-uid", "UsbipBind"),
+            "forwarded caller roles have independent stable buckets"
+        );
+    }
+
+    #[test]
+    fn broker_ipc_rate_limiter_caps_bucket_growth_fail_closed() {
+        let now = Instant::now();
+        let mut limiter = IpcRateLimiter::with_limits(64, 2);
+
+        assert!(limiter.check_at(IpcRatePool::Daemon, 1000, "nixling-admin", "UsbipBind", now));
+        assert!(limiter.check_at(IpcRatePool::Daemon, 1001, "nixling-admin", "UsbipBind", now));
+        assert_eq!(limiter.daemon_buckets.len(), 2);
+        for uid in 1002..1100 {
+            assert!(
+                !limiter.check_at(IpcRatePool::Daemon, uid, "nixling-admin", "UsbipBind", now),
+                "new UID buckets must fail closed once the cap is reached"
+            );
+        }
+        assert_eq!(
+            limiter.daemon_buckets.len(),
+            2,
+            "refused peers must not allocate unbounded buckets"
+        );
+        assert!(
+            limiter.check_at(IpcRatePool::Daemon, 1000, "nixling-admin", "UsbipBind", now),
+            "existing users keep their bucket while new buckets are refused"
+        );
+    }
+
+    #[test]
+    fn broker_ipc_rate_limiter_direct_peer_flood_preserves_daemon_capacity() {
+        let now = Instant::now();
+        let mut limiter = IpcRateLimiter::with_limits(64, 2);
+
+        assert!(limiter.check_at(
+            IpcRatePool::Direct,
+            1000,
+            "direct-broker-peer",
+            "direct-broker-connect",
+            now
+        ));
+        assert!(limiter.check_at(
+            IpcRatePool::Direct,
+            1001,
+            "direct-broker-peer",
+            "direct-broker-connect",
+            now
+        ));
+        assert!(
+            !limiter.check_at(
+                IpcRatePool::Direct,
+                1002,
+                "direct-broker-peer",
+                "direct-broker-connect",
+                now
+            ),
+            "direct peers should fail closed once their own pool is full"
+        );
+        assert_eq!(limiter.direct_buckets.len(), 2);
+
+        assert!(
+            limiter.check_at(IpcRatePool::Daemon, 4242, "nixling-admin", "UsbipBind", now),
+            "daemon-forwarded requests must retain reserved bucket capacity"
+        );
+        assert_eq!(limiter.daemon_buckets.len(), 1);
+        assert_eq!(limiter.direct_buckets.len(), 2);
+    }
+
+    #[test]
+    fn broker_ipc_rate_limiter_evicts_expired_buckets_before_allocating() {
+        let now = Instant::now();
+        let after_window = now + IPC_RATE_LIMIT_WINDOW + Duration::from_millis(1);
+        let mut limiter = IpcRateLimiter::with_limits(64, 2);
+
+        assert!(limiter.check_at(IpcRatePool::Daemon, 1000, "nixling-admin", "UsbipBind", now));
+        assert!(limiter.check_at(IpcRatePool::Daemon, 1001, "nixling-admin", "UsbipBind", now));
+        assert_eq!(limiter.daemon_buckets.len(), 2);
+
+        assert!(
+            limiter.check_at(
+                IpcRatePool::Daemon,
+                1002,
+                "nixling-admin",
+                "UsbipBind",
+                after_window
+            ),
+            "expired buckets should be reclaimed for later callers"
+        );
+        assert_eq!(
+            limiter.daemon_buckets.len(),
+            1,
+            "expired UID buckets must not accumulate after eviction"
+        );
+        assert!(
+            limiter.daemon_buckets.contains_key(&IpcRateKey {
+                uid: 1002,
+                role: "nixling-admin",
+                operation: "UsbipBind",
+            }),
+            "only the fresh caller should remain after eviction"
+        );
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]

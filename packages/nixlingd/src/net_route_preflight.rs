@@ -433,6 +433,8 @@ mod tests {
         NetEnv {
             env: name.to_owned(),
             bridge: IfName::new(bridge).expect("valid ifname"),
+            host_uplink_ip: None,
+            net_uplink_ip: None,
             mtu: 1500,
             mss_clamp: None,
             lan: LanPolicy {

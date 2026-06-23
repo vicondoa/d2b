@@ -20,6 +20,7 @@ use std::process::{Command, Output};
 use nix::sys::socket::{
     AddressFamily, Backlog, SockFlag, SockType, UnixAddr, accept, bind, listen, socket,
 };
+use nixling::UsbProbeOutputV1;
 use serde_json::{Value, json};
 
 const SYSTEM_STATE_JSON: &str = r#"{
@@ -155,6 +156,13 @@ fn target_tempdir(prefix: &str) -> tempfile::TempDir {
         .prefix(prefix)
         .tempdir_in(base)
         .expect("tempdir in cargo target")
+}
+
+fn short_repo_tempdir(prefix: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir_in(repo_root())
+        .expect("short repo tempdir")
 }
 
 fn short_socket_tempdir(prefix: &str) -> tempfile::TempDir {
@@ -778,6 +786,35 @@ fn usb_dry_run_outputs_match_goldens() {
     }
 }
 
+#[test]
+fn usb_probe_json_deserializes_to_public_output_contract() {
+    let scratch = short_repo_tempdir(".cli-json.usb-probe.");
+    let home = scratch.path().join("home");
+    let runtime = scratch.path().join("runtime");
+    fs::create_dir_all(&home).expect("mk HOME fixture");
+    fs::create_dir_all(&runtime).expect("mk XDG_RUNTIME_DIR fixture");
+
+    let socket_path = scratch.path().join("usb.sock");
+    let server = spawn_usb_probe_mock_daemon(&socket_path);
+    let out = base_command(&["usb", "probe", "--json"], &home, &runtime)
+        .env("NIXLING_PUBLIC_SOCKET", &socket_path)
+        .output()
+        .expect("spawn nixling usb probe --json");
+    server.join().expect("usb probe mock daemon");
+    assert_success(&out, "usb probe --json");
+
+    let parsed: UsbProbeOutputV1 = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
+        panic!(
+            "usb probe --json did not match UsbProbeOutputV1: {err}\noutput:\n{}",
+            String::from_utf8_lossy(&out.stdout)
+        )
+    });
+    assert_eq!(parsed.command, "usb probe");
+    assert_eq!(parsed.entries.len(), 1);
+    assert_eq!(parsed.entries[0].vm, "corp-vm");
+    assert_eq!(parsed.entries[0].bus_id, "1-2");
+}
+
 fn split_daemon_audit_lines(expected: &str) -> Vec<String> {
     if expected.is_empty() {
         return Vec::new();
@@ -815,6 +852,83 @@ fn spawn_audit_mock_daemon(path: &Path, lines: Vec<String>) -> std::thread::Join
         let req = recv_frame(conn);
         assert_eq!(req["type"], "audit", "expected audit frame, got {req}");
         send_frame(conn, &json!({ "type": "auditResponse", "lines": lines }));
+        let _ = nix::unistd::close(conn);
+    })
+}
+
+fn spawn_usb_probe_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
+    let _ = fs::remove_file(path);
+    let listener = socket(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        SockFlag::empty(),
+        None,
+    )
+    .expect("seqpacket socket");
+    let addr = UnixAddr::new(path.as_os_str().as_bytes()).expect("unix addr");
+    bind(listener.as_raw_fd(), &addr).expect("bind mock sock");
+    listen(&listener, Backlog::new(1).expect("backlog")).expect("listen mock sock");
+
+    std::thread::spawn(move || {
+        let conn = accept(listener.as_raw_fd()).expect("accept");
+        let hello = recv_frame(conn);
+        assert_eq!(hello["type"], "hello", "expected hello frame, got {hello}");
+        send_frame(
+            conn,
+            &json!({
+                "type": "helloOk",
+                "serverVersion": "0.4.0",
+                "selectedVersion": "0.4.0",
+                "capabilities": ["typed-errors"],
+            }),
+        );
+        let req = recv_frame(conn);
+        assert_eq!(
+            req["type"], "usbipProbe",
+            "expected usbipProbe frame, got {req}"
+        );
+        send_frame(
+            conn,
+            &json!({
+                "type": "usbipProbeResponse",
+                "entries": [
+                    {
+                        "vm": "corp-vm",
+                        "env": "work",
+                        "busId": "1-2",
+                        "lockPath": "/run/nixling/locks/usbip/1-2",
+                        "status": "degraded",
+                        "ownerVm": "corp-vm",
+                        "durableClaim": {
+                            "state": "held-by-desired-owner",
+                            "ownerVm": "corp-vm"
+                        },
+                        "host": {
+                            "bind": "unknown",
+                            "carrier": "unknown",
+                            "proxy": "unknown"
+                        },
+                        "guest": {
+                            "import": "detached"
+                        },
+                        "topologyPolicy": {
+                            "topology": "unknown",
+                            "policy": "allowed"
+                        },
+                        "degradedReasons": [
+                            {
+                                "code": "guest-import-unavailable",
+                                "summary": "the guest USBIP import has not converged",
+                                "remediation": "Run `nixling usb attach corp-vm 1-2 --apply` after the VM is running."
+                            }
+                        ],
+                        "remediationCommands": [
+                            "nixling usb attach corp-vm 1-2 --apply"
+                        ]
+                    }
+                ]
+            }),
+        );
         let _ = nix::unistd::close(conn);
     })
 }

@@ -99,8 +99,13 @@ mod broker_tampered {
                     err.kind
                 );
                 assert!(
-                    err.message.contains("mode"),
-                    "message should contain tamper reason 'mode'; got: {:?}",
+                    err.message.contains("integrity checks"),
+                    "message should be fail-secure integrity wording; got: {:?}",
+                    err.message
+                );
+                assert!(
+                    !err.message.contains("mode"),
+                    "message must not leak the raw tamper reason; got: {:?}",
                     err.message
                 );
                 assert!(
@@ -169,8 +174,13 @@ mod broker_tampered {
                     err.kind
                 );
                 assert!(
-                    err.message.contains("symlink"),
-                    "message should contain tamper reason 'symlink'; got: {:?}",
+                    err.message.contains("integrity checks"),
+                    "message should be fail-secure integrity wording; got: {:?}",
+                    err.message
+                );
+                assert!(
+                    !err.message.contains("symlink"),
+                    "message must not leak the raw tamper reason; got: {:?}",
                     err.message
                 );
             }

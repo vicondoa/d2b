@@ -70,4 +70,16 @@ in
     expr = sockCfg.ListenSequentialPacket or "";
     expected = "/run/nixling/priv.sock";
   };
+
+  "broker-socket-activation/socket-after-tmpfiles" = {
+    expr = builtins.elem "systemd-tmpfiles-setup.service"
+      (cfg.systemd.sockets.nixling-priv-broker.after or [ ]);
+    expected = true;
+  };
+
+  "broker-socket-activation/socket-requires-tmpfiles" = {
+    expr = builtins.elem "systemd-tmpfiles-setup.service"
+      (cfg.systemd.sockets.nixling-priv-broker.requires or [ ]);
+    expected = true;
+  };
 }

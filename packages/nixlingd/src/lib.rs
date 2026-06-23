@@ -15,7 +15,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use nix::cmsg_space;
@@ -32,7 +32,8 @@ use nixling_core::bundle_resolver::{
     BundleResolver, intent_id_activation, intent_id_gc_host, intent_id_hosts_host,
     intent_id_installer_host, intent_id_keys_rotate, intent_id_migrate_host, intent_id_nft_host,
     intent_id_nm_unmanaged_host, intent_id_rotate_known_host, intent_id_route_env,
-    intent_id_runner, intent_id_sysctl, intent_id_trust, intent_id_usbip_firewall,
+    intent_id_runner, intent_id_sysctl, intent_id_trust, intent_id_usbip_bind,
+    intent_id_usbip_firewall,
 };
 use nixling_core::closures::ClosureMetadata;
 use nixling_core::error::BundleError;
@@ -58,8 +59,8 @@ use nixling_ipc::{
         ActivationMode as BrokerActivationMode, ApplyNftablesRequest as BrokerApplyNftablesRequest,
         ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest,
         ApplyRouteRequest as BrokerApplyRouteRequest,
-        ApplySysctlRequest as BrokerApplySysctlRequest, BrokerCallerRole, BrokerRequest,
-        BrokerRequestEnvelope, BrokerResponse, DeregisterRunnerPidfdRequest,
+        ApplySysctlRequest as BrokerApplySysctlRequest, BrokerCallerRole, BrokerErrorResponse,
+        BrokerRequest, BrokerRequestEnvelope, BrokerResponse, DeregisterRunnerPidfdRequest,
         OpenPidfdRequest as BrokerOpenPidfdRequest,
         QemuMediaBootRequest as BrokerQemuMediaBootRequest,
         QemuMediaHotplugRequest as BrokerQemuMediaHotplugRequest,
@@ -80,7 +81,7 @@ use nixling_ipc::{
     },
     guest_proto as pb,
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
-    types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, VmId},
+    types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, TracingSpanId, VmId},
 };
 use nixling_provider_aca::{
     AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider,
@@ -193,6 +194,11 @@ pub mod audit_check;
 // `TypedError::UsbipStepFailed { busid, step, reason }`
 // (exit code 67). See `docs/reference/usbip-state-machine.md`.
 pub mod usbip_state_machine;
+// Daemon-internal USB physical topology identity model for restart
+// reconciliation. Keeps raw sysfs paths and serial-like descriptors out of
+// public/status projections while correlating host-session claims with allowed
+// VID/PID plus bus/port/sysfs topology.
+pub mod usbip_reconcile_state;
 // Daemon-side JSONL audit events for transitions not covered by the
 // broker's OpAuditRecord stream (e.g. api-ready timeout).
 pub mod daemon_audit;
@@ -1661,6 +1667,7 @@ async fn run_usbipd_perenv_autostart(
     let report = tokio::task::spawn_blocking(move || {
         let spawner = BrokerPerEnvUsbipdSpawner {
             state: Arc::clone(&state_arc),
+            tracing_span_id: None,
         };
         usbipd_perenv_autostart::execute_usbipd_perenv_autostart(&specs, &spawner)
     })
@@ -1706,6 +1713,7 @@ async fn run_usbipd_perenv_autostart(
 /// `processes-json.nix` grows the new DAGs.
 struct BrokerPerEnvUsbipdSpawner {
     state: Arc<ServerState>,
+    tracing_span_id: Option<TracingSpanId>,
 }
 
 impl usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnvUsbipdSpawner {
@@ -1732,7 +1740,7 @@ impl usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnvUsbipdSpawner 
             role: usbipd_perenv_autostart::spawn_runner_role(spec),
             bundle_runner_intent_ref: BundleOpId::new(spec.intent_id()),
             runtime_allocations: vec![],
-            tracing_span_id: None,
+            tracing_span_id: self.tracing_span_id.clone(),
         });
         match dispatch_broker_request_with_fds_timeout(
             &self.state,
@@ -3570,6 +3578,23 @@ fn dispatch_broker_usbip_bind(
     if let Err(response) = validate_usbip_bus_id_for_daemon(VERB, &request.bus_id) {
         return Ok(response);
     }
+    let Some(manifest_entry) = resolver.find_manifest_vm(&request.vm) else {
+        return Ok(daemon_failure_response(
+            VERB,
+            format!("VM '{}' is not present in the trusted manifest", request.vm),
+        ));
+    };
+    let manifest_entry = serde_json::to_value(manifest_entry).unwrap_or(Value::Null);
+    if let Err(response) = ensure_usbip_attach_vm_is_running(
+        state,
+        &request.vm,
+        &request.bus_id,
+        VERB,
+        &manifest_entry,
+        resolver.find_process_vm(&request.vm),
+    ) {
+        return Ok(response);
+    }
     if let Err(summary) = run_guest_usbip_import(
         state,
         &resolver,
@@ -3579,21 +3604,31 @@ fn dispatch_broker_usbip_bind(
     ) {
         return Ok(daemon_failure_response(VERB, summary));
     }
+    let bundle_usbip_bind_intent_ref =
+        match usbip_bind_intent_ref_for_daemon(&resolver, &request.vm, &request.bus_id, VERB) {
+            Ok(intent_ref) => intent_ref,
+            Err(response) => return Ok(response),
+        };
     if let Err(response) = dispatch_broker_ack_request(
         state,
         VERB,
         "UsbipBind",
         BrokerRequest::UsbipBind(BrokerUsbipBindRequest {
-            bus_id: request.bus_id.clone(),
-            vm_id: VmId::new(request.vm.clone()),
+            bundle_usbip_bind_intent_ref,
+            tracing_span_id: None,
         }),
     ) {
         return Ok(response);
     }
-    if let Err(response) =
-        ensure_usbipd_env_ready_for_attach(state, &resolver, &request.vm, &request.bus_id, VERB)
-    {
-        compensate_usbip_bind_failure(state, &request.vm, &request.bus_id, VERB);
+    if let Err(response) = ensure_usbipd_env_ready_for_attach(
+        state,
+        &resolver,
+        &request.vm,
+        &request.bus_id,
+        VERB,
+        None,
+    ) {
+        compensate_usbip_bind_failure(state, &resolver, &request.vm, &request.bus_id, VERB);
         return Ok(response);
     }
     if let Err(response) = dispatch_broker_ack_request(
@@ -3602,9 +3637,10 @@ fn dispatch_broker_usbip_bind(
         "UsbipProxyReconcile",
         BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
             scope_id: ScopeId::new(format!("vm:{}", request.vm)),
+            tracing_span_id: None,
         }),
     ) {
-        compensate_usbip_bind_failure(state, &request.vm, &request.bus_id, VERB);
+        compensate_usbip_bind_failure(state, &resolver, &request.vm, &request.bus_id, VERB);
         return Ok(response);
     }
     if let Err(summary) = run_guest_usbip_import(
@@ -3614,7 +3650,7 @@ fn dispatch_broker_usbip_bind(
         &request.bus_id,
         guest_control_health::GuestUsbipAction::Attach,
     ) {
-        compensate_usbip_bind_failure(state, &request.vm, &request.bus_id, VERB);
+        compensate_usbip_bind_failure(state, &resolver, &request.vm, &request.bus_id, VERB);
         return Ok(daemon_failure_response(VERB, summary));
     }
     Ok(applied_response(
@@ -3633,6 +3669,57 @@ fn validate_usbip_bus_id_for_daemon(verb: &str, bus_id: &str) -> Result<(), Valu
             format!("USBIP busid '{bus_id}' does not match the canonical sysfs bus-id shape"),
         )
     })
+}
+
+fn usbip_bind_intent_ref_for_daemon(
+    resolver: &BundleResolver,
+    vm: &str,
+    bus_id: &str,
+    verb: &str,
+) -> Result<BundleOpId, Value> {
+    let Some(entry) = resolver.manifest.vms.get(vm) else {
+        return Err(daemon_failure_response(
+            verb,
+            format!("VM '{vm}' is not present in the trusted manifest"),
+        ));
+    };
+    let Some(env) = entry.env.as_deref() else {
+        return Err(daemon_failure_response(
+            verb,
+            format!("VM '{vm}' is not attached to a nixling env"),
+        ));
+    };
+    Ok(BundleOpId::new(intent_id_usbip_bind(env, vm, bus_id)))
+}
+
+fn ensure_usbip_attach_vm_is_running(
+    state: &ServerState,
+    vm: &str,
+    bus_id: &str,
+    verb: &str,
+    manifest_entry: &Value,
+    process_vm: Option<&nixling_core::processes::VmProcessDag>,
+) -> Result<(), Value> {
+    let lifecycle = public_vm_lifecycle(state, vm, manifest_entry, process_vm);
+    let lifecycle_state = lifecycle
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("Unknown");
+    if lifecycle_state == "Running" {
+        return Ok(());
+    }
+
+    Err(invalid_request_response_with_summary(
+        verb,
+        format!(
+            "VM '{vm}' is {state}, so USB attach cannot reach guest-control",
+            state = lifecycle_state.to_ascii_lowercase()
+        ),
+        format!(
+            "VM '{vm}' is {state}, so USB attach cannot reach guest-control. Start the VM first with `nixling vm start {vm} --apply`, wait until it is running, then retry `nixling usb attach {vm} {bus_id} --apply`.",
+            state = lifecycle_state.to_ascii_lowercase()
+        ),
+    ))
 }
 
 fn run_guest_usbip_import(
@@ -3672,6 +3759,433 @@ fn run_guest_usbip_import(
     .map_err(|error| guest_usbip_import_error_summary(vm, error))
 }
 
+fn run_guest_usbip_status(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    vm: &str,
+    bus_id: &str,
+) -> Result<guest_control_health::GuestUsbipStatusResult, String> {
+    let Some(entry) = resolver.manifest.vms.get(vm) else {
+        return Err(format!("VM '{vm}' is not present in the trusted manifest"));
+    };
+    let Some(host) = entry.usbipd_host_ip.as_deref() else {
+        return Err(format!(
+            "VM '{vm}' has no per-env USBIP host IP in the trusted manifest"
+        ));
+    };
+    let params = resolve_guest_control_probe_params(state, resolver, vm).map_err(|detail| {
+        tracing::warn!(
+            kind = "critical",
+            subsystem = "guest-control-usbip",
+            error_kind = "transport-io",
+            "guest-control USBIP status: probe params unresolved: {detail}"
+        );
+        format!(
+            "guest-control USBIP status for vm '{vm}' could not resolve guest-control transport"
+        )
+    })?;
+    guest_control_bridge::run_usbip_status_on_dedicated_thread(
+        params,
+        broker_socket_path(state),
+        Some(host.to_owned()),
+        Some(bus_id.to_owned()),
+        guest_control_bridge::GUEST_CONTROL_USBIP_IMPORT_TIMEOUT,
+    )
+    .map_err(|error| guest_usbip_import_error_summary(vm, error))
+}
+
+fn persisted_same_vm_usbip_claims(
+    resolver: &BundleResolver,
+    vm: &str,
+) -> Vec<usbip_reconcile_state::UsbipLifecycleClaim> {
+    resolver
+        .usbip_bind_intent_ids()
+        .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
+        .filter(|intent| intent.vm_name == vm)
+        .filter_map(|intent| {
+            let owner = fs::read_to_string(&intent.lock_path).ok()?;
+            if owner.trim() != vm {
+                return None;
+            }
+            let host = resolver
+                .manifest
+                .vms
+                .get(vm)
+                .and_then(|entry| entry.usbipd_host_ip.clone())?;
+            Some(usbip_reconcile_state::UsbipLifecycleClaim {
+                vm: vm.to_owned(),
+                env: intent.env.clone(),
+                bus_id: intent.bus_id.clone(),
+                host,
+                claim_ref: intent.intent_id.clone(),
+                required: true,
+            })
+        })
+        .collect()
+}
+
+fn lifecycle_broker_error_kind(
+    error: &BrokerErrorResponse,
+) -> usbip_reconcile_state::UsbipLifecycleFailureKind {
+    let combined =
+        format!("{} {} {}", error.kind, error.message, error.action).to_ascii_lowercase();
+    if combined.contains("policy")
+        || combined.contains("allowlist")
+        || combined.contains("topology")
+    {
+        usbip_reconcile_state::UsbipLifecycleFailureKind::PolicyMismatch
+    } else if combined.contains("intent") {
+        usbip_reconcile_state::UsbipLifecycleFailureKind::MissingBundleIntent
+    } else if combined.contains("foreign")
+        || combined.contains("held")
+        || combined.contains("owner")
+        || combined.contains("lock")
+    {
+        usbip_reconcile_state::UsbipLifecycleFailureKind::LockConflict
+    } else if combined.contains("absent")
+        || combined.contains("departed")
+        || combined.contains("missing")
+        || combined.contains("not present")
+    {
+        usbip_reconcile_state::UsbipLifecycleFailureKind::RuntimeAbsent
+    } else {
+        usbip_reconcile_state::UsbipLifecycleFailureKind::HostReplayFailed
+    }
+}
+
+fn lifecycle_broker_ack(
+    state: &ServerState,
+    op_name: &str,
+    request: BrokerRequest,
+) -> Result<(), usbip_reconcile_state::UsbipLifecycleStepError> {
+    match dispatch_broker_request(state, request) {
+        Ok(BrokerResponse::Ack(ack)) if ack.accepted && ack.operation == op_name => Ok(()),
+        Ok(BrokerResponse::Error(error)) => {
+            Err(usbip_reconcile_state::UsbipLifecycleStepError::new(
+                lifecycle_broker_error_kind(&error),
+                format!("broker {op_name} failed: {}", error.message),
+            ))
+        }
+        Ok(response) => Err(usbip_reconcile_state::UsbipLifecycleStepError::new(
+            usbip_reconcile_state::UsbipLifecycleFailureKind::HostReplayFailed,
+            format!(
+                "broker {op_name} returned unexpected response {}",
+                broker_response_kind(&response)
+            ),
+        )),
+        Err(error) => Err(usbip_reconcile_state::UsbipLifecycleStepError::new(
+            usbip_reconcile_state::UsbipLifecycleFailureKind::HostReplayFailed,
+            format!("broker {op_name} dispatch failed: {error:?}"),
+        )),
+    }
+}
+
+struct DaemonUsbipStartReconcileExecutor<'a> {
+    state: &'a ServerState,
+    resolver: &'a BundleResolver,
+}
+
+impl usbip_reconcile_state::UsbipVmStartReconcileExecutor
+    for DaemonUsbipStartReconcileExecutor<'_>
+{
+    fn replay_host_bind(
+        &mut self,
+        claim: &usbip_reconcile_state::UsbipLifecycleClaim,
+        attempt: &usbip_reconcile_state::UsbipReconcileAttemptContext,
+    ) -> Result<(), usbip_reconcile_state::UsbipLifecycleStepError> {
+        let tracing_span_id = tracing_span_id_for_usbip_attempt(attempt);
+        lifecycle_broker_ack(
+            self.state,
+            "UsbipBind",
+            BrokerRequest::UsbipBind(BrokerUsbipBindRequest {
+                bundle_usbip_bind_intent_ref: BundleOpId::new(claim.claim_ref.clone()),
+                tracing_span_id: Some(tracing_span_id),
+            }),
+        )
+    }
+
+    fn ensure_proxy_ready(
+        &mut self,
+        claim: &usbip_reconcile_state::UsbipLifecycleClaim,
+        attempt: &usbip_reconcile_state::UsbipReconcileAttemptContext,
+    ) -> Result<(), usbip_reconcile_state::UsbipLifecycleStepError> {
+        let tracing_span_id = tracing_span_id_for_usbip_attempt(attempt);
+        ensure_usbipd_env_ready_for_attach(
+            self.state,
+            self.resolver,
+            &claim.vm,
+            &claim.bus_id,
+            "nixling vm start --apply",
+            Some(&tracing_span_id),
+        )
+        .map_err(|response| {
+            usbip_reconcile_state::UsbipLifecycleStepError::new(
+                usbip_reconcile_state::UsbipLifecycleFailureKind::ProxyFailed,
+                response
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .unwrap_or("USBIP proxy readiness failed")
+                    .to_owned(),
+            )
+        })?;
+        lifecycle_broker_ack(
+            self.state,
+            "UsbipProxyReconcile",
+            BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
+                scope_id: ScopeId::new(format!("vm:{}", claim.vm)),
+                tracing_span_id: Some(tracing_span_id),
+            }),
+        )
+        .map_err(|mut error| {
+            error.kind = usbip_reconcile_state::UsbipLifecycleFailureKind::ProxyFailed;
+            error
+        })
+    }
+
+    fn guest_status(
+        &mut self,
+        claim: &usbip_reconcile_state::UsbipLifecycleClaim,
+        _attempt: &usbip_reconcile_state::UsbipReconcileAttemptContext,
+    ) -> Result<
+        usbip_reconcile_state::UsbipGuestImportState,
+        usbip_reconcile_state::UsbipLifecycleStepError,
+    > {
+        let status = run_guest_usbip_status(self.state, self.resolver, &claim.vm, &claim.bus_id)
+            .map_err(|summary| {
+                usbip_reconcile_state::UsbipLifecycleStepError::new(
+                    usbip_reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
+                    summary,
+                )
+            })?;
+        let imported = status
+            .imports
+            .iter()
+            .any(|entry| entry.host == claim.host && entry.bus_id == claim.bus_id);
+        Ok(if imported {
+            usbip_reconcile_state::UsbipGuestImportState::Imported
+        } else {
+            usbip_reconcile_state::UsbipGuestImportState::Detached
+        })
+    }
+
+    fn guest_import(
+        &mut self,
+        claim: &usbip_reconcile_state::UsbipLifecycleClaim,
+        _attempt: &usbip_reconcile_state::UsbipReconcileAttemptContext,
+    ) -> Result<(), usbip_reconcile_state::UsbipLifecycleStepError> {
+        run_guest_usbip_import(
+            self.state,
+            self.resolver,
+            &claim.vm,
+            &claim.bus_id,
+            guest_control_health::GuestUsbipAction::Attach,
+        )
+        .map(|_| ())
+        .map_err(|summary| {
+            usbip_reconcile_state::UsbipLifecycleStepError::new(
+                usbip_reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
+                summary,
+            )
+        })
+    }
+}
+
+struct DaemonUsbipStopCleanupExecutor<'a> {
+    state: &'a ServerState,
+}
+
+impl usbip_reconcile_state::UsbipVmStopCarrierCleanup for DaemonUsbipStopCleanupExecutor<'_> {
+    fn detach_guest_import(
+        &mut self,
+        claim: &usbip_reconcile_state::UsbipLifecycleClaim,
+        _attempt: &usbip_reconcile_state::UsbipReconcileAttemptContext,
+    ) -> Result<(), usbip_reconcile_state::UsbipLifecycleStepError> {
+        let resolver = load_bundle_resolver(self.state).map_err(|error| {
+            usbip_reconcile_state::UsbipLifecycleStepError::new(
+                usbip_reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
+                format!("{error:?}"),
+            )
+        })?;
+        run_guest_usbip_import(
+            self.state,
+            &resolver,
+            &claim.vm,
+            &claim.bus_id,
+            guest_control_health::GuestUsbipAction::Detach,
+        )
+        .map(|_| ())
+        .map_err(|summary| {
+            usbip_reconcile_state::UsbipLifecycleStepError::new(
+                usbip_reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
+                summary,
+            )
+        })
+    }
+
+    fn cleanup_host_carrier_preserve_claim(
+        &mut self,
+        claim: &usbip_reconcile_state::UsbipLifecycleClaim,
+        attempt: &usbip_reconcile_state::UsbipReconcileAttemptContext,
+    ) -> Result<(), usbip_reconcile_state::UsbipLifecycleStepError> {
+        let tracing_span_id = tracing_span_id_for_usbip_attempt(attempt);
+        lifecycle_broker_ack(
+            self.state,
+            "UsbipUnbind",
+            BrokerRequest::UsbipUnbind(BrokerUsbipUnbindRequest {
+                bundle_usbip_bind_intent_ref: BundleOpId::new(claim.claim_ref.clone()),
+                preserve_durable_claim: true,
+                tracing_span_id: Some(tracing_span_id),
+            }),
+        )
+    }
+
+    fn reconcile_proxy(
+        &mut self,
+        claim: &usbip_reconcile_state::UsbipLifecycleClaim,
+        attempt: &usbip_reconcile_state::UsbipReconcileAttemptContext,
+    ) -> Result<(), usbip_reconcile_state::UsbipLifecycleStepError> {
+        let tracing_span_id = tracing_span_id_for_usbip_attempt(attempt);
+        lifecycle_broker_ack(
+            self.state,
+            "UsbipProxyReconcile",
+            BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
+                scope_id: ScopeId::new(format!("vm:{}", claim.vm)),
+                tracing_span_id: Some(tracing_span_id),
+            }),
+        )
+        .map_err(|mut error| {
+            error.kind = usbip_reconcile_state::UsbipLifecycleFailureKind::ProxyFailed;
+            error
+        })
+    }
+}
+
+fn emit_usbip_lifecycle_observations(
+    phase: &str,
+    report: &usbip_reconcile_state::UsbipLifecycleReconcileReport,
+) {
+    for claim in &report.claims {
+        for reason in &claim.degraded {
+            tracing::warn!(
+                kind = "critical",
+                subsystem = "usbip-lifecycle",
+                phase = phase,
+                vm = %claim.vm,
+                env = %claim.env,
+                bus_id = %claim.bus_id,
+                reason = ?reason.code,
+                remediation = %reason.remediation,
+                fatal = claim.fatal,
+                "USBIP lifecycle reconciliation degraded"
+            );
+        }
+    }
+}
+
+fn usbip_lifecycle_report_summary(
+    phase: &str,
+    report: &usbip_reconcile_state::UsbipLifecycleReconcileReport,
+) -> Option<String> {
+    if report.claims.is_empty() {
+        return None;
+    }
+    let claims = report.claims.len();
+    let degraded = report.degraded_count();
+    let imported = report
+        .claims
+        .iter()
+        .filter(|claim| {
+            claim
+                .completed
+                .contains(&usbip_reconcile_state::UsbipLifecycleStep::GuestImport)
+        })
+        .count();
+    let preserved = report
+        .claims
+        .iter()
+        .filter(|claim| {
+            claim
+                .completed
+                .contains(&usbip_reconcile_state::UsbipLifecycleStep::PreserveDurableClaim)
+        })
+        .count();
+    let mut summary = match phase {
+        "start" => format!(
+            "USBIP reconciliation inspected {claims} persisted claim(s), imported {imported}, degraded {degraded}"
+        ),
+        "stop" => format!(
+            "USBIP cleanup inspected {claims} host-session claim(s), preserved {preserved}, degraded {degraded}"
+        ),
+        _ => format!("USBIP lifecycle inspected {claims} persisted claim(s), degraded {degraded}"),
+    };
+    if let Some(reason) = report.first_fatal_reason() {
+        summary.push_str(&format!("; fatal: {}", reason.summary));
+    } else if degraded > 0 && phase == "start" {
+        summary.push_str("; VM boot continues where policy permits; inspect `nixling usb status` before using affected devices");
+    } else if degraded > 0 {
+        summary.push_str(
+            "; VM stop continues; inspect `nixling usb status` before restarting affected devices",
+        );
+    }
+    Some(summary)
+}
+
+fn new_usbip_reconcile_attempt(phase: &str) -> usbip_reconcile_state::UsbipReconcileAttemptContext {
+    let phase = match phase {
+        "start" | "stop" => phase,
+        _ => "other",
+    };
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let bounded = format!("usb-{phase}-{nanos:016x}");
+    let correlation_id = usbip_reconcile_state::UsbipReconcileCorrelationId::new(&bounded)
+        .or_else(|| usbip_reconcile_state::UsbipReconcileCorrelationId::new(format!("usb-{phase}")))
+        .expect("static USBIP reconcile correlation id is valid");
+    usbip_reconcile_state::UsbipReconcileAttemptContext { correlation_id }
+}
+
+fn tracing_span_id_for_usbip_attempt(
+    attempt: &usbip_reconcile_state::UsbipReconcileAttemptContext,
+) -> TracingSpanId {
+    TracingSpanId::new(attempt.correlation_id.as_str().to_owned())
+}
+
+fn reconcile_usbip_after_vm_start(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    vm: &str,
+) -> Option<usbip_reconcile_state::UsbipLifecycleReconcileReport> {
+    let claims = persisted_same_vm_usbip_claims(resolver, vm);
+    if claims.is_empty() {
+        return None;
+    }
+    let attempt = new_usbip_reconcile_attempt("start");
+    let mut executor = DaemonUsbipStartReconcileExecutor { state, resolver };
+    let report =
+        usbip_reconcile_state::reconcile_usbip_vm_start_claims(&claims, &attempt, &mut executor);
+    emit_usbip_lifecycle_observations("start", &report);
+    Some(report)
+}
+
+fn cleanup_usbip_before_vm_stop(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    vm: &str,
+) -> Option<usbip_reconcile_state::UsbipLifecycleReconcileReport> {
+    let claims = persisted_same_vm_usbip_claims(resolver, vm);
+    if claims.is_empty() {
+        return None;
+    }
+    let attempt = new_usbip_reconcile_attempt("stop");
+    let mut executor = DaemonUsbipStopCleanupExecutor { state };
+    let report =
+        usbip_reconcile_state::cleanup_usbip_vm_stop_claims(&claims, &attempt, &mut executor);
+    emit_usbip_lifecycle_observations("stop", &report);
+    Some(report)
+}
+
 fn guest_usbip_import_error_summary(
     vm: &str,
     error: guest_control_health::GuestUsbipImportError,
@@ -3691,17 +4205,34 @@ fn guest_usbip_import_error_summary(
         E::InvalidBusId => "guestd rejected the USBIP busid",
         E::InvalidHost => "guestd rejected the USBIP backend host",
         E::CommandFailed => "guest usbip command failed",
+        E::CommandTimeout => "guest usbip command timed out",
+        E::InvalidOutput => "guest usbip command output was invalid",
     };
     format!("guest-control USBIP import failed for vm '{vm}': {detail}")
 }
 
-fn compensate_usbip_bind_failure(state: &ServerState, vm: &str, bus_id: &str, verb: &str) {
+fn compensate_usbip_bind_failure(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    vm: &str,
+    bus_id: &str,
+    verb: &str,
+) {
+    let intent_ref = match usbip_bind_intent_ref_for_daemon(resolver, vm, bus_id, verb) {
+        Ok(intent_ref) => intent_ref,
+        Err(response) => {
+            tracing::warn!(vm = %vm, bus_id = %bus_id, response = %response, "USBIP attach compensation could not resolve bind intent");
+            return;
+        }
+    };
     if let Err(response) = dispatch_broker_ack_request(
         state,
         verb,
         "UsbipUnbind",
         BrokerRequest::UsbipUnbind(BrokerUsbipUnbindRequest {
-            bus_id: bus_id.to_owned(),
+            bundle_usbip_bind_intent_ref: intent_ref,
+            preserve_durable_claim: false,
+            tracing_span_id: None,
         }),
     ) {
         tracing::warn!(vm = %vm, bus_id = %bus_id, response = %response, "USBIP attach compensation unbind failed");
@@ -3712,6 +4243,7 @@ fn compensate_usbip_bind_failure(state: &ServerState, vm: &str, bus_id: &str, ve
         "UsbipProxyReconcile",
         BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
             scope_id: ScopeId::new(format!("vm:{vm}")),
+            tracing_span_id: None,
         }),
     ) {
         tracing::warn!(vm = %vm, bus_id = %bus_id, response = %response, "USBIP attach compensation proxy reconcile failed");
@@ -3724,6 +4256,7 @@ fn ensure_usbipd_env_ready_for_attach(
     vm: &str,
     bus_id: &str,
     verb: &str,
+    tracing_span_id: Option<&TracingSpanId>,
 ) -> Result<(), Value> {
     let Some(entry) = resolver.manifest.vms.get(vm) else {
         return Err(daemon_failure_response(
@@ -3763,12 +4296,13 @@ fn ensure_usbipd_env_ready_for_attach(
             bundle_usbip_firewall_intent_ref: BundleOpId::new(intent_id_usbip_firewall(
                 env, bus_id,
             )),
-            tracing_span_id: None,
+            tracing_span_id: tracing_span_id.cloned(),
         }),
     )?;
 
     let spawner = BrokerPerEnvUsbipdSpawner {
         state: Arc::new(state.clone()),
+        tracing_span_id: tracing_span_id.cloned(),
     };
     let report = usbipd_perenv_autostart::execute_usbipd_perenv_autostart(&specs, &spawner);
     let failed: Vec<String> = report
@@ -3828,47 +4362,37 @@ fn dispatch_broker_usbip_unbind(
     if let Err(response) = validate_usbip_bus_id_for_daemon(VERB, &request.bus_id) {
         return Ok(response);
     }
-    let guest_cleanup_failure = run_guest_usbip_import(
-        state,
-        &resolver,
+    if let Err(response) =
+        usbip_bind_intent_ref_for_daemon(&resolver, &request.vm, &request.bus_id, VERB)
+    {
+        return Ok(response);
+    }
+    let revocation_plan = usbip_reconcile_state::plan_usbip_revocation_flow_termination(
+        usbip_reconcile_state::UsbipProxyFlowObservation::SharedOrAmbiguous,
+    );
+    Ok(usbip_revocation_not_isolated_response(
+        VERB,
         &request.vm,
         &request.bus_id,
-        guest_control_health::GuestUsbipAction::Detach,
-    )
-    .err();
-    if let Err(response) = dispatch_broker_ack_request(
-        state,
-        VERB,
-        "UsbipUnbind",
-        BrokerRequest::UsbipUnbind(BrokerUsbipUnbindRequest {
-            bus_id: request.bus_id.clone(),
-        }),
-    ) {
-        return Ok(response);
-    }
-    if let Err(response) = dispatch_broker_ack_request(
-        state,
-        VERB,
-        "UsbipProxyReconcile",
-        BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
-            scope_id: ScopeId::new(format!("vm:{}", request.vm)),
-        }),
-    ) {
-        return Ok(response);
-    }
-    if let Some(summary) = guest_cleanup_failure {
-        return Ok(daemon_failure_response(
-            VERB,
-            format!("host USBIP unbind completed, but {summary}"),
-        ));
-    }
-    Ok(applied_response(
-        VERB,
-        format!(
-            "nixling usb detach --apply: detached guest import and unbound busid '{}' for vm '{}'",
-            request.bus_id, request.vm
-        ),
+        revocation_plan
+            .fail_closed_reason
+            .unwrap_or(usbip_reconcile_state::UsbipRevocationFlowFailure::MissingExactTuple),
     ))
+}
+
+fn usbip_revocation_not_isolated_response(
+    verb: &str,
+    vm: &str,
+    busid: &str,
+    reason: usbip_reconcile_state::UsbipRevocationFlowFailure,
+) -> Value {
+    let envelope = TypedError::UsbipRevocationNotIsolated {
+        vm: vm.to_owned(),
+        busid: busid.to_owned(),
+        reason,
+    }
+    .to_envelope();
+    broker_failure_response(verb, envelope.message, envelope.remediation, None)
 }
 
 fn vm_is_qemu_media(resolver: &BundleResolver, vm: &str) -> Result<bool, TypedError> {
@@ -4049,6 +4573,7 @@ fn dispatch_broker_usbip_probe(state: &ServerState) -> Result<Value, TypedError>
             "UsbipProxyReconcile",
             BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
                 scope_id: ScopeId::new("host"),
+                tracing_span_id: None,
             }),
         )
     {
@@ -4058,35 +4583,366 @@ fn dispatch_broker_usbip_probe(state: &ServerState) -> Result<Value, TypedError>
         .iter()
         .map(String::as_str)
         .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
-        .map(|intent| {
-            let owner_vm = fs::read_to_string(&intent.lock_path)
-                .ok()
-                .map(|content| content.trim().to_owned())
-                .filter(|owner| !owner.is_empty());
-            public_wire::UsbipProbeEntry {
-                vm: intent.vm_name.clone(),
-                env: intent.env.clone(),
-                bus_id: intent.bus_id.clone(),
-                lock_path: intent.lock_path.display().to_string(),
-                status: if owner_vm.is_some() {
-                    public_wire::UsbipProbeStatus::Bound
-                } else {
-                    public_wire::UsbipProbeStatus::Unbound
-                },
-                owner_vm,
-                kind: public_wire::UsbProbeEntryKind::Usbip,
-                slot: None,
-                media_ref: None,
-                source_kind: None,
-                candidate_bus_ids: Vec::new(),
-                follow_up_command: None,
-            }
-        })
+        .map(|intent| usbip_probe_entry_from_intent(state, &resolver, intent))
         .collect();
     entries.extend(qemu_media_probe_entries(&resolver));
     Ok(wire::usbip_probe_response(
         public_wire::UsbipProbeResponse { entries },
     ))
+}
+
+fn usbip_probe_entry_from_intent(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+) -> public_wire::UsbipProbeEntry {
+    let owner_vm = fs::read_to_string(&intent.lock_path)
+        .ok()
+        .map(|content| content.trim().to_owned())
+        .filter(|owner| !owner.is_empty());
+    let durable_state = match owner_vm.as_deref() {
+        None => public_wire::UsbipDurableClaimState::Missing,
+        Some(owner) if owner == intent.vm_name => {
+            public_wire::UsbipDurableClaimState::HeldByDesiredOwner
+        }
+        Some(_) => public_wire::UsbipDurableClaimState::HeldByOtherOwner,
+    };
+    let mut degraded_reasons = Vec::new();
+    let mut remediation_commands = Vec::new();
+    let mut guest_import = public_wire::UsbipGuestImportState::Unknown;
+    let (host, topology_policy, host_reason) = public_host_usb_probe_from_sysfs(intent);
+    if let Some(reason) = host_reason {
+        degraded_reasons.push(reason);
+    }
+
+    if matches!(
+        durable_state,
+        public_wire::UsbipDurableClaimState::HeldByDesiredOwner
+    ) {
+        if host.bind != public_wire::UsbipHostBindState::BoundToUsbipHost {
+            degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
+                usbip_reconcile_state::UsbipDegradedReason::HostBindUnavailable,
+                Some(format!(
+                    "Run `nixling usb attach {vm} {bus} --apply` so the broker can bind the device for USBIP export.",
+                    vm = intent.vm_name,
+                    bus = intent.bus_id
+                )),
+            ));
+        }
+        if host.carrier != public_wire::UsbipHostCarrierState::Ready {
+            degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
+                usbip_reconcile_state::UsbipDegradedReason::CarrierUnavailable,
+                Some(format!(
+                    "Reconnect the device, then run `nixling usb attach {vm} {bus} --apply`.",
+                    vm = intent.vm_name,
+                    bus = intent.bus_id
+                )),
+            ));
+        }
+        match run_guest_usbip_status(state, resolver, &intent.vm_name, &intent.bus_id) {
+            Ok(status) => {
+                let imported = status
+                    .imports
+                    .iter()
+                    .any(|entry| entry.bus_id == intent.bus_id);
+                guest_import = if imported {
+                    public_wire::UsbipGuestImportState::Imported
+                } else {
+                    public_wire::UsbipGuestImportState::Detached
+                };
+                if !imported {
+                    degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
+                        usbip_reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
+                        Some(format!(
+                            "Run `nixling usb attach {vm} {bus} --apply` after the VM is running.",
+                            vm = intent.vm_name,
+                            bus = intent.bus_id
+                        )),
+                    ));
+                    remediation_commands.push(format!(
+                        "nixling usb attach {vm} {bus} --apply",
+                        vm = intent.vm_name,
+                        bus = intent.bus_id
+                    ));
+                }
+            }
+            Err(_) => {
+                guest_import = public_wire::UsbipGuestImportState::Unavailable;
+                degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
+                    usbip_reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
+                    Some(format!(
+                        "Start the VM with `nixling vm start {vm} --apply`, then run `nixling usb attach {vm} {bus} --apply`.",
+                        vm = intent.vm_name,
+                        bus = intent.bus_id
+                    )),
+                ));
+                remediation_commands.push(format!(
+                    "nixling usb attach {vm} {bus} --apply",
+                    vm = intent.vm_name,
+                    bus = intent.bus_id
+                ));
+            }
+        }
+        degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
+            usbip_reconcile_state::UsbipDegradedReason::ProbeIncomplete,
+            Some(format!(
+                "Run `nixling usb attach {vm} {bus} --apply` to reconcile host and guest USB state.",
+                vm = intent.vm_name,
+                bus = intent.bus_id
+            )),
+        ));
+    } else if matches!(
+        durable_state,
+        public_wire::UsbipDurableClaimState::HeldByOtherOwner
+    ) {
+        degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
+            usbip_reconcile_state::UsbipDegradedReason::LockHeldByOtherOwner,
+            Some(format!(
+                "Run `nixling usb detach {owner} {bus} --apply` before attaching to `{vm}`.",
+                owner = owner_vm.as_deref().unwrap_or("<owner>"),
+                bus = intent.bus_id,
+                vm = intent.vm_name
+            )),
+        ));
+        if let Some(owner) = owner_vm.as_deref() {
+            remediation_commands.push(format!(
+                "nixling usb detach {owner} {bus} --apply",
+                bus = intent.bus_id
+            ));
+        }
+    } else {
+        remediation_commands.push(format!(
+            "nixling usb attach {vm} {bus} --apply",
+            vm = intent.vm_name,
+            bus = intent.bus_id
+        ));
+    }
+
+    let status = if degraded_reasons.is_empty() {
+        match durable_state {
+            public_wire::UsbipDurableClaimState::HeldByDesiredOwner => {
+                public_wire::UsbipProbeStatus::Bound
+            }
+            public_wire::UsbipDurableClaimState::Missing => public_wire::UsbipProbeStatus::Unbound,
+            _ => public_wire::UsbipProbeStatus::Degraded,
+        }
+    } else {
+        public_wire::UsbipProbeStatus::Degraded
+    };
+
+    public_wire::UsbipProbeEntry {
+        vm: intent.vm_name.clone(),
+        env: intent.env.clone(),
+        bus_id: intent.bus_id.clone(),
+        lock_path: intent.lock_path.display().to_string(),
+        status,
+        owner_vm: owner_vm.clone(),
+        kind: public_wire::UsbProbeEntryKind::Usbip,
+        slot: None,
+        media_ref: None,
+        source_kind: None,
+        candidate_bus_ids: Vec::new(),
+        follow_up_command: None,
+        durable_claim: public_wire::UsbipDurableClaimStatus {
+            state: durable_state,
+            owner_vm,
+        },
+        host: public_wire::UsbipHostProbeStatus {
+            bind: host.bind,
+            carrier: host.carrier,
+            proxy: public_wire::UsbipProxyState::Unknown,
+        },
+        guest: public_wire::UsbipGuestProbeStatus {
+            import: guest_import,
+        },
+        topology_policy,
+        degraded_reasons,
+        remediation_commands,
+    }
+}
+
+fn public_host_usb_probe_from_sysfs(
+    intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+) -> (
+    public_wire::UsbipHostProbeStatus,
+    public_wire::UsbipTopologyPolicyStatus,
+    Option<public_wire::UsbipProbeDegradedReason>,
+) {
+    let device = Path::new("/sys/bus/usb/devices").join(&intent.bus_id);
+    if !device.exists() {
+        return (
+            public_wire::UsbipHostProbeStatus {
+                bind: public_wire::UsbipHostBindState::DeviceMissing,
+                carrier: public_wire::UsbipHostCarrierState::Absent,
+                proxy: public_wire::UsbipProxyState::Unknown,
+            },
+            public_wire::UsbipTopologyPolicyStatus {
+                topology: public_wire::UsbipTopologyState::NotObserved,
+                policy: if intent.vendor_product_allowlist.is_empty() {
+                    public_wire::UsbipPolicyState::Missing
+                } else {
+                    public_wire::UsbipPolicyState::Unknown
+                },
+            },
+            Some(usbip_probe_degraded_reason_from_internal(
+                usbip_reconcile_state::UsbipDegradedReason::DeviceDepartedBeforeClaim,
+                Some(format!(
+                    "Reconnect the device, then run `nixling usb attach {vm} {bus} --apply`.",
+                    vm = intent.vm_name,
+                    bus = intent.bus_id
+                )),
+            )),
+        );
+    }
+
+    let bind = match fs::read_link(device.join("driver"))
+        .ok()
+        .and_then(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .as_deref()
+    {
+        Some("usbip-host") => public_wire::UsbipHostBindState::BoundToUsbipHost,
+        Some(_) => public_wire::UsbipHostBindState::BoundToUnexpectedDriver,
+        None => public_wire::UsbipHostBindState::Unbound,
+    };
+    let observed_pair = read_usb_vendor_product(&device);
+    let (topology, policy, policy_reason) = match observed_pair {
+        None => (
+            public_wire::UsbipTopologyState::Incomplete,
+            public_wire::UsbipPolicyState::Unknown,
+            Some(usbip_probe_degraded_reason_from_internal(
+                usbip_reconcile_state::UsbipDegradedReason::ProbeIncomplete,
+                Some("Retry `nixling usb probe`; if it repeats, reconnect the USB device and retry the lifecycle verb.".to_owned()),
+            )),
+        ),
+        Some((_vendor, _product)) if intent.vendor_product_allowlist.is_empty() => (
+            public_wire::UsbipTopologyState::Match,
+            public_wire::UsbipPolicyState::Missing,
+            None,
+        ),
+        Some((vendor, product))
+            if intent
+                .vendor_product_allowlist
+                .iter()
+                .any(|pair| pair.vendor == vendor && pair.product == product) =>
+        {
+            (
+                public_wire::UsbipTopologyState::Match,
+                public_wire::UsbipPolicyState::Allowed,
+                None,
+            )
+        }
+        Some(_) => (
+            public_wire::UsbipTopologyState::Mismatch,
+            public_wire::UsbipPolicyState::Denied,
+            Some(usbip_probe_degraded_reason_from_internal(
+                usbip_reconcile_state::UsbipDegradedReason::PolicyFailed(
+                    usbip_reconcile_state::UsbipPolicyFailure::TopologyMismatch,
+                ),
+                Some("Fix the USBIP declaration or attach the declared physical device, rebuild, then rerun `nixling usb probe`.".to_owned()),
+            )),
+        ),
+    };
+
+    (
+        public_wire::UsbipHostProbeStatus {
+            bind,
+            carrier: public_wire::UsbipHostCarrierState::Ready,
+            proxy: public_wire::UsbipProxyState::Unknown,
+        },
+        public_wire::UsbipTopologyPolicyStatus { topology, policy },
+        policy_reason,
+    )
+}
+
+fn read_usb_vendor_product(device: &Path) -> Option<(u16, u16)> {
+    let vendor =
+        u16::from_str_radix(fs::read_to_string(device.join("idVendor")).ok()?.trim(), 16).ok()?;
+    let product = u16::from_str_radix(
+        fs::read_to_string(device.join("idProduct")).ok()?.trim(),
+        16,
+    )
+    .ok()?;
+    Some((vendor, product))
+}
+
+fn usbip_probe_degraded_reason_from_internal(
+    reason: usbip_reconcile_state::UsbipDegradedReason,
+    remediation_override: Option<String>,
+) -> public_wire::UsbipProbeDegradedReason {
+    let public = reason.to_public_reason();
+    public_wire::UsbipProbeDegradedReason {
+        code: match public.code {
+            usbip_reconcile_state::UsbipDegradedReasonCode::PolicyFailed => {
+                public_wire::UsbipProbeDegradedReasonCode::PolicyFailed
+            }
+            usbip_reconcile_state::UsbipDegradedReasonCode::DeviceDepartedBeforeClaim => {
+                public_wire::UsbipProbeDegradedReasonCode::DeviceDepartedBeforeClaim
+            }
+            usbip_reconcile_state::UsbipDegradedReasonCode::DeviceDepartedAfterLock => {
+                public_wire::UsbipProbeDegradedReasonCode::DeviceDepartedAfterLock
+            }
+            usbip_reconcile_state::UsbipDegradedReasonCode::DeviceDepartedDuringMutation => {
+                public_wire::UsbipProbeDegradedReasonCode::DeviceDepartedDuringMutation
+            }
+            usbip_reconcile_state::UsbipDegradedReasonCode::DeviceReappearedWithDifferentTopology => {
+                public_wire::UsbipProbeDegradedReasonCode::DeviceReappearedWithDifferentTopology
+            }
+            usbip_reconcile_state::UsbipDegradedReasonCode::LockHeldByOtherOwner => {
+                public_wire::UsbipProbeDegradedReasonCode::LockHeldByOtherOwner
+            }
+            usbip_reconcile_state::UsbipDegradedReasonCode::InvalidPersistedLockClaim => {
+                public_wire::UsbipProbeDegradedReasonCode::InvalidPersistedLockClaim
+            }
+            usbip_reconcile_state::UsbipDegradedReasonCode::CarrierUnavailable => {
+                public_wire::UsbipProbeDegradedReasonCode::CarrierUnavailable
+            }
+            usbip_reconcile_state::UsbipDegradedReasonCode::HostBindUnavailable => {
+                public_wire::UsbipProbeDegradedReasonCode::HostBindUnavailable
+            }
+            usbip_reconcile_state::UsbipDegradedReasonCode::ProxyUnavailable => {
+                public_wire::UsbipProbeDegradedReasonCode::ProxyUnavailable
+            }
+            usbip_reconcile_state::UsbipDegradedReasonCode::GuestImportUnavailable => {
+                public_wire::UsbipProbeDegradedReasonCode::GuestImportUnavailable
+            }
+            usbip_reconcile_state::UsbipDegradedReasonCode::StaleHostState => {
+                public_wire::UsbipProbeDegradedReasonCode::StaleHostState
+            }
+            usbip_reconcile_state::UsbipDegradedReasonCode::StaleGuestState => {
+                public_wire::UsbipProbeDegradedReasonCode::StaleGuestState
+            }
+            usbip_reconcile_state::UsbipDegradedReasonCode::ProbeIncomplete => {
+                public_wire::UsbipProbeDegradedReasonCode::ProbeIncomplete
+            }
+        },
+        summary: public.summary,
+        remediation: remediation_override.unwrap_or(public.remediation),
+    }
+}
+
+fn public_usb_status_for_vm(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    vm: &str,
+) -> Option<public_wire::UsbipVmStatus> {
+    let entries: Vec<_> = resolver
+        .usbip_bind_intent_ids()
+        .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
+        .filter(|intent| intent.vm_name == vm)
+        .map(|intent| usbip_probe_entry_from_intent(state, resolver, intent))
+        .collect();
+    if entries.is_empty() {
+        return None;
+    }
+    Some(public_wire::UsbipVmStatus {
+        degraded: entries
+            .iter()
+            .any(|entry| entry.status == public_wire::UsbipProbeStatus::Degraded),
+        entries,
+    })
 }
 
 fn qemu_media_probe_entries(resolver: &BundleResolver) -> Vec<public_wire::UsbipProbeEntry> {
@@ -4312,7 +5168,25 @@ fn qemu_media_probe_entry(
         media_ref: Some(MediaRef::new(source.media_ref.clone())),
         source_kind: Some(source_kind),
         candidate_bus_ids: candidate_bus_ids.to_vec(),
-        follow_up_command,
+        follow_up_command: follow_up_command.clone(),
+        durable_claim: public_wire::UsbipDurableClaimStatus {
+            state: public_wire::UsbipDurableClaimState::NotApplicable,
+            owner_vm: None,
+        },
+        host: public_wire::UsbipHostProbeStatus {
+            bind: public_wire::UsbipHostBindState::NotApplicable,
+            carrier: public_wire::UsbipHostCarrierState::NotApplicable,
+            proxy: public_wire::UsbipProxyState::NotApplicable,
+        },
+        guest: public_wire::UsbipGuestProbeStatus {
+            import: public_wire::UsbipGuestImportState::NotApplicable,
+        },
+        topology_policy: public_wire::UsbipTopologyPolicyStatus {
+            topology: public_wire::UsbipTopologyState::NotApplicable,
+            policy: public_wire::UsbipPolicyState::NotApplicable,
+        },
+        degraded_reasons: Vec::new(),
+        remediation_commands: follow_up_command.into_iter().collect(),
     }
 }
 
@@ -7463,13 +8337,25 @@ fn broker_failure_response(
 }
 
 fn invalid_request_response(verb: &str, remediation: String) -> Value {
+    invalid_request_response_with_summary(verb, String::new(), remediation)
+}
+
+fn invalid_request_response_with_summary(
+    verb: &str,
+    summary: String,
+    remediation: String,
+) -> Value {
     use nixling_ipc::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
 
     wire::mutating_verb_response(MutatingVerbResponse {
         verb: verb.to_owned(),
         outcome: MutatingVerbOutcome::InvalidRequest,
         target_wave: None,
-        summary: None,
+        summary: if summary.is_empty() {
+            None
+        } else {
+            Some(summary)
+        },
         remediation: Some(remediation),
         api_ready: None,
     })
@@ -11499,6 +12385,7 @@ fn dispatch_broker_vm_start(
         ));
     }
     if report.overall_ok {
+        let mut usb_lifecycle_summary = None;
         if !request.no_wait_api {
             // When the VM that just came up is the observability VM AND
             // observability is
@@ -11581,12 +12468,48 @@ fn dispatch_broker_vm_start(
                     "known-hosts refresh failed (non-fatal, retained prior pin)",
                 ),
             }
+            if let Some(usb_report) = reconcile_usbip_after_vm_start(state, &resolver, &request.vm)
+            {
+                if usb_report.fatal() {
+                    let fatal = usb_report.first_fatal_reason();
+                    let summary = usbip_lifecycle_report_summary("start", &usb_report)
+                        .unwrap_or_else(|| {
+                            format!(
+                                "USBIP reconciliation for VM '{}' failed before device exposure",
+                                request.vm
+                            )
+                        });
+                    if let Err(response) =
+                        rollback_failed_vm_start(state, &request.vm, &tracked_roles)
+                    {
+                        return Ok(response);
+                    }
+                    return Ok(broker_failure_response(
+                        VERB,
+                        summary,
+                        fatal
+                            .map(|reason| reason.remediation.clone())
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "Fix USBIP policy or host-session claim state for VM '{}', then retry `nixling vm start {} --apply`.",
+                                    request.vm, request.vm
+                                )
+                            }),
+                        None,
+                    ));
+                }
+                usb_lifecycle_summary = usbip_lifecycle_report_summary("start", &usb_report);
+            }
         }
-        let summary = if request.no_wait_api {
+        let mut summary = if request.no_wait_api {
             format!("vm.{}: process-alive: ok; api-ready: pending", request.vm)
         } else {
             vm_start_success_summary(&report)
         };
+        if let Some(usb_summary) = usb_lifecycle_summary {
+            summary.push_str("; ");
+            summary.push_str(&usb_summary);
+        }
         let mut response = applied_response(VERB, summary);
         if request.no_wait_api {
             response.as_object_mut().unwrap().insert(
@@ -11849,6 +12772,21 @@ fn dispatch_broker_vm_stop_with_timeout_as(
         ));
     }
 
+    let usb_lifecycle_summary = match load_bundle_resolver(state) {
+        Ok(resolver) => cleanup_usbip_before_vm_stop(state, &resolver, &request.vm)
+            .and_then(|report| usbip_lifecycle_report_summary("stop", &report)),
+        Err(error) => {
+            tracing::warn!(
+                vm = %request.vm,
+                error = ?error,
+                "vm stop: USBIP carrier cleanup skipped because bundle resolver could not load"
+            );
+            Some(format!(
+                "USBIP cleanup degraded: could not load trusted bundle; host-session claims were left unchanged ({error:?})"
+            ))
+        }
+    };
+
     let mut drained_roles = Vec::with_capacity(stop_entries.len());
     let mut sigkill_roles = Vec::new();
     let mut shutdown_outcomes = Vec::new();
@@ -11927,6 +12865,10 @@ fn dispatch_broker_vm_stop_with_timeout_as(
             .collect::<Vec<_>>()
             .join(", ");
         summary.push_str(&format!("; provider shutdown outcomes: {labels}"));
+    }
+    if let Some(usb_summary) = usb_lifecycle_summary {
+        summary.push_str("; ");
+        summary.push_str(&usb_summary);
     }
     summary.push_str(&format!(" ({})", drained_roles.join(", ")));
     Ok(applied_response(VERB, summary))
@@ -12985,6 +13927,7 @@ fn dispatch_status(
         let resolver = load_bundle_resolver(state)?;
         refresh_qemu_media_registry_index_if_needed(state, &resolver)?;
     }
+    let usb_resolver = load_bundle_resolver(state).ok();
     let requested_vm = request.vm.clone();
 
     let statuses = manifest
@@ -13021,6 +13964,9 @@ fn dispatch_status(
                     process_vm,
                     &services,
                 ),
+                "usb": usb_resolver
+                    .as_ref()
+                    .and_then(|resolver| public_usb_status_for_vm(state, resolver, name)),
                 "services": services,
                 "bridgeChecks": [],
             })
@@ -14761,6 +15707,55 @@ mod public_status_tests {
         .expect_err("unsupported usb hotplug is denied");
         assert_eq!(hotplug_error.kind(), "runtime-capability-unsupported");
         assert!(hotplug_error.to_envelope().message.contains("usb-hotplug"));
+    }
+
+    #[test]
+    fn usb_attach_apply_stopped_vm_returns_actionable_start_remediation() {
+        let (state, _dir) = test_state();
+        let frame = ensure_usbip_attach_vm_is_running(
+            &state,
+            "vm-a",
+            "1-2",
+            "usb attach",
+            &manifest_entry(),
+            None,
+        )
+        .expect_err("stopped VM must fail");
+
+        assert_eq!(
+            frame.get("type").and_then(Value::as_str),
+            Some("mutatingVerbResponse")
+        );
+        assert_eq!(
+            frame.get("outcome").and_then(Value::as_str),
+            Some("invalid-request")
+        );
+        let remediation = frame
+            .get("remediation")
+            .and_then(Value::as_str)
+            .expect("remediation");
+        assert!(remediation.contains("VM 'vm-a' is stopped"));
+        assert!(remediation.contains("nixling vm start vm-a --apply"));
+        assert!(remediation.contains("nixling usb attach vm-a 1-2 --apply"));
+        assert!(!remediation.contains("guest-control transport unavailable"));
+
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                VM_RUNNER_ROLE_ID.to_owned(),
+                current_process_entry(),
+            )
+            .expect("register ch runner");
+        ensure_usbip_attach_vm_is_running(
+            &state,
+            "vm-a",
+            "1-2",
+            "usb attach",
+            &manifest_entry(),
+            None,
+        )
+        .expect("running VM preflight passes");
     }
 
     #[test]

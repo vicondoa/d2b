@@ -9387,21 +9387,169 @@
       "additionalProperties": false
     },
     "UsbipBindRequest": {
-      "description": "USBIP live device routing is refused with `unknown-operation` audit until the broker supports these variants.",
+      "description": "USBIP live device routing. The daemon supplies only the opaque bind intent id; the broker resolves busid, VM, env, lock path, and physical allowlist from its trusted bundle.",
       "type": "object",
       "required": [
-        "busId",
-        "vmId"
+        "bundleUsbipBindIntentRef"
       ],
       "properties": {
-        "busId": {
+        "bundleUsbipBindIntentRef": {
           "type": "string"
         },
-        "vmId": {
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipDurableClaimState": {
+      "description": "Wire-compatible state name for the USBIP host-session claim. The backing lock lives under `/run/nixling/locks/usbip`, so the claim survives VM stop/restart and daemon restart during one host boot, but not host reboot.",
+      "type": "string",
+      "enum": [
+        "missing",
+        "held-by-desired-owner",
+        "held-by-other-owner",
+        "stale-owner",
+        "corrupt",
+        "not-applicable"
+      ]
+    },
+    "UsbipDurableClaimStatus": {
+      "description": "Wire-compatible status object for the USBIP host-session claim. The JSON field is still named `durableClaim` for compatibility; treat it as durable only within the current host boot/session.",
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "ownerVm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/definitions/UsbipDurableClaimState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipGuestImportState": {
+      "type": "string",
+      "enum": [
+        "detached",
+        "imported",
+        "unavailable",
+        "unknown",
+        "not-applicable"
+      ]
+    },
+    "UsbipGuestProbeStatus": {
+      "type": "object",
+      "required": [
+        "import"
+      ],
+      "properties": {
+        "import": {
+          "$ref": "#/definitions/UsbipGuestImportState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipHostBindState": {
+      "type": "string",
+      "enum": [
+        "unbound",
+        "bound-to-usbip-host",
+        "bound-to-unexpected-driver",
+        "device-missing",
+        "unknown",
+        "not-applicable"
+      ]
+    },
+    "UsbipHostCarrierState": {
+      "type": "string",
+      "enum": [
+        "absent",
+        "unavailable",
+        "withheld-for-owner",
+        "ready",
+        "departed-during-probe",
+        "unknown",
+        "not-applicable"
+      ]
+    },
+    "UsbipHostProbeStatus": {
+      "type": "object",
+      "required": [
+        "bind",
+        "carrier",
+        "proxy"
+      ],
+      "properties": {
+        "bind": {
+          "$ref": "#/definitions/UsbipHostBindState"
+        },
+        "carrier": {
+          "$ref": "#/definitions/UsbipHostCarrierState"
+        },
+        "proxy": {
+          "$ref": "#/definitions/UsbipProxyState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipPolicyState": {
+      "type": "string",
+      "enum": [
+        "allowed",
+        "denied",
+        "missing",
+        "not-applicable",
+        "unknown"
+      ]
+    },
+    "UsbipProbeDegradedReason": {
+      "type": "object",
+      "required": [
+        "code",
+        "remediation",
+        "summary"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/definitions/UsbipProbeDegradedReasonCode"
+        },
+        "remediation": {
+          "type": "string"
+        },
+        "summary": {
           "type": "string"
         }
       },
       "additionalProperties": false
+    },
+    "UsbipProbeDegradedReasonCode": {
+      "type": "string",
+      "enum": [
+        "policy-failed",
+        "device-departed-before-claim",
+        "device-departed-after-lock",
+        "device-departed-during-mutation",
+        "device-reappeared-with-different-topology",
+        "lock-held-by-other-owner",
+        "invalid-persisted-lock-claim",
+        "carrier-unavailable",
+        "host-bind-unavailable",
+        "proxy-unavailable",
+        "guest-import-unavailable",
+        "stale-host-state",
+        "stale-guest-state",
+        "probe-incomplete"
+      ]
     },
     "UsbipProbeEntry": {
       "type": "object",
@@ -9422,6 +9570,23 @@
             "type": "string"
           }
         },
+        "degradedReasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/UsbipProbeDegradedReason"
+          }
+        },
+        "durableClaim": {
+          "description": "USBIP host-session claim status. Serialized as `durableClaim` for compatibility with existing clients.",
+          "default": {
+            "state": "missing"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/UsbipDurableClaimStatus"
+            }
+          ]
+        },
         "env": {
           "type": "string"
         },
@@ -9429,6 +9594,28 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "guest": {
+          "default": {
+            "import": "unknown"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/UsbipGuestProbeStatus"
+            }
+          ]
+        },
+        "host": {
+          "default": {
+            "bind": "unknown",
+            "carrier": "unknown",
+            "proxy": "unknown"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/UsbipHostProbeStatus"
+            }
           ]
         },
         "kind": {
@@ -9449,6 +9636,12 @@
             "null"
           ]
         },
+        "remediationCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "slot": {
           "type": [
             "string",
@@ -9463,6 +9656,17 @@
         },
         "status": {
           "$ref": "#/definitions/UsbipProbeStatus"
+        },
+        "topologyPolicy": {
+          "default": {
+            "policy": "unknown",
+            "topology": "unknown"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/UsbipTopologyPolicyStatus"
+            }
+          ]
         },
         "vm": {
           "type": "string"
@@ -9490,6 +9694,7 @@
       "enum": [
         "bound",
         "unbound",
+        "degraded",
         "enrollable",
         "enrolled",
         "stale",
@@ -9504,9 +9709,56 @@
       "properties": {
         "scopeId": {
           "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
+    },
+    "UsbipProxyState": {
+      "type": "string",
+      "enum": [
+        "not-declared",
+        "stopped",
+        "starting",
+        "listening",
+        "stale",
+        "failed",
+        "unknown",
+        "not-applicable"
+      ]
+    },
+    "UsbipTopologyPolicyStatus": {
+      "type": "object",
+      "required": [
+        "policy",
+        "topology"
+      ],
+      "properties": {
+        "policy": {
+          "$ref": "#/definitions/UsbipPolicyState"
+        },
+        "topology": {
+          "$ref": "#/definitions/UsbipTopologyState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipTopologyState": {
+      "type": "string",
+      "enum": [
+        "match",
+        "mismatch",
+        "incomplete",
+        "not-observed",
+        "not-applicable",
+        "unknown"
+      ]
     },
     "UsbipUnbindCliRequest": {
       "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
@@ -9540,11 +9792,42 @@
     "UsbipUnbindRequest": {
       "type": "object",
       "required": [
-        "busId"
+        "bundleUsbipBindIntentRef"
       ],
       "properties": {
-        "busId": {
+        "bundleUsbipBindIntentRef": {
           "type": "string"
+        },
+        "preserveDurableClaim": {
+          "description": "VM stop/restart tears down active host carrier state while preserving the host-session same-VM claim so the next start can replay it in the current host boot. Explicit detach leaves this false and releases the claim after unbind/ACL revoke.",
+          "default": false,
+          "type": "boolean"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipVmStatus": {
+      "type": "object",
+      "required": [
+        "degraded",
+        "entries"
+      ],
+      "properties": {
+        "degraded": {
+          "type": "boolean"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/UsbipProbeEntry"
+          }
         }
       },
       "additionalProperties": false
@@ -9793,6 +10076,16 @@
           "items": {
             "type": "string"
           }
+        },
+        "usb": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UsbipVmStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "usbip": {
           "type": "boolean"

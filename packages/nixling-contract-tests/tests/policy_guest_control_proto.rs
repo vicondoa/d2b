@@ -393,6 +393,7 @@ fn guest_control_proto_declares_service_methods_and_descriptor_sentinels() {
         "ExecCancel",
         "ReadGuestFile",
         "UsbipImport",
+        "UsbipStatus",
     ] {
         assert!(
             any_line_matches(&proto, &format!(r"^\s*rpc\s+{method}\s*\(")),
@@ -419,6 +420,8 @@ fn guest_control_proto_declares_service_methods_and_descriptor_sentinels() {
         "guest_auth_tag",
         "bus_id",
         "detached_ports",
+        "imports",
+        "tcp_port",
     ] {
         assert!(
             all_field_names.contains(field),
@@ -462,8 +465,11 @@ fn guest_control_proto_declares_service_methods_and_descriptor_sentinels() {
         "GUEST_CONTROL_ERROR_KIND_CWD_INVALID",
         "GUEST_CONTROL_ERROR_KIND_CWD_DENIED",
         "GUEST_CAPABILITY_USBIP_IMPORT",
+        "GUEST_CAPABILITY_USBIP_STATUS",
         "GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED",
+        "GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT",
         "GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST",
+        "GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT",
         "USBIP_IMPORT_ACTION_ATTACH",
         "USBIP_IMPORT_ACTION_DETACH",
     ] {
@@ -547,6 +553,12 @@ fn guest_control_proto_field_numbers_and_reserved_slots_are_stable() {
         3,
         false,
     );
+    assert_field(&shape, "UsbipStatusRequest", "host", "string", 2, true);
+    assert_field(&shape, "UsbipStatusRequest", "bus_id", "string", 3, true);
+    assert_field(&shape, "UsbipStatusEntry", "port", "uint32", 1, false);
+    assert_field(&shape, "UsbipStatusEntry", "host", "string", 2, false);
+    assert_field(&shape, "UsbipStatusEntry", "tcp_port", "uint32", 3, false);
+    assert_field(&shape, "UsbipStatusEntry", "bus_id", "string", 4, false);
 
     let hello_response_fields = fields_by_name(&shape, "HelloResponse");
     for rejected in ["health", "capabilities_hash"] {

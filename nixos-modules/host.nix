@@ -20,8 +20,6 @@ let
   cfg = config.nixling;
   envMeta = cfg._envMeta;
   obsCfg = cfg.observability;
-  vmStateDir = name: "${cfg.store.stateDir}/${name}";
-
   # graphics + audio components both
   # transitively depend on x86_64-only packages (crosvm-patched,
   # spectrum-ch, vhost-device-sound — see their meta.platforms).
@@ -146,8 +144,6 @@ let
     cid = config.nixling.manifest.${name}.observability.vsockCid;
     socket = config.nixling.manifest.${name}.observability.vsockHostSocket;
   };
-
-  vsockStateDirVmNames = daemonSupervisedVmNames;
 
 in
 
@@ -424,13 +420,14 @@ in
   # open it with `exec 9>` without write access to root:root 0755
   # /run/nixling.
   #
-  # `/run/nixling/vms/` is the parent for per-VM RuntimeDirectory= entries
-  # (e.g. /run/nixling/vms/<vm>/snd.sock from the audio sidecar). Pre-creating
-  # it root:root 0755 means systemd's RuntimeDirectory creation only owns
-  # the leaf <vm>/ dir, keeping the shared parent under root ownership.
+  # `/run/nixling/vms/` is the parent for per-VM runtime sockets. In the
+  # daemon path host-activation.nix owns its tmpfiles posture
+  # (nixlingd:nixling 0750); the legacy pre-daemon path keeps the old
+  # root-owned 0755 parent for retired RuntimeDirectory users.
   # `/run/nixling/alloy/` is a private subtree for observability sockets so
   # Alloy no longer needs write access to the shared launcher/audio lock root.
-  # also pre-create the GPU sidecar's runtime root.
+  # Also pre-create the legacy GPU sidecar runtime root in the pre-daemon path;
+  # daemon-native runtime roots are owned by host-activation.nix tmpfiles.
   # when daemonExperimental is
   # enabled, /run/nixling is owned exclusively by host-daemon.nix
   # (nixlingd:nixling 0750). This module emits its OWN
@@ -438,11 +435,12 @@ in
   # `if daemonExperimental … 0755 root root` form is REMOVED.
   systemd.tmpfiles.rules = lib.optionals (! cfg.daemonExperimental.enable) [
     "d /run/nixling             0775 root nixling -"
-  ] ++ [
+  ] ++ lib.optionals (! cfg.daemonExperimental.enable) [
     "d /run/nixling/vms         0755 root root -"
+    "d /run/nixling-gpu         0755 root root -"
+  ] ++ [
     "d /run/nixling/otel        0750 nixlingd nixling -"
     "f /run/nixling/usbipd.lock 0660 root nixling -"
-    "d /run/nixling-gpu         0755 root root -"
     # security-r7-2: lock file for nixling-known-hosts-refresh@.service
     # so concurrent refresh runs (one per VM at boot) serialize against the
     # same file the CLI do_trust path uses. Mode 0660 root:nixling
@@ -461,9 +459,8 @@ in
   # to that user at activation time. nixling-otel-host-bridge's
   # ExecStartPre setfacl runs AFTER alloy.service (After= + bindsTo)
   # so the directory is guaranteed to exist by then.
-  # Every enabled VM gets a host-owned Cloud Hypervisor base vsock socket,
-  # so every per-VM state dir must exist before CH binds `.../vsock.sock`.
-  ++ map
-    (name: "d ${vmStateDir name} 3770 microvm kvm -")
-    vsockStateDirVmNames;
+  # Per-VM state roots are postured by host-activation.nix tmpfiles under
+  # the daemon-native ownership matrix. Do not reintroduce the retired
+  # microvm:kvm tmpfiles shape here.
+  ;
 }

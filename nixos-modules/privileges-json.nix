@@ -653,11 +653,10 @@ let
     "subject": "VM/USB busid",
     "scope": "per-VM/per-env/per-busid",
     "allowedGroups": [
-      "nixling-launcher",
       "nixling-admin"
     ],
     "destructive": true,
-    "secretAccess": "none",
+    "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
   },
@@ -666,7 +665,6 @@ let
     "subject": "VM/USB busid",
     "scope": "per-VM/per-env/per-busid",
     "allowedGroups": [
-      "nixling-launcher",
       "nixling-admin"
     ],
     "destructive": true,
@@ -1168,7 +1166,7 @@ let
       "nixlingd"
     ],
     "destructive": true,
-    "secretAccess": "none",
+    "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
   },
@@ -1251,7 +1249,7 @@ let
     "allowedGroups": [
       "nixlingd"
     ],
-    "destructive": false,
+    "destructive": true,
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"

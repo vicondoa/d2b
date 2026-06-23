@@ -7,8 +7,8 @@ and store-view identity, and decide whether a VM is healthy or degraded.
 
 This document explains the design selected by
 [ADR 0034](../adr/0034-storage-lifecycle-restart-and-synchronization.md).
-The exact schemas and operator runbooks will live in reference and how-to
-documents as the implementation lands.
+The exact schemas will live in reference docs and operator runbooks will live in
+how-to docs as the implementation lands.
 
 ## Why this exists
 

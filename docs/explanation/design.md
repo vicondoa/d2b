@@ -902,7 +902,7 @@ or kernel.
 | `-video`        | yes | strict        | `AF_UNIX`                                  | not set | shares the `-gpu` uid, but keeps its own NVIDIA/render-node allowlist, empty capability sets, `DevicePolicy=closed`, and a system-service syscall filter |
 | `-snd`          | yes | strict        | as needed for PipeWire                     | yes   | see `components/audio/host.nix`      |
 | usbipd backend  | yes | (relaxed)     | `AF_INET AF_INET6 AF_UNIX AF_NETLINK`      | n/a   | needs `/sys/bus/usb` enumeration     |
-| usbipd proxy    | yes | strict        | none-via-CapBoundingSet=""                 | yes   | `systemd-socket-proxyd`              |
+| usbipd proxy    | yes | strict        | none-via-CapBoundingSet=""                 | yes   | generic L4 `socat` TCP forwarder; no busid parsing |
 
 `MemoryDenyWriteExecute` is intentionally omitted on the GPU
 sidecar at

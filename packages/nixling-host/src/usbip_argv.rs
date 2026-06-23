@@ -444,7 +444,10 @@ pub struct UsbipdBackendArgvInput {
 
 /// Inputs for the per-env TCP proxy that fronts the backend. The
 /// daemon-spawned shape starts the proxy directly and binds the env's
-/// uplink IP:3240.
+/// uplink IP:3240. This is a generic L4 forwarder: it does not parse
+/// USBIP frames and has no busid selector, so per-busid revocation must
+/// use host unbind plus targeted conntrack/socket cleanup or fail closed
+/// instead of bouncing the shared per-env proxy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsbipdProxyArgvInput {
@@ -452,7 +455,9 @@ pub struct UsbipdProxyArgvInput {
     pub socat_binary_path: String,
     /// Env name owning this proxy. Renders the argv[0] process title.
     pub env: String,
-    /// Env host-uplink IP the proxy listens on.
+    /// Env host-uplink IP the proxy listens on. Wildcard, loopback, and
+    /// multicast addresses are rejected so the proxy cannot accidentally expose
+    /// USBIP outside the env bridge.
     pub host_uplink_ip: String,
     /// Per-env loopback TCP port the proxy forwards to.
     pub backend_port: u16,
@@ -529,11 +534,19 @@ pub fn generate_usbipd_proxy_argv(
         });
     }
     validate_env(&input.env)?;
-    input.host_uplink_ip.parse::<IpAddr>().map_err(|_| {
+    let host_uplink_ip = input.host_uplink_ip.parse::<IpAddr>().map_err(|_| {
         UsbipdPerEnvArgvError::InvalidHostUplinkIp {
             host_uplink_ip: input.host_uplink_ip.clone(),
         }
     })?;
+    if host_uplink_ip.is_unspecified()
+        || host_uplink_ip.is_loopback()
+        || host_uplink_ip.is_multicast()
+    {
+        return Err(UsbipdPerEnvArgvError::InvalidHostUplinkIp {
+            host_uplink_ip: input.host_uplink_ip.clone(),
+        });
+    }
     if input.backend_port == 0 {
         return Err(UsbipdPerEnvArgvError::InvalidPort);
     }
@@ -593,6 +606,21 @@ mod per_env_tests {
                 "TCP:127.0.0.1:3242".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn proxy_argv_is_generic_l4_without_busid_selector() {
+        let argv = generate_usbipd_proxy_argv(&proxy_input()).unwrap();
+        assert_eq!(argv.len(), 3);
+        assert!(argv[1].starts_with("TCP-LISTEN:3240,bind=192.0.2.1,"));
+        assert_eq!(argv[2], "TCP:127.0.0.1:3242");
+        let joined = argv.join(" ");
+        for forbidden in ["--busid", "-b ", "busid", "1-2"] {
+            assert!(
+                !joined.contains(forbidden),
+                "proxy argv must remain a generic per-env TCP forwarder, not a per-busid selector: {joined}"
+            );
+        }
     }
 
     /// Per-env usbipd byte-parity snapshot. Emits SNAPSHOT lines
@@ -674,6 +702,21 @@ mod per_env_tests {
             generate_usbipd_proxy_argv(&input),
             Err(UsbipdPerEnvArgvError::InvalidHostUplinkIp { .. })
         ));
+    }
+
+    #[test]
+    fn proxy_rejects_wildcard_and_non_bridge_listener_ips() {
+        for rejected in ["0.0.0.0", "::", "127.0.0.1", "224.0.0.1"] {
+            let mut input = proxy_input();
+            input.host_uplink_ip = rejected.to_owned();
+            assert!(
+                matches!(
+                    generate_usbipd_proxy_argv(&input),
+                    Err(UsbipdPerEnvArgvError::InvalidHostUplinkIp { .. })
+                ),
+                "proxy listener must not bind {rejected}"
+            );
+        }
     }
 
     #[test]

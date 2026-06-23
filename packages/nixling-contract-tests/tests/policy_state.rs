@@ -239,16 +239,14 @@ fn group_migration_fresh_install() {
 //
 // v1.1 invariant gate over `/var/lib/nixling` state-dir posture:
 //   (a) declared `0750 root nixlingd` in host-daemon.nix tmpfiles (NOT 0755);
-//   (b) the `nixlingStateDirAcl` activation script grants per-user/per-group
-//       `--x` traversal (incl. `kvm` as a GROUP and the `nixling` lifecycle
-//       group, the latter possibly via the sourced state-dir-acl.sh helper);
-//   (c) no `setfacl -d -m` default ACL is applied at the state-dir root.
+//   (b) tmpfiles ACL rules grant per-user/per-group `--x` traversal
+//       (incl. `kvm` as a GROUP and the `nixling` lifecycle group);
+//   (c) no default ACL is applied at the state-dir root.
 // ---------------------------------------------------------------------------
 #[test]
 fn state_dir_acl() {
     let daemon = read_repo_file("nixos-modules/host-daemon.nix");
     let activation = read_repo_file("nixos-modules/host-activation.nix");
-    let acl_helper = read_repo_file("nixos-modules/host-activation.d/state-dir-acl.sh");
 
     let mut failures: Vec<String> = Vec::new();
 
@@ -262,43 +260,36 @@ fn state_dir_acl() {
     {
         failures.push("found `0755 /var/lib/nixling` workaround".into());
     }
-    // (b) nixlingStateDirAcl activation script present.
-    if !activation.contains("nixlingStateDirAcl") {
-        failures.push("nixlingStateDirAcl activation script missing".into());
-    }
-    // (b) setfacl `u:<user>:--x` traversal grant on the state dir.
+    // (b) tmpfiles `u:<user>:--x` traversal grants on the state dir.
     if !line_matches(
         &activation,
-        r#"setfacl.*"u:[^"]+:--x".*(\$state_dir|var/lib/nixling)"#,
+        r#"tmpfilesAcl[[:space:]]+"/var/lib/nixling"[[:space:]]+"u:[^"]+:--x""#,
     ) {
-        failures.push("no `setfacl -m \"u:<user>:--x\" <state-dir>` invocation found".into());
+        failures.push("no tmpfiles `u:<user>:--x` state-dir traversal ACL found".into());
     }
     // (b) `kvm` is a GROUP not a USER: enforce a `g:kvm:--x` grant.
-    if !line_matches(&activation, r#"setfacl.*"g:kvm:--x""#) {
-        failures.push("`setfacl -m \"g:kvm:--x\"` grant missing (kvm is a Linux group)".into());
+    if !line_matches(
+        &activation,
+        r#"tmpfilesAcl[[:space:]]+"/var/lib/nixling"[[:space:]]+"g:kvm:--x""#,
+    ) {
+        failures.push("tmpfiles `g:kvm:--x` grant missing (kvm is a Linux group)".into());
     }
-    // (b) `nixling` traversal grant: either a direct `g:nixling(-<legacy>)?:--x`
-    // setfacl in the activation module, or the activation module sources the
-    // state-dir-acl.sh helper which renders `g:$LAUNCHER_GROUP:--x`.
-    let direct_pat = [r#"setfacl.*"g:nixling(-"#, "launcher", r#")?:--x""#].concat();
-    let via_helper = activation.contains("host-activation.d/state-dir-acl.sh")
-        && acl_helper.contains(r#""g:$LAUNCHER_GROUP:--x""#);
-    if !(line_matches(&activation, &direct_pat) || via_helper) {
-        failures
-            .push("`setfacl -m \"g:nixling:--x\" /var/lib/nixling` traversal grant missing".into());
+    // (b) `nixling` lifecycle group traversal grant.
+    if !line_matches(
+        &activation,
+        r#"tmpfilesAcl[[:space:]]+"/var/lib/nixling"[[:space:]]+"g:nixling:--x""#,
+    ) {
+        failures.push("tmpfiles `g:nixling:--x` /var/lib/nixling traversal grant missing".into());
     }
-    // (c) NO `setfacl -d -m` default ACL on the state-dir root (it would widen
-    // per-VM subdir surface). Comment lines are excluded, matching the bash
-    // `grep -v '^[[:space:]]*#'` filter.
-    let default_acl = Regex::new(
-        r#"setfacl[[:space:]]+-d[[:space:]]+-m[[:space:]]+"[^"]+".*(\$state_dir|/var/lib/nixling[^/])"#,
-    )
-    .unwrap();
+    // (c) NO default ACL on the state-dir root (it would widen per-VM subdir
+    // surface). Comment lines are excluded.
+    let default_acl =
+        Regex::new(r#"tmpfilesAcl[[:space:]]+"/var/lib/nixling"[[:space:]]+"default:"#).unwrap();
     let comment = Regex::new(r"^[[:space:]]*#").unwrap();
     for line in activation.lines() {
         if default_acl.is_match(line) && !comment.is_match(line) {
             failures.push(format!(
-                "found `setfacl -d -m` default ACL on /var/lib/nixling root: {line}"
+                "found tmpfiles default ACL on /var/lib/nixling root: {line}"
             ));
         }
     }

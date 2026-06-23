@@ -97,7 +97,7 @@ in
     systemd.slices.nixling = {
       description = "Slice for nixling-managed VMs and broker-spawned runners";
       sliceConfig = {
-        Delegate = "cpu memory pids io";
+        Delegate = "cpu memory pids io cpuset";
       };
     };
 
@@ -108,6 +108,8 @@ in
     systemd.sockets.nixling-priv-broker = {
       description = "nixling privileged broker socket";
       wantedBy = [ "sockets.target" ];
+      requires = [ "systemd-tmpfiles-setup.service" ];
+      after = [ "systemd-tmpfiles-setup.service" ];
       socketConfig = {
         ListenSequentialPacket = "/run/nixling/priv.sock";
         SocketUser = "root";
@@ -126,8 +128,15 @@ in
       ];
       # Socket-activated; service activation comes from the socket unit.
       # No wantedBy here.
-      requires = [ "nixling-priv-broker.socket" ];
-      after = [ "nixling-priv-broker.socket" "local-fs.target" ];
+      requires = [
+        "nixling-priv-broker.socket"
+        "systemd-tmpfiles-setup.service"
+      ];
+      after = [
+        "nixling-priv-broker.socket"
+        "systemd-tmpfiles-setup.service"
+        "local-fs.target"
+      ];
       # Keep the broker at INFO by default so high-volume DEBUG payload
       # diagnostics do not flood journal/OTel exports. Operators can
       # temporarily force RUST_LOG=debug from host configuration when
@@ -214,6 +223,12 @@ in
         # matches the broker's DEFAULT_DELEGATED_PARENT_SLICE.
         Slice = "nixling.slice";
         Delegate = true;
+        # Broker-spawned runners are placed into dedicated nixling.slice
+        # role leaves and handed to nixlingd by pidfd. Stopping/restarting
+        # the socket-activated broker must not make systemd recursively
+        # tear down those runner leaves; targeted teardown is broker/daemon
+        # mediated via pidfd/CgroupKill instead.
+        KillMode = "process";
 
         # Isolation knobs compatible with broker's job.
         PrivateTmp = true;

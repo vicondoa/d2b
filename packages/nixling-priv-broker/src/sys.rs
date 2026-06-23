@@ -1447,7 +1447,7 @@ pub mod path_safe {
 pub mod pidfd_sys {
     use std::ffi::CString;
     use std::io;
-    use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+    use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     use std::path::Path;
 
@@ -1512,12 +1512,12 @@ pub mod pidfd_sys {
     #[allow(unsafe_code)]
     pub fn clone3_pidfd_or_fork_fallback<F>(
         extra_clone_flags: u64,
-        child_main: F,
+        mut child_main: F,
     ) -> io::Result<SpawnOutcome>
     where
         F: FnMut() -> i32,
     {
-        clone3_pidfd_or_fork_fallback_with_cgroup(extra_clone_flags, None, child_main)
+        clone3_pidfd_or_fork_fallback_with_cgroup(extra_clone_flags, None, move |_| child_main())
     }
 
     /// v1.1.1 variant of [`clone3_pidfd_or_fork_fallback`] that
@@ -1531,7 +1531,7 @@ pub mod pidfd_sys {
         mut child_main: F,
     ) -> io::Result<SpawnOutcome>
     where
-        F: FnMut() -> i32,
+        F: FnMut(bool) -> i32,
     {
         // CLONE_INTO_CGROUP = 0x200000000 per kernel
         // include/uapi/linux/sched.h (libc 0.2.95+ exposes this
@@ -1569,7 +1569,7 @@ pub mod pidfd_sys {
         };
 
         if ret == 0 {
-            let code = child_main();
+            let code = child_main(cgroup_arg != 0);
             unsafe { libc::_exit(code) };
         }
 
@@ -1608,7 +1608,7 @@ pub mod pidfd_sys {
             return Err(io::Error::last_os_error());
         }
         if pid == 0 {
-            let code = child_main();
+            let code = child_main(false);
             // SAFETY: see clone3 branch above.
             unsafe { libc::_exit(code) };
         }
@@ -1669,6 +1669,37 @@ pub mod pidfd_sys {
             return Err(io::Error::last_os_error());
         }
         Ok(())
+    }
+
+    /// Synchronously reap a runner child on parent-side post-clone errors.
+    ///
+    /// Once `clone3_spawn_runner` returns `Err`, runtime never receives the
+    /// pidfd and therefore never registers the async `waitid(P_PIDFD)` reaper.
+    /// Error paths that have already created a child must consume its
+    /// `SIGCHLD` here to avoid leaving a zombie behind.
+    #[allow(unsafe_code)]
+    pub(super) fn reap_spawn_runner_error_child(child_pid: i32) -> io::Result<()> {
+        if child_pid <= 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid child pid for reap: {child_pid}"),
+            ));
+        }
+
+        let mut status = 0;
+        loop {
+            let rc = unsafe { libc::waitpid(child_pid, &mut status, 0) };
+            if rc == child_pid {
+                return Ok(());
+            }
+            if rc < 0 {
+                let err = io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::EINTR) {
+                    continue;
+                }
+                return Err(err);
+            }
+        }
     }
 
     /// Run `setfacl -m <acl_spec> /proc/self/fd/<fd>` in a forked
@@ -1902,6 +1933,7 @@ pub mod pidfd_sys {
         pub namespaces: NamespaceSet,
         pub seccomp_program: Option<SeccompProgram>,
         pub mount_policy: MountPolicy,
+        pub cgroup_dir_fd: Option<OwnedFd>,
         pub cgroup_procs_fd: Option<OwnedFd>,
         /// When `Some`, the broker pre-establishes a single-entry user
         /// namespace for the runner before exec'ing the role binary. The
@@ -2300,8 +2332,7 @@ pub mod pidfd_sys {
     }
 
     #[allow(unsafe_code)]
-    fn write_self_to_cgroup(fd: RawFd) -> io::Result<()> {
-        let pid = unsafe { libc::getpid() } as u32;
+    fn write_pid_to_cgroup(fd: RawFd, pid: u32) -> io::Result<()> {
         let mut buf = [0u8; 32];
         let digits = write_decimal_u32(pid, &mut buf);
         buf[digits] = b'\n';
@@ -2321,6 +2352,26 @@ pub mod pidfd_sys {
             written += ret as usize;
         }
         Ok(())
+    }
+
+    pub(super) fn parent_attach_fallback_cgroup(
+        cgroup_procs_fd: Option<&OwnedFd>,
+        child_pid: i32,
+        cgroup_already_placed: bool,
+    ) -> io::Result<()> {
+        if cgroup_already_placed {
+            return Ok(());
+        }
+        let Some(fd) = cgroup_procs_fd else {
+            return Ok(());
+        };
+        let pid = u32::try_from(child_pid).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid child pid for cgroup attach: {child_pid}"),
+            )
+        })?;
+        write_pid_to_cgroup(fd.as_raw_fd(), pid)
     }
 
     #[allow(unsafe_code)]
@@ -2673,7 +2724,6 @@ pub mod pidfd_sys {
     const CHILD_EXIT_PRCTL_NO_NEW_PRIVS: libc::c_int = 60;
     const CHILD_EXIT_PRCTL_KEEP_CAPS: libc::c_int = 61;
     const CHILD_EXIT_UNSHARE: libc::c_int = 62;
-    const CHILD_EXIT_CGROUP: libc::c_int = 63;
     const CHILD_EXIT_MOUNT: libc::c_int = 64;
     const CHILD_EXIT_CAPSET: libc::c_int = 65;
     const CHILD_EXIT_SECCOMP: libc::c_int = 66;
@@ -2771,6 +2821,7 @@ pub mod pidfd_sys {
         let prepared_device_binds = &prepared_device_binds;
         let root_mask_actions = &root_mask_actions;
         let seccomp_program = isolation.seccomp_program;
+        let cgroup_dir_fd = isolation.cgroup_dir_fd;
         let cgroup_procs_fd = isolation.cgroup_procs_fd;
         let child_umask = isolation.umask;
         let memlock_limit_bytes = isolation.memlock_limit_bytes;
@@ -2842,272 +2893,292 @@ pub mod pidfd_sys {
             ));
         }
 
-        let outcome = clone3_pidfd_or_fork_fallback(extra_clone_flags, move || unsafe {
-            // If we're in a user NS, FIRST close the inherited write end
-            // of the sync pipe so the parent's death is observable as EOF.
-            // THEN block on the read end until the parent has written
-            // uid_map/setgroups=deny/gid_map and signaled.
-            if user_ns_sync_read_fd >= 0 {
-                if user_ns_sync_write_fd >= 0 {
-                    libc::close(user_ns_sync_write_fd);
-                }
-                let mut buf = [0u8; 1];
-                let n = libc::read(user_ns_sync_read_fd, buf.as_mut_ptr() as *mut _, 1);
-                if n != 1 {
-                    let m = b"DEBUG: sync read returned non-1\n";
-                    libc::write(2, m.as_ptr() as *const _, m.len());
-                    libc::_exit(CHILD_EXIT_USER_NS_SYNC);
-                }
-                libc::close(user_ns_sync_read_fd);
-                let m = b"DEBUG: sync passed\n";
-                libc::write(2, m.as_ptr() as *const _, m.len());
-            }
-            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0 {
-                let m = b"DEBUG: prctl NO_NEW_PRIVS failed\n";
-                libc::write(2, m.as_ptr() as *const _, m.len());
-                libc::_exit(CHILD_EXIT_PRCTL_NO_NEW_PRIVS);
-            }
-            if !capabilities.is_empty() && libc::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0) < 0 {
-                libc::_exit(CHILD_EXIT_PRCTL_KEEP_CAPS);
-            }
-            if unshare_flags != 0 && libc::unshare(unshare_flags) < 0 {
-                let m = b"DEBUG: unshare failed\n";
-                libc::write(2, m.as_ptr() as *const _, m.len());
-                libc::_exit(CHILD_EXIT_UNSHARE);
-            }
-            if mount_required {
-                if libc::mount(
-                    std::ptr::null(),
-                    c"/".as_ptr(),
-                    std::ptr::null(),
-                    (libc::MS_REC | libc::MS_PRIVATE) as libc::c_ulong,
-                    std::ptr::null(),
-                ) < 0
-                {
-                    let errno = *libc::__errno_location();
-                    let m = b"DEBUG: mount MS_PRIVATE failed errno=";
-                    libc::write(2, m.as_ptr() as *const _, m.len());
-                    let mut buf = [0u8; 16];
-                    let len = format_errno(errno, &mut buf);
-                    libc::write(2, buf.as_ptr() as *const _, len);
-                    libc::write(2, b"\n".as_ptr() as *const _, 1);
-                    libc::_exit(CHILD_EXIT_MOUNT);
-                }
-                // When in_ns_credentials (broker-pre-NS spawn per ADR 0021),
-                // SKIP apply_mount_actions.
-                // The user-NS already provides isolation (each NS has its
-                // own mount tree clone from clone3). Bind-mounting paths
-                // onto themselves WOULD FAIL with EPERM for any path that
-                // belongs to a mount inherited from the parent NS — Linux
-                // locks inherited mounts inside user-NS so they can't be
-                // mutated. virtiofsd's --sandbox=chroot does its own
-                // pivot_root inside the user-NS post-exec, which works
-                // because the new NS-root has CAP_SYS_ADMIN. The old
-                // (non-user-NS) bind-mount semantics from the minijail
-                // model are unnecessary for the broker-pre-NS path.
-                if !in_ns_credentials {
-                    match apply_mount_actions_debug(mount_actions) {
-                        Ok(()) => {}
-                        Err((errno, path_bytes)) => {
-                            let m = b"DEBUG: apply_mount_actions failed errno=";
-                            libc::write(2, m.as_ptr() as *const _, m.len());
-                            let mut buf = [0u8; 16];
-                            let len = format_errno(errno, &mut buf);
-                            libc::write(2, buf.as_ptr() as *const _, len);
-                            let m2 = b" path=";
-                            libc::write(2, m2.as_ptr() as *const _, m2.len());
-                            libc::write(2, path_bytes.as_ptr() as *const _, path_bytes.len());
-                            libc::write(2, b"\n".as_ptr() as *const _, 1);
-                            libc::_exit(CHILD_EXIT_MOUNT);
-                        }
+        let cgroup_dir_raw_fd = cgroup_dir_fd.as_ref().map(|fd| fd.as_raw_fd());
+
+        let outcome = clone3_pidfd_or_fork_fallback_with_cgroup(
+            extra_clone_flags,
+            cgroup_dir_raw_fd,
+            move |_| unsafe {
+                // If we're in a user NS, FIRST close the inherited write end
+                // of the sync pipe so the parent's death is observable as EOF.
+                // THEN block on the read end until the parent has written
+                // uid_map/setgroups=deny/gid_map and signaled.
+                if user_ns_sync_read_fd >= 0 {
+                    if user_ns_sync_write_fd >= 0 {
+                        libc::close(user_ns_sync_write_fd);
                     }
-                    match apply_root_secret_masks(root_mask_actions) {
-                        Ok(()) => {}
-                        Err((errno, path_bytes)) => {
-                            let m = b"DEBUG: apply_root_secret_masks failed errno=";
-                            libc::write(2, m.as_ptr() as *const _, m.len());
-                            let mut buf = [0u8; 16];
-                            let len = format_errno(errno, &mut buf);
-                            libc::write(2, buf.as_ptr() as *const _, len);
-                            let m2 = b" path=";
-                            libc::write(2, m2.as_ptr() as *const _, m2.len());
-                            libc::write(2, path_bytes.as_ptr() as *const _, path_bytes.len());
-                            libc::write(2, b"\n".as_ptr() as *const _, 1);
-                            libc::_exit(CHILD_EXIT_MOUNT);
-                        }
-                    }
-                    if mask_dev {
-                        match apply_device_mask_and_binds(
-                            prepared_device_binds,
-                            target_uid,
-                            target_gid,
-                        ) {
-                            Ok(()) => {}
-                            Err((errno, path_bytes)) => {
-                                let m = b"DEBUG: apply_device_mask_and_binds failed errno=";
-                                libc::write(2, m.as_ptr() as *const _, m.len());
-                                let mut buf = [0u8; 16];
-                                let len = format_errno(errno, &mut buf);
-                                libc::write(2, buf.as_ptr() as *const _, len);
-                                let m2 = b" path=";
-                                libc::write(2, m2.as_ptr() as *const _, m2.len());
-                                libc::write(2, path_bytes.as_ptr() as *const _, path_bytes.len());
-                                libc::write(2, b"\n".as_ptr() as *const _, 1);
-                                libc::_exit(CHILD_EXIT_MOUNT);
-                            }
-                        }
-                        match apply_private_procfs() {
-                            Ok(()) => {}
-                            Err((errno, path_bytes)) => {
-                                let m = b"DEBUG: apply_private_procfs failed errno=";
-                                libc::write(2, m.as_ptr() as *const _, m.len());
-                                let mut buf = [0u8; 16];
-                                let len = format_errno(errno, &mut buf);
-                                libc::write(2, buf.as_ptr() as *const _, len);
-                                let m2 = b" path=";
-                                libc::write(2, m2.as_ptr() as *const _, m2.len());
-                                libc::write(2, path_bytes.as_ptr() as *const _, path_bytes.len());
-                                libc::write(2, b"\n".as_ptr() as *const _, 1);
-                                libc::_exit(CHILD_EXIT_MOUNT);
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some(fd) = cgroup_procs_fd.as_ref()
-                && write_self_to_cgroup(fd.as_raw_fd()).is_err()
-            {
-                let m = b"DEBUG: write_self_to_cgroup failed\n";
-                libc::write(2, m.as_ptr() as *const _, m.len());
-                libc::_exit(CHILD_EXIT_CGROUP);
-            }
-            if let Some(limit) = memlock_limit_bytes {
-                let rlim = libc::rlimit {
-                    rlim_cur: limit as libc::rlim_t,
-                    rlim_max: limit as libc::rlim_t,
-                };
-                if libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) < 0 {
-                    let m = b"DEBUG: setrlimit RLIMIT_MEMLOCK failed\n";
-                    libc::write(2, m.as_ptr() as *const _, m.len());
-                    libc::_exit(CHILD_EXIT_MEMLOCK_RLIMIT);
-                }
-            }
-            // Credential changes here MUST go through the RAW syscalls, not
-            // the glibc `setgroups`/`setgid`/`setuid` wrappers. glibc routes
-            // those wrappers through its SETXID machinery (`__nptl_setxid`),
-            // which broadcasts the credential change to every thread in the
-            // process and blocks on a futex until all of them acknowledge via
-            // a signal. In this `clone3`/`fork` child of the MULTITHREADED
-            // broker (and, under test, the multithreaded `cargo test` runner)
-            // the inherited glibc thread list still names the parent's other
-            // threads — none of which exist in the single-threaded child — so
-            // the wrapper waits forever on a futex no one will ever post. That
-            // is a classic fork-in-a-multithreaded-program deadlock and it
-            // wedges the child before `execve`, leaking every inherited fd
-            // (including other operations' held `flock`'d `sync.lock` fds,
-            // which then never release). The raw syscalls change only the
-            // calling (sole) thread's credentials, which is exactly what we
-            // want immediately before `execve`, and they are async-signal-safe.
-            //
-            // Skip setgroups when in a broker-pre-NS spawn (parent wrote
-            // setgroups=deny so any call would EPERM).
-            if !in_ns_credentials
-                && libc::syscall(
-                    libc::SYS_setgroups,
-                    supplementary_groups.len(),
-                    supplementary_groups.as_ptr(),
-                ) < 0
-            {
-                libc::_exit(CHILD_EXIT_SETGROUPS);
-            }
-            if libc::syscall(libc::SYS_setgid, target_gid) < 0 {
-                let m = b"DEBUG: setgid failed\n";
-                libc::write(2, m.as_ptr() as *const _, m.len());
-                libc::_exit(CHILD_EXIT_SETGID);
-            }
-            if libc::syscall(libc::SYS_setuid, target_uid) < 0 {
-                let m = b"DEBUG: setuid failed\n";
-                libc::write(2, m.as_ptr() as *const _, m.len());
-                libc::_exit(CHILD_EXIT_SETUID);
-            }
-            if !capabilities.is_empty() && apply_capabilities(capabilities).is_err() {
-                libc::_exit(CHILD_EXIT_CAPSET);
-            }
-            // umask MUST precede seccomp. A restrictive BPF filter that
-            // kills unrecognised ioctls would SIGSYS the process if
-            // libc::umask() is implemented via ioctl on some kernels or
-            // if a future profile adds ioctl-free seccomp. Ordering:
-            //   capset → umask → seccomp → execve
-            // Install umask from the role profile before execve. Sidecars
-            // that bind shared Unix sockets (vhost-user-sound, crosvm-gpu,
-            // swtpm) use 0o007 so the bind() returns a 0660-mode socket —
-            // the existing /run/nixling/vms/<vm>/ default ACL
-            // (user:<ch-uid>:rwx) then becomes effective for
-            // cloud-hypervisor because mode-group-bits derive ACL mask=rw,
-            // not mask=---.
-            //
-            // Reject umasks that exceed the POSIX file-mode width (0o777)
-            // so a config typo (e.g. umask = 9999) is caught explicitly
-            // rather than silently truncated by libc::umask.
-            if let Some(mask) = child_umask {
-                if mask > 0o777 {
-                    let m = b"DEBUG: invalid umask (>0o777)\n";
-                    libc::write(2, m.as_ptr() as *const _, m.len());
-                    libc::_exit(CHILD_EXIT_INVALID_UMASK);
-                }
-                libc::umask(mask as libc::mode_t);
-            }
-            // Install pre-opened device fds at their well-known numbers
-            // before seccomp is loaded (ADR 0021).
-            //
-            // Ordering (capset → umask → pre-open → seccomp → execve): the
-            // dup2/fcntl calls must precede seccomp installation so the
-            // filter does not need to permit them at runtime.
-            //
-            // Each fd is dup2'd to RENDER_NODE_INHERITED_FD + index:
-            //   - dup2 does NOT copy CLOEXEC; fcntl(F_SETFD,0) is defensive
-            //     no-op (CLOEXEC was already absent on the dup2 target) but
-            //     explicit for future-proofing.
-            //   - If src == dst (already at the target slot), skip dup2/close
-            //     but still clear CLOEXEC (dup2(a,a) is a POSIX no-op AND
-            //     does not clear CLOEXEC on the destination).
-            //   - OwnedFds holding the original fds are in the closure and
-            //     dropped by the PARENT after fork; in the child _exit(2) is
-            //     called (no Rust destructors) after execve. No double-close.
-            for (i, &src_fd) in pre_opened_raw_fds.iter().enumerate() {
-                let dst_fd = RENDER_NODE_INHERITED_FD + i as libc::c_int;
-                if src_fd != dst_fd {
-                    if libc::dup2(src_fd, dst_fd) < 0 {
-                        let m = b"DEBUG: dup2 pre-opened device fd failed\n";
+                    let mut buf = [0u8; 1];
+                    let n = libc::read(user_ns_sync_read_fd, buf.as_mut_ptr() as *mut _, 1);
+                    if n != 1 {
+                        let m = b"DEBUG: sync read returned non-1\n";
                         libc::write(2, m.as_ptr() as *const _, m.len());
-                        libc::_exit(CHILD_EXIT_PREOPEN_DUP2);
+                        libc::_exit(CHILD_EXIT_USER_NS_SYNC);
                     }
-                    libc::close(src_fd);
+                    libc::close(user_ns_sync_read_fd);
+                    let m = b"DEBUG: sync passed\n";
+                    libc::write(2, m.as_ptr() as *const _, m.len());
                 }
-                // Clear CLOEXEC so the fd survives execve.
-                libc::fcntl(dst_fd, libc::F_SETFD, 0);
-            }
-            if let Some(program) = seccomp_program.as_ref()
-                && apply_seccomp(program).is_err()
-            {
-                libc::_exit(CHILD_EXIT_SECCOMP);
-            }
-            libc::execve(binary_ptr, argv_ptrs.as_ptr(), env_ptrs.as_ptr());
-            let m2 = b"DEBUG: execve returned (failed)\n";
-            libc::write(2, m2.as_ptr() as *const _, m2.len());
-            libc::_exit(CHILD_EXIT_EXECVE);
-        })?;
+                if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0 {
+                    let m = b"DEBUG: prctl NO_NEW_PRIVS failed\n";
+                    libc::write(2, m.as_ptr() as *const _, m.len());
+                    libc::_exit(CHILD_EXIT_PRCTL_NO_NEW_PRIVS);
+                }
+                if !capabilities.is_empty() && libc::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0) < 0 {
+                    libc::_exit(CHILD_EXIT_PRCTL_KEEP_CAPS);
+                }
+                if unshare_flags != 0 && libc::unshare(unshare_flags) < 0 {
+                    let m = b"DEBUG: unshare failed\n";
+                    libc::write(2, m.as_ptr() as *const _, m.len());
+                    libc::_exit(CHILD_EXIT_UNSHARE);
+                }
+                if mount_required {
+                    if libc::mount(
+                        std::ptr::null(),
+                        c"/".as_ptr(),
+                        std::ptr::null(),
+                        (libc::MS_REC | libc::MS_PRIVATE) as libc::c_ulong,
+                        std::ptr::null(),
+                    ) < 0
+                    {
+                        let errno = *libc::__errno_location();
+                        let m = b"DEBUG: mount MS_PRIVATE failed errno=";
+                        libc::write(2, m.as_ptr() as *const _, m.len());
+                        let mut buf = [0u8; 16];
+                        let len = format_errno(errno, &mut buf);
+                        libc::write(2, buf.as_ptr() as *const _, len);
+                        libc::write(2, b"\n".as_ptr() as *const _, 1);
+                        libc::_exit(CHILD_EXIT_MOUNT);
+                    }
+                    // When in_ns_credentials (broker-pre-NS spawn per ADR 0021),
+                    // SKIP apply_mount_actions.
+                    // The user-NS already provides isolation (each NS has its
+                    // own mount tree clone from clone3). Bind-mounting paths
+                    // onto themselves WOULD FAIL with EPERM for any path that
+                    // belongs to a mount inherited from the parent NS — Linux
+                    // locks inherited mounts inside user-NS so they can't be
+                    // mutated. virtiofsd's --sandbox=chroot does its own
+                    // pivot_root inside the user-NS post-exec, which works
+                    // because the new NS-root has CAP_SYS_ADMIN. The old
+                    // (non-user-NS) bind-mount semantics from the minijail
+                    // model are unnecessary for the broker-pre-NS path.
+                    if !in_ns_credentials {
+                        match apply_mount_actions_debug(mount_actions) {
+                            Ok(()) => {}
+                            Err((errno, path_bytes)) => {
+                                let m = b"DEBUG: apply_mount_actions failed errno=";
+                                libc::write(2, m.as_ptr() as *const _, m.len());
+                                let mut buf = [0u8; 16];
+                                let len = format_errno(errno, &mut buf);
+                                libc::write(2, buf.as_ptr() as *const _, len);
+                                let m2 = b" path=";
+                                libc::write(2, m2.as_ptr() as *const _, m2.len());
+                                libc::write(2, path_bytes.as_ptr() as *const _, path_bytes.len());
+                                libc::write(2, b"\n".as_ptr() as *const _, 1);
+                                libc::_exit(CHILD_EXIT_MOUNT);
+                            }
+                        }
+                        match apply_root_secret_masks(root_mask_actions) {
+                            Ok(()) => {}
+                            Err((errno, path_bytes)) => {
+                                let m = b"DEBUG: apply_root_secret_masks failed errno=";
+                                libc::write(2, m.as_ptr() as *const _, m.len());
+                                let mut buf = [0u8; 16];
+                                let len = format_errno(errno, &mut buf);
+                                libc::write(2, buf.as_ptr() as *const _, len);
+                                let m2 = b" path=";
+                                libc::write(2, m2.as_ptr() as *const _, m2.len());
+                                libc::write(2, path_bytes.as_ptr() as *const _, path_bytes.len());
+                                libc::write(2, b"\n".as_ptr() as *const _, 1);
+                                libc::_exit(CHILD_EXIT_MOUNT);
+                            }
+                        }
+                        if mask_dev {
+                            match apply_device_mask_and_binds(
+                                prepared_device_binds,
+                                target_uid,
+                                target_gid,
+                            ) {
+                                Ok(()) => {}
+                                Err((errno, path_bytes)) => {
+                                    let m = b"DEBUG: apply_device_mask_and_binds failed errno=";
+                                    libc::write(2, m.as_ptr() as *const _, m.len());
+                                    let mut buf = [0u8; 16];
+                                    let len = format_errno(errno, &mut buf);
+                                    libc::write(2, buf.as_ptr() as *const _, len);
+                                    let m2 = b" path=";
+                                    libc::write(2, m2.as_ptr() as *const _, m2.len());
+                                    libc::write(
+                                        2,
+                                        path_bytes.as_ptr() as *const _,
+                                        path_bytes.len(),
+                                    );
+                                    libc::write(2, b"\n".as_ptr() as *const _, 1);
+                                    libc::_exit(CHILD_EXIT_MOUNT);
+                                }
+                            }
+                            match apply_private_procfs() {
+                                Ok(()) => {}
+                                Err((errno, path_bytes)) => {
+                                    let m = b"DEBUG: apply_private_procfs failed errno=";
+                                    libc::write(2, m.as_ptr() as *const _, m.len());
+                                    let mut buf = [0u8; 16];
+                                    let len = format_errno(errno, &mut buf);
+                                    libc::write(2, buf.as_ptr() as *const _, len);
+                                    let m2 = b" path=";
+                                    libc::write(2, m2.as_ptr() as *const _, m2.len());
+                                    libc::write(
+                                        2,
+                                        path_bytes.as_ptr() as *const _,
+                                        path_bytes.len(),
+                                    );
+                                    libc::write(2, b"\n".as_ptr() as *const _, 1);
+                                    libc::_exit(CHILD_EXIT_MOUNT);
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(limit) = memlock_limit_bytes {
+                    let rlim = libc::rlimit {
+                        rlim_cur: limit as libc::rlim_t,
+                        rlim_max: limit as libc::rlim_t,
+                    };
+                    if libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) < 0 {
+                        let m = b"DEBUG: setrlimit RLIMIT_MEMLOCK failed\n";
+                        libc::write(2, m.as_ptr() as *const _, m.len());
+                        libc::_exit(CHILD_EXIT_MEMLOCK_RLIMIT);
+                    }
+                }
+                // Credential changes here MUST go through the RAW syscalls, not
+                // the glibc `setgroups`/`setgid`/`setuid` wrappers. glibc routes
+                // those wrappers through its SETXID machinery (`__nptl_setxid`),
+                // which broadcasts the credential change to every thread in the
+                // process and blocks on a futex until all of them acknowledge via
+                // a signal. In this `clone3`/`fork` child of the MULTITHREADED
+                // broker (and, under test, the multithreaded `cargo test` runner)
+                // the inherited glibc thread list still names the parent's other
+                // threads — none of which exist in the single-threaded child — so
+                // the wrapper waits forever on a futex no one will ever post. That
+                // is a classic fork-in-a-multithreaded-program deadlock and it
+                // wedges the child before `execve`, leaking every inherited fd
+                // (including other operations' held `flock`'d `sync.lock` fds,
+                // which then never release). The raw syscalls change only the
+                // calling (sole) thread's credentials, which is exactly what we
+                // want immediately before `execve`, and they are async-signal-safe.
+                //
+                // Skip setgroups when in a broker-pre-NS spawn (parent wrote
+                // setgroups=deny so any call would EPERM).
+                if !in_ns_credentials
+                    && libc::syscall(
+                        libc::SYS_setgroups,
+                        supplementary_groups.len(),
+                        supplementary_groups.as_ptr(),
+                    ) < 0
+                {
+                    libc::_exit(CHILD_EXIT_SETGROUPS);
+                }
+                if libc::syscall(libc::SYS_setgid, target_gid) < 0 {
+                    let m = b"DEBUG: setgid failed\n";
+                    libc::write(2, m.as_ptr() as *const _, m.len());
+                    libc::_exit(CHILD_EXIT_SETGID);
+                }
+                if libc::syscall(libc::SYS_setuid, target_uid) < 0 {
+                    let m = b"DEBUG: setuid failed\n";
+                    libc::write(2, m.as_ptr() as *const _, m.len());
+                    libc::_exit(CHILD_EXIT_SETUID);
+                }
+                if !capabilities.is_empty() && apply_capabilities(capabilities).is_err() {
+                    libc::_exit(CHILD_EXIT_CAPSET);
+                }
+                // umask MUST precede seccomp. A restrictive BPF filter that
+                // kills unrecognised ioctls would SIGSYS the process if
+                // libc::umask() is implemented via ioctl on some kernels or
+                // if a future profile adds ioctl-free seccomp. Ordering:
+                //   capset → umask → seccomp → execve
+                // Install umask from the role profile before execve. Sidecars
+                // that bind shared Unix sockets (vhost-user-sound, crosvm-gpu,
+                // swtpm) use 0o007 so the bind() returns a 0660-mode socket —
+                // the existing /run/nixling/vms/<vm>/ default ACL
+                // (user:<ch-uid>:rwx) then becomes effective for
+                // cloud-hypervisor because mode-group-bits derive ACL mask=rw,
+                // not mask=---.
+                //
+                // Reject umasks that exceed the POSIX file-mode width (0o777)
+                // so a config typo (e.g. umask = 9999) is caught explicitly
+                // rather than silently truncated by libc::umask.
+                if let Some(mask) = child_umask {
+                    if mask > 0o777 {
+                        let m = b"DEBUG: invalid umask (>0o777)\n";
+                        libc::write(2, m.as_ptr() as *const _, m.len());
+                        libc::_exit(CHILD_EXIT_INVALID_UMASK);
+                    }
+                    libc::umask(mask as libc::mode_t);
+                }
+                // Install pre-opened device fds at their well-known numbers
+                // before seccomp is loaded (ADR 0021).
+                //
+                // Ordering (capset → umask → pre-open → seccomp → execve): the
+                // dup2/fcntl calls must precede seccomp installation so the
+                // filter does not need to permit them at runtime.
+                //
+                // Each fd is dup2'd to RENDER_NODE_INHERITED_FD + index:
+                //   - dup2 does NOT copy CLOEXEC; fcntl(F_SETFD,0) is defensive
+                //     no-op (CLOEXEC was already absent on the dup2 target) but
+                //     explicit for future-proofing.
+                //   - If src == dst (already at the target slot), skip dup2/close
+                //     but still clear CLOEXEC (dup2(a,a) is a POSIX no-op AND
+                //     does not clear CLOEXEC on the destination).
+                //   - OwnedFds holding the original fds are in the closure and
+                //     dropped by the PARENT after fork; in the child _exit(2) is
+                //     called (no Rust destructors) after execve. No double-close.
+                for (i, &src_fd) in pre_opened_raw_fds.iter().enumerate() {
+                    let dst_fd = RENDER_NODE_INHERITED_FD + i as libc::c_int;
+                    if src_fd != dst_fd {
+                        if libc::dup2(src_fd, dst_fd) < 0 {
+                            let m = b"DEBUG: dup2 pre-opened device fd failed\n";
+                            libc::write(2, m.as_ptr() as *const _, m.len());
+                            libc::_exit(CHILD_EXIT_PREOPEN_DUP2);
+                        }
+                        libc::close(src_fd);
+                    }
+                    // Clear CLOEXEC so the fd survives execve.
+                    libc::fcntl(dst_fd, libc::F_SETFD, 0);
+                }
+                if let Some(program) = seccomp_program.as_ref()
+                    && apply_seccomp(program).is_err()
+                {
+                    libc::_exit(CHILD_EXIT_SECCOMP);
+                }
+                libc::execve(binary_ptr, argv_ptrs.as_ptr(), env_ptrs.as_ptr());
+                let m2 = b"DEBUG: execve returned (failed)\n";
+                libc::write(2, m2.as_ptr() as *const _, m2.len());
+                libc::_exit(CHILD_EXIT_EXECVE);
+            },
+        )?;
+
+        let cgroup_already_placed = cgroup_dir_raw_fd.is_some() && !outcome.used_fork_fallback;
+        if let Err(err) = parent_attach_fallback_cgroup(
+            cgroup_procs_fd.as_ref(),
+            outcome.pid,
+            cgroup_already_placed,
+        ) {
+            let _ = pidfd_send_signal(outcome.pidfd.as_fd(), libc::SIGKILL);
+            drop(user_ns_sync);
+            let _ = reap_spawn_runner_error_child(outcome.pid);
+            return Err(err);
+        }
 
         // Parent-side user-NS map writes. Performed AFTER clone3 returns
-        // (we have the child's PID) and BEFORE the sync pipe write that
-        // unblocks the child. Sequencing per `man 7 user_namespaces`:
-        // uid_map → setgroups=deny → gid_map. Then write 1 byte to the
-        // sync pipe so the child unblocks. The child has
-        // already closed its inherited write_fd, so if the parent dies
-        // BEFORE this point the child gets EOF on read and exits
-        // CHILD_EXIT_USER_NS_SYNC=74.
+        // (we have the child's PID) and AFTER any fallback cgroup.procs
+        // attach that the parent must perform with host credentials. Both
+        // complete BEFORE the sync pipe write that unblocks the child.
+        // Sequencing per `man 7 user_namespaces`: cgroup.procs fallback
+        // attach → uid_map → setgroups=deny → gid_map → sync byte. The
+        // child has already closed its inherited write_fd, so if the
+        // parent dies BEFORE this point the child gets EOF on read and
+        // exits CHILD_EXIT_USER_NS_SYNC=74.
         if let (Some(sync), Some(spec)) = (user_ns_sync, user_ns_spec) {
-            write_user_namespace_maps(outcome.pid, spec).map_err(|err| {
+            if let Err(err) = write_user_namespace_maps(outcome.pid, spec).map_err(|err| {
                 // Preserve the underlying io::Error as the source so
                 // callers can chain `.source()` to recover the original
                 // errno/kind information. The outer wrapper adds
@@ -3120,7 +3191,11 @@ pub mod pidfd_sys {
                         source: err,
                     },
                 )
-            })?;
+            }) {
+                drop(sync);
+                let _ = reap_spawn_runner_error_child(outcome.pid);
+                return Err(err);
+            }
             // Drop the parent's inherited read end before signaling
             // — it's never read on the parent side. Explicit drop
             // for the reader half makes the intent obvious.
@@ -3132,7 +3207,17 @@ pub mod pidfd_sys {
             // returns 1 on success.
             let n = unsafe { libc::write(sync.write_fd.as_raw_fd(), buf.as_ptr() as *const _, 1) };
             if n != 1 {
-                return Err(io::Error::last_os_error());
+                let err = if n < 0 {
+                    io::Error::last_os_error()
+                } else {
+                    io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "short user namespace sync pipe write",
+                    )
+                };
+                drop(sync.write_fd);
+                let _ = reap_spawn_runner_error_child(outcome.pid);
+                return Err(err);
             }
         }
 
@@ -3219,8 +3304,10 @@ pub mod pidfd_sys {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::os::unix::fs::{PermissionsExt, symlink};
 
+    use nix::libc;
     use nixling_core::minijail_profile::{MountPolicy, NamespaceSet};
     use tempfile::tempdir;
 
@@ -3391,6 +3478,7 @@ mod tests {
             },
             seccomp_program: None,
             mount_policy: empty_mount_policy(),
+            cgroup_dir_fd: None,
             cgroup_procs_fd: None,
             user_namespace: spec,
             umask: None,
@@ -3464,6 +3552,130 @@ mod tests {
         assert!(
             !source.contains(spawn_marker),
             "broker child path must not emit a debug line for every spawn"
+        );
+    }
+
+    #[allow(unsafe_code)]
+    fn owned_pipe_for_test() -> (OwnedFd, OwnedFd) {
+        let mut fds: [libc::c_int; 2] = [-1, -1];
+        let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+        assert_eq!(rc, 0, "pipe2 failed: {}", std::io::Error::last_os_error());
+        let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+        (read_fd, write_fd)
+    }
+
+    #[allow(unsafe_code)]
+    fn read_pipe_once(read_fd: &OwnedFd) -> String {
+        let mut buf = [0u8; 64];
+        let n = unsafe {
+            libc::read(
+                read_fd.as_raw_fd(),
+                buf.as_mut_ptr() as *mut libc::c_void,
+                buf.len(),
+            )
+        };
+        assert!(
+            n >= 0,
+            "pipe read failed: {}",
+            std::io::Error::last_os_error()
+        );
+        String::from_utf8(buf[..n as usize].to_vec()).expect("pipe data is utf8")
+    }
+
+    #[test]
+    fn parent_fallback_cgroup_attach_writes_child_pid_not_self() {
+        let (read_fd, write_fd) = owned_pipe_for_test();
+
+        super::pidfd_sys::parent_attach_fallback_cgroup(Some(&write_fd), 4242, false)
+            .expect("fallback cgroup attach succeeds");
+        drop(write_fd);
+
+        assert_eq!(read_pipe_once(&read_fd), "4242\n");
+    }
+
+    #[test]
+    fn parent_fallback_cgroup_attach_skips_clone_into_cgroup_path() {
+        let (read_fd, write_fd) = owned_pipe_for_test();
+
+        super::pidfd_sys::parent_attach_fallback_cgroup(Some(&write_fd), 4242, true)
+            .expect("clone-placed path is a no-op");
+        drop(write_fd);
+
+        assert_eq!(read_pipe_once(&read_fd), "");
+    }
+
+    #[test]
+    fn spawn_runner_uses_clone_into_cgroup_before_fallback_attach() {
+        let source = include_str!("sys.rs");
+        let clone_into_cgroup_call = concat!(
+            "clone3_pidfd_or_fork_fallback_with_cgroup(\n",
+            "            extra_clone_flags,\n",
+            "            cgroup_dir_raw_fd,"
+        );
+        let parent_fallback_attach = concat!(
+            "parent_attach_fallback_cgroup(\n",
+            "            cgroup_procs_fd.as_ref(),\n",
+            "            outcome.pid,\n",
+            "            cgroup_already_placed,"
+        );
+        let user_ns_maps = "write_user_namespace_maps(outcome.pid, spec)";
+        let user_ns_signal = "libc::write(sync.write_fd.as_raw_fd()";
+        let reap_error_child = concat!("reap_spawn_runner", "_error_child(outcome.pid)");
+        let removed_child_helper = concat!("write_self", "_to_cgroup");
+        assert!(
+            source.contains(clone_into_cgroup_call),
+            "SpawnRunner must pass the role-leaf cgroup dirfd to clone3 for CLONE_INTO_CGROUP"
+        );
+        let parent_attach_pos = source
+            .find(parent_fallback_attach)
+            .expect("fallback cgroup attach must happen on the parent path");
+        let user_ns_maps_pos = source
+            .find(user_ns_maps)
+            .expect("user namespace map writes must remain parent-side");
+        let user_ns_signal_pos = source
+            .find(user_ns_signal)
+            .expect("user namespace sync write must remain parent-side");
+        assert!(
+            parent_attach_pos < user_ns_maps_pos && user_ns_maps_pos < user_ns_signal_pos,
+            "fallback cgroup attach must write the child pid before user-NS maps and sync continuation"
+        );
+        let first_reap_pos = source
+            .find(reap_error_child)
+            .expect("post-clone error paths must synchronously reap the child");
+        assert!(
+            parent_attach_pos < first_reap_pos && first_reap_pos < user_ns_maps_pos,
+            "fallback cgroup attach failure must reap before returning Err"
+        );
+        assert_eq!(
+            source.matches(reap_error_child).count(),
+            3,
+            "fallback cgroup, user-NS map, and sync-write errors must each reap before returning Err"
+        );
+        assert!(
+            !source.contains(removed_child_helper),
+            "child path must not mutate cgroup.procs after entering CLONE_NEWUSER"
+        );
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn reap_spawn_runner_error_child_consumes_child_status() {
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork failed: {}", std::io::Error::last_os_error());
+        if pid == 0 {
+            unsafe { libc::_exit(0) };
+        }
+
+        super::pidfd_sys::reap_spawn_runner_error_child(pid).expect("error child reaped");
+
+        let mut status = 0;
+        let rc = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert_eq!(rc, -1, "child status should already be consumed");
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD),
+            "second waitpid should report no unreaped child"
         );
     }
 
@@ -3592,6 +3804,7 @@ mod tests {
                 device_binds: vec![],
                 bind_mounts: vec![],
             },
+            cgroup_dir_fd: None,
             cgroup_procs_fd: None,
             user_namespace: Some(UserNamespaceSpec {
                 host_uid_for_zero: current_uid,

@@ -336,6 +336,8 @@ fn build_synthetic_resolver() -> BundleResolver {
         environments: vec![NetEnv {
             env: "work".to_owned(),
             bridge: IfName::new("br-work-lan").expect("ifname"),
+            host_uplink_ip: Some("192.0.2.1".to_owned()),
+            net_uplink_ip: Some("192.0.2.2".to_owned()),
             mtu: 1500,
             mss_clamp: None,
             lan: LanPolicy {
@@ -343,14 +345,24 @@ fn build_synthetic_resolver() -> BundleResolver {
                 effective_east_west: false,
             },
             net_vm_forward_blocklist: vec!["192.168.1.0/24".to_owned()],
-            bridge_port_flags: vec![BridgePortFlags {
-                role: TapRole::WorkloadLan,
-                isolated: true,
-                neigh_suppress: true,
-                learning: Some(true),
-                unicast_flood: Some(false),
-                rule: "workload isolation".to_owned(),
-            }],
+            bridge_port_flags: vec![
+                BridgePortFlags {
+                    role: TapRole::WorkloadLan,
+                    isolated: true,
+                    neigh_suppress: true,
+                    learning: Some(true),
+                    unicast_flood: Some(false),
+                    rule: "workload isolation".to_owned(),
+                },
+                BridgePortFlags {
+                    role: TapRole::Uplink,
+                    isolated: true,
+                    neigh_suppress: true,
+                    learning: Some(false),
+                    unicast_flood: Some(false),
+                    rule: "uplink point-to-point anti-spoofing".to_owned(),
+                },
+            ],
             ipv6_sysctls: vec![Ipv6SysctlEntry {
                 if_name: IfName::new("br-work-lan").expect("ifname"),
                 disable_ipv6: 1,

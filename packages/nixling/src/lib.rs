@@ -117,6 +117,13 @@ pub struct ListItemOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbProbeOutputV1 {
+    pub command: String,
+    pub entries: Vec<IpcUsbipProbeEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmExecCreateOutputV1 {
     pub command: String,
     pub vm: String,
@@ -409,6 +416,8 @@ pub struct StatusVmOutputV2 {
     pub unsupported_capabilities: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qemu_media: Option<IpcQemuMediaStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usb: Option<public_wire::UsbipVmStatus>,
     pub declared_roles: Vec<String>,
     pub readiness: Vec<String>,
     /// api-ready state from the last vm start in split mode.
@@ -793,7 +802,7 @@ enum UsbCommand {
     Attach(UsbAttachArgs),
     /// Unbind a host USB busid from a VM via the native daemon path.
     Detach(UsbDetachArgs),
-    /// List daemon-declared USBIP claims and qemu-media USB candidates.
+    /// List daemon-declared USBIP session claims and qemu-media USB candidates.
     Probe(UsbProbeArgs),
 }
 
@@ -8527,10 +8536,10 @@ fn cmd_usb_probe(context: &Context, args: &UsbProbeArgs) -> Result<i32, CliFailu
     match try_usb_probe_via_socket(context)? {
         UsbProbeSocketOutcome::Entries(entries) => {
             if json_mode {
-                let body = serde_json::json!({
-                    "command": "usb probe",
-                    "entries": entries,
-                });
+                let body = UsbProbeOutputV1 {
+                    command: "usb probe".to_owned(),
+                    entries,
+                };
                 let mut rendered = serde_json::to_string_pretty(&body)
                     .map_err(|e| CliFailure::new(1, format!("serialize: {e}")))?;
                 rendered.push('\n');
@@ -8564,19 +8573,45 @@ fn render_usb_probe_human(entries: &[IpcUsbipProbeEntry]) -> String {
     if !usbip_entries.is_empty() || entries.is_empty() {
         let _ = writeln!(
             out,
-            "{:<24} {:<12} {:<12} {:<8} OWNER",
-            "VM", "ENV", "BUSID", "STATUS"
+            "{:<24} {:<12} {:<12} {:<10} {:<22} {:<24} {:<14} {:<12} {:<10} {:<8}",
+            "VM",
+            "ENV",
+            "BUSID",
+            "STATUS",
+            "SESSION-CLAIM",
+            "HOST-BIND",
+            "CARRIER",
+            "PROXY",
+            "GUEST",
+            "POLICY"
         );
         for entry in usbip_entries {
             let _ = writeln!(
                 out,
-                "{:<24} {:<12} {:<12} {:<8} {}",
+                "{:<24} {:<12} {:<12} {:<10} {:<22} {:<24} {:<14} {:<12} {:<10} {:<8}",
                 entry.vm,
                 entry.env,
                 entry.bus_id,
                 usb_probe_status_label(entry.status),
-                entry.owner_vm.as_deref().unwrap_or("-"),
+                durable_claim_label(entry.durable_claim.state),
+                host_bind_label(entry.host.bind),
+                host_carrier_label(entry.host.carrier),
+                proxy_label(entry.host.proxy),
+                guest_import_label(entry.guest.import),
+                policy_label(entry.topology_policy.policy),
             );
+            for reason in &entry.degraded_reasons {
+                let _ = writeln!(
+                    out,
+                    "  degraded {}: {}",
+                    reason_code_label(reason.code),
+                    reason.summary
+                );
+                let _ = writeln!(out, "  remediation: {}", reason.remediation);
+            }
+            for command in &entry.remediation_commands {
+                let _ = writeln!(out, "  command: {command}");
+            }
         }
     }
     let qemu_entries: Vec<_> = entries
@@ -8617,10 +8652,122 @@ fn usb_probe_status_label(status: IpcUsbipProbeStatus) -> &'static str {
     match status {
         IpcUsbipProbeStatus::Bound => "bound",
         IpcUsbipProbeStatus::Unbound => "unbound",
+        IpcUsbipProbeStatus::Degraded => "degraded",
         IpcUsbipProbeStatus::Enrollable => "enrollable",
         IpcUsbipProbeStatus::Enrolled => "enrolled",
         IpcUsbipProbeStatus::Stale => "stale",
         IpcUsbipProbeStatus::DirectConfig => "direct-config",
+    }
+}
+
+fn durable_claim_label(state: public_wire::UsbipDurableClaimState) -> &'static str {
+    match state {
+        public_wire::UsbipDurableClaimState::Missing => "missing",
+        public_wire::UsbipDurableClaimState::HeldByDesiredOwner => "held-by-desired-owner",
+        public_wire::UsbipDurableClaimState::HeldByOtherOwner => "held-by-other-owner",
+        public_wire::UsbipDurableClaimState::StaleOwner => "stale-owner",
+        public_wire::UsbipDurableClaimState::Corrupt => "corrupt",
+        public_wire::UsbipDurableClaimState::NotApplicable => "not-applicable",
+    }
+}
+
+fn host_bind_label(state: public_wire::UsbipHostBindState) -> &'static str {
+    match state {
+        public_wire::UsbipHostBindState::Unbound => "unbound",
+        public_wire::UsbipHostBindState::BoundToUsbipHost => "bound-to-usbip-host",
+        public_wire::UsbipHostBindState::BoundToUnexpectedDriver => "bound-to-unexpected-driver",
+        public_wire::UsbipHostBindState::DeviceMissing => "device-missing",
+        public_wire::UsbipHostBindState::Unknown => "unknown",
+        public_wire::UsbipHostBindState::NotApplicable => "not-applicable",
+    }
+}
+
+fn host_carrier_label(state: public_wire::UsbipHostCarrierState) -> &'static str {
+    match state {
+        public_wire::UsbipHostCarrierState::Absent => "absent",
+        public_wire::UsbipHostCarrierState::Unavailable => "unavailable",
+        public_wire::UsbipHostCarrierState::WithheldForOwner => "withheld-for-owner",
+        public_wire::UsbipHostCarrierState::Ready => "ready",
+        public_wire::UsbipHostCarrierState::DepartedDuringProbe => "departed-during-probe",
+        public_wire::UsbipHostCarrierState::Unknown => "unknown",
+        public_wire::UsbipHostCarrierState::NotApplicable => "not-applicable",
+    }
+}
+
+fn proxy_label(state: public_wire::UsbipProxyState) -> &'static str {
+    match state {
+        public_wire::UsbipProxyState::NotDeclared => "not-declared",
+        public_wire::UsbipProxyState::Stopped => "stopped",
+        public_wire::UsbipProxyState::Starting => "starting",
+        public_wire::UsbipProxyState::Listening => "listening",
+        public_wire::UsbipProxyState::Stale => "stale",
+        public_wire::UsbipProxyState::Failed => "failed",
+        public_wire::UsbipProxyState::Unknown => "unknown",
+        public_wire::UsbipProxyState::NotApplicable => "not-applicable",
+    }
+}
+
+fn guest_import_label(state: public_wire::UsbipGuestImportState) -> &'static str {
+    match state {
+        public_wire::UsbipGuestImportState::Detached => "detached",
+        public_wire::UsbipGuestImportState::Imported => "imported",
+        public_wire::UsbipGuestImportState::Unavailable => "unavailable",
+        public_wire::UsbipGuestImportState::Unknown => "unknown",
+        public_wire::UsbipGuestImportState::NotApplicable => "not-applicable",
+    }
+}
+
+fn topology_label(state: public_wire::UsbipTopologyState) -> &'static str {
+    match state {
+        public_wire::UsbipTopologyState::Match => "match",
+        public_wire::UsbipTopologyState::Mismatch => "mismatch",
+        public_wire::UsbipTopologyState::Incomplete => "incomplete",
+        public_wire::UsbipTopologyState::NotObserved => "not-observed",
+        public_wire::UsbipTopologyState::NotApplicable => "not-applicable",
+        public_wire::UsbipTopologyState::Unknown => "unknown",
+    }
+}
+
+fn policy_label(state: public_wire::UsbipPolicyState) -> &'static str {
+    match state {
+        public_wire::UsbipPolicyState::Allowed => "allowed",
+        public_wire::UsbipPolicyState::Denied => "denied",
+        public_wire::UsbipPolicyState::Missing => "missing",
+        public_wire::UsbipPolicyState::NotApplicable => "not-applicable",
+        public_wire::UsbipPolicyState::Unknown => "unknown",
+    }
+}
+
+fn reason_code_label(code: public_wire::UsbipProbeDegradedReasonCode) -> &'static str {
+    match code {
+        public_wire::UsbipProbeDegradedReasonCode::PolicyFailed => "policy-failed",
+        public_wire::UsbipProbeDegradedReasonCode::DeviceDepartedBeforeClaim => {
+            "device-departed-before-claim"
+        }
+        public_wire::UsbipProbeDegradedReasonCode::DeviceDepartedAfterLock => {
+            "device-departed-after-lock"
+        }
+        public_wire::UsbipProbeDegradedReasonCode::DeviceDepartedDuringMutation => {
+            "device-departed-during-mutation"
+        }
+        public_wire::UsbipProbeDegradedReasonCode::DeviceReappearedWithDifferentTopology => {
+            "device-reappeared-with-different-topology"
+        }
+        public_wire::UsbipProbeDegradedReasonCode::LockHeldByOtherOwner => {
+            "lock-held-by-other-owner"
+        }
+        public_wire::UsbipProbeDegradedReasonCode::InvalidPersistedLockClaim => {
+            "invalid-persisted-lock-claim"
+        }
+        public_wire::UsbipProbeDegradedReasonCode::CarrierUnavailable => "carrier-unavailable",
+        public_wire::UsbipProbeDegradedReasonCode::HostBindUnavailable => "host-bind-unavailable",
+        public_wire::UsbipProbeDegradedReasonCode::ProxyUnavailable => "proxy-unavailable",
+        public_wire::UsbipProbeDegradedReasonCode::GuestImportUnavailable => {
+            "guest-import-unavailable"
+        }
+        public_wire::UsbipProbeDegradedReasonCode::StaleHostState => "stale-host-state",
+        public_wire::UsbipProbeDegradedReasonCode::StaleGuestState => "stale-guest-state",
+        public_wire::UsbipProbeDegradedReasonCode::ProbeIncomplete => "probe-incomplete",
     }
 }
 
@@ -9329,6 +9476,7 @@ fn build_vm_status_output(
         service_capabilities,
         unsupported_capabilities: output_unsupported_capabilities(vm),
         qemu_media,
+        usb: None,
         declared_roles,
         readiness,
         api_ready: read_vm_api_ready(&context.daemon_state_dir, &vm.name),
@@ -9413,6 +9561,7 @@ fn build_vm_status_output_from_public(
             .qemu_media
             .clone()
             .or_else(|| qemu_media_status(context, vm, bundle, process_vm, &services)),
+        usb: public.usb.clone(),
         declared_roles,
         readiness,
         api_ready: read_vm_api_ready(&context.daemon_state_dir, &vm.name),
@@ -9844,6 +9993,40 @@ fn render_status_vm_human(
     }
     if let Some(video) = &output.services.video {
         let _ = writeln!(text, "video: {video}");
+    }
+    if let Some(usb) = &output.usb {
+        let _ = writeln!(
+            text,
+            "usb: {}",
+            if usb.degraded { "degraded" } else { "ok" }
+        );
+        for entry in &usb.entries {
+            let _ = writeln!(
+                text,
+                "  - busid={} status={} session-claim={} host-bind={} carrier={} proxy={} guest-import={} topology={} policy={}",
+                entry.bus_id,
+                usb_probe_status_label(entry.status),
+                durable_claim_label(entry.durable_claim.state),
+                host_bind_label(entry.host.bind),
+                host_carrier_label(entry.host.carrier),
+                proxy_label(entry.host.proxy),
+                guest_import_label(entry.guest.import),
+                topology_label(entry.topology_policy.topology),
+                policy_label(entry.topology_policy.policy),
+            );
+            for reason in &entry.degraded_reasons {
+                let _ = writeln!(
+                    text,
+                    "    degraded: {} - {}",
+                    reason_code_label(reason.code),
+                    reason.summary
+                );
+                let _ = writeln!(text, "    remediation: {}", reason.remediation);
+            }
+            for command in &entry.remediation_commands {
+                let _ = writeln!(text, "    command: {command}");
+            }
+        }
     }
     if manifest_vm.ssh_user.is_some() && manifest_vm.static_ip.is_some() {
         let _ = writeln!(text, "ssh: declared");
@@ -15378,6 +15561,7 @@ mod host_install_dispatch_tests {
                 follow_up_command: Some(
                     "update qemu-media config for vm 'media' and ref 'installer-usb', then run `nixling usb probe`; when the VM is running, hotplug this selector with `nixling usb attach media 1-2.3 --apply`".to_owned(),
                 ),
+                ..Default::default()
             },
             IpcUsbipProbeEntry {
                 kind: IpcUsbProbeEntryKind::QemuMediaSlot,
@@ -15392,6 +15576,7 @@ mod host_install_dispatch_tests {
                 source_kind: Some("image-file".to_owned()),
                 candidate_bus_ids: Vec::new(),
                 follow_up_command: None,
+                ..Default::default()
             },
         ];
 
@@ -15404,6 +15589,50 @@ mod host_install_dispatch_tests {
         assert!(rendered.contains("direct-config"));
         assert!(!rendered.contains("usb-Vendor_SecretSerial"));
         assert!(!rendered.contains("/dev/disk/by-id"));
+    }
+
+    #[test]
+    fn usb_probe_human_renders_degraded_claim_state_with_remediation() {
+        let entries = vec![IpcUsbipProbeEntry {
+            kind: IpcUsbProbeEntryKind::Usbip,
+            vm: "corp-vm".to_owned(),
+            env: "work".to_owned(),
+            bus_id: "1-2".to_owned(),
+            lock_path: "/run/nixling/locks/usbip/1-2".to_owned(),
+            status: IpcUsbipProbeStatus::Degraded,
+            owner_vm: Some("corp-vm".to_owned()),
+            durable_claim: public_wire::UsbipDurableClaimStatus {
+                state: public_wire::UsbipDurableClaimState::HeldByDesiredOwner,
+                owner_vm: Some("corp-vm".to_owned()),
+            },
+            host: public_wire::UsbipHostProbeStatus {
+                bind: public_wire::UsbipHostBindState::Unknown,
+                carrier: public_wire::UsbipHostCarrierState::Unknown,
+                proxy: public_wire::UsbipProxyState::Unknown,
+            },
+            guest: public_wire::UsbipGuestProbeStatus {
+                import: public_wire::UsbipGuestImportState::Detached,
+            },
+            topology_policy: public_wire::UsbipTopologyPolicyStatus {
+                topology: public_wire::UsbipTopologyState::Unknown,
+                policy: public_wire::UsbipPolicyState::Allowed,
+            },
+            degraded_reasons: vec![public_wire::UsbipProbeDegradedReason {
+                code: public_wire::UsbipProbeDegradedReasonCode::GuestImportUnavailable,
+                summary: "guest has not imported the claimed USB device".to_owned(),
+                remediation:
+                    "Run `nixling usb attach corp-vm 1-2 --apply` after the VM is running."
+                        .to_owned(),
+            }],
+            remediation_commands: vec!["nixling usb attach corp-vm 1-2 --apply".to_owned()],
+            ..Default::default()
+        }];
+
+        let rendered = render_usb_probe_human(&entries);
+        assert!(rendered.contains("held-by-desired-owner"));
+        assert!(rendered.contains("guest-import-unavailable"));
+        assert!(rendered.contains("nixling usb attach corp-vm 1-2 --apply"));
+        assert!(!rendered.contains("/run/nixling/locks"));
     }
 
     #[test]
@@ -15821,6 +16050,7 @@ mod host_install_dispatch_tests {
             service_capabilities: Vec::new(),
             unsupported_capabilities: Vec::new(),
             qemu_media: None,
+            usb: None,
             declared_roles: vec!["gpu".to_owned()],
             readiness: Vec::new(),
             api_ready: None,
@@ -16134,6 +16364,7 @@ mod host_install_dispatch_tests {
             service_capabilities: vec!["microvm".to_owned(), "nixling".to_owned()],
             unsupported_capabilities: Vec::new(),
             usbip: true,
+            usb: None,
             vm: "vm-a".to_owned(),
         };
 

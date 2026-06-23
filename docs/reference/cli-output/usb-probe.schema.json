@@ -1,0 +1,350 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UsbProbeOutputV1",
+  "type": "object",
+  "required": [
+    "command",
+    "entries"
+  ],
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/UsbipProbeEntry"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "UsbProbeEntryKind": {
+      "type": "string",
+      "enum": [
+        "usbip",
+        "qemu-media-slot"
+      ]
+    },
+    "UsbipDurableClaimState": {
+      "description": "Wire-compatible state name for the USBIP host-session claim. The backing lock lives under `/run/nixling/locks/usbip`, so the claim survives VM stop/restart and daemon restart during one host boot, but not host reboot.",
+      "type": "string",
+      "enum": [
+        "missing",
+        "held-by-desired-owner",
+        "held-by-other-owner",
+        "stale-owner",
+        "corrupt",
+        "not-applicable"
+      ]
+    },
+    "UsbipDurableClaimStatus": {
+      "description": "Wire-compatible status object for the USBIP host-session claim. The JSON field is still named `durableClaim` for compatibility; treat it as durable only within the current host boot/session.",
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "ownerVm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/definitions/UsbipDurableClaimState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipGuestImportState": {
+      "type": "string",
+      "enum": [
+        "detached",
+        "imported",
+        "unavailable",
+        "unknown",
+        "not-applicable"
+      ]
+    },
+    "UsbipGuestProbeStatus": {
+      "type": "object",
+      "required": [
+        "import"
+      ],
+      "properties": {
+        "import": {
+          "$ref": "#/definitions/UsbipGuestImportState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipHostBindState": {
+      "type": "string",
+      "enum": [
+        "unbound",
+        "bound-to-usbip-host",
+        "bound-to-unexpected-driver",
+        "device-missing",
+        "unknown",
+        "not-applicable"
+      ]
+    },
+    "UsbipHostCarrierState": {
+      "type": "string",
+      "enum": [
+        "absent",
+        "unavailable",
+        "withheld-for-owner",
+        "ready",
+        "departed-during-probe",
+        "unknown",
+        "not-applicable"
+      ]
+    },
+    "UsbipHostProbeStatus": {
+      "type": "object",
+      "required": [
+        "bind",
+        "carrier",
+        "proxy"
+      ],
+      "properties": {
+        "bind": {
+          "$ref": "#/definitions/UsbipHostBindState"
+        },
+        "carrier": {
+          "$ref": "#/definitions/UsbipHostCarrierState"
+        },
+        "proxy": {
+          "$ref": "#/definitions/UsbipProxyState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipPolicyState": {
+      "type": "string",
+      "enum": [
+        "allowed",
+        "denied",
+        "missing",
+        "not-applicable",
+        "unknown"
+      ]
+    },
+    "UsbipProbeDegradedReason": {
+      "type": "object",
+      "required": [
+        "code",
+        "remediation",
+        "summary"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/definitions/UsbipProbeDegradedReasonCode"
+        },
+        "remediation": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipProbeDegradedReasonCode": {
+      "type": "string",
+      "enum": [
+        "policy-failed",
+        "device-departed-before-claim",
+        "device-departed-after-lock",
+        "device-departed-during-mutation",
+        "device-reappeared-with-different-topology",
+        "lock-held-by-other-owner",
+        "invalid-persisted-lock-claim",
+        "carrier-unavailable",
+        "host-bind-unavailable",
+        "proxy-unavailable",
+        "guest-import-unavailable",
+        "stale-host-state",
+        "stale-guest-state",
+        "probe-incomplete"
+      ]
+    },
+    "UsbipProbeEntry": {
+      "type": "object",
+      "required": [
+        "busId",
+        "env",
+        "lockPath",
+        "status",
+        "vm"
+      ],
+      "properties": {
+        "busId": {
+          "type": "string"
+        },
+        "candidateBusIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "degradedReasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/UsbipProbeDegradedReason"
+          }
+        },
+        "durableClaim": {
+          "description": "USBIP host-session claim status. Serialized as `durableClaim` for compatibility with existing clients.",
+          "default": {
+            "state": "missing"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/UsbipDurableClaimStatus"
+            }
+          ]
+        },
+        "env": {
+          "type": "string"
+        },
+        "followUpCommand": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "guest": {
+          "default": {
+            "import": "unknown"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/UsbipGuestProbeStatus"
+            }
+          ]
+        },
+        "host": {
+          "default": {
+            "bind": "unknown",
+            "carrier": "unknown",
+            "proxy": "unknown"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/UsbipHostProbeStatus"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/definitions/UsbProbeEntryKind"
+        },
+        "lockPath": {
+          "type": "string"
+        },
+        "mediaRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ownerVm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remediationCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "slot": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceKind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/UsbipProbeStatus"
+        },
+        "topologyPolicy": {
+          "default": {
+            "policy": "unknown",
+            "topology": "unknown"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/UsbipTopologyPolicyStatus"
+            }
+          ]
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipProbeStatus": {
+      "type": "string",
+      "enum": [
+        "bound",
+        "unbound",
+        "degraded",
+        "enrollable",
+        "enrolled",
+        "stale",
+        "direct-config"
+      ]
+    },
+    "UsbipProxyState": {
+      "type": "string",
+      "enum": [
+        "not-declared",
+        "stopped",
+        "starting",
+        "listening",
+        "stale",
+        "failed",
+        "unknown",
+        "not-applicable"
+      ]
+    },
+    "UsbipTopologyPolicyStatus": {
+      "type": "object",
+      "required": [
+        "policy",
+        "topology"
+      ],
+      "properties": {
+        "policy": {
+          "$ref": "#/definitions/UsbipPolicyState"
+        },
+        "topology": {
+          "$ref": "#/definitions/UsbipTopologyState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipTopologyState": {
+      "type": "string",
+      "enum": [
+        "match",
+        "mismatch",
+        "incomplete",
+        "not-observed",
+        "not-applicable",
+        "unknown"
+      ]
+    }
+  }
+}

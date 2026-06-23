@@ -334,6 +334,62 @@ fn usbip_profile_source_layer1_shape() {
     );
 }
 
+/// The data-plane stream proxy must stay a non-root, no-capability socat-style
+/// proxy. Sysfs/module/driver mutation belongs to broker helper ops, never to
+/// the proxy profile or argv.
+#[test]
+fn usbip_proxy_source_has_no_host_privilege_surface() {
+    let profiles = read_repo_file(MINIJAIL_PROFILES_NIX);
+    let proxy_profile = extract_block(&profiles, r#"profileIdFor vmId "proxy""#, r"^\s*};\s*$")
+        .expect("could not locate usbipd proxy profile block");
+    assert!(
+        any_line_matches(
+            &proxy_profile,
+            r#"principal\s*=\s*"nixling-\$\{vmId\}-proxy""#
+        ),
+        "usbip proxy must use the dedicated non-root proxy principal"
+    );
+    assert!(
+        any_line_matches(&proxy_profile, r"capabilities\s*=\s*\[\s*\]"),
+        "usbip proxy must keep an empty host capability set"
+    );
+    assert!(
+        any_line_matches(&proxy_profile, r#"seccompPolicyRef\s*=\s*"w1-usbip-proxy""#),
+        "usbip proxy must use the proxy-specific seccomp profile"
+    );
+    for forbidden in [
+        r"\buid\s*=\s*0\b",
+        r"\bgid\s*=\s*0\b",
+        r"CAP_SYS",
+        r#"CAP_NET_RAW"#,
+        r"/sys",
+        r"modprobe",
+        r"usbip-host",
+    ] {
+        assert!(
+            !any_line_matches(&proxy_profile, forbidden),
+            "usbip proxy profile must not expose privileged surface matching {forbidden:?}"
+        );
+    }
+
+    let processes = read_repo_file("nixos-modules/processes-json.nix");
+    let proxy_runner = extract_block(&processes, r"usbipProxyRunner\s*=", r"^\s*};\s*$")
+        .expect("could not locate usbip proxy runner block");
+    assert!(
+        any_line_matches(
+            &proxy_runner,
+            r#"binaryPath\s*=\s*"\$\{pkgs\.socat\}/bin/socat""#
+        ),
+        "usbip proxy runner must remain the data-plane stream proxy"
+    );
+    for forbidden in ["usbip ", "modprobe", "/sys", "usbip bind", "usbip unbind"] {
+        assert!(
+            !proxy_runner.contains(forbidden),
+            "usbip proxy argv must not perform host driver/module/sysfs work matching {forbidden:?}"
+        );
+    }
+}
+
 /// Layer-1 applied to the REAL rendered fixture RoleProfiles (stronger than the
 /// bash gate's source greps): the env's auto-declared `sys-work-usbipd` net VM
 /// emits the two usbip DAG nodes the per-busid attach runs under —

@@ -308,7 +308,7 @@ fn bundle_resolver_unavailable_returns_typed_error() {
             operation: "BundleResolver".to_owned(),
             target_wave: Some("W12".to_owned()),
             message: "Broker started without a loadable bundle at ServerConfig.bundle_path. Bundle-dependent real-wire ops cannot resolve their BundleOpId refs.".to_owned(),
-            action: "Land the bundle at /var/lib/nixling/current-bundle/manifest.json (or pass --bundle-path) and retry; the broker reloads the bundle on the next request.".to_owned(),
+            action: "Restore the trusted bundle at the broker-configured bundle path and retry; the broker reloads the bundle on the next request.".to_owned(),
         })
     );
 }
@@ -328,8 +328,7 @@ fn bundle_intent_missing_returns_typed_error() {
             kind: "Broker.BundleIntentMissing".to_owned(),
             operation: "BundleResolver".to_owned(),
             target_wave: Some("W12".to_owned()),
-            message: "no installer intent in the trusted bundle for opaque id `installer:missing`"
-                .to_owned(),
+            message: "trusted bundle does not contain the requested installer intent".to_owned(),
             action: "Confirm the daemon emitted the BundleOpId that matches the loaded bundle (nixos-modules/bundle.nix populates the intent table).".to_owned(),
         })
     );
@@ -360,9 +359,15 @@ fn live_run_host_install_propagates_write_failure() {
             assert_eq!(kind, "Broker.LiveHandlerFailed");
             assert_eq!(operation, "LiveHandler");
             assert_eq!(target_wave.as_deref(), Some("W12"));
-            assert!(message.contains("host install: failed to write artifact"));
-            assert!(message.contains("I/O error on "));
-            assert!(message.contains("injected write_atomic_file failure"));
+            assert!(message.contains("privileged host operation failed"));
+            assert!(
+                !message.contains("I/O error on "),
+                "public message must not leak raw filesystem paths: {message}"
+            );
+            assert!(
+                !message.contains("injected write_atomic_file failure"),
+                "public message must not leak raw executor details: {message}"
+            );
             assert_eq!(action, LIVE_HANDLER_ACTION);
         }
         other => panic!("expected BrokerResponse::Error, got {other:?}"),

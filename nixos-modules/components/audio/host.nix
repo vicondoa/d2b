@@ -341,22 +341,12 @@ in
         in
         lib.concatLists (lib.mapAttrsToList mk enabledVms);
 
-      # Ensure both the parent dir and the root-owned state/ subdir
-      # exist before the tmpfiles rule fires.
-      # Parent: microvm:kvm 2775 (as before) — kvm group can write here
-      #         for the audio.lock and temp files.
-      # state/: root:kvm 0750 — kvm group can traverse (execute); no group write.
-      # Migration: if the old path exists and the new path does not, move it.
+      # Migration-only: if the old audio-state path exists and the new path does
+      # not, move it. Directory creation/posture is tmpfiles-owned above and the
+      # VM root itself is postured by host-activation.nix tmpfiles.
       system.activationScripts.nixlingAudioStateDirs =
         lib.stringAfter [ "users" ] (lib.concatStringsSep "\n" (lib.mapAttrsToList
           (name: _: ''
-            install -d -m 3770 -o nixlingd -g users /var/lib/nixling/vms/${name} || true
-            install -d -m 0750 -o nixlingd -g nixling /var/lib/nixling/vms/${name}/state || true
-            # live-deploy fu9: chown -R to repair any state/
-            # dir that was pre-existing root:* before our fix. install
-            # -d is no-op when dir exists; force ownership repair.
-            chown nixlingd:nixling /var/lib/nixling/vms/${name}/state 2>/dev/null || true
-            chmod 0750 /var/lib/nixling/vms/${name}/state 2>/dev/null || true
             # One-time migration: move old audio-state.json to new path.
             old_f="/var/lib/nixling/vms/${name}/audio-state.json"
             new_f="/var/lib/nixling/vms/${name}/state/audio-state.json"

@@ -14,7 +14,7 @@ use schemars::{
 use serde::{Deserialize, Serialize};
 
 pub const GUEST_CONTROL_SCHEMA_VERSION: &str = "v2";
-pub const GUEST_CONTROL_PROTOCOL_VERSION: u32 = 4;
+pub const GUEST_CONTROL_PROTOCOL_VERSION: u32 = 5;
 pub const GUEST_CONTROL_VSOCK_PORT: u32 = 14_318;
 pub const TTRPC_FRAME_CAP_BYTES: u64 = 4 * 1024 * 1024;
 pub const DEFAULT_MAX_CHUNK_BYTES: u64 = 64 * 1024;
@@ -352,6 +352,7 @@ pub enum GuestCapability {
     ShellAttached,
     ShellManagement,
     ShellForceAttach,
+    UsbipStatus,
 }
 
 /// Closed set of host-declared guest files readable via `ReadGuestFile`.
@@ -476,6 +477,8 @@ pub struct GuestControlSchema {
     pub read_guest_file_result: ReadGuestFileResponse,
     pub usbip_import: UsbipImportRequest,
     pub usbip_import_result: UsbipImportResponse,
+    pub usbip_status: UsbipStatusRequest,
+    pub usbip_status_result: UsbipStatusResponse,
     pub error: GuestControlError,
 }
 
@@ -1216,6 +1219,35 @@ pub struct UsbipImportResponse {
     pub error: Option<GuestControlError>,
 }
 
+/// Side-effect-free guest USBIP import observation. Optional filters are
+/// validated with the same closed host/bus-id rules as `UsbipImport`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbipStatusRequest {
+    pub metadata: GuestRequestMetadata,
+    pub host: Option<GuestUsbipHost>,
+    pub bus_id: Option<GuestUsbipBusId>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbipStatusResponse {
+    #[schemars(length(max = 64))]
+    pub imports: Vec<UsbipStatusEntry>,
+    pub error: Option<GuestControlError>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbipStatusEntry {
+    #[schemars(range(max = 65535))]
+    pub port: u32,
+    pub host: GuestUsbipHost,
+    #[schemars(range(min = 1, max = 65535))]
+    pub tcp_port: u32,
+    pub bus_id: GuestUsbipBusId,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum OutputStream {
@@ -1361,11 +1393,24 @@ pub enum GuestControlErrorKind {
     ShellPoolUnavailable,
     ShellDaemonEpochMismatch,
     ShellOutputGap,
+    UsbipCommandTimeout,
+    UsbipInvalidOutput,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::guest_proto as pb;
+    use protobuf::{Message, MessageField};
+
+    fn proto_round_trip<M>(message: M)
+    where
+        M: Message + Default + PartialEq + std::fmt::Debug,
+    {
+        let encoded = message.write_to_bytes().expect("message encodes");
+        let decoded = M::parse_from_bytes(&encoded).expect("message decodes");
+        assert_eq!(decoded, message);
+    }
 
     #[test]
     fn base64_encoded_len_matches_standard_padded_expansion() {
@@ -1482,6 +1527,45 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&TerminalStatus::Signal { signal: 2 }).unwrap(),
             "{\"outcome\":\"signal\",\"signal\":2}"
+        );
+    }
+
+    #[test]
+    fn generated_usbip_status_shapes_round_trip() {
+        let mut common = pb::RequestMetadata::new();
+        common.vm_id = "corp-vm".to_owned();
+        common.request_id = "req-usbip-status".to_owned();
+        common.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
+
+        let mut request = pb::UsbipStatusRequest::new();
+        request.metadata = MessageField::some(common);
+        request.host = Some("192.0.2.1".to_owned());
+        request.bus_id = Some("1-2.1".to_owned());
+        proto_round_trip(request);
+
+        let mut entry = pb::UsbipStatusEntry::new();
+        entry.port = 1;
+        entry.host = "192.0.2.1".to_owned();
+        entry.tcp_port = 3240;
+        entry.bus_id = "1-2.1".to_owned();
+        let mut response = pb::UsbipStatusResponse::new();
+        response.imports.push(entry);
+        proto_round_trip(response);
+
+        assert_eq!(
+            pb::GuestCapability::GUEST_CAPABILITY_USBIP_STATUS as i32,
+            14,
+            "generated USBIP status capability discriminant changed"
+        );
+        assert_eq!(
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT as i32,
+            56,
+            "generated USBIP timeout discriminant changed"
+        );
+        assert_eq!(
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT as i32,
+            57,
+            "generated USBIP invalid-output discriminant changed"
         );
     }
 }

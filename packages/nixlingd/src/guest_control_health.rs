@@ -118,6 +118,10 @@ pub trait GuestControlRpc {
         &self,
         request: pb::UsbipImportRequest,
     ) -> Result<pb::UsbipImportResponse, GuestControlHealthError>;
+    async fn usbip_status(
+        &self,
+        request: pb::UsbipStatusRequest,
+    ) -> Result<pb::UsbipStatusResponse, GuestControlHealthError>;
 }
 
 pub trait GuestControlSigner {
@@ -260,6 +264,13 @@ impl GuestControlRpc for TtrpcGuestControlClient {
     ) -> Result<pb::UsbipImportResponse, GuestControlHealthError> {
         self.unary("UsbipImport", request).await
     }
+
+    async fn usbip_status(
+        &self,
+        request: pb::UsbipStatusRequest,
+    ) -> Result<pb::UsbipStatusResponse, GuestControlHealthError> {
+        self.unary("UsbipStatus", request).await
+    }
 }
 
 pub async fn probe_guest_control_health<C, S>(
@@ -391,6 +402,19 @@ pub struct GuestUsbipImportResult {
     pub detached_ports: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestUsbipStatusEntry {
+    pub port: u32,
+    pub host: String,
+    pub tcp_port: u32,
+    pub bus_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestUsbipStatusResult {
+    pub imports: Vec<GuestUsbipStatusEntry>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct GuestUsbipImportCall<'a> {
     pub action: GuestUsbipAction,
@@ -414,6 +438,10 @@ pub enum GuestUsbipImportError {
     InvalidHost,
     /// `usbip port`, `usbip detach`, or `usbip attach` exited unsuccessfully.
     CommandFailed,
+    /// `usbip` did not complete within the strict guestd command timeout.
+    CommandTimeout,
+    /// `usbip port` returned output that guestd refused to parse.
+    InvalidOutput,
     /// The guest returned a malformed USBIP response or wrong error kind.
     Protocol,
 }
@@ -524,6 +552,64 @@ where
     })
 }
 
+pub async fn usbip_status_authenticated<C, S>(
+    vm_id: &str,
+    peer_cid: Option<u32>,
+    host_nonce: [u8; AUTH_NONCE_LEN],
+    client: &C,
+    signer: &S,
+    host: Option<&str>,
+    bus_id: Option<&str>,
+) -> Result<GuestUsbipStatusResult, GuestUsbipImportError>
+where
+    C: GuestControlRpc + Sync,
+    S: GuestControlSigner + Sync,
+{
+    let evidence = probe_guest_control_health(vm_id, peer_cid, host_nonce, client, signer)
+        .await
+        .map_err(GuestUsbipImportError::Probe)?;
+    let advertises_usbip_status = evidence.health.capabilities.iter().any(|capability| {
+        matches!(
+            capability.enum_value(),
+            Ok(pb::GuestCapability::GUEST_CAPABILITY_USBIP_STATUS)
+        )
+    });
+    if !advertises_usbip_status {
+        return Err(GuestUsbipImportError::CapabilityUnavailable);
+    }
+
+    let mut request = pb::UsbipStatusRequest::new();
+    request.metadata = MessageField::some(request_metadata(vm_id));
+    request.host = host.map(str::to_owned);
+    request.bus_id = bus_id.map(str::to_owned);
+    let response = client
+        .usbip_status(request)
+        .await
+        .map_err(GuestUsbipImportError::Probe)?;
+
+    if let Some(error) = response.error.as_ref() {
+        return Err(map_guest_usbip_error(error.kind.enum_value_or_default()));
+    }
+    let mut imports = Vec::with_capacity(response.imports.len());
+    for entry in response.imports {
+        if entry.port > u16::MAX as u32
+            || entry.tcp_port == 0
+            || entry.tcp_port > u16::MAX as u32
+            || entry.host.parse::<std::net::IpAddr>().is_err()
+            || nixling_ipc::usbip::validate_bus_id(&entry.bus_id).is_err()
+        {
+            return Err(GuestUsbipImportError::Protocol);
+        }
+        imports.push(GuestUsbipStatusEntry {
+            port: entry.port,
+            host: entry.host,
+            tcp_port: entry.tcp_port,
+            bus_id: entry.bus_id,
+        });
+    }
+    Ok(GuestUsbipStatusResult { imports })
+}
+
 /// Exhaustive host-side mapping of a guest `ReadGuestFile` error kind to a typed
 /// read error (no default `Retry`). Non-file kinds collapse to
 /// `Protocol` because the guest must not return them on this RPC.
@@ -545,6 +631,8 @@ fn map_guest_usbip_error(kind: pb::GuestControlErrorKind) -> GuestUsbipImportErr
         K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID => GuestUsbipImportError::InvalidBusId,
         K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST => GuestUsbipImportError::InvalidHost,
         K::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED => GuestUsbipImportError::CommandFailed,
+        K::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT => GuestUsbipImportError::CommandTimeout,
+        K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT => GuestUsbipImportError::InvalidOutput,
         _ => GuestUsbipImportError::Protocol,
     }
 }
@@ -708,10 +796,12 @@ mod tests {
         invalid_health: bool,
         advertise_read_cap: bool,
         advertise_usbip_cap: bool,
+        advertise_usbip_status_cap: bool,
         read_error: Option<pb::GuestControlErrorKind>,
         read_content: Vec<u8>,
         usbip_error: Option<pb::GuestControlErrorKind>,
         usbip_wrong_echo: bool,
+        usbip_status_invalid_entry: bool,
     }
 
     #[async_trait]
@@ -769,6 +859,11 @@ mod tests {
                     pb::GuestCapability::GUEST_CAPABILITY_USBIP_IMPORT,
                 ));
             }
+            if self.advertise_usbip_status_cap {
+                health.capabilities.push(protobuf::EnumOrUnknown::new(
+                    pb::GuestCapability::GUEST_CAPABILITY_USBIP_STATUS,
+                ));
+            }
             Ok(health)
         }
 
@@ -807,6 +902,30 @@ mod tests {
                 error.kind = protobuf::EnumOrUnknown::new(kind);
                 response.error = MessageField::some(error);
             }
+            Ok(response)
+        }
+
+        async fn usbip_status(
+            &self,
+            _request: pb::UsbipStatusRequest,
+        ) -> Result<pb::UsbipStatusResponse, GuestControlHealthError> {
+            let mut response = pb::UsbipStatusResponse::new();
+            if let Some(kind) = self.usbip_error {
+                let mut error = pb::GuestControlError::new();
+                error.kind = protobuf::EnumOrUnknown::new(kind);
+                response.error = MessageField::some(error);
+                return Ok(response);
+            }
+            let mut entry = pb::UsbipStatusEntry::new();
+            entry.port = 1;
+            entry.host = if self.usbip_status_invalid_entry {
+                "not-an-ip".to_owned()
+            } else {
+                "192.0.2.1".to_owned()
+            };
+            entry.tcp_port = 3240;
+            entry.bus_id = "1-2".to_owned();
+            response.imports.push(entry);
             Ok(response)
         }
     }
@@ -990,6 +1109,21 @@ mod tests {
         .await
     }
 
+    async fn usbip_status(
+        client: &FakeClient,
+    ) -> Result<GuestUsbipStatusResult, GuestUsbipImportError> {
+        usbip_status_authenticated(
+            "corp-vm",
+            Some(2),
+            [0x11; AUTH_NONCE_LEN],
+            client,
+            &FakeSigner,
+            Some("192.0.2.1"),
+            Some("1-2"),
+        )
+        .await
+    }
+
     #[tokio::test]
     async fn usbip_import_requires_advertised_capability() {
         assert_eq!(
@@ -1033,6 +1167,14 @@ mod tests {
                 GuestUsbipImportError::CommandFailed,
             ),
             (
+                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT,
+                GuestUsbipImportError::CommandTimeout,
+            ),
+            (
+                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT,
+                GuestUsbipImportError::InvalidOutput,
+            ),
+            (
                 pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
                 GuestUsbipImportError::Protocol,
             ),
@@ -1053,6 +1195,70 @@ mod tests {
             usbip_import(&FakeClient {
                 advertise_usbip_cap: true,
                 usbip_wrong_echo: true,
+                ..Default::default()
+            })
+            .await,
+            Err(GuestUsbipImportError::Protocol)
+        );
+    }
+
+    #[tokio::test]
+    async fn usbip_status_requires_advertised_capability() {
+        assert_eq!(
+            usbip_status(&FakeClient {
+                advertise_usbip_cap: true,
+                advertise_usbip_status_cap: false,
+                ..Default::default()
+            })
+            .await,
+            Err(GuestUsbipImportError::CapabilityUnavailable)
+        );
+    }
+
+    #[tokio::test]
+    async fn usbip_status_returns_sanitized_import_entries() {
+        let result = usbip_status(&FakeClient {
+            advertise_usbip_status_cap: true,
+            ..Default::default()
+        })
+        .await
+        .expect("usbip status succeeds");
+        assert_eq!(
+            result.imports,
+            vec![GuestUsbipStatusEntry {
+                port: 1,
+                host: "192.0.2.1".to_owned(),
+                tcp_port: 3240,
+                bus_id: "1-2".to_owned(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn usbip_status_maps_closed_guest_errors_and_invalid_entries() {
+        for (kind, expected) in [
+            (
+                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT,
+                GuestUsbipImportError::CommandTimeout,
+            ),
+            (
+                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT,
+                GuestUsbipImportError::InvalidOutput,
+            ),
+        ] {
+            let result = usbip_status(&FakeClient {
+                advertise_usbip_status_cap: true,
+                usbip_error: Some(kind),
+                ..Default::default()
+            })
+            .await;
+            assert_eq!(result, Err(expected), "kind {kind:?}");
+        }
+
+        assert_eq!(
+            usbip_status(&FakeClient {
+                advertise_usbip_status_cap: true,
+                usbip_status_invalid_entry: true,
                 ..Default::default()
             })
             .await,

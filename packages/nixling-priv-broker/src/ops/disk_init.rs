@@ -975,6 +975,23 @@ mod tests {
             .unwrap();
     }
 
+    fn validate_or_repair_existing_with_test_retry(
+        spec: &ResolvedDiskInitOp,
+        tool: &MkfsTool,
+    ) -> io::Result<DiskInitOutcome> {
+        let mut last = None;
+        for _ in 0..8 {
+            match validate_or_repair_existing_with(spec, tool) {
+                Err(err) if err.to_string().contains("Resource temporarily unavailable") => {
+                    last = Some(err);
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                other => return other,
+            }
+        }
+        Err(last.expect("retry loop records the last transient lease failure"))
+    }
+
     #[test]
     fn create_and_format_creates_ext4_image_when_absent() {
         let scratch = scratch_root();
@@ -1099,7 +1116,7 @@ mod tests {
         // shared test process. Production cannot skip the lease, and the
         // lease helper itself is still covered by integration through the
         // normal non-skipped paths.
-        let outcome = validate_or_repair_existing_with(&spec, &tool)
+        let outcome = validate_or_repair_existing_with_test_retry(&spec, &tool)
             .expect("safe stale posture repairs automatically");
         assert_eq!(outcome, DiskInitOutcome::PostureRepaired);
         let mode = fs::metadata(&target).unwrap().mode() & 0o777;
@@ -1117,7 +1134,7 @@ mod tests {
         let spec = test_spec(target.clone(), 4096, true);
         let tool = fake_mkfs_tool(&scratch);
 
-        let outcome = validate_or_repair_existing_with(&spec, &tool)
+        let outcome = validate_or_repair_existing_with_test_retry(&spec, &tool)
             .expect("sparse stale posture repairs and formats");
         assert_eq!(outcome, DiskInitOutcome::RepairedWithPosture);
         let meta = fs::metadata(&target).unwrap();

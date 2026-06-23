@@ -799,12 +799,15 @@ where
 ///
 /// 1. Acquire `/run/nixling/locks/usbip/<bus_id>` for `vm_name`
 ///    (refuses if another VM already owns the busid).
-/// 2. Run `usbip bind --busid <bus_id>` via the executor.
-/// 3. On bind failure, release the lock (so a retried `UsbipBind`
-///    from the same VM can succeed).
+/// 2. If sysfs already reports `usbip-host`, treat same-VM replay as
+///    converged without shelling out.
+/// 3. Otherwise run `usbip bind --busid <bus_id>` via the executor and
+///    verify sysfs converged to `usbip-host`. On bind failure, release
+///    the lock so a retried `UsbipBind` from the same VM can succeed.
 pub fn live_usbip_bind(
     executor: &dyn ReconcileExecutor,
     usbip_binary: &Path,
+    sysfs_root: &Path,
     bus_id: &str,
     lock_path: &Path,
     vm_name: &str,
@@ -813,6 +816,15 @@ pub fn live_usbip_bind(
 ) -> Result<(), LiveHandlerError> {
     crate::ops::usbip_lock::acquire_lock(lock_path, vm_name, daemon_uid, daemon_gid)
         .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?;
+    match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id)
+        .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?
+    {
+        crate::ops::usbip_host::UsbipDriverBinding::BoundToUsbipHost => {
+            return Ok(());
+        }
+        crate::ops::usbip_host::UsbipDriverBinding::Unbound
+        | crate::ops::usbip_host::UsbipDriverBinding::BoundToOtherDriver { .. } => {}
+    }
     if let Err(e) = executor.run_usbip(
         usbip_binary,
         crate::ops::exec_reconcile::UsbipSubcommand::Bind,
@@ -821,7 +833,14 @@ pub fn live_usbip_bind(
         let _ = crate::ops::usbip_lock::release_lock(lock_path, vm_name);
         return Err(LiveHandlerError::ReconcileExec(e));
     }
-    Ok(())
+    match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id)
+        .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?
+    {
+        crate::ops::usbip_host::UsbipDriverBinding::BoundToUsbipHost => Ok(()),
+        observed => Err(LiveHandlerError::UsbipLock(format!(
+            "usbip bind did not converge to usbip-host for bus_id={bus_id}: observed {observed:?}"
+        ))),
+    }
 }
 
 /// Live broker `UsbipUnbind` handler.
@@ -830,26 +849,54 @@ pub fn live_usbip_bind(
 ///    touching usbip. The unbind shellout previously ran first, so a
 ///    stale-but-authenticated request from VM A could detach VM B's
 ///    device before the owner-mismatch was caught at release_lock time.
-/// 2. Run `usbip unbind --busid <bus_id>` via the executor.
-/// 3. Release `/run/nixling/locks/usbip/<bus_id>` (re-verifies
-///    owner; missing lock is idempotent).
+/// 2. Run `usbip unbind --busid <bus_id>` via the executor. Production
+///    first aborts the usbip-host socket-backed stream via the per-device
+///    `usbip_sockfd` control, waits for the kernel stream-fd liveness surface to
+///    leave `USED`, and then executes driver unbind through a bounded helper
+///    because kernel driver detach can stall in sysfs; timeout keeps the
+///    broker/nixlingd control path live.
+/// 3. Leave `/run/nixling/locks/usbip/<bus_id>` in place. The dispatch layer
+///    revokes the backend device ACL after successful unbind, then releases the
+///    host-session claim last. Timeout/failure deliberately preserves the claim for
+///    operator recovery.
 pub fn live_usbip_unbind(
     executor: &dyn ReconcileExecutor,
     usbip_binary: &Path,
+    sysfs_root: &Path,
     bus_id: &str,
     lock_path: &Path,
     vm_name: &str,
 ) -> Result<(), LiveHandlerError> {
-    if let Some(observed) = crate::ops::usbip_lock::peek_owner(lock_path)
-        && observed != vm_name
-    {
-        return Err(LiveHandlerError::UsbipLock(format!(
-            "usbip unbind refused: bus_id={bus_id} lock at {} owned by {observed} but caller is {vm_name}",
-            lock_path.display()
-        )));
+    match crate::ops::usbip_lock::peek_owner(lock_path) {
+        Some(observed) if observed != vm_name => {
+            return Err(LiveHandlerError::UsbipLock(format!(
+                "usbip unbind refused: bus_id={bus_id} lock at {} owned by {observed} but caller is {vm_name}",
+                lock_path.display()
+            )));
+        }
+        Some(_) => {}
+        None => return Ok(()),
     }
-    // No lock present → idempotent unbind (already released). Still
-    // run the shellout so the kernel state catches up.
+    match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id)
+        .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?
+    {
+        crate::ops::usbip_host::UsbipDriverBinding::Unbound => return Ok(()),
+        crate::ops::usbip_host::UsbipDriverBinding::BoundToUsbipHost => {
+            crate::ops::usbip_host::ensure_usbip_host_driver_unbind_supported(sysfs_root)
+                .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?;
+        }
+        crate::ops::usbip_host::UsbipDriverBinding::BoundToOtherDriver { driver } => {
+            return Err(LiveHandlerError::UsbipLock(format!(
+                "usbip unbind refused: bus_id={bus_id} is no longer bound to usbip-host (observed driver {driver}); the session claim is preserved for manual recovery"
+            )));
+        }
+    }
+    executor
+        .shutdown_usbip_streams(sysfs_root, bus_id)
+        .map_err(LiveHandlerError::ReconcileExec)?;
+    executor
+        .wait_usbip_stream_fd_release(sysfs_root, bus_id)
+        .map_err(LiveHandlerError::ReconcileExec)?;
     executor
         .run_usbip(
             usbip_binary,
@@ -857,9 +904,17 @@ pub fn live_usbip_unbind(
             bus_id,
         )
         .map_err(LiveHandlerError::ReconcileExec)?;
-    crate::ops::usbip_lock::release_lock(lock_path, vm_name)
-        .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?;
-    Ok(())
+    match crate::ops::usbip_host::inspect_usbip_driver_binding(sysfs_root, bus_id)
+        .map_err(|e| LiveHandlerError::UsbipLock(e.to_string()))?
+    {
+        crate::ops::usbip_host::UsbipDriverBinding::BoundToUsbipHost => {
+            Err(LiveHandlerError::UsbipLock(format!(
+                "usbip unbind did not detach usbip-host for bus_id={bus_id}; the session claim is preserved for manual recovery"
+            )))
+        }
+        crate::ops::usbip_host::UsbipDriverBinding::Unbound
+        | crate::ops::usbip_host::UsbipDriverBinding::BoundToOtherDriver { .. } => Ok(()),
+    }
 }
 
 /// Run the bundle-resolved systemd unit install + `--enable` /
@@ -1497,9 +1552,14 @@ fn ensure_runner_cgroup_leaf<B: nixling_host::cgroup::CgroupBackend>(
     Ok(Some(leaf_path))
 }
 
-fn prepare_runner_cgroup_fd(
+struct RunnerCgroupFds {
+    dir_fd: OwnedFd,
+    procs_fd: OwnedFd,
+}
+
+fn prepare_runner_cgroup_fds(
     placement: &CgroupPlacement,
-) -> Result<Option<OwnedFd>, LiveHandlerError> {
+) -> Result<Option<RunnerCgroupFds>, LiveHandlerError> {
     use nixling_host::cgroup::RealCgroupBackend;
     use rustix::fs::{Mode, OFlags, open};
 
@@ -1517,7 +1577,15 @@ fn prepare_runner_cgroup_fd(
     else {
         return Ok(None);
     };
-    let fd = open(
+    let dir_fd = open(
+        &leaf_path,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )
+    .map_err(|err| LiveHandlerError::SpawnFailed {
+        detail: format!("open cgroup dir {}: {err}", leaf_path.display()),
+    })?;
+    let procs_fd = open(
         leaf_path.join("cgroup.procs"),
         OFlags::WRONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
         Mode::empty(),
@@ -1525,7 +1593,7 @@ fn prepare_runner_cgroup_fd(
     .map_err(|err| LiveHandlerError::SpawnFailed {
         detail: format!("open {}: {err}", leaf_path.join("cgroup.procs").display()),
     })?;
-    Ok(Some(fd))
+    Ok(Some(RunnerCgroupFds { dir_fd, procs_fd }))
 }
 
 /// Maps known internal seccomp policy ref names to the `DeviceClass`
@@ -2957,7 +3025,7 @@ pub fn live_spawn_runner(
     let (binary, argv, env) =
         build_cstring_vectors(&plan).map_err(LiveHandlerError::SpawnPreflight)?;
     let seccomp_program = load_runner_seccomp(&plan)?;
-    let cgroup_procs_fd = prepare_runner_cgroup_fd(&plan.cgroup_placement)?;
+    let cgroup_fds = prepare_runner_cgroup_fds(&plan.cgroup_placement)?;
     refresh_spawn_runner_acls(&plan)?;
 
     // swtpm-dir first-run hardening (issue #64). Gated on the
@@ -3012,7 +3080,14 @@ pub fn live_spawn_runner(
         namespaces: plan.namespaces.clone(),
         seccomp_program,
         mount_policy: plan.mount_policy.clone(),
-        cgroup_procs_fd,
+        cgroup_dir_fd: cgroup_fds
+            .as_ref()
+            .map(|fds| fds.dir_fd.try_clone())
+            .transpose()
+            .map_err(|err| LiveHandlerError::SpawnFailed {
+                detail: format!("duplicate cgroup dir fd: {err}"),
+            })?,
+        cgroup_procs_fd: cgroup_fds.map(|fds| fds.procs_fd),
         // Plumb through the user-NS spec from the role profile. When
         // Some, the broker pre-creates the user NS and writes
         // uid_map/gid_map; the child runs fake-root inside with no
@@ -3133,6 +3208,7 @@ mod tests {
     };
     use nixling_host::cgroup::fake::FakeCgroupBackend;
     use nixling_ipc::broker_wire::ActivationMode;
+    use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
 
     struct TestDir {
@@ -3164,6 +3240,30 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
         }
+    }
+
+    fn fake_usbip_sysfs(root: &TestDir, bus_id: &str) -> PathBuf {
+        let sysfs_root = root.join("sys").join("bus").join("usb").join("devices");
+        let driver_root = root
+            .join("sys")
+            .join("bus")
+            .join("usb")
+            .join("drivers")
+            .join("usbip-host");
+        let device = sysfs_root.join(bus_id);
+        std::fs::create_dir_all(&device).expect("create fake usb device");
+        std::fs::create_dir_all(&driver_root).expect("create fake usbip driver");
+        std::fs::write(driver_root.join("unbind"), b"").expect("driver unbind attr");
+        symlink(&driver_root, device.join("driver")).expect("driver symlink");
+        std::fs::write(device.join("usbip_status"), b"2\n").expect("usbip status");
+        std::fs::write(device.join("usbip_sockfd"), b"").expect("usbip sockfd");
+        sysfs_root
+    }
+
+    fn fake_unbound_usbip_sysfs(root: &TestDir, bus_id: &str) -> PathBuf {
+        let sysfs_root = root.join("sys").join("bus").join("usb").join("devices");
+        std::fs::create_dir_all(sysfs_root.join(bus_id)).expect("create fake usb device");
+        sysfs_root
     }
 
     fn sample_installer_intent(root: &TestDir) -> ResolvedInstallerIntent {
@@ -3606,6 +3706,309 @@ mod tests {
         }
         let err = live_apply_nftables(&FailExec, Path::new("/usr/sbin/nft"), "x").unwrap_err();
         assert!(matches!(err, LiveHandlerError::ReconcileExec(_)));
+    }
+
+    #[test]
+    fn usbip_unbind_failure_preserves_claim_for_operator_recovery() {
+        struct FailUsbipUnbind;
+        impl ReconcileExecutor for FailUsbipUnbind {
+            fn apply_nft_script(&self, _: &Path, _: &str) -> Result<(), ReconcileExecError> {
+                unreachable!()
+            }
+            fn write_sysctl(&self, _: &str, _: &str) -> Result<(), ReconcileExecError> {
+                unreachable!()
+            }
+            fn write_atomic_file(
+                &self,
+                _: &Path,
+                _: &[u8],
+                _: u32,
+            ) -> Result<(), ReconcileExecError> {
+                unreachable!()
+            }
+            fn write_path_value(&self, _: &Path, _: &str) -> Result<(), ReconcileExecError> {
+                unreachable!()
+            }
+            fn read_path_value(&self, _: &Path) -> Result<String, ReconcileExecError> {
+                unreachable!()
+            }
+            fn ip_route(
+                &self,
+                _: &Path,
+                _: IpRouteVerb,
+                _: &str,
+            ) -> Result<(), ReconcileExecError> {
+                unreachable!()
+            }
+            fn run_usbip(
+                &self,
+                _: &Path,
+                subcommand: crate::ops::exec_reconcile::UsbipSubcommand,
+                _: &str,
+            ) -> Result<(), ReconcileExecError> {
+                assert_eq!(
+                    subcommand,
+                    crate::ops::exec_reconcile::UsbipSubcommand::Unbind
+                );
+                Err(ReconcileExecError::TimedOut {
+                    which: "usbip unbind".to_owned(),
+                    timeout_ms: 1,
+                    remediation: "manual recovery required".to_owned(),
+                })
+            }
+            fn prepare_store_view(
+                &self,
+                _: &ResolvedStoreViewIntent,
+            ) -> Result<(), ReconcileExecError> {
+                unreachable!()
+            }
+            fn setup_mount_namespace(
+                &self,
+                _: &str,
+                _: &str,
+                _: &Path,
+                _: &Path,
+            ) -> Result<PathBuf, ReconcileExecError> {
+                unreachable!()
+            }
+            fn run_activation_script(
+                &self,
+                _: &str,
+                _: &Path,
+                _: &Path,
+            ) -> Result<String, ReconcileExecError> {
+                unreachable!()
+            }
+            fn run_gc(&self, _: Option<u32>) -> Result<String, ReconcileExecError> {
+                unreachable!()
+            }
+            fn run_ssh_keygen(
+                &self,
+                _: &Path,
+                _: &str,
+            ) -> Result<crate::ops::exec_reconcile::GeneratedSshKey, ReconcileExecError>
+            {
+                unreachable!()
+            }
+        }
+
+        let root = TestDir::new("usbip-unbind-preserves-claim");
+        let lock_dir = root.join("locks");
+        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        let lock_path = lock_dir.join("1-2");
+        let sysfs_root = fake_usbip_sysfs(&root, "1-2");
+        crate::ops::usbip_lock::acquire_lock(
+            &lock_path,
+            "corp-vm",
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        )
+        .expect("seed lock");
+
+        let err = live_usbip_unbind(
+            &FailUsbipUnbind,
+            Path::new("/run/current-system/sw/bin/usbip"),
+            &sysfs_root,
+            "1-2",
+            &lock_path,
+            "corp-vm",
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, LiveHandlerError::ReconcileExec(_)));
+        assert_eq!(
+            crate::ops::usbip_lock::peek_owner(&lock_path),
+            Some("corp-vm".to_owned()),
+            "failed or timed-out sysfs unbind must not falsely release the USBIP session claim"
+        );
+    }
+
+    #[test]
+    fn usbip_bind_same_vm_replay_skips_shellout_and_preserves_claim() {
+        let root = TestDir::new("usbip-bind-same-vm-replay");
+        let lock_dir = root.join("locks");
+        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        let lock_path = lock_dir.join("1-2");
+        crate::ops::usbip_lock::acquire_lock(
+            &lock_path,
+            "corp-vm",
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        )
+        .expect("seed session claim");
+        let sysfs_root = fake_usbip_sysfs(&root, "1-2");
+        let exec = FakeReconcileExecutor::new();
+
+        live_usbip_bind(
+            &exec,
+            Path::new("/run/current-system/sw/bin/usbip"),
+            &sysfs_root,
+            "1-2",
+            &lock_path,
+            "corp-vm",
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        )
+        .expect("same-VM replay converges without mutation");
+
+        assert_eq!(
+            exec.take_log(),
+            Vec::<ReconcileOp>::new(),
+            "already-bound same-VM replay must not rerun usbip bind"
+        );
+        assert_eq!(
+            crate::ops::usbip_lock::peek_owner(&lock_path),
+            Some("corp-vm".to_owned())
+        );
+    }
+
+    #[test]
+    fn usbip_bind_shellout_failure_releases_claim_for_retry() {
+        let root = TestDir::new("usbip-bind-failure-releases-claim");
+        let lock_dir = root.join("locks");
+        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        let lock_path = lock_dir.join("1-2");
+        let sysfs_root = fake_unbound_usbip_sysfs(&root, "1-2");
+        let exec = FakeReconcileExecutor::new();
+        exec.fail_run_usbip(ReconcileExecError::NonZeroExit {
+            which: "usbip bind".to_owned(),
+            exit_code: 1,
+            stderr: "bind failed".to_owned(),
+        });
+
+        let err = live_usbip_bind(
+            &exec,
+            Path::new("/run/current-system/sw/bin/usbip"),
+            &sysfs_root,
+            "1-2",
+            &lock_path,
+            "corp-vm",
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        )
+        .expect_err("bind shellout failure fails closed");
+
+        assert!(matches!(err, LiveHandlerError::ReconcileExec(_)));
+        assert_eq!(
+            exec.take_log(),
+            vec![ReconcileOp::RunUsbip {
+                binary: PathBuf::from("/run/current-system/sw/bin/usbip"),
+                subcommand: crate::ops::exec_reconcile::UsbipSubcommand::Bind,
+                bus_id: "1-2".to_owned(),
+            }]
+        );
+        assert_eq!(
+            crate::ops::usbip_lock::peek_owner(&lock_path),
+            None,
+            "failed first bind must release the claim so same VM can retry"
+        );
+    }
+
+    #[test]
+    fn usbip_unbind_aborts_stream_before_driver_unbind_and_preserves_claim_for_acl_phase() {
+        let root = TestDir::new("usbip-unbind-order");
+        let lock_dir = root.join("locks");
+        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        let lock_path = lock_dir.join("1-2");
+        let sysfs_root = fake_usbip_sysfs(&root, "1-2");
+        crate::ops::usbip_lock::acquire_lock(
+            &lock_path,
+            "corp-vm",
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        )
+        .expect("seed lock");
+
+        let exec = FakeReconcileExecutor::new();
+        live_usbip_unbind(
+            &exec,
+            Path::new("/run/current-system/sw/bin/usbip"),
+            &sysfs_root,
+            "1-2",
+            &lock_path,
+            "corp-vm",
+        )
+        .expect("unbind succeeds");
+
+        assert_eq!(
+            exec.take_log(),
+            vec![
+                ReconcileOp::ShutdownUsbipStreams {
+                    sysfs_root: sysfs_root.clone(),
+                    bus_id: "1-2".to_owned(),
+                },
+                ReconcileOp::WaitUsbipStreamFdRelease {
+                    sysfs_root: sysfs_root.clone(),
+                    bus_id: "1-2".to_owned(),
+                },
+                ReconcileOp::RunUsbip {
+                    binary: PathBuf::from("/run/current-system/sw/bin/usbip"),
+                    subcommand: crate::ops::exec_reconcile::UsbipSubcommand::Unbind,
+                    bus_id: "1-2".to_owned(),
+                },
+            ]
+        );
+        assert_eq!(
+            crate::ops::usbip_lock::peek_owner(&lock_path),
+            Some("corp-vm".to_owned()),
+            "live unbind leaves session claim until dispatch revokes ACL and releases it"
+        );
+    }
+
+    #[test]
+    fn usbip_unbind_fd_release_timeout_preserves_claim_without_driver_unbind() {
+        let root = TestDir::new("usbip-unbind-release-timeout");
+        let lock_dir = root.join("locks");
+        std::fs::create_dir_all(&lock_dir).expect("create lock dir");
+        let lock_path = lock_dir.join("1-2");
+        let sysfs_root = fake_usbip_sysfs(&root, "1-2");
+        crate::ops::usbip_lock::acquire_lock(
+            &lock_path,
+            "corp-vm",
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        )
+        .expect("seed lock");
+
+        let exec = FakeReconcileExecutor::new();
+        exec.fail_wait_usbip_stream_fd_release(
+            crate::ops::exec_reconcile::ReconcileExecError::TimedOut {
+                which: "usbip stream fd release".to_owned(),
+                timeout_ms: 1,
+                remediation: "manual recovery required".to_owned(),
+            },
+        );
+
+        let err = live_usbip_unbind(
+            &exec,
+            Path::new("/run/current-system/sw/bin/usbip"),
+            &sysfs_root,
+            "1-2",
+            &lock_path,
+            "corp-vm",
+        )
+        .expect_err("fd release timeout fails closed");
+
+        assert!(matches!(err, LiveHandlerError::ReconcileExec(_)));
+        assert_eq!(
+            exec.take_log(),
+            vec![
+                ReconcileOp::ShutdownUsbipStreams {
+                    sysfs_root: sysfs_root.clone(),
+                    bus_id: "1-2".to_owned(),
+                },
+                ReconcileOp::WaitUsbipStreamFdRelease {
+                    sysfs_root,
+                    bus_id: "1-2".to_owned(),
+                },
+            ],
+            "driver unbind helper must not run until stream fd release is proven"
+        );
+        assert_eq!(
+            crate::ops::usbip_lock::peek_owner(&lock_path),
+            Some("corp-vm".to_owned()),
+            "fd-release timeout must preserve the USBIP session claim"
+        );
     }
 
     #[test]

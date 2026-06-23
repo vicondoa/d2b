@@ -80,6 +80,7 @@ use crate::sync::SyncJson;
 use sha2::Digest as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read as _;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 /// Trusted-bundle intent lookup tables loaded from the broker-configured
@@ -2169,13 +2170,12 @@ fn build_usbip_firewall_intents(host: &HostJson) -> BTreeMap<String, ResolvedUsb
         let bridge_ifname =
             user_visible_ifname_for(host, &env.env, None, crate::host::TapRole::Uplink)
                 .unwrap_or_else(|| format!("br-{}-up", env.env));
+        let Some(rule_body) = scoped_usbip_proxy_rule_body(env, &bridge_ifname) else {
+            continue;
+        };
         for lock in &env.usbip_busid_locks {
             for bus_id in synthesize_bus_ids(lock) {
                 let intent_id = intent_id_usbip_firewall(&env.env, &bus_id);
-                let rule_body = format!(
-                    "iifname \"{}\" ip protocol tcp tcp dport 3240 accept",
-                    bridge_ifname,
-                );
                 let desired_hash = stable_digest(&rule_body);
                 out.insert(
                     intent_id.clone(),
@@ -2183,7 +2183,7 @@ fn build_usbip_firewall_intents(host: &HostJson) -> BTreeMap<String, ResolvedUsb
                         intent_id,
                         bus_id,
                         env: env.env.clone(),
-                        nft_rule_body: rule_body,
+                        nft_rule_body: rule_body.clone(),
                         desired_hash,
                     },
                 );
@@ -2191,6 +2191,43 @@ fn build_usbip_firewall_intents(host: &HostJson) -> BTreeMap<String, ResolvedUsb
         }
     }
     out
+}
+
+fn scoped_usbip_proxy_rule_body(env: &NetEnv, bridge_ifname: &str) -> Option<String> {
+    let bridge_ifname = safe_ifname_literal(bridge_ifname)?;
+    let host_uplink_ip = safe_ipv4_literal(env.host_uplink_ip.as_deref()?)?;
+    let net_uplink_ip = safe_ipv4_literal(env.net_uplink_ip.as_deref()?)?;
+    let uplink_flags = env
+        .bridge_port_flags
+        .iter()
+        .find(|flags| flags.role == crate::host::TapRole::Uplink)?;
+    if !uplink_flags.isolated
+        || !uplink_flags.neigh_suppress
+        || uplink_flags.resolved_learning()
+        || uplink_flags.resolved_unicast_flood()
+    {
+        return None;
+    }
+
+    Some(format!(
+        "iifname \"{bridge_ifname}\" ip saddr {net_uplink_ip} ip daddr {host_uplink_ip} ip protocol tcp tcp dport 3240 accept"
+    ))
+}
+
+fn safe_ifname_literal(value: &str) -> Option<&str> {
+    IfName::new(value).ok()?;
+    Some(value)
+}
+
+fn safe_ipv4_literal(value: &str) -> Option<String> {
+    match value.parse::<IpAddr>().ok()? {
+        IpAddr::V4(addr)
+            if !addr.is_unspecified() && !addr.is_loopback() && !addr.is_multicast() =>
+        {
+            Some(addr.to_string())
+        }
+        _ => None,
+    }
 }
 
 fn build_usbip_bind_intents(host: &HostJson) -> BTreeMap<String, ResolvedUsbipBindIntent> {
@@ -2804,9 +2841,9 @@ mod tests {
     use crate::bundle::{Bundle, BundleClosureRef, BundleGeneration};
     use crate::closures::{ClosureGeneration, ClosureMetadata};
     use crate::host::{
-        ChNetHandoffMode, HostChConfig, HostJson, HostsFileOwnership, IfName, IfNameMapping,
-        LanPolicy, NetEnv, NetworkManagerUnmanaged, NftablesModel, OwnershipRule, SitePolicy,
-        UsbipBusidLock, UsbipLockOwner, UsbipLockScope,
+        BridgePortFlags, ChNetHandoffMode, HostChConfig, HostJson, HostsFileOwnership, IfName,
+        IfNameMapping, LanPolicy, NetEnv, NetworkManagerUnmanaged, NftablesModel, OwnershipRule,
+        SitePolicy, UsbipBusidLock, UsbipLockOwner, UsbipLockScope,
     };
     use crate::manifest_v04::{
         ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy, VmObservability,
@@ -2970,6 +3007,8 @@ mod tests {
             environments: vec![NetEnv {
                 env: "personal".to_owned(),
                 bridge: IfName::new("nlpersbr0").expect("bridge ifname"),
+                host_uplink_ip: Some("192.0.2.1".to_owned()),
+                net_uplink_ip: Some("192.0.2.2".to_owned()),
                 mtu: 1500,
                 mss_clamp: Some(1460),
                 lan: LanPolicy {
@@ -2977,7 +3016,14 @@ mod tests {
                     effective_east_west: false,
                 },
                 net_vm_forward_blocklist: Vec::new(),
-                bridge_port_flags: Vec::new(),
+                bridge_port_flags: vec![BridgePortFlags {
+                    role: TapRole::Uplink,
+                    isolated: true,
+                    neigh_suppress: true,
+                    learning: Some(false),
+                    unicast_flood: Some(false),
+                    rule: "uplink point-to-point anti-spoofing".to_owned(),
+                }],
                 ipv6_sysctls: Vec::new(),
                 usbip_busid_locks: vec![UsbipBusidLock {
                     vm: "personal-dev".to_owned(),
@@ -3485,6 +3531,13 @@ mod tests {
             "rule body must not target LAN bridge: {}",
             intent.nft_rule_body
         );
+        assert!(
+            intent
+                .nft_rule_body
+                .contains("ip saddr 192.0.2.2 ip daddr 192.0.2.1"),
+            "rule body must scope to the host-visible net-VM source identity: {}",
+            intent.nft_rule_body
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -3493,6 +3546,16 @@ mod tests {
     fn usbip_firewall_intent_uses_user_visible_uplink_ifname() {
         let mut host: HostJson =
             serde_json::from_str(HOST_JSON_FIXTURE).expect("host fixture parses");
+        host.environments[0].host_uplink_ip = Some("192.0.2.1".to_owned());
+        host.environments[0].net_uplink_ip = Some("192.0.2.2".to_owned());
+        host.environments[0].bridge_port_flags = vec![BridgePortFlags {
+            role: TapRole::Uplink,
+            isolated: true,
+            neigh_suppress: true,
+            learning: Some(false),
+            unicast_flood: Some(false),
+            rule: "uplink point-to-point anti-spoofing".to_owned(),
+        }];
         host.environments[0].usbip_busid_locks = vec![UsbipBusidLock {
             vm: "corp-vm".to_owned(),
             lock_owner: UsbipLockOwner::Daemon,
@@ -3517,7 +3580,37 @@ mod tests {
             "rule body: {}",
             intent.nft_rule_body
         );
+        assert!(intent.nft_rule_body.contains("ip saddr 192.0.2.2"));
         assert!(!intent.nft_rule_body.contains("nl-derived0"));
+    }
+
+    #[test]
+    fn usbip_firewall_intent_fails_closed_without_uplink_source_validation() {
+        let mut host: HostJson =
+            serde_json::from_str(HOST_JSON_FIXTURE).expect("host fixture parses");
+        host.environments[0].host_uplink_ip = Some("192.0.2.1".to_owned());
+        host.environments[0].net_uplink_ip = Some("192.0.2.2".to_owned());
+        host.environments[0].usbip_busid_locks = vec![UsbipBusidLock {
+            vm: "corp-vm".to_owned(),
+            lock_owner: UsbipLockOwner::Daemon,
+            scope: UsbipLockScope::PerBusid,
+            bus_ids: vec!["1-2".to_owned()],
+            vendor_product_allowlist: Vec::new(),
+        }];
+        host.environments[0].bridge_port_flags = vec![BridgePortFlags {
+            role: TapRole::Uplink,
+            isolated: false,
+            neigh_suppress: true,
+            learning: Some(false),
+            unicast_flood: Some(false),
+            rule: "unsafe uplink".to_owned(),
+        }];
+
+        let intents = build_usbip_firewall_intents(&host);
+        assert!(
+            !intents.contains_key(&intent_id_usbip_firewall(&host.environments[0].env, "1-2",)),
+            "unsafe or unvalidated uplink must not widen USBIP exposure"
+        );
     }
 
     #[test]

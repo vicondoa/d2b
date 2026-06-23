@@ -14,13 +14,14 @@ Every row carries three policy flags:
 - **destructive** — `yes` for any operation whose audit decision can
   mutate persistent host state. Pure-`open` device handoffs are `no`
   because the broker only opens; the daemon owns the resulting fd.
-- **secret** — `yes` for operations whose audit record may reference
-  secret-material identifiers. The currently callable surface has one
-  secret-bearing variant, `GuestControlSign`, recorded as
-  `redacted-only`: its audit record carries only redacted
-  token-transcript metadata (`transcript_len`, `peer_cid_present`,
-  `capabilities_hash_present`), never the per-VM token or the signature
-  bytes.
+- **secret** — `yes` for operations whose implementation reads secret
+  material or whose audit record may reference secret-material
+  identifiers. `redacted-only` rows carry only derived/redacted metadata:
+  for example `GuestControlSign` records token-transcript metadata
+  (`transcript_len`, `peer_cid_present`, `capabilities_hash_present`),
+  and `UsbipBind` records normalized device identity plus serial HMAC
+  correlations, never the per-VM token, signature bytes, raw serial, raw
+  sysfs path, or device path.
 
 Unknown variants and unknown fields in security-sensitive artifacts
 are denied (`defaultForUnknown: deny`).
@@ -117,7 +118,10 @@ The currently implemented broker operation catalog. Every row carries
 | `SetSocketAcl` | socket | per VM / role | reserved | partial (replace stale only) | no | `nixling-admin` | yes | deny | `socket_path_hash`, `mode`, `acl_diff` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) |
 | `RevokeSocketAclIfPresent` | socket | per VM / role | future work | yes (revoke) | no | `nixling-admin` | yes | deny | `socket_path_hash`, `groups_revoked`, `acl_diff` | [0018](../adr/0018-microvm-nix-removal.md) |
 | `ModprobeIfAllowed` | kernel module | global / feature | live | yes | no | `nixling-admin` | yes | deny | `module_name`, `matrix_entry_id`, `modules_disabled_sysctl` | [0014](../adr/0014-w3-modules-devices-runner-shape.md) |
-| `UsbipBindFirewallRule` | USBIP firewall | per busid | live | no | no | `nixling-admin` | yes | deny | `busid`, `rule_hash` | [0013](../adr/0013-w3-firewall-coexistence-policy.md), [0018](../adr/0018-microvm-nix-removal.md) |
+| `UsbipBind` | USBIP device routing | per busid / env | live | yes (driver bind + backend ACL grant) | redacted-only | `nixlingd` | yes | deny | Request DTO (opaque IDs only): `bundle_usbip_bind_intent_ref`. Audit `operation_fields` (broker-derived after bundle resolution): `bus_id`, `vm`, optional `device_identity` with normalized VID/PID, `serial_observed`, and HMAC serial correlations; no raw sysfs path, serial, or device path. Refused before exposure if the selected physical device fails the bundle vendor/product or topology policy. | [0018](../adr/0018-microvm-nix-removal.md) |
+| `UsbipUnbind` | USBIP device routing | per busid / env | live | yes (driver unbind + backend ACL revoke + optional host-session claim release) | no | `nixlingd` | yes | deny | Request DTO (opaque IDs only): `bundle_usbip_bind_intent_ref`, `preserve_durable_claim`. Audit `operation_fields` (broker-derived after bundle resolution): `bus_id`; no raw sysfs path or topology. VM stop/restart sets `preserve_durable_claim = true`; explicit detach releases the matching broker-owned session claim after successful unbind. | [0018](../adr/0018-microvm-nix-removal.md) |
+| `UsbipProxyReconcile` | USBIP proxy / backend ACL reconciliation | host / per env | live | yes (backend ACL reconciliation; no bind/unbind) | no | `nixlingd` | yes | deny | Request DTO: `scope_id`. Audit `operation_fields`: `{}`; `subject_id` / `scope_id` carry the bounded reconcile scope, while per-busid expectations are re-derived from the trusted bundle. | [0018](../adr/0018-microvm-nix-removal.md) |
+| `UsbipBindFirewallRule` | USBIP firewall | per busid | live | yes (applies nftables carve-out / live routing exposure) | no | `nixlingd` | yes | deny | Request DTO (opaque IDs only): `bundle_usbip_firewall_intent_ref`. Audit `operation_fields`: `bundle_usbip_firewall_intent_ref`; `subject_id` carries the resolved busid and `scope_id` is `usbip-firewall`. The broker derives busid, source/destination scoping, and the nft batch hash from the trusted bundle before applying the `inet nixling` carve-out. | [0013](../adr/0013-w3-firewall-coexistence-policy.md), [0018](../adr/0018-microvm-nix-removal.md) |
 | `QemuMediaEnroll` | qemu-media registry | per VM / media ref | live | yes (root-only registry + runtime udev ignore rules) | redacted-only | `nixling-admin` | yes | deny | `vm`, `media_ref`, `read_only`, `udev_rule_written`, `udev_reloaded`; no busid, by-id path, serial, or block path | [0015](../adr/0015-daemon-only-clean-break.md) |
 | `QemuMediaRefreshRegistry` | qemu-media redacted registry | host | live | yes (redacted index + runtime udev ignore rules) | redacted-only | `nixling-admin` | yes | deny | `record_count`, `redacted_index_written`, `udev_rule_written`, `udev_reloaded`; no busid, by-id path, serial, block path, or registry path | [0015](../adr/0015-daemon-only-clean-break.md) |
 | `QemuMediaAttach` | qemu-media hotplug | per VM / media ref | live | yes (live QMP media attach) | redacted-only | `nixling-admin` | yes | deny | `vm`, `media_ref`, `slot`, `read_only`, `qmp_commands`; no busid, by-id path, serial, or block path | [0015](../adr/0015-daemon-only-clean-break.md) |
@@ -126,6 +130,18 @@ The currently implemented broker operation catalog. Every row carries
 | `QemuMediaQueryStatus` | qemu-media lifecycle status | per VM | live | no (QMP query-status) | redacted-only | `nixling-admin` | errors only | deny | `vm`, `shutdown_context`, typed status enum; suppresses success audit during polling and never records raw QMP JSON | [0040](../adr/0040-graceful-vm-shutdown.md) |
 | `QemuMediaQuit` | qemu-media lifecycle | per VM | live | yes (QMP quit) | redacted-only | `nixling-admin` | yes | deny | `vm`, `qmp_command`; no raw QMP response, socket path, guest output, busid, by-id path, serial, or block path | [0015](../adr/0015-daemon-only-clean-break.md), [0040](../adr/0040-graceful-vm-shutdown.md) |
 | `QemuMediaDetach` | qemu-media hotplug | per VM / media ref | live | yes (live QMP media detach) | redacted-only | `nixling-admin` | yes | deny | `vm`, `media_ref`, `slot`, `read_only`, `qmp_commands`; no busid, by-id path, serial, or block path | [0015](../adr/0015-daemon-only-clean-break.md) |
+
+## Public USB operations
+
+The public CLI/API rows in `privileges.json` are separate from the
+daemon-to-broker rows above. The daemon enforces public authz before any
+broker request is emitted.
+
+| Public operation | Status | Destructive | Secret access | Allowed groups | Broker/audit path |
+| --- | --- | --- | --- | --- | --- |
+| `usb attach` | live | yes (host-session claim, driver bind, backend ACL, firewall/proxy convergence, guest import) | redacted-only (the broker-side bind may read the USB audit serial-HMAC key and records only redacted correlations) | `nixling-admin` | Emits public `usb attach` audit plus broker `UsbipBind`, `UsbipBindFirewallRule`, `SpawnRunner`/`OpenPidfd` as needed, and `UsbipProxyReconcile`; `UsbipBind.operation_fields` carries `bus_id`, `vm`, and optional redacted `device_identity`. |
+| `usb detach` | live | yes (guest detach, firewall withdrawal/targeted stream cleanup when proven, then driver unbind, backend ACL revoke, optional host-session claim release) | no | `nixling-admin` | Emits public `usb detach` audit plus broker `UsbipUnbind` and related lifecycle rows. `UsbipUnbind.operation_fields` carries only the resolved `bus_id`; `preserve_durable_claim` is true for VM stop/restart cleanup and false for explicit detach. |
+| `usb probe` | live diagnostic | no device-routing mutation (qemu-media redacted registry refresh and USBIP backend-ACL validation may run; it does not bind, unbind, import, detach, or release claims) | no | `nixling-launcher` + `nixling-admin` | Emits public `usb probe` audit; when USBIP intents exist it calls `UsbipProxyReconcile` with `scope_id = "host"` before rendering [`cli-output/usb-probe.md`](cli-output/usb-probe.md). |
 
 ## Utility and bootstrap variants
 
@@ -155,9 +171,6 @@ protocol stays stable, but the current broker dispatches them to an
 | Variant | Subject | Current status | Destructive | Secret access | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `LaunchMinijailChild` | process | future work | yes (fork+exec) | no | Handler work is tied to minijail provisioning and runner launch. |
-| `UsbipBind` | USBIP device routing | future work | yes | no | The current broker provides only `UsbipBindFirewallRule`; live USBIP attach is not implemented. |
-| `UsbipUnbind` | USBIP device routing | future work | yes | no | Live USBIP detach is not implemented. |
-| `UsbipProxyReconcile` | USBIP device routing | future work | yes | no | USBIP proxy DAG reconcile is not implemented. |
 | `ReadSecretById` | secret store | future work | no (read-only) | yes | Secret backend support is not implemented. |
 | `InjectSecretById` | secret store | future work | yes | yes | Secret injection into VM payloads is not implemented. |
 | `RotateSecretById` | secret store | future work | yes | yes | Secret rotation is not implemented. |
@@ -247,7 +260,7 @@ non-bootstrap dispatch surface as typed per-op payloads:
 - `RunKeysRotate { bundle_keys_intent_ref, vm }`
 - `RunHostKeyTrust { bundle_trust_intent_ref, vm }`
 - `RunRotateKnownHost { bundle_rotate_known_host_intent_ref, vm }`
-- `UsbipBind { bus_id, vm }`
+- `UsbipBind { bus_id, vm, device_identity? }`
 - `UsbipUnbind { bus_id }`
 - `UsbipProxyReconcile {}`
 - `UsbipBindFirewallRule { bundle_usbip_firewall_intent_ref }`
@@ -450,7 +463,7 @@ enforces fail-closed before fork/exec.
 | Runner role | Legacy unit replaced | Caps (steady-state) | Per-env scope | Broker-dispatch contract |
 | --- | --- | --- | --- | --- |
 | `OtelHostBridge` | `nixling-otel-host-bridge.service`; replaced by broker `SpawnRunner{role: OtelHostBridge, …}` | empty | host-scoped (singleton — exactly one runner per host) | Broker refuses `SpawnRunner{role: OtelHostBridge, …}` fail-closed via `Broker.OtelHostBridgeIntentInvalid` unless the bundle's `OtelHostBridge` runner intent points at a VM whose `vm_name` equals `manifest._observability.vmName`. Readiness gate: `/run/nixling/otel` exists with expected ownership, stale `host-egress.sock` is removed, and the obs VM base `vsock.sock` exists; exponential backoff applies on host-OTLP unreachable. Broker waits for the readiness gate before exec; `supervisor::pidfd` respawns on relay exit. Pre-opened vsock fds only; `socket(AF_VSOCK)` is denied by `w1-otel-host-bridge` seccomp. |
-| `Usbip` | per-env singletons `nixling-sys-<env>-usbipd-{proxy,backend}.{service,socket}`; replaced by broker `SpawnRunner{role: Usbip, vm_id: sys-<env>-usbipd, …}` | backend: scoped host-root carve-out with `CAP_NET_RAW`; proxy: empty | **per env** — two runners per USBIP-enabled env (`vm_id` = `sys-<env>-usbipd`, roles `backend` and `proxy`) | `nixling usb attach --apply` dispatches `UsbipBind(busid, vm)` first so broker allowlist validation and the per-busid lock succeed before any listener is exposed, then applies `UsbipBindFirewallRule`, ensures the per-env backend (`usbipd -4 --tcp-port <backendPort>`) and bounded proxy (`socat TCP-LISTEN:3240,bind=<env.hostUplinkIp>,fork,max-children=4,reuseaddr ...`) are spawned and TCP-ready, then runs `UsbipProxyReconcile`. Host kernel module is `usbip-host` (not `vhci_hcd`, which is the guest module). |
+| `Usbip` | per-env singletons `nixling-sys-<env>-usbipd-{proxy,backend}.{service,socket}`; replaced by broker `SpawnRunner{role: Usbip, vm_id: sys-<env>-usbipd, …}` | backend: scoped host-root carve-out with `CAP_NET_RAW`; proxy: empty | **per env** — two runners per USBIP-enabled env (`vm_id` = `sys-<env>-usbipd`, roles `backend` and `proxy`) | `nixling usb attach --apply` dispatches `UsbipBind` with a bundle-resolved bind intent first so broker allowlist validation and the per-busid lock succeed before any listener is exposed, then applies `UsbipBindFirewallRule`, ensures the per-env backend (`usbipd -4 --tcp-port <backendPort>`) and bounded proxy (`socat TCP-LISTEN:3240,bind=<env.hostUplinkIp>,fork,max-children=4,reuseaddr ...`) are spawned and TCP-ready, then runs `UsbipProxyReconcile`. Host kernel module is `usbip-host` (not `vhci_hcd`, which is the guest module). |
 | `CloudHypervisor` (guest-control VM) | `nixling@<vm>.service` runner; replaced by broker `SpawnRunner{role: CloudHypervisor, vm_id: <vm>, …}` | empty | per VM | On a guest-control-enabled VM the broker, as a SpawnRunner **side-effect**, grants the unprivileged `nixlingd` daemon uid a minimal ACL on the per-VM vsock transport so the daemon can run the authenticated readiness/config-read bridge: traversal `--x` on every non-public component of the per-VM state dir and `rw` on `vsock.sock`. The grant is scoped to the **current** socket inode/dev (the broker re-fstats after the fd-based setfacl and aborts+retries if the path is replaced mid-grant), grants **only** that single daemon uid (no `g:`, no default, no blanket entry), and retries until bound while cloud-hypervisor finishes creating the socket. It runs as a revoke-then-grant at each cloud-hypervisor (re-)spawn — any stale daemon grant on a replaced/disabled socket inode is revoked first — so a disabled or replaced socket cannot retain a stale daemon grant; a dedicated stop-time teardown revoke hook is future work (`SignalRunner` carries no socket path). The shared traversal `--x` grants on non-public ancestors are retained, since the daemon also needs them for the per-VM api-socket and sibling VMs depend on them. Both grant and revoke emit hash-only audit records (`target_class` ∈ {`state-dir`, `ancestor`, `vsock-socket`}, `daemon_principal`, `acl_diff_hash`, `result`); raw socket / state-dir paths are never recorded. A **second** SpawnRunner side-effect grants the cloud-hypervisor **runner** uid connect access to the cross-principal `nl-gctl` token fs-share socket (served by the narrower `gctlfs` principal, ADR 0021, so cloud-hypervisor does not own it as it owns its other fs-share sockets): `--x` traversal on the per-VM `guest-control` dir and `rw` with an explicit `m::rw` mask on the `gctlfs`-owned `nl-gctl` socket inode. The explicit mask lifts the 0700 socket's `mask::---`, which otherwise masks out the inherited `default:u:<ch_uid>` grant and EACCESes cloud-hypervisor's vhost-user connect (hanging device-init at api-ready timeout). It is `(dev, ino)`-scoped (re-fstat after the fd-based setfacl), grants **only** the runner uid (no execute in the mask, no group/other broadening), and retries until the socket is bound. It emits its own hash-only audit record (`target_class` ∈ {`gctlfs-dir`, `gctlfs-socket`}, `consumer_principal` = `cloud-hypervisor-runner`, `acl_diff_hash`, `result`); raw paths and uids-by-value are never recorded. |
 
 ### Metrics endpoint
@@ -539,7 +552,7 @@ never both.
 | `nixling-audit-check.service` + `nixling-audit-check.timer` | Broker `ExportBrokerAudit` + `nixling host doctor` on-demand poll; no timer. | not emitted |
 | `nixling-ch-exporter.service` | `nixlingd` Prometheus exposition at `http://127.0.0.1:9101/metrics` (no broker op — daemon-emitted). | not emitted |
 | `nixling-otel-host-bridge.service` | Broker `SpawnRunner{role: OtelHostBridge}` (host-scoped singleton, broker-supervised). | not emitted |
-| `nixling-sys-<env>-usbipd-proxy.{service,socket}` + `nixling-sys-<env>-usbipd-backend.{service,socket}` (per USBIP-enabled env) | Broker `SpawnRunner{role: Usbip, vm_id: sys-<env>-usbipd}` + per-busid state machine (`UsbipBindFirewallRule` → `UsbipBind` → proxy listen). | not emitted |
+| `nixling-sys-<env>-usbipd-proxy.{service,socket}` + `nixling-sys-<env>-usbipd-backend.{service,socket}` (per USBIP-enabled env) | Broker `SpawnRunner{role: Usbip, vm_id: sys-<env>-usbipd}` + per-busid state machine (`UsbipBind`, `UsbipBindFirewallRule`, proxy reconcile). | not emitted |
 
 ### Activation-time hooks no longer emitted
 
@@ -560,9 +573,6 @@ singleton, is gone.
 
 ## Operations outside the current broker surface
 
-- `UsbipBind`, `UsbipUnbind`, `UsbipProxyReconcile` — live USBIP
-  device routing. The current broker provides only
-  `UsbipBindFirewallRule`.
 - Partition-root cpuset creation (`cpuset.cpus.partition=root`). The
   broker forbids it without an ADR.
 - Threaded cgroups. Same rule as partition roots.

@@ -77,6 +77,47 @@ pub struct SwtpmDirAudit {
     pub fail_reason: Option<String>,
 }
 
+/// Privileged USB audit identity projection. This record is for the
+/// root-owned broker audit log only: vendor/product IDs are normalized to
+/// lower-case four-hex strings, and serial-like descriptors are represented
+/// only by keyed correlation material when a key is available.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbAuditDeviceIdentity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product_id: Option<String>,
+    pub serial_observed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial_correlation: Option<UsbSerialCorrelation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_serial_correlation: Option<UsbSerialCorrelation>,
+}
+
+/// HMAC-SHA256 keyed serial correlation material for USB forensics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSerialCorrelation {
+    pub key_id: String,
+    pub hmac_sha256: String,
+}
+
+/// Path-free USB serial-correlation key rotation metadata.
+///
+/// Key material never appears here. The active-key count and correlation
+/// version let non-root observability readers understand a grace-window
+/// transition without receiving HMAC secrets or raw USB serial descriptors.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSerialCorrelationKeyRotationAudit {
+    pub previous_key_id: String,
+    pub current_key_id: String,
+    pub active_key_count: u8,
+    pub grace_window_seconds: u64,
+    pub correlation_version: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum OperationFields {
@@ -225,7 +266,13 @@ pub enum OperationFields {
     UsbipBind {
         bus_id: String,
         vm: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_identity: Option<UsbAuditDeviceIdentity>,
     },
+    /// Audit/log hook for USB serial-correlation key rotation metadata.
+    /// Carries only key IDs, active-key count, grace-window length, and the
+    /// closed correlation algorithm label.
+    UsbSerialCorrelationKeyRotate(UsbSerialCorrelationKeyRotationAudit),
     UsbipUnbind {
         bus_id: String,
     },
@@ -546,7 +593,11 @@ impl OperationFields {
             "UsbipBind" => parse_fields!(value => UsbipBind {
                 bus_id: String,
                 vm: String,
+                device_identity: Option<UsbAuditDeviceIdentity>,
             }),
+            "UsbSerialCorrelationKeyRotate" => Ok(Self::UsbSerialCorrelationKeyRotate(
+                serde_json::from_value(value)?,
+            )),
             "UsbipUnbind" => parse_fields!(value => UsbipUnbind {
                 bus_id: String,
             }),
@@ -1037,8 +1088,54 @@ mod tests {
         OperationFields::UsbipBind {
             bus_id: "1-2.3".to_owned(),
             vm: "corp-vm".to_owned(),
+            device_identity: Some(UsbAuditDeviceIdentity {
+                vendor_id: Some("1050".to_owned()),
+                product_id: Some("0407".to_owned()),
+                serial_observed: true,
+                serial_correlation: Some(UsbSerialCorrelation {
+                    key_id: "test-key".to_owned(),
+                    hmac_sha256: "a".repeat(64),
+                }),
+                previous_serial_correlation: Some(UsbSerialCorrelation {
+                    key_id: "previous-key".to_owned(),
+                    hmac_sha256: "b".repeat(64),
+                }),
+            }),
         }
     );
+    roundtrip_test!(
+        usb_serial_correlation_key_rotate_round_trip,
+        "UsbSerialCorrelationKeyRotate",
+        OperationFields::UsbSerialCorrelationKeyRotate(UsbSerialCorrelationKeyRotationAudit {
+            previous_key_id: "usb-audit-old".to_owned(),
+            current_key_id: "usb-audit-new".to_owned(),
+            active_key_count: 2,
+            grace_window_seconds: 86_400,
+            correlation_version: "nixling-usb-audit-serial-v1".to_owned(),
+        })
+    );
+
+    #[test]
+    fn usbip_bind_parses_pre_forensics_audit_records() {
+        let fields = OperationFields::from_operation_value(
+            "UsbipBind",
+            serde_json::json!({
+                "bus_id": "1-2.3",
+                "vm": "corp-vm",
+            }),
+        )
+        .expect("legacy usbip bind fields parse");
+
+        assert_eq!(
+            fields,
+            OperationFields::UsbipBind {
+                bus_id: "1-2.3".to_owned(),
+                vm: "corp-vm".to_owned(),
+                device_identity: None,
+            }
+        );
+    }
+
     roundtrip_test!(
         usbip_unbind_round_trip,
         "UsbipUnbind",

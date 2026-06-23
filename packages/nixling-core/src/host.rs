@@ -141,12 +141,12 @@ pub struct HostJson {
     /// compatibility with V1 host.json fixtures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ch: Option<HostChConfig>,
-    /// W4a-H3: per-host firewall coexistence policy emitted by the Nix
+    /// Per-host firewall coexistence policy emitted by the Nix
     /// `host-json.nix` module. The broker reads this at runtime to
     /// decide whether `ApplyNftables` runs (Coexist), refuses
     /// (Refuse), or demands an explicit unmanaged drop-in
     /// (RequireUnmanaged). Optional for backward compatibility with
-    /// pre-W4a host.json fixtures; the broker treats `None` as the
+    /// older host.json fixtures; the broker treats `None` as the
     /// implicit "no managed firewall detected" Coexist default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub firewall_coexistence_policy: Option<crate::host_w3::FirewallCoexistencePolicy>,
@@ -295,6 +295,15 @@ pub struct NetEnv {
     pub env: String,
     /// Host bridge name for the environment LAN.
     pub bridge: IfName,
+    /// Host-side IP on the env uplink bridge. Required for scoped USBIP proxy
+    /// firewall carve-outs; absent legacy bundles fail closed for USBIP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_uplink_ip: Option<String>,
+    /// Net-VM-side IP on the env uplink bridge. Because the net VM currently
+    /// SNATs workload-to-host USBIP traffic, this is the host-visible source
+    /// identity used for USBIP proxy firewall carve-outs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net_uplink_ip: Option<String>,
     /// Per-env MTU value applied to bridges and TAPs.
     pub mtu: u16,
     /// Optional MSS clamp applied to forwarded traffic.

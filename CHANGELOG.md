@@ -41,12 +41,127 @@ deprecations ship one minor release before removal.
 - `nixling list` and `nixling status` now use a short provider-status probe
   timeout instead of the graceful shutdown operation timeout, keeping status
   queries responsive when a VM's provider API socket is slow.
+- `nixling usb attach <vm> <busid> --apply` now fails immediately for stopped
+  VMs with copy-pasteable start-and-retry remediation instead of surfacing a
+  generic guest-control transport failure.
+- Privileged USB broker IPC now rejects malformed bus IDs, traversal-shaped
+  intent identifiers, and invalid module names before host USB/module actions,
+  rate-limits direct broker peers plus daemon-forwarded requests by stable
+  bounded/evicted UID/role/operation buckets with separate direct/daemon bucket
+  pools so peer floods cannot starve daemon-forwarded operations, caps audit
+  writes, returns typed fail-secure peer-credential refusals, and redacts
+  sensitive USB/bundle details from public error envelopes.
+- Broker audit write limiting now gives unprivileged refusal spam a separate
+  bounded bucket from privileged operation audit writes and records visible drop
+  counters when the limiter refuses audit records while aggregating journal
+  warnings for dropped records.
+- USBIP bind/unbind broker requests now carry only bundle-resolved opaque
+  intent IDs, with broker-side physical VID/PID and bus/port topology checks
+  before bind or replay.
+- USB serial-correlation key-rotation audit records are now deduplicated per
+  previous/current key pair so repeated USB binds during a grace window do not
+  consume privileged audit tokens.
+- USBIP proxy firewall carve-outs now fail closed unless they can scope TCP/3240
+  to the env's uplink bridge, host bridge IP, and host-visible net-VM source IP;
+  proxy listeners also reject wildcard bind addresses.
+- USBIP detach now fails with an actionable `usbip-revocation-not-isolated`
+  error unless immediate stream revocation can first block/withdraw the firewall
+  carve-out and then target a proven VM/proxy conntrack or TCP socket tuple
+  whose source is not SNAT-obscured and whose anti-spoofing posture is proven,
+  preserving the USBIP session claim instead of silently leaving an established
+  stream or bouncing unrelated same-env streams.
+- USBIP carrier cleanup now keeps withdrawing firewall state and unbinding the
+  host carrier when guest detach fails because the VM is dead or unreachable,
+  while preserving the failed guest-detach report for degraded/audit visibility.
+- USBIP step and revocation failures now name the target busid while keeping
+  remediation concise and free of raw sysfs paths or serials.
+- USBIP attach failure rollback now filters shared per-env backend/proxy
+  sidecar checks out of the single-busid rollback order, avoiding disruption
+  to unrelated same-env USBIP streams.
+- USBIP host unbind now drains bounded helper stderr concurrently so verbose
+  failures cannot stall detach/restart cleanup before the helper exits.
+- USBIP bind now revokes the backend device ACL and unbinds the host carrier if
+  the terminal broker success audit record cannot be written, avoiding
+  unaudited bind state after audit rate limiting or write failures.
+- VM start now reconciles same-host-session same-VM USBIP claims after guest-control
+  readiness by replaying host bind/proxy state and re-importing in-guest
+  devices; stop/restart cleanup now preserves the session claim and refuses
+  sysfs host unbind unless firewall withdrawal plus targeted stream cleanup can
+  be proven first.
+- USB serial-correlation HMAC key rotation windows now emit a broker audit
+  record with only key IDs and rotation metadata, preserving the forensic trail
+  without logging key material or raw serials.
+- `nixling usb probe` and `nixling status` now split USB session claim,
+  host, guest, topology/policy, degraded reason, and remediation state so stale
+  lock-only USBIP claims are not reported as healthy bound devices.
+- USBIP reference docs and CLI output artifacts now document the host-session
+  claim versus active carrier model, including that `/run/nixling/locks/usbip`
+  survives VM stop/restart and daemon restart but not host reboot, plus restart
+  reconciliation, probe JSON schema, degraded reasons, prerequisites, and
+  copy-paste remediation commands.
+- Required USBIP policy failures during VM-start claim replay now fail before
+  device exposure and roll back boot, while runtime absence/proxy/guest
+  availability issues remain visible degraded USB state.
+- VM stop/restart USBIP cleanup now has a reusable daemon plan that detaches
+  guest imports, withdraws host carrier/firewall/flow state when safely
+  isolated, preserves same-VM USBIP session claims for restart, and reserves
+  claim release for successful explicit detach.
+- `/run/nixling/locks/usbip` is now created by tmpfiles before daemon/broker
+  startup as `root:nixlingd 0750`, keeping USBIP lock claims broker-written
+  while allowing daemon status reads.
+- `nixling-priv-broker.service` now explicitly uses `Delegate=true` and
+  `KillMode=process` in `nixling.slice` so broker restarts do not tear down
+  broker-spawned runner cgroups.
+- Broker-spawned runners now use `clone3(CLONE_INTO_CGROUP)` against the
+  systemd-delegated `nixling.slice` role leaf when available, with the legacy
+  `cgroup.procs` attach kept only as the fork fallback; `nixling.slice`
+  delegates the required `cpuset` controller as well.
+- The broker's `cgroup.procs` fallback now writes the child PID from the parent
+  before releasing user-namespace runner children, avoiding in-namespace
+  cgroupfs permission failures.
+- Runtime per-VM socket directories and store-view top-level directories are now
+  created and postured by tmpfiles instead of ad-hoc activation mkdir/chown/chmod
+  snippets.
+- Host tmpfiles ACL rules now append entries instead of replacing previous ACLs
+  on the same path.
+- Per-VM state-root posture, static state traversal ACLs, TPM parent traversal
+  ACLs, and next-generation runtime leaf directories are now tmpfiles-owned;
+  net-VM `var.img` creation/posture remains broker `DiskInit`-owned instead of
+  being repaired by host activation.
 
 ### Internal
 
 - ADR 0035 Wave 0 internal cleanup added deterministic inventory tooling and
   `compat-ADR` bridge-key policy coverage, removed caller-free test/Make
   compatibility aliases, and dropped stale retired bash-CLI option comments.
+- USBIP architecture notes/tests now pin the per-env proxy as a generic L4
+  forwarder, preserving backend/proxy sidecars during single-busid teardown and
+  encoding optimistic backend/export refresh, firewall-before-flow-kill
+  revocation ordering, TCP-vs-UDP targeted cleanup rules, fail-closed
+  revocation when a selected busid stream cannot be isolated, and explicit
+  bounded-drain/exclusive rebind requirements before any same-env stream bounce.
+- USBIP restart reconciliation now has a daemon-internal physical topology
+  identity model that compares allowed VID/PID with sysfs bus/port topology
+  instead of trusting serial-like descriptors, while keeping raw topology out of
+  public/status projections.
+- USB reconciliation now has closed degraded-reason/status primitives with
+  redacted public/event projections, bounded telemetry labels, remediation
+  mapping, bounded reconcile correlation IDs, dedupe/rate-limit buckets
+  partitioned only by closed event type and bounded source projection, strict
+  `other` fallback for capped buckets/static metric labels, and suppressed-event
+  summaries with exact dropped counts and windows for later observability
+  wiring.
+- VM start/stop USB reconciliation now threads the same bounded reconcile
+  correlation ID through USB broker requests as broker audit trace context
+  without adding it to metric labels.
+- USB broker audit records now keep a privileged forensics projection for
+  USBIP binds with normalized vendor/product IDs, serial-presence only by
+  default, HMAC-SHA256 serial correlation backed by broker-owned root-only key
+  material, current/previous-key correlation during rotation windows, and a
+  scrubbed rotation-window log/audit shape for observability.
+- Guest-control now exposes authenticated, side-effect-free USBIP status/list
+  observation backed by the configured guest `usbip` path with closed timeout and
+  parser error mapping.
 - Persistent shell CLI routing now sends gateway-backed `list`, `detach`, and
   `kill` management forms through the configured realm gateway over the typed
   guest-control exec path, while interactive gateway attach fails closed until

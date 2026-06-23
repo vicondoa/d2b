@@ -90,6 +90,7 @@ const MAX_TOKEN_BYTES: usize = 4096;
 /// vanished units + terminal-record TTL/GC).
 const DETACHED_REAPER_INTERVAL_MS: u64 = 30_000;
 const USBIP_COMMAND_TIMEOUT_MS: u64 = 10_000;
+const USBIP_STATUS_MAX_IMPORTS: usize = 64;
 const SHELL_DAEMON_READY_TIMEOUT_MS: u64 = 5_000;
 const SHELL_DAEMON_READY_POLL_MS: u64 = 50;
 /// Maximum concurrent in-flight `WriteStdin` handlers per connection. A
@@ -348,6 +349,9 @@ pub struct CapabilitiesConfig {
     /// Guest-side USBIP import lifecycle. Advertised only when the USBIP guest
     /// component wired an explicit `usbip` binary path into guestd.
     pub usbip_import: bool,
+    /// Side-effect-free guest USBIP import status/list. Advertised with the same
+    /// explicit `usbip` binary path as `UsbipImport`.
+    pub usbip_status: bool,
     pub shell_attached: bool,
     pub shell_management: bool,
     pub shell_force_attach: bool,
@@ -381,6 +385,7 @@ fn derive_capabilities_config(
         exec_tty,
         read_guest_file,
         usbip_import,
+        usbip_status: usbip_import,
         shell_attached: shell_usable,
         shell_management: shell_usable,
         shell_force_attach: shell_usable,
@@ -970,6 +975,28 @@ impl GuestControlService {
             }
             _ => Err(K::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR),
         }
+    }
+
+    async fn usbip_status_inner(
+        &self,
+        host: Option<&str>,
+        bus_id: Option<&str>,
+    ) -> Result<Vec<GuestUsbipImportStatus>, pb::GuestControlErrorKind> {
+        use pb::GuestControlErrorKind as K;
+        let path = self
+            .usbip_path
+            .as_deref()
+            .ok_or(K::GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE)?;
+        if let Some(host) = host {
+            validate_guest_usbip_host(host)?;
+        }
+        if let Some(bus_id) = bus_id {
+            validate_guest_usbip_bus_id(bus_id)?;
+        }
+        let output = run_guest_usbip_command(path, &["port"]).await?;
+        let stdout = std::str::from_utf8(&output.stdout)
+            .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT)?;
+        parse_guest_usbip_status(stdout, host, bus_id)
     }
 
     /// Acquire a per-connection WriteStdin budget slot: at most
@@ -1606,6 +1633,37 @@ impl GuestControl for GuestControlService {
             .await
         {
             Ok(detached_ports) => response.detached_ports = detached_ports,
+            Err(kind) => response.error = MessageField::some(guest_error(kind)),
+        }
+        Ok(response)
+    }
+
+    async fn usbip_status(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        request: pb::UsbipStatusRequest,
+    ) -> ttrpc::Result<pb::UsbipStatusResponse> {
+        self.require_authenticated()?;
+        self.validate_metadata(request.metadata.as_ref())?;
+
+        let mut response = pb::UsbipStatusResponse::new();
+        match self
+            .usbip_status_inner(request.host.as_deref(), request.bus_id.as_deref())
+            .await
+        {
+            Ok(entries) => {
+                response.imports = entries
+                    .into_iter()
+                    .map(|entry| {
+                        let mut wire = pb::UsbipStatusEntry::new();
+                        wire.port = u32::from(entry.port);
+                        wire.host = entry.host;
+                        wire.tcp_port = u32::from(entry.tcp_port);
+                        wire.bus_id = entry.bus_id;
+                        wire
+                    })
+                    .collect();
+            }
             Err(kind) => response.error = MessageField::some(guest_error(kind)),
         }
         Ok(response)
@@ -2649,17 +2707,48 @@ fn read_guest_file_safely(path: &Path) -> Result<Vec<u8>, pb::GuestControlErrorK
     Ok(buf)
 }
 
-fn validate_guest_usbip_request(host: &str, bus_id: &str) -> Result<(), pb::GuestControlErrorKind> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GuestUsbipImportStatus {
+    port: u16,
+    host: String,
+    tcp_port: u16,
+    bus_id: String,
+}
+
+fn validate_guest_usbip_host(host: &str) -> Result<(), pb::GuestControlErrorKind> {
     use pb::GuestControlErrorKind as K;
     host.parse::<IpAddr>()
-        .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST)?;
+        .map(|_| ())
+        .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST)
+}
+
+fn validate_guest_usbip_bus_id(bus_id: &str) -> Result<(), pb::GuestControlErrorKind> {
+    use pb::GuestControlErrorKind as K;
     nixling_ipc::usbip::validate_bus_id(bus_id)
         .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID)
+}
+
+fn validate_guest_usbip_request(host: &str, bus_id: &str) -> Result<(), pb::GuestControlErrorKind> {
+    validate_guest_usbip_host(host)?;
+    validate_guest_usbip_bus_id(bus_id)
 }
 
 async fn run_guest_usbip_command(
     usbip_path: &Path,
     args: &[&str],
+) -> Result<std::process::Output, pb::GuestControlErrorKind> {
+    run_guest_usbip_command_with_timeout(
+        usbip_path,
+        args,
+        Duration::from_millis(USBIP_COMMAND_TIMEOUT_MS),
+    )
+    .await
+}
+
+async fn run_guest_usbip_command_with_timeout(
+    usbip_path: &Path,
+    args: &[&str],
+    timeout: Duration,
 ) -> Result<std::process::Output, pb::GuestControlErrorKind> {
     use pb::GuestControlErrorKind as K;
     let mut command = TokioCommand::new(usbip_path);
@@ -2669,16 +2758,13 @@ async fn run_guest_usbip_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let output = tokio::time::timeout(
-        Duration::from_millis(USBIP_COMMAND_TIMEOUT_MS),
-        command.output(),
-    )
-    .await
-    .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED)?
-    .map_err(|err| match err.kind() {
-        std::io::ErrorKind::NotFound => K::GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE,
-        _ => K::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED,
-    })?;
+    let output = tokio::time::timeout(timeout, command.output())
+        .await
+        .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT)?
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::NotFound => K::GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE,
+            _ => K::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED,
+        })?;
     if output.status.success() {
         Ok(output)
     } else {
@@ -2692,38 +2778,116 @@ async fn detach_guest_usbip_ports(
     bus_id: &str,
 ) -> Result<u32, pb::GuestControlErrorKind> {
     let output = run_guest_usbip_command(usbip_path, &["port"]).await?;
-    let ports =
-        guest_usbip_ports_for_bus_id(&String::from_utf8_lossy(&output.stdout), host, bus_id);
+    let stdout = std::str::from_utf8(&output.stdout)
+        .map_err(|_| pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT)?;
+    let ports = guest_usbip_ports_for_bus_id(stdout, host, bus_id)?;
     for port in &ports {
         run_guest_usbip_command(usbip_path, &["detach", "-p", &port.to_string()]).await?;
     }
     Ok(ports.len().try_into().unwrap_or(u32::MAX))
 }
 
-fn guest_usbip_ports_for_bus_id(port_output: &str, host: &str, bus_id: &str) -> Vec<u16> {
+fn guest_usbip_ports_for_bus_id(
+    port_output: &str,
+    host: &str,
+    bus_id: &str,
+) -> Result<Vec<u16>, pb::GuestControlErrorKind> {
+    Ok(
+        parse_guest_usbip_status(port_output, Some(host), Some(bus_id))?
+            .into_iter()
+            .map(|entry| entry.port)
+            .collect(),
+    )
+}
+
+fn parse_guest_usbip_status(
+    port_output: &str,
+    host_filter: Option<&str>,
+    bus_id_filter: Option<&str>,
+) -> Result<Vec<GuestUsbipImportStatus>, pb::GuestControlErrorKind> {
+    use pb::GuestControlErrorKind as K;
     let mut current_port: Option<u16> = None;
-    let mut ports = Vec::new();
-    let prefix = format!("usbip://{host}:");
-    let suffix = format!("/{bus_id}");
+    let mut imports = Vec::new();
 
     for line in port_output.lines() {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("Port ") {
-            current_port = rest
-                .split_once(':')
-                .and_then(|(port, _)| port.trim().parse::<u16>().ok());
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed == "Imported USB devices"
+            || trimmed.chars().all(|ch| ch == '=')
+            || trimmed.starts_with("-> remote bus/dev ")
+        {
             continue;
         }
-        if trimmed.contains(&prefix)
-            && trimmed.trim_end().ends_with(&suffix)
-            && let Some(port) = current_port
-        {
-            ports.push(port);
+        if let Some(rest) = trimmed.strip_prefix("Port ") {
+            let (port, after_colon) = rest
+                .split_once(':')
+                .ok_or(K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT)?;
+            let port = port
+                .trim()
+                .parse::<u16>()
+                .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT)?;
+            if after_colon.trim().is_empty() {
+                return Err(K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT);
+            }
+            current_port = Some(port);
+            continue;
         }
+        if let Some((_, uri)) = trimmed.split_once(" -> ") {
+            if let Some(entry) = parse_guest_usbip_uri(
+                current_port.ok_or(K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT)?,
+                uri.trim(),
+            )?
+            .filter(|entry| {
+                host_filter.is_none_or(|host| host == entry.host)
+                    && bus_id_filter.is_none_or(|bus_id| bus_id == entry.bus_id)
+            }) {
+                imports.push(entry);
+            }
+            continue;
+        }
+        if current_port.is_some() {
+            continue;
+        }
+        return Err(K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT);
     }
-    ports.sort_unstable();
-    ports.dedup();
-    ports
+
+    if imports.len() > USBIP_STATUS_MAX_IMPORTS {
+        return Err(K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT);
+    }
+    imports.sort_by_key(|entry| entry.port);
+    imports.dedup_by_key(|entry| entry.port);
+    Ok(imports)
+}
+
+fn parse_guest_usbip_uri(
+    port: u16,
+    uri: &str,
+) -> Result<Option<GuestUsbipImportStatus>, pb::GuestControlErrorKind> {
+    use pb::GuestControlErrorKind as K;
+    let Some(rest) = uri.strip_prefix("usbip://") else {
+        return Ok(None);
+    };
+    let (host_port, bus_id) = rest
+        .rsplit_once('/')
+        .ok_or(K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT)?;
+    let (host, tcp_port) = host_port
+        .rsplit_once(':')
+        .ok_or(K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT)?;
+    validate_guest_usbip_host(host)
+        .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT)?;
+    validate_guest_usbip_bus_id(bus_id)
+        .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT)?;
+    let tcp_port = tcp_port
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port != 0)
+        .ok_or(K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT)?;
+    Ok(Some(GuestUsbipImportStatus {
+        port,
+        host: host.to_owned(),
+        tcp_port,
+        bus_id: bus_id.to_owned(),
+    }))
 }
 
 fn guest_error(kind: pb::GuestControlErrorKind) -> pb::GuestControlError {
@@ -2759,7 +2923,11 @@ fn guest_error(kind: pb::GuestControlErrorKind) -> pb::GuestControlError {
         }
         K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID
         | K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST => (R::HEALTH_REMEDIATION_NONE, None),
-        K::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED => (R::HEALTH_REMEDIATION_RETRY, None),
+        K::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED
+        | K::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT => (R::HEALTH_REMEDIATION_RETRY, None),
+        K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT => {
+            (R::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE, None)
+        }
         K::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED
         | K::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE
         | K::GUEST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMATCH => {
@@ -3096,6 +3264,11 @@ impl RuntimeCapabilitiesProvider {
                 pb::GuestCapability::GUEST_CAPABILITY_USBIP_IMPORT,
             ));
         }
+        if config.usbip_status {
+            capabilities.capabilities.push(EnumOrUnknown::new(
+                pb::GuestCapability::GUEST_CAPABILITY_USBIP_STATUS,
+            ));
+        }
         if config.shell_attached {
             capabilities.capabilities.push(EnumOrUnknown::new(
                 pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED,
@@ -3376,6 +3549,7 @@ mod tests {
                             assert_eq!(cfg.exec_tty, exec_tty);
                             assert_eq!(cfg.read_guest_file, read_guest_file);
                             assert_eq!(cfg.usbip_import, usbip_import);
+                            assert_eq!(cfg.usbip_status, usbip_import);
                             assert!(!cfg.shell_attached);
                             assert_eq!(cfg.shell_sessions_per_vm, 0);
                             assert_eq!(cfg.shell_attached_sessions_per_vm, 0);
@@ -3586,6 +3760,37 @@ mod tests {
         assert!(!cap_values.contains(&pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED));
         assert_eq!(caps.limits.shell_sessions_per_vm, 0);
         assert_eq!(caps.limits.shell_attached_sessions_per_vm, 0);
+    }
+
+    #[tokio::test]
+    async fn service_startup_advertises_usbip_status_with_import_capability() {
+        let runtime = prepare_service_runtime_with_probe(
+            startup_config("alice")
+                .with_usbip_path(PathBuf::from("/run/current-system/sw/bin/usbip")),
+            &TestStartupProbe {
+                uid: crate::login_session::WorkloadUserUid::NonRoot(1000),
+            },
+        )
+        .await
+        .unwrap();
+        let service = GuestControlService::new(
+            runtime.auth,
+            runtime.exec,
+            runtime.detached,
+            test_context(35),
+        );
+        authenticate(&service).await;
+        let caps = service
+            .capabilities(&ttrpc_context(), capabilities_request())
+            .await
+            .unwrap();
+        let cap_values = caps
+            .capabilities
+            .iter()
+            .map(|cap| cap.enum_value().unwrap())
+            .collect::<Vec<_>>();
+        assert!(cap_values.contains(&pb::GuestCapability::GUEST_CAPABILITY_USBIP_IMPORT));
+        assert!(cap_values.contains(&pb::GuestCapability::GUEST_CAPABILITY_USBIP_STATUS));
     }
 
     fn test_exec() -> SharedExec {
@@ -3813,6 +4018,11 @@ mod tests {
                 .await,
         );
         assert_unauthenticated(service.exec_list(&ctx, pb::ExecListRequest::new()).await);
+        assert_unauthenticated(
+            service
+                .usbip_status(&ctx, pb::UsbipStatusRequest::new())
+                .await,
+        );
     }
 
     #[tokio::test]
@@ -4630,7 +4840,9 @@ mod tests {
     fn scratch_dir(tag: &str) -> PathBuf {
         // Repo convention for guest-crate tests: scratch under the system temp
         // dir (respects TMPDIR), never the repo-relative ".".
-        let base = std::env::temp_dir();
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
         let dir = base.join(format!(
             "guestd-rgf-{tag}-{}-{}",
             std::process::id(),
@@ -4694,6 +4906,14 @@ mod tests {
         request
     }
 
+    fn usbip_status_request(host: Option<&str>, bus_id: Option<&str>) -> pb::UsbipStatusRequest {
+        let mut request = pb::UsbipStatusRequest::new();
+        request.metadata = metadata();
+        request.host = host.map(str::to_owned);
+        request.bus_id = bus_id.map(str::to_owned);
+        request
+    }
+
     #[tokio::test]
     async fn read_guest_file_requires_authentication() {
         let dir = scratch_dir("auth");
@@ -4726,6 +4946,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn usbip_status_requires_authentication() {
+        let service =
+            service_with_usbip(66, Some(PathBuf::from("/run/current-system/sw/bin/usbip")));
+        let ctx = ttrpc_context();
+        assert_unauthenticated(
+            service
+                .usbip_status(
+                    &ctx,
+                    usbip_status_request(Some("192.168.100.1"), Some("1-2.1")),
+                )
+                .await,
+        );
+    }
+
+    #[tokio::test]
     async fn usbip_import_without_configured_path_is_unavailable() {
         let service = service_with_usbip(61, None);
         authenticate(&service).await;
@@ -4746,6 +4981,26 @@ mod tests {
             error.kind.enum_value().unwrap(),
             pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE
         );
+    }
+
+    #[tokio::test]
+    async fn usbip_status_without_configured_path_is_unavailable() {
+        let service = service_with_usbip(65, None);
+        authenticate(&service).await;
+        let ctx = ttrpc_context();
+        let response = service
+            .usbip_status(
+                &ctx,
+                usbip_status_request(Some("192.168.100.1"), Some("1-2.1")),
+            )
+            .await
+            .unwrap();
+        let error = response.error.as_ref().expect("usbip error set");
+        assert_eq!(
+            error.kind.enum_value().unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE
+        );
+        assert!(response.imports.is_empty());
     }
 
     #[tokio::test]
@@ -5256,14 +5511,58 @@ Port 01: <Port in Use> at High Speed(480Mbps)
            -> remote bus/dev 001/019
 "#;
         assert_eq!(
-            guest_usbip_ports_for_bus_id(output, "192.168.100.1", "1-2.1"),
+            guest_usbip_ports_for_bus_id(output, "192.168.100.1", "1-2.1").unwrap(),
             vec![1]
         );
         assert_eq!(
-            guest_usbip_ports_for_bus_id(output, "192.168.100.1", "1-2.2"),
+            guest_usbip_ports_for_bus_id(output, "192.168.100.1", "1-2.2").unwrap(),
             vec![0]
         );
-        assert!(guest_usbip_ports_for_bus_id(output, "192.168.100.2", "1-2.1").is_empty());
+        assert!(
+            guest_usbip_ports_for_bus_id(output, "192.168.100.2", "1-2.1")
+                .unwrap()
+                .is_empty()
+        );
+        let all = parse_guest_usbip_status(output, None, None).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].host, "192.168.100.1");
+        assert_eq!(all[0].tcp_port, 3240);
+        assert_eq!(all[0].bus_id, "1-2.2");
+    }
+
+    #[test]
+    fn guest_usbip_status_parser_rejects_invalid_output() {
+        for output in [
+            "Port 00: <Port in Use>\n       1-1 -> usbip://not-an-ip:3240/1-2\n",
+            "Port xx: <Port in Use>\n       1-1 -> usbip://192.168.100.1:3240/1-2\n",
+            "Port 00: <Port in Use>\n       1-1 -> usbip://192.168.100.1:0/1-2\n",
+            "Port 00: <Port in Use>\n       1-1 -> usbip://192.168.100.1:3240/1-/../../x\n",
+            "unexpected header\n",
+        ] {
+            assert_eq!(
+                parse_guest_usbip_status(output, None, None),
+                Err(pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT),
+                "{output:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn guest_usbip_command_timeout_maps_to_closed_kind() {
+        let shell = Path::new("/bin/sh");
+        if !shell.exists() {
+            return;
+        }
+        let result = run_guest_usbip_command_with_timeout(
+            shell,
+            &["-c", "sleep 1"],
+            Duration::from_millis(1),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT)
+        ));
     }
 
     #[test]

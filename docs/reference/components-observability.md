@@ -209,6 +209,21 @@ other broker state. Static gates:
 - [`packages/nixling-contract-tests/tests/policy_state.rs`](../../packages/nixling-contract-tests/tests/policy_state.rs) (`store_sync_export`)
 - [`packages/nixling-contract-tests/tests/policy_observability.rs`](../../packages/nixling-contract-tests/tests/policy_observability.rs) (`loki_native_otel_resource_attributes` — the SigNoz resource-attribute key-allowlist gate; legacy name, the framework uses native SigNoz/ClickHouse, not Loki)
 
+## USB audit HMAC keys and observability
+
+USB hardware serial HMAC keys are intentionally not distributed to non-root
+observability components. The privileged broker owns
+`${nixling.site.stateDir}/secrets/usb-audit-serial-hmac/current.key` and the
+optional `previous.key`; the host OTel collector is not granted ACLs on that
+directory and receives no systemd credentials for those files. The broker
+reloads the keyring on each `UsbipBind`, so a key rotation does not require
+restarting the collector or exposing a secure IPC key-read path.
+
+Rotation observability is data-only: broker audit/log records contain key IDs,
+active-key count, the 30-day grace-window length, and the closed correlation
+version, plus HMAC values inside the privileged audit record. Raw key material,
+raw serials, bus IDs, sysfs paths, and dynamic metric labels are not emitted.
+
 ## Socket and port contract
 
 | Resource | Value |

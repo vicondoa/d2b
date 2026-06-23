@@ -58,7 +58,7 @@
   #   br-work-up  (192.0.2.0/30)   host ↔ sys-work-net point-to-point
   #   br-work-lan (10.20.0.0/24)   sys-work-net + workload VMs
   #   sys-work-net VM (NAT + dnsmasq + nftables, autostarts)
-  #   nixling-sys-work-usbipd-proxy.service bound to 192.0.2.1:3240
+  #   broker-spawned usbipd proxy runner bound to 192.0.2.1:3240
   # ---------------------------------------------------------------
   nixling.envs.work = {
     lanSubnet    = "10.20.0.0/24";

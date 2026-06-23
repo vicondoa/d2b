@@ -6,15 +6,15 @@
 //! # Why this state machine exists
 //!
 //! The host-side USBIP path is a chain of cooperating subsystems —
-//! the `usbip-host` kernel module, a per-busid file lock under
-//! `/run/nixling/locks/usbip/<busid>`, the per-env nftables
+//! the `usbip-host` kernel module, the existing broker-mediated USB
+//! device claim for the busid, the per-env nftables
 //! carve-out, the per-env usbipd backend + proxy runners, and the
 //! per-busid bind operation itself. Any step out of order silently
 //! corrupts state:
 //!
 //! * Binding before `modprobe usbip-host` succeeds returns a
 //!   confusing `ENODEV` deep inside the broker call site.
-//! * Skipping the per-busid lock lets two envs race for the same
+//! * Skipping broker-mediated claim acquisition lets two envs race for the same
 //!   physical device — both win briefly, then one loses on the
 //!   first I/O.
 //! * Opening the firewall before withholding non-owner-env
@@ -31,11 +31,13 @@
 //! modprobe → lock → withhold → firewall → backend → bind → proxy
 //! ```
 //!
-//! and the stop path reverses it. This module turns that ordering
-//! into a typed Rust enum + plan + executor so call sites can't
-//! shuffle the steps and every failure surfaces through the typed
-//! error surface as `UsbipStepFailed { busid, step, reason }`
-//! (exit code 67).
+//! where `backend` and `proxy` mean "ensure the per-env sidecar is
+//! running". The proxy is a generic L4 TCP forwarder, not a USBIP
+//! protocol or busid-aware process, so single-busid teardown must
+//! preserve those per-env sidecars. This module turns that ordering
+//! into a typed Rust enum + plan + executor so call sites can't shuffle
+//! the steps and every failure surfaces through the typed error surface
+//! as `UsbipStepFailed { busid, step, reason }` (exit code 67).
 //!
 //! # Shape
 //!
@@ -77,8 +79,8 @@ pub enum UsbipBusidStep {
     /// kernel-module matrix. MUST be first — every later step
     /// silently no-ops without the kernel symbol surface.
     Modprobe,
-    /// Acquire `/run/nixling/locks/usbip/<busid>` for the target
-    /// env. Held until the stop path releases it.
+    /// Acquire the existing broker-mediated USB device claim for the
+    /// target env. This is not a daemon-local DAG lock.
     Lock,
     /// Withhold non-owner-env `SpawnRunner` requests for the same
     /// busid. Closes the race window before the firewall opens.
@@ -87,14 +89,14 @@ pub enum UsbipBusidStep {
     /// carve-out (`UsbipBindFirewallRule`) so the per-env proxy
     /// can accept the bind.
     Firewall,
-    /// Start the per-env usbipd backend runner (`SpawnRunner`
-    /// with `RunnerRole::Usbip` for `sys-<env>-usbipd`).
+    /// Ensure the per-env usbipd backend runner (`SpawnRunner`
+    /// with `RunnerRole::Usbip` for `sys-<env>-usbipd`) is running.
     Backend,
     /// Issue `UsbipBind { bus_id, vm }` so the kernel binds the
     /// physical device to the per-env usbipd backend.
     Bind,
-    /// Open the per-env usbipd proxy listen socket so the target
-    /// VM can attach to the now-bound device.
+    /// Ensure the per-env generic L4 usbipd proxy listen socket is
+    /// open so the target VM can attach to the now-bound device.
     Proxy,
 }
 
@@ -113,6 +115,17 @@ impl UsbipBusidStep {
             Self::Bind => "bind",
             Self::Proxy => "proxy",
         }
+    }
+
+    /// `true` for steps that only ensure shared per-env carrier
+    /// sidecars are available.
+    pub fn is_per_env_sidecar(self) -> bool {
+        matches!(self, Self::Backend | Self::Proxy)
+    }
+
+    /// `true` for steps that rollback may undo for one busid.
+    pub fn is_per_busid_rollback_step(self) -> bool {
+        !self.is_per_env_sidecar()
     }
 }
 
@@ -149,17 +162,26 @@ pub struct UsbipBusidPlan {
 }
 
 impl UsbipBusidPlan {
-    /// Stop-path order: the canonical list reversed
-    /// (`proxy → bind → backend → firewall → withhold → lock → modprobe`).
+    /// Single-busid teardown order.
     ///
-    /// Note that "Modprobe" at the tail is intentionally a no-op
-    /// on the stop path — the kernel module stays loaded — but
-    /// keeping it in the reversed list keeps the executor's
-    /// stop-side dispatch table aligned with the bring-up table.
+    /// This reverses only per-busid mutable state. The `backend` and
+    /// `proxy` steps are per-env sidecar readiness checks and are
+    /// deliberately preserved: the proxy is a generic TCP forwarder with
+    /// no busid selector, so stopping it to revoke one busid would bounce
+    /// unrelated same-env USBIP streams. Selective revocation must rely on
+    /// host unbind plus targeted conntrack/socket cleanup, or fail closed
+    /// if the selected stream cannot be isolated.
+    ///
+    /// `Modprobe` at the tail is intentionally a no-op — the kernel
+    /// module stays loaded — but keeping it in the list leaves room for a
+    /// stop-side dispatch table to record the no-op explicitly.
     pub fn stop_order(&self) -> Vec<UsbipBusidStep> {
-        let mut steps = self.steps.clone();
-        steps.reverse();
-        steps
+        self.steps
+            .iter()
+            .rev()
+            .copied()
+            .filter(|step| step.is_per_busid_rollback_step())
+            .collect()
     }
 }
 
@@ -263,13 +285,27 @@ impl UsbipExecutionReport {
     pub fn is_ok(&self) -> bool {
         self.failed.is_none() && self.completed.len() == CANONICAL_STEPS.len()
     }
+
+    /// Steps a failure rollback may undo, in reverse completion order.
+    ///
+    /// This deliberately filters out `backend` and `proxy`: they are
+    /// shared per-env sidecar readiness checks, not per-busid resources.
+    pub fn failure_rollback_order(&self) -> Vec<UsbipBusidStep> {
+        self.completed
+            .iter()
+            .rev()
+            .copied()
+            .filter(|step| step.is_per_busid_rollback_step())
+            .collect()
+    }
 }
 
 /// Drive the plan top-to-bottom, fail-fast on the first error.
 ///
 /// On failure, the executor's prior successful steps stay
-/// recorded in `completed` so the stop-path / reconciler can
-/// undo them in reverse order. The error is returned as a typed
+/// recorded in `completed`; rollback code must use
+/// [`UsbipExecutionReport::failure_rollback_order`] so shared per-env
+/// sidecars are not torn down for one busid. The error is returned as a typed
 /// [`TypedError::UsbipStepFailed`] tagged with the exact step
 /// that blew up; the caller can lift it into the public error
 /// envelope unchanged.
@@ -397,21 +433,95 @@ mod tests {
     }
 
     #[test]
-    fn stop_order_reverses_bring_up() {
+    fn stop_order_preserves_per_env_sidecars() {
         let plan = synthetic_plan();
         let stop = plan.stop_order();
         assert_eq!(
             stop,
             vec![
-                UsbipBusidStep::Proxy,
                 UsbipBusidStep::Bind,
-                UsbipBusidStep::Backend,
                 UsbipBusidStep::Firewall,
                 UsbipBusidStep::Withhold,
                 UsbipBusidStep::Lock,
                 UsbipBusidStep::Modprobe,
             ],
         );
+        assert!(!stop.contains(&UsbipBusidStep::Backend));
+        assert!(!stop.contains(&UsbipBusidStep::Proxy));
+    }
+
+    #[test]
+    fn rollback_scope_filters_per_env_sidecars() {
+        assert!(UsbipBusidStep::Backend.is_per_env_sidecar());
+        assert!(UsbipBusidStep::Proxy.is_per_env_sidecar());
+        assert!(!UsbipBusidStep::Bind.is_per_env_sidecar());
+
+        assert!(!UsbipBusidStep::Backend.is_per_busid_rollback_step());
+        assert!(!UsbipBusidStep::Proxy.is_per_busid_rollback_step());
+        assert!(UsbipBusidStep::Bind.is_per_busid_rollback_step());
+    }
+
+    #[test]
+    fn bind_failure_rollback_preserves_started_backend() {
+        let plan = synthetic_plan();
+        let mut exec = FixtureExecutor::failing(UsbipBusidStep::Bind, "bind refused");
+        let (report, _) =
+            execute_usbip_plan(&plan, &mut exec).expect_err("bind failure should fail plan");
+
+        assert_eq!(
+            report.completed,
+            vec![
+                UsbipBusidStep::Modprobe,
+                UsbipBusidStep::Lock,
+                UsbipBusidStep::Withhold,
+                UsbipBusidStep::Firewall,
+                UsbipBusidStep::Backend,
+            ],
+        );
+        assert_eq!(
+            report.failure_rollback_order(),
+            vec![
+                UsbipBusidStep::Firewall,
+                UsbipBusidStep::Withhold,
+                UsbipBusidStep::Lock,
+                UsbipBusidStep::Modprobe,
+            ],
+        );
+        let rollback = report.failure_rollback_order();
+        assert!(!rollback.contains(&UsbipBusidStep::Backend));
+    }
+
+    #[test]
+    fn proxy_failure_rollback_preserves_per_env_sidecars() {
+        let plan = synthetic_plan();
+        let mut exec = FixtureExecutor::failing(UsbipBusidStep::Proxy, "proxy refused");
+        let (report, _) =
+            execute_usbip_plan(&plan, &mut exec).expect_err("proxy failure should fail plan");
+
+        assert_eq!(
+            report.completed,
+            vec![
+                UsbipBusidStep::Modprobe,
+                UsbipBusidStep::Lock,
+                UsbipBusidStep::Withhold,
+                UsbipBusidStep::Firewall,
+                UsbipBusidStep::Backend,
+                UsbipBusidStep::Bind,
+            ],
+        );
+        assert_eq!(
+            report.failure_rollback_order(),
+            vec![
+                UsbipBusidStep::Bind,
+                UsbipBusidStep::Firewall,
+                UsbipBusidStep::Withhold,
+                UsbipBusidStep::Lock,
+                UsbipBusidStep::Modprobe,
+            ],
+        );
+        let rollback = report.failure_rollback_order();
+        assert!(!rollback.contains(&UsbipBusidStep::Backend));
+        assert!(!rollback.contains(&UsbipBusidStep::Proxy));
     }
 
     #[test]
@@ -483,6 +593,7 @@ mod tests {
         assert_eq!(env.exit_code, 67);
         assert!(env.message.contains("1-2"));
         assert!(env.message.contains("firewall"));
-        assert!(env.remediation.contains("modprobe → lock → withhold"));
+        assert!(env.remediation.contains("nixling usb probe"));
+        assert!(env.remediation.contains("1-2"));
     }
 }

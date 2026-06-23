@@ -835,6 +835,10 @@ use devices::virtio::vhost_user_backend::run_video_device;'
 
   usbipProxyRunner = envName: m: {
     binaryPath = "${pkgs.socat}/bin/socat";
+    # Generic per-env L4 forwarder. It does not inspect USBIP frames or busids,
+    # so single-busid revocation must not bounce this sidecar while other
+    # same-env streams may be active; use host unbind plus targeted
+    # conntrack/socket cleanup, or fail closed if the stream cannot be isolated.
     argv = [
       "nixling-sys-${envName}-usbipd-proxy"
       "TCP-LISTEN:3240,bind=${m.hostUplinkIp},fork,max-children=4,reuseaddr"

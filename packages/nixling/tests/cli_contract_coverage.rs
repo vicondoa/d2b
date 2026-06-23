@@ -752,6 +752,7 @@ fn json_schema_names(command: &str) -> &'static [&'static str] {
         "host check" => &["host-check.schema.json"],
         "auth status" => &["auth-status.schema.json"],
         "store verify" => &["store-verify.schema.json"],
+        "usb probe" => &["usb-probe.schema.json"],
         "vm exec" => &[
             "vm-exec-create.schema.json",
             "vm-exec-list.schema.json",

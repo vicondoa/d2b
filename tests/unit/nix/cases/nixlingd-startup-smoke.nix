@@ -80,6 +80,11 @@ in
     expected = [ "d /run/nixling 0750 nixlingd nixling -" ];
   };
 
+  "nixlingd-startup-smoke/tmpfiles-usbip-lock-root" = {
+    expr = rulesForPath "/run/nixling/locks/usbip";
+    expected = [ "d /run/nixling/locks/usbip 0750 root nixlingd -" ];
+  };
+
   "nixlingd-startup-smoke/tmpfiles-audit" = {
     expr = rulesForPath "/var/lib/nixling/audit";
     expected = [ "d /var/lib/nixling/audit 0750 root nixlingd -" ];
@@ -125,6 +130,16 @@ in
     expected = "root";
   };
 
+  "nixlingd-startup-smoke/broker-after-tmpfiles" = {
+    expr = builtins.elem "systemd-tmpfiles-setup.service" (brokerService.after or [ ]);
+    expected = true;
+  };
+
+  "nixlingd-startup-smoke/broker-requires-tmpfiles" = {
+    expr = builtins.elem "systemd-tmpfiles-setup.service" (brokerService.requires or [ ]);
+    expected = true;
+  };
+
   "nixlingd-startup-smoke/broker-group" = {
     expr = brokerService.serviceConfig.Group;
     expected = "nixlingd";
@@ -152,6 +167,16 @@ in
 
   "nixlingd-startup-smoke/daemon-wants-broker-socket" = {
     expr = builtins.elem "nixling-priv-broker.socket" (daemonService.wants or [ ]);
+    expected = true;
+  };
+
+  "nixlingd-startup-smoke/daemon-after-tmpfiles" = {
+    expr = builtins.elem "systemd-tmpfiles-setup.service" (daemonService.after or [ ]);
+    expected = true;
+  };
+
+  "nixlingd-startup-smoke/daemon-wants-tmpfiles" = {
+    expr = builtins.elem "systemd-tmpfiles-setup.service" (daemonService.wants or [ ]);
     expected = true;
   };
 

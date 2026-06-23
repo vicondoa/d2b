@@ -175,8 +175,7 @@ pub struct NmUnmanagedEntry {
     pub marker_id: String,
 }
 
-/// Per-host firewall coexistence policy row owned by scope s3. Mirrors
-/// plan.md §"W3 firewall coexistence policy matrix" ADR.
+/// Per-host firewall coexistence policy row emitted in host.json.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FirewallCoexistencePolicy {
@@ -188,7 +187,7 @@ pub struct FirewallCoexistencePolicy {
     pub rationale: String,
 }
 
-/// Detected host firewall manager. Detection lives in scope s3.
+/// Detected host firewall manager.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum FirewallManager {

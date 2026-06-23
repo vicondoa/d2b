@@ -661,7 +661,7 @@ The bridge-health probe is part of the read-only status surface, even though rec
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | `false` | Print the daemon → broker USBIP attach plan plus the authenticated guestd import step without mutating host or guest state. |
-| `--apply` | boolean | `false` | Ask `nixlingd` to first reconcile any stale guest-side import through guestd, run `UsbipBind` (acquiring the per-busid lock and validating ownership), apply the USBIP firewall carve-out, ensure the per-env USBIP backend/proxy runners are ready, run `UsbipProxyReconcile`, then ask guestd over authenticated guest-control to run the guest-side `usbip attach -r <usbipdHostIp> -b <busid>`. |
+| `--apply` | boolean | `false` | Ask `nixlingd` to first reconcile any stale guest-side import through guestd, run `UsbipBind` (acquiring the per-busid lock and validating ownership), apply the USBIP firewall carve-out, ensure the per-env USBIP backend/proxy runners are ready, run `UsbipProxyReconcile`, then ask guestd over authenticated guest-control to import the selected busid from the per-env backend. |
 | `--json` | boolean | `false` | Emit the dry-run summary as structured JSON. |
 | `--human` | boolean | `false` | Force the human dry-run summary on stdout. |
 
@@ -692,6 +692,23 @@ nixling usb attach --dry-run: would bind and lock, apply the USBIP firewall carv
 
 The native CLI sends one intent to `nixlingd`; the daemon drives broker host
 USBIP state and authenticated guestd import cleanup/attach over guest-control.
+If the target VM is stopped, `--apply` fails before host mutation with an
+actionable usage error: start the VM with
+`nixling vm start <vm> --apply`, wait until it is running, then retry
+`nixling usb attach <vm> <busid> --apply`. This preflight does not create a
+degraded USB state. If an earlier failed apply left a stale or bound USBIP
+session claim, start the VM and rerun the attach or run
+`nixling usb detach <vm> <busid> --apply`; the attach/detach paths and
+`nixling usb probe` all run the USBIP proxy reconcile pass, and `usb probe`
+shows the session claim as cleared once the lock/proxy state is consistent.
+
+Prerequisites for `--apply` are: the target VM is running and guest-control
+advertises USBIP status/import, the bundle declares a USBIP bind/firewall intent
+for the VM/busid, policy/topology checks allow the physical device, the
+`usbip-host` module and per-env backend/proxy carrier can be prepared, and no
+other owner holds the busid session claim. Failing prerequisites surface as
+typed errors or as `nixling usb probe` degraded reasons with exact remediation
+commands.
 
 **Native**
 
@@ -734,12 +751,23 @@ USBIP state and authenticated guestd import cleanup/attach over guest-control.
 
 ```text
 $ nixling usb detach corp-vm 1-2 --dry-run
-nixling usb detach --dry-run: would unbind busid '1-2' for vm 'corp-vm', and reconcile the USBIP proxy
+nixling usb detach --dry-run: would ask guestd to detach busid '1-2' for vm 'corp-vm', unbind it on the host, and reconcile the USBIP proxy
 ```
 
 **Status**
 
-The native CLI drives the daemon → broker `UsbipUnbind` / `UsbipProxyReconcile` path directly.
+The native CLI first asks guestd to detach matching imports, then drives the
+daemon → broker `UsbipUnbind` / `UsbipProxyReconcile` path. Explicit detach is
+the only normal path that releases a USBIP session claim. VM stop/restart keeps
+the claim for the same VM within the current host boot/session so restart
+reconciliation can re-import the device; a host reboot clears the `/run` lock.
+
+Single-busid detach never stops the shared per-env proxy. If the daemon cannot
+prove firewall-withdrawal-before-flow-kill ordering plus an exact VM/proxy
+cleanup tuple, `--apply` fails closed with `usbip-revocation-not-isolated` and
+preserves the session claim for manual drain/recovery. The public error names the
+target busid. The safe next step is to stop the VM so the stream drains, then
+rerun `nixling usb detach <vm> <busid> --apply`.
 
 **Native**
 
@@ -764,7 +792,7 @@ The native CLI drives the daemon → broker `UsbipUnbind` / `UsbipProxyReconcile
 
 | Argument | Semantics |
 | --- | --- |
-| _(none)_ | The probe always lists every daemon-declared USBIP busid claim. |
+| _(none)_ | The probe always lists every daemon-declared USBIP busid session claim. |
 
 **Exit codes**
 
@@ -779,17 +807,92 @@ The native CLI drives the daemon → broker `UsbipUnbind` / `UsbipProxyReconcile
 
 ```text
 $ nixling usb probe
-VM                       ENV          BUSID        STATUS   OWNER
-corp-vm                  work         1-2          bound    corp-vm
+VM                       ENV          BUSID        STATUS     SESSION-CLAIM          HOST-BIND                CARRIER        PROXY        GUEST      POLICY
+corp-vm                  work         1-2          degraded   held-by-desired-owner  unknown                  unknown        unknown      detached   allowed
+  degraded guest-import-unavailable: the guest USBIP import has not converged
+  remediation: Run `nixling usb attach corp-vm 1-2 --apply` after the VM is running.
+  command: nixling usb attach corp-vm 1-2 --apply
+```
+
+**`--json` example** — schema: [`usb-probe.schema.json`](./cli-output/usb-probe.schema.json); prose companion: [`usb-probe.md`](./cli-output/usb-probe.md).
+
+```json
+{
+  "command": "usb probe",
+  "entries": [
+    {
+      "vm": "corp-vm",
+      "env": "work",
+      "busId": "1-2",
+      "lockPath": "/run/nixling/locks/usbip/1-2",
+      "status": "degraded",
+      "ownerVm": "corp-vm",
+      "durableClaim": {
+        "state": "held-by-desired-owner",
+        "ownerVm": "corp-vm"
+      },
+      "host": {
+        "bind": "unknown",
+        "carrier": "unknown",
+        "proxy": "unknown"
+      },
+      "guest": {
+        "import": "detached"
+      },
+      "topologyPolicy": {
+        "topology": "unknown",
+        "policy": "allowed"
+      },
+      "degradedReasons": [
+        {
+          "code": "guest-import-unavailable",
+          "summary": "the guest USBIP import has not converged",
+          "remediation": "Run `nixling usb attach corp-vm 1-2 --apply` after the VM is running."
+        }
+      ],
+      "remediationCommands": [
+        "nixling usb attach corp-vm 1-2 --apply"
+      ]
+    }
+  ]
+}
 ```
 
 **Status**
 
-Probe is a read-only daemon RPC backed by the broker's `UsbipProxyReconcile` validation pass.
+Probe is a read-only daemon RPC backed by the broker's
+`UsbipProxyReconcile` validation pass. The JSON and human forms split:
+
+- the **session claim** (`missing`, `held-by-desired-owner`,
+  `held-by-other-owner`, `stale-owner`, `corrupt`, or `not-applicable`);
+- **active host carrier** state for module/device/backend readiness
+  (`absent`, `unavailable`, `withheld-for-owner`, `ready`,
+  `departed-during-probe`, `unknown`, or `not-applicable`);
+- host driver bind, per-env proxy listener, guest import, and redacted
+  topology/policy state;
+- closed degraded reasons with human remediation; and
+- copy-paste lifecycle commands such as
+  `nixling usb attach corp-vm 1-2 --apply` or
+  `nixling usb detach <owner> 1-2 --apply` when the daemon can name a safe
+  next command.
+
+A persisted lock by itself is not reported as healthy `bound`; stale or
+incomplete lock-only state is `degraded` until host and guest state are
+reconciled. Public output uses redacted state labels and summaries rather
+than raw sysfs paths, raw serials, stderr, or policy internals.
+
+VM restart reconciliation preserves same-VM session claims for the current host
+boot/session, detaches guest imports, and only runs host unbind after firewall
+withdrawal plus targeted stream cleanup is proven. It then replays host
+bind/proxy and guest import after guest-control readiness. Runtime absence,
+proxy unavailability, or guest import unavailability surfaces as degraded USB
+state. Required policy/topology failures fail before device exposure and must be
+remediated by fixing the declaration, rebuilding, and rerunning the lifecycle
+command.
 
 **Native**
 
-- Read-only daemon query enumerating every declared USBIP busid claim.
+- Read-only daemon query enumerating every declared USBIP busid session claim.
 
 **Bash**
 
@@ -2342,7 +2445,7 @@ is the live mutation path when you are ready.
 ```text
 $ nixling auth status
 role: launcher
-public socket: /run/nixling/public.sock (reachable, server=0.2.0-w2, selected=0.2.0)
+public socket: /run/nixling/public.sock (reachable, server=0.2.0, selected=0.2.0)
 allowed commands: auth status, host check, list, status
 denied commands:
 - audit: requires admin role in nixling.site.adminUsers
@@ -2356,7 +2459,7 @@ denied commands:
   "publicSocket": {
     "path": "/run/nixling/public.sock",
     "reachable": true,
-    "serverVersion": "0.2.0-w2",
+    "serverVersion": "0.2.0",
     "selectedVersion": "0.2.0"
   },
   "allowedCommands": [

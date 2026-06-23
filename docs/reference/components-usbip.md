@@ -13,9 +13,9 @@ and some enabled VM in an env sets `usbip.yubikey = true`, the host
 materializes a broker-spawned per-env `usbipd` backend listening on TCP
 `<backendPort>` (usbipd has no `--host` flag, so it binds to
 `0.0.0.0`; firewall rules — see "Host-side resources" — restrict
-source addresses to host loopback, so it's the operational equivalent
+backend ingress to host loopback, so it's the operational equivalent
 of a loopback bind but enforced via netfilter rather than by the
-socket). A broker-spawned `socat` proxy binds exactly the env's
+socket). A broker-spawned per-env `socat` proxy binds exactly the env's
 uplink-bridge IP at TCP 3240; the guest loads `vhci_hcd`, ships the
 `usbip` CLI, and advertises guestd's `UsbipImport` capability so
 `nixlingd` can import/detach through authenticated guest-control. The
@@ -31,6 +31,36 @@ elsewhere — see "Host-side resources" below.
 
 USB and HID capabilities remain independent from display; see
 [display and virtual I/O capabilities](./display-io-capabilities.md).
+
+## Claim, carrier, and restart model
+
+USBIP state is reported as separate layers because they have different
+owners and remediation:
+
+- **Session claim** — the broker-owned per-busid lock under
+  `/run/nixling/locks/usbip/<busid>`. It records which VM owns the right
+  to expose the physical device for the current host boot/session. The claim
+  survives VM stop/restart and daemon restart, but not host reboot because the
+  backing path is under `/run`. Only explicit
+  `nixling usb detach <vm> <busid> --apply` releases a healthy claim during
+  that host session.
+- **Active carrier** — transient host/guest state that can disappear across
+  unplug, VM stop, daemon restart, or guest-control restart: the
+  `usbip-host` module, host driver bind, per-env backend/export readiness,
+  per-env proxy listener, and guest import.
+- **Policy/topology** — bundle-declared vendor/product and bus/port
+  identity checks. Required failures fail before device exposure and require
+  fixing the declaration or attaching the approved physical device, then
+  rebuilding before retry.
+
+VM stop/restart cleans up guest imports and only runs host unbind when firewall
+withdrawal plus targeted stream cleanup can be proven first; otherwise it keeps
+the same-VM session claim for manual recovery. VM start reconciles same-VM
+session claims from the current host session after guest-control readiness by
+replaying host bind/proxy state and re-importing in the guest. Runtime absence,
+proxy/backend unavailability, or guest import unavailability degrades
+`nixling usb probe` / `nixling status` without pretending the row is healthy.
+Required policy/topology failures remain fail-closed.
 
 ## Options (host-side)
 
@@ -65,6 +95,37 @@ Per opted-in env (declared in [`network.nix`](../../nixos-modules/network.nix); 
 > `UsbipBackend` runner for each env. Per-attach host `usbip bind` /
 > `unbind` steps are broker ops with per-env busid locking and audit
 > coverage; guest `usbip attach` / `detach` is an authenticated guestd RPC.
+> VM start/stop USB reconciliation threads one bounded reconcile correlation ID
+> through its USB broker requests as the broker audit `tracingSpanId`.
+> These privileged USB broker requests inherit the broker IPC limiter
+> (stable UID/role/operation buckets for daemon-forwarded calls, a
+> collapsed direct-peer bucket for non-daemon callers) and the bounded
+> audit-write limiter documented in
+> [`daemon-api.md`](./daemon-api.md#broker-socket).
+> USB reconciliation observability partitions dedupe/rate-limit buckets by
+> closed event type plus bounded source kind/VM projection, never by process
+> ID, trace ID, bus ID, sysfs path, or serial. Bucket caps are strict: once the
+> reserved capacity is full, new partitions collapse into a single `other`
+> bucket instead of evicting older keys. Metric labels are static
+> (`present`/`none`/`other` for VM source presence), while structured log/event
+> DTOs keep unknown but well-shaped VM and error values and reject only unknown
+> fields or malformed shapes. Suppressed-event summaries carry the suppressed
+> count and window start/end.
+>
+> Successful `UsbipBind` broker audit records include a root-only forensics
+> projection: normalized VID/PID, a boolean `serialObserved`, and HMAC-SHA256
+> serial correlations when a serial descriptor exists. The HMAC keyring lives
+> under `${nixling.site.stateDir}/secrets/usb-audit-serial-hmac/` as
+> root-only `current.key` plus optional `previous.key`. The broker reads the
+> files on each bind, so key reload is per-request; no non-root observability
+> unit receives key material through systemd credentials, environment variables,
+> config files, or IPC. During rotation, operators atomically install a new
+> `current.key`, keep the old key as `previous.key` for the 30-day grace
+> window, then remove `previous.key` to close the window. While both files are
+> present, audit records carry both current and previous correlations and the
+> broker emits one structured rotation-window log event per key pair with only
+> key IDs, active-key count, grace-window length, and the closed correlation
+> version.
 
 - **`nixling.slice/sys-<env>/usbipd-backend` runner** — runs
   `usbipd -4 --tcp-port <backendPort>`. usbipd has no `--host` flag
@@ -79,25 +140,37 @@ Per opted-in env (declared in [`network.nix`](../../nixos-modules/network.nix); 
 - **`nixling.slice/sys-<env>/usbipd-proxy` runner** —
   `socat TCP-LISTEN:3240,bind=<env.hostUplinkIp>,fork,max-children=4,reuseaddr
   TCP:127.0.0.1:<backendPort>`. Requires + after the matching backend
-  runner. `CapabilityBoundingSet = ""`.
+  runner. `CapabilityBoundingSet = ""`. The listener is never wildcard
+  (`0.0.0.0`/`::`) and there is no cross-env proxy. The proxy is a
+  generic L4 TCP forwarder; it does not parse USBIP packets and cannot
+  selectively identify one busid stream by itself.
 
-Firewall carve-outs (canonical `inet nixling` table per
-[ADR 0013](../adr/0013-w3-firewall-coexistence-policy.md) +
+Firewall carve-outs (canonical `inet nixling` table per ADR 0013 +
 [`inet-nixling-chains.md`](./inet-nixling-chains.md)):
 
 The broker emits these source-based carve-outs through the existing
-`UsbipBindFirewallRule` broker op. Carve-out removal is performed by
-re-invoking `UsbipBindFirewallRule` with a `destroy: true` payload
-field; there is no separate firewall-unbind op. The carve-outs land
-in the canonical `forward` chain inside the `inet nixling` table
-BEFORE the generic allow/drop rule. The carve-out matrix translates
-the legacy iptables semantics 1:1:
+`UsbipBindFirewallRule` broker op. Single-busid revocation is allowed to
+kill an established stream only after the firewall carve-out has been
+blocked or withdrawn; if the daemon cannot prove that ordering and an exact
+VM/proxy cleanup tuple, detach fails closed instead of killing the shared
+per-env proxy listener. The carve-outs land in the canonical `input` chain
+inside the `inet nixling` table BEFORE the generic TCP/3240 drop rule. The
+carve-out matrix is:
 
 - DROP source ≠ 127.0.0.1 to the env's backend loopback port.
-- DROP source ∉ `<env.uplinkSubnet>` to TCP 3240 on the env's
-  uplink bridge.
-- ACCEPT source ∈ `<env.uplinkSubnet>` to TCP 3240 on the env's
-  uplink bridge.
+- DROP all TCP/3240 proxy traffic by default.
+- ACCEPT only traffic arriving on the env's uplink bridge with
+  `ip saddr <env.netUplinkIp>` and `ip daddr <env.hostUplinkIp>`.
+
+The current net VM topology preserves env identity, not workload-VM
+source identity, at the host proxy: workload traffic to
+`<env.hostUplinkIp>:3240` crosses the net VM and is SNATed to
+`<env.netUplinkIp>`. The broker therefore does **not** widen the
+carve-out to the whole uplink subnet and does not claim VM-source
+scoping. Instead it uses the non-spoofable point-to-point net-VM
+uplink identity and fails closed if the host bundle lacks the
+uplink IPs or the uplink bridge-port anti-spoofing shape
+(`isolated`, neighbor suppression, no learning, no unicast flooding).
 
 The legacy iptables `nixos-fw` rules (an interim implementation
 that inserted at position 1 in `nixos-fw` to win first-match
@@ -123,16 +196,64 @@ Per host (in [`host.nix`](../../nixos-modules/host.nix)):
 - The `/dev/kvm` lock-down rule (`KERNEL=="kvm", GROUP="kvm",
   MODE="0660"`) is unconditional and not part of the yubikey gate.
 
-CLI (`nixling usb attach|detach|probe` in the Rust CLI).
+## Runtime prerequisite contract
+
+For `nixling usb attach <vm> <busid> --apply` to expose a device, all of
+these must be true:
+
+1. the target VM is running and guest-control advertises USBIP status/import;
+2. the bundle declares USBIP bind/firewall intents for the VM and busid;
+3. the session busid claim is missing or already held by the target VM;
+4. `usbip-host`, the physical device, host bind operation, per-env backend,
+   and per-env proxy can converge;
+5. topology/policy checks allow the observed physical device; and
+6. the guest can import the device from its own env's
+   `<env.hostUplinkIp>:3240` path.
+
+Stable operator remediation uses lifecycle verbs rather than direct lock or
+sysfs mutation. Keep procedural recovery in the how-to runbook:
+[Troubleshoot USBIP passthrough](../how-to/troubleshoot-usbip.md).
+
+CLI contract (`nixling usb attach|detach|probe` in the Rust CLI):
 
 - Sends one apply/dry-run intent to `nixlingd`.
 - `attach --apply`: guestd first detaches any stale matching import, the
   broker binds/locks the host busid and reconciles firewall/proxy state, then
   guestd imports the device inside the VM.
-- `detach --apply`: guestd detaches matching guest imports, then the broker
-  unbinds the host busid and reconciles the proxy. If guest cleanup is
-  unavailable, the host unbind still runs and the daemon reports the guest
-  cleanup failure as degraded state.
+- `detach --apply`: for the generic per-env L4 proxy, the daemon first requires
+  an immediate-revocation proof: firewall block/withdrawal must precede any
+  targeted conntrack deletion or TCP established-socket kill for a proven
+  VM/proxy tuple whose source is not hidden by SNAT and whose anti-spoofing
+  posture is proven. When that proof is unavailable, detach returns the public
+  `usbip-revocation-not-isolated` failure with the target busid and preserves
+  the broker-owned claim for manual drain/recovery instead of silently leaving
+  an established stream or bouncing unrelated same-env streams.
+
+### Proxy synchronization strategy
+
+The current proxy is per-env, not per-busid: a `socat` L4 listener forwards
+`<env.hostUplinkIp>:3240` to that env's loopback backend port. Synchronization
+therefore follows the conservative daemon plan in
+`packages/nixlingd/src/usbip_reconcile_state.rs`:
+
+1. normal attach or single-VM restart performs an optimistic backend/export
+   refresh and verifies that the per-env proxy is listening;
+2. single-busid detach removes the firewall carve-out before any flow kill,
+   asks the device-specific `usbip_sockfd` control to shut down the usbip-host
+   stream, then uses only exact VM/proxy tuple cleanup with proven per-VM source
+   identity without stopping or rebinding the per-env proxy;
+3. no generic sysfs/listener revoke is claimed: TCP may use exact conntrack
+   deletion and/or exact established-socket kill, UDP may use exact conntrack
+   deletion only, and shared listeners or ambiguous same-env streams are never
+   killed for one busid. If the device-specific stream/unbind controls or those
+   tuple guarantees are unavailable, revocation fails closed and preserves the
+   broker-owned session busid claim for manual drain/recovery; and
+4. bouncing same-env active streams is permitted only through an explicit
+   bounded-drain or force-recycle policy, which must take an exclusive socket
+   lifecycle lock before any rebind.
+
+This means a single VM restart in an env must not disconnect unrelated active
+USBIP streams in that same env.
 
 ## Guest-side resources created
 
@@ -155,18 +276,15 @@ The entire `components/usbip.nix` is two lines of payload:
 
 ## Runtime invariants
 
-- The YubiKey is exposed to at most one env at any moment. The
-  flock + the cross-env "stop other proxies" step in the
-  exclusive-attach path is the enforcement mechanism; switching
-  to another env requires re-running `nixling usb attach <vm>`,
-  which steals the lock and detaches first. The same enforcement now
-  lives in the Rust CLI's `nixling usb attach` dispatch through the
-  broker.
+- A declared busid is exposed to at most one VM/env owner at any moment. The
+  broker-owned per-busid claim, host unbind, and firewall carve-out are the
+  enforcement mechanisms. The generic per-env proxy is not stopped merely to
+  revoke one busid, because doing so would bounce unrelated same-env streams.
 - The host-side proxy listens only on `<env.hostUplinkIp>:3240`. A
   workload VM in env A cannot reach env B's usbipd via routing —
-  the nftables `ACCEPT source ∈ <env.uplinkSubnet>` carve-out (per
-  ADR 0013 + this doc's "Firewall carve-outs" section above) keys
-  on the env's own uplink subnet.
+  the nftables carve-out (per ADR 0013 + this doc's
+  "Firewall carve-outs" section above) keys on the env's own
+  uplink bridge, host destination IP, and net-VM uplink source IP.
 - Guestd's `usbip attach` connects to its own env's
   `usbipdHostIp` (the host-side end of that env's uplink bridge),
   not the host's WAN address.
@@ -177,8 +295,8 @@ The entire `components/usbip.nix` is two lines of payload:
   because usbipd has no `--host` flag); the broker-managed nftables
   `inet nixling` input chain explicitly drops non-loopback ingress to
   backend ports, making the backend effectively loopback-only even
-  though the socket itself is all-interface-bound. The cross-env proxy
-  is a bounded `socat` instance with an empty capability set.
+  though the socket itself is all-interface-bound. Each env's proxy is
+  a bounded `socat` instance with an empty capability set.
 - Backend retains only the USBIP backend capability set. The proxy runs
   with an empty capability set and listens only on `<env.hostUplinkIp>:3240`.
 - The kvm-group YubiKey udev grant (`GROUP="kvm" MODE="0660"`) is
@@ -191,24 +309,17 @@ The entire `components/usbip.nix` is two lines of payload:
   USB; it's there for `/dev/kvm`. USBIP traffic flows over TCP, not
   device-node ACLs.
 
-## Common gotchas / failure modes
+## Failure-mode reference
 
-- **`nixling usb attach <vm> <busid> --apply` failing with "no Yubico USB device".** The
-  host has no `1050:*` device plugged in, or `nixling.site.yubikey
-  .enable = false` and the udev rules are absent. Plug the key in,
-  or flip the site flag.
-- **`nixling usb attach <vm> <busid> --apply` failing with "VM at <ip> is not reachable".**
-  The target VM has not been started or guest-control is not healthy — run
-  `nixling vm start <vm>` first and check `nixling vm status <vm>`.
-- **`usbip attach` succeeds but the YubiKey doesn't appear in
-  `lsusb` inside the VM.** `vhci_hcd` failed to load — check
-  `dmesg` in the guest. Verify the component is enabled
-  (`usbip.yubikey = true`) so the module pulls in the kernel
-  module.
-- **Cross-env interference.** Running `nixling usb <vm-in-env-A>`
-  while another env has the key attached steals the lock and stops
-  env B's proxy units. This is intentional but can surprise
-  multi-env users; expect a brief disconnect on the previous env.
+`nixling usb probe` is the stable read-only diagnostic surface. It reports
+session claim state, active host carrier/bind/proxy state, guest import state,
+topology/policy state, degraded reasons, and copy-paste remediation commands.
+See [`cli-output/usb-probe.md`](./cli-output/usb-probe.md) for the JSON field
+contract and degraded reason table.
+
+Troubleshooting walkthroughs belong in Diataxis how-to docs, not in this
+reference page. See [Troubleshoot USBIP passthrough](../how-to/troubleshoot-usbip.md)
+for operator procedures.
 
 ## See also
 
@@ -216,6 +327,8 @@ The entire `components/usbip.nix` is two lines of payload:
 - [Manifest schema](./manifest-schema.md) — `units.usbipBackend` /
   `units.usbipProxy` (per-env, not per-VM).
 - [CLI contract](./cli-contract.md) — `nixling usb attach|detach|probe` subcommands.
+- [Troubleshoot USBIP passthrough](../how-to/troubleshoot-usbip.md) —
+  operator recovery workflow.
 - [`examples/graphics-workstation`](../../examples/graphics-workstation/) —
   end-to-end example with `usbip.yubikey = true`.
 - [CHANGELOG.md](../../CHANGELOG.md) — release history for USBIP gating and related fixes.

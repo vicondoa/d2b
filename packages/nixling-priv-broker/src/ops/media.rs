@@ -23,11 +23,11 @@ use nixling_host::media::{
     UsbPhysicalIdentity,
 };
 use nixling_ipc::broker_wire::{
-    QemuMediaBootRequest, QemuMediaEnrollRequest, QemuMediaEnrollResponse,
-    QemuMediaHotplugEvent, QemuMediaHotplugRequest, QemuMediaHotplugResponse,
-    QemuMediaHotplugStatus, QemuMediaLifecycleAction, QemuMediaLifecycleRequest,
-    QemuMediaLifecycleResponse, QemuMediaQueryStatusRequest, QemuMediaQueryStatusResponse,
-    QemuMediaRefreshRegistryResponse, QemuMediaVmStatus,
+    QemuMediaBootRequest, QemuMediaEnrollRequest, QemuMediaEnrollResponse, QemuMediaHotplugEvent,
+    QemuMediaHotplugRequest, QemuMediaHotplugResponse, QemuMediaHotplugStatus,
+    QemuMediaLifecycleAction, QemuMediaLifecycleRequest, QemuMediaLifecycleResponse,
+    QemuMediaQueryStatusRequest, QemuMediaQueryStatusResponse, QemuMediaRefreshRegistryResponse,
+    QemuMediaVmStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -2574,7 +2574,9 @@ mod tests {
             let id = qmp_id_from_line(&line);
             let oversized = "x".repeat(QMP_MAX_RESPONSE_BYTES);
             writer
-                .write_all(format!(r#"{{"return":{{"status":"{oversized}"}},"id":"{id}"}}"#).as_bytes())
+                .write_all(
+                    format!(r#"{{"return":{{"status":"{oversized}"}},"id":"{id}"}}"#).as_bytes(),
+                )
                 .expect("oversized response");
             writer.write_all(b"\n").expect("oversized newline");
         });
@@ -2676,7 +2678,10 @@ mod tests {
     ) {
         let mut line = String::new();
         reader.read_line(&mut line).expect("read query-status");
-        assert!(line.contains("query-status"), "missing query-status in {line}");
+        assert!(
+            line.contains("query-status"),
+            "missing query-status in {line}"
+        );
         let id = qmp_id_from_line(&line);
         writer
             .write_all(format!(r#"{{"return":{{"status":"{status}"}},"id":"{id}"}}"#).as_bytes())

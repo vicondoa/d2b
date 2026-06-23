@@ -7,8 +7,8 @@
 //!   never from caller input; the wire request only names the
 //!   subject (`subtree`, `vm_id`) and the broker maps that name to
 //!   the canonical delegated subtree (default
-//!   `/sys/fs/cgroup/system.slice/nixling.slice`) plus optional
-//!   `/<vm>.scope` leaves beneath it;
+//!   `/sys/fs/cgroup/nixling.slice`) plus per-VM interiors and
+//!   per-role leaves beneath it;
 //! - the 8-step delegation algorithm runs through
 //!   [`nixling_host::cgroup`];
 //! - `OpenCgroupDir` returns an `O_PATH | O_NOFOLLOW` fd opened with
@@ -230,7 +230,7 @@ impl PathClass {
 /// systemd-managed parent slice that has already been delegated to the
 /// broker/daemon. The broker never writes `/sys/fs/cgroup` root; the
 /// operator must pre-create + `Delegate=yes` the parent slice (default
-/// `/sys/fs/cgroup/system.slice/nixling.slice`) and then the broker
+/// `/sys/fs/cgroup/nixling.slice`) and then the broker
 /// enables controllers / chowns only within that subtree. Per the
 /// broker variant table, `destructive: no`, `secret: no`, audit
 /// decision `allowed` on success.
