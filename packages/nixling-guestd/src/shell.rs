@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
 use std::io::Read;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use nixling_constellation_core as constellation;
@@ -21,6 +22,9 @@ pub struct ShellRuntimeConfig {
     pub guest_boot_id: String,
     pub guestd_instance_id: String,
     pub daemon_instance_id: String,
+    pub runner_path: PathBuf,
+    pub systemctl_path: PathBuf,
+    pub socket_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +47,9 @@ impl ShellRuntimeConfig {
             guest_boot_id: String::new(),
             guestd_instance_id: String::new(),
             daemon_instance_id: String::new(),
+            runner_path: PathBuf::new(),
+            systemctl_path: PathBuf::new(),
+            socket_path: PathBuf::new(),
         }
     }
 }
@@ -73,6 +80,7 @@ struct ShellSession {
     guest_boot_id: String,
     owner_key: Vec<u8>,
     attached: bool,
+    terminal_exec_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -272,6 +280,97 @@ impl ShellRuntime {
         (self.config.max_sessions, self.config.max_attached)
     }
 
+    pub fn runner_path(&self) -> Option<PathBuf> {
+        self.enabled.then(|| self.config.runner_path.clone())
+    }
+
+    pub fn systemctl_path(&self) -> Option<PathBuf> {
+        self.enabled.then(|| self.config.systemctl_path.clone())
+    }
+
+    pub fn socket_path(&self) -> Option<PathBuf> {
+        self.enabled.then(|| self.config.socket_path.clone())
+    }
+
+    pub fn guest_boot_id(&self) -> Option<String> {
+        self.enabled.then(|| self.config.guest_boot_id.clone())
+    }
+
+    pub fn default_name(&self) -> String {
+        self.config.default_name.clone()
+    }
+
+    pub fn resolve_name(&self, name: Option<String>) -> Result<String, ShellRuntimeError> {
+        let resolved = name.unwrap_or_else(|| self.config.default_name.clone());
+        validate_shell_name(&resolved).map_err(|_| ShellRuntimeError::InvalidName)?;
+        if !self.enabled {
+            return Err(ShellRuntimeError::Disabled);
+        }
+        Ok(resolved)
+    }
+
+    pub fn session_attached(&self, name: &str) -> bool {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state
+            .sessions
+            .get(name)
+            .is_some_and(|session| session.attached)
+    }
+
+    pub fn session_exists(&self, name: &str) -> bool {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.sessions.contains_key(name)
+    }
+
+    pub fn attached_snapshot(&self) -> Vec<(String, Vec<u8>)> {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state
+            .sessions
+            .values()
+            .filter(|session| session.attached)
+            .map(|session| (session.name.clone(), session.owner_key.clone()))
+            .collect()
+    }
+
+    pub fn restore_failed_attach(
+        &self,
+        resolved_name: &str,
+        session_id: &str,
+        existed_before: bool,
+        attached_before: &[(String, Vec<u8>)],
+    ) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !existed_before
+            && state
+                .sessions
+                .get(resolved_name)
+                .is_some_and(|session| session.session_id == session_id)
+        {
+            state.sessions.remove(resolved_name);
+        }
+        for session in state.sessions.values_mut() {
+            session.attached = false;
+        }
+        for (name, owner_key) in attached_before {
+            if let Some(session) = state.sessions.get_mut(name) {
+                session.attached = true;
+                session.owner_key = owner_key.clone();
+            }
+        }
+    }
+
     pub fn attach(&self, request: pb::ShellAttachRequest) -> pb::ShellAttachResponse {
         self.attach_with_owner(request, Vec::new())
     }
@@ -393,6 +492,7 @@ impl ShellRuntime {
             guest_boot_id: self.config.guest_boot_id.clone(),
             owner_key,
             attached: true,
+            terminal_exec_id: None,
         };
         state.sessions.insert(name, session.clone());
         state.events.push(ShellEventKind::AttachCreated);
@@ -492,6 +592,39 @@ impl ShellRuntime {
             ShellRuntimeError::NotFound,
             self.config.default_name.clone(),
         )
+    }
+
+    pub fn set_terminal_exec_id(
+        &self,
+        session_id: &str,
+        exec_id: String,
+    ) -> Result<(), ShellRuntimeError> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(session) = state
+            .sessions
+            .values_mut()
+            .find(|session| session.session_id == session_id)
+        else {
+            return Err(ShellRuntimeError::NotFound);
+        };
+        session.terminal_exec_id = Some(exec_id);
+        Ok(())
+    }
+
+    pub fn terminal_exec_id(&self, session_id: &str) -> Result<String, ShellRuntimeError> {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state
+            .sessions
+            .values()
+            .find(|session| session.session_id == session_id)
+            .and_then(|session| session.terminal_exec_id.clone())
+            .ok_or(ShellRuntimeError::NotFound)
     }
 
     pub fn kill(&self, name: String) -> pb::ShellKillResponse {
@@ -792,6 +925,9 @@ mod tests {
             guest_boot_id: "boot-1".to_owned(),
             guestd_instance_id: "guestd-1".to_owned(),
             daemon_instance_id: "daemon-1".to_owned(),
+            runner_path: PathBuf::new(),
+            systemctl_path: PathBuf::new(),
+            socket_path: PathBuf::new(),
         })
     }
 

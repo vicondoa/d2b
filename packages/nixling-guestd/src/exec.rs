@@ -212,6 +212,7 @@ pub struct ValidatedCommand {
     pub args: Vec<String>,
     pub cwd: PathBuf,
     pub env: Vec<(String, String)>,
+    pub direct_workload_tty: bool,
 }
 
 // Redacted Debug: never print argv/cwd/env values (they may carry secrets).
@@ -540,6 +541,7 @@ pub struct ExecCreateInput {
     pub detached: bool,
     pub has_terminal_size: bool,
     pub max_chunk_bytes: u64,
+    pub direct_workload_tty: bool,
 }
 
 /// Validate the supported-subset flags and command shape, then apply policy.
@@ -676,6 +678,7 @@ fn validate_command(input: &ExecCreateInput) -> Result<ValidatedCommand, ExecErr
         args: input.argv[1..].to_vec(),
         cwd,
         env: input.env.clone(),
+        direct_workload_tty: input.direct_workload_tty,
     })
 }
 
@@ -1717,6 +1720,7 @@ mod tests {
             detached: false,
             has_terminal_size: false,
             max_chunk_bytes: 64 * 1024,
+            direct_workload_tty: false,
         }
     }
 
@@ -2746,6 +2750,7 @@ mod tests {
             detached: false,
             has_terminal_size: false,
             max_chunk_bytes: 64 * 1024,
+            direct_workload_tty: false,
         }
     }
 

@@ -15,6 +15,7 @@ let
     "CAP_FSETID"
     "CAP_IPC_LOCK"
     "CAP_KILL"
+    "CAP_LEASE"
     "CAP_MKNOD"
     "CAP_NET_ADMIN"
     "CAP_NET_RAW"

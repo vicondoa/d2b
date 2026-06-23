@@ -219,19 +219,16 @@ in
     '')
     roleAclVms));
 
-  # Per-graphics-VM state dir + var.img + extra-disk ownership.
+  # Per-graphics-VM state-dir ownership and ACLs.
   # update: ownership matches the per-VM ownership matrix
   # (`nixos-modules/options-ownership-matrix.nix`): per-VM root is
   # `nixlingd:users 3770` (setgid + sticky; sticky added for issue
   # #64 so a non-owner role UID cannot rename/replace the swtpm
   # NVRAM dir). The pre-v1.1 `microvm:kvm` shape was
-  # the upstream microvm.nix default; it's incompatible with the
-  # daemon-native ownership matrix. var.img stays `nixlingd:kvm 0600`
-  # so the cloud-
-  # hypervisor runner (member of the kvm group via supplementary
-  # groups) can open it. ACLs grant `nixling-<vm>-gpu` rwx on the
-  # parent dir and rw on each *.img leaf so the gpu sidecar can
-  # access displays.
+  # the upstream microvm.nix default; it is incompatible with the
+  # daemon-native ownership matrix. Disk-image ownership is reconciled
+  # by broker DiskInit immediately before cloud-hypervisor spawn; activation
+  # only maintains the parent directory and inherited ACL posture here.
   system.activationScripts.nixlingVmStatePerms = lib.stringAfter [ "users" "nixlingGroupMigration" ]
     (lib.concatStringsSep "\n" (lib.mapAttrsToList
       (name: _: ''
@@ -243,27 +240,6 @@ in
           ${pkgs.acl}/bin/setfacl -m "u:nixling-${name}-gpu:rwx" /var/lib/nixling/vms/${name} || true
           ${pkgs.acl}/bin/setfacl -d -m "g::r-x" /var/lib/nixling/vms/${name} || true
           ${pkgs.acl}/bin/setfacl -d -m "u:nixling-${name}-gpu:rw" /var/lib/nixling/vms/${name} || true
-          if systemctl is-active --quiet "nixling-${name}-gpu.service" 2>/dev/null; then
-            echo "nixling: ${name} is running; skipping disk image ownership fix (apply on next nixling vm restart)"
-          else
-            # panel-software R2 critical must-fix
-            # the old `for img in /var/lib/nixling/vms/${name}/*.img`
-            # shell glob followed symlinks. The VM dir grants
-            # `nixling-${name}-gpu:rwx` (line 117), so a compromised
-            # gpu runner could plant `evil.img -> /etc/shadow` and
-            # root would chown/chmod the target. Removed: the.img
-            # ACL grants now flow exclusively through the
-            # nixlingRoleUidAcls activation script below, which is
-            # also being hardened. Existing files keep their
-            # previous ACL; new files inherit it via the parent
-            # dir's default ACL (setfacl -d -m at line 119).
-            #
-            # Operators upgrading from v1.1.1: do one
-            # `nixling vm restart <vm>` after `nixos-rebuild switch`
-            # to ensure the broker-spawned CH re-applies ACLs to
-            # any new disk images it creates.
-            :
-          fi
         fi
       '')
       (lib.filterAttrs (_: vm: vm.graphics.enable) (nl.normalNixosVms cfg.vms))));
@@ -289,10 +265,10 @@ in
       '')
       (lib.filterAttrs (_: vm: vm.tpm.enable) (nl.normalNixosVms cfg.vms))));
 
-  # Non-graphics VMs (net VMs) also need correct ownership on var.img.
-  # same nixlingd:kvm 0660 as graphics VMs — the broker
-  # spawns CH as nixlingd (member of kvm via supplementary groups)
-  # and opens var.img read/write.
+  # Non-graphics VMs (net VMs) also need the parent state-dir posture.
+  # Disk-image ownership/mode repair belongs to broker DiskInit, not activation:
+  # the broker has the bundle-declared image path, size, owner, mode, and
+  # fd-safe validation immediately before cloud-hypervisor spawn.
   system.activationScripts.nixlingNetVmVarImgPerms = lib.stringAfter [ "users" ]
     (lib.concatStringsSep "\n" (lib.mapAttrsToList
       (name: _: ''
@@ -300,30 +276,6 @@ in
             chown nixlingd /var/lib/nixling/vms/${name} || true
             chgrp users /var/lib/nixling/vms/${name} || true
             chmod 3770 /var/lib/nixling/vms/${name} || true
-          fi
-          # panel-security R3 critical must-fix
-          # var.img repair must NOT use `[ -f ]` + chown/chmod
-          # because the runner-UID has rwx on the parent dir
-          # (granted by nixlingRoleUidAcls below). An attacker
-          # could swap var.img for a symlink between the check
-          # and the chown. Route through ensure-regular-file
-          # which uses O_NOFOLLOW + fchown + fchmod against a
-          # held fd. The size-mib=0 special-cases re-asserting
-          # ownership/mode on an existing file: ensure-regular-
-          # file's `Err(AlreadyExists)` branch never re-truncates,
-          # it only re-fchown+re-fchmod.
-          if systemctl is-active --quiet "nixling-${name}-runner.service" 2>/dev/null \
-             || systemctl is-active --quiet "nixlingd.service" 2>/dev/null; then
-            : # daemon-only model: skip var.img repair while live VM may be running
-          else
-            kvm_gid=$(${pkgs.getent}/bin/getent group kvm | ${pkgs.coreutils}/bin/cut -d: -f3)
-            nixlingd_uid=$(${pkgs.getent}/bin/getent passwd nixlingd | ${pkgs.coreutils}/bin/cut -d: -f3)
-            if [ -n "$kvm_gid" ] && [ -n "$nixlingd_uid" ]; then
-              ${activationHelper} ensure-regular-file \
-                --path /var/lib/nixling/vms/${name}/var.img \
-                --uid "$nixlingd_uid" --gid "$kvm_gid" --mode 0660 --size-mib 0 \
-                2>/dev/null || true
-            fi
           fi
       '')
       (lib.filterAttrs (_: vm: !vm.graphics.enable) (nl.normalNixosVms cfg.vms))));

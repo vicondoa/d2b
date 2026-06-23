@@ -22,9 +22,9 @@ deprecations ship one minor release before removal.
   rendering, and host-shutdown `nixlingd.service` ordering/timeout budgeting.
 - Host shutdown and reboot now gracefully stop workload VMs before env net VMs.
 - Broker disk initialization now validates existing nixling-owned ext4 raw
-  images before treating `ifAbsent` as satisfied, safely formats only
-  proven-empty images, and fails closed before VM spawn for malformed or
-  ambiguous image data.
+  images before treating `ifAbsent` as satisfied, automatically repairs safe
+  declared owner/mode drift, safely formats only proven-empty images, and fails
+  closed before VM spawn for malformed or ambiguous image data.
 - Persistent shell guests now render the shpool daemon unit with a store-backed
   start script instead of an inline multi-line `ExecStart` command, avoiding
   systemd quote parsing failures.
@@ -37,11 +37,20 @@ deprecations ship one minor release before removal.
 - Persistent shell detach now treats the known close-attach transport-unavailable
   response as a successful local detach, matching the daemon's owner-disconnect
   cleanup semantics.
+- Persistent shell attach now starts the guest shpool daemon, probes readiness
+  through the workload helper, and wires shell terminal RPCs to the PTY-backed
+  attach helper instead of returning disabled shell I/O.
 - `nixling list --json` now preserves daemon-reported failed lifecycle state as
   `status = "failed"` instead of collapsing it to `unknown`.
+- `nixling list` and `nixling status` now use a short provider-status probe
+  timeout instead of the graceful shutdown operation timeout, keeping status
+  queries responsive when a VM's provider API socket is slow.
 
 ### Internal
 
+- ADR 0035 Wave 0 internal cleanup added deterministic inventory tooling and
+  `compat-ADR` bridge-key policy coverage, removed caller-free test/Make
+  compatibility aliases, and dropped stale retired bash-CLI option comments.
 - Persistent shell CLI routing now sends gateway-backed `list`, `detach`, and
   `kill` management forms through the configured realm gateway over the typed
   guest-control exec path, while interactive gateway attach fails closed until

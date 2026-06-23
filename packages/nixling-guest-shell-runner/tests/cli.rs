@@ -18,6 +18,7 @@ fn rejects_template_names_before_runtime() {
 }
 
 #[test]
+#[cfg(not(feature = "real-libshpool"))]
 fn management_json_has_stable_shape() {
     let mut cmd = Command::cargo_bin("nixling-guest-shell-runner").unwrap();
     cmd.args([
@@ -36,6 +37,7 @@ fn management_json_has_stable_shape() {
 }
 
 #[test]
+#[cfg(not(feature = "real-libshpool"))]
 fn list_json_reports_unsupported_shape() {
     let mut cmd = Command::cargo_bin("nixling-guest-shell-runner").unwrap();
     cmd.args([
@@ -52,6 +54,7 @@ fn list_json_reports_unsupported_shape() {
 }
 
 #[test]
+#[cfg(not(feature = "real-libshpool"))]
 fn daemon_stub_reports_neutral_unsupported_error() {
     let mut cmd = Command::cargo_bin("nixling-guest-shell-runner").unwrap();
     cmd.args([
@@ -70,6 +73,7 @@ fn daemon_stub_reports_neutral_unsupported_error() {
 }
 
 #[test]
+#[cfg(not(feature = "real-libshpool"))]
 fn attach_stub_reports_neutral_unsupported_error() {
     let mut cmd = Command::cargo_bin("nixling-guest-shell-runner").unwrap();
     cmd.args([
@@ -88,6 +92,7 @@ fn attach_stub_reports_neutral_unsupported_error() {
 }
 
 #[test]
+#[cfg(not(feature = "real-libshpool"))]
 fn non_json_management_outputs_are_stable() {
     for (subcommand, expected) in [
         (
@@ -122,6 +127,22 @@ fn non_json_management_outputs_are_stable() {
             .assert()
             .success()
             .stdout(predicate::str::contains(expected));
+    }
+
+    #[test]
+    #[cfg(feature = "real-libshpool")]
+    fn real_attach_still_validates_name_before_connecting() {
+        let mut cmd = Command::cargo_bin("nixling-guest-shell-runner").unwrap();
+        cmd.args([
+            "attach",
+            "--socket",
+            "/run/user/1000/nl-shpool.sock",
+            "--name",
+            "work-{workspace}",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unsupported character '{'"));
     }
 }
 

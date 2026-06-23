@@ -86,8 +86,9 @@ pub struct ProcessNode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum SpawnRunnerPlanOp {
-    /// Create and pre-allocate a disk image file if absent; validate
-    /// and safely repair a trusted empty image when present.
+    /// Create and pre-allocate a disk image file if absent; validate and
+    /// safely repair declared owner/mode posture drift or a trusted empty
+    /// image when present.
     ///
     /// Used for nixling-owned raw ext4 volumes and the per-VM writable
     /// store overlay disk (`store-overlay.img`). The broker validates
@@ -95,8 +96,9 @@ pub enum SpawnRunnerPlanOp {
     /// files with `O_CREAT|O_EXCL`, pre-allocates `size_bytes` via
     /// `fallocate`, formats them as ext4, and sets mode + ownership.
     /// Existing files are not accepted on path existence alone: they
-    /// must match the declared posture and carry an ext4 superblock, or
-    /// be proven empty before broker-side repair.
+    /// must carry an ext4 superblock or be proven empty before broker-side
+    /// repair, and stale owner/mode posture is repaired only after fd-bound
+    /// identity checks.
     #[serde(rename_all = "camelCase")]
     DiskInit {
         /// Absolute host path for the new disk image.
@@ -110,9 +112,10 @@ pub enum SpawnRunnerPlanOp {
         /// Owner GID.
         owner_gid: u32,
         /// When `true`, make re-runs idempotent by validating an
-        /// existing file before skipping; a present but unformatted
-        /// file is repaired only when it is proven empty, otherwise the
-        /// broker fails closed.
+        /// existing file before skipping; declared posture drift is repaired
+        /// only for a safe held fd, and a present but unformatted file is
+        /// repaired only when it is proven empty. Otherwise the broker fails
+        /// closed.
         if_absent: bool,
     },
 }

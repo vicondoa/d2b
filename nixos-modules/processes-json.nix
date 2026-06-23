@@ -1018,8 +1018,9 @@ use devices::virtio::vhost_user_backend::run_video_device;'
           # the consumer and mounted inside the guest by vm-guest-base.nix,
           # so missing images must be created and mkfs'd before CH starts.
           # Existing images are validated non-destructively (`ifAbsent = true`):
-          # the broker skips only correctly-postured ext4 images, safely
-          # formats a proven-empty image, and fails closed for ambiguous data.
+          # the broker skips ext4 images, safely repairs stale declared
+          # owner/mode posture after fd-bound identity checks, safely formats a
+          # proven-empty image, and fails closed for ambiguous data.
           #
           # mode 0o660 = 432 decimal for regular VM volumes (CH runner
           # opens them via kvm group); store-overlay keeps 0o600.
