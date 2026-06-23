@@ -27,6 +27,7 @@
 {
   imports = [
     ./options.nix
+    ./bundle-artifacts.nix
     ./options-observability.nix
     ./options-ownership-matrix.nix
     ./assertions.nix

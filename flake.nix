@@ -668,6 +668,7 @@
             "broker-bundle-path.nix"
             "broker-caps.nix"
             "broker-socket-activation.nix"
+            "bundle-artifacts.nix"
             "daemon-autostart.nix"
             "daemon-default-compat.nix"
             "gateway-vm.nix"
