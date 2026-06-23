@@ -14,6 +14,7 @@ futures = "0.3"
 hmac = "0.12"
 nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
 nixling-exec-runner = { path = "../nixling-exec-runner", version = "0.0.0-bootstrap" }
+nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
 protobuf = "3.7.2"
 rustix = { workspace = true }
 sha2 = { workspace = true }

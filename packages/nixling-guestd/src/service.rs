@@ -6,7 +6,7 @@ use std::{
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     pin::Pin,
-    process::Stdio,
+    process::{Command, Stdio},
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -349,6 +349,8 @@ pub struct CapabilitiesConfig {
     pub shell_attached: bool,
     pub shell_management: bool,
     pub shell_force_attach: bool,
+    pub shell_sessions_per_vm: u32,
+    pub shell_attached_sessions_per_vm: u32,
 }
 
 /// Derive the advertised capability set from runtime presence.
@@ -366,8 +368,10 @@ fn derive_capabilities_config(
     exec_tty: bool,
     read_guest_file: bool,
     usbip_import: bool,
-    shell_usable: bool,
+    shell_limits: Option<(u32, u32)>,
 ) -> CapabilitiesConfig {
+    let shell_usable = shell_limits.is_some();
+    let (shell_sessions_per_vm, shell_attached_sessions_per_vm) = shell_limits.unwrap_or((0, 0));
     CapabilitiesConfig {
         exec_attached: exec_paths_present,
         exec_detached,
@@ -378,6 +382,29 @@ fn derive_capabilities_config(
         shell_attached: shell_usable,
         shell_management: shell_usable,
         shell_force_attach: shell_usable,
+        shell_sessions_per_vm,
+        shell_attached_sessions_per_vm,
+    }
+}
+
+/// Map guest-control shell capability fragments into the ADR 0039 core
+/// capability contract. The core `persistent-shell` capability is advertised
+/// only when guestd can attach, manage, force-attach, and report bounded shell
+/// limits; partial guest-control fragments remain fail-closed.
+pub fn constellation_shell_capability_set(
+    config: &CapabilitiesConfig,
+) -> nixling_constellation_core::CapabilitySet {
+    let shell_ready = config.shell_attached
+        && config.shell_management
+        && config.shell_force_attach
+        && (1..=256).contains(&config.shell_sessions_per_vm)
+        && (1..=64).contains(&config.shell_attached_sessions_per_vm)
+        && config.shell_attached_sessions_per_vm <= config.shell_sessions_per_vm;
+    if shell_ready {
+        nixling_constellation_core::CapabilitySet::empty()
+            .with(nixling_constellation_core::Capability::PersistentShell)
+    } else {
+        nixling_constellation_core::CapabilitySet::empty()
     }
 }
 
@@ -411,6 +438,9 @@ trait StartupProbe {
     fn guest_boot_id(&self) -> Result<String, GuestAuthError>;
     fn path_is_file(&self, path: &Path) -> bool;
     fn detached_runtime_usable(&self, detached: &DetachedRuntimeConfig) -> bool;
+    fn shpool_service_usable(&self, systemctl_path: &Path) -> bool {
+        self.path_is_file(systemctl_path)
+    }
     fn login_shell_path(&self) -> PathBuf {
         PathBuf::from(GUEST_LOGIN_SHELL_PATH)
     }
@@ -433,6 +463,10 @@ impl StartupProbe for ProductionStartupProbe {
 
     fn detached_runtime_usable(&self, detached: &DetachedRuntimeConfig) -> bool {
         detached_runtime_usable(detached)
+    }
+
+    fn shpool_service_usable(&self, systemctl_path: &Path) -> bool {
+        shpool_service_usable(systemctl_path)
     }
 }
 
@@ -492,18 +526,13 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
         .as_ref()
         .filter(|path| probe.path_is_file(path))
         .cloned();
-    let shell_runtime_usable = config.shell_policy.enabled
-        && exec_enabled_user
-        && config
-            .shell_policy
-            .runner_path
-            .as_ref()
-            .is_some_and(|path| probe.path_is_file(path))
-        && config
-            .shell_policy
-            .systemctl_path
-            .as_ref()
-            .is_some_and(|path| probe.path_is_file(path));
+    let shell_runtime_usable = shell_policy_runtime_usable(
+        &config.shell_policy,
+        exec_paths.is_some(),
+        exec_uid,
+        |path| probe.path_is_file(path),
+        |path| probe.shpool_service_usable(path),
+    );
 
     let detached: SharedDetached = match (config.detached.as_ref(), exec_user.clone(), exec_uid) {
         (Some(detached_cfg), Some(user), Some(uid))
@@ -562,6 +591,8 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
     let exec: SharedExec = Arc::new(exec_runtime);
     let shell: SharedShell = if shell_runtime_usable {
         let guest_boot_id = probe.guest_boot_id().map_err(|_| GuestdServiceError::Io)?;
+        let guestd_instance_id = generate_protocol_instance_id("guestd")?;
+        let shell_daemon_instance_id = generate_protocol_instance_id("shpool")?;
         Arc::new(ShellRuntime::enabled(ShellRuntimeConfig {
             default_name: config.shell_policy.default_name.clone(),
             max_sessions: config.shell_policy.max_sessions,
@@ -569,8 +600,8 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
             workload_user: exec_user.clone(),
             workload_uid: exec_uid,
             guest_boot_id,
-            guestd_instance_id: format!("guestd-{}", config.vm_id),
-            daemon_instance_id: "shpool-daemon-pending".to_owned(),
+            guestd_instance_id,
+            daemon_instance_id: shell_daemon_instance_id,
         }))
     } else {
         Arc::new(ShellRuntime::disabled())
@@ -584,7 +615,10 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
         exec.tty_usable(),
         config.guest_config_path.is_some(),
         usbip_path.is_some(),
-        shell.is_enabled(),
+        shell.is_enabled().then_some((
+            config.shell_policy.max_sessions,
+            config.shell_policy.max_attached,
+        )),
     );
 
     let auth = Arc::new(Mutex::new(build_runtime_auth_core(
@@ -673,6 +707,57 @@ fn detached_runtime_usable(detached: &DetachedRuntimeConfig) -> bool {
     }
 }
 
+fn shpool_service_usable(systemctl_path: &Path) -> bool {
+    if !systemctl_path.is_file() {
+        return false;
+    }
+    Command::new(systemctl_path)
+        .arg("--no-pager")
+        .arg("cat")
+        .arg("nixling-shpool-daemon.service")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn shell_policy_runtime_usable(
+    policy: &ShellPolicy,
+    exec_paths_present: bool,
+    exec_uid: Option<u32>,
+    mut path_is_file: impl FnMut(&Path) -> bool,
+    mut shpool_service_usable: impl FnMut(&Path) -> bool,
+) -> bool {
+    policy.enabled
+        && exec_paths_present
+        && matches!(exec_uid, Some(uid) if uid != 0)
+        && is_valid_shell_name(&policy.default_name)
+        && (1..=256).contains(&policy.max_sessions)
+        && (1..=64).contains(&policy.max_attached)
+        && policy.max_attached <= policy.max_sessions
+        && policy
+            .runner_path
+            .as_ref()
+            .is_some_and(|path| path_is_file(path))
+        && policy
+            .systemctl_path
+            .as_ref()
+            .is_some_and(|path| shpool_service_usable(path))
+}
+
+fn is_valid_shell_name(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > 64 || value == "." || value == ".." {
+        return false;
+    }
+    let first = bytes[0];
+    (first.is_ascii_alphanumeric() || first == b'_')
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
 fn detached_registry_allowed(
     exec_enabled_user: bool,
     exec_uid: Option<u32>,
@@ -706,6 +791,21 @@ fn new_connection_instance() -> Result<[u8; CONNECTION_INSTANCE_LEN], GuestdServ
     rng.fill_bytes(&mut instance)
         .map_err(|_| GuestdServiceError::TokenUnavailable)?;
     Ok(instance)
+}
+
+fn generate_protocol_instance_id(prefix: &str) -> Result<String, GuestdServiceError> {
+    let mut bytes = [0_u8; 16];
+    let mut rng = OsNonceRng;
+    rng.fill_bytes(&mut bytes)
+        .map_err(|_| GuestdServiceError::TokenUnavailable)?;
+    let mut out = String::with_capacity(prefix.len() + 1 + bytes.len() * 2);
+    out.push_str(prefix);
+    out.push('-');
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+    }
+    Ok(out)
 }
 
 pub async fn run_single_connection<S>(
@@ -1207,6 +1307,13 @@ pub fn effective_limits() -> pb::GuestEffectiveLimits {
     limits.rpc_rate_per_vm_burst = 1_000;
     limits.shell_sessions_per_vm = 8;
     limits.shell_attached_sessions_per_vm = 1;
+    limits
+}
+
+fn effective_limits_for_config(config: &CapabilitiesConfig) -> pb::GuestEffectiveLimits {
+    let mut limits = effective_limits();
+    limits.shell_sessions_per_vm = config.shell_sessions_per_vm;
+    limits.shell_attached_sessions_per_vm = config.shell_attached_sessions_per_vm;
     limits
 }
 
@@ -2448,7 +2555,7 @@ pub struct RuntimeCapabilitiesProvider {
 
 impl RuntimeCapabilitiesProvider {
     pub fn new(config: CapabilitiesConfig) -> Self {
-        let limits = effective_limits();
+        let limits = effective_limits_for_config(&config);
 
         let mut capabilities = pb::CapabilitiesResponse::new();
         capabilities.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
@@ -2695,6 +2802,19 @@ mod tests {
         })
     }
 
+    fn startup_config_with_shell(user: &str) -> GuestdServeConfig {
+        startup_config(user).with_shell_policy(ShellPolicy {
+            enabled: true,
+            default_name: "default".to_owned(),
+            max_sessions: 12,
+            max_attached: 2,
+            runner_path: Some(PathBuf::from(
+                "/run/current-system/sw/bin/nixling-guest-shell-runner",
+            )),
+            systemctl_path: Some(PathBuf::from("/run/current-system/sw/bin/systemctl")),
+        })
+    }
+
     #[test]
     fn detached_command_validation_allows_bare_absolute_and_relative_argv0() {
         for argv0 in ["id", "/bin/true", "./script", "../script"] {
@@ -2758,7 +2878,7 @@ mod tests {
                                 exec_tty,
                                 read_guest_file,
                                 usbip_import,
-                                false,
+                                None,
                             );
                             assert_eq!(
                                 cfg.exec_attached, cfg.exec_logs,
@@ -2770,11 +2890,66 @@ mod tests {
                             assert_eq!(cfg.exec_tty, exec_tty);
                             assert_eq!(cfg.read_guest_file, read_guest_file);
                             assert_eq!(cfg.usbip_import, usbip_import);
+                            assert!(!cfg.shell_attached);
+                            assert_eq!(cfg.shell_sessions_per_vm, 0);
+                            assert_eq!(cfg.shell_attached_sessions_per_vm, 0);
                         }
                     }
                 }
             }
         }
+    }
+
+    #[test]
+    fn shell_capability_gate_requires_exec_runtime_service_and_valid_limits() {
+        let valid = ShellPolicy {
+            enabled: true,
+            default_name: "default".to_owned(),
+            max_sessions: 8,
+            max_attached: 1,
+            runner_path: Some(PathBuf::from("/nix/store/runner")),
+            systemctl_path: Some(PathBuf::from("/nix/store/systemctl")),
+        };
+        assert!(shell_policy_runtime_usable(
+            &valid,
+            true,
+            Some(1000),
+            |_| true,
+            |_| true
+        ));
+        let invalid_limits = ShellPolicy {
+            max_sessions: 1,
+            max_attached: 2,
+            ..valid.clone()
+        };
+        assert!(!shell_policy_runtime_usable(
+            &invalid_limits,
+            true,
+            Some(1000),
+            |_| true,
+            |_| true
+        ));
+        assert!(!shell_policy_runtime_usable(
+            &valid,
+            false,
+            Some(1000),
+            |_| true,
+            |_| true
+        ));
+        assert!(!shell_policy_runtime_usable(
+            &valid,
+            true,
+            Some(0),
+            |_| true,
+            |_| true
+        ));
+        assert!(!shell_policy_runtime_usable(
+            &valid,
+            true,
+            Some(1000),
+            |_| true,
+            |_| false
+        ));
     }
 
     #[test]
@@ -2847,6 +3022,84 @@ mod tests {
             );
             assert!(response.exec_id.is_none(), "{label}: no exec id allocated");
         }
+    }
+
+    #[tokio::test]
+    async fn service_startup_advertises_shell_only_after_full_runtime_probe() {
+        let runtime = prepare_service_runtime_with_probe(
+            startup_config_with_shell("alice"),
+            &TestStartupProbe {
+                uid: crate::login_session::WorkloadUserUid::NonRoot(1000),
+            },
+        )
+        .await
+        .unwrap();
+        let service = GuestControlService::new(
+            runtime.auth,
+            runtime.exec,
+            runtime.detached,
+            test_context(33),
+        );
+        authenticate(&service).await;
+        let caps = service
+            .capabilities(&ttrpc_context(), capabilities_request())
+            .await
+            .unwrap();
+        let cap_values = caps
+            .capabilities
+            .iter()
+            .map(|cap| cap.enum_value().unwrap())
+            .collect::<Vec<_>>();
+        assert!(cap_values.contains(&pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED));
+        assert_eq!(caps.limits.shell_sessions_per_vm, 12);
+        assert_eq!(caps.limits.shell_attached_sessions_per_vm, 2);
+
+        struct NoShpoolProbe;
+        impl StartupProbe for NoShpoolProbe {
+            fn classify_workload_user(&self, _user: &str) -> crate::login_session::WorkloadUserUid {
+                crate::login_session::WorkloadUserUid::NonRoot(1000)
+            }
+
+            fn guest_boot_id(&self) -> Result<String, GuestAuthError> {
+                Ok("boot-1".to_owned())
+            }
+
+            fn path_is_file(&self, _path: &Path) -> bool {
+                true
+            }
+
+            fn detached_runtime_usable(&self, _detached: &DetachedRuntimeConfig) -> bool {
+                true
+            }
+
+            fn shpool_service_usable(&self, _systemctl_path: &Path) -> bool {
+                false
+            }
+        }
+
+        let runtime =
+            prepare_service_runtime_with_probe(startup_config_with_shell("alice"), &NoShpoolProbe)
+                .await
+                .unwrap();
+        let service = GuestControlService::new(
+            runtime.auth,
+            runtime.exec,
+            runtime.detached,
+            test_context(34),
+        );
+        authenticate(&service).await;
+        let caps = service
+            .capabilities(&ttrpc_context(), capabilities_request())
+            .await
+            .unwrap();
+        let cap_values = caps
+            .capabilities
+            .iter()
+            .map(|cap| cap.enum_value().unwrap())
+            .collect::<Vec<_>>();
+        assert!(!cap_values.contains(&pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED));
+        assert_eq!(caps.limits.shell_sessions_per_vm, 0);
+        assert_eq!(caps.limits.shell_attached_sessions_per_vm, 0);
     }
 
     fn test_exec() -> SharedExec {
@@ -4304,14 +4557,17 @@ mod tests {
         let advertised = |caps: &[EnumOrUnknown<pb::GuestCapability>], cap: pb::GuestCapability| {
             caps.iter().any(|c| c.enum_value().unwrap() == cap)
         };
-        let with = RuntimeCapabilitiesProvider::new(CapabilitiesConfig {
+        let shell_config = CapabilitiesConfig {
             shell_attached: true,
             shell_management: true,
             shell_force_attach: true,
+            shell_sessions_per_vm: 12,
+            shell_attached_sessions_per_vm: 2,
             ..CapabilitiesConfig::default()
-        })
-        .snapshot()
-        .unwrap();
+        };
+        let with = RuntimeCapabilitiesProvider::new(shell_config)
+            .snapshot()
+            .unwrap();
         for cap in [
             pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED,
             pb::GuestCapability::GUEST_CAPABILITY_SHELL_MANAGEMENT,
@@ -4320,6 +4576,12 @@ mod tests {
             assert!(advertised(&with.capabilities.capabilities, cap));
             assert!(advertised(&with.health.capabilities, cap));
         }
+        assert_eq!(with.capabilities.limits.shell_sessions_per_vm, 12);
+        assert_eq!(with.capabilities.limits.shell_attached_sessions_per_vm, 2);
+        assert!(
+            constellation_shell_capability_set(&shell_config)
+                .has(nixling_constellation_core::Capability::PersistentShell)
+        );
 
         let without = RuntimeCapabilitiesProvider::new(CapabilitiesConfig::default())
             .snapshot()
@@ -4328,6 +4590,22 @@ mod tests {
             &without.capabilities.capabilities,
             pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED
         ));
+        assert_eq!(without.capabilities.limits.shell_sessions_per_vm, 0);
+        assert_eq!(
+            without.capabilities.limits.shell_attached_sessions_per_vm,
+            0
+        );
+        assert!(
+            !constellation_shell_capability_set(&CapabilitiesConfig {
+                shell_attached: true,
+                shell_management: true,
+                shell_force_attach: false,
+                shell_sessions_per_vm: 12,
+                shell_attached_sessions_per_vm: 2,
+                ..CapabilitiesConfig::default()
+            })
+            .has(nixling_constellation_core::Capability::PersistentShell)
+        );
     }
 
     #[tokio::test]

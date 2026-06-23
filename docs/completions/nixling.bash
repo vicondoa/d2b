@@ -2850,7 +2850,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__shell)
-            opts="-h --name --force --json --human --help <VM> attach list detach kill"
+            opts="-h --name --force --json --human --help <TARGET> attach list detach kill"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

@@ -61,7 +61,8 @@ pub use remote_node::{
     RemoteFullHostAdapter, RemoteNodeAuditLabels, RemoteNodeAvailability, RemoteNodeEntry,
     RemoteNodeError, RemoteNodeErrorKind, RemoteNodeRegistration, RemoteNodeRegistry,
     RemotePeerClient, RemotePeerStatus, RemoteRetryAction, RemoteRoute,
-    ensure_remote_execution_generation, retry_action_after_disconnect,
+    ensure_remote_execution_generation, ensure_remote_shell_generation,
+    retry_action_after_disconnect,
 };
 pub use secure_session::{
     NonceReplayGuard, SecurePeerIdentity, SecurePeerSession, SecureSessionKey,

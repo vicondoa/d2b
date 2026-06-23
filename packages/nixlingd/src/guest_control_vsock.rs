@@ -685,11 +685,14 @@ mod tests {
     fn rejects_ack_timeout() {
         let root = state_root();
         let socket = socket_path(&root);
-        let handle = fake_ch(&socket, |_stream| {
-            thread::sleep(Duration::from_millis(250));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let handle = fake_ch(&socket, move |_stream| {
+            let _ = release_rx.recv_timeout(Duration::from_secs(5));
         });
+        let result = connect(&socket, root.path());
+        release_tx.send(()).expect("release fake CH");
         assert_eq!(
-            connect(&socket, root.path()).failure(),
+            result.failure(),
             Some(&GuestControlTransportFailure::AckTimeout)
         );
         let _ = handle.join();

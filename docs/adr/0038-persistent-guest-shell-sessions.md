@@ -349,9 +349,9 @@ Admin-initiated events such as list, create/attach, attach close, force detach,
 admin detach, and kill are synchronously audited by nixlingd with actor
 `peer_uid`, the validated 64-byte session name, bounded result enums, and opaque
 correlation ids. Involuntary detach events record the acting admin and, when
-known, the victim `peer_uid` and `attach_id`. Raw terminal bytes, argv, env,
-raw or unbounded helper stderr, and unbounded paths never enter audit, logs,
-spans, or metrics.
+known, the victim `peer_uid` and `attach_id`. Raw terminal bytes, argv,
+process env, cwd/current working directory, raw or unbounded helper stderr, and
+unbounded paths never enter audit, logs, spans, or metrics.
 On abnormal helper exit, guestd may include a bounded, sanitized helper stderr
 snippet or a helper-emitted JSON panic record in structured error logs for
 debuggability. Such snippets are byte-capped, control-character escaped, and
@@ -379,8 +379,9 @@ guest journal; startup diagnostics are bounded and sanitized before surfacing to
 nixlingd.
 
 Metrics use bounded labels only. Session names, attach ids, shell session
-instance ids, raw output, stdin, helper stderr, env, and paths are not metric
-labels. Opaque correlation ids may appear only in redaction-safe structured
+instance ids, terminal stream ids, provider resource ids, raw output, stdin,
+helper stderr, process env, cwd/current working directory, and paths are not
+metric labels. Opaque correlation ids may appear only in redaction-safe structured
 logs/spans and audit fields where they are needed for debugging and lifecycle
 correlation. Core metrics include gauges for current persistent sessions and
 current attached clients, a shell-pool-up gauge, counters for shell operation

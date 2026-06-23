@@ -9,7 +9,8 @@ use schemars::{
     schema::{ArrayValidation, InstanceType, Schema, SchemaObject, SingleOrVec},
 };
 use serde::de::{SeqAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::ser::SerializeSeq;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeSet;
 use std::fmt;
 
@@ -38,6 +39,8 @@ pub enum Capability {
     FileCopy,
     /// One stream per connection; never a generic network bridge.
     PortForward,
+    /// Persistent named shell operations and their shell-authorized PTY streams.
+    PersistentShell,
     /// virtio-vsock availability.
     Vsock,
     /// virtiofs share availability.
@@ -79,6 +82,7 @@ impl Capability {
             Capability::Logs => "logs",
             Capability::FileCopy => "file-copy",
             Capability::PortForward => "port-forward",
+            Capability::PersistentShell => "persistent-shell",
             Capability::Vsock => "vsock",
             Capability::Virtiofs => "virtiofs",
             Capability::WindowForwarding => "window-forwarding",
@@ -108,6 +112,7 @@ impl Capability {
             "logs" => Some(Capability::Logs),
             "file-copy" => Some(Capability::FileCopy),
             "port-forward" => Some(Capability::PortForward),
+            "persistent-shell" => Some(Capability::PersistentShell),
             "vsock" => Some(Capability::Vsock),
             "virtiofs" => Some(Capability::Virtiofs),
             "window-forwarding" => Some(Capability::WindowForwarding),
@@ -129,14 +134,16 @@ impl Capability {
 
 /// A set of advertised capabilities. Routing is by required capability;
 /// callers fail closed when a required capability is absent.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
-pub struct CapabilitySet(BTreeSet<Capability>);
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CapabilitySet {
+    known: BTreeSet<Capability>,
+    unknown: BTreeSet<ProtocolToken>,
+}
 
 impl CapabilitySet {
     /// An empty set (advertises nothing).
     pub fn empty() -> Self {
-        Self(BTreeSet::new())
+        Self::default()
     }
 
     /// Build from an iterator of capabilities.
@@ -144,26 +151,49 @@ impl CapabilitySet {
         caps.into_iter().collect()
     }
 
+    /// Build from already-validated capability protocol tokens, preserving
+    /// unknown future tokens through serialization and fingerprinting.
+    pub fn from_tokens<I: IntoIterator<Item = ProtocolToken>>(tokens: I) -> Self {
+        let mut set = Self::empty();
+        for token in tokens {
+            if let Some(capability) = Capability::from_code(token.as_str()) {
+                set.known.insert(capability);
+            } else {
+                set.unknown.insert(token);
+            }
+        }
+        set
+    }
+
     /// Add a capability (builder style).
     pub fn with(mut self, cap: Capability) -> Self {
-        self.0.insert(cap);
+        self.known.insert(cap);
         self
     }
 
     /// True iff the capability is advertised.
     pub fn has(&self, cap: Capability) -> bool {
-        self.0.contains(&cap)
+        self.known.contains(&cap)
     }
 
     /// Iterate the advertised capabilities in a stable order.
     pub fn iter(&self) -> impl Iterator<Item = Capability> + '_ {
-        self.0.iter().copied()
+        self.known.iter().copied()
+    }
+
+    /// Iterate unknown future capability tokens preserved during negotiation.
+    pub fn unknown_iter(&self) -> impl Iterator<Item = &ProtocolToken> + '_ {
+        self.unknown.iter()
     }
 
     /// Deterministic low-cardinality fingerprint for audit/negotiation.
     pub fn stable_fingerprint(&self) -> String {
         let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-        let mut codes = self.iter().map(Capability::code).collect::<Vec<_>>();
+        let mut codes = self
+            .iter()
+            .map(|cap| cap.code().to_owned())
+            .chain(self.unknown.iter().map(|token| token.as_str().to_owned()))
+            .collect::<Vec<_>>();
         codes.sort_unstable();
         for code in codes {
             for byte in code.as_bytes() {
@@ -187,18 +217,43 @@ impl CapabilitySet {
 
     /// Capabilities shared with `other`.
     pub fn intersection(&self, other: &Self) -> Self {
-        Self(self.0.intersection(&other.0).copied().collect())
+        Self {
+            known: self.known.intersection(&other.known).copied().collect(),
+            unknown: self.unknown.intersection(&other.unknown).cloned().collect(),
+        }
     }
 
     /// True iff every advertised capability is also present in `other`.
     pub fn is_subset_of(&self, other: &Self) -> bool {
-        self.0.is_subset(&other.0)
+        self.known.is_subset(&other.known) && self.unknown.is_subset(&other.unknown)
     }
 }
 
 impl FromIterator<Capability> for CapabilitySet {
     fn from_iter<I: IntoIterator<Item = Capability>>(caps: I) -> Self {
-        Self(caps.into_iter().collect())
+        Self {
+            known: caps.into_iter().collect(),
+            unknown: BTreeSet::new(),
+        }
+    }
+}
+
+impl Serialize for CapabilitySet {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut codes = self
+            .iter()
+            .map(|cap| cap.code().to_owned())
+            .chain(self.unknown.iter().map(|token| token.as_str().to_owned()))
+            .collect::<Vec<_>>();
+        codes.sort_unstable();
+        let mut seq = serializer.serialize_seq(Some(codes.len()))?;
+        for code in &codes {
+            seq.serialize_element(code)?;
+        }
+        seq.end()
     }
 }
 
@@ -221,7 +276,7 @@ impl<'de> Deserialize<'de> for CapabilitySet {
                 A: SeqAccess<'de>,
             {
                 let mut count = 0_usize;
-                let mut caps = BTreeSet::new();
+                let mut tokens = Vec::new();
                 while let Some(capability) = seq.next_element::<ProtocolToken>()? {
                     count += 1;
                     if count > MAX_CAPABILITY_SET_LEN {
@@ -229,11 +284,9 @@ impl<'de> Deserialize<'de> for CapabilitySet {
                             "capability set exceeds {MAX_CAPABILITY_SET_LEN} entries"
                         )));
                     }
-                    if let Some(capability) = Capability::from_code(capability.as_str()) {
-                        caps.insert(capability);
-                    }
+                    tokens.push(capability);
                 }
-                Ok(CapabilitySet(caps))
+                Ok(CapabilitySet::from_tokens(tokens))
             }
         }
 
@@ -316,12 +369,43 @@ mod tests {
     }
 
     #[test]
-    fn capability_set_decode_ignores_unknown_future_capabilities() {
+    fn capability_set_preserves_unknown_future_capabilities() {
         let caps: CapabilitySet =
             serde_json::from_str("[\"exec\",\"future-capability\",\"logs\"]").unwrap();
         assert!(caps.has(Capability::Exec));
         assert!(caps.has(Capability::Logs));
         assert!(!caps.has(Capability::Clipboard));
+        assert_eq!(
+            caps.unknown_iter()
+                .map(ProtocolToken::as_str)
+                .collect::<Vec<_>>(),
+            ["future-capability"]
+        );
+        let encoded = serde_json::to_string(&caps).unwrap();
+        assert!(encoded.contains("future-capability"));
+        assert_eq!(
+            caps.stable_fingerprint(),
+            serde_json::from_str::<CapabilitySet>(&encoded)
+                .unwrap()
+                .stable_fingerprint()
+        );
+        assert_ne!(
+            caps.stable_fingerprint(),
+            CapabilitySet::from_caps([Capability::Exec, Capability::Logs]).stable_fingerprint(),
+            "unknown capabilities participate in the fingerprint to prevent downgrade"
+        );
+    }
+
+    #[test]
+    fn persistent_shell_capability_has_stable_code() {
+        assert_eq!(Capability::PersistentShell.code(), "persistent-shell");
+        assert_eq!(
+            Capability::from_code("persistent-shell"),
+            Some(Capability::PersistentShell)
+        );
+        let caps: CapabilitySet = serde_json::from_str("[\"persistent-shell\"]").unwrap();
+        assert!(caps.has(Capability::PersistentShell));
+        assert!(!caps.has(Capability::Pty));
     }
 
     #[test]
