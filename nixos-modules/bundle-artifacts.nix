@@ -102,34 +102,127 @@ let
     };
   });
 
+  nestedArtifactModule = types.submodule {
+    freeformType = types.attrsOf types.unspecified;
+
+    options = {
+      classification = lib.mkOption {
+        type = types.enum [ "contractPublic" "contractPrivateNonSecret" ];
+        default = "contractPrivateNonSecret";
+        internal = true;
+        visible = false;
+        description = "Internal non-secret nested bundle artifact classification.";
+      };
+
+      sensitivity = lib.mkOption {
+        type = types.enum [ "nonSecret" ];
+        default = "nonSecret";
+        internal = true;
+        visible = false;
+        description = "Internal sensitivity marker for nested store-materialised bundle artifacts.";
+      };
+    };
+  };
+
   privateGroup =
     if topConfig.nixling.daemonExperimental.enable
     then "nixlingd"
     else "root";
 
-  artifactRowType = types.addCheck artifactModule
-    (value: value ? data || value ? jsonText || value ? path || value ? installFileName);
-
-  nestedTableType = types.attrsOf types.unspecified;
-
-  bundleValueType = types.oneOf [ artifactRowType nestedTableType ];
+  singletonArtifactNames = [
+    "bundle"
+    "hostJson"
+    "processesJson"
+    "privilegesJson"
+    "storageJson"
+    "syncJson"
+  ];
 
   shouldInstall = artifact:
-    (artifact ? enableEtc) && artifact.enableEtc && artifact.installFileName != null && artifact.path != null;
+    artifact.enableEtc && artifact.installFileName != null;
+
+  singletonArtifacts = lib.genAttrs singletonArtifactNames
+    (name: topConfig.nixling._bundle.${name});
 
   centrallyInstalledArtifacts =
     lib.filterAttrs
       (_: artifact: shouldInstall artifact)
-      topConfig.nixling._bundle;
+      (singletonArtifacts // topConfig.nixling._bundle.extraArtifacts);
 
 in
 {
-  options.nixling._bundle = lib.mkOption {
-    type = types.attrsOf bundleValueType;
-    default = { };
-    internal = true;
-    visible = false;
-    description = "Internal typed bundle artifact metadata.";
+  options.nixling._bundle = {
+    bundle = lib.mkOption {
+      type = artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed bundle.json artifact metadata.";
+    };
+
+    hostJson = lib.mkOption {
+      type = artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed host.json artifact metadata.";
+    };
+
+    processesJson = lib.mkOption {
+      type = artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed processes.json artifact metadata.";
+    };
+
+    privilegesJson = lib.mkOption {
+      type = artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed privileges.json artifact metadata.";
+    };
+
+    storageJson = lib.mkOption {
+      type = artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed storage.json artifact metadata.";
+    };
+
+    syncJson = lib.mkOption {
+      type = artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed sync.json artifact metadata.";
+    };
+
+    extraArtifacts = lib.mkOption {
+      type = types.attrsOf artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed extension point for future singleton bundle artifacts.";
+    };
+
+    closures = lib.mkOption {
+      type = types.attrsOf nestedArtifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed closures/<vm>.json artifact metadata table.";
+    };
+
+    minijailProfiles = lib.mkOption {
+      type = types.attrsOf nestedArtifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed minijail profile artifact metadata table.";
+    };
   };
 
   config = {

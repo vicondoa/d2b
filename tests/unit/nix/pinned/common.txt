@@ -72,6 +72,7 @@ broker-socket-activation/no-socket-path-flag
 bundle-artifacts/default-derivation-name
 bundle-artifacts/defaulted-central-etc
 bundle-artifacts/default-json-text
+bundle-artifacts/nested-table-field-name-collisions-are-not-rows
 bundle-artifacts/nested-tables-are-not-artifact-rows
 bundle-artifacts/root-group-compat
 bundle-artifacts/storage-json-central-etc

@@ -21,7 +21,7 @@ let
   };
 
   defaultedArtifact = {
-    nixling._bundle.defaultedJson = {
+    nixling._bundle.extraArtifacts.defaultedJson = {
       data = {
         schemaVersion = "test";
         value = 1;
@@ -72,13 +72,13 @@ in
   };
 
   "bundle-artifacts/default-json-text" = {
-    expr = cfgDaemon.nixling._bundle.defaultedJson.jsonText;
-    expected = builtins.toJSON cfgDaemon.nixling._bundle.defaultedJson.data;
+    expr = cfgDaemon.nixling._bundle.extraArtifacts.defaultedJson.jsonText;
+    expected = builtins.toJSON cfgDaemon.nixling._bundle.extraArtifacts.defaultedJson.data;
   };
 
   "bundle-artifacts/default-derivation-name" = {
     expr = lib.hasSuffix "-nixling-defaulted.json"
-      (storePathString cfgDaemon.nixling._bundle.defaultedJson.path);
+      (storePathString cfgDaemon.nixling._bundle.extraArtifacts.defaultedJson.path);
     expected = true;
   };
 
@@ -104,5 +104,32 @@ in
       !(builtins.elem "data" (builtins.attrNames cfgDaemon.nixling._bundle.closures))
       && !(builtins.elem "installFileName" (builtins.attrNames cfgDaemon.nixling._bundle.minijailProfiles));
     expected = true;
+  };
+
+  "bundle-artifacts/nested-table-field-name-collisions-are-not-rows" = {
+    expr =
+      let
+        cfg = (mkEval [ base defaultedArtifact ({ ... }: {
+          nixling._bundle.closures = {
+            data = { vm = "data"; path = "/nix/store/example"; };
+            path = { vm = "path"; path = "/nix/store/example"; };
+            installFileName = { vm = "installFileName"; path = "/nix/store/example"; };
+            enableEtc = { vm = "enableEtc"; path = "/nix/store/example"; };
+          };
+        }) ]).config;
+      in {
+        closureKeys = lib.sort lib.lessThan (builtins.attrNames cfg.nixling._bundle.closures);
+        defaultedInstalled = cfg.environment.etc ? "nixling/defaulted.json";
+        collisionInstalled =
+          (cfg.environment.etc ? "nixling/data")
+          || (cfg.environment.etc ? "nixling/path")
+          || (cfg.environment.etc ? "nixling/installFileName")
+          || (cfg.environment.etc ? "nixling/enableEtc");
+      };
+    expected = {
+      closureKeys = [ "data" "enableEtc" "installFileName" "path" "sys-work-net" ];
+      defaultedInstalled = true;
+      collisionInstalled = false;
+    };
   };
 }
