@@ -2,7 +2,9 @@
 
 let
   cfg = config.nixling;
+  nl = import ./lib.nix { inherit lib; };
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
+  qemuMediaVms = nl.qemuMediaVms cfg.vms;
 
   actor = kind: value: { inherit kind value; };
   lockId = prefix: key: "${prefix}:${builtins.hashString "sha256" key}";
@@ -114,7 +116,7 @@ let
     cloexecRequired = false;
   };
 
-  vmStartLock = vm: kernelLock {
+  vmStartLock = vm: ofdLock {
     id = "lock:vm-start:${vm}";
     scope = "vm:${vm}";
     path = "/run/nixling/locks/vm-start-${vm}.lock";
@@ -122,10 +124,9 @@ let
     scopeClass = "vm";
     root = "run";
     normalizedPath = "locks/vm-start-${vm}.lock";
-    degradeScope = "vm";
   };
 
-  storeSyncLock = vm: kernelLock {
+  storeSyncLock = vm: ofdLock {
     id = "lock:store-sync:${vm}";
     scope = "vm:${vm}";
     path = "${toString cfg.store.stateDir}/${vm}/store-view/sync.lock";
@@ -133,6 +134,16 @@ let
     scopeClass = "vm";
     root = "state";
     normalizedPath = "vms/${vm}/store-view/sync.lock";
+  };
+
+  qemuMediaTapGrant = vm: kernelLock {
+    id = "lock:qemu-media-tap:${vm}";
+    scope = "vm:${vm}";
+    path = "tap:${cfg.manifest.${vm}.tap}";
+    owner = actor "broker" "nixling-priv-broker";
+    scopeClass = "vm";
+    root = "kernel";
+    normalizedPath = "tap/${cfg.manifest.${vm}.tap}";
     degradeScope = "vm";
   };
 
@@ -225,6 +236,7 @@ let
     ++ (lib.mapAttrsToList (vm: _: inProcessLock vm) enabledVms)
     ++ (lib.mapAttrsToList (vm: _: vmStartLock vm) enabledVms)
     ++ (lib.mapAttrsToList (vm: _: storeSyncLock vm) enabledVms)
+    ++ (lib.mapAttrsToList (vm: _: qemuMediaTapGrant vm) qemuMediaVms)
     ++ usbipLocks;
   };
 

@@ -379,17 +379,16 @@ mod tests {
     #[test]
     fn canonical_root_check_rejects_symlink_escape() {
         let tmp = project_scratch("canonical-root-check-rejects-symlink-escape");
-        let root = tmp.join("root");
+        let root = tmp.path().join("root");
         std::fs::create_dir_all(&root).unwrap();
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink("/etc", root.join("escape")).unwrap();
-            let canonical_root = std::fs::canonicalize(&root).unwrap();
-            let canonical_target =
-                canonicalize_existing_or_parent(&root.join("escape/passwd"), "x").unwrap();
-            assert!(!canonical_target.starts_with(canonical_root));
+            assert_refused_reason(
+                validate_owned_root(&root.join("escape/passwd"), "x"),
+                "storage-path-outside-owned-roots",
+            );
         }
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -550,7 +549,21 @@ mod tests {
         }
     }
 
-    fn project_scratch(name: &str) -> PathBuf {
+    struct ScratchDir(PathBuf);
+
+    impl ScratchDir {
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn project_scratch(name: &str) -> ScratchDir {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target")
             .join("storage-contract-test-scratch");
@@ -565,7 +578,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        dir
+        ScratchDir(dir)
     }
 
     fn resolver_with_storage_path(

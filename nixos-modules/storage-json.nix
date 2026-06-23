@@ -159,7 +159,7 @@ let
       path = "${toString cfg.site.stateDir}/daemon-state";
       owner = principal "user" "nixlingd";
       group = principal "group" "nixlingd";
-      mode = "0700";
+      mode = "0755";
       creator = actor "nix-module" "tmpfiles";
       writers = [ (actor "daemon" "nixlingd") ];
       cleanupPolicy = "never";
@@ -178,7 +178,7 @@ let
       writers = [ (actor "daemon" "nixlingd") ];
       cleanupPolicy = "boot";
       repairPolicy = "nix-activation";
-      leaseClass = "file-record";
+      leaseClass = "none";
     })
     (mkPath {
       id = "path:run-locks-usbip";
@@ -194,7 +194,7 @@ let
       cleanupPolicy = "boot";
       repairPolicy = "nix-activation";
       leaseClass = "file-record";
-      invariants = [ "no-symlink" "broker-opaque-id-only" "scope-authorization-required" ];
+      invariants = [ "no-symlink" "root-owned-parent" "broker-opaque-id-only" "scope-authorization-required" ];
     })
     (mkPath {
       id = "path:run-state";
@@ -209,6 +209,29 @@ let
       writers = [ (actor "daemon" "nixlingd") ];
       cleanupPolicy = "boot";
       repairPolicy = "nix-activation";
+    })
+    (mkPath {
+      id = "path:run-otel";
+      scope = "host";
+      path = "/run/nixling/otel";
+      lifecycle = "boot-scoped-readoptable";
+      persistence = "boot-scoped";
+      owner = principal "user" "nixlingd";
+      group = principal "group" "nixling";
+      mode = "0750";
+      creator = actor "nix-module" "tmpfiles";
+      writers = [
+        (actor "daemon" "nixlingd")
+        (actor "role" "role:host:otel-host-bridge")
+      ];
+      readers = [
+        (actor "daemon" "nixlingd")
+        (actor "role" "role:host:otel-host-bridge")
+      ];
+      cleanupPolicy = "boot";
+      repairPolicy = "nix-activation";
+      leaseClass = "process-pidfd";
+      invariants = [ "no-symlink" "scope-authorization-required" ];
     })
     (mkPath {
       id = "path:state-ledgers";
@@ -239,7 +262,7 @@ let
       readers = [ (actor "broker" "nixling-priv-broker") ];
       cleanupPolicy = "never";
       repairPolicy = "broker-fail-closed";
-      invariants = [ "no-symlink" "broker-opaque-id-only" "scope-authorization-required" ];
+      invariants = [ "no-symlink" "root-owned-parent" "broker-opaque-id-only" "scope-authorization-required" ];
     })
     (mkPath {
       id = "path:qemu-media-redacted-index";
@@ -279,7 +302,7 @@ let
       cleanupPolicy = "boot";
       repairPolicy = "broker-reconcile";
       sensitivity = "private";
-      invariants = [ "no-symlink" "broker-opaque-id-only" "scope-authorization-required" ];
+      invariants = [ "no-symlink" "root-owned-parent" "broker-opaque-id-only" "scope-authorization-required" ];
     })
   ] ++ lib.optionals (tpmVms != { }) [
     (mkPath {
@@ -669,6 +692,28 @@ let
         invariants = [ "no-symlink" "scope-authorization-required" ];
       })
       (mkPath {
+        id = "path:qemu-media-tap:${name}";
+        scope = "vm:${name}";
+        path = "tap:${cfg.manifest.${name}.tap}";
+        kind = "external-grant-only";
+        lifecycle = "boot-scoped-readoptable";
+        persistence = "boot-scoped";
+        owner = principal "user" "root";
+        group = principal "group" "root";
+        mode = "0000";
+        creator = actor "broker" "nixling-priv-broker";
+        writers = [ (actor "broker" "nixling-priv-broker") ];
+        readers = [
+          (actor "daemon" "nixlingd")
+          (actor "role" "role:${name}:qemu-media")
+        ];
+        cleanupPolicy = "process-exit-with-proof";
+        repairPolicy = "broker-fail-closed";
+        leaseClass = "process-pidfd";
+        noFollow = false;
+        invariants = [ "broker-opaque-id-only" "scope-authorization-required" ];
+      })
+      (mkPath {
         id = "path:qemu-media-registry-vm:${name}";
         scope = "vm:${name}";
         path = "${toString cfg.site.stateDir}/media-registry/${name}";
@@ -681,7 +726,7 @@ let
         cleanupPolicy = "never";
         repairPolicy = "broker-fail-closed";
         sensitivity = "secret-adjacent";
-        invariants = [ "no-symlink" "broker-opaque-id-only" "scope-authorization-required" ];
+        invariants = [ "no-symlink" "root-owned-parent" "broker-opaque-id-only" "scope-authorization-required" ];
       })
       (mkPath {
         id = "path:qemu-media-registry-records:${name}";
@@ -697,7 +742,7 @@ let
         cleanupPolicy = "never";
         repairPolicy = "broker-fail-closed";
         sensitivity = "secret-adjacent";
-        invariants = [ "no-symlink" "broker-opaque-id-only" "scope-authorization-required" ];
+        invariants = [ "no-symlink" "root-owned-parent" "broker-opaque-id-only" "scope-authorization-required" ];
       })
     ])
     qemuMediaVms);

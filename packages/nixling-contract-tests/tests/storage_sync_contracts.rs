@@ -200,13 +200,28 @@ fn broker_storage_and_sync_requests_stay_opaque_only() {
     let broker_wire = read_repo_file("packages/nixling-ipc/src/broker_wire.rs");
     let request_re =
         Regex::new(r"(?s)pub struct (\w+Request) \{(?P<body>.*?)\n\}").expect("request regex");
-    let field_re = Regex::new(r"(?m)^\s*pub\s+([A-Za-z0-9_]+)\s*:").expect("field regex");
-    let forbidden_re =
-        Regex::new(r"(?i)(path|owner|acl|cleanup|command|cmd)").expect("forbidden field regex");
+    let field_re =
+        Regex::new(r"(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?([A-Za-z0-9_]+)\s*:")
+            .expect("field regex");
+    let forbidden_fields = BTreeSet::from([
+        "acl",
+        "cleanup",
+        "cleanup_policy",
+        "cmd",
+        "command",
+        "fd_passing_policy",
+        "group",
+        "mode",
+        "owner",
+        "path",
+        "path_template",
+        "repair_policy",
+    ]);
 
     let allowed = BTreeSet::from([
         ("OpenCgroupDirRequest", "path_class"),
         ("PrepareDirRequest", "path_class"),
+        ("RunActivationRequest", "mode"),
     ]);
     let mut violations = Vec::new();
     for cap in request_re.captures_iter(&broker_wire) {
@@ -214,7 +229,10 @@ fn broker_storage_and_sync_requests_stay_opaque_only() {
         let body = cap.name("body").expect("request body").as_str();
         for cap in field_re.captures_iter(body) {
             let field = &cap[1];
-            if forbidden_re.is_match(field) && !allowed.contains(&(request, field)) {
+            let normalized = field.to_ascii_lowercase();
+            if forbidden_fields.contains(normalized.as_str())
+                && !allowed.contains(&(request, field))
+            {
                 violations.push(format!("{request}.{field}"));
             }
         }
@@ -277,6 +295,18 @@ fn host_mutation_sources_are_registered_with_storage_or_sync_policy() {
          before adding new mutation sources. Unregistered sources: {unregistered:?}"
     );
 
+    let stale: Vec<_> = registered
+        .keys()
+        .filter(|path| !discovered.contains(**path))
+        .copied()
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "policy-paths: registered host mutation sources must remain live scan matches, so the \
+         storage/sync ownership allowlist cannot accumulate stale entries. Stale registrations: \
+         {stale:?}"
+    );
+
     assert!(
         read_repo_file("AGENTS.md").contains("single repair owner"),
         "AGENTS.md must document the durable single repair owner rule for host-mutable paths/locks"
@@ -285,15 +315,18 @@ fn host_mutation_sources_are_registered_with_storage_or_sync_policy() {
 
 fn literal_nixling_tmpfiles_paths() -> BTreeSet<String> {
     let mut paths = BTreeSet::new();
-    let rule_re = Regex::new(r#""[a-zA-Z]\+?\s+((?:/var/lib|/run|/etc)/nixling(?:/[^ "\t]*)?)"#)
-        .expect("tmpfiles path regex");
+    let rule_re = Regex::new(
+        r#"(?m)^\s*"?[a-zA-Z]\+?\s+((?:/var/lib|/run|/etc)/nixling(?:/[^ "'\t\n]*)?)"#,
+    )
+    .expect("tmpfiles path regex");
     for path in collect_repo_files("nixos-modules", "nix") {
         let text = fs::read_to_string(&path)
             .unwrap_or_else(|err| panic!("policy-paths: cannot read {}: {err}", path.display()));
         if !text.contains("tmpfiles.rules") {
             continue;
         }
-        for cap in rule_re.captures_iter(&text) {
+        let code = stripped_code_text(&path, &text);
+        for cap in rule_re.captures_iter(&code) {
             paths.insert(cap[1].trim_end_matches('/').to_owned());
         }
     }
@@ -337,11 +370,11 @@ fn rendered_storage_roots_or_static_fallback() -> BTreeSet<String> {
 
 fn host_mutation_sources() -> BTreeSet<String> {
     let mutation_re = Regex::new(
-        r"(fs::write|File::create|OpenOptions::new|create_dir(?:_all)?|set_permissions|chmod|chown|setfacl|systemd\.tmpfiles\.rules|tmpfiles\.rules|activationScripts|install\s+-[dm]|mkdir\s+-p)",
+        r"(fs::write|fs::remove_(?:file|dir|dir_all)|std::os::unix::fs::symlink|symlink|hard_link|File::create|OpenOptions::new|create_dir(?:_all)?|set_permissions|chmod|chown|setfacl|systemd\.tmpfiles\.rules|tmpfiles\.rules|activationScripts|install\s+-[dm]|mkdir\s+-p)",
     )
     .expect("mutation context regex");
     let surface_re = Regex::new(
-        r"(/var/lib/nixling(?:/|\b)|/run/nixling(?:/|\b)|/etc/nixling(?:/|\b)|cfg\.site\.stateDir|\.lock|locks/)",
+        r"(/var/lib/nixling(?:/|\b)|/run/nixling(?:/|\b)|/etc/nixling(?:/|\b)|cfg\.site\.stateDir|cfg\.store\.stateDir|\.lock|locks/)",
     )
     .expect("surface regex");
 
@@ -361,6 +394,8 @@ fn host_mutation_sources() -> BTreeSet<String> {
                 .into_owned();
             if rel_path.starts_with("nixos-modules/options-")
                 || rel_path == "nixos-modules/processes-json.nix"
+                || rel_path == "nixos-modules/storage-json.nix"
+                || rel_path == "nixos-modules/sync-json.nix"
             {
                 continue;
             }
@@ -370,10 +405,12 @@ fn host_mutation_sources() -> BTreeSet<String> {
                     path.display()
                 )
             });
-            let lines: Vec<&str> = text.lines().collect();
+            let lines: Vec<String> = text
+                .lines()
+                .map(|line| stripped_code_line(&path, line).to_owned())
+                .collect();
             for (idx, line) in lines.iter().enumerate() {
-                let code = line.split("//").next().unwrap_or(line);
-                if !mutation_re.is_match(code) {
+                if !mutation_re.is_match(line) {
                     continue;
                 }
                 let start = idx.saturating_sub(4);
@@ -387,6 +424,21 @@ fn host_mutation_sources() -> BTreeSet<String> {
         }
     }
     found
+}
+
+fn stripped_code_text(path: &Path, text: &str) -> String {
+    text.lines()
+        .map(|line| stripped_code_line(path, line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn stripped_code_line<'a>(path: &Path, line: &'a str) -> &'a str {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("nix") => line.split('#').next().unwrap_or(line),
+        Some("rs") => line.split("//").next().unwrap_or(line),
+        _ => line,
+    }
 }
 
 fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
@@ -408,10 +460,6 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
             "storage root:path:run-root",
         ),
         (
-            "nixos-modules/components/observability/stack.nix",
-            "storage roots:path:state-root,path:run-root",
-        ),
-        (
             "nixos-modules/gateway-vm.nix",
             "storage root:path:state-root",
         ),
@@ -420,23 +468,11 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
             "storage paths:nodeWritablePaths/readinessSocketPaths",
         ),
         (
-            "nixos-modules/guest-sshd-host-keys.nix",
-            "storage root:path:state-root",
-        ),
-        (
             "nixos-modules/host-activation.nix",
             "storage roots:path:state-root,path:run-root",
         ),
         (
             "nixos-modules/host-broker.nix",
-            "storage root:path:state-root",
-        ),
-        (
-            "nixos-modules/host-daemon.nix",
-            "storage root:path:run-root",
-        ),
-        (
-            "nixos-modules/host-keys.nix",
             "storage root:path:state-root",
         ),
         (
@@ -465,70 +501,30 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
             "storage root:path:state-root",
         ),
         (
-            "packages/nixling-priv-broker/src/live_handlers.rs",
-            "broker resolves storage/sync opaque ids",
+            "packages/nixling-priv-broker/src/audit.rs",
+            "storage root:path:state-root audit log subtree",
         ),
         (
-            "packages/nixling-priv-broker/src/ops/cgroup.rs",
-            "sync lock:cgroup-delegation",
+            "packages/nixling-priv-broker/src/live_handlers.rs",
+            "broker resolves storage/sync opaque ids",
         ),
         (
             "packages/nixling-priv-broker/src/ops/exec_reconcile.rs",
             "storage roots:path:etc-root,path:state-root",
         ),
         (
-            "packages/nixling-priv-broker/src/ops/hosts.rs",
-            "storage root:path:etc-root",
-        ),
-        (
             "packages/nixling-priv-broker/src/ops/media.rs",
             "storage paths:qemu-media registry/runtime index",
-        ),
-        (
-            "packages/nixling-priv-broker/src/ops/state_dir.rs",
-            "storage paths:PrepareStateDir/ReconcileStorageScope",
-        ),
-        (
-            "packages/nixling-priv-broker/src/ops/storage_contract.rs",
-            "storage/sync contract validator",
-        ),
-        (
-            "packages/nixling-priv-broker/src/ops/store_sync_export.rs",
-            "storage paths:store-view hardlink farm",
         ),
         (
             "packages/nixling-priv-broker/src/ops/store_sync.rs",
             "storage paths:store-view hardlink farm",
         ),
         (
-            "packages/nixling-priv-broker/src/ops/store_verify.rs",
-            "storage paths:store-view hardlink farm",
-        ),
-        (
-            "packages/nixling-priv-broker/src/ops/swtpm_dir.rs",
-            "storage path:swtpm state",
-        ),
-        (
-            "packages/nixling-priv-broker/src/ops/usbip_lock.rs",
-            "sync lock:usbip",
-        ),
-        (
             "packages/nixling-priv-broker/src/runtime.rs",
             "storage root:path:run-root",
         ),
-        (
-            "packages/nixling-priv-broker/src/sys.rs",
-            "sync fd-passing policy",
-        ),
-        (
-            "packages/nixlingd/src/audit_check.rs",
-            "storage root:path:state-root",
-        ),
         ("packages/nixlingd/src/lib.rs", "storage root:path:run-root"),
-        (
-            "packages/nixlingd/src/ssh_host_key_preflight.rs",
-            "storage root:path:state-root",
-        ),
         (
             "packages/nixlingd/src/typed_error.rs",
             "storage degraded-state reports",
