@@ -76,8 +76,8 @@ let
 in
 {
   "nixlingd-startup-smoke/tmpfiles-run-nixling" = {
-    expr = rulesForPath "/run/nixling";
-    expected = [ "d /run/nixling 0750 nixlingd nixling -" ];
+    expr = builtins.elem "d /run/nixling 0750 nixlingd nixling -" tmpfiles;
+    expected = true;
   };
 
   "nixlingd-startup-smoke/tmpfiles-usbip-lock-root" = {

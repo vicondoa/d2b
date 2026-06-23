@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Daemon-native runtime parent directories under `/run/nixling/vms`,
+  `/run/nixling-gpu`, `/run/nixling-video`, and `/run/nixling-wlproxy`
+  are root-owned again while preserving daemon-owned per-VM leaves, so
+  broker path-safety checks no longer reject VM starts after a host switch.
 - `nixlingd.service` now reports systemd readiness only after the daemon has
   rebound its public socket and completed startup adoption, so post-switch
   scripts no longer race `/run/nixling/public.sock`; daemon updates may restart
