@@ -158,6 +158,21 @@ fn process_builder_validation_uses_stable_identifiers_only() {
 }
 
 #[test]
+fn pre_start_hooks_are_not_long_lived_spawnable_runners() {
+    let node = ProcessNodeBuilder::new(ProcessRole::SwtpmPreStartFlush, profile())
+        .with_id("swtpm-flush")
+        .with_binary_path("relative/pre-start-helper")
+        .with_argv(["nixling-swtpm-flush@test-vm"])
+        .build()
+        .expect("pre-start hooks are not validated as long-lived spawnable runners");
+    assert_eq!(node.role, ProcessRole::SwtpmPreStartFlush);
+    assert_eq!(
+        node.binary_path.as_deref(),
+        Some("relative/pre-start-helper")
+    );
+}
+
+#[test]
 fn process_builder_rejects_empty_argv_and_duplicate_readiness() {
     let err = ProcessNodeBuilder::new(ProcessRole::Swtpm, profile())
         .with_id("swtpm")

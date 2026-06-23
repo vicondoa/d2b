@@ -257,6 +257,7 @@ fn is_spawnable_runner_role(role: &ProcessRole) -> bool {
         role,
         ProcessRole::HostReconcile
             | ProcessRole::StoreVirtiofsPreflight
+            | ProcessRole::SwtpmPreStartFlush
             | ProcessRole::GuestSshReadiness
             | ProcessRole::GuestControlHealth
     )
