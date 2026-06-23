@@ -36,7 +36,7 @@ let
       name = envName;
       inherit (net) lanSubnet uplinkSubnet netName mtu mssClamp;
       allowEastWest = net.lan.allowEastWest;
-      hostBlocklist = lib.unique (net.hostBlocklist ++ cfg.hostLanCidrs ++ peerEnvCidrs);
+      hostBlocklist = sortNames (lib.unique (net.hostBlocklist ++ cfg.hostLanCidrs ++ peerEnvCidrs));
       lanBridge = "br-${envName}-lan";
       uplinkBridge = "br-${envName}-up";
       hostUplinkIp = subnetIp uplinkSubnet 1;
@@ -211,7 +211,7 @@ let
             vm = vmName;
             lockOwner = "daemon";
             scope = "per-busid";
-            busIds = enabledVms.${vmName}.usbip.busids;
+            busIds = sortNames enabledVms.${vmName}.usbip.busids;
           })
           vmNames)
         usbipVmNamesByEnv;

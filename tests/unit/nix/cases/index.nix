@@ -18,12 +18,13 @@ let
       yubikey.enable = true;
       allowUnsafeEastWest = true;
     };
-    nixling.hostLanCidrs = [ "172.16.0.0/12" ];
+    nixling.hostLanCidrs = [ "172.16.0.0/12" "10.0.0.0/8" ];
     nixling.observability.enable = true;
 
     nixling.envs.zeta = {
       lanSubnet = "10.50.0.0/24";
       uplinkSubnet = "198.51.100.0/30";
+      hostBlocklist = [ "203.0.113.0/24" "192.168.0.0/16" ];
     };
     nixling.envs.alpha = {
       lanSubnet = "10.20.0.0/24";
@@ -40,7 +41,7 @@ let
       tpm.enable = true;
       usbip = {
         yubikey = true;
-        busids = [ "1-1.4" ];
+        busids = [ "1-1.4" "1-1.2" ];
       };
       audio.enable = x86;
       observability.enable = true;
@@ -178,6 +179,7 @@ in
       activeUsbipEnvNames = index.usbip.activeEnvNames;
       usbipVmNamesByEnv = index.usbip.vmNamesByEnv;
       zetaBusidLocks = index.usbip.busidLocksByEnv.zeta;
+      zetaHostBlocklist = index.envMeta.zeta.hostBlocklist;
     };
     expected = {
       graphics = lib.optional x86 "app";
@@ -196,8 +198,18 @@ in
         vm = "zed";
         lockOwner = "daemon";
         scope = "per-busid";
-        busIds = [ "1-1.4" ];
+        busIds = [ "1-1.2" "1-1.4" ];
       }];
+      zetaHostBlocklist = [
+        "10.0.0.0/8"
+        "10.20.0.0/24"
+        "10.40.0.0/24"
+        "172.16.0.0/12"
+        "192.0.2.0/30"
+        "192.168.0.0/16"
+        "203.0.113.0/24"
+        "203.0.113.0/30"
+      ];
     };
   };
 
