@@ -124,7 +124,7 @@ wait_for_ssh() {
 # vm_ip <vm> — resolve the VM's static IP from the nixling manifest.
 vm_ip() {
   nixling vm status "$1" --json 2>/dev/null \
-    | grep -o '"static_ip"[[:space:]]*:[[:space:]]*"[^"]*"' \
+    | grep -Eo '"static(_i|I)p"[[:space:]]*:[[:space:]]*"[^"]*"' \
     | grep -o '"[0-9][^"]*"' \
     | tr -d '"' \
     | head -1
