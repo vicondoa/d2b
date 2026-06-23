@@ -174,6 +174,37 @@ mod tests {
     }
 
     #[test]
+    fn reports_missing_restart_policy_for_each_process_node() {
+        let mut resolver = resolver_with_contracts(false, true);
+        let mut second = resolver.processes.vms[0].nodes[0].clone();
+        second.id = nixling_core::processes::NodeId("virtiofsd-ro-store".to_owned());
+        second.role = ProcessRole::Virtiofsd;
+        second.profile.profile_id = "vm-corp-vm-virtiofsd-ro-store".to_owned();
+        second.profile.cgroup_placement.subtree =
+            "nixling.slice/corp-vm/virtiofsd-ro-store".to_owned();
+        resolver.processes.vms[0].nodes.push(second);
+
+        let report = run_startup_contract_check(&resolver);
+        let missing: BTreeSet<_> = report
+            .issues
+            .iter()
+            .filter_map(|issue| match issue {
+                StorageLifecycleIssue::MissingRestartPolicy { vm, role_id } => {
+                    Some((vm.as_str(), role_id.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            missing,
+            BTreeSet::from([
+                ("corp-vm", "cloud-hypervisor"),
+                ("corp-vm", "virtiofsd-ro-store")
+            ])
+        );
+    }
+
+    #[test]
     fn reports_adoptable_policy_without_cgroup_leaf() {
         let resolver = resolver_with_contracts(true, false);
         let report = run_startup_contract_check(&resolver);
@@ -232,6 +263,10 @@ mod tests {
                 }
             )
         }));
+        let serialized = serde_json::to_string(&report).expect("serialize report");
+        assert!(serialized.contains("duplicate-storage-path-id"));
+        assert!(!serialized.contains("/run/nixling"));
+        assert!(!serialized.contains("path:run-root"));
     }
 
     #[test]
@@ -252,6 +287,63 @@ mod tests {
                 }
             )
         }));
+    }
+
+    #[test]
+    fn reports_sync_ofd_and_fd_transfer_policy_as_reason_slugs() {
+        let mut missing_cloexec = sync();
+        missing_cloexec.locks[0].cloexec_required = false;
+        let resolver = resolver_with_optional_contracts(
+            STORAGE_LIFECYCLE_CONTRACT_BUNDLE_VERSION,
+            Some(storage(true, true)),
+            Some(missing_cloexec),
+        );
+        let report = run_startup_contract_check(&resolver);
+        assert!(report.issues.iter().any(|issue| {
+            matches!(
+                issue,
+                StorageLifecycleIssue::SyncContractInvalid {
+                    reason: SyncContractValidationReason::OfdLockMissingCloexec
+                }
+            )
+        }));
+        let serialized = serde_json::to_string(&report).expect("serialize OFD report");
+        assert!(serialized.contains("ofd-lock-missing-cloexec"));
+        assert!(!serialized.contains("lock:daemon"));
+
+        let mut missing_lease = sync();
+        missing_lease.locks[0].fd_passing_policy.mechanism = FdPassingMechanism::ScmRights;
+        missing_lease.locks[0]
+            .fd_passing_policy
+            .lease_transfer_record_required = false;
+        let resolver = resolver_with_optional_contracts(
+            STORAGE_LIFECYCLE_CONTRACT_BUNDLE_VERSION,
+            Some(storage(true, true)),
+            Some(missing_lease),
+        );
+        let report = run_startup_contract_check(&resolver);
+        assert!(report.issues.iter().any(|issue| {
+            matches!(
+                issue,
+                StorageLifecycleIssue::SyncContractInvalid {
+                    reason: SyncContractValidationReason::FdPassingMissingLeaseTransferRecord
+                }
+            )
+        }));
+        let serialized = serde_json::to_string(&report).expect("serialize fd report");
+        assert!(serialized.contains("fd-passing-missing-lease-transfer-record"));
+        assert!(!serialized.contains("lock:daemon"));
+    }
+
+    #[test]
+    fn startup_report_carries_diagnostics_without_pidfd_authority() {
+        let resolver = resolver_with_contracts(true, false);
+        let report = run_startup_contract_check(&resolver);
+        let serialized = serde_json::to_string(&report).expect("serialize report");
+        assert!(serialized.contains("adoptable-missing-cgroup-leaf"));
+        assert!(!serialized.contains("pidfd"));
+        assert!(!serialized.contains("pidFd"));
+        assert!(!serialized.contains("state.json"));
     }
 
     #[test]
