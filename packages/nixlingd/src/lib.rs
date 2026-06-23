@@ -5,11 +5,13 @@
 #![allow(clippy::result_large_err)]
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry};
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::future::Future;
 use std::io::{self, IoSliceMut, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -22,7 +24,7 @@ use nix::cmsg_space;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
 use nix::sys::socket::{
     AddressFamily, ControlMessageOwned, MsgFlags, SockFlag, SockType, UnixAddr, connect,
-    getsockopt, recv, recvmsg, send, socket, sockopt::PeerCredentials,
+    getsockopt, recv, recvmsg, send, sendto, socket, sockopt::PeerCredentials,
 };
 use nix::unistd::{self, Gid, Group, Uid, User};
 use nixling_constellation_core::TargetName;
@@ -858,6 +860,7 @@ fn gateway_display_config_error(detail: impl Into<String>) -> TypedError {
 pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     let mut config = load_config(&options.config_path)?;
     apply_overrides(&mut config, &options);
+    let notify_socket = std::env::var_os("NOTIFY_SOCKET");
 
     // v1.1.1 runtime pidfs self-probe: refuse startup on kernels
     // without pidfs support. Static `tests/v1.1-kernel-floor-eval.sh`
@@ -880,6 +883,10 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     if options.drop_privileges {
         drop_privileges_if_root(&runtime_identity)?;
     }
+    sd_notify_status(
+        notify_socket.as_deref(),
+        "nixlingd public socket bound; restoring state",
+    )?;
 
     // Write /run/nixling/version on daemon startup so the CLI's
     // [pending restart] machinery has
@@ -899,6 +906,10 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         },
     )?);
     pidfd_table.set_broker_reap_log(Arc::clone(&broker_reap_log));
+    sd_notify_status(
+        notify_socket.as_deref(),
+        "nixlingd restored runner state; checking startup contracts",
+    )?;
 
     let gateway_display =
         if let Some(gateway_config) = load_gateway_file_config(&config.gateway_config_path)? {
@@ -1134,8 +1145,17 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             "net-route-preflight: operator-only mode — skipping run_startup_autostart entirely",
         );
     } else {
+        sd_notify_status(
+            notify_socket.as_deref(),
+            "nixlingd running startup autostart reconciliation",
+        )?;
         run_startup_autostart(&state, &combined_pre_degraded).await;
     }
+    sd_notify_ready(notify_socket.as_deref())?;
+    tracing::info!(
+        socket = %state.config.public_socket_path.display(),
+        "nixlingd public socket ready; accepting connections",
+    );
 
     loop {
         let (stream, _) = listener.accept().map_err(|err| TypedError::InternalIo {
@@ -2052,6 +2072,85 @@ fn bind_public_socket(path: &Path, identity: &RuntimeIdentity) -> Result<Socket,
             .map_err(io_wrap("chown public socket"))?;
     }
     Ok(socket)
+}
+
+fn sd_notify_address(notify_socket: &OsStr) -> Result<Option<UnixAddr>, TypedError> {
+    let bytes = notify_socket.as_bytes();
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    if let Some(abstract_name) = bytes.strip_prefix(b"@") {
+        return UnixAddr::new_abstract(abstract_name)
+            .map(Some)
+            .map_err(|err| TypedError::InternalIo {
+                context: "parse NOTIFY_SOCKET abstract address".to_owned(),
+                detail: err.to_string(),
+            });
+    }
+    UnixAddr::new(Path::new(notify_socket))
+        .map(Some)
+        .map_err(|err| TypedError::InternalIo {
+            context: "parse NOTIFY_SOCKET path".to_owned(),
+            detail: err.to_string(),
+        })
+}
+
+fn sd_notify_payload(
+    notify_socket: Option<&OsStr>,
+    payload: &str,
+    context: &'static str,
+) -> Result<(), TypedError> {
+    let Some(notify_socket) = notify_socket else {
+        return Ok(());
+    };
+    let Some(address) = sd_notify_address(notify_socket)? else {
+        return Ok(());
+    };
+    let sock = socket(
+        AddressFamily::Unix,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .map_err(|err| TypedError::InternalIo {
+        context: format!("{context}: create notify socket"),
+        detail: err.to_string(),
+    })?;
+    let bytes = payload.as_bytes();
+    loop {
+        match sendto(sock.as_raw_fd(), bytes, &address, MsgFlags::empty()) {
+            Ok(written) if written == bytes.len() => return Ok(()),
+            Ok(written) => {
+                return Err(TypedError::InternalIo {
+                    context: context.to_owned(),
+                    detail: format!("short sd_notify datagram write: {written}/{}", bytes.len()),
+                });
+            }
+            Err(nix::errno::Errno::EINTR) => continue,
+            Err(err) => {
+                return Err(TypedError::InternalIo {
+                    context: context.to_owned(),
+                    detail: err.to_string(),
+                });
+            }
+        }
+    }
+}
+
+fn sd_notify_status(notify_socket: Option<&OsStr>, status: &'static str) -> Result<(), TypedError> {
+    sd_notify_payload(
+        notify_socket,
+        &format!("STATUS={status}"),
+        "sd_notify STATUS",
+    )
+}
+
+fn sd_notify_ready(notify_socket: Option<&OsStr>) -> Result<(), TypedError> {
+    let payload = format!(
+        "READY=1\nMAINPID={}\nSTATUS=nixlingd public socket ready",
+        std::process::id()
+    );
+    sd_notify_payload(notify_socket, &payload, "sd_notify READY")
 }
 
 fn drop_privileges_if_root(identity: &RuntimeIdentity) -> Result<(), TypedError> {
@@ -8331,6 +8430,7 @@ fn command_ready(command: &[String]) -> Result<bool, String> {
     };
     Command::new(program)
         .args(&command[1..])
+        .env_remove("NOTIFY_SOCKET")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -8528,6 +8628,106 @@ mod unix_socket_readiness_tests {
 
         drop(listener);
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+mod sd_notify_tests {
+    use super::*;
+    use std::os::unix::net::UnixDatagram;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_abstract_name(label: &str) -> Vec<u8> {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        format!("nixlingd-{label}-{}-{nanos}", std::process::id()).into_bytes()
+    }
+
+    fn payload_string(bytes: &[u8]) -> String {
+        String::from_utf8(bytes.to_vec()).expect("sd_notify payload is utf8")
+    }
+
+    #[test]
+    fn sd_notify_ready_noops_without_notify_socket() {
+        sd_notify_ready(None).expect("absent NOTIFY_SOCKET is a no-op");
+    }
+
+    #[test]
+    fn sd_notify_ready_sends_pathname_datagram() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("notify.sock");
+        let listener = UnixDatagram::bind(&path).expect("bind notify datagram");
+
+        sd_notify_ready(Some(path.as_os_str())).expect("send READY");
+
+        let mut buf = [0u8; 256];
+        let len = listener.recv(&mut buf).expect("recv notify payload");
+        let payload = payload_string(&buf[..len]);
+        assert!(payload.contains("READY=1"));
+        assert!(payload.contains(&format!("MAINPID={}", std::process::id())));
+        assert!(payload.contains("STATUS=nixlingd public socket ready"));
+    }
+
+    #[test]
+    fn sd_notify_status_sends_abstract_datagram() {
+        let name = unique_abstract_name("notify");
+        let fd = socket(
+            AddressFamily::Unix,
+            SockType::Datagram,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("create abstract listener");
+        let addr = UnixAddr::new_abstract(&name).expect("abstract address");
+        nix::sys::socket::bind(fd.as_raw_fd(), &addr).expect("bind abstract notify socket");
+
+        let mut env_value = Vec::with_capacity(name.len() + 1);
+        env_value.push(b'@');
+        env_value.extend_from_slice(&name);
+        let env_value = OsStr::from_bytes(&env_value);
+        sd_notify_status(Some(env_value), "nixlingd test status").expect("send STATUS");
+
+        let mut buf = [0u8; 256];
+        let len = recv(fd.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv status payload");
+        assert_eq!(payload_string(&buf[..len]), "STATUS=nixlingd test status");
+    }
+
+    #[test]
+    fn sd_notify_ready_errors_when_socket_is_unreachable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("missing").join("notify.sock");
+        let err = sd_notify_ready(Some(path.as_os_str())).expect_err("unreachable socket errors");
+        assert_eq!(err.kind(), "internal-io");
+    }
+}
+
+#[cfg(test)]
+mod notify_socket_spawn_policy_tests {
+    #[test]
+    fn production_readiness_command_removes_notify_socket() {
+        let source = include_str!("lib.rs");
+        let command_ready = source
+            .split("fn command_ready(command: &[String]) -> Result<bool, String> {")
+            .nth(1)
+            .and_then(|tail| tail.split("/// v1.1.2-final-R1").next())
+            .expect("command_ready source slice");
+        assert!(
+            command_ready.contains(".env_remove(\"NOTIFY_SOCKET\")"),
+            "production readiness Command spawn must not pass NOTIFY_SOCKET to children",
+        );
+    }
+
+    #[test]
+    fn daemon_does_not_use_global_notify_socket_mutation() {
+        let source = include_str!("lib.rs");
+        let forbidden = ["remove_var", "(\"NOTIFY_SOCKET\")"].concat();
+        assert!(
+            !source.contains(&forbidden),
+            "do not mutate process-global environment; sanitize per Command instead",
+        );
     }
 }
 

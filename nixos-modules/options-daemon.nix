@@ -42,7 +42,7 @@ let
       implementedDefault = true;
     };
     p0 = {
-      implementedDescription = "Daemon-only foundation shipped (broker socket-activation + bundle digest verify + canonical /run/nixling + nixlingd.service restartIfChanged=false)";
+      implementedDescription = "Daemon-only foundation shipped (broker socket-activation + bundle digest verify + canonical /run/nixling + notify-ready nixlingd.service)";
       validatedDescription = "Validated via tests/nixlingd-startup-smoke.sh on this host with evidence record";
       implementedDefault = false;
     };

@@ -1,11 +1,10 @@
 # nix-unit cases migrated from tests/restart-policy-eval.sh.
 #
-# Regression for the framework restart-policy invariant: every per-VM
-# lifecycle service AND the long-lived nixlingd supervisor must carry
-# top-level `restartIfChanged = false` so a `nixos-rebuild switch` never
-# cycles a running VM/runner DAG mid-flight (which would terminate
-# cloud-hypervisor, evaporate in-RAM Entra device-bound tokens, and drop
-# the user's session).
+# Regression for the framework restart-policy invariant: retired per-VM
+# lifecycle services must remain absent (or, if reintroduced, carry
+# top-level `restartIfChanged = false`). The daemon itself is allowed to
+# restart on switch/update; VM runner survival is guarded by
+# nixlingd.service KillMode=process plus daemon adoption/reconciliation.
 #
 # Synthesizes one workload VM with graphics + audio + TPM + observability
 # all enabled so EVERY per-VM lifecycle service would materialise in a
@@ -21,8 +20,8 @@
 # invariant below: it passes while the unit is absent and would fail only
 # if such a unit were RE-INTRODUCED with a missing/true restart policy —
 # exactly the regression the bash retained these checks to guard against.
-# The single hard assertion (nixlingd carries restartIfChanged = false) is
-# preserved as a strict value case.
+# nixlingd is a strict value case too, but with the opposite policy: it may
+# restart on update and must use KillMode=process so VM runners survive.
 { mkEval, ... }:
 
 let
@@ -85,9 +84,9 @@ let
   obsOk = key: { expr = ricOkOrAbsent obsGuestSvcs key; expected = true; };
 
   # nixlingd daemon eval: forced on so the unit materialises regardless of
-  # any allReady gate. It is the long-lived supervisor whose pidfd owns the
-  # child-runner DAG; a rebuild-triggered restart would tear down every
-  # in-flight VM process, so the VM lifecycle policy extends to the daemon.
+  # any allReady gate. The daemon may restart on switch/update; systemd only
+  # terminates the main daemon process and the restarted daemon re-adopts
+  # surviving runners.
   dCfg = (mkEval [ base ({ ... }: { nixling.daemonExperimental.enable = true; }) ]).config;
   dSvc = dCfg.systemd.services.nixlingd or null;
 in
@@ -109,8 +108,12 @@ in
     expr = dSvc != null;
     expected = true;
   };
-  "restart-policy/nixlingd-no-restart" = {
+  "restart-policy/nixlingd-restarts-on-update" = {
     expr = if dSvc != null then (dSvc.restartIfChanged or null) else null;
-    expected = false;
+    expected = true;
+  };
+  "restart-policy/nixlingd-killmode-process" = {
+    expr = if dSvc != null then (dSvc.serviceConfig.KillMode or null) else null;
+    expected = "process";
   };
 }

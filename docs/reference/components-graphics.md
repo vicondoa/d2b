@@ -171,7 +171,8 @@ pidfd and are stopped/restarted through the same daemon/broker path.
 Implications:
 
 - **`nixos-rebuild switch` does NOT restart the running VM.**
-  `nixlingd.service` itself carries `restartIfChanged = false`.
+  `nixlingd.service` may restart, but the restart kills only the daemon
+  main PID and re-adopts existing VM runners.
   After a rebuild, `nixling list`
   flags the VM with `[pending restart]` if its `current` closure
   has drifted from `booted`. Apply with `nixling vm restart <vm>`.

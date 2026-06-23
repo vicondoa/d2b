@@ -35,10 +35,36 @@ pkgs.testers.runNixOSTest {
     # 2. The unprivileged public daemon comes up. It Wants= (not Requires=) the
     #    broker socket, so it serves while the broker stays idle.
     machine.wait_for_unit("nixlingd.service")
+    machine.succeed("test \"$(systemctl show -P Type nixlingd.service)\" = notify")
+    machine.succeed("test \"$(systemctl show -P NotifyAccess nixlingd.service)\" = main")
+    machine.succeed("test \"$(systemctl show -P KillMode nixlingd.service)\" = process")
+    machine.succeed(
+        "systemctl show -P ExecStop nixlingd.service | grep -q nixling-host-shutdown-hook"
+    )
 
     # 3. The live public wire surface: nixlingd binds its AF_UNIX socket.
     machine.wait_for_file("/run/nixling/public.sock")
     machine.succeed("test -S /run/nixling/public.sock")
+    machine.succeed("runuser -u alice -- nixling list --json >/dev/null")
+
+    # 3b. Service restart readiness + cgroup survival. The synthetic process is
+    # moved into nixlingd.service's cgroup so this verifies systemd KillMode
+    # behavior directly without requiring a nested Cloud Hypervisor guest in this
+    # fast smoke test. The actual VM runner-survival test lives in
+    # daemon-restart-vm-survival.nix.
+    survivor_pid = machine.succeed(
+        "set -euo pipefail; "
+        "cg=$(systemctl show -P ControlGroup nixlingd.service); "
+        "sleep 600 & pid=$!; "
+        "echo \"$pid\" > \"/sys/fs/cgroup$cg/cgroup.procs\"; "
+        "echo \"$pid\""
+    ).strip()
+    machine.succeed("systemctl restart nixlingd.service")
+    machine.wait_for_unit("nixlingd.service")
+    machine.succeed("test -S /run/nixling/public.sock")
+    machine.succeed("runuser -u alice -- nixling list --json >/dev/null")
+    machine.succeed(f"test -d /proc/{survivor_pid}")
+    machine.succeed(f"kill {survivor_pid}")
 
     # 4. Daemon-only end-state (ADR 0015 "Verification gates"): the framework's
     #    root-visible SERVICE/SOCKET surface is exactly the public daemon, the
