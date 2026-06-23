@@ -8631,6 +8631,7 @@ mod tests {
                         product: 0x0407,
                     }],
                 }],
+                usbip_backend_port: Some(3241),
             }],
             nftables: NftablesModel {
                 family: "inet".to_owned(),

@@ -445,6 +445,7 @@ mod tests {
             bridge_port_flags: Vec::new(),
             ipv6_sysctls: Vec::new(),
             usbip_busid_locks: Vec::new(),
+            usbip_backend_port: None,
         }
     }
 

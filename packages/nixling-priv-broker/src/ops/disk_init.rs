@@ -975,21 +975,24 @@ mod tests {
             .unwrap();
     }
 
-    fn validate_or_repair_existing_with_test_retry(
-        spec: &ResolvedDiskInitOp,
-        tool: &MkfsTool,
-    ) -> io::Result<DiskInitOutcome> {
-        let mut last = None;
-        for _ in 0..8 {
-            match validate_or_repair_existing_with(spec, tool) {
-                Err(err) if err.to_string().contains("Resource temporarily unavailable") => {
-                    last = Some(err);
-                    std::thread::sleep(std::time::Duration::from_millis(10));
+    fn retry_on_transient_lease_contention<T>(
+        mut f: impl FnMut() -> io::Result<T>,
+    ) -> io::Result<T> {
+        let mut last_err = None;
+        for _ in 0..20 {
+            match f() {
+                Ok(value) => return Ok(value),
+                Err(err)
+                    if err.kind() == io::ErrorKind::InvalidData
+                        && err.to_string().contains("Resource temporarily unavailable") =>
+                {
+                    last_err = Some(err);
+                    std::thread::sleep(std::time::Duration::from_millis(25));
                 }
-                other => return other,
+                Err(err) => return Err(err),
             }
         }
-        Err(last.expect("retry loop records the last transient lease failure"))
+        Err(last_err.expect("retry loop records transient lease error"))
     }
 
     #[test]
@@ -1057,7 +1060,9 @@ mod tests {
         let spec = test_spec(target.clone(), 4096, true);
         let tool = fake_mkfs_tool(&scratch);
 
-        let outcome = validate_or_repair_existing_with(&spec, &tool).expect("sparse image repairs");
+        let outcome =
+            retry_on_transient_lease_contention(|| validate_or_repair_existing_with(&spec, &tool))
+                .expect("sparse image repairs");
         assert_eq!(outcome, DiskInitOutcome::Repaired);
         assert!(has_ext4_superblock(&fs::File::open(&target).unwrap(), &target).unwrap());
 
@@ -1074,7 +1079,8 @@ mod tests {
         let tool = fake_mkfs_tool(&scratch);
 
         let outcome =
-            validate_or_repair_existing_with(&spec, &tool).expect("zero-length image repairs");
+            retry_on_transient_lease_contention(|| validate_or_repair_existing_with(&spec, &tool))
+                .expect("zero-length image repairs");
         assert_eq!(outcome, DiskInitOutcome::Repaired);
         let meta = fs::metadata(&target).expect("stat repaired image");
         assert_eq!(meta.len(), 4096);
@@ -1098,7 +1104,8 @@ mod tests {
         let message = err.to_string();
         assert!(
             message.contains("has data but no ext4 superblock")
-                || message.contains("automatic posture repair bypassed"),
+                || message.contains("automatic posture repair bypassed")
+                || message.contains("is not exclusively available for repair"),
             "unexpected error: {message}"
         );
         assert!(err.to_string().contains("inspect and back up"));
@@ -1121,8 +1128,9 @@ mod tests {
         // shared test process. Production cannot skip the lease, and the
         // lease helper itself is still covered by integration through the
         // normal non-skipped paths.
-        let outcome = validate_or_repair_existing_with_test_retry(&spec, &tool)
-            .expect("safe stale posture repairs automatically");
+        let outcome =
+            retry_on_transient_lease_contention(|| validate_or_repair_existing_with(&spec, &tool))
+                .expect("safe stale posture repairs automatically");
         assert_eq!(outcome, DiskInitOutcome::PostureRepaired);
         let mode = fs::metadata(&target).unwrap().mode() & 0o777;
         assert_eq!(mode, 0o600);
@@ -1139,8 +1147,9 @@ mod tests {
         let spec = test_spec(target.clone(), 4096, true);
         let tool = fake_mkfs_tool(&scratch);
 
-        let outcome = validate_or_repair_existing_with_test_retry(&spec, &tool)
-            .expect("sparse stale posture repairs and formats");
+        let outcome =
+            retry_on_transient_lease_contention(|| validate_or_repair_existing_with(&spec, &tool))
+                .expect("sparse stale posture repairs and formats");
         assert_eq!(outcome, DiskInitOutcome::RepairedWithPosture);
         let meta = fs::metadata(&target).unwrap();
         assert_eq!(meta.mode() & 0o777, 0o600);

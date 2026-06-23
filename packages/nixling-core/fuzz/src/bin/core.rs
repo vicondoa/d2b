@@ -378,6 +378,7 @@ fn build_synthetic_resolver() -> BundleResolver {
                 bus_ids: Vec::new(),
                 vendor_product_allowlist: Vec::new(),
             }],
+            usbip_backend_port: Some(3241),
         }],
         nftables: NftablesModel {
             family: "inet".to_owned(),

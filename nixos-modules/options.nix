@@ -25,15 +25,14 @@
     ./options-gateway.nix
   ];
 
-  # Internal: populated by network.nix from the resolved
-  # nixling.envs config. host.nix reads it to derive
-  # workload-VM tap names, MACs, IPs, USBIP host IP, etc. Don't set
-  # this manually.
+  # Internal compatibility alias for nixling._index.envMeta. host.nix
+  # reads it to derive workload-VM tap names, MACs, IPs, USBIP host
+  # IP, etc. Don't set this manually.
   options.nixling._envMeta = lib.mkOption {
     type = lib.types.attrsOf lib.types.unspecified;
     default = { };
     internal = true;
-    description = "Internal: per-env computed metadata (set by network.nix).";
+    description = "Internal: per-env computed metadata aliasing nixling._index.envMeta.";
   };
 
 }

@@ -1673,7 +1673,8 @@ async fn run_usbipd_perenv_autostart(
     state: &ServerState,
     resolver: &nixling_core::bundle_resolver::BundleResolver,
 ) {
-    let specs = usbipd_perenv_autostart::derive_per_env_usbipd_specs(&resolver.manifest);
+    let specs =
+        usbipd_perenv_autostart::derive_per_env_usbipd_specs(&resolver.manifest, &resolver.host);
     if specs.is_empty() {
         tracing::debug!("usbipd-perenv autostart: no usbip-enabled envs in manifest");
         return;
@@ -4439,10 +4440,11 @@ fn ensure_usbipd_env_ready_for_attach(
         ));
     };
 
-    let specs: Vec<_> = usbipd_perenv_autostart::derive_per_env_usbipd_specs(&resolver.manifest)
-        .into_iter()
-        .filter(|spec| spec.env == env)
-        .collect();
+    let specs: Vec<_> =
+        usbipd_perenv_autostart::derive_per_env_usbipd_specs(&resolver.manifest, &resolver.host)
+            .into_iter()
+            .filter(|spec| spec.env == env)
+            .collect();
     if specs.len() != 2 {
         return Err(daemon_failure_response(
             verb,

@@ -4,7 +4,7 @@
 
 let
   nl = import ./lib.nix { inherit lib; };
-  inherit (nl) subnetIp mkMac normalNixosVms;
+  inherit (nl) subnetIp mkMac;
   # Per-VM evaluator entry point. composeVm is the nixling-owned
   # replacement for microvm.nix's per-VM
   # lib.evalModules invocation; see vm-evaluator.nix +
@@ -18,7 +18,8 @@ let
   composeVm = vmSubmodule._composeVm;
 
   cfg = config.nixling;
-  envMeta = cfg._envMeta;
+  index = cfg._index;
+  envMeta = index.envMeta;
   obsCfg = cfg.observability;
   # graphics + audio components both
   # transitively depend on x86_64-only packages (crosvm-patched,
@@ -94,8 +95,8 @@ let
     };
   };
 
-  enabledVms = nl.enabledVms cfg.vms;
-  normalNixosVms' = normalNixosVms cfg.vms;
+  enabledVms = index.enabledVms;
+  normalNixosVms' = index.normalNixosVms;
   # `nixling.vms.<vm>.supervisor` was removed per ADR 0015.
   # Every enabled VM is now daemon-supervised; the systemd-template
   # path is retired. The empty `systemdSupervisedVms` set keeps
@@ -103,25 +104,20 @@ let
   # template instances; the v1.1- phase deletes those sites
   # outright when the template definitions themselves go.
   systemdSupervisedVms = { };
-  daemonSupervisedVmNames = lib.attrNames normalNixosVms';
+  daemonSupervisedVmNames = index.normalNixosVmNames;
 
-  usbipYubikeyVmEnabled =
-    builtins.any (vm: vm.usbip.yubikey or false) (lib.attrValues enabledVms);
+  usbipYubikeyVmEnabled = index.usbip.vmNames != [ ];
 
-  workloadObsVmNames =
-    lib.attrNames (lib.filterAttrs (_: vm: vm.observability.enable) enabledVms);
+  workloadObsVmNames = index.components.observability.vmNames;
 
   # `transport-vsock` lands before `observability-vm.nix`, so don't
   # auto-start relay instances until the auto-declared obs VM actually
   # exists in `cfg.vms`.
-  obsVmEnabled =
-    obsCfg.enable
-    && cfg.vms ? ${obsCfg.vmName}
-    && cfg.vms.${obsCfg.vmName}.enable;
+  obsVmEnabled = index.observability.stackVmEnabled;
 
   relayVmNames =
     if obsVmEnabled
-    then lib.filter (name: name != obsCfg.vmName) workloadObsVmNames
+    then workloadObsVmNames
     else [ ];
 
   # Graphics VMs run via nixling-<vm>-gpu.service (the GPU sidecar IS

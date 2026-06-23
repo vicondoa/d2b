@@ -43,90 +43,26 @@
 
 let
   cfg = config.nixling;
+  index = cfg._index;
   nl = import ./lib.nix { inherit lib; };
-  inherit (nl) subnetIp subnetMask mkMac;
 
   # -------- Per-env materialisation ------------------------------------------
-  envs = lib.filterAttrs (_: n: n.enable) cfg.envs;
+  envs = index.enabledEnvs;
+  envNames = index.enabledEnvNames;
 
-  # All enabled VMs (workload + net) — used by the route-preflight
-  # ordering/dependency wiring below.
-  enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
-
-  # Workload VMs in an env (excludes the net VM and any VM with env=null).
-  workloadsInEnv = envName:
-    lib.filterAttrs
-      (_: vm: vm.enable && vm.env == envName)
-      cfg.vms;
-
-  # Per-env metadata used by host.nix, cli.nix, and net.nix.
-  # `hostBlocklist` is augmented with the host's own primary-LAN CIDRs
-  # (cfg.hostLanCidrs) plus every OTHER env's LAN/uplink CIDR. That
-  # keeps the broad LAN->uplink forward rule in net.nix from becoming a
-  # routed path into peer envs.
-  netMeta = envName: net:
-    let
-      peerEnvCidrs = lib.flatten (lib.mapAttrsToList
-        (otherName: otherNet:
-          lib.optionals (otherName != envName) [
-            otherNet.lanSubnet
-            otherNet.uplinkSubnet
-          ])
-        envs);
-    in rec {
-      name = envName;
-      inherit (net) lanSubnet uplinkSubnet netName mtu mssClamp;
-      allowEastWest = net.lan.allowEastWest;
-      hostBlocklist = lib.unique (net.hostBlocklist ++ cfg.hostLanCidrs ++ peerEnvCidrs);
-      lanBridge = "br-${envName}-lan";
-      uplinkBridge = "br-${envName}-up";
-      hostUplinkIp = subnetIp uplinkSubnet 1;
-      netUplinkIp = subnetIp uplinkSubnet 2;
-      netLanIp = subnetIp lanSubnet 1;
-      uplinkMask = subnetMask uplinkSubnet;
-      lanMask = subnetMask lanSubnet;
-      # DHCP pool: avoid the net VM (.1), reserved low (.2–.9), and
-      # the static-reservation block (.10–.250).
-      dhcpRangeStart = subnetIp lanSubnet 251;
-      dhcpRangeEnd = subnetIp lanSubnet 254;
-      netUplinkMac = mkMac envName "up" 2;
-      netLanMac = mkMac envName "lan" 1;
-      workloads = lib.mapAttrs
-        (vmName: vm: {
-          ip = subnetIp lanSubnet vm.index;
-          mac = mkMac envName "lan" vm.index;
-          hostName = vmName;
-        })
-        (workloadsInEnv envName);
-    };
-
-  allMeta = lib.mapAttrs netMeta envs;
+  # Per-env metadata is owned by the normalized index. Use index-derived
+  # env names for iteration so merely discovering environments does not force
+  # metadata values that include workload scans.
+  envMetaFor = envName: index.envMeta.${envName};
+  allMeta = lib.genAttrs envNames envMetaFor;
 
   # USBIP host-side plumbing is only needed for envs that actually
   # carry a YubiKey-enabled workload VM, and only when host-side
   # YubiKey support is enabled at all.
-  usbipEnvNames = lib.unique (lib.concatMap
-    (vm: lib.optional (vm.enable && vm.usbip.yubikey && vm.env != null) vm.env)
-    (lib.attrValues cfg.vms));
-  usbipMeta =
-    if cfg.site.yubikey.enable
-    then lib.filterAttrs (envName: _: lib.elem envName usbipEnvNames) allMeta
-    else { };
-
-  # Per-env backend port: 3241 + alphabetical index of env name.
-  # lib.attrNames returns names sorted, so the assignment is deterministic.
-  # Lifted here so both systemd.services and networking.firewall.extraCommands
-  # can reference it without duplicating the computation.
-  envNames = lib.attrNames envs;
-  envPortMap = lib.listToAttrs (
-    lib.imap0 (i: name: { inherit name; value = 3241 + i; }) envNames
-  );
-  backendPort = envName: envPortMap.${envName};
+  usbipMeta = index.usbip.envMeta;
+  enabledVms = index.enabledVms;
 in
 {
-  # Expose the per-env metadata to host.nix and cli.nix.
-  nixling._envMeta = allMeta;
-
   # ---------------------------------------------------------------------------
   # /etc/hosts entries so the host can `ssh <vm>` without remembering
   # IPs. We don't trust dnsmasq for the host's own name resolution
@@ -158,7 +94,7 @@ in
           + "but nixling.envs has no such ENABLED env (have enabled: "
           + lib.concatStringsSep ", " (lib.attrNames envs) + ").";
       })
-      cfg.vms)
+      enabledVms)
     # `staticIp` and `env` are mutually exclusive.
     ++ (lib.mapAttrsToList
       (vmName: vm: {
@@ -166,12 +102,12 @@ in
         message = "nixling.vms.${vmName}: set EITHER `env`/`index` "
           + "OR the deprecated `staticIp`, not both.";
       })
-      cfg.vms)
+      enabledVms)
     # Unique indices within an env.
     ++ (lib.mapAttrsToList
       (envName: _:
         let
-          indices = lib.mapAttrsToList (_: vm: vm.index) (workloadsInEnv envName);
+          indices = lib.mapAttrsToList (_: vm: vm.index) index.workloadsByEnv.${envName};
           dups = lib.attrNames (lib.filterAttrs (_: members: builtins.length members > 1)
             (lib.groupBy toString indices));
         in

@@ -141,8 +141,12 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
-- Consolidated internal NixOS bundle artifact definitions behind a typed central
-  model while preserving generated artifact bytes and private install metadata.
+- ADR 0035 Wave 2 normalized internal NixOS VM/env indexing for network and host
+  consumers, preserving network isolation semantics while making per-env USBIP
+  backend ports an explicit generated host contract.
+- ADR 0035 Wave 1 consolidated internal NixOS bundle artifact definitions behind
+  a typed central model while preserving generated artifact bytes and private
+  install metadata.
 - ADR 0035 Wave 0 internal cleanup added deterministic inventory tooling and
   `compat-ADR` bridge-key policy coverage, removed caller-free test/Make
   compatibility aliases, and dropped stale retired bash-CLI option comments.
