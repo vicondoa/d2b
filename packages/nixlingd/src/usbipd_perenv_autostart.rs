@@ -23,7 +23,7 @@
 //!
 //! See the retired-unit header in `nixos-modules/network.nix`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use nixling_core::manifest_v04::ManifestV04;
 use nixling_ipc::broker_wire::RunnerRole;
@@ -107,23 +107,25 @@ impl PerEnvUsbipdSpec {
 /// Each included env yields two spawn specs (`Backend`, then
 /// `Proxy`) so the resulting `Vec` is in stable spawn order:
 /// `[(env_a, backend), (env_a, proxy), (env_b, backend), ...]`.
-pub fn derive_per_env_usbipd_specs(manifest: &ManifestV04) -> Vec<PerEnvUsbipdSpec> {
-    // Step 1: enumerate every env that appears in the manifest, in
-    // alphabetical order. We index against this list (not just the
-    // usbip-enabled subset) so port numbers match the Nix module
-    // exactly — both sides use `lib.attrNames envs` / sorted env
-    // names from the same source of truth.
-    let mut all_envs: BTreeSet<String> = BTreeSet::new();
-    for vm in manifest.vms.values() {
-        if let Some(env) = &vm.env {
-            all_envs.insert(env.clone());
-        }
-    }
-    let env_index: Vec<String> = all_envs.iter().cloned().collect();
+pub fn derive_per_env_usbipd_specs(
+    manifest: &ManifestV04,
+    host: &nixling_core::host::HostJson,
+) -> Vec<PerEnvUsbipdSpec> {
+    let backend_ports: BTreeMap<String, u16> = host
+        .environments
+        .iter()
+        .filter_map(|env| env.usbip_backend_port.map(|port| (env.env.clone(), port)))
+        .collect();
+    derive_per_env_usbipd_specs_with_ports(manifest, &backend_ports)
+}
 
-    // Step 2: filter to envs whose workload VMs declare usbip
+fn derive_per_env_usbipd_specs_with_ports(
+    manifest: &ManifestV04,
+    backend_ports: &BTreeMap<String, u16>,
+) -> Vec<PerEnvUsbipdSpec> {
+    // Step 1: filter to envs whose workload VMs declare usbip
     // yubikey opt-in AND a non-null usbipd_host_ip. Order matches
-    // env_index.
+    // the trusted host.json environment order below.
     let mut usbip_envs: BTreeSet<String> = BTreeSet::new();
     for vm in manifest.vms.values() {
         let Some(env) = vm.env.clone() else { continue };
@@ -132,31 +134,26 @@ pub fn derive_per_env_usbipd_specs(manifest: &ManifestV04) -> Vec<PerEnvUsbipdSp
         }
     }
 
-    // Step 3: emit (backend, proxy) pairs in stable env order.
+    // Step 2: emit (backend, proxy) pairs in the explicit backend-port order
+    // supplied by host.json. The Nix index owns the port assignment; the daemon
+    // never re-enumerates envs independently.
     let mut specs = Vec::with_capacity(usbip_envs.len() * 2);
-    for env in &env_index {
+    for (env, port) in backend_ports {
         if !usbip_envs.contains(env) {
             continue;
         }
-        let index = env_index
-            .iter()
-            .position(|e| e == env)
-            .expect("env must appear in env_index by construction");
-        let port = PER_ENV_USBIPD_BACKEND_PORT_BASE
-            .checked_add(index as u16)
-            .expect("env index must fit in u16; manifest has < 65k envs");
         let vm_id = format!("{PER_ENV_USBIPD_VM_PREFIX}{env}{PER_ENV_USBIPD_VM_SUFFIX}");
         specs.push(PerEnvUsbipdSpec {
             env: env.clone(),
             vm_id: vm_id.clone(),
             role: PerEnvUsbipdRole::Backend,
-            backend_port: port,
+            backend_port: *port,
         });
         specs.push(PerEnvUsbipdSpec {
             env: env.clone(),
             vm_id,
             role: PerEnvUsbipdRole::Proxy,
-            backend_port: port,
+            backend_port: *port,
         });
     }
     specs
@@ -437,13 +434,22 @@ mod tests {
         ManifestV04::from_slice(&bytes).expect("manifest parses")
     }
 
+    fn ports(envs: &[(&str, u16)]) -> BTreeMap<String, u16> {
+        envs.iter()
+            .map(|(env, port)| ((*env).to_owned(), *port))
+            .collect()
+    }
+
     #[test]
     fn derive_returns_empty_when_no_usbip_vms() {
         let m = manifest_with(&[
             ("vm-a", Some("work"), false, None),
             ("vm-b", Some("personal"), false, None),
         ]);
-        let specs = derive_per_env_usbipd_specs(&m);
+        let specs = derive_per_env_usbipd_specs_with_ports(
+            &m,
+            &ports(&[("personal", 3241), ("work", 3242)]),
+        );
         assert!(specs.is_empty());
     }
 
@@ -454,7 +460,10 @@ mod tests {
             ("vm-b", Some("personal"), false, None),
             ("vm-c", Some("obs"), true, Some("192.0.2.2")),
         ]);
-        let specs = derive_per_env_usbipd_specs(&m);
+        let specs = derive_per_env_usbipd_specs_with_ports(
+            &m,
+            &ports(&[("obs", 3241), ("personal", 3242), ("work", 3243)]),
+        );
         let envs: Vec<&str> = specs.iter().map(|s| s.env.as_str()).collect();
         assert!(envs.contains(&"obs"));
         assert!(envs.contains(&"work"));
@@ -464,7 +473,7 @@ mod tests {
     #[test]
     fn derive_emits_backend_then_proxy_per_env() {
         let m = manifest_with(&[("vm-a", Some("work"), true, Some("192.0.2.1"))]);
-        let specs = derive_per_env_usbipd_specs(&m);
+        let specs = derive_per_env_usbipd_specs_with_ports(&m, &ports(&[("work", 3241)]));
         assert_eq!(specs.len(), 2);
         assert_eq!(specs[0].role, PerEnvUsbipdRole::Backend);
         assert_eq!(specs[1].role, PerEnvUsbipdRole::Proxy);
@@ -483,7 +492,10 @@ mod tests {
             ("vm-b", Some("personal"), false, None),
             ("vm-c", Some("obs"), true, Some("192.0.2.2")),
         ]);
-        let specs = derive_per_env_usbipd_specs(&m);
+        let specs = derive_per_env_usbipd_specs_with_ports(
+            &m,
+            &ports(&[("obs", 4000), ("personal", 4100), ("work", 4200)]),
+        );
         let obs_backend = specs
             .iter()
             .find(|s| s.env == "obs" && s.role == PerEnvUsbipdRole::Backend)
@@ -492,8 +504,8 @@ mod tests {
             .iter()
             .find(|s| s.env == "work" && s.role == PerEnvUsbipdRole::Backend)
             .unwrap();
-        assert_eq!(obs_backend.backend_port, 3241);
-        assert_eq!(work_backend.backend_port, 3243);
+        assert_eq!(obs_backend.backend_port, 4000);
+        assert_eq!(work_backend.backend_port, 4200);
     }
 
     #[test]

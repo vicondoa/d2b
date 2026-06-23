@@ -1897,9 +1897,9 @@ fn render_host_nft_script(host: &HostJson) -> String {
             let usbip_backend_ports: Vec<u16> = host
                 .environments
                 .iter()
-                .enumerate()
-                .filter_map(|(idx, env)| {
-                    (!env.usbip_busid_locks.is_empty()).then_some(3241u16 + idx as u16)
+                .filter_map(|env| {
+                    env.usbip_backend_port
+                        .filter(|_| !env.usbip_busid_locks.is_empty())
                 })
                 .collect();
             if !usbip_backend_ports.is_empty() {
@@ -2986,6 +2986,7 @@ mod tests {
                     bus_ids: Vec::new(),
                     vendor_product_allowlist: Vec::new(),
                 }],
+                usbip_backend_port: Some(3241),
             }],
             nftables: NftablesModel {
                 family: "inet".to_owned(),
@@ -3500,6 +3501,7 @@ mod tests {
             bus_ids: vec!["1-2".to_owned()],
             vendor_product_allowlist: Vec::new(),
         }];
+        host.environments[0].usbip_backend_port = Some(3241);
         host.if_name_mappings = vec![IfNameMapping {
             env: host.environments[0].env.clone(),
             vm: None,
@@ -3531,6 +3533,7 @@ mod tests {
             bus_ids: vec!["1-2".to_owned()],
             vendor_product_allowlist: Vec::new(),
         }];
+        host.environments[0].usbip_backend_port = Some(3241);
 
         let script = render_host_nft_script(&host);
         assert!(

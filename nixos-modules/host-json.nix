@@ -38,25 +38,17 @@ let
       (vmName: _: { vm = vmName; tap = cfg.manifest.${vmName}.tap; })
       (lib.filterAttrs (_: vm: vm.enable && vm.env == envName) cfg.vms);
 
-  usbipVmNamesForEnv = envName:
-    lib.sort lib.lessThan (lib.attrNames (lib.filterAttrs (_: vm: vm.enable && vm.env == envName && vm.usbip.yubikey) cfg.vms));
-
   usbipVendorProductAllowlist = map (entry: {
     vendor = lib.fromHexString (lib.removePrefix "0x" entry.vendor);
     product = lib.fromHexString (lib.removePrefix "0x" entry.product);
   }) cfg.host.usbip.allowlist;
 
   usbipBusidLocksForEnv = envName:
-    map (vmName:
-      {
-        vm = vmName;
-        lockOwner = "daemon";
-        scope = "per-busid";
-        busIds = cfg.vms.${vmName}.usbip.busids;
-      }
+    map (lock:
+      lock
       // lib.optionalAttrs (usbipVendorProductAllowlist != [ ]) {
         vendorProductAllowlist = usbipVendorProductAllowlist;
-      }) (usbipVmNamesForEnv envName);
+      }) (cfg._index.usbip.busidLocksByEnv.${envName} or [ ]);
 
   ipv6SysctlEntry = ifName: {
     inherit ifName;
@@ -226,10 +218,12 @@ let
       builtins.toJSON duplicateDerived
     }. Rename one of the colliding env/VM scopes to break the SHA-256 prefix tie.";
 
-  envInfo = envName: m: {
-    env = envName;
-    bridge = m.lanBridge;
-    bridgePortFlags = [
+  envInfo = envName: m:
+    let usbipBusidLocks = usbipBusidLocksForEnv envName;
+    in {
+      env = envName;
+      bridge = m.lanBridge;
+      bridgePortFlags = [
       {
         role = "net-vm-lan";
         isolated = false;
@@ -258,16 +252,18 @@ let
         rule = "The host-to-net-VM uplink TAP stays point-to-point: no learning, no flooding, neighbor suppression on.";
       }
     ];
-    ipv6Sysctls = map ipv6SysctlEntry (envIfNames envName m);
-    usbipBusidLocks = usbipBusidLocksForEnv envName;
-    lan = {
-      allowEastWest = m.allowEastWest;
-      effectiveEastWest = lanEastWestEnabled m;
+      ipv6Sysctls = map ipv6SysctlEntry (envIfNames envName m);
+      inherit usbipBusidLocks;
+      lan = {
+        allowEastWest = m.allowEastWest;
+        effectiveEastWest = lanEastWestEnabled m;
+      };
+      mtu = resolvedMtu m;
+      mssClamp = resolvedMssClamp m;
+      netVmForwardBlocklist = m.hostBlocklist;
+    } // lib.optionalAttrs (usbipBusidLocks != [ ]) {
+      usbipBackendPort = cfg._index.usbip.backendPorts.${envName};
     };
-    mtu = resolvedMtu m;
-    mssClamp = resolvedMssClamp m;
-    netVmForwardBlocklist = m.hostBlocklist;
-  };
 
   # ownership marker. Stable per-host id used in
   # nft rule comment markers (`comment "nixling managed: <ownership-id>"`).
