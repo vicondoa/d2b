@@ -371,6 +371,8 @@ pub enum OperationFields {
         ops_skipped: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ops_repaired: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ops_posture_repaired: Option<u32>,
         target_paths_hash: String,
     },
     ReconcileStorageScope {
@@ -674,6 +676,7 @@ impl OperationFields {
                 ops_created: u32,
                 ops_skipped: u32,
                 ops_repaired: Option<u32>,
+                ops_posture_repaired: Option<u32>,
                 target_paths_hash: String,
             }),
             "ReconcileStorageScope" => parse_fields!(value => ReconcileStorageScope {
@@ -1187,6 +1190,47 @@ mod tests {
             order_key: "Global:run:lock:daemon:lock:daemon".to_owned(),
         }
     );
+    roundtrip_test!(
+        disk_init_round_trip,
+        "DiskInit",
+        OperationFields::DiskInit {
+            vm_id: "corp-vm".to_owned(),
+            ops_total: 2,
+            ops_created: 0,
+            ops_skipped: 1,
+            ops_repaired: Some(1),
+            ops_posture_repaired: Some(1),
+            target_paths_hash: "fnv1a64:1234".to_owned(),
+        }
+    );
+
+    #[test]
+    fn disk_init_historical_audit_without_posture_count_parses() {
+        let reparsed = OperationFields::from_operation_value(
+            "DiskInit",
+            json!({
+                "vm_id": "corp-vm",
+                "ops_total": 1,
+                "ops_created": 0,
+                "ops_skipped": 1,
+                "ops_repaired": 0,
+                "target_paths_hash": "fnv1a64:1234",
+            }),
+        )
+        .expect("historical DiskInit audit parses");
+        assert_eq!(
+            reparsed,
+            OperationFields::DiskInit {
+                vm_id: "corp-vm".to_owned(),
+                ops_total: 1,
+                ops_created: 0,
+                ops_skipped: 1,
+                ops_repaired: Some(0),
+                ops_posture_repaired: None,
+                target_paths_hash: "fnv1a64:1234".to_owned(),
+            }
+        );
+    }
     roundtrip_test!(
         prepare_swtpm_dir_success_round_trip,
         "PrepareSwtpmDir",

@@ -180,7 +180,9 @@ in
         # CAP_DAC_READ_SEARCH / CAP_SYS_ADMIN / CAP_SETUID /
         # CAP_SETGID / CAP_FOWNER / CAP_SETPCAP / CAP_CHOWN /
         # CAP_FSETID / CAP_MKNOD / CAP_SETFCAP / CAP_SYS_RESOURCE /
-        # CAP_IPC_LOCK. CAP_KILL is required for the audited
+        # CAP_IPC_LOCK / CAP_LEASE. CAP_LEASE is required for DiskInit
+        # to prove no other process has a declared disk image open before
+        # fd-bound posture repair or mkfs. CAP_KILL is required for the audited
         # SignalRunner broker op: root inside this bounding set still
         # gets EPERM from pidfd_send_signal(2) without it when signaling
         # runner UIDs outside the broker's own credential set.
@@ -200,6 +202,7 @@ in
           "CAP_SETFCAP"
           "CAP_SYS_RESOURCE"
           "CAP_IPC_LOCK"
+          "CAP_LEASE"
           "CAP_KILL"
         ];
         AmbientCapabilities = [ "" ];
