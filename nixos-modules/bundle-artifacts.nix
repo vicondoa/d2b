@@ -144,10 +144,15 @@ let
   singletonArtifacts = lib.genAttrs singletonArtifactNames
     (name: topConfig.nixling._bundle.${name});
 
+  extraArtifacts = topConfig.nixling._bundle.extraArtifacts;
+
+  collidingExtraArtifactNames =
+    lib.attrNames (builtins.intersectAttrs singletonArtifacts extraArtifacts);
+
   centrallyInstalledArtifacts =
     lib.filterAttrs
       (_: artifact: shouldInstall artifact)
-      (singletonArtifacts // topConfig.nixling._bundle.extraArtifacts);
+      (singletonArtifacts // extraArtifacts);
 
 in
 {
@@ -226,11 +231,22 @@ in
   };
 
   config = {
-    environment.etc = lib.mapAttrs'
-      (_: artifact: lib.nameValuePair "nixling/${artifact.installFileName}" {
-        source = artifact.path;
-        inherit (artifact) mode user group;
+    assertions = [
+      {
+        assertion = collidingExtraArtifactNames == [ ];
+        message =
+          "nixling internal bundle extraArtifacts collide with reserved artifact names: "
+          + lib.concatStringsSep ", " collidingExtraArtifactNames;
+      }
+    ];
+
+    environment.etc = lib.mkMerge (lib.mapAttrsToList
+      (_: artifact: {
+        "nixling/${artifact.installFileName}" = {
+          source = artifact.path;
+          inherit (artifact) mode user group;
+        };
       })
-      centrallyInstalledArtifacts;
+      centrallyInstalledArtifacts);
   };
 }

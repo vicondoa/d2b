@@ -132,4 +132,36 @@ in
       collisionInstalled = false;
     };
   };
+
+  "bundle-artifacts/extra-artifact-reserved-name-collision-asserts" = {
+    expr =
+      let
+        cfg = (mkEval [ base defaultedArtifact ({ ... }: {
+          nixling._bundle.extraArtifacts.bundle = {
+            data = { value = "bad"; };
+            installFileName = "extra-bundle.json";
+          };
+        }) ]).config;
+      in lib.any
+        (a:
+          !a.assertion
+          && lib.hasInfix "extraArtifacts collide with reserved artifact names"
+            a.message
+          && lib.hasInfix "bundle" a.message)
+        cfg.assertions;
+    expected = true;
+  };
+
+  "bundle-artifacts/extra-artifact-install-path-collision-conflicts" = {
+    expr =
+      let
+        cfg = (mkEval [ base defaultedArtifact ({ ... }: {
+          nixling._bundle.extraArtifacts.alsoDefaulted = {
+            data = { value = "bad"; };
+            installFileName = "defaulted.json";
+          };
+        }) ]).config;
+      in cfg.environment.etc."nixling/defaulted.json";
+    expectedError = { };
+  };
 }
