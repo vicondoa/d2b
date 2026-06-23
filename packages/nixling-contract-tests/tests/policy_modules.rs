@@ -444,15 +444,21 @@ fn nixling_use_blocks(src: &str) -> impl Iterator<Item = &str> {
 
 fn struct_has_deny_unknown_fields(src: &str, type_name: &str) -> bool {
     let needle = format!("pub struct {type_name}");
-    let Some(start) = src.find(&needle) else {
+    let lines = src.lines().collect::<Vec<_>>();
+    let Some(struct_line) = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with(&needle))
+    else {
         return false;
     };
-    let prefix = &src[..start];
-    let attrs = prefix
-        .rsplit_once("#[derive")
-        .map(|(_, attrs)| attrs)
-        .unwrap_or(prefix);
-    attrs.contains("deny_unknown_fields")
+    lines[..struct_line]
+        .iter()
+        .rev()
+        .take_while(|line| {
+            let line = line.trim_start();
+            line.starts_with("#[") || line.starts_with("///") || line.starts_with("//")
+        })
+        .any(|line| line.contains("deny_unknown_fields"))
 }
 
 /// Faithful port of the bash gate's `internal_deps()` awk parser: collect the

@@ -366,37 +366,61 @@ pub struct StatusServicesOutputV2 {
     pub swtpm: Option<String>,
 }
 
+/// Per-VM service-state map (V3) -- broker-spawn-aware status output.
+///
+/// All fields are optional so emitters can omit a role when the VM
+/// doesn't enable it. The wire shape uses camelCase
+/// + `deny_unknown_fields` to keep schema-drift gates honest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StatusServicesOutputV3 {
+    /// Cloud Hypervisor runner state (broker-spawned).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hypervisor: Option<String>,
+    /// Per-share virtiofsd state, keyed by share `tag`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
     pub virtiofsd_per_share: BTreeMap<String, String>,
+    /// crosvm GPU sidecar state (broker-spawned).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu: Option<String>,
+    /// vhost-device-sound audio sidecar state (broker-spawned).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio: Option<String>,
+    /// swtpm sidecar state (broker-spawned).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub swtpm: Option<String>,
+    /// Per-VM OtelGuestRelay state (broker-spawned).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub otel_relay: Option<String>,
+    /// Host-scoped OtelHostBridge state (broker-spawned).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub otel_host_bridge: Option<String>,
+    /// Per-env USBIP backend state, keyed by env name.
     #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
     pub usbip_backend_per_env: BTreeMap<String, String>,
+    /// Per-env USBIP proxy state, keyed by env name.
     #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
     pub usbip_proxy_per_env: BTreeMap<String, String>,
 }
 
 impl StatusServicesOutputV3 {
+    /// Conversion shim: takes a V2 record and projects it into V3
+    /// by applying the documented rename map. Used so callers
+    /// consuming the legacy V2 shape can be migrated incrementally
+    /// without breaking the bundle-resolver / status-output contract.
     pub fn from_v2(v2: &StatusServicesOutputV2) -> Self {
         let mut virtiofsd_per_share = BTreeMap::new();
+        // V2 had a single `virtiofsd` slot; we expose it under the
+        // synthetic share tag `default` so the V3 consumer can read
+        // it without losing data. v1.1.2+ wire bumps populate the
+        // map per-share via the broker's per-share spawn records.
         virtiofsd_per_share.insert("default".to_owned(), v2.virtiofsd.clone());
         Self {
             hypervisor: Some(v2.microvm.clone()),
             virtiofsd_per_share,
             gpu: v2.gpu.clone(),
+            // V3 has no dedicated video field yet; keep V2 authoritative
+            // until a negotiated schema revision adds one.
             audio: v2.snd.clone(),
             swtpm: v2.swtpm.clone(),
             otel_relay: None,
