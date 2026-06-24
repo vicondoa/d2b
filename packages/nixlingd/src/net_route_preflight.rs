@@ -54,8 +54,8 @@ pub const HISTORY_FILENAME: &str = "net-route-preflight-history.jsonl";
 
 /// Maximum number of history records the daemon retains. Older
 /// records are pruned on every `record_attempt` call so the file
-/// cannot grow unbounded. Plenty larger than the threshold so the
-/// operator-only-mode decision always has its inputs available.
+/// cannot grow unbounded. Sized to retain enough history for
+/// manual diagnostics and recovery evidence.
 pub const HISTORY_RETENTION_RECORDS: usize = 32;
 
 /// Per-env preflight result.
