@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Runtime capability projection for qemu-media list/status output now goes
+  through focused helpers with direct regression coverage, preserving public JSON
+  and human output shape.
 - Provider/realm policy coverage now explicitly guards host daemon, broker, and
   bundle artifacts from storing realm credentials, remote registries, or realm
   audit state while keeping capability-denied remote dispatch fail-closed.

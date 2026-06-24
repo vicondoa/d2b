@@ -14393,58 +14393,59 @@ fn public_autostart_posture(manifest_entry: &Value) -> Option<Value> {
     })
 }
 
+const QEMU_MEDIA_DEFAULT_RUNTIME_CAPABILITIES: &[&str] = &["display", "lifecycle", "usb-hotplug"];
+const QEMU_MEDIA_DEFAULT_UNSUPPORTED_CAPABILITIES: &[&str] = &[
+    "config-sync",
+    "exec",
+    "guest-control",
+    "in-guest-observability",
+    "keys",
+    concat!("s", "sh"),
+    "store-sync",
+];
+
 fn public_runtime_capabilities(manifest_entry: &Value) -> Vec<String> {
-    let Some(capabilities) = manifest_entry
-        .pointer("/runtime/capabilities")
-        .and_then(Value::as_object)
-    else {
-        return if public_is_qemu_media(manifest_entry) {
-            vec![
-                "display".to_owned(),
-                "lifecycle".to_owned(),
-                "usb-hotplug".to_owned(),
-            ]
-        } else {
-            Vec::new()
-        };
-    };
-    let mut supported = capabilities
-        .iter()
-        .filter(|(_name, value)| value.as_bool() == Some(true))
-        .map(|(name, _value)| capability_name_for_public_output(name))
-        .collect::<Vec<_>>();
-    supported.sort();
-    supported.dedup();
-    supported
+    public_runtime_capabilities_by_support(
+        manifest_entry,
+        true,
+        QEMU_MEDIA_DEFAULT_RUNTIME_CAPABILITIES,
+    )
 }
 
 fn public_unsupported_capabilities(manifest_entry: &Value) -> Vec<String> {
+    public_runtime_capabilities_by_support(
+        manifest_entry,
+        false,
+        QEMU_MEDIA_DEFAULT_UNSUPPORTED_CAPABILITIES,
+    )
+}
+
+fn public_runtime_capabilities_by_support(
+    manifest_entry: &Value,
+    supported: bool,
+    qemu_media_default: &[&str],
+) -> Vec<String> {
     let Some(capabilities) = manifest_entry
         .pointer("/runtime/capabilities")
         .and_then(Value::as_object)
     else {
         return if public_is_qemu_media(manifest_entry) {
-            vec![
-                "config-sync".to_owned(),
-                "exec".to_owned(),
-                "guest-control".to_owned(),
-                "in-guest-observability".to_owned(),
-                "keys".to_owned(),
-                "s".to_owned() + "sh",
-                "store-sync".to_owned(),
-            ]
+            qemu_media_default
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect()
         } else {
             Vec::new()
         };
     };
-    let mut unsupported = capabilities
+    let mut output = capabilities
         .iter()
-        .filter(|(_name, value)| value.as_bool() == Some(false))
+        .filter(|(_name, value)| value.as_bool() == Some(supported))
         .map(|(name, _value)| capability_name_for_public_output(name))
         .collect::<Vec<_>>();
-    unsupported.sort();
-    unsupported.dedup();
-    unsupported
+    output.sort();
+    output.dedup();
+    output
 }
 
 fn capability_name_for_public_output(name: &str) -> String {
@@ -15620,6 +15621,18 @@ mod public_status_tests {
         })
     }
 
+    fn qemu_media_default_capability_manifest_entry() -> Value {
+        json!({
+            "stateDir": "/nonexistent/nixling-public-status-test",
+            "runtime": {
+                "kind": "qemu-media"
+            },
+            "graphics": false,
+            "audio": false,
+            "tpm": false
+        })
+    }
+
     fn qemu_media_process_dag() -> nixling_core::processes::VmProcessDag {
         use nixling_core::processes::{NodeId, VmProcessDag, VmProcessInvariants};
         VmProcessDag {
@@ -15835,6 +15848,41 @@ mod public_status_tests {
         assert_eq!(
             public_service_capabilities(&services),
             vec!["nixling".to_owned(), "qemu-media".to_owned()]
+        );
+    }
+
+    #[test]
+    fn public_qemu_media_capability_projection_is_stable() {
+        let defaulted = qemu_media_default_capability_manifest_entry();
+        assert_eq!(
+            public_runtime_capabilities(&defaulted),
+            vec!["display", "lifecycle", "usb-hotplug"]
+        );
+        assert_eq!(
+            public_unsupported_capabilities(&defaulted),
+            vec![
+                "config-sync",
+                "exec",
+                "guest-control",
+                "in-guest-observability",
+                "keys",
+                "ssh",
+                "store-sync"
+            ]
+        );
+
+        let explicit = qemu_media_manifest_entry();
+        assert_eq!(public_runtime_capabilities(&explicit), vec!["usb-hotplug"]);
+        assert_eq!(
+            public_unsupported_capabilities(&explicit),
+            vec![
+                "config-sync",
+                "exec",
+                "guest-control",
+                "keys",
+                "ssh",
+                "store-sync"
+            ]
         );
     }
 
