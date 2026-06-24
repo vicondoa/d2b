@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["packages/nixling-contract-tests/tests/policy_ci.rs::github_workflows_use_make_targets_or_explicit_allowlist", "packages/nixling-contract-tests/tests/policy_ci.rs::ci_uses_make_allowlist_is_intentional_and_bounded", "tests/golden/pinned/ci-uses-make.txt"]
+successor_ids = ["packages/xtask/tests/policy_ci.rs::github_workflows_use_make_targets_or_explicit_allowlist", "packages/xtask/tests/policy_ci.rs::ci_uses_make_allowlist_is_intentional_and_bounded", "tests/golden/pinned/ci-uses-make.txt"]

@@ -1042,7 +1042,8 @@ mod tests {
         let spec = test_spec(target.clone(), 4096, true);
         let tool = fake_mkfs_tool(&scratch);
         let outcome =
-            validate_or_repair_existing_with(&spec, &tool).expect("existing image validates");
+            retry_on_transient_lease_contention(|| validate_or_repair_existing_with(&spec, &tool))
+                .expect("existing image validates");
         assert_eq!(outcome, DiskInitOutcome::Skipped);
 
         let meta = fs::metadata(&target).expect("stat file");
