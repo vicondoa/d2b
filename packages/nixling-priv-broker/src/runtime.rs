@@ -3930,14 +3930,303 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             operation: "SshHostKeyPreflight",
             target_wave: "P2",
         }),
-        RealBrokerRequest::UsbipExplicitBind(_) => Err(BrokerError::Unimplemented {
-            operation: "UsbipExplicitBind",
-            target_wave: "W5",
-        }),
-        RealBrokerRequest::UsbipExplicitFirewallRule(_) => Err(BrokerError::Unimplemented {
-            operation: "UsbipExplicitFirewallRule",
-            target_wave: "W5",
-        }),
+        RealBrokerRequest::UsbipExplicitBind(req) => {
+            // Explicit attach: bind a present sysfs busid to a USB-capable VM without
+            // a bundle allowlist. The daemon has already performed:
+            //   1. Sysfs presence check (fail-closed if device absent)
+            //   2. USB-capable gate (RuntimeCapabilityGate::UsbHotplug)
+            //   3. Active-claim exclusivity check (OFD lock read)
+            // The broker acquires the per-busid OFD lock, runs `usbip bind`, and
+            // grants the per-device ACL to the env's USBIP backend runner.
+            let resolver = require_resolver(resolver)?;
+            let lock_path = std::path::PathBuf::from(
+                nixling_contracts::usbip::UsbipDaemonClaimRecord::lock_path_for_busid(
+                    &req.bus_id,
+                ),
+            );
+
+            // Same-VM replay: lock is already held by this VM (e.g. daemon restart).
+            let same_vm_replay = match crate::ops::usbip_lock::peek_owner(&lock_path) {
+                Some(owner) if owner == req.vm => true,
+                Some(owner) => {
+                    return Err(BrokerError::LiveHandler(format!(
+                        "explicit usbip bind refused: bus_id={} lock owned by {owner} but caller is {}",
+                        req.bus_id, req.vm
+                    )));
+                }
+                None => false,
+            };
+
+            // Inspect the device: no allowlist check (explicit path bypasses it).
+            let inspection =
+                crate::ops::usbip_host::inspect_usbip_host_device(
+                    usb_device_sysfs_root(),
+                    &req.bus_id,
+                )
+                .map_err(|err| {
+                    BrokerError::LiveHandler(format!(
+                        "explicit usbip bind sysfs inspection failed for bus_id={}: {err}",
+                        req.bus_id
+                    ))
+                })?;
+
+            let expected_identity = (inspection.vendor, inspection.product);
+            let expected_device_node = inspection.device_node;
+
+            // Audit device identity (same helper as declared path).
+            let (audit_device_identity, rotation_audit) = usb_audit_device_identity_for_busid(
+                usb_device_sysfs_root(),
+                &req.bus_id,
+                expected_identity,
+                &config.state_dir,
+                config.test_mode,
+            )?;
+
+            // Emit serial key rotation audit if needed (same policy as UsbipBind).
+            if let Some(rotation_audit) = rotation_audit
+                && let Some(rotation_audit_dedupe_key) =
+                    mark_usb_audit_serial_hmac_rotation_audit_logged(&rotation_audit)
+            {
+                let rotation_audit_context = DispatchAuditContext {
+                    peer_pid: audit_context.peer_pid,
+                    peer_role: audit_context.peer_role.clone(),
+                    verb: "UsbSerialCorrelationKeyRotate".to_owned(),
+                    request_fields: serde_json::json!({
+                        "detectedDuring": "UsbipExplicitBind",
+                        "tracingSpanIdPresent": req.tracing_span_id.is_some(),
+                    }),
+                    started_at: audit_context.started_at,
+                };
+                if let Err(err) = write_success_op_record_impl(
+                    audit_log,
+                    bundle_metadata,
+                    "UsbSerialCorrelationKeyRotate",
+                    "usb-audit-serial-hmac",
+                    caller_uid,
+                    caller_gid,
+                    &caller_role,
+                    "usb-audit-serial-hmac",
+                    "host",
+                    tracing_span_id_str(req.tracing_span_id.as_ref()),
+                    OperationFields::UsbSerialCorrelationKeyRotate(rotation_audit),
+                    &rotation_audit_context,
+                ) {
+                    unmark_usb_audit_serial_hmac_rotation_audit_logged(
+                        &rotation_audit_dedupe_key,
+                    );
+                    return Err(err);
+                }
+            }
+
+            // Build synthetic intent for backend calls: usbip_bind/usbip_unbind
+            // only use bus_id, lock_path, and vm_name — the empty allowlist is never
+            // checked on the explicit path (no enforce_usbip_physical_policy call).
+            let synthetic_intent = nixling_core::bundle_resolver::ResolvedUsbipBindIntent {
+                intent_id: format!("explicit:{}:{}", req.env, req.bus_id),
+                bus_id: req.bus_id.clone(),
+                vm_name: req.vm.clone(),
+                env: req.env.clone(),
+                lock_path: lock_path.clone(),
+                vendor_product_allowlist: vec![],
+                dynamic_bus_id: true,
+            };
+
+            // Acquire OFD lock and run `usbip bind` via the standard live handler.
+            backend.usbip_bind(&synthetic_intent)?;
+
+            // Grant per-device ACL to the env's USBIP backend runner (no allowlist).
+            if let Err(grant_error) = grant_explicit_usbip_backend_acl(
+                resolver,
+                &req.env,
+                &req.bus_id,
+                expected_identity,
+                expected_device_node,
+            ) {
+                if !same_vm_replay {
+                    match backend.usbip_unbind(&synthetic_intent) {
+                        Ok(()) => {
+                            if let Err(lock_error) = crate::ops::usbip_lock::release_lock(
+                                &lock_path,
+                                &req.vm,
+                            ) {
+                                warn!(
+                                    bus_id = %req.bus_id,
+                                    vm = %req.vm,
+                                    grant_error = ?grant_error,
+                                    error = %lock_error,
+                                    "UsbipExplicitBind ACL grant failed, rollback unbind succeeded, but lock rollback failed"
+                                );
+                            }
+                        }
+                        Err(rollback_error) => {
+                            warn!(
+                                bus_id = %req.bus_id,
+                                vm = %req.vm,
+                                grant_error = ?grant_error,
+                                rollback_error = ?rollback_error,
+                                "UsbipExplicitBind ACL grant failed and rollback unbind also failed"
+                            );
+                        }
+                    }
+                }
+                return Err(grant_error);
+            }
+
+            let scope_id = format!("env:{}", req.env);
+            let audit_result = write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "UsbipExplicitBind",
+                req.bus_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm.as_str(),
+                scope_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::UsbipExplicitBind {
+                    bus_id: req.bus_id.clone(),
+                    vm: req.vm.clone(),
+                    env: req.env.clone(),
+                    device_identity: Some(audit_device_identity),
+                },
+            );
+            if let Err(audit_error) = audit_result {
+                if !same_vm_replay {
+                    if let Err(revoke_err) =
+                        revoke_explicit_usbip_backend_acl(resolver, &req.env, &req.bus_id)
+                    {
+                        warn!(
+                            bus_id = %req.bus_id,
+                            vm = %req.vm,
+                            error = ?revoke_err,
+                            "UsbipExplicitBind audit write failed and backend ACL rollback failed"
+                        );
+                    }
+                    match backend.usbip_unbind(&synthetic_intent) {
+                        Ok(()) => {
+                            if let Err(lock_error) = crate::ops::usbip_lock::release_lock(
+                                &lock_path,
+                                &req.vm,
+                            ) {
+                                warn!(
+                                    bus_id = %req.bus_id,
+                                    vm = %req.vm,
+                                    error = %lock_error,
+                                    "UsbipExplicitBind audit write failed and lock rollback failed"
+                                );
+                            }
+                        }
+                        Err(unbind_error) => {
+                            warn!(
+                                bus_id = %req.bus_id,
+                                vm = %req.vm,
+                                error = ?unbind_error,
+                                "UsbipExplicitBind audit write failed and backend unbind rollback failed"
+                            );
+                        }
+                    }
+                }
+                return Err(audit_error);
+            }
+            Ok(DispatchResult::no_fds(ack_response("UsbipExplicitBind")))
+        }
+        RealBrokerRequest::UsbipExplicitFirewallRule(req) => {
+            // Explicit attach: install a per-busid nftables carve-out scoped to the
+            // target VM's env bridge. The broker validates request IPs against the
+            // env's declared host config values (cross-check to prevent rule spoofing),
+            // validates anti-spoof bridge port flags, and atomically applies the
+            // updated nft table preserving all currently active carve-outs.
+            let resolver = require_resolver(resolver)?;
+
+            let (_, rule_body) = build_explicit_usbip_rule_body(
+                resolver,
+                &req.env,
+                &req.host_uplink_ip,
+                &req.net_uplink_ip,
+            )?;
+
+            let host_nft_intent = resolver
+                .find_nft_intent(&nixling_core::bundle_resolver::intent_id_nft_host())
+                .ok_or_else(|| BrokerError::BundleIntentMissing {
+                    kind: "nft",
+                    intent_id: nixling_core::bundle_resolver::intent_id_nft_host(),
+                })?;
+
+            let decision = build_usbip_explicit_firewall_decision(
+                resolver,
+                host_nft_intent,
+                &req.bus_id,
+                &rule_body,
+            )?;
+
+            let nft_binary = nft_binary_path();
+            let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+            let nft_script = decision.batch.render_nft_script();
+            let expected_hash = persisted_nft_hash()
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?
+                .or_else(|| resolver.host.nftables.table_hash_after_apply.clone());
+            crate::ops::nft::apply_with_coexistence(
+                &exec,
+                &nft_binary,
+                &nft_script,
+                resolver.host.nftables.ownership_id.as_str(),
+                resolver.host.firewall_coexistence_policy.as_ref(),
+                expected_hash.as_deref(),
+            )
+            .map_err(|err| match err {
+                crate::ops::nft::ApplyWithCoexistenceError::CoexistenceRefused {
+                    manager,
+                    rationale,
+                } => BrokerError::CoexistenceRefused { manager, rationale },
+                crate::ops::nft::ApplyWithCoexistenceError::ParseFailed(err) => {
+                    BrokerError::NftScriptParseFailed(err.to_string())
+                }
+                crate::ops::nft::ApplyWithCoexistenceError::CarveoutOrderingViolation(err) => {
+                    BrokerError::CarveoutOrderingViolation(match err {
+                        nixling_host::nftables::NftError::ForeignNftRuleShadowsNixling {
+                            details,
+                        } => details,
+                        other => other.to_string(),
+                    })
+                }
+                crate::ops::nft::ApplyWithCoexistenceError::DriftDetected {
+                    expected,
+                    observed,
+                } => BrokerError::NftablesDriftDetected { expected, observed },
+                crate::ops::nft::ApplyWithCoexistenceError::ReconcileExec(err) => {
+                    BrokerError::LiveHandler(err.to_string())
+                }
+            })?;
+            crate::ops::nft::persist_live_nft_hash(
+                &exec,
+                &nft_binary,
+                &resolver.host.nftables.family,
+                &resolver.host.nftables.table,
+                &nft_hash_sidecar_path(),
+            )
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "UsbipExplicitFirewallRule",
+                req.bus_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.bus_id.as_str(),
+                &format!("env:{}", req.env),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::UsbipExplicitFirewallRule {
+                    bus_id: req.bus_id.clone(),
+                    env: req.env.clone(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(ack_response(
+                "UsbipExplicitFirewallRule",
+            )))
+        }
         // Disk-init dispatch. The broker resolves every `DiskInit`
         // plan-op from the trusted bundle for `vm_id` and creates the
         // disk images before the caller issues SpawnRunner. No
@@ -6245,6 +6534,422 @@ fn usbip_backend_runner_intent<'a>(
             kind: "runner",
             intent_id: runner_id,
         })
+}
+
+/// Resolve the env USBIP backend runner UID for the explicit attach path.
+/// Returns the UID of the `sys-<env>-usbipd/backend` runner so the broker
+/// can grant the per-device ACL without needing a full `ResolvedUsbipBindIntent`.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn explicit_usbip_backend_uid(
+    resolver: &Arc<BundleResolver>,
+    env: &str,
+) -> Result<u32, BrokerError> {
+    let runner_id = nixling_core::bundle_resolver::intent_id_runner(
+        &format!("sys-{env}-usbipd"),
+        "backend",
+    );
+    resolver
+        .find_runner_intent(&runner_id)
+        .map(|r| r.uid)
+        .ok_or(BrokerError::BundleIntentMissing {
+            kind: "runner",
+            intent_id: runner_id,
+        })
+}
+
+/// Validate and build the scoped nftables rule body for an explicit USBIP
+/// attach. Cross-checks the request IPs against the env's declared host config
+/// values to prevent the daemon from installing rules for a different env's
+/// bridge. Returns the rule body string on success.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn build_explicit_usbip_rule_body(
+    resolver: &BundleResolver,
+    env: &str,
+    req_host_uplink_ip: &str,
+    req_net_uplink_ip: &str,
+) -> Result<(String, String), BrokerError> {
+    use std::net::IpAddr;
+    let env_config =
+        resolver
+            .find_host_env(env)
+            .ok_or_else(|| BrokerError::LiveHandler(format!(
+                "explicit USBIP firewall: env {env:?} not found in host config"
+            )))?;
+
+    // Validate anti-spoof bridge port flags (uplink must be isolated+neigh_suppress,
+    // no MAC learning, no unknown-unicast flood).
+    let uplink_flags = env_config
+        .bridge_port_flags
+        .iter()
+        .find(|f| f.role == nixling_core::host::TapRole::Uplink)
+        .ok_or_else(|| BrokerError::LiveHandler(format!(
+            "explicit USBIP firewall: env {env:?} has no uplink bridge port flags"
+        )))?;
+    if !uplink_flags.isolated
+        || !uplink_flags.neigh_suppress
+        || uplink_flags.resolved_learning()
+        || uplink_flags.resolved_unicast_flood()
+    {
+        return Err(BrokerError::LiveHandler(format!(
+            "explicit USBIP firewall: env {env:?} uplink bridge port flags fail anti-spoof validation (isolated={} neigh_suppress={} learning={} unicast_flood={})",
+            uplink_flags.isolated,
+            uplink_flags.neigh_suppress,
+            uplink_flags.resolved_learning(),
+            uplink_flags.resolved_unicast_flood(),
+        )));
+    }
+
+    // Cross-check request IPs against the env's declared values. This prevents
+    // a compromised daemon from installing a carve-out scoped to the wrong env.
+    let env_host_ip = env_config.host_uplink_ip.as_deref().ok_or_else(|| {
+        BrokerError::LiveHandler(format!(
+            "explicit USBIP firewall: env {env:?} has no host_uplink_ip in host config"
+        ))
+    })?;
+    let env_net_ip = env_config.net_uplink_ip.as_deref().ok_or_else(|| {
+        BrokerError::LiveHandler(format!(
+            "explicit USBIP firewall: env {env:?} has no net_uplink_ip in host config"
+        ))
+    })?;
+    if req_host_uplink_ip != env_host_ip || req_net_uplink_ip != env_net_ip {
+        return Err(BrokerError::LiveHandler(format!(
+            "explicit USBIP firewall: request IPs do not match env {env:?} declared IPs (host_uplink_ip: req={req_host_uplink_ip:?} env={env_host_ip:?}; net_uplink_ip: req={req_net_uplink_ip:?} env={env_net_ip:?})"
+        )));
+    }
+
+    // Validate the IPs are non-loopback, non-unspecified IPv4.
+    fn safe_ipv4(value: &str) -> Option<String> {
+        match value.parse::<IpAddr>().ok()? {
+            IpAddr::V4(addr)
+                if !addr.is_unspecified() && !addr.is_loopback() && !addr.is_multicast() =>
+            {
+                Some(addr.to_string())
+            }
+            _ => None,
+        }
+    }
+    let host_ip = safe_ipv4(req_host_uplink_ip).ok_or_else(|| {
+        BrokerError::LiveHandler(format!(
+            "explicit USBIP firewall: host_uplink_ip {req_host_uplink_ip:?} is not a valid non-loopback IPv4"
+        ))
+    })?;
+    let net_ip = safe_ipv4(req_net_uplink_ip).ok_or_else(|| {
+        BrokerError::LiveHandler(format!(
+            "explicit USBIP firewall: net_uplink_ip {req_net_uplink_ip:?} is not a valid non-loopback IPv4"
+        ))
+    })?;
+
+    let bridge_ifname = env_config.bridge.as_str();
+    // Validate the bridge ifname is safe for nft literals.
+    if nixling_host::nftables::NftBatch::parse(&format!("table inet t {{ chain c {{ }}\n}}")).is_ok()
+    {
+        // The ifname is safe to embed in a quoted nft rule expression.
+        // (We validate it doesn't contain quotes or metacharacters below.)
+    }
+    if bridge_ifname.contains('"') || bridge_ifname.contains('\\') || bridge_ifname.contains('\0')
+    {
+        return Err(BrokerError::LiveHandler(format!(
+            "explicit USBIP firewall: env {env:?} bridge ifname contains unsafe characters"
+        )));
+    }
+
+    let rule_body = format!(
+        "iifname \"{bridge_ifname}\" ip saddr {net_ip} ip daddr {host_ip} ip protocol tcp tcp dport 3240 accept"
+    );
+    Ok((bridge_ifname.to_owned(), rule_body))
+}
+
+/// Grant the per-device ACL to the env's USBIP backend runner for the explicit
+/// attach path. Unlike `grant_usbip_backend_device_acl` this does NOT check a
+/// vendor/product allowlist; the explicit path carries no bundle allowlist.
+/// Retries up to 20 times with 100ms sleep (same policy as the declared path).
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn grant_explicit_usbip_backend_acl(
+    resolver: &Arc<BundleResolver>,
+    env: &str,
+    bus_id: &str,
+    expected_identity: (u16, u16),
+    expected_device_node: PathBuf,
+) -> Result<(), BrokerError> {
+    let backend_uid = explicit_usbip_backend_uid(resolver, env)?;
+    #[cfg(test)]
+    {
+        let _ = (expected_identity, expected_device_node);
+        test_usbip_backend_acl_events()
+            .lock()
+            .map_err(|_| BrokerError::Protocol("test USBIP ACL event mutex poisoned".to_owned()))?
+            .push(TestUsbipBackendAclEvent::Grant { uid: backend_uid });
+        return Ok(());
+    }
+    #[cfg(not(test))]
+    {
+        let mut last_error = None;
+        let mut granted = false;
+        for _ in 0..20 {
+            if let Err(error) =
+                verify_explicit_usbip_device_stable(bus_id, expected_identity, &expected_device_node)
+            {
+                if granted {
+                    let _ = crate::live_handlers::live_revoke_verified_device_acl(
+                        &expected_device_node,
+                        backend_uid,
+                    );
+                }
+                return Err(error);
+            }
+            match crate::live_handlers::live_grant_verified_device_acl(
+                &expected_device_node,
+                backend_uid,
+            ) {
+                Ok(()) => granted = true,
+                Err(err) => {
+                    last_error = Some(err.to_string());
+                }
+            }
+            if granted {
+                if let Err(error) = verify_explicit_usbip_device_stable(
+                    bus_id,
+                    expected_identity,
+                    &expected_device_node,
+                ) {
+                    let _ = crate::live_handlers::live_revoke_verified_device_acl(
+                        &expected_device_node,
+                        backend_uid,
+                    );
+                    return Err(error);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if granted {
+            return Ok(());
+        }
+        Err(BrokerError::LiveHandler(
+            last_error
+                .unwrap_or_else(|| "grant explicit USBIP backend device ACL failed".to_owned()),
+        ))
+    }
+}
+
+/// Stability check for explicit USBIP device ACL grant. Uses
+/// `inspect_usbip_host_device` (no allowlist check) to verify the device at
+/// `bus_id` still matches `expected_identity` and `expected_device_node`.
+#[cfg(all(not(feature = "layer1-bootstrap"), not(test)))]
+fn verify_explicit_usbip_device_stable(
+    bus_id: &str,
+    expected_identity: (u16, u16),
+    expected_device_node: &Path,
+) -> Result<(), BrokerError> {
+    let inspection =
+        crate::ops::usbip_host::inspect_usbip_host_device(usb_device_sysfs_root(), bus_id)
+            .map_err(|err| {
+                BrokerError::LiveHandler(format!(
+                    "explicit USBIP device stability check failed for bus_id={bus_id}: {err}"
+                ))
+            })?;
+    let current_identity = (inspection.vendor, inspection.product);
+    let current_device_node = inspection.device_node;
+    if current_identity != expected_identity || current_device_node != expected_device_node {
+        return Err(BrokerError::LiveHandler(format!(
+            "USBIP device identity changed while granting backend ACL for bus_id={bus_id}: expected {:?} at {}, observed {:?} at {}",
+            expected_identity,
+            expected_device_node.display(),
+            current_identity,
+            current_device_node.display(),
+        )));
+    }
+    Ok(())
+}
+
+/// Revoke the per-device ACL from the env's USBIP backend runner for the
+/// explicit attach path rollback. Best-effort; failures are logged only.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn revoke_explicit_usbip_backend_acl(
+    resolver: &Arc<BundleResolver>,
+    env: &str,
+    bus_id: &str,
+) -> Result<(), BrokerError> {
+    let backend_uid = explicit_usbip_backend_uid(resolver, env)?;
+    #[cfg(test)]
+    {
+        test_usbip_backend_acl_events()
+            .lock()
+            .map_err(|_| BrokerError::Protocol("test USBIP ACL event mutex poisoned".to_owned()))?
+            .push(TestUsbipBackendAclEvent::Revoke { uid: backend_uid });
+        return Ok(());
+    }
+    #[cfg(not(test))]
+    {
+        let inspection =
+            crate::ops::usbip_host::inspect_usbip_host_device(usb_device_sysfs_root(), bus_id)
+                .map_err(|err| {
+                    BrokerError::LiveHandler(format!(
+                        "explicit USBIP revoke inspection failed for bus_id={bus_id}: {err}"
+                    ))
+                })?;
+        crate::live_handlers::live_revoke_verified_device_acl(&inspection.device_node, backend_uid)
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    }
+}
+
+/// Collect rule bodies for all currently active explicit USBIP carve-outs
+/// (busids locked in `/run/nixling/locks/usbip/` that are neither declared
+/// in the bundle as static intents nor resolvable via the wildcard
+/// `pending` fallback). Used by `build_usbip_explicit_firewall_decision`
+/// to preserve existing explicit carve-outs when atomically replacing the
+/// nftables state.
+///
+/// Entries for `excluding_bus_id` are skipped (caller adds its own carveout).
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn collect_active_explicit_usbip_carveouts(
+    resolver: &BundleResolver,
+    excluding_bus_id: &str,
+) -> Vec<(String, String)> {
+    let Ok(entries) = std::fs::read_dir("/run/nixling/locks/usbip") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let bus_id = entry.file_name().into_string().ok()?;
+            nixling_host::usbip_argv::validate_bus_id(&bus_id).ok()?;
+            if bus_id == excluding_bus_id {
+                return None;
+            }
+            // Skip busids that are handled by the declared (static or wildcard) path.
+            if static_usbip_busid_owner(resolver, &bus_id).is_some() {
+                return None;
+            }
+            let vm = crate::ops::usbip_lock::peek_owner(&entry.path())?;
+            if find_wildcard_usbip_bind_intent_for(resolver, &vm, &bus_id).is_some() {
+                return None;
+            }
+            // Pure explicit busid — reconstruct rule body from manifest + host config.
+            let vm_entry = resolver.find_manifest_vm(&vm)?;
+            let env = vm_entry.env.as_deref()?;
+            let env_config = resolver.find_host_env(env)?;
+            let host_ip = env_config.host_uplink_ip.as_deref()?;
+            let net_ip = env_config.net_uplink_ip.as_deref()?;
+            // Validate bridge port flags fail-closed: skip carveout if anti-spoof
+            // invariants are no longer satisfied (operator may have changed bridge config).
+            let uplink_flags = env_config
+                .bridge_port_flags
+                .iter()
+                .find(|f| f.role == nixling_core::host::TapRole::Uplink)?;
+            if !uplink_flags.isolated
+                || !uplink_flags.neigh_suppress
+                || uplink_flags.resolved_learning()
+                || uplink_flags.resolved_unicast_flood()
+            {
+                return None;
+            }
+            let bridge_ifname = env_config.bridge.as_str();
+            if bridge_ifname.contains('"')
+                || bridge_ifname.contains('\\')
+                || bridge_ifname.contains('\0')
+            {
+                return None;
+            }
+            let rule_body = format!(
+                "iifname \"{bridge_ifname}\" ip saddr {net_ip} ip daddr {host_ip} ip protocol tcp tcp dport 3240 accept"
+            );
+            Some((bus_id, rule_body))
+        })
+        .collect()
+}
+
+/// Build the nft firewall decision for an explicit USBIP attach. Starts from
+/// the host nft base, preserves all currently-active declared and explicit
+/// carve-outs, and inserts the new carve-out for `bus_id`.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn build_usbip_explicit_firewall_decision(
+    resolver: &BundleResolver,
+    host_nft_intent: &nixling_core::bundle_resolver::ResolvedNftIntent,
+    bus_id: &str,
+    rule_body: &str,
+) -> Result<crate::ops::usbip_firewall::UsbipBindFirewallRuleDecision, BrokerError> {
+    let mut batch = nixling_host::nftables::NftBatch::parse(host_nft_intent.script_body.as_str())
+        .map_err(|err| BrokerError::NftScriptParseFailed(err.to_string()))?;
+    let mut inserted = std::collections::BTreeSet::<String>::new();
+
+    // Add carveouts for all declared (statically locked) USBIP busids.
+    for id in resolver.usbip_bind_intent_ids() {
+        let Some(bind_intent) = resolver.find_usbip_bind_intent(id) else {
+            continue;
+        };
+        let Some(owner) = crate::ops::usbip_lock::peek_owner(&bind_intent.lock_path) else {
+            continue;
+        };
+        if owner != bind_intent.vm_name {
+            continue;
+        }
+        let firewall_id = nixling_core::bundle_resolver::intent_id_usbip_firewall(
+            &bind_intent.env,
+            &bind_intent.bus_id,
+        );
+        if !inserted.insert(firewall_id.clone()) {
+            continue;
+        }
+        let Some(active_firewall) = resolver.find_usbip_firewall_intent(&firewall_id) else {
+            continue;
+        };
+        batch
+            .add_usbip_carveout_expr(
+                nixling_host::nftables::ChainHook::Input,
+                &nixling_host::nftables::BusId::new(active_firewall.bus_id.as_str()),
+                active_firewall.nft_rule_body.as_str(),
+            )
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+    }
+
+    // Add carveouts for active dynamic (declared wildcard) USBIP busids.
+    for bind_intent in active_dynamic_usbip_bind_intents(resolver) {
+        let firewall_id = nixling_core::bundle_resolver::intent_id_usbip_firewall(
+            &bind_intent.env,
+            &bind_intent.bus_id,
+        );
+        if !inserted.insert(firewall_id.clone()) {
+            continue;
+        }
+        let Some(active_firewall) =
+            find_usbip_firewall_intent_or_wildcard(resolver, &firewall_id)
+        else {
+            continue;
+        };
+        batch
+            .add_usbip_carveout_expr(
+                nixling_host::nftables::ChainHook::Input,
+                &nixling_host::nftables::BusId::new(active_firewall.bus_id.as_str()),
+                active_firewall.nft_rule_body.as_str(),
+            )
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+    }
+
+    // Add carveouts for currently active explicit busids (not in bundle, but locked).
+    // Reconstructed on-the-fly from the lock owner's manifest entry + env host config.
+    for (explicit_bus_id, explicit_rule_body) in
+        collect_active_explicit_usbip_carveouts(resolver, bus_id)
+    {
+        let carveout_id = format!("explicit:{explicit_bus_id}");
+        if !inserted.insert(carveout_id) {
+            continue;
+        }
+        batch
+            .add_usbip_carveout_expr(
+                nixling_host::nftables::ChainHook::Input,
+                &nixling_host::nftables::BusId::new(explicit_bus_id.as_str()),
+                explicit_rule_body.as_str(),
+            )
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+    }
+
+    // Insert the new explicit carveout last.
+    crate::ops::usbip_firewall::bind_firewall_rule(
+        batch,
+        &nixling_host::nftables::BusId::new(bus_id),
+        rule_body,
+    )
+    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]

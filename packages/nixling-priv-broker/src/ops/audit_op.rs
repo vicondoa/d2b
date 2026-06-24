@@ -280,6 +280,22 @@ pub enum OperationFields {
     UsbipBindFirewallRule {
         bundle_usbip_firewall_intent_ref: String,
     },
+    /// Explicit-attach: broker bound a present sysfs busid for a USB-capable
+    /// VM without a bundle allowlist. Carries vm, env, and optional device
+    /// identity (vendor/product + keyed serial correlation) for the audit log.
+    UsbipExplicitBind {
+        bus_id: String,
+        vm: String,
+        env: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_identity: Option<UsbAuditDeviceIdentity>,
+    },
+    /// Explicit-attach: broker installed a per-busid nftables carve-out scoped
+    /// to the target env bridge. Carries busid and env for traceability.
+    UsbipExplicitFirewallRule {
+        bus_id: String,
+        env: String,
+    },
     QemuMediaEnroll {
         vm_id: String,
         media_ref: String,
@@ -604,6 +620,16 @@ impl OperationFields {
             "UsbipProxyReconcile" => parse_fields!(value => UsbipProxyReconcile {}),
             "UsbipBindFirewallRule" => parse_fields!(value => UsbipBindFirewallRule {
                 bundle_usbip_firewall_intent_ref: String,
+            }),
+            "UsbipExplicitBind" => parse_fields!(value => UsbipExplicitBind {
+                bus_id: String,
+                vm: String,
+                env: String,
+                device_identity: Option<UsbAuditDeviceIdentity>,
+            }),
+            "UsbipExplicitFirewallRule" => parse_fields!(value => UsbipExplicitFirewallRule {
+                bus_id: String,
+                env: String,
             }),
             "QemuMediaEnroll" => parse_fields!(value => QemuMediaEnroll {
                 vm_id: String,
@@ -1153,6 +1179,30 @@ mod tests {
         "UsbipBindFirewallRule",
         OperationFields::UsbipBindFirewallRule {
             bundle_usbip_firewall_intent_ref: "usbip-firewall:1-2.3".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        usbip_explicit_bind_round_trip,
+        "UsbipExplicitBind",
+        OperationFields::UsbipExplicitBind {
+            bus_id: "1-2.3".to_owned(),
+            vm: "work".to_owned(),
+            env: "corp".to_owned(),
+            device_identity: Some(UsbAuditDeviceIdentity {
+                vendor_id: Some("1050".to_owned()),
+                product_id: Some("0407".to_owned()),
+                serial_observed: false,
+                serial_correlation: None,
+                previous_serial_correlation: None,
+            }),
+        }
+    );
+    roundtrip_test!(
+        usbip_explicit_firewall_rule_round_trip,
+        "UsbipExplicitFirewallRule",
+        OperationFields::UsbipExplicitFirewallRule {
+            bus_id: "1-2.3".to_owned(),
+            env: "corp".to_owned(),
         }
     );
     roundtrip_test!(
