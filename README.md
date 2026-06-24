@@ -311,6 +311,15 @@ The activation creates `/var/lib/nixling/keys/corp-vm_ed25519`
 VM, materialises `br-work-up` + `br-work-lan` bridges, and
 installs the `nixling` CLI on your `$PATH`.
 
+Guest configuration is still built on the host, but guest activation
+stays inside the guest. The host build produces the VM's NixOS
+`system.build.toplevel`; nixling's broker/store-view path publishes
+that closure into the per-VM live store pool; virtiofs serves that pool
+as the guest's `/nix/store`; and guestd activates the prepared toplevel
+inside the running VM for `switch`, `test`, and live `rollback`.
+Stopped VMs do not run live activation from the host: use `nixling boot
+<vm> --apply` to stage the declared toplevel for the next start.
+
 **4. Verify and use.**
 
 ```bash
@@ -375,6 +384,8 @@ The Rust `nixling` CLI is the only operator surface. Run
   `rollback`, `gc`, `migrate`, `keys rotate`, `trust`,
   `rotate-known-host`, `host install`, `host prepare`,
   `host destroy`, `host reconcile`, `usb attach`, `usb detach`.
+  `switch`, `test`, and live `rollback` require a running VM with the
+  guest activation capability; `boot` is the offline staging verb.
 - **Not yet implemented**: `console`, `audio status|mic|speaker|off`
   return a typed exit-78 envelope until the daemon-native surface
   ships. Argument parsing and shell completions still work.

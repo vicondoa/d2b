@@ -322,6 +322,29 @@ provider graceful wait; it still uses the standard SIGTERM/SIGKILL cleanup
 policy rather than jumping directly to SIGKILL. Restart applies force to the
 stop phase only.
 
+## VM activation flow
+
+The public activation requests (`Switch`, `Test`, `Rollback`, and
+`Boot`) are daemon-owned operations. The generated request/response
+tables below describe the currently committed wire shapes; when the
+activation wire types change, regenerate the `AUTO-GENERATED` sections
+with `cargo xtask gen-daemon-api` rather than editing those blocks by
+hand.
+
+Live activation (`Switch`, `Test`, and live `Rollback`) is not a broker
+script-execution surface. `nixlingd` prepares the VM toplevel, asks the
+broker/store-view path to publish the closure into the per-VM live store
+pool, opens authenticated guest-control to guestd, starts activation of
+the prepared toplevel inside the running guest, polls guest activation
+status, and only then asks the broker to commit host-owned generation
+metadata. If the VM is stopped/offline or guestd does not advertise the
+activation capability, the operation fails closed before host-side
+generation commit.
+
+`Boot` is the explicit offline staging mode. It publishes and commits
+the declared toplevel for the next VM start without contacting guestd or
+running live guest activation.
+
 <!-- BEGIN AUTO-GENERATED: enum-variants -->
 ### Lifecycle enum
 

@@ -15,6 +15,10 @@ deprecations ship one minor release before removal.
 - Public daemon list/status handling now uses a request-scoped artifact snapshot
   so manifest, process, host, and bundle resolver reads are shared within one
   request without cross-request caching.
+- VM activation now keeps guest systemd isolated from the host: `switch
+  --apply`, `test --apply`, and live `rollback --apply` fail closed when the
+  VM is stopped/offline or does not advertise the guest activation capability,
+  while `boot --apply` is the explicit offline staging path for the next start.
 - Runtime capability projection for qemu-media list/status output now goes
   through focused helpers with direct regression coverage, preserving public JSON
   and human output shape.

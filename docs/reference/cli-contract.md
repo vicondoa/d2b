@@ -1194,14 +1194,17 @@ Build is a native non-destructive planner that renders the eval/build preview wi
 
 **Status**
 
-`switch` is a daemon-native activation verb. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native.
+`switch` is a daemon-native live guest activation verb. If neither
+mutation flag is set, the CLI prints the parity notice and defaults to
+`--dry-run`; `--apply` requires the VM to be running and reachable over
+guest-control.
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the activation without mutating the guest. |
-| `--apply` | boolean | `false` | Perform the activation mutation. |
+| `--apply` | boolean | `false` | Publish the prepared VM closure into the VM's live store pool, ask guestd to activate that prepared toplevel inside the running guest, poll guest activation status, then commit the successful generation through the broker. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -1216,42 +1219,54 @@ Build is a native non-destructive planner that renders the eval/build preview wi
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
+| `1` | `nixlingd` is unreachable or guest-control transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
-| `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `78` | Host store publication, broker commit, guest activation capability, or guest activation status failed closed. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling switch` exit table is preserved in this file as history.
+Stopped/offline VMs fail closed: `switch --apply` never asks the host
+broker to execute the guest activation program, never mutates host
+systemd for the VM, and never falls back to SSH or a host shell. Start
+the VM first with `nixling vm start <vm> --apply`, wait for guest-control
+readiness, then rerun `nixling switch <vm> --apply`.
 
 **Human example**
 
 ```text
 $ nixling switch corp-vm --apply
-nixling switch --apply executed via the native daemon → broker path (vm=corp-vm, mode=switch, summary=activated, generationNumber=42)
+nixling switch --apply activated in guest via guest-control (vm=corp-vm, mode=switch, summary=activated, generationNumber=42)
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative: wired through `nixlingd` → broker `RunActivation` with `ActivationMode::Switch` (commit `7de9194`).
+- `--apply`: routes through `nixlingd`, which prepares/publishes the
+  closure, opens the authenticated guest-control activation flow, waits
+  for guestd status, and only then asks the broker to commit host-side
+  generation metadata. Daemon-unreachable surfaces `daemon-down` exit 1;
+  guest capability/readiness and broker failures surface typed non-zero
+  envelopes. There is no host-side execution of guest activation scripts.
+- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars
+  were retired; the daemon-only contract is the only path.
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
+- There is no live bash fallback for this verb.
 ### `boot`
 
 **Synopsis:** `nixling boot <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`boot` is a daemon-native activation verb. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native.
+`boot` is the daemon-native offline staging activation verb. If neither
+mutation flag is set, the CLI prints the parity notice and defaults to
+`--dry-run`; `--apply` does not require a running guest.
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the activation without mutating the guest. |
-| `--apply` | boolean | `false` | Perform the activation mutation. |
+| `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the offline staging update without mutating guest or host generation state. |
+| `--apply` | boolean | `false` | Publish the prepared VM closure into the VM's live store pool and commit it as the toplevel to use on the next VM start; no guest-control activation is attempted. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -1266,42 +1281,51 @@ nixling switch --apply executed via the native daemon → broker path (vm=corp-v
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
+| `1` | `nixlingd` is unreachable. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
-| `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `78` | Host store publication, broker commit, or native handler support failed closed. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling boot` exit table is preserved in this file as history.
+`boot --apply` is the explicit way to stage a new toplevel while the VM
+is stopped/offline. It only changes the host-side generation selected
+for the next start; it does not run guest activation in the current
+guest and does not require guest-control capability.
 
 **Human example**
 
 ```text
 $ nixling boot corp-vm --apply
-nixling boot --apply executed via the native daemon → broker path (vm=corp-vm, mode=boot, summary=staged for next boot, generationNumber=42)
+nixling boot --apply staged next-boot toplevel (vm=corp-vm, mode=boot, summary=staged for next boot, generationNumber=42)
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative: wired through `nixlingd` → broker `RunActivation` with `ActivationMode::Boot` (commit `7de9194`).
+- `--apply`: routes through `nixlingd` and the broker-backed store
+  publication/commit path only. It intentionally skips guest-control
+  activation because there may be no running guest.
+- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars
+  were retired; the daemon-only contract is the only path.
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
+- There is no live bash fallback for this verb.
 ### `test`
 
 **Synopsis:** `nixling test <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`test` is a daemon-native activation verb. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native.
+`test` is a daemon-native live guest activation verb for temporary
+activation until reboot. If neither mutation flag is set, the CLI prints
+the parity notice and defaults to `--dry-run`; `--apply` requires the VM
+to be running and reachable over guest-control.
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the activation without mutating the guest. |
-| `--apply` | boolean | `false` | Perform the activation mutation. |
+| `--apply` | boolean | `false` | Publish the prepared VM closure into the VM's live store pool, ask guestd to run a test activation of that prepared toplevel inside the running guest, poll guest activation status, then commit the successful host-side metadata needed to observe the temporary generation. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -1316,42 +1340,50 @@ nixling boot --apply executed via the native daemon → broker path (vm=corp-vm,
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
+| `1` | `nixlingd` is unreachable or guest-control transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
-| `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `78` | Host store publication, broker commit, guest activation capability, or guest activation status failed closed. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling test` exit table is preserved in this file as history.
+Stopped/offline VMs fail closed for `test --apply`. Use `boot --apply`
+for offline staging, or start the VM and retry once guest-control
+advertises activation support.
 
 **Human example**
 
 ```text
 $ nixling test corp-vm --apply
-nixling test --apply executed via the native daemon → broker path (vm=corp-vm, mode=test, summary=activated until reboot, generationNumber=42)
+nixling test --apply activated in guest via guest-control (vm=corp-vm, mode=test, summary=activated until reboot, generationNumber=42)
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative: wired through `nixlingd` → broker `RunActivation` with `ActivationMode::Test` (commit `7de9194`).
+- `--apply`: routes through `nixlingd`, guest-control activation, and a
+  broker commit after guestd reports success. There is no host-side
+  execution of guest activation scripts.
+- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars
+  were retired; the daemon-only contract is the only path.
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
+- There is no live bash fallback for this verb.
 ### `rollback`
 
 **Synopsis:** `nixling rollback <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`rollback` is a daemon-native activation verb. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native.
+`rollback` is a daemon-native live guest rollback verb. If neither
+mutation flag is set, the CLI prints the parity notice and defaults to
+`--dry-run`; live `--apply` requires the VM to be running and reachable
+over guest-control.
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the activation without mutating the guest. |
-| `--apply` | boolean | `false` | Perform the activation mutation. |
+| `--apply` | boolean | `false` | Select the previous prepared VM toplevel, ensure it is published into the VM's live store pool, ask guestd to activate it inside the running guest, poll guest activation status, then commit the successful rollback generation through the broker. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -1366,28 +1398,34 @@ nixling test --apply executed via the native daemon → broker path (vm=corp-vm,
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
+| `1` | `nixlingd` is unreachable or guest-control transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
-| `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `78` | Host store publication, broker commit, guest activation capability, or guest activation status failed closed. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling rollback` exit table is preserved in this file as history.
+Live rollback of a stopped/offline VM fails closed. Offline rollback is
+not inferred from host-side metadata, and `boot --apply` stages only the
+currently declared toplevel for the next start; rollback itself does not
+run guest activation from the host.
 
 **Human example**
 
 ```text
 $ nixling rollback corp-vm --apply
-nixling rollback --apply executed via the native daemon → broker path (vm=corp-vm, mode=rollback, summary=rolled back, generationNumber=41)
+nixling rollback --apply activated previous toplevel in guest via guest-control (vm=corp-vm, mode=rollback, summary=rolled back, generationNumber=41)
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative: wired through `nixlingd` → broker `RunActivation` with `ActivationMode::Rollback` (commit `7de9194`).
+- `--apply`: routes through `nixlingd`, guest-control activation, and a
+  broker commit after guestd reports success. There is no host-side
+  execution of guest activation scripts.
+- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars
+  were retired; the daemon-only contract is the only path.
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
+- There is no live bash fallback for this verb.
 
 
 ### `generations`
