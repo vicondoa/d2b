@@ -21,6 +21,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Activation now grants every numeric per-role runtime UID traversal on both
+  `/run/nixling` and `/run/nixling/vms`, so broker-spawned runners can reach
+  their per-VM runtime socket directories after a host switch.
 - Public daemon `status` keeps guest USBIP import state, but now uses a short
   status-specific guest-control budget so stale or slow guest USB probes cannot
   push wlcontrol past its public-socket timeout.
