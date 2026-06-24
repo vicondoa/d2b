@@ -103,7 +103,7 @@ let
       path = "/etc/nixling";
       lifecycle = "config";
       persistence = "persistent";
-      owner = principal "user" "nixlingd";
+      owner = principal "user" "root";
       group = principal "group" "nixlingd";
       creator = actor "nix-module" "environment.etc";
       writers = [ (actor "nix-module" "environment.etc") ];
@@ -117,7 +117,7 @@ let
       scope = "host";
       path = toString cfg.site.stateDir;
       persistence = "persistent";
-      owner = principal "user" "nixlingd";
+      owner = principal "user" "root";
       group = principal "group" "nixlingd";
       creator = actor "nix-module" "tmpfiles";
     })
@@ -139,9 +139,9 @@ let
       path = "/run/nixling";
       lifecycle = "boot-scoped-readoptable";
       persistence = "boot-scoped";
-      owner = principal "user" "root";
-      group = principal "group" "nixlingd";
-      mode = "0700";
+      owner = principal "user" "nixlingd";
+      group = principal "group" "nixling";
+      mode = "0750";
       creator = actor "nix-module" "tmpfiles";
       cleanupPolicy = "boot";
       leaseClass = "process-pidfd";
@@ -322,7 +322,7 @@ let
       lifecycle = "boot-scoped-readoptable";
       persistence = "boot-scoped";
       owner = principal "user" "root";
-      group = principal "group" "root";
+      group = principal "group" "nixlingd";
       mode = "0640";
       creator = actor "broker" "nixling-priv-broker";
       writers = [ (actor "broker" "nixling-priv-broker") ];

@@ -685,9 +685,18 @@ pub mod path_safe {
         Ok(())
     }
 
-    fn write_temp_file(file: &mut File, contents: &[u8], mode: u32) -> io::Result<()> {
+    fn write_temp_file(
+        file: &mut File,
+        contents: &[u8],
+        mode: u32,
+        owner_uid: Option<u32>,
+        owner_gid: Option<u32>,
+    ) -> io::Result<()> {
         file.write_all(contents)?;
         fchmod(file.as_fd(), mode)?;
+        if owner_uid.is_some() || owner_gid.is_some() {
+            fchown(file.as_fd(), owner_uid, owner_gid)?;
+        }
         file.sync_all()
     }
 
@@ -792,6 +801,8 @@ pub mod path_safe {
         target_name: &str,
         contents: &[u8],
         mode: u32,
+        owner_uid: Option<u32>,
+        owner_gid: Option<u32>,
     ) -> io::Result<()> {
         let target_name = cstring_from_name(target_name)?;
         for _ in 0..64 {
@@ -807,7 +818,7 @@ pub mod path_safe {
                 Err(err) => return Err(err),
             };
             let mut stage_file = File::from(stage_fd);
-            if let Err(err) = write_temp_file(&mut stage_file, contents, mode) {
+            if let Err(err) = write_temp_file(&mut stage_file, contents, mode, owner_uid, owner_gid) {
                 drop(stage_file);
                 let _ = unlinkat_raw(dir_fd.as_raw_fd(), &stage_name);
                 return Err(err);
@@ -826,9 +837,11 @@ pub mod path_safe {
         target_name: &str,
         contents: &[u8],
         mode: u32,
+        owner_uid: Option<u32>,
+        owner_gid: Option<u32>,
     ) -> io::Result<()> {
         let mut tmp_file = create_anonymous_tmpfile(dir_fd, mode)?;
-        write_temp_file(&mut tmp_file, contents, mode)?;
+        write_temp_file(&mut tmp_file, contents, mode, owner_uid, owner_gid)?;
         let target_name = cstring_from_name(target_name)?;
         for _ in 0..64 {
             let stage_name = cstring_from_name(&next_hidden_name("stage"))?;
@@ -1154,10 +1167,36 @@ pub mod path_safe {
         mode: u32,
     ) -> io::Result<()> {
         validate_target_name(target_name)?;
-        match atomic_replace_via_linked_tmp(dir_fd, target_name, contents, mode) {
+        atomic_replace_fd_with_owner(dir_fd, target_name, contents, mode, None, None)
+    }
+
+    pub fn atomic_replace_fd_with_owner(
+        dir_fd: &OwnedFd,
+        target_name: &str,
+        contents: &[u8],
+        mode: u32,
+        owner_uid: Option<u32>,
+        owner_gid: Option<u32>,
+    ) -> io::Result<()> {
+        validate_target_name(target_name)?;
+        match atomic_replace_via_linked_tmp(
+            dir_fd,
+            target_name,
+            contents,
+            mode,
+            owner_uid,
+            owner_gid,
+        ) {
             Ok(()) => Ok(()),
             Err(err) if proc_link_fallback_allowed(&err) => {
-                atomic_replace_via_named_stage(dir_fd, target_name, contents, mode)
+                atomic_replace_via_named_stage(
+                    dir_fd,
+                    target_name,
+                    contents,
+                    mode,
+                    owner_uid,
+                    owner_gid,
+                )
             }
             Err(err) => Err(err),
         }

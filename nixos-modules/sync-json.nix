@@ -140,7 +140,7 @@ let
     id = "lock:qemu-media-tap:${vm}";
     scope = "vm:${vm}";
     path = "tap:${cfg.manifest.${vm}.tap}";
-    owner = actor "role" "role:${vm}:qemu-media-runner";
+    owner = actor "role" "role:${vm}:qemu-media";
     scopeClass = "vm";
     root = "kernel";
     normalizedPath = "tap/${cfg.manifest.${vm}.tap}";

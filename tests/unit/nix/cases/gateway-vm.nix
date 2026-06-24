@@ -414,6 +414,7 @@ in
       hostStateDir = builtins.elem "d /var/lib/nixling/gateways/work 0750 root nixlingd -" hostTmpfiles;
       guestStateDir = builtins.elem "d /var/lib/nixling/gateways/work 0700 nixlingd nixlingd -" gatewayGuestTmpfiles;
       guestDaemonStateDir = builtins.elem "d /var/lib/nixling/daemon-state 0700 nixlingd nixlingd -" gatewayGuestTmpfiles;
+      guestCacheDir = builtins.elem "d /var/cache/nixling 0750 root nixlingd -" gatewayGuestTmpfiles;
       guestLockFile = builtins.elem "f /run/nixling/daemon.lock 0640 nixlingd nixlingd -" gatewayGuestTmpfiles;
       gatewayUserCanReachPublicSocket = builtins.elem "nixling" gatewayGuestCfg.users.users.gateway.extraGroups;
     };
@@ -421,6 +422,7 @@ in
       hostStateDir = false;
       guestStateDir = true;
       guestDaemonStateDir = true;
+      guestCacheDir = true;
       guestLockFile = true;
       gatewayUserCanReachPublicSocket = true;
     };
