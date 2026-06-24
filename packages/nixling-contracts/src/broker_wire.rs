@@ -327,18 +327,13 @@ pub enum ActivationMode {
     Rollback,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ActivationPhase {
     Prepare,
     Commit,
+    #[default]
     MetadataOnly,
-}
-
-impl Default for ActivationPhase {
-    fn default() -> Self {
-        Self::MetadataOnly
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

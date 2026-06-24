@@ -17841,16 +17841,11 @@ mod runtime_acl_tests {
 
     use super::{RuntimeIdentity, bind_public_socket, validate_lock_parent};
 
-    fn scratch_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "nixlingd-runtime-acl-{}-{}-{}",
-            tag,
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or_default(),
-        ));
+    static SCRATCH_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn scratch_dir(_tag: &str) -> PathBuf {
+        let nonce = SCRATCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("nlr-{}-{nonce}", std::process::id()));
         fs::create_dir_all(&dir).expect("create scratch dir");
         dir
     }
@@ -20785,7 +20780,7 @@ mod broker_dispatch_tests {
             response.get("outcome").and_then(Value::as_str),
             Some("applied")
         );
-        assert!(activation_marker_path(&state, "vm-a").exists() == false);
+        assert!(!activation_marker_path(&state, "vm-a").exists());
         assert_eq!(
             *phases.lock().unwrap(),
             vec![

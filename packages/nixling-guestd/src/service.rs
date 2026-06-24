@@ -946,11 +946,10 @@ impl ActivationUnitManager for ProductionActivationUnitManager {
         if !output.status.success() && fields.is_empty() {
             return Ok(None);
         }
-        match fields.get("ActiveState").map(String::as_str) {
-            Some("active" | "activating" | "reloading") => {
-                return Ok(Some(ActivationStatusSnapshot::running()));
-            }
-            _ => {}
+        if let Some("active" | "activating" | "reloading") =
+            fields.get("ActiveState").map(String::as_str)
+        {
+            return Ok(Some(ActivationStatusSnapshot::running()));
         }
         match fields.get("Result").map(String::as_str) {
             Some("success") => Ok(Some(ActivationStatusSnapshot {
@@ -5591,10 +5590,12 @@ mod tests {
             .with_usbip_path(path)
     }
 
+    type ActivationStartLog = Arc<Mutex<Vec<(String, String)>>>;
+
     #[derive(Clone)]
     struct FakeActivationUnits {
         query: Arc<Mutex<Option<ActivationStatusSnapshot>>>,
-        starts: Arc<Mutex<Vec<(String, String)>>>,
+        starts: ActivationStartLog,
         fail_start: Option<ActivationError>,
     }
 
@@ -5639,7 +5640,7 @@ mod tests {
     fn activation_runtime(
         dir: PathBuf,
         units: FakeActivationUnits,
-    ) -> (Arc<ActivationRuntime>, Arc<Mutex<Vec<(String, String)>>>) {
+    ) -> (Arc<ActivationRuntime>, ActivationStartLog) {
         let starts = Arc::clone(&units.starts);
         (
             Arc::new(ActivationRuntime::new(
