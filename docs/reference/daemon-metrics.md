@@ -135,6 +135,33 @@ declared schema; see "Cardinality bounds" below.
   force and config-disabled paths record near-zero observations with their
   bounded outcomes.
 
+### `nixling_daemon_activation_phase_duration_seconds`
+
+- **Type:** histogram
+- **Labels:** `phase`, `mode`, `status`
+- **Phase values:** `prepare`, `marker-write`, `guest`, `commit`,
+  `metadata-only`
+- **Mode values:** `switch`, `boot`, `test`, `rollback`
+- **Status values:** bounded daemon outcomes such as `success`, `failure`,
+  `indeterminate`, `broker-error`, `protocol-error`, and
+  `dispatch-error`
+- **Buckets (seconds):** `0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 30,
+  120, 600`
+- **Meaning:** Wall-clock duration for the daemon-owned VM activation
+  orchestration phases. Labels never include activation ids, store paths,
+  switch script paths, guest output, or error text.
+
+### `nixling_daemon_vm_degraded`
+
+- **Type:** gauge
+- **Labels:** `vm`, `reason`
+- **Reason values:** currently `activation_pending`
+- **Meaning:** Per-VM degraded-state indicator for bounded daemon reasons
+  that should be visible to operators even when lifecycle state remains
+  `Running` or `Stopped`. Activation sets this gauge while a host pending
+  marker is unresolved and clears it after a successful commit or
+  definitive guest activation failure.
+
 ### `nixling_daemon_ownership_drift_total`
 
 - **Type:** counter
@@ -201,13 +228,17 @@ declared schema; see "Cardinality bounds" below.
 | `outcome` (broker) | closed enum | 3 |
 | `vmm` | closed VM shutdown runtime enum | 3 |
 | `outcome` (VM shutdown) | closed daemon enum | bounded by daemon code |
+| `phase` | closed activation orchestration enum | 5 |
+| `mode` | closed activation mode enum | 4 |
+| `status` | closed activation phase outcome enum | bounded by daemon code |
+| `reason` | closed degraded reason enum | bounded by daemon code |
 | `subsystem` | closed guest-control subsystem enum | bounded by daemon code |
 | `outcome` (guest-control) | closed enum | bounded by daemon code |
 | `error_kind` | normalized daemon error bucket | bounded by daemon code |
 
 No label carries free-form text (no error messages, no store paths,
-no command output, no shell session names, no terminal handles,
-no terminal stream ids, and no provider resource ids). The
+no activation ids, no command output, no shell session names, no
+terminal handles, no terminal stream ids, and no provider resource ids). The
 [observability panel's cardinality + PII rules](../../AGENTS.md#default-observability-panel)
 apply.
 

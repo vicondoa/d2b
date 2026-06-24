@@ -1913,8 +1913,19 @@ pub struct BridgeCheck {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmLifecycle {
+    #[serde(default)]
+    pub degraded: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub degraded_reasons: Vec<VmLifecycleDegradedReason>,
     pub pending_restart: bool,
     pub state: VmLifecycleState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmLifecycleDegradedReason {
+    pub reason: String,
+    pub remediation: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

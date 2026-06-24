@@ -122,6 +122,20 @@ pub trait GuestControlRpc {
         &self,
         request: pb::UsbipStatusRequest,
     ) -> Result<pb::UsbipStatusResponse, GuestControlHealthError>;
+    async fn activate_system_start(
+        &self,
+        request: pb::GuestActivationStartRequest,
+    ) -> Result<pb::GuestActivationStartResponse, GuestControlHealthError> {
+        let _ = request;
+        Err(GuestControlHealthError::Protocol)
+    }
+    async fn activate_system_status(
+        &self,
+        request: pb::GuestActivationStatusRequest,
+    ) -> Result<pb::GuestActivationStatusResponse, GuestControlHealthError> {
+        let _ = request;
+        Err(GuestControlHealthError::Protocol)
+    }
 }
 
 pub trait GuestControlSigner {
@@ -270,6 +284,20 @@ impl GuestControlRpc for TtrpcGuestControlClient {
         request: pb::UsbipStatusRequest,
     ) -> Result<pb::UsbipStatusResponse, GuestControlHealthError> {
         self.unary("UsbipStatus", request).await
+    }
+
+    async fn activate_system_start(
+        &self,
+        request: pb::GuestActivationStartRequest,
+    ) -> Result<pb::GuestActivationStartResponse, GuestControlHealthError> {
+        self.unary("ActivateSystemStart", request).await
+    }
+
+    async fn activate_system_status(
+        &self,
+        request: pb::GuestActivationStatusRequest,
+    ) -> Result<pb::GuestActivationStatusResponse, GuestControlHealthError> {
+        self.unary("ActivateSystemStatus", request).await
     }
 }
 
@@ -446,6 +474,36 @@ pub enum GuestUsbipImportError {
     Protocol,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuestSystemActivationMode {
+    Switch,
+    Test,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestSystemActivationStart {
+    pub activation_id: String,
+    pub switch_script_path: String,
+    pub mode: GuestSystemActivationMode,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestSystemActivationStatus {
+    pub state: pb::GuestActivationState,
+    pub exit_code: Option<i32>,
+    pub signal: Option<u32>,
+    pub status_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuestSystemActivationError {
+    Probe(GuestControlHealthError),
+    CapabilityUnavailable,
+    GuestRejected(pb::GuestControlErrorKind),
+    Protocol,
+}
+
 /// Authenticate to the guest control endpoint (reusing the W11 Health-probe
 /// handshake) and read the editable guest config working copy via the typed
 /// `ReadGuestFile { GuestConfig }` RPC on the SAME authenticated connection.
@@ -608,6 +666,116 @@ where
         });
     }
     Ok(GuestUsbipStatusResult { imports })
+}
+
+pub async fn activate_system_start_authenticated<C, S>(
+    vm_id: &str,
+    peer_cid: Option<u32>,
+    host_nonce: [u8; AUTH_NONCE_LEN],
+    client: &C,
+    signer: &S,
+    start: &GuestSystemActivationStart,
+) -> Result<GuestSystemActivationStatus, GuestSystemActivationError>
+where
+    C: GuestControlRpc + Sync,
+    S: GuestControlSigner + Sync,
+{
+    let evidence = probe_guest_control_health(vm_id, peer_cid, host_nonce, client, signer)
+        .await
+        .map_err(GuestSystemActivationError::Probe)?;
+    let advertises_activation = evidence.health.capabilities.iter().any(|capability| {
+        matches!(
+            capability.enum_value(),
+            Ok(pb::GuestCapability::GUEST_CAPABILITY_SYSTEM_ACTIVATION)
+        )
+    });
+    if !advertises_activation {
+        return Err(GuestSystemActivationError::CapabilityUnavailable);
+    }
+
+    let mut request = pb::GuestActivationStartRequest::new();
+    request.metadata = MessageField::some(request_metadata(vm_id));
+    request.activation_id = start.activation_id.clone();
+    request.switch_script_path = start.switch_script_path.clone();
+    request.timeout_ms = start.timeout_ms;
+    request.mode = protobuf::EnumOrUnknown::new(match start.mode {
+        GuestSystemActivationMode::Switch => pb::GuestActivationMode::GUEST_ACTIVATION_MODE_SWITCH,
+        GuestSystemActivationMode::Test => pb::GuestActivationMode::GUEST_ACTIVATION_MODE_TEST,
+    });
+    let response = client
+        .activate_system_start(request)
+        .await
+        .map_err(GuestSystemActivationError::Probe)?;
+    if response.activation_id != start.activation_id {
+        return Err(GuestSystemActivationError::Protocol);
+    }
+    if let Some(error) = response.error.as_ref() {
+        return Err(GuestSystemActivationError::GuestRejected(
+            error.kind.enum_value_or_default(),
+        ));
+    }
+    let state = response
+        .state
+        .enum_value()
+        .map_err(|_| GuestSystemActivationError::Protocol)?;
+    Ok(GuestSystemActivationStatus {
+        state,
+        exit_code: None,
+        signal: None,
+        status_code: None,
+    })
+}
+
+pub async fn activate_system_status_authenticated<C, S>(
+    vm_id: &str,
+    peer_cid: Option<u32>,
+    host_nonce: [u8; AUTH_NONCE_LEN],
+    client: &C,
+    signer: &S,
+    activation_id: &str,
+) -> Result<GuestSystemActivationStatus, GuestSystemActivationError>
+where
+    C: GuestControlRpc + Sync,
+    S: GuestControlSigner + Sync,
+{
+    let evidence = probe_guest_control_health(vm_id, peer_cid, host_nonce, client, signer)
+        .await
+        .map_err(GuestSystemActivationError::Probe)?;
+    let advertises_activation = evidence.health.capabilities.iter().any(|capability| {
+        matches!(
+            capability.enum_value(),
+            Ok(pb::GuestCapability::GUEST_CAPABILITY_SYSTEM_ACTIVATION)
+        )
+    });
+    if !advertises_activation {
+        return Err(GuestSystemActivationError::CapabilityUnavailable);
+    }
+
+    let mut request = pb::GuestActivationStatusRequest::new();
+    request.metadata = MessageField::some(request_metadata(vm_id));
+    request.activation_id = activation_id.to_owned();
+    let response = client
+        .activate_system_status(request)
+        .await
+        .map_err(GuestSystemActivationError::Probe)?;
+    if response.activation_id != activation_id {
+        return Err(GuestSystemActivationError::Protocol);
+    }
+    if let Some(error) = response.error.as_ref() {
+        return Err(GuestSystemActivationError::GuestRejected(
+            error.kind.enum_value_or_default(),
+        ));
+    }
+    let state = response
+        .state
+        .enum_value()
+        .map_err(|_| GuestSystemActivationError::Protocol)?;
+    Ok(GuestSystemActivationStatus {
+        state,
+        exit_code: response.exit_code,
+        signal: response.signal,
+        status_code: response.status_code,
+    })
 }
 
 /// Exhaustive host-side mapping of a guest `ReadGuestFile` error kind to a typed

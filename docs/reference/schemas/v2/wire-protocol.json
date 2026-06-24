@@ -9948,11 +9948,37 @@
         "state"
       ],
       "properties": {
+        "degraded": {
+          "default": false,
+          "type": "boolean"
+        },
+        "degradedReasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/VmLifecycleDegradedReason"
+          }
+        },
         "pendingRestart": {
           "type": "boolean"
         },
         "state": {
           "$ref": "#/definitions/VmLifecycleState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmLifecycleDegradedReason": {
+      "type": "object",
+      "required": [
+        "reason",
+        "remediation"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "remediation": {
+          "type": "string"
         }
       },
       "additionalProperties": false

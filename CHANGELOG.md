@@ -19,6 +19,10 @@ deprecations ship one minor release before removal.
   --apply`, `test --apply`, and live `rollback --apply` fail closed when the
   VM is stopped/offline or does not advertise the guest activation capability,
   while `boot --apply` is the explicit offline staging path for the next start.
+- `nixlingd` now orchestrates live VM activation as broker prepare,
+  guest-control activation, and broker commit, with per-VM serialization,
+  crash-consistent pending markers, bounded activation metrics, and degraded
+  status/list reporting for unresolved activation state.
 - Guest-control now exposes authenticated in-guest system activation start/status
   RPCs, with guestd-owned transient systemd units and restart-safe status.
 - Runtime capability projection for qemu-media list/status output now goes
