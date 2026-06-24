@@ -130,7 +130,7 @@ let
     id = "lock:store-sync:${vm}";
     scope = "vm:${vm}";
     path = "${toString cfg.store.stateDir}/${vm}/store-view/sync.lock";
-    owner = actor "broker" "nixling-priv-broker";
+    owner = actor "role" "role:${vm}:qemu-media";
     scopeClass = "vm";
     root = "state";
     normalizedPath = "vms/${vm}/store-view/sync.lock";

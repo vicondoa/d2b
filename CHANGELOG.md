@@ -52,6 +52,9 @@ deprecations ship one minor release before removal.
 - `nixling list` and `nixling status` now use a short provider-status probe
   timeout instead of the graceful shutdown operation timeout, keeping status
   queries responsive when a VM's provider API socket is slow.
+- Public daemon `status` keeps guest USBIP import state, but now uses a short
+  status-specific guest-control budget so slow guest probes cannot make status
+  clients exceed their public-socket timeout.
 - `nixling usb attach <vm> <busid> --apply` now fails immediately for stopped
   VMs with copy-pasteable start-and-retry remediation instead of surfacing a
   generic guest-control transport failure.

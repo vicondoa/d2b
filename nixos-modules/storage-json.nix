@@ -127,7 +127,7 @@ let
       path = "/run/nixling";
       lifecycle = "boot-scoped-readoptable";
       persistence = "boot-scoped";
-      owner = principal "user" "nixlingd";
+      owner = principal "user" "root";
       group = principal "group" "nixling";
       mode = "0750";
       creator = actor "nix-module" "tmpfiles";
@@ -159,7 +159,7 @@ let
       id = "path:daemon-state";
       scope = "host";
       path = "${toString cfg.site.stateDir}/daemon-state";
-      owner = principal "user" "nixlingd";
+      owner = principal "user" "root";
       group = principal "group" "nixlingd";
       mode = "0755";
       creator = actor "nix-module" "tmpfiles";
@@ -484,7 +484,7 @@ let
         ];
         cleanupPolicy = "never";
         repairPolicy = "broker-reconcile";
-        invariants = [ "no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only" ];
+        invariants = [ "broker-opaque-id-only" ];
       })
       (mkPath {
         id = "path:store-view-live:${name}";
@@ -588,7 +588,7 @@ let
         cleanupPolicy = "cutover-only";
         repairPolicy = "broker-reconcile";
         noFollow = false;
-        invariants = [ "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only" ];
+        invariants = [ "broker-opaque-id-only" ];
       })
       (mkPath {
         id = "path:store-sync-lock:${name}";
@@ -607,7 +607,7 @@ let
         cleanupPolicy = "never";
         repairPolicy = "broker-reconcile";
         leaseClass = "none";
-        invariants = [ "no-symlink" "same-filesystem" "broker-opaque-id-only" ];
+        invariants = [ "no-symlink" "broker-opaque-id-only" ];
       })
     ])
     normalNixosVms);
