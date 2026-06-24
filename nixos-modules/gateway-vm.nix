@@ -164,6 +164,7 @@ let
         ];
         systemd.tmpfiles.rules = [
           "d /run/nixling 1770 root nixling -"
+          "z /run/nixling 1770 root nixling -"
           "a+ /run/nixling - - - - g::r-x"
           "a+ /run/nixling - - - - u:nixlingd:rwx"
           "a+ /run/nixling - - - - m::rwx"

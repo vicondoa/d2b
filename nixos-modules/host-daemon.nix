@@ -366,6 +366,7 @@ in
       # socket itself is mode 0660 group nixling
       # (see packages/nixlingd/src/lib.rs::bind_public_socket).
       "d /run/nixling 1770 root nixling -"
+      "z /run/nixling 1770 root nixling -"
       "a+ /run/nixling - - - - g::r-x"
       "a+ /run/nixling - - - - u:nixlingd:rwx"
       "a+ /run/nixling - - - - m::rwx"
