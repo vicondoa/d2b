@@ -376,17 +376,18 @@ fn rendered_storage_roots_or_static_fallback() -> BTreeSet<String> {
 
 fn host_mutation_sources() -> BTreeSet<String> {
     let mutation_re = Regex::new(
-        r"(fs::(?:write|copy|rename|remove_(?:file|dir|dir_all))|std::os::unix::fs::symlink|symlink|hard_link|File::create|OpenOptions::new|create_dir(?:_all)?|set_permissions|chmod|chown|setfacl|systemd\.tmpfiles\.rules|tmpfiles\.rules|activationScripts|install\s+-[dm]|mkdir\s+-p)",
+        r"(fs::(?:write|copy|rename|remove_(?:file|dir|dir_all))|write_evidence|std::os::unix::fs::symlink|symlink|hard_link|File::create|OpenOptions::new|create_dir(?:_all)?|set_permissions|chmod|chown|setfacl|systemd\.tmpfiles\.rules|tmpfiles\.rules|activationScripts|install\s+-[dm]|mkdir\s+-p)",
     )
     .expect("mutation context regex");
     let surface_re = Regex::new(
-        r"(/var/lib/nixling(?:/|\b)|/run/nixling(?:/|\b)|/etc/nixling(?:/|\b)|cfg\.site\.stateDir|cfg\.store\.stateDir|\.lock|locks/)",
+        r"(/var/lib/nixling(?:/|\b)|/run/nixling(?:/|\b)|/etc/nixling(?:/|\b)|cfg\.site\.stateDir|cfg\.store\.stateDir|evidence_dir|\.lock|locks/)",
     )
     .expect("surface regex");
 
     let mut found = BTreeSet::new();
     for rel in [
         ("nixos-modules", "nix"),
+        ("packages/nixling/src", "rs"),
         ("packages/nixling-priv-broker/src", "rs"),
         ("packages/nixlingd/src", "rs"),
         ("packages/nixling-host/src", "rs"),
@@ -494,6 +495,14 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
             "storage root:path:state-root",
         ),
         ("nixos-modules/store.nix", "storage root:path:state-root"),
+        (
+            "packages/nixling/src/host_validate.rs",
+            "storage paths:validation evidence root/records",
+        ),
+        (
+            "packages/nixling/src/lib.rs",
+            "storage paths:validation evidence root/records via host validate dispatch",
+        ),
         (
             "packages/nixling-host-activation-helper/src/main.rs",
             "storage root:path:state-root",

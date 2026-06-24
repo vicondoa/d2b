@@ -45,6 +45,8 @@ let
       adoptionPolicy ? "adopt-with-live-owner-proof",
       leaseClass ? "none",
       sensitivity ? "private",
+      accessAcl ? [ ],
+      defaultAcl ? [ ],
       noFollow ? true,
       recursive ? false,
       invariants ? [ "no-symlink" "broker-opaque-id-only" ],
@@ -68,13 +70,13 @@ let
         adoptionPolicy
         leaseClass
         sensitivity
+        accessAcl
+        defaultAcl
         noFollow
         recursive
         invariants
         ;
       pathTemplate = path;
-      accessAcl = [ ];
-      defaultAcl = [ ];
     };
 
   bundleArtifactPaths = [
@@ -186,7 +188,7 @@ let
       path = "/run/nixling/locks/usbip";
       lifecycle = "boot-scoped-readoptable";
       persistence = "boot-scoped";
-      owner = principal "user" "root";
+      owner = principal "user" "nixlingd";
       group = principal "group" "nixlingd";
       mode = "0750";
       creator = actor "nix-module" "tmpfiles";
@@ -248,6 +250,42 @@ let
       ];
       cleanupPolicy = "never";
       repairPolicy = "broker-reconcile";
+      invariants = [ "no-symlink" "root-owned-parent" "broker-opaque-id-only" "scope-authorization-required" ];
+    })
+    (mkPath {
+      id = "path:validation-evidence-root";
+      scope = "host";
+      path = cfg.daemonExperimental.defaultFlipEvidenceDir;
+      owner = principal "user" "root";
+      group = principal "group" "nixling";
+      mode = "0775";
+      creator = actor "operator" "nixling host validate --apply";
+      writers = [ (actor "operator" "nixling host validate --apply") ];
+      readers = [
+        (actor "nix-module" "defaultSwitchReadiness assertions")
+        (actor "operator" "host-doctor")
+      ];
+      cleanupPolicy = "never";
+      repairPolicy = "operator-only";
+      invariants = [ "no-symlink" "scope-authorization-required" ];
+    })
+    (mkPath {
+      id = "path:validation-evidence-records";
+      scope = "host";
+      path = "${cfg.daemonExperimental.defaultFlipEvidenceDir}/<wave>.json";
+      kind = "regular-file";
+      owner = principal "user" "root";
+      group = principal "group" "nixling";
+      mode = "0664";
+      creator = actor "operator" "nixling host validate --apply";
+      writers = [ (actor "operator" "nixling host validate --apply") ];
+      readers = [
+        (actor "nix-module" "defaultSwitchReadiness assertions")
+        (actor "operator" "host-doctor")
+      ];
+      cleanupPolicy = "never";
+      repairPolicy = "operator-only";
+      invariants = [ "no-symlink" "scope-authorization-required" ];
     })
   ] ++ lib.optionals (qemuMediaVms != { }) [
     (mkPath {
@@ -362,6 +400,7 @@ let
         cleanupPolicy = "boot";
         repairPolicy = "nix-activation";
         leaseClass = "process-pidfd";
+        invariants = [ "no-symlink" "scope-authorization-required" ];
       })
       (mkPath {
         id = "path:vm-run-guest-control:${name}";
@@ -380,6 +419,7 @@ let
         cleanupPolicy = "boot";
         repairPolicy = "nix-activation";
         leaseClass = "process-pidfd";
+        invariants = [ "no-symlink" "scope-authorization-required" ];
       })
       (mkPath {
         id = "path:daemon-state-vm:${name}";
@@ -641,7 +681,7 @@ let
         persistence = "boot-scoped";
         owner = principal "user" "nixlingd";
         group = principal "group" "nixling";
-        mode = "0750";
+        mode = "0770";
         creator = actor "nix-module" "tmpfiles";
         writers = [
           (actor "broker" "nixling-priv-broker")
@@ -651,6 +691,12 @@ let
         repairPolicy = "nix-activation";
         leaseClass = "process-pidfd";
         invariants = [ "no-symlink" "scope-authorization-required" ];
+        accessAcl = [
+          {
+            principal = principal "user" "nixling-${name}-qemu-media";
+            permissions = "rwx";
+          }
+        ];
       })
       (mkPath {
         id = "path:qemu-media-qmp:${name}";
@@ -666,7 +712,6 @@ let
         writers = [ (actor "role" "role:${name}:qemu-media") ];
         readers = [
           (actor "broker" "nixling-priv-broker")
-          (actor "daemon" "nixlingd")
         ];
         cleanupPolicy = "process-exit-with-proof";
         repairPolicy = "broker-fail-closed";

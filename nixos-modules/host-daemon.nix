@@ -373,13 +373,13 @@ in
       # semantics.
       "d /run/nixling/locks 0700 nixlingd nixlingd -"
       # USBIP busid lock claims are broker-written records read by the
-      # daemon. Keep the claim root root-owned so nixlingd can read
-      # and traverse it via the nixlingd group but cannot create or
-      # replace lock claims itself.
-      "d /run/nixling/locks/usbip 0750 root nixlingd -"
+      # daemon. Keep the claim root daemon-owned so the file-record
+      # parent matches sync/storage ownership while broker request
+      # authz still gates individual claim creation.
+      "d /run/nixling/locks/usbip 0750 nixlingd nixlingd -"
       "d /run/nixling/state 0700 nixlingd nixlingd -"
       "d /var/lib/nixling 0750 root nixlingd -"
-      "d /var/lib/nixling/daemon-state 0700 nixlingd nixlingd -"
+      "d /var/lib/nixling/daemon-state 0755 nixlingd nixlingd -"
       "d /etc/nixling 0750 root nixlingd -"
     ];
 
