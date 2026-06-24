@@ -82,7 +82,7 @@ in
 
   "nixlingd-startup-smoke/tmpfiles-usbip-lock-root" = {
     expr = rulesForPath "/run/nixling/locks/usbip";
-    expected = [ "d /run/nixling/locks/usbip 0750 root nixlingd -" ];
+    expected = [ "d /run/nixling/locks/usbip 0750 nixlingd nixlingd -" ];
   };
 
   "nixlingd-startup-smoke/tmpfiles-audit" = {
@@ -97,7 +97,7 @@ in
 
   "nixlingd-startup-smoke/tmpfiles-daemon-state" = {
     expr = rulesForPath "/var/lib/nixling/daemon-state";
-    expected = [ "d /var/lib/nixling/daemon-state 0700 nixlingd nixlingd -" ];
+    expected = [ "d /var/lib/nixling/daemon-state 0755 nixlingd nixlingd -" ];
   };
 
   "nixlingd-startup-smoke/socket-listen-seqpacket" = {
