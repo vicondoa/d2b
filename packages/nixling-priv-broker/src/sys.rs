@@ -693,10 +693,10 @@ pub mod path_safe {
         owner_gid: Option<u32>,
     ) -> io::Result<()> {
         file.write_all(contents)?;
-        fchmod(file.as_fd(), mode)?;
         if owner_uid.is_some() || owner_gid.is_some() {
             fchown(file.as_fd(), owner_uid, owner_gid)?;
         }
+        fchmod(file.as_fd(), mode)?;
         file.sync_all()
     }
 
