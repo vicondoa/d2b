@@ -811,7 +811,7 @@ pub mod path_safe {
                 dir_fd.as_raw_fd(),
                 &stage_name,
                 libc::O_WRONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_CREAT | libc::O_EXCL,
-                mode,
+                0o600,
             ) {
                 Ok(fd) => fd,
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
