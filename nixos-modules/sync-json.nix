@@ -44,10 +44,10 @@ let
     cloexecRequired = true;
   };
 
-  kernelLock = { id, scope, path, owner, scopeClass ? "host", root ? "run", normalizedPath ? id, staleKind ? "cutover-only", adoptionPolicy ? "reacquire-after-proof", timeoutKind ? "fail-fast", timeoutMs ? null, degradeScope ? "host" }: {
+  kernelLock = { id, scope, path ? null, resourceId ? null, owner, scopeClass ? "host", root ? "run", normalizedPath ? id, staleKind ? "cutover-only", adoptionPolicy ? "reacquire-after-proof", timeoutKind ? "fail-fast", timeoutMs ? null, degradeScope ? "host" }: {
     inherit id scope;
     pathTemplate = path;
-    resourceId = null;
+    inherit resourceId;
     kind = "kernel-object";
     ownerProcess = owner;
     allowedHolders = [ owner ];
@@ -139,7 +139,7 @@ let
   qemuMediaTapGrant = vm: kernelLock {
     id = "lock:qemu-media-tap:${vm}";
     scope = "vm:${vm}";
-    path = "tap:${cfg.manifest.${vm}.tap}";
+    resourceId = "tap:${cfg.manifest.${vm}.tap}";
     owner = actor "role" "role:${vm}:qemu-media";
     scopeClass = "vm";
     root = "kernel";
