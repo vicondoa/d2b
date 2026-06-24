@@ -14092,21 +14092,73 @@ fn dispatch_broker_rotate_known_host(
     }
 }
 
+struct PublicRequestArtifacts {
+    manifest: serde_json::Map<String, Value>,
+    host: Option<HostJson>,
+    processes: ProcessesJson,
+    resolver: Option<BundleResolver>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublicResolverLoad {
+    NotNeeded,
+    Optional,
+    Required,
+}
+
+fn public_request_resolver_load(
+    qemu_media_declared: bool,
+    include_usb_status: bool,
+) -> PublicResolverLoad {
+    if qemu_media_declared {
+        PublicResolverLoad::Required
+    } else if include_usb_status {
+        PublicResolverLoad::Optional
+    } else {
+        PublicResolverLoad::NotNeeded
+    }
+}
+
+fn load_public_request_artifacts(
+    state: &ServerState,
+    include_usb_status: bool,
+) -> Result<PublicRequestArtifacts, TypedError> {
+    let manifest = load_manifest(&state.config.artifacts.public_manifest_path)?;
+    let host = load_json::<HostJson>(&state.config.artifacts.host_path).ok();
+    let processes = load_json::<ProcessesJson>(&state.config.artifacts.processes_path)?;
+    let qemu_media_declared = host
+        .as_ref()
+        .and_then(|host| host.qemu_media.as_ref())
+        .is_some();
+    let resolver = match public_request_resolver_load(qemu_media_declared, include_usb_status) {
+        PublicResolverLoad::NotNeeded => None,
+        PublicResolverLoad::Optional => load_bundle_resolver(state).ok(),
+        PublicResolverLoad::Required => Some(load_bundle_resolver(state)?),
+    };
+    if qemu_media_declared {
+        let resolver = resolver
+            .as_ref()
+            .expect("qemu-media declared requires bundle resolver");
+        refresh_qemu_media_registry_index_if_needed(state, resolver)?;
+    }
+    Ok(PublicRequestArtifacts {
+        manifest,
+        host,
+        processes,
+        resolver,
+    })
+}
+
 fn dispatch_list(
     state: &ServerState,
     request: public_wire::ListRequest,
 ) -> Result<Value, TypedError> {
-    let manifest = load_manifest(&state.config.artifacts.public_manifest_path)?;
-    let host = load_json::<HostJson>(&state.config.artifacts.host_path).ok();
-    let processes = load_json::<ProcessesJson>(&state.config.artifacts.processes_path)?;
-    if host
-        .as_ref()
-        .and_then(|host| host.qemu_media.as_ref())
-        .is_some()
-    {
-        let resolver = load_bundle_resolver(state)?;
-        refresh_qemu_media_registry_index_if_needed(state, &resolver)?;
-    }
+    let PublicRequestArtifacts {
+        manifest,
+        host,
+        processes,
+        resolver: _,
+    } = load_public_request_artifacts(state, false)?;
     let vms = std::thread::scope(|scope| {
         let workers = manifest
             .iter()
@@ -14168,18 +14220,12 @@ fn dispatch_status(
     state: &ServerState,
     request: public_wire::StatusRequest,
 ) -> Result<Value, TypedError> {
-    let manifest = load_manifest(&state.config.artifacts.public_manifest_path)?;
-    let host = load_json::<HostJson>(&state.config.artifacts.host_path).ok();
-    let processes = load_json::<ProcessesJson>(&state.config.artifacts.processes_path)?;
-    if host
-        .as_ref()
-        .and_then(|host| host.qemu_media.as_ref())
-        .is_some()
-    {
-        let resolver = load_bundle_resolver(state)?;
-        refresh_qemu_media_registry_index_if_needed(state, &resolver)?;
-    }
-    let usb_resolver = load_bundle_resolver(state).ok();
+    let PublicRequestArtifacts {
+        manifest,
+        host,
+        processes,
+        resolver,
+    } = load_public_request_artifacts(state, true)?;
     let requested_vm = request.vm.clone();
 
     let statuses = std::thread::scope(|scope| {
@@ -14190,7 +14236,7 @@ fn dispatch_status(
             .map(|(name, manifest_entry)| {
                 let process_vm = processes.vms.iter().find(|entry| entry.vm == *name);
                 let host = host.as_ref();
-                let usb_resolver = usb_resolver.as_ref();
+                let usb_resolver = resolver.as_ref();
                 scope.spawn(move || {
                     let lifecycle = public_vm_lifecycle(state, name, manifest_entry, process_vm);
                     let runtime_kind = public_runtime_kind(manifest_entry);
@@ -15631,6 +15677,30 @@ mod public_status_tests {
             "audio": false,
             "tpm": false
         })
+    }
+
+    #[test]
+    fn public_request_resolver_load_is_request_scoped_and_minimal() {
+        assert_eq!(
+            public_request_resolver_load(false, false),
+            PublicResolverLoad::NotNeeded,
+            "list/status paths without qemu-media or USB status do not need a bundle resolver"
+        );
+        assert_eq!(
+            public_request_resolver_load(false, true),
+            PublicResolverLoad::Optional,
+            "USB status may use the resolver but must preserve status output when it is unavailable"
+        );
+        assert_eq!(
+            public_request_resolver_load(true, false),
+            PublicResolverLoad::Required,
+            "qemu-media registry refresh needs the trusted bundle resolver"
+        );
+        assert_eq!(
+            public_request_resolver_load(true, true),
+            PublicResolverLoad::Required,
+            "qemu-media plus USB status shares one required per-request resolver"
+        );
     }
 
     fn qemu_media_process_dag() -> nixling_core::processes::VmProcessDag {
