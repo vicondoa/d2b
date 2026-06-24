@@ -32,7 +32,7 @@ use crate::ops::exec_reconcile::{
 use crate::ops::spawn_runner::{
     SpawnRunnerError, SpawnRunnerPlan, SpawnRunnerPlanInput, build_cstring_vectors, preflight,
 };
-use nixling_contracts::broker_wire::ActivationMode;
+use nixling_contracts::broker_wire::{ActivationMode, ActivationPhase};
 use nixling_core::bundle_resolver::{
     HostRuntime, ResolvedActivationIntent, ResolvedStoreViewIntent,
 };
@@ -259,13 +259,13 @@ pub struct MountNamespaceOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivationOutcome {
+    pub phase: ActivationPhase,
     pub mode: ActivationMode,
     pub vm: String,
     pub generation_number: Option<u64>,
     pub summary: String,
     pub prepared_store_view: Option<StoreViewOutcome>,
-    pub mount_namespace: MountNamespaceOutcome,
-    pub activation_script_path: PathBuf,
+    pub guest_switch_script_path: Option<PathBuf>,
     pub activation_script_mode: String,
     pub rollback_marker_written: Option<u64>,
     pub current_generation_updated: Option<u64>,
@@ -301,8 +301,6 @@ pub struct RotateKnownHostOutcome {
     pub removed: bool,
 }
 
-const ACTIVATION_MOUNT_ROLE_ID: &str = "activation";
-
 pub fn live_prepare_store_view(
     executor: &dyn ReconcileExecutor,
     intent: &ResolvedStoreViewIntent,
@@ -310,6 +308,22 @@ pub fn live_prepare_store_view(
     executor
         .prepare_store_view(intent)
         .map_err(LiveHandlerError::ReconcileExec)?;
+    Ok(StoreViewOutcome {
+        vm: intent.vm.clone(),
+        generation: intent.generation,
+        hardlink_farm_path: intent.hardlink_farm_path.clone(),
+        target_view_path: intent.target_view_path.clone(),
+    })
+}
+
+fn live_prepare_activation_store_view(
+    executor: &dyn ReconcileExecutor,
+    intent: &ResolvedStoreViewIntent,
+) -> Result<StoreViewOutcome, LiveHandlerError> {
+    executor
+        .prepare_activation_store_view(intent)
+        .map_err(LiveHandlerError::ReconcileExec)?;
+    sync_prepared_store_view(intent)?;
     Ok(StoreViewOutcome {
         vm: intent.vm.clone(),
         generation: intent.generation,
@@ -341,6 +355,7 @@ pub fn live_run_activation(
     executor: &dyn ReconcileExecutor,
     intent: &ResolvedActivationIntent,
     store_view_intent: &ResolvedStoreViewIntent,
+    phase: ActivationPhase,
     mode: ActivationMode,
 ) -> Result<ActivationOutcome, LiveHandlerError> {
     if intent.vm != store_view_intent.vm {
@@ -358,106 +373,181 @@ pub fn live_run_activation(
         )));
     }
 
-    let previous_current = read_current_generation(&store_view_intent.hardlink_farm_path)?;
     let mut prepared_store_view = None;
-    let (target_generation, target_view_path) = match mode {
-        ActivationMode::Rollback => {
-            let rollback_generation = read_rollback_marker(&store_view_intent.hardlink_farm_path)?
-                .ok_or_else(|| {
-                    LiveHandlerError::Activation(format!(
-                        "rollback marker missing at {}",
-                        rollback_marker_path(&store_view_intent.hardlink_farm_path).display(),
-                    ))
-                })?;
-            let generation_dir =
-                generation_dir(&store_view_intent.hardlink_farm_path, rollback_generation);
-            let rollback_marker = hardlink_farm::read_generation_marker(&generation_dir)
-                .map_err(|err| LiveHandlerError::Activation(err.to_string()))?;
-            // The rolled-back generation may hold a DIFFERENT closure
-            // than the current bundle intent, so the toplevel basename
-            // for the target view must come from the rollback
-            // generation's own marker — NOT the current intent's
-            // basename (which would point at a non-existent
-            // `generations/<old-gen>/<current-basename>`).
-            let target_view_path = rollback_target_view_path(
-                store_view_intent,
-                rollback_generation,
-                &rollback_marker,
-            )?;
-            if !target_view_path.exists() {
-                return Err(LiveHandlerError::Activation(format!(
-                    "rollback target store view missing at {}",
-                    target_view_path.display(),
-                )));
-            }
-            (rollback_generation, target_view_path)
-        }
-        _ => {
-            let store_view = live_prepare_store_view(executor, store_view_intent)?;
-            let target_generation = store_view.generation;
-            let target_view_path = store_view.target_view_path.clone();
-            prepared_store_view = Some(store_view);
-            (target_generation, target_view_path)
-        }
-    };
-
-    let mount_namespace = live_setup_mount_namespace(
+    let (target_generation, target_view_path) = resolve_activation_target(
         executor,
-        &intent.vm,
-        &store_view_intent.hardlink_farm_path,
-        ACTIVATION_MOUNT_ROLE_ID,
-        &target_view_path,
+        store_view_intent,
+        mode,
+        phase,
+        &mut prepared_store_view,
     )?;
     let activation_script_mode = activation_script_mode(mode).to_owned();
-    let activation_script_path = mount_namespace
-        .mount_view_path
-        .join("bin/switch-to-configuration");
-    let summary = executor
-        .run_activation_script(
-            &activation_script_mode,
-            &target_view_path,
-            &mount_namespace.mount_view_path,
-        )
-        .map_err(LiveHandlerError::ReconcileExec)?;
+    let guest_switch_script_path = guest_switch_script_path_for(&target_view_path)?;
+    let mut rollback_marker_written = None;
+    let mut current_generation_updated = None;
+    if matches!(
+        phase,
+        ActivationPhase::Commit | ActivationPhase::MetadataOnly
+    ) {
+        let metadata = commit_activation_metadata(
+            &store_view_intent.hardlink_farm_path,
+            target_generation,
+            mode,
+        )?;
+        rollback_marker_written = metadata.rollback_marker_written;
+        current_generation_updated = metadata.current_generation_updated;
+    }
 
+    Ok(ActivationOutcome {
+        phase,
+        mode,
+        vm: intent.vm.clone(),
+        generation_number: Some(target_generation),
+        summary: activation_phase_summary(
+            phase,
+            mode,
+            target_generation,
+            &guest_switch_script_path,
+            current_generation_updated,
+        ),
+        prepared_store_view,
+        guest_switch_script_path: Some(guest_switch_script_path),
+        activation_script_mode,
+        rollback_marker_written,
+        current_generation_updated,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MetadataCommitOutcome {
+    rollback_marker_written: Option<u64>,
+    current_generation_updated: Option<u64>,
+}
+
+fn resolve_activation_target(
+    executor: &dyn ReconcileExecutor,
+    store_view_intent: &ResolvedStoreViewIntent,
+    mode: ActivationMode,
+    phase: ActivationPhase,
+    prepared_store_view: &mut Option<StoreViewOutcome>,
+) -> Result<(u64, PathBuf), LiveHandlerError> {
+    if mode == ActivationMode::Rollback {
+        return resolve_rollback_target(store_view_intent);
+    }
+    match phase {
+        ActivationPhase::Prepare | ActivationPhase::MetadataOnly => {
+            let store_view = live_prepare_activation_store_view(executor, store_view_intent)?;
+            let target_generation = store_view.generation;
+            let target_view_path = store_view.target_view_path.clone();
+            *prepared_store_view = Some(store_view);
+            Ok((target_generation, target_view_path))
+        }
+        ActivationPhase::Commit => Ok((
+            store_view_intent.generation,
+            store_view_intent.target_view_path.clone(),
+        )),
+    }
+}
+
+fn resolve_rollback_target(
+    store_view_intent: &ResolvedStoreViewIntent,
+) -> Result<(u64, PathBuf), LiveHandlerError> {
+    let rollback_generation = read_rollback_marker(&store_view_intent.hardlink_farm_path)?
+        .ok_or_else(|| {
+            LiveHandlerError::Activation(format!(
+                "rollback marker missing at {}",
+                rollback_marker_path(&store_view_intent.hardlink_farm_path).display(),
+            ))
+        })?;
+    let generation_dir = generation_dir(&store_view_intent.hardlink_farm_path, rollback_generation);
+    let rollback_marker = hardlink_farm::read_generation_marker(&generation_dir)
+        .map_err(|err| LiveHandlerError::Activation(err.to_string()))?;
+    let target_view_path =
+        rollback_target_view_path(store_view_intent, rollback_generation, &rollback_marker)?;
+    if !target_view_path.exists() {
+        return Err(LiveHandlerError::Activation(format!(
+            "rollback target store view missing at {}",
+            target_view_path.display(),
+        )));
+    }
+    Ok((rollback_generation, target_view_path))
+}
+
+fn commit_activation_metadata(
+    hardlink_farm_path: &Path,
+    target_generation: u64,
+    mode: ActivationMode,
+) -> Result<MetadataCommitOutcome, LiveHandlerError> {
+    verify_generation_ready(hardlink_farm_path, target_generation)?;
+    let previous_current = read_current_generation(hardlink_farm_path)?;
     let mut rollback_marker_written = None;
     let mut current_generation_updated = None;
     match mode {
         ActivationMode::Test => {
             if let Some(previous_generation) = previous_current.filter(|g| *g != target_generation)
             {
-                write_rollback_marker(&store_view_intent.hardlink_farm_path, previous_generation)?;
+                write_rollback_marker(hardlink_farm_path, previous_generation)?;
                 rollback_marker_written = Some(previous_generation);
             }
         }
         ActivationMode::Switch | ActivationMode::Boot => {
             if let Some(previous_generation) = previous_current.filter(|g| *g != target_generation)
             {
-                write_rollback_marker(&store_view_intent.hardlink_farm_path, previous_generation)?;
+                write_rollback_marker(hardlink_farm_path, previous_generation)?;
                 rollback_marker_written = Some(previous_generation);
             }
-            swap_current_generation(&store_view_intent.hardlink_farm_path, target_generation)?;
+            swap_current_generation(hardlink_farm_path, target_generation)?;
             current_generation_updated = Some(target_generation);
         }
         ActivationMode::Rollback => {
-            swap_current_generation(&store_view_intent.hardlink_farm_path, target_generation)?;
+            swap_current_generation(hardlink_farm_path, target_generation)?;
             current_generation_updated = Some(target_generation);
-            clear_rollback_marker(&store_view_intent.hardlink_farm_path)?;
+            clear_rollback_marker(hardlink_farm_path)?;
         }
     }
-
-    Ok(ActivationOutcome {
-        mode,
-        vm: intent.vm.clone(),
-        generation_number: Some(target_generation),
-        summary,
-        prepared_store_view,
-        mount_namespace,
-        activation_script_path,
-        activation_script_mode,
+    Ok(MetadataCommitOutcome {
         rollback_marker_written,
         current_generation_updated,
     })
+}
+
+fn verify_generation_ready(
+    hardlink_farm_path: &Path,
+    generation: u64,
+) -> Result<(), LiveHandlerError> {
+    let dir = generation_dir(hardlink_farm_path, generation);
+    hardlink_farm::read_generation_marker(&dir)
+        .map(|_| ())
+        .map_err(|err| LiveHandlerError::Activation(err.to_string()))
+}
+
+fn activation_phase_summary(
+    phase: ActivationPhase,
+    mode: ActivationMode,
+    target_generation: u64,
+    guest_switch_script_path: &Path,
+    current_generation_updated: Option<u64>,
+) -> String {
+    let mode = activation_script_mode(mode);
+    match phase {
+        ActivationPhase::Prepare => format!(
+            "prepared generation {target_generation} for in-guest {mode} activation at {}",
+            guest_switch_script_path.display()
+        ),
+        ActivationPhase::Commit => match current_generation_updated {
+            Some(generation) => {
+                format!(
+                    "committed generation {generation} metadata after in-guest {mode} activation"
+                )
+            }
+            None => format!(
+                "committed rollback metadata after in-guest {mode} activation for generation {target_generation}"
+            ),
+        },
+        ActivationPhase::MetadataOnly => format!(
+            "staged generation {target_generation} metadata only for {mode}; broker did not execute activation"
+        ),
+    }
 }
 
 fn activation_script_mode(mode: ActivationMode) -> &'static str {
@@ -467,6 +557,58 @@ fn activation_script_mode(mode: ActivationMode) -> &'static str {
         ActivationMode::Test => "test",
         ActivationMode::Rollback => "switch",
     }
+}
+
+fn guest_switch_script_path_for(target_view_path: &Path) -> Result<PathBuf, LiveHandlerError> {
+    let basename = target_view_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            LiveHandlerError::Activation(format!(
+                "store-view target {} lacks a valid UTF-8 basename",
+                target_view_path.display(),
+            ))
+        })?;
+    if basename.is_empty() || basename == "." || basename == ".." || basename.contains('/') {
+        return Err(LiveHandlerError::Activation(format!(
+            "store-view target basename {basename:?} is not a single safe component",
+        )));
+    }
+    Ok(Path::new("/nix/store")
+        .join(basename)
+        .join("bin/switch-to-configuration"))
+}
+
+fn sync_prepared_store_view(intent: &ResolvedStoreViewIntent) -> Result<(), LiveHandlerError> {
+    let live_dir = intent.hardlink_farm_path.join("live");
+    let generation_dir = generation_dir(&intent.hardlink_farm_path, intent.generation);
+    for path in [
+        intent.target_view_path.clone(),
+        intent.target_view_path.join("bin"),
+        intent.target_view_path.join("bin/switch-to-configuration"),
+        live_dir,
+        generation_dir.clone(),
+        generation_dir.join("marker.json"),
+        generation_dir.join("meta.json"),
+        generation_dir.join("store-paths"),
+    ] {
+        sync_existing_path(&path)?;
+    }
+    Ok(())
+}
+
+fn sync_existing_path(path: &Path) -> Result<(), LiveHandlerError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    File::open(path)
+        .and_then(|file| file.sync_all())
+        .map_err(|err| {
+            LiveHandlerError::Activation(format!(
+                "failed to sync prepared store-view path {}: {err}",
+                path.display(),
+            ))
+        })
 }
 
 fn mount_root_for(hardlink_farm_path: &Path, role_id: &str) -> Result<PathBuf, LiveHandlerError> {
@@ -3209,7 +3351,7 @@ fn maybe_harden_swtpm_dir(
 mod tests {
     use super::*;
     use crate::ops::exec_reconcile::{FakeReconcileExecutor, ReconcileOp};
-    use nixling_contracts::broker_wire::ActivationMode;
+    use nixling_contracts::broker_wire::{ActivationMode, ActivationPhase};
     use nixling_core::bundle_resolver::{
         HostRuntime, HostRuntimeArtifact, HostRuntimeIfName, InstallerArtifact,
         ResolvedActivationIntent, ResolvedGcIntent, ResolvedHostKeyTrustIntent,
@@ -3523,16 +3665,23 @@ mod tests {
         let root = TestDir::new("live-run-activation");
         let intent = sample_activation_intent(&root);
         let store_view_intent = sample_store_view_intent(&root);
-        let outcome =
-            live_run_activation(&exec, &intent, &store_view_intent, ActivationMode::Switch)
-                .unwrap();
+        let outcome = live_run_activation(
+            &exec,
+            &intent,
+            &store_view_intent,
+            ActivationPhase::Prepare,
+            ActivationMode::Switch,
+        )
+        .unwrap();
         assert_eq!(outcome.vm, "alpha");
         assert_eq!(outcome.generation_number, Some(42));
-        assert_eq!(outcome.current_generation_updated, Some(42));
+        assert_eq!(outcome.current_generation_updated, None);
         assert_eq!(outcome.activation_script_mode, "switch");
         assert_eq!(
-            std::fs::read_link(store_view_intent.hardlink_farm_path.join("current")).unwrap(),
-            PathBuf::from("generations/42")
+            outcome.guest_switch_script_path.as_deref(),
+            Some(Path::new(
+                "/nix/store/alpha-system/bin/switch-to-configuration"
+            ))
         );
         let log = exec.take_log();
         assert!(matches!(
@@ -3540,14 +3689,69 @@ mod tests {
             ReconcileOp::PrepareStoreView { vm, generation, .. }
                 if vm == "alpha" && *generation == 42
         ));
+        assert_eq!(log.len(), 1);
+    }
+
+    #[test]
+    fn live_run_activation_commit_updates_metadata_without_prepare_or_script() {
+        let exec = FakeReconcileExecutor::new();
+        let root = TestDir::new("live-run-activation-commit");
+        let intent = sample_activation_intent(&root);
+        let store_view_intent = sample_store_view_intent(&root);
+        live_run_activation(
+            &exec,
+            &intent,
+            &store_view_intent,
+            ActivationPhase::Prepare,
+            ActivationMode::Switch,
+        )
+        .unwrap();
+        exec.take_log();
+
+        let outcome = live_run_activation(
+            &exec,
+            &intent,
+            &store_view_intent,
+            ActivationPhase::Commit,
+            ActivationMode::Switch,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.current_generation_updated, Some(42));
+        assert_eq!(
+            std::fs::read_link(store_view_intent.hardlink_farm_path.join("current")).unwrap(),
+            PathBuf::from("generations/42")
+        );
+        assert!(
+            exec.take_log().is_empty(),
+            "commit must not prepare or execute"
+        );
+    }
+
+    #[test]
+    fn live_run_activation_metadata_only_prepares_and_stages_without_script() {
+        let exec = FakeReconcileExecutor::new();
+        let root = TestDir::new("live-run-activation-metadata-only");
+        let intent = sample_activation_intent(&root);
+        let store_view_intent = sample_store_view_intent(&root);
+
+        let outcome = live_run_activation(
+            &exec,
+            &intent,
+            &store_view_intent,
+            ActivationPhase::MetadataOnly,
+            ActivationMode::Boot,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.current_generation_updated, Some(42));
+        assert!(outcome.summary.contains("metadata only"));
+        let log = exec.take_log();
+        assert_eq!(log.len(), 1);
         assert!(matches!(
-            &log[1],
-            ReconcileOp::SetupMountNamespace { vm, role_id, .. }
-                if vm == "alpha" && role_id == "activation"
-        ));
-        assert!(matches!(
-            &log[2],
-            ReconcileOp::RunActivationScript { mode_arg, .. } if mode_arg == "switch"
+            &log[0],
+            ReconcileOp::PrepareStoreView { vm, generation, .. }
+                if vm == "alpha" && *generation == 42
         ));
     }
 

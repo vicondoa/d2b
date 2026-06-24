@@ -327,11 +327,27 @@ pub enum ActivationMode {
     Rollback,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ActivationPhase {
+    Prepare,
+    Commit,
+    MetadataOnly,
+}
+
+impl Default for ActivationPhase {
+    fn default() -> Self {
+        Self::MetadataOnly
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunActivationRequest {
     pub bundle_activation_intent_ref: BundleOpId,
     pub mode: ActivationMode,
+    #[serde(default)]
+    pub phase: ActivationPhase,
     pub vm: String,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
@@ -344,6 +360,8 @@ pub struct RunActivationResponse {
     pub vm: String,
     #[serde(default)]
     pub generation_number: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_switch_script_path: Option<String>,
     pub summary: String,
 }
 
@@ -1856,10 +1874,26 @@ mod tests {
                     "activation:vm:corp-vm"
                 );
                 assert_eq!(req.mode, ActivationMode::Switch);
+                assert_eq!(req.phase, ActivationPhase::MetadataOnly);
                 assert_eq!(req.vm, "corp-vm");
             }
             other => panic!("expected RunActivation, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn run_activation_request_phase_round_trips() {
+        let req = RunActivationRequest {
+            bundle_activation_intent_ref: BundleOpId::new("activation:vm:corp-vm"),
+            mode: ActivationMode::Switch,
+            phase: ActivationPhase::Prepare,
+            vm: "corp-vm".to_owned(),
+            tracing_span_id: None,
+        };
+        let json = serde_json::to_string(&req).expect("serialize");
+        assert!(json.contains("\"phase\":\"prepare\""));
+        let decoded: RunActivationRequest = serde_json::from_str(&json).expect("decode");
+        assert_eq!(decoded.phase, ActivationPhase::Prepare);
     }
 
     #[test]

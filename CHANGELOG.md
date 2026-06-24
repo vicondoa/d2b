@@ -34,6 +34,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Broker VM activation requests now split store-view preparation, guest-completed
+  metadata commit, and offline metadata-only staging so the privileged broker no
+  longer executes VM `switch-to-configuration` scripts on the host.
 - Broker request handling no longer emits a per-request `Bundle resolver loaded`
   info log, and USBIP proxy reconciliation now treats absent locked hardware as
   a non-fatal ACL-refresh skip instead of spamming paired broker/daemon warnings.
