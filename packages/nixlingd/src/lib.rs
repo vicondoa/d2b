@@ -13852,6 +13852,7 @@ fn refresh_activation_marker_metrics_on_startup(state: &ServerState) {
         tracing::warn!(
             vm = %marker.vm,
             mode = %marker.mode,
+            activation_id = %marker.activation_id,
             state = ?marker.state,
             "startup observed unresolved activation marker; VM status/list will report degraded activation-pending"
         );
@@ -14003,6 +14004,17 @@ fn guest_activation_error_is_indeterminate(
     )
 }
 
+fn guest_activation_error_is_not_found(
+    error: &guest_control_health::GuestSystemActivationError,
+) -> bool {
+    matches!(
+        error,
+        guest_control_health::GuestSystemActivationError::GuestRejected(
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND
+        )
+    )
+}
+
 fn run_guest_system_activation(
     state: &ServerState,
     params: Option<guest_control_bridge::ProbeParams>,
@@ -14011,6 +14023,7 @@ fn run_guest_system_activation(
     tracing::info!(
         vm = %plan.vm,
         mode = activation_mode_label(plan.mode),
+        activation_id = %plan.activation_id,
         "starting guest-control system activation"
     );
     #[cfg(test)]
@@ -14074,6 +14087,7 @@ fn rejoin_guest_activation_status(
     activation_id: String,
 ) -> GuestActivationTerminal {
     let deadline = Instant::now() + GUEST_SYSTEM_ACTIVATION_REJOIN_DEADLINE;
+    let mut consecutive_not_found = 0_u32;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -14089,11 +14103,22 @@ fn rejoin_guest_activation_status(
         ) {
             Ok(status) => match status.state {
                 pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING => {
+                    consecutive_not_found = 0;
                     std::thread::sleep(Duration::from_millis(250));
                 }
                 _ => return guest_activation_state_to_terminal(status),
             },
             Err(error) if guest_activation_error_is_indeterminate(&error) => {
+                if guest_activation_error_is_not_found(&error) {
+                    consecutive_not_found = consecutive_not_found.saturating_add(1);
+                    if consecutive_not_found >= 12 {
+                        return GuestActivationTerminal::Indeterminate(
+                            "guest activation was not found after reconnect; start RPC may not have reached guestd".to_owned(),
+                        );
+                    }
+                } else {
+                    consecutive_not_found = 0;
+                }
                 std::thread::sleep(Duration::from_millis(250));
             }
             Err(error) => {
@@ -15102,6 +15127,7 @@ fn public_vm_lifecycle(
         tracing::warn!(
             vm = %vm,
             mode = %marker.mode,
+            activation_id = %marker.activation_id,
             state = ?marker.state,
             "status/list observed unresolved activation marker"
         );

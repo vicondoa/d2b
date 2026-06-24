@@ -852,6 +852,12 @@ trait ActivationUnitManager: Send + Sync + 'static {
         &self,
         unit_name: &str,
     ) -> Result<Option<ActivationStatusSnapshot>, ActivationError>;
+
+    async fn cleanup_terminal_unit(
+        &self,
+        unit_name: &str,
+        snapshot: &ActivationStatusSnapshot,
+    ) -> Result<(), ActivationError>;
 }
 
 struct ProductionActivationUnitManager {
@@ -885,6 +891,8 @@ impl ActivationUnitManager for ProductionActivationUnitManager {
             .arg("User=root")
             .arg("-p")
             .arg("Type=exec")
+            .arg("-p")
+            .arg("RemainAfterExit=yes")
             .arg("-p")
             .arg("StandardInput=null")
             .arg("-p")
@@ -922,6 +930,8 @@ impl ActivationUnitManager for ProductionActivationUnitManager {
             .arg("-p")
             .arg("ActiveState")
             .arg("-p")
+            .arg("SubState")
+            .arg("-p")
             .arg("Result")
             .arg("-p")
             .arg("ExecMainCode")
@@ -946,9 +956,20 @@ impl ActivationUnitManager for ProductionActivationUnitManager {
         if !output.status.success() && fields.is_empty() {
             return Ok(None);
         }
-        if let Some("active" | "activating" | "reloading") =
-            fields.get("ActiveState").map(String::as_str)
+        let active_state = fields.get("ActiveState").map(String::as_str);
+        let sub_state = fields.get("SubState").map(String::as_str);
+        if matches!(active_state, Some("active"))
+            && matches!(sub_state, Some("exited"))
+            && fields.get("Result").map(String::as_str) == Some("success")
         {
+            return Ok(Some(ActivationStatusSnapshot {
+                state: pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED,
+                exit_code: Some(0),
+                signal: None,
+                status_code: None,
+            }));
+        }
+        if matches!(active_state, Some("active" | "activating" | "reloading")) {
             return Ok(Some(ActivationStatusSnapshot::running()));
         }
         match fields.get("Result").map(String::as_str) {
@@ -988,6 +1009,41 @@ impl ActivationUnitManager for ProductionActivationUnitManager {
             }
             None => Err(ActivationError::StatusUnavailable),
         }
+    }
+
+    async fn cleanup_terminal_unit(
+        &self,
+        unit_name: &str,
+        snapshot: &ActivationStatusSnapshot,
+    ) -> Result<(), ActivationError> {
+        match snapshot.state {
+            pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED => {
+                let _ = TokioCommand::new(&self.systemctl_path)
+                    .arg("--no-pager")
+                    .arg("stop")
+                    .arg(unit_name)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .await;
+            }
+            pb::GuestActivationState::GUEST_ACTIVATION_STATE_FAILED
+            | pb::GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT
+            | pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST => {
+                let _ = TokioCommand::new(&self.systemctl_path)
+                    .arg("--no-pager")
+                    .arg("reset-failed")
+                    .arg(unit_name)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .await;
+            }
+            _ => {}
+        }
+        Ok(())
     }
 }
 
@@ -1030,7 +1086,7 @@ impl ActivationRuntime {
         validate_switch_script_path(switch_script_path)?;
         let mode_arg = activation_mode_arg(mode)?;
         let timeout_ms = timeout_ms.clamp(1, self.max_timeout_ms);
-        validate_activation_status_dir(&self.status_dir)?;
+        self.validate_status_dir_async().await?;
         match self.status(activation_id).await {
             Ok(existing) => return Ok(existing),
             Err(ActivationError::NotFound) => {}
@@ -1039,7 +1095,7 @@ impl ActivationRuntime {
 
         let unit_name = activation_unit_name(activation_id)?;
         let running = ActivationStatusSnapshot::running();
-        self.write_record(activation_id, &running)?;
+        self.write_record_async(activation_id, &running).await?;
         if let Err(error) = self
             .manager
             .start_unit(&unit_name, switch_script_path, mode_arg, timeout_ms)
@@ -1054,7 +1110,7 @@ impl ActivationRuntime {
                 },
                 _ => ActivationStatusSnapshot::failed_status(1),
             };
-            let _ = self.write_record(activation_id, &failed);
+            let _ = self.write_record_async(activation_id, &failed).await;
             return Err(error);
         }
         Ok(running)
@@ -1065,8 +1121,8 @@ impl ActivationRuntime {
         activation_id: &str,
     ) -> Result<ActivationStatusSnapshot, ActivationError> {
         validate_activation_id(activation_id)?;
-        validate_activation_status_dir(&self.status_dir)?;
-        let record = self.read_record(activation_id)?;
+        self.validate_status_dir_async().await?;
+        let record = self.read_record_async(activation_id).await?;
         if record.state != pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING {
             return Ok(record);
         }
@@ -1078,7 +1134,13 @@ impl ActivationRuntime {
                 Ok(snapshot)
             }
             Some(snapshot) => {
-                self.write_record(activation_id, &snapshot)?;
+                self.write_record_async(activation_id, &snapshot).await?;
+                if snapshot.state != pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING {
+                    let _ = self
+                        .manager
+                        .cleanup_terminal_unit(&unit_name, &snapshot)
+                        .await;
+                }
                 Ok(snapshot)
             }
             None => {
@@ -1088,15 +1150,46 @@ impl ActivationRuntime {
                     signal: None,
                     status_code: None,
                 };
-                self.write_record(activation_id, &lost)?;
+                self.write_record_async(activation_id, &lost).await?;
+                let _ = self.manager.cleanup_terminal_unit(&unit_name, &lost).await;
                 Ok(lost)
             }
         }
     }
 
-    fn record_path(&self, activation_id: &str) -> Result<PathBuf, ActivationError> {
-        validate_activation_id(activation_id)?;
-        Ok(self.status_dir.join(format!("{activation_id}.status")))
+    async fn validate_status_dir_async(&self) -> Result<(), ActivationError> {
+        let status_dir = self.status_dir.clone();
+        tokio::task::spawn_blocking(move || validate_activation_status_dir(&status_dir))
+            .await
+            .map_err(|_| ActivationError::StatusUnavailable)?
+    }
+
+    async fn write_record_async(
+        &self,
+        activation_id: &str,
+        snapshot: &ActivationStatusSnapshot,
+    ) -> Result<(), ActivationError> {
+        let status_dir = self.status_dir.clone();
+        let activation_id = activation_id.to_owned();
+        let snapshot = snapshot.clone();
+        tokio::task::spawn_blocking(move || {
+            write_activation_record_blocking(&status_dir, &activation_id, &snapshot)
+        })
+        .await
+        .map_err(|_| ActivationError::StatusUnavailable)?
+    }
+
+    async fn read_record_async(
+        &self,
+        activation_id: &str,
+    ) -> Result<ActivationStatusSnapshot, ActivationError> {
+        let status_dir = self.status_dir.clone();
+        let activation_id = activation_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            read_activation_record_blocking(&status_dir, &activation_id)
+        })
+        .await
+        .map_err(|_| ActivationError::StatusUnavailable)?
     }
 
     fn write_record(
@@ -1104,58 +1197,81 @@ impl ActivationRuntime {
         activation_id: &str,
         snapshot: &ActivationStatusSnapshot,
     ) -> Result<(), ActivationError> {
-        let path = self.record_path(activation_id)?;
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let tmp = self.status_dir.join(format!(
-            ".{activation_id}.{}.{nonce}.tmp",
-            std::process::id(),
-        ));
-        let data = format!(
-            "state={}\nexit_code={}\nsignal={}\nstatus_code={}\n",
-            activation_state_name(snapshot.state),
-            snapshot.exit_code.map_or(String::new(), |v| v.to_string()),
-            snapshot.signal.map_or(String::new(), |v| v.to_string()),
-            snapshot
-                .status_code
-                .map_or(String::new(), |v| v.to_string()),
-        );
-        let write_result = (|| -> io::Result<()> {
-            let mut file = OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .mode(0o600)
-                .open(&tmp)?;
-            file.write_all(data.as_bytes())?;
-            file.sync_all()?;
-            fs::rename(&tmp, &path)?;
-            File::open(&self.status_dir)?.sync_all()?;
-            Ok(())
-        })();
-        if write_result.is_err() {
-            let _ = fs::remove_file(&tmp);
-        }
-        write_result.map_err(|_| ActivationError::StatusUnavailable)
+        write_activation_record_blocking(&self.status_dir, activation_id, snapshot)
     }
 
     fn read_record(
         &self,
         activation_id: &str,
     ) -> Result<ActivationStatusSnapshot, ActivationError> {
-        let path = self.record_path(activation_id)?;
-        let meta = fs::symlink_metadata(&path).map_err(|_| ActivationError::NotFound)?;
-        if meta.file_type().is_symlink()
-            || !meta.file_type().is_file()
-            || meta.mode() & 0o077 != 0
-            || !owner_is_safe(meta.uid())
-        {
-            return Err(ActivationError::StatusUnavailable);
-        }
-        let text = fs::read_to_string(&path).map_err(|_| ActivationError::StatusUnavailable)?;
-        parse_activation_record(&text)
+        read_activation_record_blocking(&self.status_dir, activation_id)
     }
+}
+
+fn activation_record_path(
+    status_dir: &Path,
+    activation_id: &str,
+) -> Result<PathBuf, ActivationError> {
+    validate_activation_id(activation_id)?;
+    Ok(status_dir.join(format!("{activation_id}.status")))
+}
+
+fn write_activation_record_blocking(
+    status_dir: &Path,
+    activation_id: &str,
+    snapshot: &ActivationStatusSnapshot,
+) -> Result<(), ActivationError> {
+    let path = activation_record_path(status_dir, activation_id)?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let tmp = status_dir.join(format!(
+        ".{activation_id}.{}.{nonce}.tmp",
+        std::process::id(),
+    ));
+    let data = format!(
+        "state={}\nexit_code={}\nsignal={}\nstatus_code={}\n",
+        activation_state_name(snapshot.state),
+        snapshot.exit_code.map_or(String::new(), |v| v.to_string()),
+        snapshot.signal.map_or(String::new(), |v| v.to_string()),
+        snapshot
+            .status_code
+            .map_or(String::new(), |v| v.to_string()),
+    );
+    let write_result = (|| -> io::Result<()> {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        file.write_all(data.as_bytes())?;
+        file.sync_all()?;
+        fs::rename(&tmp, &path)?;
+        File::open(status_dir)?.sync_all()?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    write_result.map_err(|_| ActivationError::StatusUnavailable)
+}
+
+fn read_activation_record_blocking(
+    status_dir: &Path,
+    activation_id: &str,
+) -> Result<ActivationStatusSnapshot, ActivationError> {
+    let path = activation_record_path(status_dir, activation_id)?;
+    let meta = fs::symlink_metadata(&path).map_err(|_| ActivationError::NotFound)?;
+    if meta.file_type().is_symlink()
+        || !meta.file_type().is_file()
+        || meta.mode() & 0o077 != 0
+        || !owner_is_safe(meta.uid())
+    {
+        return Err(ActivationError::StatusUnavailable);
+    }
+    let text = fs::read_to_string(&path).map_err(|_| ActivationError::StatusUnavailable)?;
+    parse_activation_record(&text)
 }
 
 fn parse_activation_record(text: &str) -> Result<ActivationStatusSnapshot, ActivationError> {
@@ -5634,6 +5750,14 @@ mod tests {
             _unit_name: &str,
         ) -> Result<Option<ActivationStatusSnapshot>, ActivationError> {
             Ok(self.query.lock().unwrap().clone())
+        }
+
+        async fn cleanup_terminal_unit(
+            &self,
+            _unit_name: &str,
+            _snapshot: &ActivationStatusSnapshot,
+        ) -> Result<(), ActivationError> {
+            Ok(())
         }
     }
 
