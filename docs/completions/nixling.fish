@@ -112,7 +112,7 @@ complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_see
 complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "doctor" -d 'Read-only deep diagnostics for the daemon + broker state'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "migrate-storage" -d 'Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "install" -d 'Install nixlingd + broker units onto the host. --apply mutates'
-complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "reconcile" -d 'Recover host network state after the daemon engaged operator-only mode'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "reconcile" -d 'Reconcile host network state (re-run bridge/route/nftables reconcile without starting any VM)'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "validate" -d 'Run the host-side validator suite and write evidence records'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and not __fish_seen_subcommand_from check prepare destroy doctor migrate-storage install reconcile validate help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from check" -l read-only
@@ -149,7 +149,7 @@ complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_su
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from install" -l json
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from install" -l human
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from install" -s h -l help -d 'Print help'
-complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l network -d 'Re-run the network slice of `host prepare` and clear the daemon\'s net-route preflight counter. Currently the only available scope'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l network -d 'Re-run the network slice of `host prepare` (bridge/route/nftables reconcile without starting any VM). Currently the only available scope'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l dry-run -d 'Plan the reconcile without mutating host state'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l apply -d 'Apply the reconcile (mutates host state)'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from reconcile" -l json
@@ -170,7 +170,7 @@ complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_su
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "doctor" -d 'Read-only deep diagnostics for the daemon + broker state'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "migrate-storage" -d 'Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "install" -d 'Install nixlingd + broker units onto the host. --apply mutates'
-complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "reconcile" -d 'Recover host network state after the daemon engaged operator-only mode'
+complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "reconcile" -d 'Reconcile host network state (re-run bridge/route/nftables reconcile without starting any VM)'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "validate" -d 'Run the host-side validator suite and write evidence records'
 complete -c nixling -n "__fish_nixling_using_subcommand host; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c nixling -n "__fish_nixling_using_subcommand auth; and not __fish_seen_subcommand_from status help" -s h -l help -d 'Print help'
@@ -443,7 +443,7 @@ complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_su
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "doctor" -d 'Read-only deep diagnostics for the daemon + broker state'
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "migrate-storage" -d 'Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands'
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "install" -d 'Install nixlingd + broker units onto the host. --apply mutates'
-complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "reconcile" -d 'Recover host network state after the daemon engaged operator-only mode'
+complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "reconcile" -d 'Reconcile host network state (re-run bridge/route/nftables reconcile without starting any VM)'
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from host" -f -a "validate" -d 'Run the host-side validator suite and write evidence records'
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from auth" -f -a "status"
 complete -c nixling -n "__fish_nixling_using_subcommand help; and __fish_seen_subcommand_from realm" -f -a "list" -d 'List local realm policy entrypoints'

@@ -4935,7 +4935,7 @@
           "type": "boolean"
         },
         "network": {
-          "description": "Re-run the per-env nftables / route / sysctl reconcile and clear the operator-only-mode counter on success.",
+          "description": "Re-run the per-env nftables / route / sysctl reconcile.",
           "default": false,
           "type": "boolean"
         }
@@ -6102,7 +6102,7 @@
           }
         },
         {
-          "description": "Dedicated reconcile verb that re-runs the daemon-side net-route preflight + the broker-side per-env nftables / route / sysctl reconcile without starting any VM. On success it resets the operator-only-mode counter so future daemon startups are no longer locked out of autostart. The CLI exposes this as `nixling host reconcile --network --apply`.",
+          "description": "Dedicated reconcile verb that re-runs the broker-side per-env nftables / route / sysctl reconcile without starting any VM. The CLI exposes this as `nixling host reconcile --network --apply`.",
           "type": "object",
           "required": [
             "kind",

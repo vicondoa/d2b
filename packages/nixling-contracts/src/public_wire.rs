@@ -78,13 +78,9 @@ pub enum PublicRequest {
     HostDestroy(HostDestroyRequest),
     #[serde(rename = "host install")]
     HostInstall(HostInstallRequest),
-    /// Dedicated reconcile verb that re-runs the daemon-side net-route
-    /// preflight + the broker-side per-env nftables / route / sysctl
-    /// reconcile
-    /// without starting any VM. On success it resets the
-    /// operator-only-mode counter so future daemon startups are
-    /// no longer locked out of autostart. The CLI exposes this as
-    /// `nixling host reconcile --network --apply`.
+    /// Dedicated reconcile verb that re-runs the broker-side per-env
+    /// nftables / route / sysctl reconcile without starting any VM.
+    /// The CLI exposes this as `nixling host reconcile --network --apply`.
     #[serde(rename = "host reconcile")]
     HostReconcile(HostReconcileRequest),
     /// Read the editable guest config working copy of `vm` over the
@@ -1430,8 +1426,7 @@ pub struct HostInstallRequest {
 pub struct HostReconcileRequest {
     #[serde(default, flatten)]
     pub flags: MutationFlags,
-    /// Re-run the per-env nftables / route / sysctl reconcile and
-    /// clear the operator-only-mode counter on success.
+    /// Re-run the per-env nftables / route / sysctl reconcile.
     #[serde(default)]
     pub network: bool,
 }

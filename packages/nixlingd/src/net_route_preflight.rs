@@ -12,23 +12,12 @@
 //! Every `nixling@<vm>.service` carried `Requires=` on that unit, so
 //! a missing bridge fail-closed all VM starts at the unit-dep level.
 //!
-//! The daemon-only path retires that singleton in favour of running the
-//! equivalent check inside `nixlingd` itself, with two upgrades over the
-//! bash shape:
-//!
-//! 1. The result feeds the autostart layer's pre-degraded set, so a
-//!    failed env's VMs surface in `nixling status` as
-//!    `Outcome::Degraded { reason }` instead of "service failed"
-//!    journal noise.
-//! 2. Repeated failures graduate the daemon into
-//!    [`OperatorOnlyMode`], where the autostart pass is skipped
-//!    entirely and the SOLE mutating recovery verb is
-//!    `nixling host reconcile --network --apply`. This matches the
-//!    rule: "bridge/route self-check failure does NOT make nixlingd
-//!    refuse to serve. Read-only
-//!    status/doctor/audit available. Per-env starts blocked. SOLE
-//!    mutating recovery verb: nixling host reconcile --network
-//!    --apply."
+//! The daemon-only path retires that singleton in favour of running a
+//! diagnostic check inside `nixlingd` itself. Startup misses do not block
+//! autostart: cold boots can legitimately begin without env bridges because
+//! the autostarted net VMs own the host-prep DAG that creates them. If a net
+//! VM actually fails to start, the autostart layer degrades that env's
+//! workloads through the normal net-VM dependency outcome.
 //!
 //! # Scope
 //!
@@ -41,10 +30,9 @@
 //! administratively down, so `ip route get` returned no result or
 //! a wrong-dev route).
 //!
-//! The persistent counter at
-//! `<state_dir>/net-route-preflight-history.jsonl` is a
-//! line-delimited JSON log of recent passes. The most-recent N entries
-//! determine whether the daemon is in operator-only mode.
+//! The persistent history at
+//! `<state_dir>/net-route-preflight-history.jsonl` is a line-delimited JSON
+//! log of recent passes for diagnostics and manual recovery evidence.
 
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
@@ -55,10 +43,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nixling_core::host::{HostJson, IfName, NetEnv};
 use serde::{Deserialize, Serialize};
 
-/// Default number of consecutive failed preflight passes that graduates
-/// the daemon into [`OperatorOnlyMode::Engaged`]: "if the daemon detects
-/// on startup that no autostart attempt has succeeded in N
-/// consecutive tries (e.g. 3), enter operator-only mode".
+/// Historical degraded-mode threshold retained for compatibility with the
+/// typed error/tests. Startup bridge preflight no longer uses this threshold
+/// to skip autostart.
 pub const DEFAULT_DEGRADED_MODE_THRESHOLD: u32 = 3;
 
 /// Filename of the persistent history log relative to the daemon
@@ -339,8 +326,7 @@ impl PreflightHistory {
         Ok(out)
     }
 
-    /// Count how many trailing records are failures. Used to
-    /// determine operator-only mode.
+    /// Count how many trailing records are failures.
     pub fn consecutive_failures(&self) -> std::io::Result<u32> {
         let all = self.read_all()?;
         let mut n: u32 = 0;
@@ -588,7 +574,7 @@ mod tests {
                 consecutive_failures: 10
             }
         ));
-        // threshold = 0 disables operator-only mode (escape hatch).
+        // threshold = 0 disables degraded-mode classification.
         assert!(matches!(
             OperatorOnlyMode::classify(99, 0),
             OperatorOnlyMode::Disengaged
