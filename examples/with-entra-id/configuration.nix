@@ -37,8 +37,8 @@
     waylandUser = "alice";
 
     # Members of `nixling` can run `nixling vm start/stop/...`
-    # without password prompts via polkit. The framework adds the
-    # group; you still declare the user above.
+    # through the daemon public socket. The framework adds the group;
+    # you still declare the user above.
     launcherUsers = [ "alice" ];
 
     # Most Entra-joined workstations want a Yubikey for the MFA

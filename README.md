@@ -200,7 +200,7 @@ sudo nixos-rebuild switch --flake .#desktop
 nixling list                          # corp-vm + sys-work-net
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # corp-vm            work      false     false false   10.20.0.10      stopped
-# sys-work-net       work      false     false false   192.0.2.2       systemd (net-vm)
+# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
 nixling status                        # same table + bridge-health footer
 sudo nixling vm start corp-vm --apply
 ```
@@ -317,7 +317,7 @@ installs the `nixling` CLI on your `$PATH`.
 nixling list                          # expect 'corp-vm' + 'sys-work-net'
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # corp-vm            work      false     false false   10.20.0.10      stopped
-# sys-work-net       work      false     false false   192.0.2.2       systemd (net-vm)
+# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
 nixling status                        # same table + "=== Bridge health ===" footer
 nixling vm start corp-vm --apply      # preferred Rust CLI path
 ssh -i /var/lib/nixling/keys/corp-vm_ed25519 alice@10.20.0.10 hostname

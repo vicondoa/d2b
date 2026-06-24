@@ -264,12 +264,12 @@ default):
 ```text
 nixling list
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
-# sys-work-net       work      false     false false   192.0.2.2       systemd (net-vm)
+# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
 # work-entra            work      false     true  false   10.20.0.10      stopped
 
 nixling status
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
-# sys-work-net       work      false     false false   192.0.2.2       systemd (net-vm)
+# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
 # work-entra            work      false     true  false   10.20.0.10      stopped
 #
 # === Bridge health ===
@@ -421,12 +421,12 @@ back into sync.
 
 ## After subsequent rebuilds
 
-Every per-VM lifecycle service in the framework carries
-`restartIfChanged = false`, so a `nixos-rebuild switch` updates
-unit files but does NOT cycle running VMs. After rebuilding,
-`nixling list` flags any VM whose declared closure has drifted
-from the running one as `[pending restart]`; apply with
-`nixling vm restart <vm> --apply`. See
+`nixos-rebuild switch` updates the declared nixling bundle and may
+restart `nixlingd`, but daemon restarts are continuation events:
+running VM runners are re-adopted rather than cycled. After rebuilding,
+`nixling list` flags any VM whose declared closure has drifted from the
+running one as `[pending restart]`; apply with `nixling vm restart
+<vm> --apply`. See
 [`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)

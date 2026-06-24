@@ -47,7 +47,7 @@
   # ---------------------------------------------------------------
   # nixling.site — host-wide knobs.
   #
-  # Headless example: no Wayland session, no launcher polkit, no
+  # Headless example: no Wayland session, no lifecycle users, no
   # host-side YubiKey rules. Observability does not require any of
   # those, so this stays a minimal-surface host config.
   # ---------------------------------------------------------------

@@ -39,8 +39,8 @@
     # while this stays null.
     waylandUser = null;
 
-    # No launcher users → the framework's polkit grant is inert.
-    # sudo + the per-VM SSH key flow still cover every CLI path.
+    # No launcher users: no host user is added to the nixling lifecycle
+    # group. sudo + the per-VM SSH key flow still cover every CLI path.
     launcherUsers = [ ];
 
     # No YubiKey hardware on this host. Skips the Yubico udev rules

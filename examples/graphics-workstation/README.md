@@ -36,7 +36,7 @@ The matching site-level requirements are declared in
 ```nix
 nixling.site = {
   waylandUser   = "alice";        # required for graphics/audio
-  launcherUsers = [ "alice" ];    # polkit grant for `nixling vm start`
+  launcherUsers = [ "alice" ];    # adds alice to the nixling lifecycle group
   yubikey.enable = true;          # host udev; usbip-host loads on per-VM opt-in
 };
 ```
@@ -228,25 +228,18 @@ implicitly by the host activation script) produces:
     (`.10` and up) share. The host has **no** interface on this
     bridge — workload VMs cannot reach the host's neighbours.
 
-- **Systemd units (sample, not exhaustive):**
-  - `microvm@corp-desktop.service` (the VM itself, owned by
-    microvm.nix).
-  - `microvm@sys-desktop-net.service` (the auto-declared net
-    VM, `autostart = true`).
-  - `nixling-corp-desktop-gpu.service`    — GPU sidecar.
-  - `nixling-corp-desktop-snd.service`    — audio sidecar.
-  - broker-spawned `usbipd-backend` / `usbipd-proxy` runners under
-    `nixling.slice/sys-desktop/` — per-env USBIP backend (loopback)
-    + uplink-IP-bound proxy.
-  - `nixling-net-route-preflight.service` — fail-closed env-route
-    sanity check ordered after `network-online.target`.
+- **Root-visible services:** `nixlingd.service`,
+  `nixling-priv-broker.socket`, and `nixling-priv-broker.service`.
+  Per-VM runners (cloud-hypervisor, virtiofsd, swtpm, GPU/audio/USBIP
+  sidecars) are broker-spawned and supervised by `nixlingd`, not by
+  per-VM systemd templates.
 
-- **Polkit grants:** `alice` (member of `nixling`) can
-  start / stop / restart any of the framework's own units without
-  a password prompt.
+- **Lifecycle access:** `alice` is a member of the `nixling` group via
+  `launcherUsers`, so the daemon authorizes lifecycle requests through
+  its public socket peer credentials.
 
-- **CLI on `$PATH`:** `nixling` (a `writeShellApplication`-shaped
-  Bash CLI for daily VM ops — see `nixling --help`).
+- **CLI on `$PATH`:** `nixling`, the Rust CLI for daily VM operations
+  (see `nixling --help`).
 
 ## Bringing the VM up
 
@@ -256,12 +249,12 @@ Once the host activation completes:
 nixling list                              # expect 'corp-desktop' + 'sys-desktop-net'
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # corp-desktop       desktop   true      false true    10.42.0.10      stopped
-# sys-desktop-net    desktop   false     false false   192.0.2.2       systemd (net-vm)
+# sys-desktop-net    desktop   false     false false   192.0.2.2       running (net-vm)
 
 nixling status                            # adds a "Bridge health" block
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # corp-desktop       desktop   true      false true    10.42.0.10      stopped
-# sys-desktop-net    desktop   false     false false   192.0.2.2       systemd (net-vm)
+# sys-desktop-net    desktop   false     false false   192.0.2.2       running (net-vm)
 #
 # === Bridge health ===
 # BRIDGE               STATE      ADMIN   EXPECTED     RESULT
@@ -302,7 +295,7 @@ Plasma + PipeWire + nixling closure and takes minutes.
   personal)? Add a second `nixling.envs.<name>` block with
   non-overlapping subnets, and a second `nixling.vms.<name>` with
   `env = "<that-env>"`. The framework materialises bridges, the
-  net VM, the USBIP proxy, and polkit grants per-env in lockstep.
+  net VM, the USBIP proxy, and lifecycle group access in lockstep.
 - Want this VM to **not** forward Wayland (e.g. a headless
   background-service VM)? Drop `graphics.enable` and
   `audio.enable` — at that point you don't need
@@ -327,19 +320,18 @@ Plasma + PipeWire + nixling closure and takes minutes.
   names the owning VM. If `nixling usb probe` reports a degraded or
   other-owner row, follow the command it prints or the USBIP troubleshooting
   runbook rather than editing locks or sysfs driver links directly.
-- **The fail-closed `nixling-net-route-preflight.service` runs
-  before any nixling VM starts.** A stale `ip route` or a
-  CIDR-overlap between this env and your host LAN refuses VM
-  start with a precise error naming the env.
+- **Host route/CIDR diagnostics are fail-closed.** A stale `ip route`
+  or a CIDR overlap between this env and your host LAN refuses the
+  affected lifecycle operation with a precise error naming the env.
 
 ## After subsequent rebuilds
 
-Every per-VM lifecycle service in the framework carries
-`restartIfChanged = false`, so a `nixos-rebuild switch` updates
-unit files but does NOT cycle running VMs. After rebuilding,
-`nixling list` flags any VM whose declared closure has drifted
-from the running one as `[pending restart]`; apply with
-`nixling vm restart <vm> --apply`. See
+`nixos-rebuild switch` updates the declared nixling bundle and may
+restart `nixlingd`, but daemon restarts are continuation events:
+running VM runners are re-adopted rather than cycled. After rebuilding,
+`nixling list` flags any VM whose declared closure has drifted from the
+running one as `[pending restart]`; apply with `nixling vm restart
+<vm> --apply`. See
 [`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)

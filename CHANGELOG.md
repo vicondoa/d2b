@@ -15,6 +15,9 @@ deprecations ship one minor release before removal.
 - Public daemon list/status handling now uses a request-scoped artifact snapshot
   so manifest, process, host, and bundle resolver reads are shared within one
   request without cross-request caching.
+- Examples and the default template now describe the daemon-only lifecycle,
+  Rust CLI, and `nixling` group authorization model without stale per-VM
+  systemd, polkit, route-preflight, or bash-CLI references.
 - Runtime capability projection for qemu-media list/status output now goes
   through focused helpers with direct regression coverage, preserving public JSON
   and human output shape.
