@@ -23,8 +23,7 @@ fn explicit_broker_bind_request_round_trips_via_serde() {
     };
     let wrapped = BrokerRequest::UsbipExplicitBind(req);
     let json = serde_json::to_value(&wrapped).expect("serialize UsbipExplicitBind");
-    let back: BrokerRequest =
-        serde_json::from_value(json).expect("deserialize UsbipExplicitBind");
+    let back: BrokerRequest = serde_json::from_value(json).expect("deserialize UsbipExplicitBind");
     match back {
         BrokerRequest::UsbipExplicitBind(r) => {
             assert_eq!(r.bus_id, "1-2");
@@ -112,15 +111,7 @@ fn explicit_attach_uses_same_busid_validation_as_declared_path() {
             "valid busid {busid:?} must pass shared validator"
         );
     }
-    let invalid = [
-        "",
-        "abc",
-        "1-",
-        "-2",
-        "1_2",
-        "/dev/bus/usb/001/002",
-        "1 -2",
-    ];
+    let invalid = ["", "abc", "1-", "-2", "1_2", "/dev/bus/usb/001/002", "1 -2"];
     for busid in invalid {
         assert!(
             validate_bus_id(busid).is_err(),
@@ -244,11 +235,20 @@ fn explicit_firewall_rule_carries_per_env_uplink_not_shared_subnet() {
         net_uplink_ip: "192.0.2.20".to_owned(),
         tracing_span_id: None,
     };
-    assert!(!req.host_uplink_ip.is_empty(), "explicit firewall rule must carry host_uplink_ip for env-scoped nftables rule");
-    assert!(!req.net_uplink_ip.is_empty(), "explicit firewall rule must carry net_uplink_ip for env-scoped nftables rule");
+    assert!(
+        !req.host_uplink_ip.is_empty(),
+        "explicit firewall rule must carry host_uplink_ip for env-scoped nftables rule"
+    );
+    assert!(
+        !req.net_uplink_ip.is_empty(),
+        "explicit firewall rule must carry net_uplink_ip for env-scoped nftables rule"
+    );
     // The env identifier allows the broker to scope the rule to exactly
     // this env's bridge, not open a wildcard across all nixling envs.
-    assert!(!req.env.is_empty(), "explicit firewall rule must carry env identifier");
+    assert!(
+        !req.env.is_empty(),
+        "explicit firewall rule must carry env identifier"
+    );
 }
 
 // ---------------------------------------------------------------------------

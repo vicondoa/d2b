@@ -1081,7 +1081,11 @@ impl TypedError {
                     "usbip explicit attach rejected: busid not present in sysfs"
                 );
             }
-            Self::UsbipExplicitClaimConflict { busid, owner_vm, verb } => {
+            Self::UsbipExplicitClaimConflict {
+                busid,
+                owner_vm,
+                verb,
+            } => {
                 let busid = public_usb_busid(busid);
                 let owner_vm = public_usb_busid(owner_vm);
                 tracing::warn!(

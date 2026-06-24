@@ -62,13 +62,13 @@ let
     # runtimePrep runs, the socket inherits rw for the collector automatically
     # (connect(2) requires write on the socket file). Without this default ACL
     # the collector could not connect to a socket created after startup. The
-    # default mask is clamped to d:m::rw (no x propagation) so execute bits
-    # never leak into new entries via the default ACL path.
+    # default mask is d:m::rwx (write-capable) so the bridge runner's rwx
+    # effective access on newly created children is not masked away.
     ${pkgs.acl}/bin/setfacl \
       -m u:nixling-host-otel-collector:--x \
       -m m::rwx \
       -m d:u:nixling-host-otel-collector:rw \
-      -m d:m::rw \
+      -m d:m::rwx \
       ${otelRuntimeDir}
     if [ -S ${hostEgressSocket} ]; then
       ${pkgs.acl}/bin/setfacl -m u:nixling-host-otel-collector:rw,m::rw ${hostEgressSocket}

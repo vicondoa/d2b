@@ -733,7 +733,13 @@ mod tests {
             let err = build_usbip_explicit_plan(busid, "work", "corp-vm")
                 .expect_err(&format!("explicit plan must reject busid {busid:?}"));
             assert!(
-                matches!(err, TypedError::UsbipStepFailed { step: UsbipBusidStep::Lock, .. }),
+                matches!(
+                    err,
+                    TypedError::UsbipStepFailed {
+                        step: UsbipBusidStep::Lock,
+                        ..
+                    }
+                ),
                 "explicit plan busid shape rejection must surface at Lock step"
             );
         }
@@ -745,8 +751,8 @@ mod tests {
             .expect_err("empty env must be rejected");
         assert!(matches!(err, TypedError::UsbipStepFailed { .. }));
 
-        let err = build_usbip_explicit_plan("1-2", "work", "")
-            .expect_err("empty vm must be rejected");
+        let err =
+            build_usbip_explicit_plan("1-2", "work", "").expect_err("empty vm must be rejected");
         assert!(matches!(err, TypedError::UsbipStepFailed { .. }));
     }
 
@@ -763,8 +769,8 @@ mod tests {
     #[test]
     fn declared_plan_carries_bundle_refs_in_claim_source() {
         // Explicit plan has no bundle refs
-        let explicit = build_usbip_explicit_plan("1-2", "work", "corp-vm")
-            .expect("explicit plan succeeds");
+        let explicit =
+            build_usbip_explicit_plan("1-2", "work", "corp-vm").expect("explicit plan succeeds");
         assert!(!matches!(
             explicit.claim_source,
             UsbipClaimSource::Declared { .. }
@@ -788,8 +794,8 @@ mod tests {
 
     #[test]
     fn explicit_plan_uses_canonical_step_order() {
-        let plan = build_usbip_explicit_plan("1-2", "work", "corp-vm")
-            .expect("explicit plan succeeds");
+        let plan =
+            build_usbip_explicit_plan("1-2", "work", "corp-vm").expect("explicit plan succeeds");
         // The step order for explicit attach is the same as for declared;
         // the difference is in which broker ops the executor dispatches per step.
         assert_eq!(
