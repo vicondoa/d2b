@@ -66,6 +66,8 @@ let
     if positiveQemuProcess == null then null else lib.findFirst (node: node.id == "qemu-media") null positiveQemuProcess.nodes;
   positiveQemuWaylandProxy =
     if positiveQemuProcess == null then null else lib.findFirst (node: node.id == "wayland-proxy") null positiveQemuProcess.nodes;
+  positiveQemuTapLock =
+    lib.findFirst (lock: lock.id == "lock:qemu-media-tap:media") null positiveCfg.nixling._bundle.syncJson.data.locks;
   positiveProfileNames = lib.attrNames positiveCfg.nixling._bundle.minijailProfiles;
   expectedNixosRuntime = {
     kind = "nixos";
@@ -651,6 +653,23 @@ in
       noGuestControl = true;
       noMediaPathInArgv = true;
       noVhostNetPathInArgv = true;
+    };
+  };
+
+  "external-vm-kind/qemu-media-tap-sync-lock-uses-resource-id" = {
+    expr = {
+      id = positiveQemuTapLock.id or null;
+      kind = positiveQemuTapLock.kind or null;
+      pathTemplate = positiveQemuTapLock.pathTemplate or null;
+      resourceId = positiveQemuTapLock.resourceId or null;
+      normalizedPath = positiveQemuTapLock.acquireOrder.normalizedPath or null;
+    };
+    expected = {
+      id = "lock:qemu-media-tap:media";
+      kind = "kernel-object";
+      pathTemplate = null;
+      resourceId = "tap:work-l42";
+      normalizedPath = "tap/work-l42";
     };
   };
 

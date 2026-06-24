@@ -75,6 +75,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- `qemu-media` TAP synchronization locks now render the TAP identifier as a
+  resource id instead of a non-path `pathTemplate`, so the generated `sync.json`
+  deserializes through the Rust `SyncJson` DTO and `nixlingd` can load the bundle
+  after hosts with qemu-media VMs switch.
 - Broker SIGCHLD reaper startup now installs the child-signal stream before the
   runtime is returned, closing a load-sensitive child-reap race surfaced by the
   broker reap tests.
