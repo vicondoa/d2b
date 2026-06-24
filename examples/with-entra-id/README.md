@@ -53,7 +53,7 @@ configure the VM itself.
 | Option                                | Set in            | Purpose                                           |
 |---------------------------------------|-------------------|---------------------------------------------------|
 | `nixling.site.waylandUser`            | `configuration.nix` | Host's Plasma / Wayland user                    |
-| `nixling.site.launcherUsers`          | `configuration.nix` | Polkit grant for `nixling vm start/stop`              |
+| `nixling.site.launcherUsers`          | `configuration.nix` | Adds users to the `nixling` lifecycle group for daemon socket access |
 | `nixling.site.yubikey.enable`         | `configuration.nix` | Host-side YubiKey udev rules; `usbip-host` loads on per-VM opt-in |
 | `nixling.envs.<env>.lanSubnet`        | `configuration.nix` | Per-env workload `/24`                          |
 | `nixling.envs.<env>.uplinkSubnet`     | `configuration.nix` | Per-env host↔net-VM `/30`                       |
@@ -278,11 +278,10 @@ nixling status
 # br-work-lan          NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
 ```
 
-`work-entra` shows `STATUS=stopped` until you `nixling vm start work-entra --apply`;
-after that it transitions to `interactive` (because Entra VMs are
-expected to be launched ad-hoc from a Plasma terminal, never as a
-systemd unit). The `TPM=true` column reflects the swtpm sidecar
-wired up by `nixling.vms.work-entra.tpm.enable = true`.
+`work-entra` shows `STATUS=stopped` until you `nixling vm start
+work-entra --apply`; after that it transitions to `running` under
+`nixlingd` supervision. The `TPM=true` column reflects the swtpm
+sidecar wired up by `nixling.vms.work-entra.tpm.enable = true`.
 
 ### 4. Bring the VM up
 

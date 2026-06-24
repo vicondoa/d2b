@@ -77,8 +77,8 @@
     env   = "personal";
     index = 10;
 
-    # `nixling switch personal-dev` will SSH in as this user using the
-    # framework-managed Ed25519 key generated under
+    # `nixling switch personal-dev --apply` will SSH in as this user
+    # using the framework-managed Ed25519 key generated under
     # /var/lib/nixling/keys/ on every activation.
     ssh.user = "alice";
 

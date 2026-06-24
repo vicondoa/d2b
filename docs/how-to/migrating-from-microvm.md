@@ -514,10 +514,10 @@ work             work   true     true  true    10.20.0.10      systemd [pending 
 Apply with:
 
 ```bash
-nixling vm restart <vm>
+nixling vm restart <vm> --apply
 ```
 
-(Or `nixling switch <vm>` if you want a per-VM closure rebuild +
+(Or `nixling switch <vm> --apply` if you want a per-VM closure rebuild +
 live activation via SSH; restart cycles the existing closure
 cleanly.)
 
@@ -554,8 +554,8 @@ change. For the full predicate semantics see
 - **Per-VM /nix/store.** Each guest sees only its own closure plus
   the microvm.nix runner — a closure-limited `/nix/store` view backed
   by a per-VM hardlink farm under `/var/lib/nixling/vms/<vm>/store/`.
-  Zero byte duplication. `nixling switch <vm>` updates it live without
-  a VM reboot. Back up `/var/lib/nixling/` only to encrypted,
+  Zero byte duplication. `nixling switch <vm> --apply` updates it live
+  without a VM reboot. Back up `/var/lib/nixling/` only to encrypted,
   access-controlled media.
 - **Explicit lifecycle.** In v1.0 (per ADR 0015) `nixling vm start /
   stop / restart` dispatch through `nixlingd` → `nixling-priv-broker`;
@@ -667,7 +667,7 @@ as root.
 `ip link delete vm-<oldname>` and rerun `nixos-rebuild switch`. The
 framework only manages the taps it declares.
 
-**`nixling switch <vm>` errors with `cross-FS hardlink refused`.**
+**`nixling switch <vm> --apply` errors with `cross-FS hardlink refused`.**
 `/var/lib/nixling` and `/nix/store` are on different filesystems.
 The per-VM store needs same-FS hardlinks; move
 `/var/lib/nixling` to the same FS as `/nix/store` (typically by

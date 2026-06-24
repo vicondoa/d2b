@@ -261,10 +261,9 @@ nixling status                            # adds a "Bridge health" block
 # br-desktop-up        UP         up      UP           ok
 # br-desktop-lan       NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
 
-# `corp-desktop` is GRAPHICS=true, so its STATUS will go to
-# `interactive` (not `systemd`) after the next `nixling vm start
-# corp-desktop` — graphics VMs cannot run as systemd units because
-# there is no Wayland compositor in the system unit's PID 1.
+# `corp-desktop` is GRAPHICS=true, so start it from an active
+# Plasma/Wayland session. After the daemon starts its runners, STATUS
+# transitions to `running`.
 
 nixling vm start corp-desktop --apply      # interactive boot from a Plasma terminal
 ssh -i /var/lib/nixling/keys/corp-desktop_ed25519 alice@10.42.0.10 hostname
@@ -308,7 +307,7 @@ Plasma + PipeWire + nixling closure and takes minutes.
 ## Common gotchas
 
 - **`nixling vm start corp-desktop --apply` must run from a Plasma/Wayland
-  terminal on the host** — not over SSH, not as a systemd unit.
+  terminal on the host** — not over SSH.
   The launcher reads the operator's Wayland environment to wire
   the crosvm GPU sidecar; over SSH there is no `wayland-0` socket
   to reach. (Headless VMs are unaffected.)

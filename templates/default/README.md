@@ -133,7 +133,7 @@ check whether any VM has pending changes:
 
 ```bash
 nixling list
-# … STATUS column shows `systemd [pending restart]` for VMs whose
+# ... STATUS column shows `running [pending restart]` for VMs whose
 # `current` closure differs from `booted` while they're running.
 
 nixling vm restart <vm> --apply    # apply the new declared VM closure

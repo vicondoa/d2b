@@ -601,10 +601,10 @@ filesystem caches discard).
 The trade-off is that consumers must explicitly opt into picking
 up sidecar config changes. The framework provides two paths:
 
-- `nixling vm restart <vm>` — clean `down` + `up` of the existing
+- `nixling vm restart <vm> --apply` — clean `down` + `up` of the existing
   closure. Use this when `nixling list` flags a VM as
   `[pending restart]` after a `nixos-rebuild switch`.
-- `nixling switch <vm>` — full per-VM closure rebuild + live
+- `nixling switch <vm> --apply` — full per-VM closure rebuild + live
   activation through the daemon (no VM reboot). Use this when you edited
   the VM's own NixOS module.
 
@@ -1372,10 +1372,10 @@ signal:
 - `nixling list` flags any VM whose declared closure
   (`current` symlink) has drifted from the running one
   (`booted` symlink) with `[pending restart]`.
-- `nixling vm restart <vm>` does a clean `down` + `up` of the
+- `nixling vm restart <vm> --apply` does a clean `down` + `up` of the
   existing closure. Use this when you ran `nixos-rebuild
   switch` and a sidecar config changed.
-- `nixling switch <vm>` does a per-VM closure rebuild + live
+- `nixling switch <vm> --apply` does a per-VM closure rebuild + live
   activation through the daemon (no VM reboot). Use this when you edited
   the VM's own NixOS module.
 

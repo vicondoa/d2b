@@ -202,7 +202,7 @@ nixling list                          # corp-vm + sys-work-net
 # corp-vm            work      false     false false   10.20.0.10      stopped
 # sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
 nixling status                        # same table + bridge-health footer
-sudo nixling vm start corp-vm --apply
+nixling vm start corp-vm --apply
 ```
 
 The scaffold is ~150 lines and is documented inline. See
