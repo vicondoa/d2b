@@ -1,9 +1,10 @@
 use std::{
+    collections::BTreeMap,
     env, fs,
-    fs::File,
-    io::{Read, Result as IoResult},
+    fs::{File, OpenOptions},
+    io::{Read, Result as IoResult, Write},
     net::IpAddr,
-    os::unix::fs::MetadataExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     pin::Pin,
     process::{Command, Stdio},
@@ -93,6 +94,10 @@ const USBIP_COMMAND_TIMEOUT_MS: u64 = 10_000;
 const USBIP_STATUS_MAX_IMPORTS: usize = 64;
 const SHELL_DAEMON_READY_TIMEOUT_MS: u64 = 5_000;
 const SHELL_DAEMON_READY_POLL_MS: u64 = 50;
+const ACTIVATION_MAX_TIMEOUT_MS: u64 = 60 * 60 * 1_000;
+#[cfg(test)]
+const ACTIVATION_DEFAULT_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
+const ACTIVATION_TIMEOUT_STOP_SEC: u64 = 10;
 /// Maximum concurrent in-flight `WriteStdin` handlers per connection. A
 /// fifth concurrent handler is shed with `StdinBackpressure`.
 const WRITE_STDIN_HANDLERS_PER_CONNECTION: u64 = 4;
@@ -109,6 +114,7 @@ type RuntimeAuthCore = GuestAuthCore<
     SystemClock,
 >;
 type SharedAuthCore = Arc<Mutex<RuntimeAuthCore>>;
+type SharedActivation = Option<Arc<ActivationRuntime>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuestdServiceError {
@@ -159,6 +165,10 @@ pub struct GuestdServeConfig {
     /// this policy so guest units can be rendered, but runtime shell operations
     /// remain fail-closed until the shell runtime is available.
     pub shell_policy: ShellPolicy,
+    /// Guest-root system activation runtime. This is independent of guest exec:
+    /// activation always runs as root inside the guest via a transient systemd
+    /// unit, never through workload-user exec.
+    pub activation: Option<ActivationRuntimeConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,6 +206,18 @@ pub struct DetachedRuntimeConfig {
     pub max_runtime_sec: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActivationRuntimeConfig {
+    /// Absolute path to `systemd-run` inside the guest.
+    pub systemd_run_path: PathBuf,
+    /// Absolute path to `systemctl` inside the guest.
+    pub systemctl_path: PathBuf,
+    /// Root-owned 0700 status directory for rejoinable activation state.
+    pub status_dir: PathBuf,
+    /// Maximum accepted activation runtime in milliseconds.
+    pub max_timeout_ms: u64,
+}
+
 impl GuestdServeConfig {
     pub fn new(vm_id: impl Into<String>, token: Vec<u8>) -> Result<Self, GuestdServiceError> {
         Self::with_exec_policy(vm_id, token, ExecPolicy::disabled())
@@ -219,6 +241,7 @@ impl GuestdServeConfig {
             guest_config_path: None,
             usbip_path: None,
             shell_policy: ShellPolicy::disabled(),
+            activation: None,
         })
     }
 
@@ -254,6 +277,11 @@ impl GuestdServeConfig {
         self.shell_policy = policy;
         self
     }
+
+    pub fn with_activation_runtime(mut self, activation: ActivationRuntimeConfig) -> Self {
+        self.activation = Some(activation);
+        self
+    }
 }
 
 pub fn load_token_from_credentials_env() -> Result<Vec<u8>, GuestdServiceError> {
@@ -269,7 +297,7 @@ pub fn load_token_from_credentials_dir(dir: &Path) -> Result<Vec<u8>, GuestdServ
     validate_token_path(dir, &path)?;
     let mut file = File::open(&path).map_err(|_| GuestdServiceError::TokenUnavailable)?;
     let mut data = Vec::new();
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take((MAX_TOKEN_BYTES + 1) as u64)
         .read_to_end(&mut data)
         .map_err(|_| GuestdServiceError::Io)?;
@@ -352,6 +380,10 @@ pub struct CapabilitiesConfig {
     /// Side-effect-free guest USBIP import status/list. Advertised with the same
     /// explicit `usbip` binary path as `UsbipImport`.
     pub usbip_status: bool,
+    /// Guest-root system activation via authenticated guest-control. This is
+    /// independent of workload-user exec and is advertised only when guestd has
+    /// a usable systemd-run/systemctl pair plus secure status storage.
+    pub system_activation: bool,
     pub shell_attached: bool,
     pub shell_management: bool,
     pub shell_force_attach: bool,
@@ -374,6 +406,7 @@ fn derive_capabilities_config(
     exec_tty: bool,
     read_guest_file: bool,
     usbip_import: bool,
+    system_activation: bool,
     shell_limits: Option<(u32, u32)>,
 ) -> CapabilitiesConfig {
     let shell_usable = shell_limits.is_some();
@@ -386,6 +419,7 @@ fn derive_capabilities_config(
         read_guest_file,
         usbip_import,
         usbip_status: usbip_import,
+        system_activation,
         shell_attached: shell_usable,
         shell_management: shell_usable,
         shell_force_attach: shell_usable,
@@ -436,6 +470,7 @@ pub struct ServiceRuntime {
     exec: SharedExec,
     detached: SharedDetached,
     shell: SharedShell,
+    activation: SharedActivation,
     guest_config_path: Option<PathBuf>,
     usbip_path: Option<PathBuf>,
 }
@@ -445,6 +480,9 @@ trait StartupProbe {
     fn guest_boot_id(&self) -> Result<String, GuestAuthError>;
     fn path_is_file(&self, path: &Path) -> bool;
     fn detached_runtime_usable(&self, detached: &DetachedRuntimeConfig) -> bool;
+    fn activation_status_dir_usable(&self, path: &Path) -> bool {
+        validate_activation_status_dir(path).is_ok()
+    }
     fn shpool_service_usable(&self, systemctl_path: &Path) -> bool {
         self.path_is_file(systemctl_path)
     }
@@ -470,6 +508,10 @@ impl StartupProbe for ProductionStartupProbe {
 
     fn detached_runtime_usable(&self, detached: &DetachedRuntimeConfig) -> bool {
         detached_runtime_usable(detached)
+    }
+
+    fn activation_status_dir_usable(&self, path: &Path) -> bool {
+        validate_activation_status_dir(path).is_ok()
     }
 
     fn shpool_service_usable(&self, systemctl_path: &Path) -> bool {
@@ -540,6 +582,24 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
         |path| probe.path_is_file(path),
         |path| probe.shpool_service_usable(path),
     );
+    let activation: SharedActivation = config
+        .activation
+        .as_ref()
+        .filter(|activation| {
+            probe.path_is_file(&activation.systemd_run_path)
+                && probe.path_is_file(&activation.systemctl_path)
+                && probe.activation_status_dir_usable(&activation.status_dir)
+        })
+        .map(|activation| {
+            Arc::new(ActivationRuntime::new(
+                Arc::new(ProductionActivationUnitManager::new(
+                    activation.systemd_run_path.clone(),
+                    activation.systemctl_path.clone(),
+                )),
+                activation.status_dir.clone(),
+                activation.max_timeout_ms,
+            ))
+        });
 
     let detached: SharedDetached = match (config.detached.as_ref(), exec_user.clone(), exec_uid) {
         (Some(detached_cfg), Some(user), Some(uid))
@@ -630,6 +690,7 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
         exec.tty_usable(),
         config.guest_config_path.is_some(),
         usbip_path.is_some(),
+        activation.is_some(),
         shell.is_enabled().then_some((
             config.shell_policy.max_sessions,
             config.shell_policy.max_attached,
@@ -646,6 +707,7 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
         exec,
         detached,
         shell,
+        activation,
         guest_config_path,
         usbip_path,
     })
@@ -735,6 +797,494 @@ fn shpool_service_usable(systemctl_path: &Path) -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActivationError {
+    InvalidId,
+    InvalidPath,
+    InvalidMode,
+    NotFound,
+    StatusUnavailable,
+    TimedOut,
+    SpawnFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActivationStatusSnapshot {
+    state: pb::GuestActivationState,
+    exit_code: Option<i32>,
+    signal: Option<u32>,
+    status_code: Option<i32>,
+}
+
+impl ActivationStatusSnapshot {
+    fn running() -> Self {
+        Self {
+            state: pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING,
+            exit_code: None,
+            signal: None,
+            status_code: None,
+        }
+    }
+
+    fn failed_status(status_code: i32) -> Self {
+        Self {
+            state: pb::GuestActivationState::GUEST_ACTIVATION_STATE_FAILED,
+            exit_code: None,
+            signal: None,
+            status_code: Some(status_code),
+        }
+    }
+}
+
+#[async_trait]
+trait ActivationUnitManager: Send + Sync + 'static {
+    async fn start_unit(
+        &self,
+        unit_name: &str,
+        switch_script_path: &Path,
+        mode_arg: &str,
+        timeout_ms: u64,
+    ) -> Result<(), ActivationError>;
+
+    async fn query_unit(
+        &self,
+        unit_name: &str,
+    ) -> Result<Option<ActivationStatusSnapshot>, ActivationError>;
+}
+
+struct ProductionActivationUnitManager {
+    systemd_run_path: PathBuf,
+    systemctl_path: PathBuf,
+}
+
+impl ProductionActivationUnitManager {
+    fn new(systemd_run_path: PathBuf, systemctl_path: PathBuf) -> Self {
+        Self {
+            systemd_run_path,
+            systemctl_path,
+        }
+    }
+}
+
+#[async_trait]
+impl ActivationUnitManager for ProductionActivationUnitManager {
+    async fn start_unit(
+        &self,
+        unit_name: &str,
+        switch_script_path: &Path,
+        mode_arg: &str,
+        timeout_ms: u64,
+    ) -> Result<(), ActivationError> {
+        let timeout_sec = timeout_ms.div_ceil(1_000).max(1);
+        let mut cmd = TokioCommand::new(&self.systemd_run_path);
+        cmd.arg("--quiet")
+            .arg(format!("--unit={unit_name}"))
+            .arg("-p")
+            .arg("User=root")
+            .arg("-p")
+            .arg("Type=exec")
+            .arg("-p")
+            .arg("StandardInput=null")
+            .arg("-p")
+            .arg("StandardOutput=null")
+            .arg("-p")
+            .arg("StandardError=null")
+            .arg("-p")
+            .arg("KillMode=control-group")
+            .arg("-p")
+            .arg(format!("TimeoutStopSec={ACTIVATION_TIMEOUT_STOP_SEC}"))
+            .arg("-p")
+            .arg(format!("RuntimeMaxSec={timeout_sec}"))
+            .arg(switch_script_path)
+            .arg(mode_arg)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let status = cmd
+            .status()
+            .await
+            .map_err(|_| ActivationError::SpawnFailed)?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(ActivationError::SpawnFailed)
+        }
+    }
+
+    async fn query_unit(
+        &self,
+        unit_name: &str,
+    ) -> Result<Option<ActivationStatusSnapshot>, ActivationError> {
+        let mut cmd = TokioCommand::new(&self.systemctl_path);
+        cmd.arg("--no-pager")
+            .arg("show")
+            .arg(unit_name)
+            .arg("-p")
+            .arg("LoadState")
+            .arg("-p")
+            .arg("ActiveState")
+            .arg("-p")
+            .arg("Result")
+            .arg("-p")
+            .arg("ExecMainCode")
+            .arg("-p")
+            .arg("ExecMainStatus")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let output = cmd
+            .output()
+            .await
+            .map_err(|_| ActivationError::StatusUnavailable)?;
+        let text =
+            String::from_utf8(output.stdout).map_err(|_| ActivationError::StatusUnavailable)?;
+        let fields = parse_systemctl_show(&text);
+        if fields
+            .get("LoadState")
+            .is_some_and(|value| value == "not-found")
+        {
+            return Ok(None);
+        }
+        if !output.status.success() && fields.is_empty() {
+            return Ok(None);
+        }
+        match fields.get("ActiveState").map(String::as_str) {
+            Some("active" | "activating" | "reloading") => {
+                return Ok(Some(ActivationStatusSnapshot::running()));
+            }
+            _ => {}
+        }
+        match fields.get("Result").map(String::as_str) {
+            Some("success") => Ok(Some(ActivationStatusSnapshot {
+                state: pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED,
+                exit_code: Some(0),
+                signal: None,
+                status_code: None,
+            })),
+            Some("timeout") => Ok(Some(ActivationStatusSnapshot {
+                state: pb::GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT,
+                exit_code: None,
+                signal: None,
+                status_code: None,
+            })),
+            Some(_) => {
+                let code = fields
+                    .get("ExecMainCode")
+                    .and_then(|value| value.parse::<i32>().ok());
+                let status = fields
+                    .get("ExecMainStatus")
+                    .and_then(|value| value.parse::<i32>().ok())
+                    .unwrap_or(1);
+                let mut snapshot = ActivationStatusSnapshot::failed_status(status);
+                match code {
+                    Some(1) => {
+                        snapshot.exit_code = Some(status);
+                        snapshot.status_code = None;
+                    }
+                    Some(2) if status >= 0 => {
+                        snapshot.signal = Some(status as u32);
+                        snapshot.status_code = None;
+                    }
+                    _ => {}
+                }
+                Ok(Some(snapshot))
+            }
+            None => Err(ActivationError::StatusUnavailable),
+        }
+    }
+}
+
+fn parse_systemctl_show(text: &str) -> BTreeMap<String, String> {
+    text.lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            Some((key.to_owned(), value.to_owned()))
+        })
+        .collect()
+}
+
+struct ActivationRuntime {
+    manager: Arc<dyn ActivationUnitManager>,
+    status_dir: PathBuf,
+    max_timeout_ms: u64,
+}
+
+impl ActivationRuntime {
+    fn new(
+        manager: Arc<dyn ActivationUnitManager>,
+        status_dir: PathBuf,
+        max_timeout_ms: u64,
+    ) -> Self {
+        Self {
+            manager,
+            status_dir,
+            max_timeout_ms: max_timeout_ms.clamp(1, ACTIVATION_MAX_TIMEOUT_MS),
+        }
+    }
+
+    async fn start(
+        &self,
+        activation_id: &str,
+        switch_script_path: &Path,
+        mode: pb::GuestActivationMode,
+        timeout_ms: u64,
+    ) -> Result<ActivationStatusSnapshot, ActivationError> {
+        validate_activation_id(activation_id)?;
+        validate_switch_script_path(switch_script_path)?;
+        let mode_arg = activation_mode_arg(mode)?;
+        let timeout_ms = timeout_ms.clamp(1, self.max_timeout_ms);
+        validate_activation_status_dir(&self.status_dir)?;
+        match self.status(activation_id).await {
+            Ok(existing) => return Ok(existing),
+            Err(ActivationError::NotFound) => {}
+            Err(error) => return Err(error),
+        }
+
+        let unit_name = activation_unit_name(activation_id)?;
+        let running = ActivationStatusSnapshot::running();
+        self.write_record(activation_id, &running)?;
+        if let Err(error) = self
+            .manager
+            .start_unit(&unit_name, switch_script_path, mode_arg, timeout_ms)
+            .await
+        {
+            let failed = match error {
+                ActivationError::TimedOut => ActivationStatusSnapshot {
+                    state: pb::GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT,
+                    exit_code: None,
+                    signal: None,
+                    status_code: None,
+                },
+                _ => ActivationStatusSnapshot::failed_status(1),
+            };
+            let _ = self.write_record(activation_id, &failed);
+            return Err(error);
+        }
+        Ok(running)
+    }
+
+    async fn status(
+        &self,
+        activation_id: &str,
+    ) -> Result<ActivationStatusSnapshot, ActivationError> {
+        validate_activation_id(activation_id)?;
+        validate_activation_status_dir(&self.status_dir)?;
+        let record = self.read_record(activation_id)?;
+        if record.state != pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING {
+            return Ok(record);
+        }
+        let unit_name = activation_unit_name(activation_id)?;
+        match self.manager.query_unit(&unit_name).await? {
+            Some(snapshot)
+                if snapshot.state == pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING =>
+            {
+                Ok(snapshot)
+            }
+            Some(snapshot) => {
+                self.write_record(activation_id, &snapshot)?;
+                Ok(snapshot)
+            }
+            None => {
+                let lost = ActivationStatusSnapshot {
+                    state: pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST,
+                    exit_code: None,
+                    signal: None,
+                    status_code: None,
+                };
+                self.write_record(activation_id, &lost)?;
+                Ok(lost)
+            }
+        }
+    }
+
+    fn record_path(&self, activation_id: &str) -> Result<PathBuf, ActivationError> {
+        validate_activation_id(activation_id)?;
+        Ok(self.status_dir.join(format!("{activation_id}.status")))
+    }
+
+    fn write_record(
+        &self,
+        activation_id: &str,
+        snapshot: &ActivationStatusSnapshot,
+    ) -> Result<(), ActivationError> {
+        let path = self.record_path(activation_id)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|_| ActivationError::StatusUnavailable)?;
+        let data = format!(
+            "state={}\nexit_code={}\nsignal={}\nstatus_code={}\n",
+            activation_state_name(snapshot.state),
+            snapshot.exit_code.map_or(String::new(), |v| v.to_string()),
+            snapshot.signal.map_or(String::new(), |v| v.to_string()),
+            snapshot
+                .status_code
+                .map_or(String::new(), |v| v.to_string()),
+        );
+        file.write_all(data.as_bytes())
+            .and_then(|_| file.sync_all())
+            .map_err(|_| ActivationError::StatusUnavailable)
+    }
+
+    fn read_record(
+        &self,
+        activation_id: &str,
+    ) -> Result<ActivationStatusSnapshot, ActivationError> {
+        let path = self.record_path(activation_id)?;
+        let meta = fs::symlink_metadata(&path).map_err(|_| ActivationError::NotFound)?;
+        if meta.file_type().is_symlink()
+            || !meta.file_type().is_file()
+            || meta.mode() & 0o077 != 0
+            || !owner_is_safe(meta.uid())
+        {
+            return Err(ActivationError::StatusUnavailable);
+        }
+        let text = fs::read_to_string(&path).map_err(|_| ActivationError::StatusUnavailable)?;
+        parse_activation_record(&text)
+    }
+}
+
+fn parse_activation_record(text: &str) -> Result<ActivationStatusSnapshot, ActivationError> {
+    let fields = parse_systemctl_show(text);
+    let state = fields
+        .get("state")
+        .and_then(|value| activation_state_from_name(value))
+        .ok_or(ActivationError::StatusUnavailable)?;
+    let optional_i32 = |key: &str| -> Result<Option<i32>, ActivationError> {
+        match fields.get(key).map(String::as_str) {
+            Some("") | None => Ok(None),
+            Some(value) => value
+                .parse::<i32>()
+                .map(Some)
+                .map_err(|_| ActivationError::StatusUnavailable),
+        }
+    };
+    let signal = match fields.get("signal").map(String::as_str) {
+        Some("") | None => None,
+        Some(value) => Some(
+            value
+                .parse::<u32>()
+                .map_err(|_| ActivationError::StatusUnavailable)?,
+        ),
+    };
+    Ok(ActivationStatusSnapshot {
+        state,
+        exit_code: optional_i32("exit_code")?,
+        signal,
+        status_code: optional_i32("status_code")?,
+    })
+}
+
+fn activation_unit_name(activation_id: &str) -> Result<String, ActivationError> {
+    validate_activation_id(activation_id)?;
+    Ok(format!("nixling-activation-{activation_id}.service"))
+}
+
+fn validate_activation_id(value: &str) -> Result<(), ActivationError> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 36 || bytes.iter().any(|b| matches!(b, b'/' | b'.' | 0)) {
+        return Err(ActivationError::InvalidId);
+    }
+    for (idx, byte) in bytes.iter().copied().enumerate() {
+        let hyphen = matches!(idx, 8 | 13 | 18 | 23);
+        if hyphen {
+            if byte != b'-' {
+                return Err(ActivationError::InvalidId);
+            }
+        } else if !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte) {
+            return Err(ActivationError::InvalidId);
+        }
+    }
+    Ok(())
+}
+
+fn activation_mode_arg(mode: pb::GuestActivationMode) -> Result<&'static str, ActivationError> {
+    match mode {
+        pb::GuestActivationMode::GUEST_ACTIVATION_MODE_SWITCH => Ok("switch"),
+        pb::GuestActivationMode::GUEST_ACTIVATION_MODE_BOOT => Ok("boot"),
+        pb::GuestActivationMode::GUEST_ACTIVATION_MODE_TEST => Ok("test"),
+        pb::GuestActivationMode::GUEST_ACTIVATION_MODE_DRY_ACTIVATE => Ok("dry-activate"),
+        _ => Err(ActivationError::InvalidMode),
+    }
+}
+
+fn validate_switch_script_path(path: &Path) -> Result<(), ActivationError> {
+    let value = path.to_str().ok_or(ActivationError::InvalidPath)?;
+    if value.as_bytes().contains(&0) {
+        return Err(ActivationError::InvalidPath);
+    }
+    let prefix = "/nix/store/";
+    let suffix = "/bin/switch-to-configuration";
+    let Some(rest) = value.strip_prefix(prefix) else {
+        return Err(ActivationError::InvalidPath);
+    };
+    let Some(store_name) = rest.strip_suffix(suffix) else {
+        return Err(ActivationError::InvalidPath);
+    };
+    if store_name.contains('/') || !strict_nix_store_basename(store_name) {
+        return Err(ActivationError::InvalidPath);
+    }
+    let meta = fs::symlink_metadata(path).map_err(|_| ActivationError::InvalidPath)?;
+    if meta.file_type().is_symlink() || !meta.file_type().is_file() || meta.mode() & 0o111 == 0 {
+        return Err(ActivationError::InvalidPath);
+    }
+    Ok(())
+}
+
+fn strict_nix_store_basename(value: &str) -> bool {
+    const NIX_BASE32: &[u8] = b"0123456789abcdfghijklmnpqrsvwxyz";
+    let bytes = value.as_bytes();
+    if bytes.len() < 34 || bytes[32] != b'-' {
+        return false;
+    }
+    if !bytes[..32].iter().all(|byte| NIX_BASE32.contains(byte)) {
+        return false;
+    }
+    bytes[33..].iter().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.' | b'_' | b'?' | b'=')
+    })
+}
+
+fn validate_activation_status_dir(path: &Path) -> Result<(), ActivationError> {
+    if !path.is_absolute() || path == Path::new("/nix/store") || path.starts_with("/nix/store/") {
+        return Err(ActivationError::StatusUnavailable);
+    }
+    let meta = fs::symlink_metadata(path).map_err(|_| ActivationError::StatusUnavailable)?;
+    if meta.file_type().is_symlink()
+        || !meta.file_type().is_dir()
+        || meta.mode() & 0o077 != 0
+        || !owner_is_safe(meta.uid())
+    {
+        return Err(ActivationError::StatusUnavailable);
+    }
+    Ok(())
+}
+
+fn activation_state_name(state: pb::GuestActivationState) -> &'static str {
+    match state {
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING => "running",
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED => "succeeded",
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_FAILED => "failed",
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT => "timed-out",
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST => "lost",
+        _ => "failed",
+    }
+}
+
+fn activation_state_from_name(value: &str) -> Option<pb::GuestActivationState> {
+    match value {
+        "running" => Some(pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING),
+        "succeeded" => Some(pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED),
+        "failed" => Some(pb::GuestActivationState::GUEST_ACTIVATION_STATE_FAILED),
+        "timed-out" => Some(pb::GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT),
+        "lost" => Some(pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST),
+        _ => None,
+    }
 }
 
 fn shell_policy_runtime_usable(
@@ -845,6 +1395,7 @@ where
     let service = Arc::new(
         GuestControlService::new(runtime.auth, runtime.exec, runtime.detached, context)
             .with_shell_runtime(runtime.shell)
+            .with_activation_runtime(runtime.activation)
             .with_guest_config_path(runtime.guest_config_path)
             .with_usbip_path(runtime.usbip_path),
     );
@@ -867,6 +1418,7 @@ pub struct GuestControlService {
     exec: SharedExec,
     detached: SharedDetached,
     shell: SharedShell,
+    activation: SharedActivation,
     context: AuthConnectionContext,
     // Per-connection interactive-stdin backpressure budgets (shared across the
     // Arc-cloned service for this connection): the count of in-flight
@@ -895,6 +1447,7 @@ impl GuestControlService {
             exec,
             detached,
             shell: Arc::new(ShellRuntime::disabled()),
+            activation: None,
             context,
             write_stdin_handlers: Arc::new(AtomicU64::new(0)),
             write_stdin_bytes: Arc::new(AtomicU64::new(0)),
@@ -919,6 +1472,11 @@ impl GuestControlService {
 
     pub fn with_shell_runtime(mut self, shell: SharedShell) -> Self {
         self.shell = shell;
+        self
+    }
+
+    fn with_activation_runtime(mut self, activation: SharedActivation) -> Self {
+        self.activation = activation;
         self
     }
 
@@ -997,6 +1555,33 @@ impl GuestControlService {
         let stdout = std::str::from_utf8(&output.stdout)
             .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT)?;
         parse_guest_usbip_status(stdout, host, bus_id)
+    }
+
+    async fn activation_start_inner(
+        &self,
+        activation_id: &str,
+        switch_script_path: &Path,
+        mode: pb::GuestActivationMode,
+        timeout_ms: u64,
+    ) -> Result<ActivationStatusSnapshot, ActivationError> {
+        let activation = self
+            .activation
+            .as_ref()
+            .ok_or(ActivationError::StatusUnavailable)?;
+        activation
+            .start(activation_id, switch_script_path, mode, timeout_ms)
+            .await
+    }
+
+    async fn activation_status_inner(
+        &self,
+        activation_id: &str,
+    ) -> Result<ActivationStatusSnapshot, ActivationError> {
+        let activation = self
+            .activation
+            .as_ref()
+            .ok_or(ActivationError::StatusUnavailable)?;
+        activation.status(activation_id).await
     }
 
     /// Acquire a per-connection WriteStdin budget slot: at most
@@ -1357,6 +1942,36 @@ fn guest_error_kind(error: ExecError) -> pb::GuestControlError {
     guest_error(wire_error_kind(error))
 }
 
+fn activation_error_kind(error: ActivationError) -> pb::GuestControlErrorKind {
+    match error {
+        ActivationError::InvalidId => {
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_ID
+        }
+        ActivationError::InvalidPath => {
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_PATH
+        }
+        ActivationError::InvalidMode => {
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_MODE
+        }
+        ActivationError::NotFound => {
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND
+        }
+        ActivationError::StatusUnavailable => {
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE
+        }
+        ActivationError::TimedOut => {
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT
+        }
+        ActivationError::SpawnFailed => {
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED
+        }
+    }
+}
+
+fn activation_error(error: ActivationError) -> pb::GuestControlError {
+    guest_error(activation_error_kind(error))
+}
+
 /// RAII release of a per-connection WriteStdin budget slot (handler count +
 /// in-flight decoded bytes), held for the lifetime of a single WriteStdin RPC.
 struct WriteStdinBudgetGuard {
@@ -1665,6 +2280,75 @@ impl GuestControl for GuestControlService {
                     .collect();
             }
             Err(kind) => response.error = MessageField::some(guest_error(kind)),
+        }
+        Ok(response)
+    }
+
+    async fn activate_system_start(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        request: pb::GuestActivationStartRequest,
+    ) -> ttrpc::Result<pb::GuestActivationStartResponse> {
+        self.require_authenticated()?;
+        self.validate_metadata(request.metadata.as_ref())?;
+
+        let activation_id = request.activation_id.clone();
+        let mode = request.mode.enum_value_or_default();
+        let mut response = pb::GuestActivationStartResponse::new();
+        response.activation_id = activation_id.clone();
+        match self
+            .activation_start_inner(
+                &activation_id,
+                Path::new(&request.switch_script_path),
+                mode,
+                request.timeout_ms,
+            )
+            .await
+        {
+            Ok(snapshot) => response.state = EnumOrUnknown::new(snapshot.state),
+            Err(error) => {
+                response.state =
+                    EnumOrUnknown::new(pb::GuestActivationState::GUEST_ACTIVATION_STATE_FAILED);
+                if error == ActivationError::TimedOut {
+                    response.state = EnumOrUnknown::new(
+                        pb::GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT,
+                    );
+                }
+                response.error = MessageField::some(activation_error(error));
+            }
+        }
+        Ok(response)
+    }
+
+    async fn activate_system_status(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        request: pb::GuestActivationStatusRequest,
+    ) -> ttrpc::Result<pb::GuestActivationStatusResponse> {
+        self.require_authenticated()?;
+        self.validate_metadata(request.metadata.as_ref())?;
+
+        let mut response = pb::GuestActivationStatusResponse::new();
+        response.activation_id = request.activation_id.clone();
+        match self.activation_status_inner(&request.activation_id).await {
+            Ok(snapshot) => {
+                response.state = EnumOrUnknown::new(snapshot.state);
+                response.exit_code = snapshot.exit_code;
+                response.signal = snapshot.signal;
+                response.status_code = snapshot.status_code;
+                if snapshot.state == pb::GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT {
+                    response.error =
+                        MessageField::some(activation_error(ActivationError::TimedOut));
+                } else if snapshot.state == pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST {
+                    response.error =
+                        MessageField::some(activation_error(ActivationError::StatusUnavailable));
+                }
+            }
+            Err(error) => {
+                response.state =
+                    EnumOrUnknown::new(pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST);
+                response.error = MessageField::some(activation_error(error));
+            }
         }
         Ok(response)
     }
@@ -2941,6 +3625,15 @@ fn guest_error(kind: pb::GuestControlErrorKind) -> pb::GuestControlError {
         | K::GUEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND
         | K::GUEST_CONTROL_ERROR_KIND_SHELL_ALREADY_ATTACHED
         | K::GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP => (R::HEALTH_REMEDIATION_NONE, None),
+        K::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_ID
+        | K::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_PATH
+        | K::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_MODE
+        | K::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND => (R::HEALTH_REMEDIATION_NONE, None),
+        K::GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE
+        | K::GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED => {
+            (R::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE, None)
+        }
+        K::GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT => (R::HEALTH_REMEDIATION_RETRY, None),
         _ => (R::HEALTH_REMEDIATION_RETRY, None),
     };
     error.remediation = EnumOrUnknown::new(remediation);
@@ -3269,6 +3962,11 @@ impl RuntimeCapabilitiesProvider {
                 pb::GuestCapability::GUEST_CAPABILITY_USBIP_STATUS,
             ));
         }
+        if config.system_activation {
+            capabilities.capabilities.push(EnumOrUnknown::new(
+                pb::GuestCapability::GUEST_CAPABILITY_SYSTEM_ACTIVATION,
+            ));
+        }
         if config.shell_attached {
             capabilities.capabilities.push(EnumOrUnknown::new(
                 pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED,
@@ -3531,28 +4229,32 @@ mod tests {
                 for exec_tty in [false, true] {
                     for read_guest_file in [false, true] {
                         for usbip_import in [false, true] {
-                            let cfg = derive_capabilities_config(
-                                exec_paths_present,
-                                exec_detached,
-                                exec_tty,
-                                read_guest_file,
-                                usbip_import,
-                                None,
-                            );
-                            assert_eq!(
-                                cfg.exec_attached, cfg.exec_logs,
-                                "exec_attached must imply exec_logs (and vice-versa)"
-                            );
-                            assert_eq!(cfg.exec_attached, exec_paths_present);
-                            assert_eq!(cfg.exec_logs, exec_paths_present);
-                            assert_eq!(cfg.exec_detached, exec_detached);
-                            assert_eq!(cfg.exec_tty, exec_tty);
-                            assert_eq!(cfg.read_guest_file, read_guest_file);
-                            assert_eq!(cfg.usbip_import, usbip_import);
-                            assert_eq!(cfg.usbip_status, usbip_import);
-                            assert!(!cfg.shell_attached);
-                            assert_eq!(cfg.shell_sessions_per_vm, 0);
-                            assert_eq!(cfg.shell_attached_sessions_per_vm, 0);
+                            for system_activation in [false, true] {
+                                let cfg = derive_capabilities_config(
+                                    exec_paths_present,
+                                    exec_detached,
+                                    exec_tty,
+                                    read_guest_file,
+                                    usbip_import,
+                                    system_activation,
+                                    None,
+                                );
+                                assert_eq!(
+                                    cfg.exec_attached, cfg.exec_logs,
+                                    "exec_attached must imply exec_logs (and vice-versa)"
+                                );
+                                assert_eq!(cfg.exec_attached, exec_paths_present);
+                                assert_eq!(cfg.exec_logs, exec_paths_present);
+                                assert_eq!(cfg.exec_detached, exec_detached);
+                                assert_eq!(cfg.exec_tty, exec_tty);
+                                assert_eq!(cfg.read_guest_file, read_guest_file);
+                                assert_eq!(cfg.usbip_import, usbip_import);
+                                assert_eq!(cfg.usbip_status, usbip_import);
+                                assert_eq!(cfg.system_activation, system_activation);
+                                assert!(!cfg.shell_attached);
+                                assert_eq!(cfg.shell_sessions_per_vm, 0);
+                                assert_eq!(cfg.shell_attached_sessions_per_vm, 0);
+                            }
                         }
                     }
                 }
@@ -4021,6 +4723,16 @@ mod tests {
         assert_unauthenticated(
             service
                 .usbip_status(&ctx, pb::UsbipStatusRequest::new())
+                .await,
+        );
+        assert_unauthenticated(
+            service
+                .activate_system_start(&ctx, pb::GuestActivationStartRequest::new())
+                .await,
+        );
+        assert_unauthenticated(
+            service
+                .activate_system_status(&ctx, pb::GuestActivationStatusRequest::new())
                 .await,
         );
     }
@@ -4838,11 +5550,11 @@ mod tests {
     // ---- ReadGuestFile ------------------------------------------------
 
     fn scratch_dir(tag: &str) -> PathBuf {
-        // Repo convention for guest-crate tests: scratch under the system temp
-        // dir (respects TMPDIR), never the repo-relative ".".
-        let base = std::env::temp_dir()
-            .canonicalize()
-            .unwrap_or_else(|_| std::env::temp_dir());
+        // Keep scratch under the worktree; this session forbids /tmp writes.
+        let base = std::env::current_dir()
+            .unwrap()
+            .join(".scratch-guestd-tests");
+        let _ = std::fs::create_dir_all(&base);
         let dir = base.join(format!(
             "guestd-rgf-{tag}-{}-{}",
             std::process::id(),
@@ -4852,6 +5564,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
         dir
     }
 
@@ -4863,6 +5576,97 @@ mod tests {
     fn service_with_usbip(instance: u8, path: Option<PathBuf>) -> GuestControlService {
         GuestControlService::new(test_auth(), test_exec(), None, test_context(instance))
             .with_usbip_path(path)
+    }
+
+    #[derive(Clone)]
+    struct FakeActivationUnits {
+        query: Arc<Mutex<Option<ActivationStatusSnapshot>>>,
+        starts: Arc<Mutex<Vec<(String, String)>>>,
+        fail_start: Option<ActivationError>,
+    }
+
+    impl FakeActivationUnits {
+        fn with_query(query: Option<ActivationStatusSnapshot>) -> Self {
+            Self {
+                query: Arc::new(Mutex::new(query)),
+                starts: Arc::new(Mutex::new(Vec::new())),
+                fail_start: None,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ActivationUnitManager for FakeActivationUnits {
+        async fn start_unit(
+            &self,
+            unit_name: &str,
+            _switch_script_path: &Path,
+            mode_arg: &str,
+            _timeout_ms: u64,
+        ) -> Result<(), ActivationError> {
+            self.starts
+                .lock()
+                .unwrap()
+                .push((unit_name.to_owned(), mode_arg.to_owned()));
+            if let Some(error) = self.fail_start {
+                Err(error)
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn query_unit(
+            &self,
+            _unit_name: &str,
+        ) -> Result<Option<ActivationStatusSnapshot>, ActivationError> {
+            Ok(self.query.lock().unwrap().clone())
+        }
+    }
+
+    fn activation_runtime(
+        dir: PathBuf,
+        units: FakeActivationUnits,
+    ) -> (Arc<ActivationRuntime>, Arc<Mutex<Vec<(String, String)>>>) {
+        let starts = Arc::clone(&units.starts);
+        (
+            Arc::new(ActivationRuntime::new(
+                Arc::new(units),
+                dir,
+                ACTIVATION_MAX_TIMEOUT_MS,
+            )),
+            starts,
+        )
+    }
+
+    fn service_with_activation(
+        instance: u8,
+        activation: Option<Arc<ActivationRuntime>>,
+    ) -> GuestControlService {
+        GuestControlService::new(test_auth(), test_exec(), None, test_context(instance))
+            .with_activation_runtime(activation)
+    }
+
+    fn valid_activation_id() -> &'static str {
+        "01234567-89ab-cdef-0123-456789abcdef"
+    }
+
+    fn activation_start_request() -> pb::GuestActivationStartRequest {
+        let mut request = pb::GuestActivationStartRequest::new();
+        request.metadata = metadata();
+        request.activation_id = valid_activation_id().to_owned();
+        request.switch_script_path =
+            "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-nixos-system/bin/switch-to-configuration"
+                .to_owned();
+        request.mode = EnumOrUnknown::new(pb::GuestActivationMode::GUEST_ACTIVATION_MODE_SWITCH);
+        request.timeout_ms = ACTIVATION_DEFAULT_TIMEOUT_MS;
+        request
+    }
+
+    fn activation_status_request(id: &str) -> pb::GuestActivationStatusRequest {
+        let mut request = pb::GuestActivationStatusRequest::new();
+        request.metadata = metadata();
+        request.activation_id = id.to_owned();
+        request
     }
 
     fn read_guest_file_request(file_id: pb::GuestFileId) -> pb::ReadGuestFileRequest {
@@ -4923,6 +5727,129 @@ mod tests {
         let ctx = ttrpc_context();
         // No authenticate(): must fail UNAUTHENTICATED before any stat/read.
         assert_unauthenticated(service.read_guest_file(&ctx, config_request()).await);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn activation_handlers_require_authentication_before_validation() {
+        let dir = scratch_dir("activation-auth");
+        let (runtime, _starts) =
+            activation_runtime(dir.clone(), FakeActivationUnits::with_query(None));
+        let service = service_with_activation(70, Some(runtime));
+        let ctx = ttrpc_context();
+        assert_unauthenticated(
+            service
+                .activate_system_start(&ctx, pb::GuestActivationStartRequest::new())
+                .await,
+        );
+        assert_unauthenticated(
+            service
+                .activate_system_status(&ctx, pb::GuestActivationStatusRequest::new())
+                .await,
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn activation_rejects_invalid_id_path_and_mode_without_starting_unit() {
+        let dir = scratch_dir("activation-invalid");
+        let (runtime, starts) =
+            activation_runtime(dir.clone(), FakeActivationUnits::with_query(None));
+        let service = service_with_activation(71, Some(runtime));
+        authenticate(&service).await;
+        let ctx = ttrpc_context();
+
+        let mut bad_id = activation_start_request();
+        bad_id.activation_id = "../bad".to_owned();
+        let response = service.activate_system_start(&ctx, bad_id).await.unwrap();
+        assert_eq!(
+            response.error.unwrap().kind.enum_value().unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_ID
+        );
+
+        let mut bad_path = activation_start_request();
+        bad_path.switch_script_path = "/run/current-system/bin/switch-to-configuration".to_owned();
+        let response = service.activate_system_start(&ctx, bad_path).await.unwrap();
+        assert_eq!(
+            response.error.unwrap().kind.enum_value().unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_PATH
+        );
+
+        assert_eq!(
+            activation_error_kind(
+                activation_mode_arg(pb::GuestActivationMode::GUEST_ACTIVATION_MODE_UNSPECIFIED,)
+                    .unwrap_err()
+            ),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_MODE
+        );
+        assert!(starts.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn activation_status_rejoins_persisted_terminal_record() {
+        let dir = scratch_dir("activation-rejoin");
+        let (runtime, _starts) =
+            activation_runtime(dir.clone(), FakeActivationUnits::with_query(None));
+        let done = ActivationStatusSnapshot {
+            state: pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED,
+            exit_code: Some(0),
+            signal: None,
+            status_code: None,
+        };
+        runtime.write_record(valid_activation_id(), &done).unwrap();
+
+        let (runtime_after_restart, _starts) =
+            activation_runtime(dir.clone(), FakeActivationUnits::with_query(None));
+        let service = service_with_activation(72, Some(runtime_after_restart));
+        authenticate(&service).await;
+        let response = service
+            .activate_system_status(
+                &ttrpc_context(),
+                activation_status_request(valid_activation_id()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.state.enum_value().unwrap(),
+            pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED
+        );
+        assert_eq!(response.exit_code, Some(0));
+        assert!(response.error.is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn activation_status_marks_stale_running_record_lost_when_unit_is_gone() {
+        let dir = scratch_dir("activation-lost");
+        let (runtime, _starts) =
+            activation_runtime(dir.clone(), FakeActivationUnits::with_query(None));
+        runtime
+            .write_record(valid_activation_id(), &ActivationStatusSnapshot::running())
+            .unwrap();
+        let service = service_with_activation(73, Some(runtime));
+        authenticate(&service).await;
+        let response = service
+            .activate_system_status(
+                &ttrpc_context(),
+                activation_status_request(valid_activation_id()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.state.enum_value().unwrap(),
+            pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST
+        );
+        let persisted = service
+            .activation
+            .as_ref()
+            .unwrap()
+            .read_record(valid_activation_id())
+            .unwrap();
+        assert_eq!(
+            persisted.state,
+            pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
