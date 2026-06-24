@@ -1083,7 +1083,7 @@ impl ActivationRuntime {
         timeout_ms: u64,
     ) -> Result<ActivationStatusSnapshot, ActivationError> {
         validate_activation_id(activation_id)?;
-        validate_switch_script_path(switch_script_path)?;
+        validate_switch_script_path_async(switch_script_path.to_path_buf()).await?;
         let mode_arg = activation_mode_arg(mode)?;
         let timeout_ms = timeout_ms.clamp(1, self.max_timeout_ms);
         self.validate_status_dir_async().await?;
@@ -1324,6 +1324,12 @@ fn activation_mode_arg(mode: pb::GuestActivationMode) -> Result<&'static str, Ac
         pb::GuestActivationMode::GUEST_ACTIVATION_MODE_DRY_ACTIVATE => Ok("dry-activate"),
         _ => Err(ActivationError::InvalidMode),
     }
+}
+
+async fn validate_switch_script_path_async(path: PathBuf) -> Result<(), ActivationError> {
+    tokio::task::spawn_blocking(move || validate_switch_script_path(&path))
+        .await
+        .map_err(|_| ActivationError::InvalidPath)?
 }
 
 fn validate_switch_script_path(path: &Path) -> Result<(), ActivationError> {
@@ -1600,27 +1606,25 @@ impl GuestControlService {
     }
 
     /// Resolve a `ReadGuestFile` enum key to the host-declared path and read it
-    /// with the fail-closed safe-open algorithm. Returns the file bytes or a
-    /// typed `GuestControlErrorKind`. Only `GuestConfig` is supported; any other
-    /// (or `Unspecified`/unknown) key maps to `PathUnsafe` because it names no
-    /// safe target.
-    fn read_guest_file_inner(
+    /// with the fail-closed safe-open algorithm on a blocking worker. Returns the
+    /// file bytes or a typed `GuestControlErrorKind`. Only `GuestConfig` is
+    /// supported; any other (or `Unspecified`/unknown) key maps to `PathUnsafe`
+    /// because it names no safe target.
+    async fn read_guest_file_inner_async(
         &self,
         file_id: pb::GuestFileId,
     ) -> Result<Vec<u8>, pb::GuestControlErrorKind> {
         use pb::GuestControlErrorKind as K;
-        match file_id {
-            pb::GuestFileId::GUEST_FILE_ID_GUEST_CONFIG => {
-                let path = self
-                    .guest_config_path
-                    .as_deref()
-                    // No path wired => the capability was never advertised; a
-                    // caller reaching here anyway is denied (not "not found").
-                    .ok_or(K::GUEST_CONTROL_ERROR_KIND_READ_DENIED)?;
-                read_guest_file_safely(path)
-            }
-            _ => Err(K::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE),
-        }
+        let path = match file_id {
+            pb::GuestFileId::GUEST_FILE_ID_GUEST_CONFIG => self
+                .guest_config_path
+                .clone()
+                .ok_or(K::GUEST_CONTROL_ERROR_KIND_READ_DENIED)?,
+            _ => return Err(K::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE),
+        };
+        tokio::task::spawn_blocking(move || read_guest_file_safely(&path))
+            .await
+            .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_READ_DENIED)?
     }
 
     async fn usbip_import_inner(
@@ -2318,7 +2322,7 @@ impl GuestControl for GuestControlService {
         self.validate_metadata(request.metadata.as_ref())?;
 
         let file_id = request.file_id.enum_value_or_default();
-        let outcome = self.read_guest_file_inner(file_id);
+        let outcome = self.read_guest_file_inner_async(file_id).await;
 
         let mut response = pb::ReadGuestFileResponse::new();
         // Echo the requested key so the host can correlate; on error this is the
