@@ -1896,7 +1896,7 @@ fn write_registry_record_at_root(
     owner_gid: u32,
 ) -> Result<(), MediaOpError> {
     std::fs::create_dir_all(root).map_err(|err| MediaOpError::Registry(err.to_string()))?;
-    crate::sys::path_safe::ensure_dir(root, 0o700, Some(owner_uid), Some(owner_gid))
+    crate::sys::path_safe::ensure_dir(root, 0o700, Some(0), Some(0))
         .map_err(|err| MediaOpError::Registry(err.to_string()))?;
     let root_fd = crate::sys::path_safe::open_dir_path_safe(&root)
         .map_err(|err| MediaOpError::Registry(err.to_string()))?;
@@ -1907,11 +1907,13 @@ fn write_registry_record_at_root(
     let mut bytes =
         serde_json::to_vec_pretty(record).map_err(|err| MediaOpError::Registry(err.to_string()))?;
     bytes.push(b'\n');
-    crate::sys::path_safe::atomic_replace_fd(
+    crate::sys::path_safe::atomic_replace_fd_with_owner(
         &vm_fd,
         &format!("{}.json", record.media_ref),
         &bytes,
         0o600,
+        Some(owner_uid),
+        Some(owner_gid),
     )
     .map_err(|err| MediaOpError::Registry(err.to_string()))
 }
