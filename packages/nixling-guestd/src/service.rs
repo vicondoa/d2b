@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     env, fs,
     fs::{File, OpenOptions},
-    io::{Read, Result as IoResult, Write},
+    io::{self, Read, Result as IoResult, Write},
     net::IpAddr,
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
@@ -888,10 +888,6 @@ impl ActivationUnitManager for ProductionActivationUnitManager {
             .arg("-p")
             .arg("StandardInput=null")
             .arg("-p")
-            .arg("StandardOutput=null")
-            .arg("-p")
-            .arg("StandardError=null")
-            .arg("-p")
             .arg("KillMode=control-group")
             .arg("-p")
             .arg(format!("TimeoutStopSec={ACTIVATION_TIMEOUT_STOP_SEC}"))
@@ -1110,13 +1106,14 @@ impl ActivationRuntime {
         snapshot: &ActivationStatusSnapshot,
     ) -> Result<(), ActivationError> {
         let path = self.record_path(activation_id)?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(0o600)
-            .open(&path)
-            .map_err(|_| ActivationError::StatusUnavailable)?;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let tmp = self.status_dir.join(format!(
+            ".{activation_id}.{}.{nonce}.tmp",
+            std::process::id(),
+        ));
         let data = format!(
             "state={}\nexit_code={}\nsignal={}\nstatus_code={}\n",
             activation_state_name(snapshot.state),
@@ -1126,9 +1123,22 @@ impl ActivationRuntime {
                 .status_code
                 .map_or(String::new(), |v| v.to_string()),
         );
-        file.write_all(data.as_bytes())
-            .and_then(|_| file.sync_all())
-            .map_err(|_| ActivationError::StatusUnavailable)
+        let write_result = (|| -> io::Result<()> {
+            let mut file = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            file.write_all(data.as_bytes())?;
+            file.sync_all()?;
+            fs::rename(&tmp, &path)?;
+            File::open(&self.status_dir)?.sync_all()?;
+            Ok(())
+        })();
+        if write_result.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        write_result.map_err(|_| ActivationError::StatusUnavailable)
     }
 
     fn read_record(
@@ -1199,6 +1209,9 @@ fn validate_activation_id(value: &str) -> Result<(), ActivationError> {
         } else if !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte) {
             return Err(ActivationError::InvalidId);
         }
+    }
+    if bytes[14] != b'4' || !matches!(bytes[19], b'8' | b'9' | b'a' | b'b') {
+        return Err(ActivationError::InvalidId);
     }
     Ok(())
 }
@@ -5647,7 +5660,7 @@ mod tests {
     }
 
     fn valid_activation_id() -> &'static str {
-        "01234567-89ab-cdef-0123-456789abcdef"
+        "01234567-89ab-4def-8123-456789abcdef"
     }
 
     fn activation_start_request() -> pb::GuestActivationStartRequest {
