@@ -436,19 +436,32 @@ cargo_deny_check() {
 cargo_audit_check() {
   local label="$1" lock_path="$2"
   shift 2
-  if command -v cargo-audit >/dev/null 2>&1; then
-    log "--> cargo audit ($label)"
-    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path" "$@"
-    ok "cargo audit ($label)"
-  elif command -v nix >/dev/null 2>&1; then
-    log "--> cargo audit ($label via nix shell)"
-    nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-audit --command \
-      env RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path" "$@"
-    ok "cargo audit ($label)"
-  else
+  local attempts=3 attempt
+  if ! command -v cargo-audit >/dev/null 2>&1 && ! command -v nix >/dev/null 2>&1; then
     fail "cargo audit cannot run for $label: cargo-audit and nix are unavailable; ADR 0009 does not authorize a waiver"
     exit 1
   fi
+  for attempt in $(seq 1 "$attempts"); do
+    if command -v cargo-audit >/dev/null 2>&1; then
+      log "--> cargo audit ($label, attempt $attempt/$attempts)"
+      if RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path" "$@"; then
+        ok "cargo audit ($label)"
+        return 0
+      fi
+    else
+      log "--> cargo audit ($label via nix shell, attempt $attempt/$attempts)"
+      if nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-audit --command \
+        env RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path" "$@"; then
+        ok "cargo audit ($label)"
+        return 0
+      fi
+    fi
+    [ "$attempt" -lt "$attempts" ] || break
+    log "  RETRY: cargo audit ($label) after transient failure"
+    sleep 5
+  done
+  fail "cargo audit ($label) failed after $attempts attempts"
+  return 1
 }
 
 cargo_deny_check "main workspace" "$manifest" "$deny_config"

@@ -1,0 +1,3 @@
+# ci-uses-make — Rust successor for tests/unit/meta/ci-uses-make.sh.
+github_workflows_use_make_targets_or_explicit_allowlist
+ci_uses_make_allowlist_is_intentional_and_bounded

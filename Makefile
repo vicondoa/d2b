@@ -10,7 +10,7 @@
         test-flake-list \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
         layer1-workflow layer1-workflow-check \
-        ledger-regen check-inventory pr-checklist-gate ci-uses-make nix-unit-pin flake-matrix-pin
+        ledger-regen check-inventory pr-checklist-gate nix-unit-pin flake-matrix-pin
 
 # Current Nix system double, used to address per-system flake.checks attrs.
 # Falls back to x86_64-linux if `nix` is unavailable (e.g. a docs-only host).
@@ -123,7 +123,7 @@ test-drift:
 	bash tests/test-drift.sh
 
 ## test-policy — meta gates that guard the test architecture + cross-cutting
-## invariants (ci-coverage, ci-uses-make, adr-index, deliverable-gate, etc.).
+## invariants (ci-coverage, adr-index, deliverable-gate, etc.).
 test-policy:
 	bash tests/test-policy.sh
 
@@ -163,11 +163,9 @@ nix-unit-pin:
 flake-matrix-pin:
 	bash tests/tools/gen-flake-check-matrix-pin.sh
 
-## W0 policy gates (also run by test-policy).
+## W0 policy gate (also run by test-policy).
 pr-checklist-gate:
 	bash tests/unit/meta/pr-checklist-gate.sh .github/PULL_REQUEST_TEMPLATE.md
-ci-uses-make:
-	bash tests/unit/meta/ci-uses-make.sh
 
 ## test-host-integration — G-host: runNixOSTest VM integration tests (the
 ## `vmChecks` flake output, NOT swept by `nix flake check`). Each test boots a

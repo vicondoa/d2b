@@ -91,9 +91,7 @@ def tier0_job(job: dict[str, Any]) -> str:
       - name: CI coverage structural guard
         run: bash tests/unit/meta/ci-coverage.sh
       - name: Test rearchitecture fail-closed gates
-        run: |
-          bash tests/tools/gen-migration-ledger.sh --check
-          bash tests/unit/meta/ci-uses-make.sh"""
+        run: bash tests/tools/gen-migration-ledger.sh --check"""
 
 
 def changelog_job(job: dict[str, Any]) -> str:

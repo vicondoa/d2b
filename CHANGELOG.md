@@ -12,6 +12,8 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- CI workflow make-target policy coverage moved from a shell meta gate to a Rust
+  contract test with pinned successor coverage.
 - `storage-lifecycle-report.json` now includes bounded `contractId` and
   `offendingId` fields on storage/sync contract validation issues, and broker
   storage I/O diagnostics redact absolute managed paths as
@@ -22,6 +24,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- `storage.json` validation-evidence rows now use bounded contract identifiers
+  for actor values, so rendered fixtures deserialize through the Rust storage
+  contract DTOs.
 - Activation now grants every numeric per-role runtime UID traversal on both
   `/run/nixling` and `/run/nixling/vms`, so broker-spawned runners can reach
   their per-VM runtime socket directories after a host switch.
