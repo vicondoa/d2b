@@ -681,7 +681,7 @@ let
         persistence = "boot-scoped";
         owner = principal "user" "nixlingd";
         group = principal "group" "nixling";
-        mode = "0770";
+        mode = "0750";
         creator = actor "nix-module" "tmpfiles";
         writers = [
           (actor "broker" "nixling-priv-broker")
@@ -709,7 +709,10 @@ let
         group = principal "group" "nixling-${name}-qemu-media";
         mode = "0660";
         creator = actor "role" "role:${name}:qemu-media";
-        writers = [ (actor "role" "role:${name}:qemu-media") ];
+        writers = [
+          (actor "role" "role:${name}:qemu-media")
+          (actor "broker" "nixling-priv-broker")
+        ];
         readers = [
           (actor "broker" "nixling-priv-broker")
         ];

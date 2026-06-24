@@ -77,8 +77,8 @@ pub fn reconcile_storage_scope(
             path_hash,
         });
     }
-    validate_owned_root(&path_buf, storage_ref.as_str())?;
-    if apply && apply_is_check_only(&path_buf) {
+    let safe_path = validate_owned_root(&path_buf, storage_ref.as_str())?;
+    if apply && apply_is_check_only(&safe_path) {
         return Err(StorageContractError::Refused {
             subject: storage_ref.as_str().to_owned(),
             reason: "storage-config-root-is-nix-managed".to_owned(),
@@ -91,13 +91,13 @@ pub fn reconcile_storage_scope(
                 let uid = resolve_uid(&spec.owner)?;
                 let gid = resolve_gid(&spec.group)?;
                 let result = crate::sys::path_safe::ensure_dir(
-                    &path_buf,
+                    &safe_path,
                     mode,
                     Some(uid.as_raw()),
                     Some(gid.as_raw()),
                 )
                 .map_err(|err| StorageContractError::Io {
-                    path: path_buf.clone(),
+                    path: safe_path.clone(),
                     detail: err.to_string(),
                 })?;
                 let status = match result {
@@ -117,7 +117,7 @@ pub fn reconcile_storage_scope(
                     path_hash,
                 })
             } else {
-                let status = if path_buf.exists() {
+                let status = if safe_path.exists() {
                     StorageReconcileStatus::Clean
                 } else {
                     StorageReconcileStatus::CheckedOnly
@@ -192,7 +192,7 @@ fn apply_is_check_only(path: &Path) -> bool {
     path.starts_with("/etc/nixling")
 }
 
-fn validate_owned_root(path: &Path, subject: &str) -> Result<(), StorageContractError> {
+fn validate_owned_root(path: &Path, subject: &str) -> Result<PathBuf, StorageContractError> {
     validate_owned_root_against(
         path,
         subject,
@@ -209,7 +209,7 @@ fn validate_owned_root_against(
     path: &Path,
     subject: &str,
     roots: &[&Path],
-) -> Result<(), StorageContractError> {
+) -> Result<PathBuf, StorageContractError> {
     if path
         .components()
         .any(|component| matches!(component, std::path::Component::ParentDir))
@@ -235,7 +235,7 @@ fn validate_owned_root_against(
             reason: "storage-path-escapes-owned-root".to_owned(),
         });
     }
-    Ok(())
+    Ok(canonical_target)
 }
 
 fn owned_root_for(path: &Path) -> Option<&'static Path> {
@@ -576,7 +576,7 @@ mod tests {
     }
 
     fn assert_refused_reason(
-        result: Result<(), StorageContractError>,
+        result: Result<PathBuf, StorageContractError>,
         expected_reason: &'static str,
     ) {
         match result {

@@ -233,7 +233,7 @@ EOF
       in
       lib.concatLists [
       (tmpfilesDir "/var/lib/nixling/vms/${name}" "0750" "nixling-${name}-qemu-media" "nixling-${name}-qemu-media")
-      (runtimeLeafDir vmRunDir "0770" "nixlingd" "nixling")
+      (runtimeLeafDir vmRunDir "0750" "nixlingd" "nixling")
       (runtimeAclMask vmRunDir)
       (runtimeAclUser vmRunDir qemuMediaPrincipal "rwx")
       (runtimeLeafDir wlproxyRunDir "0770" "nixlingd" "nixling")

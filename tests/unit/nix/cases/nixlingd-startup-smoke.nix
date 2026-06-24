@@ -82,7 +82,7 @@ in
 
   "nixlingd-startup-smoke/tmpfiles-usbip-lock-root" = {
     expr = rulesForPath "/run/nixling/locks/usbip";
-    expected = [ "d /run/nixling/locks/usbip 0750 nixlingd nixlingd -" ];
+    expected = [ "d /run/nixling/locks/usbip 0750 root nixlingd -" ];
   };
 
   "nixlingd-startup-smoke/tmpfiles-audit" = {

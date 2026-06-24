@@ -35,7 +35,7 @@ let
       timeoutMs = null;
     };
     stalePolicy = {
-      kind = "pidfd-proof-required";
+      kind = "cutover-only";
       degradedReason = "lock-owner-ambiguous";
     };
     adoptionPolicy = "reacquire-after-proof";
@@ -44,7 +44,7 @@ let
     cloexecRequired = true;
   };
 
-  kernelLock = { id, scope, path, owner, scopeClass ? "host", root ? "run", normalizedPath ? id, staleKind ? "pidfd-proof-required", adoptionPolicy ? "reacquire-after-proof", timeoutKind ? "fail-fast", timeoutMs ? null, degradeScope ? "host" }: {
+  kernelLock = { id, scope, path, owner, scopeClass ? "host", root ? "run", normalizedPath ? id, staleKind ? "cutover-only", adoptionPolicy ? "reacquire-after-proof", timeoutKind ? "fail-fast", timeoutMs ? null, degradeScope ? "host" }: {
     inherit id scope;
     pathTemplate = path;
     resourceId = null;
@@ -163,16 +163,16 @@ let
       ];
       inheritancePolicy = "close-on-exec";
       fdPassingPolicy = fdNone;
-      acquireOrder = order "vm" "run" id id;
+      acquireOrder = order "vm" "run" "locks/usbip/${busid}" id;
       timeoutPolicy = {
         kind = "fail-fast";
         timeoutMs = null;
       };
       stalePolicy = {
-        kind = "file-record-owner-match";
+        kind = "manual-recovery";
         degradedReason = "lock-owner-ambiguous";
       };
-      adoptionPolicy = "reacquire-after-proof";
+      adoptionPolicy = "quarantine-on-ambiguity";
       degradeScope = "vm";
       releaseAuthority = actor "broker" "nixling-priv-broker";
       cloexecRequired = false;
