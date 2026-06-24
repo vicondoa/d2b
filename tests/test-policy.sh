@@ -4,7 +4,6 @@
 #
 #   * adr-index-coverage      — every docs/adr/*.md is indexed
 #   * ci-coverage             — every tests/*.sh is wired into CI / an aggregator
-#   * ci-uses-make            — every workflow invokes a make target
 #   * deliverable-gate-inventory — required gate scripts exist
 #   * layer1-self-inventory   — Layer-1 driver scripts are accounted for
 #   * no-new-deferral         — ADR 0022 I3 invariant (no new v1.3 deferrals)
@@ -42,7 +41,6 @@ run_policy_gate() {
 }
 
 run_policy_gate "adr-index-coverage"        tests/unit/meta/adr-index-coverage.sh
-run_policy_gate "ci-uses-make"              tests/unit/meta/ci-uses-make.sh
 run_policy_gate "w0-dep-direction"          tests/unit/meta/w0-dep-direction.sh
 run_policy_gate "deliverable-gate-inventory" tests/unit/meta/deliverable-gate-inventory.sh
 run_policy_gate "layer1-self-inventory"     tests/unit/meta/layer1-self-inventory.sh

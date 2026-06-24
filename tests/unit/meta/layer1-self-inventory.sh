@@ -35,11 +35,6 @@ is_known_non_layer1() {
       # Maintainer-only, never runnable in Layer-1 / ephemeral CI.
       return 0
       ;;
-    ci-uses-make.sh)
-      # CI-convergence guard wired into a .github workflow
-      # (pr-l1-static-fast.yml), not invoked from static.sh.
-      return 0
-      ;;
     runner.sh|static-timing.sh)
       # Aggregating wrappers that invoke static.sh; not Layer-1 gate bodies.
       return 0

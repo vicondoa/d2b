@@ -53,15 +53,6 @@ successor_ids = []
 exercised_today = "manual"
 
 [[script]]
-name = "tests/unit/meta/ci-uses-make.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/unit/meta/deliverable-gate-inventory.sh"
 group = "H"
 make_target = "test-policy"
@@ -168,6 +159,15 @@ tier = "scheduled"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "manual"
+
+[[script]]
+name = "tests/unit/meta/ci-uses-make.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/xtask/tests/policy_ci.rs::github_workflows_use_make_targets_or_explicit_allowlist", "packages/xtask/tests/policy_ci.rs::ci_uses_make_allowlist_is_intentional_and_bounded", "tests/golden/pinned/ci-uses-make.txt"]
+exercised_today = "yes"
 
 [[script]]
 name = "tests/tools/rust-workspace-checks.sh"
@@ -1617,4 +1617,13 @@ tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
 successor_ids = ["cargo nextest run --workspace --exclude nixling-contract-tests (argv #[test]s: audio_argv, ch_argv, gpu_argv, hardlink_farm, otel_host_bridge_argv, ssh_keygen, supervisor::state::reconcile_and_adopt, swtpm_argv, usbip_argv, video_argv, virtiofsd_argv, vsock_relay_argv)", "tests/tools/assert-pinned-tests.sh"]
 exercised_today = "yes"
+
+[[script]]
+name = "tests/static-fast-tier0.sh"
+group = "ORCH"
+make_target = "check-tier0"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["tests/tools/tier0-first-pass.sh"]
+exercised_today = "manual"
 

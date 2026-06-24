@@ -548,10 +548,7 @@ fn classify_test_driver_surface(path: &str) -> Option<&'static str> {
         Some("ci-workflow")
     } else if path.starts_with("tests/test-") && path.ends_with(".sh") {
         Some("make-target-driver")
-    } else if path == "tests/static.sh"
-        || path == "tests/static-fast-tier0.sh"
-        || path == "tests/runner.sh"
-    {
+    } else if path == "tests/static.sh" || path == "tests/runner.sh" {
         Some("top-level-shell-driver")
     } else if path.starts_with("tests/tools/") {
         Some("test-tooling")

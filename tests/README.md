@@ -20,7 +20,7 @@ that you must *not* add new ad-hoc `tests/*.sh`), read [`AGENTS.md`](./AGENTS.md
 
 ```
 tests/
-├── static.sh, static-fast-tier0.sh, runner.sh, test-*.sh          orchestrators (entry points)
+├── static.sh, runner.sh, test-*.sh                                orchestrators (entry points)
 ├── lib.sh, cli-rust-native-common.sh                              shared shell harness
 ├── README.md, AGENTS.md                                           this guide + the test-model contract
 ├── migration-ledger.toml, migration-state.d/                    retirement ledger + per-test records
@@ -57,7 +57,7 @@ Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
 | `make test-flake-list` | emit native-system flake check names as JSON (CI matrix plumbing) | CI (dynamic matrix) |
 | `make test-nix-unit` | sharded nix-unit corpus checks (already covered by test-flake; focused convenience target) | local |
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
-| `make test-policy` | meta gates (ci-coverage, ci-uses-make, adr-index, etc.) | local + CI |
+| `make test-policy` | meta gates (ci-coverage, adr-index, deliverable inventory, etc.) | local + CI |
 | `make test-integration` | type-9 podman container tests | **local host/manual pre-PR** (podman; not the PR pipeline) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks | **local NixOS host w/ KVM**, manual pre-PR (not the PR pipeline; TCG fallback) |
 | `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |

@@ -436,19 +436,45 @@ cargo_deny_check() {
 cargo_audit_check() {
   local label="$1" lock_path="$2"
   shift 2
-  if command -v cargo-audit >/dev/null 2>&1; then
-    log "--> cargo audit ($label)"
-    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path" "$@"
-    ok "cargo audit ($label)"
-  elif command -v nix >/dev/null 2>&1; then
-    log "--> cargo audit ($label via nix shell)"
-    nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-audit --command \
-      env RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path" "$@"
-    ok "cargo audit ($label)"
-  else
+  local attempts=3 attempt audit_dir audit_out rc
+  if ! command -v cargo-audit >/dev/null 2>&1 && ! command -v nix >/dev/null 2>&1; then
     fail "cargo audit cannot run for $label: cargo-audit and nix are unavailable; ADR 0009 does not authorize a waiver"
     exit 1
   fi
+  audit_dir=$(nl_mktemp ".cargo-audit.${label//[^A-Za-z0-9._-]/-}.XXXXXX")
+  audit_out="$audit_dir/output.log"
+  for attempt in $(seq 1 "$attempts"); do
+    log "--> cargo audit ($label)"
+    log "  attempt $attempt/$attempts"
+    if command -v cargo-audit >/dev/null 2>&1; then
+      set +e
+      RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path" "$@" >"$audit_out" 2>&1
+      rc=$?
+      set -e
+    else
+      set +e
+      nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-audit --command \
+        env RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path" "$@" >"$audit_out" 2>&1
+      rc=$?
+      set -e
+    fi
+    if [ "$rc" -eq 0 ]; then
+      cat "$audit_out"
+      ok "cargo audit ($label)"
+      return 0
+    fi
+    if [ "$rc" -eq 1 ]; then
+      cat "$audit_out" >&2
+      fail "cargo audit ($label) reported vulnerabilities"
+      return 1
+    fi
+    [ "$attempt" -lt "$attempts" ] || break
+    log "  RETRY: cargo audit ($label) after transient failure"
+    sleep 5
+  done
+  cat "$audit_out" >&2
+  fail "cargo audit ($label) failed after $attempts attempts"
+  return 1
 }
 
 cargo_deny_check "main workspace" "$manifest" "$deny_config"

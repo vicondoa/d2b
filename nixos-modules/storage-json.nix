@@ -271,10 +271,10 @@ let
       owner = principal "user" "root";
       group = principal "group" "nixling";
       mode = "0775";
-      creator = actor "operator" "nixling host validate --apply";
-      writers = [ (actor "operator" "nixling host validate --apply") ];
+      creator = actor "operator" "host-validate-apply";
+      writers = [ (actor "operator" "host-validate-apply") ];
       readers = [
-        (actor "nix-module" "defaultSwitchReadiness assertions")
+        (actor "nix-module" "default-switch-readiness-assertions")
         (actor "operator" "host-doctor")
       ];
       cleanupPolicy = "never";
@@ -289,10 +289,10 @@ let
       owner = principal "user" "root";
       group = principal "group" "nixling";
       mode = "0664";
-      creator = actor "operator" "nixling host validate --apply";
-      writers = [ (actor "operator" "nixling host validate --apply") ];
+      creator = actor "operator" "host-validate-apply";
+      writers = [ (actor "operator" "host-validate-apply") ];
       readers = [
-        (actor "nix-module" "defaultSwitchReadiness assertions")
+        (actor "nix-module" "default-switch-readiness-assertions")
         (actor "operator" "host-doctor")
       ];
       cleanupPolicy = "never";

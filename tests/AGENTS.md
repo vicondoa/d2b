@@ -85,7 +85,7 @@ If the successor is a fail-closed native/contract test, pin its exact
 
 ```
 tests/
-├── static.sh / static-fast-tier0.sh / runner.sh / test-*.sh  orchestrators (entry points)
+├── static.sh / runner.sh / test-*.sh                         orchestrators (entry points)
 ├── lib.sh / cli-rust-native-common.sh                              shared shell harness
 ├── README.md / AGENTS.md                                           docs (human guide + this file)
 ├── migration-ledger.toml / migration-state.d/                      retirement ledger + records
