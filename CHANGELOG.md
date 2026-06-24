@@ -70,6 +70,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- `qemu-media` TAP synchronization locks now render the TAP identifier as a
+  resource id instead of a non-path `pathTemplate`, so the generated `sync.json`
+  deserializes through the Rust `SyncJson` DTO and `nixlingd` can load the bundle
+  after hosts with qemu-media VMs switch.
 - Daemon startup no longer lets the diagnostic bridge preflight pre-skip
   autostarted net VMs on cold boot; net VMs now get to run their host-prep DAG
   and workloads degrade only if their env net VM actually fails to start.
