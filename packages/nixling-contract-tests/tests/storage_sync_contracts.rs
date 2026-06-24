@@ -540,9 +540,6 @@ fn collect_repo_files(rel_dir: &str, extension: &str) -> Vec<PathBuf> {
 }
 
 fn collect_repo_files_inner(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) {
-    if !dir.exists() {
-        return;
-    }
     for entry in fs::read_dir(dir)
         .unwrap_or_else(|err| panic!("policy-paths: cannot read {}: {err}", dir.display()))
     {

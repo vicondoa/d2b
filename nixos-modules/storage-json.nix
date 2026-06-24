@@ -218,7 +218,7 @@ let
       persistence = "boot-scoped";
       owner = principal "user" "nixlingd";
       group = principal "group" "nixling";
-      mode = "0755";
+      mode = "0750";
       creator = actor "nix-module" "tmpfiles";
       writers = [
         (actor "daemon" "nixlingd")
@@ -371,7 +371,7 @@ let
         persistence = "boot-scoped";
         owner = principal "user" "nixlingd";
         group = principal "group" "nixling";
-        mode = "0750";
+        mode = "0755";
         creator = actor "nix-module" "tmpfiles";
         writers = [
           (actor "daemon" "nixlingd")
@@ -405,7 +405,7 @@ let
         path = "${toString cfg.site.stateDir}/daemon-state/${name}";
         owner = principal "user" "nixlingd";
         group = principal "group" "nixlingd";
-        mode = "0750";
+        mode = "0755";
         creator = actor "daemon" "nixlingd";
         writers = [ (actor "daemon" "nixlingd") ];
         readers = [ (actor "daemon" "nixlingd") ];

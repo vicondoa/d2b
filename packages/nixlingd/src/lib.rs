@@ -14019,51 +14019,60 @@ fn dispatch_list(
         let resolver = load_bundle_resolver(state)?;
         refresh_qemu_media_registry_index_if_needed(state, &resolver)?;
     }
-    let vms = manifest
-        .iter()
-        .filter(|(name, _)| !name.starts_with('_'))
-        .filter(|(name, _)| request.vm.as_ref().map(|vm| vm == *name).unwrap_or(true))
-        .filter(|(_, value)| {
-            request
-                .env
-                .as_ref()
-                .map(|env| value.get("env").and_then(Value::as_str) == Some(env.as_str()))
-                .unwrap_or(true)
-        })
-        .map(|(name, value)| {
-            let process_vm = processes.vms.iter().find(|entry| entry.vm == *name);
-            let lifecycle = public_vm_lifecycle(state, name, value, process_vm);
-            let runtime_kind = public_runtime_kind(value);
-            let services = public_service_states(state, name, value, process_vm);
-            let service_capabilities = public_service_capabilities(&services);
-            json!({
-                "name": name,
-                "vm": name,
-                "env": value.get("env").cloned().unwrap_or(Value::Null),
-                "staticIp": value.get("staticIp").cloned().unwrap_or(Value::Null),
-                "isNetVm": value.get("isNetVm").cloned().unwrap_or(Value::Bool(false)),
-                "sshUser": value.get("sshUser").cloned().unwrap_or(Value::Null),
-                "graphics": value.get("graphics").cloned().unwrap_or(Value::Bool(false)),
-                "tpm": value.get("tpm").cloned().unwrap_or(Value::Bool(false)),
-                "usbip": value.get("usbipYubikey").cloned().unwrap_or(Value::Bool(false)),
-                "lifecycle": lifecycle,
-                "runtime": public_runtime_summary(&lifecycle, value),
-                "autostart": public_autostart_posture(value),
-                "runtimeCapabilities": public_runtime_capabilities(value),
-                "serviceCapabilities": service_capabilities,
-                "unsupportedCapabilities": public_unsupported_capabilities(value),
-                "qemuMedia": public_qemu_media_status(
-                    state,
-                    name,
-                    runtime_kind.as_deref(),
-                    host.as_ref(),
-                    process_vm,
-                    &services,
-                ),
-                "services": services,
+    let vms = std::thread::scope(|scope| {
+        let workers = manifest
+            .iter()
+            .filter(|(name, _)| !name.starts_with('_'))
+            .filter(|(name, _)| request.vm.as_ref().map(|vm| vm == *name).unwrap_or(true))
+            .filter(|(_, value)| {
+                request
+                    .env
+                    .as_ref()
+                    .map(|env| value.get("env").and_then(Value::as_str) == Some(env.as_str()))
+                    .unwrap_or(true)
             })
-        })
-        .collect();
+            .map(|(name, value)| {
+                let process_vm = processes.vms.iter().find(|entry| entry.vm == *name);
+                let host = host.as_ref();
+                scope.spawn(move || {
+                    let lifecycle = public_vm_lifecycle(state, name, value, process_vm);
+                    let runtime_kind = public_runtime_kind(value);
+                    let services = public_service_states(state, name, value, process_vm);
+                    let service_capabilities = public_service_capabilities(&services);
+                    json!({
+                        "name": name,
+                        "vm": name,
+                        "env": value.get("env").cloned().unwrap_or(Value::Null),
+                        "staticIp": value.get("staticIp").cloned().unwrap_or(Value::Null),
+                        "isNetVm": value.get("isNetVm").cloned().unwrap_or(Value::Bool(false)),
+                        "sshUser": value.get("sshUser").cloned().unwrap_or(Value::Null),
+                        "graphics": value.get("graphics").cloned().unwrap_or(Value::Bool(false)),
+                        "tpm": value.get("tpm").cloned().unwrap_or(Value::Bool(false)),
+                        "usbip": value.get("usbipYubikey").cloned().unwrap_or(Value::Bool(false)),
+                        "lifecycle": lifecycle,
+                        "runtime": public_runtime_summary(&lifecycle, value),
+                        "autostart": public_autostart_posture(value),
+                        "runtimeCapabilities": public_runtime_capabilities(value),
+                        "serviceCapabilities": service_capabilities,
+                        "unsupportedCapabilities": public_unsupported_capabilities(value),
+                        "qemuMedia": public_qemu_media_status(
+                            state,
+                            name,
+                            runtime_kind.as_deref(),
+                            host,
+                            process_vm,
+                            &services,
+                        ),
+                        "services": services,
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("public list worker panicked"))
+            .collect::<Vec<_>>()
+    });
     Ok(wire::list_response(vms))
 }
 
@@ -14085,48 +14094,57 @@ fn dispatch_status(
     let usb_resolver = load_bundle_resolver(state).ok();
     let requested_vm = request.vm.clone();
 
-    let statuses = manifest
-        .iter()
-        .filter(|(name, _)| !name.starts_with('_'))
-        .filter(|(name, _)| requested_vm.as_ref().map(|vm| vm == *name).unwrap_or(true))
-        .map(|(name, manifest_entry)| {
-            let process_vm = processes.vms.iter().find(|entry| entry.vm == *name);
-            let lifecycle = public_vm_lifecycle(state, name, manifest_entry, process_vm);
-            let runtime_kind = public_runtime_kind(manifest_entry);
-            let services = public_service_states(state, name, manifest_entry, process_vm);
-            let service_capabilities = public_service_capabilities(&services);
-            json!({
-                "vm": name,
-                "name": name,
-                "env": manifest_entry.get("env").cloned().unwrap_or(Value::Null),
-                "staticIp": manifest_entry.get("staticIp").cloned().unwrap_or(Value::Null),
-                "sshUser": manifest_entry.get("sshUser").cloned().unwrap_or(Value::Null),
-                "graphics": manifest_entry.get("graphics").cloned().unwrap_or(Value::Bool(false)),
-                "tpm": manifest_entry.get("tpm").cloned().unwrap_or(Value::Bool(false)),
-                "usbip": manifest_entry.get("usbipYubikey").cloned().unwrap_or(Value::Bool(false)),
-                "isNetVm": manifest_entry.get("isNetVm").cloned().unwrap_or(Value::Bool(false)),
-                "lifecycle": lifecycle,
-                "runtime": public_runtime_summary(&lifecycle, manifest_entry),
-                "autostart": public_autostart_posture(manifest_entry),
-                "runtimeCapabilities": public_runtime_capabilities(manifest_entry),
-                "serviceCapabilities": service_capabilities,
-                "unsupportedCapabilities": public_unsupported_capabilities(manifest_entry),
-                "qemuMedia": public_qemu_media_status(
-                    state,
-                    name,
-                    runtime_kind.as_deref(),
-                    host.as_ref(),
-                    process_vm,
-                    &services,
-                ),
-                "usb": usb_resolver
-                    .as_ref()
-                    .and_then(|resolver| public_usb_status_for_vm(state, resolver, name)),
-                "services": services,
-                "bridgeChecks": [],
+    let statuses = std::thread::scope(|scope| {
+        let workers = manifest
+            .iter()
+            .filter(|(name, _)| !name.starts_with('_'))
+            .filter(|(name, _)| requested_vm.as_ref().map(|vm| vm == *name).unwrap_or(true))
+            .map(|(name, manifest_entry)| {
+                let process_vm = processes.vms.iter().find(|entry| entry.vm == *name);
+                let host = host.as_ref();
+                let usb_resolver = usb_resolver.as_ref();
+                scope.spawn(move || {
+                    let lifecycle = public_vm_lifecycle(state, name, manifest_entry, process_vm);
+                    let runtime_kind = public_runtime_kind(manifest_entry);
+                    let services = public_service_states(state, name, manifest_entry, process_vm);
+                    let service_capabilities = public_service_capabilities(&services);
+                    json!({
+                        "vm": name,
+                        "name": name,
+                        "env": manifest_entry.get("env").cloned().unwrap_or(Value::Null),
+                        "staticIp": manifest_entry.get("staticIp").cloned().unwrap_or(Value::Null),
+                        "sshUser": manifest_entry.get("sshUser").cloned().unwrap_or(Value::Null),
+                        "graphics": manifest_entry.get("graphics").cloned().unwrap_or(Value::Bool(false)),
+                        "tpm": manifest_entry.get("tpm").cloned().unwrap_or(Value::Bool(false)),
+                        "usbip": manifest_entry.get("usbipYubikey").cloned().unwrap_or(Value::Bool(false)),
+                        "isNetVm": manifest_entry.get("isNetVm").cloned().unwrap_or(Value::Bool(false)),
+                        "lifecycle": lifecycle,
+                        "runtime": public_runtime_summary(&lifecycle, manifest_entry),
+                        "autostart": public_autostart_posture(manifest_entry),
+                        "runtimeCapabilities": public_runtime_capabilities(manifest_entry),
+                        "serviceCapabilities": service_capabilities,
+                        "unsupportedCapabilities": public_unsupported_capabilities(manifest_entry),
+                        "qemuMedia": public_qemu_media_status(
+                            state,
+                            name,
+                            runtime_kind.as_deref(),
+                            host,
+                            process_vm,
+                            &services,
+                        ),
+                        "usb": usb_resolver
+                            .and_then(|resolver| public_usb_status_for_vm(state, resolver, name)),
+                        "services": services,
+                        "bridgeChecks": [],
+                    })
+                })
             })
-        })
-        .collect::<Vec<_>>();
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("public status worker panicked"))
+            .collect::<Vec<_>>()
+    });
 
     Ok(wire::status_response(json!({ "entries": statuses })))
 }
@@ -16082,6 +16100,81 @@ mod public_status_tests {
         assert!(
             vm.get("readiness").is_none(),
             "public status should not expose raw readiness path strings"
+        );
+    }
+
+    #[test]
+    fn dispatch_list_and_status_without_filters_preserve_all_vm_order() {
+        let root = tempfile::tempdir().expect("artifact root");
+        let artifacts = write_public_status_artifacts(root.path());
+        let (state, _dir) = test_state_with_config(DaemonConfig {
+            artifacts,
+            ..DaemonConfig::default()
+        });
+        state
+            .pidfd_table
+            .register(
+                "vm-b".to_owned(),
+                VM_RUNNER_ROLE_ID.to_owned(),
+                current_process_entry(),
+            )
+            .expect("register vm-b runner");
+
+        let list = dispatch_list(
+            &state,
+            public_wire::ListRequest {
+                env: None,
+                vm: None,
+            },
+        )
+        .expect("unfiltered list dispatch");
+        let list_names = list
+            .get("vms")
+            .and_then(Value::as_array)
+            .expect("list vms")
+            .iter()
+            .map(|entry| {
+                entry
+                    .get("vm")
+                    .and_then(Value::as_str)
+                    .expect("list vm name")
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(list_names, vec!["vm-a", "vm-b"]);
+        assert_eq!(
+            list.pointer("/vms/1/lifecycle/state")
+                .and_then(Value::as_str),
+            Some("Running")
+        );
+
+        let status = dispatch_status(
+            &state,
+            public_wire::StatusRequest {
+                check_bridges: false,
+                vm: None,
+            },
+        )
+        .expect("unfiltered status dispatch");
+        let status_names = status
+            .pointer("/status/entries")
+            .and_then(Value::as_array)
+            .expect("status entries")
+            .iter()
+            .map(|entry| {
+                entry
+                    .get("vm")
+                    .and_then(Value::as_str)
+                    .expect("status vm name")
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(status_names, vec!["vm-a", "vm-b"]);
+        assert_eq!(
+            status
+                .pointer("/status/entries/1/lifecycle/state")
+                .and_then(Value::as_str),
+            Some("Running")
         );
     }
 

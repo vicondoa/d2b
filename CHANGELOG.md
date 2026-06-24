@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Public daemon `list` and `status` responses now build per-VM status entries
+  in parallel, so slow provider or guest-control probes cannot serially push
+  wlcontrol past its public-socket timeout.
 - Daemon-native runtime parent directories under `/run/nixling/vms`,
   `/run/nixling-gpu`, `/run/nixling-video`, and `/run/nixling-wlproxy`
   are root-owned again while preserving daemon-owned per-VM leaves, so
