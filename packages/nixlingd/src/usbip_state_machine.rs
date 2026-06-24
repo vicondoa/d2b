@@ -66,6 +66,35 @@ use serde::{Deserialize, Serialize};
 
 use crate::typed_error::TypedError;
 
+/// Whether an active USBIP plan was built from a static bundle declaration or
+/// from an explicit `nixling usb attach <vm> <busid> --apply` that bypassed the
+/// bundle allowlist check.
+///
+/// The daemon uses this to select the correct broker ops:
+///  - `Declared` → `UsbipBind` + `UsbipBindFirewallRule` (opaque bundle refs)
+///  - `Explicit`  → `UsbipExplicitBind` + `UsbipExplicitFirewallRule` (raw busid + env)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "source")]
+pub enum UsbipClaimSource {
+    /// Originated from a static bundle declaration (bundle firewall + bind intents present).
+    Declared {
+        /// Opaque bundle firewall intent id for the `UsbipBindFirewallRule` broker op.
+        firewall_ref: String,
+        /// Opaque bundle bind intent id for the `UsbipBind` broker op.
+        bind_ref: String,
+    },
+    /// Originated from an explicit operator request that passed the
+    /// sysfs-presence check, USB-capable gate, and active-claim exclusivity check.
+    /// No static bundle allowlist is required for this path.
+    Explicit,
+}
+
+impl UsbipClaimSource {
+    pub fn is_explicit(&self) -> bool {
+        matches!(self, Self::Explicit)
+    }
+}
+
 /// One node in the canonical per-busid USBIP state machine.
 ///
 /// The order of variants in this enum is documentation-only — the
@@ -153,12 +182,18 @@ pub const CANONICAL_STEPS: [UsbipBusidStep; 7] = [
 /// intents — callers MUST NOT compose synthetic busids here. The
 /// `steps` field is the canonical bring-up order; the stop path
 /// is the same list reversed (use [`UsbipBusidPlan::stop_order`]).
+///
+/// The `claim_source` field distinguishes whether this plan was built from a
+/// static bundle declaration (`UsbipBind` + `UsbipBindFirewallRule`) or from an
+/// explicit operator request (`UsbipExplicitBind` + `UsbipExplicitFirewallRule`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsbipBusidPlan {
     pub busid: String,
     pub env: String,
     pub vm: String,
     pub steps: Vec<UsbipBusidStep>,
+    /// Source of this plan: declared from bundle or explicit operator request.
+    pub claim_source: UsbipClaimSource,
 }
 
 impl UsbipBusidPlan {
@@ -249,6 +284,66 @@ pub fn build_usbip_plan(
         env: env.to_owned(),
         vm: vm.to_owned(),
         steps: CANONICAL_STEPS.to_vec(),
+        claim_source: UsbipClaimSource::Declared {
+            firewall_ref: firewall_id,
+            bind_ref: bind_id,
+        },
+    })
+}
+
+/// Build a plan for an **explicit** `nixling usb attach <vm> <busid> --apply`
+/// that does NOT require static bundle firewall or bind intent refs.
+///
+/// The daemon MUST have already checked, before calling this:
+///  1. the busid is present in `/sys/bus/usb/devices/<busid>/` (sysfs check),
+///  2. the target VM has `runtime.capabilities.usbHotplug = true` (USB-capable gate),
+///  3. the per-busid OFD lock at `/run/nixling/locks/usbip/<busid>` is NOT held by
+///     another VM (active-claim exclusivity).
+///
+/// This function only validates the busid and VM name shapes, then returns a plan
+/// with `claim_source: UsbipClaimSource::Explicit`. The executor dispatches
+/// `UsbipExplicitBind` and `UsbipExplicitFirewallRule` broker ops instead of the
+/// bundle-ref-based ops used by the declared path.
+pub fn build_usbip_explicit_plan(
+    busid: &str,
+    env: &str,
+    vm: &str,
+) -> Result<UsbipBusidPlan, TypedError> {
+    if busid.is_empty() {
+        return Err(TypedError::UsbipStepFailed {
+            busid: busid.to_owned(),
+            step: UsbipBusidStep::Lock,
+            reason: "bus_id is empty".to_owned(),
+        });
+    }
+    if let Err(err) = nixling_contracts::usbip::validate_bus_id(busid) {
+        return Err(TypedError::UsbipStepFailed {
+            busid: busid.to_owned(),
+            step: UsbipBusidStep::Lock,
+            reason: format!("invalid bus_id shape: {err:?}"),
+        });
+    }
+    if env.is_empty() {
+        return Err(TypedError::UsbipStepFailed {
+            busid: busid.to_owned(),
+            step: UsbipBusidStep::Lock,
+            reason: "env is empty".to_owned(),
+        });
+    }
+    if vm.is_empty() {
+        return Err(TypedError::UsbipStepFailed {
+            busid: busid.to_owned(),
+            step: UsbipBusidStep::Bind,
+            reason: "vm is empty".to_owned(),
+        });
+    }
+
+    Ok(UsbipBusidPlan {
+        busid: busid.to_owned(),
+        env: env.to_owned(),
+        vm: vm.to_owned(),
+        steps: CANONICAL_STEPS.to_vec(),
+        claim_source: UsbipClaimSource::Explicit,
     })
 }
 
@@ -412,6 +507,20 @@ mod tests {
             env: "work".to_owned(),
             vm: "yk".to_owned(),
             steps: CANONICAL_STEPS.to_vec(),
+            claim_source: UsbipClaimSource::Declared {
+                firewall_ref: "usbip-fw-work-1-2".to_owned(),
+                bind_ref: "usbip-bind-work-yk-1-2".to_owned(),
+            },
+        }
+    }
+
+    fn synthetic_explicit_plan() -> UsbipBusidPlan {
+        UsbipBusidPlan {
+            busid: "1-2".to_owned(),
+            env: "work".to_owned(),
+            vm: "corp-vm".to_owned(),
+            steps: CANONICAL_STEPS.to_vec(),
+            claim_source: UsbipClaimSource::Explicit,
         }
     }
 
@@ -595,5 +704,125 @@ mod tests {
         assert!(env.message.contains("firewall"));
         assert!(env.remediation.contains("nixling usb probe"));
         assert!(env.remediation.contains("1-2"));
+    }
+
+    // ---- Phase 4 explicit-attach plan tests ----
+
+    #[test]
+    fn explicit_plan_does_not_require_bundle_intents() {
+        let plan = build_usbip_explicit_plan("1-2", "work", "corp-vm")
+            .expect("explicit plan must succeed without bundle resolver");
+        assert!(plan.claim_source.is_explicit());
+        assert_eq!(plan.busid, "1-2");
+        assert_eq!(plan.env, "work");
+        assert_eq!(plan.vm, "corp-vm");
+        assert_eq!(plan.steps, CANONICAL_STEPS.to_vec());
+    }
+
+    #[test]
+    fn explicit_plan_accepts_valid_busid_shapes() {
+        for busid in ["0", "1-2", "2-1.4.5", "10-3.2.1"] {
+            build_usbip_explicit_plan(busid, "work", "corp-vm")
+                .unwrap_or_else(|e| panic!("explicit plan must accept busid {busid}: {e:?}"));
+        }
+    }
+
+    #[test]
+    fn explicit_plan_rejects_invalid_busid_shapes() {
+        for busid in ["", "01", "1-", "1-02", "1-2.", "1-2/a"] {
+            let err = build_usbip_explicit_plan(busid, "work", "corp-vm")
+                .expect_err(&format!("explicit plan must reject busid {busid:?}"));
+            assert!(
+                matches!(err, TypedError::UsbipStepFailed { step: UsbipBusidStep::Lock, .. }),
+                "explicit plan busid shape rejection must surface at Lock step"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_plan_rejects_empty_env_or_vm() {
+        let err = build_usbip_explicit_plan("1-2", "", "corp-vm")
+            .expect_err("empty env must be rejected");
+        assert!(matches!(err, TypedError::UsbipStepFailed { .. }));
+
+        let err = build_usbip_explicit_plan("1-2", "work", "")
+            .expect_err("empty vm must be rejected");
+        assert!(matches!(err, TypedError::UsbipStepFailed { .. }));
+    }
+
+    #[test]
+    fn explicit_plan_carries_explicit_claim_source() {
+        let plan = build_usbip_explicit_plan("2-1.4.5", "personal", "yubikey-vm")
+            .expect("explicit plan succeeds");
+        match &plan.claim_source {
+            UsbipClaimSource::Explicit => {}
+            other => panic!("expected Explicit claim source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn declared_plan_carries_bundle_refs_in_claim_source() {
+        // Explicit plan has no bundle refs
+        let explicit = build_usbip_explicit_plan("1-2", "work", "corp-vm")
+            .expect("explicit plan succeeds");
+        assert!(!matches!(
+            explicit.claim_source,
+            UsbipClaimSource::Declared { .. }
+        ));
+
+        // Verify the Declared variant shape directly
+        let declared = UsbipClaimSource::Declared {
+            firewall_ref: "usbip-fw-work-1-2".to_owned(),
+            bind_ref: "usbip-bind-work-corp-vm-1-2".to_owned(),
+        };
+        assert!(!declared.is_explicit());
+        if let UsbipClaimSource::Declared {
+            ref firewall_ref,
+            ref bind_ref,
+        } = declared
+        {
+            assert!(firewall_ref.contains("work"));
+            assert!(bind_ref.contains("corp-vm"));
+        }
+    }
+
+    #[test]
+    fn explicit_plan_uses_canonical_step_order() {
+        let plan = build_usbip_explicit_plan("1-2", "work", "corp-vm")
+            .expect("explicit plan succeeds");
+        // The step order for explicit attach is the same as for declared;
+        // the difference is in which broker ops the executor dispatches per step.
+        assert_eq!(
+            plan.steps,
+            vec![
+                UsbipBusidStep::Modprobe,
+                UsbipBusidStep::Lock,
+                UsbipBusidStep::Withhold,
+                UsbipBusidStep::Firewall,
+                UsbipBusidStep::Backend,
+                UsbipBusidStep::Bind,
+                UsbipBusidStep::Proxy,
+            ]
+        );
+    }
+
+    #[test]
+    fn explicit_plan_stop_order_preserves_per_env_sidecars() {
+        let plan = synthetic_explicit_plan();
+        let stop = plan.stop_order();
+        assert!(!stop.contains(&UsbipBusidStep::Backend));
+        assert!(!stop.contains(&UsbipBusidStep::Proxy));
+        assert!(stop.contains(&UsbipBusidStep::Bind));
+        assert!(stop.contains(&UsbipBusidStep::Firewall));
+    }
+
+    #[test]
+    fn explicit_plan_can_execute_all_steps_via_fixture_executor() {
+        let plan = synthetic_explicit_plan();
+        let mut exec = FixtureExecutor::ok();
+        let report = execute_usbip_plan(&plan, &mut exec).expect("explicit happy path succeeds");
+        assert!(report.is_ok());
+        assert_eq!(report.completed, CANONICAL_STEPS.to_vec());
+        assert!(report.failed.is_none());
     }
 }
