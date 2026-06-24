@@ -3318,12 +3318,12 @@ pub mod pidfd_sys {
     /// Small helper that creates a CLOEXEC pipe and returns the two ends
     /// as OwnedFds. Used to gate the child's post-clone setup on the
     /// parent finishing the uid_map writes.
-    struct SyncPipe {
-        read_fd: OwnedFd,
-        write_fd: OwnedFd,
+    pub(super) struct SyncPipe {
+        pub(super) read_fd: OwnedFd,
+        pub(super) write_fd: OwnedFd,
     }
 
-    fn make_sync_pipe() -> io::Result<SyncPipe> {
+    pub(super) fn make_sync_pipe() -> io::Result<SyncPipe> {
         let (read_fd, write_fd) = nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC)
             .map_err(|err| io::Error::from_raw_os_error(err as i32))?;
         Ok(SyncPipe { read_fd, write_fd })
@@ -3606,10 +3606,10 @@ mod tests {
 
     #[test]
     fn sync_pipe_fds_are_cloexec() {
-        let (read_fd, write_fd) = owned_pipe_for_test();
+        let pipe = super::pidfd_sys::make_sync_pipe().expect("production sync pipe");
 
-        assert_fd_cloexec(&read_fd);
-        assert_fd_cloexec(&write_fd);
+        assert_fd_cloexec(&pipe.read_fd);
+        assert_fd_cloexec(&pipe.write_fd);
     }
 
     #[test]
