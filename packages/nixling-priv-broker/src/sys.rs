@@ -700,13 +700,13 @@ pub mod path_safe {
         file.sync_all()
     }
 
-    fn create_anonymous_tmpfile(dir_fd: &OwnedFd, mode: u32) -> io::Result<File> {
+    fn create_anonymous_tmpfile(dir_fd: &OwnedFd, _mode: u32) -> io::Result<File> {
         let dot = CString::new(".").expect("static dot path contains no NUL");
         match openat_raw(
             dir_fd.as_raw_fd(),
             &dot,
             libc::O_WRONLY | libc::O_CLOEXEC | libc::O_TMPFILE,
-            mode,
+            0o600,
         ) {
             Ok(fd) => Ok(File::from(fd)),
             Err(err) if tmpfile_fallback_allowed(&err) => {
@@ -720,7 +720,7 @@ pub mod path_safe {
                             | libc::O_NOFOLLOW
                             | libc::O_CREAT
                             | libc::O_EXCL,
-                        mode,
+                        0o600,
                     ) {
                         Ok(fd) => {
                             if let Err(unlink_err) = unlinkat_raw(dir_fd.as_raw_fd(), &tmp_name) {
