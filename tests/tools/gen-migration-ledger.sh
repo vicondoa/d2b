@@ -225,6 +225,7 @@ target_of() {
     GCI) echo test-integration ;;
     GHW) echo test-hardware ;;
     PERF) echo perf ;;
+    ORCH) echo check-tier0 ;;
     *) echo "" ;;
   esac
 }
@@ -492,6 +493,9 @@ emit_ledger() {
       successors_empty "$successors" && continue
       group="${existing_group[$rel]}"
       make_target="${existing_make_target[$rel]}"
+      if [ -z "$make_target" ]; then
+        make_target=$(target_of "$group")
+      fi
       tier="${existing_tier[$rel]}"
       exercised="${existing_exercised[$rel]:-manual}"
       emit_script_row "$rel" "$group" "$make_target" "$tier" "retired" "$successors" "$exercised"

@@ -20,7 +20,7 @@ that you must *not* add new ad-hoc `tests/*.sh`), read [`AGENTS.md`](./AGENTS.md
 
 ```
 tests/
-├── static.sh, static-fast-tier0.sh, runner.sh, test-*.sh          orchestrators (entry points)
+├── static.sh, runner.sh, test-*.sh                                orchestrators (entry points)
 ├── lib.sh, cli-rust-native-common.sh                              shared shell harness
 ├── README.md, AGENTS.md                                           this guide + the test-model contract
 ├── migration-ledger.toml, migration-state.d/                    retirement ledger + per-test records

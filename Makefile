@@ -59,7 +59,7 @@ check-all:
 ## back-compat but now aliases to test-unit.
 check-fast: test-unit
 check-tier0:
-	bash tests/static-fast-tier0.sh
+	bash tests/tools/tier0-first-pass.sh
 
 # ===========================================================================
 # Umbrella test targets (local / agent development).

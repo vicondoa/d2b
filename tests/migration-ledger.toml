@@ -1618,3 +1618,12 @@ status = "retired"      # legacy | porting | ported | retired
 successor_ids = ["cargo nextest run --workspace --exclude nixling-contract-tests (argv #[test]s: audio_argv, ch_argv, gpu_argv, hardlink_farm, otel_host_bridge_argv, ssh_keygen, supervisor::state::reconcile_and_adopt, swtpm_argv, usbip_argv, video_argv, virtiofsd_argv, vsock_relay_argv)", "tests/tools/assert-pinned-tests.sh"]
 exercised_today = "yes"
 
+[[script]]
+name = "tests/static-fast-tier0.sh"
+group = "ORCH"
+make_target = "check-tier0"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["tests/tools/tier0-first-pass.sh"]
+exercised_today = "manual"
+

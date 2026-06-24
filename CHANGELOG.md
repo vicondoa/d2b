@@ -14,6 +14,8 @@ deprecations ship one minor release before removal.
 
 - CI workflow make-target policy coverage moved from a shell meta gate to a Rust
   contract test with pinned successor coverage.
+- The Tier 0 first-pass implementation moved under `tests/tools/` while keeping
+  the stable `make check-tier0` target.
 - `storage-lifecycle-report.json` now includes bounded `contractId` and
   `offendingId` fields on storage/sync contract validation issues, and broker
   storage I/O diagnostics redact absolute managed paths as

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/static-fast-tier0.sh — sub-60s first-pass PR gate.
+# tests/tools/tier0-first-pass.sh — sub-60s first-pass PR gate.
 #
 # Pure host-local checks only:
 #   * bash -n on tracked shell scripts under tests/, scripts/, harness/ubuntu/
@@ -10,7 +10,7 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-ROOT=${ROOT:-$(dirname "$HERE")}
+ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 
 log() {
   printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >&2
@@ -25,7 +25,7 @@ fail() {
   exit 1
 }
 
-log "==> tests/static-fast-tier0.sh"
+log "==> tests/tools/tier0-first-pass.sh"
 cd "$ROOT"
 
 mapfile -t shell_files < <(find tests scripts harness/ubuntu -type f -name '*.sh' 2>/dev/null | sort)
