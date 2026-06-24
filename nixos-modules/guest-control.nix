@@ -261,6 +261,9 @@ in
               usbipFlags =
                 lib.optionalString (cfg.usbipPath != null)
                   " --usbip-path ${lib.escapeShellArg cfg.usbipPath}";
+              activationFlags =
+                " --activation-systemd-run-path ${pkgs.systemd}/bin/systemd-run"
+                + " --activation-systemctl-path ${pkgs.systemd}/bin/systemctl";
               shellFlags =
                 lib.optionalString cfg.shell.enable (
                   " --shell-enable"
@@ -273,11 +276,12 @@ in
                       " --shell-systemctl-path ${pkgs.systemd}/bin/systemctl"
                 );
             in
-            "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}${usbipFlags}${shellFlags}";
+            "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}${usbipFlags}${activationFlags}${shellFlags}";
           LoadCredential = [
             "guest_control_token:/run/nixling-guest-control-host/token"
           ];
         };
+        restartIfChanged = false;
       };
 
       nixling-shpool-daemon = lib.mkIf (cfg.shell.enable && cfg.exec.execUser != null) {
@@ -327,9 +331,14 @@ in
     # detached slot state survives a guestd restart for re-adoption. Do
     # NOT make this guestd's RuntimeDirectory without
     # RuntimeDirectoryPreserve, else a restart wipes adoptable state.
-    systemd.tmpfiles.rules = lib.mkIf execRuntimeEnabled [
-      "D /run/nixling-exec 0700 root root -"
-    ];
+    systemd.tmpfiles.rules =
+      lib.optionals cfg.enable [
+        "d /run/nixling-guestd 0700 root root -"
+        "d /run/nixling-guestd/activations 0700 root root -"
+      ]
+      ++ lib.optionals execRuntimeEnabled [
+        "D /run/nixling-exec 0700 root root -"
+      ];
 
     # Guest-internal slice that scopes every per-exec transient slot unit
     # (nixling-exec-NN.service). Slot-keyed unit names bound metadata

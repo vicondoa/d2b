@@ -3,6 +3,10 @@
   "title": "GuestControlSchema",
   "type": "object",
   "required": [
+    "activateSystemStart",
+    "activateSystemStarted",
+    "activateSystemStatus",
+    "activateSystemStatusResult",
     "authenticate",
     "authenticated",
     "capabilities",
@@ -57,6 +61,18 @@
     "writeStdinResult"
   ],
   "properties": {
+    "activateSystemStart": {
+      "$ref": "#/definitions/GuestActivationStartRequest"
+    },
+    "activateSystemStarted": {
+      "$ref": "#/definitions/GuestActivationStartResponse"
+    },
+    "activateSystemStatus": {
+      "$ref": "#/definitions/GuestActivationStatusRequest"
+    },
+    "activateSystemStatusResult": {
+      "$ref": "#/definitions/GuestActivationStatusResponse"
+    },
     "authenticate": {
       "$ref": "#/definitions/AuthenticateRequest"
     },
@@ -1053,6 +1069,151 @@
       },
       "additionalProperties": false
     },
+    "GuestActivationId": {
+      "type": "string",
+      "maxLength": 36,
+      "minLength": 1
+    },
+    "GuestActivationMode": {
+      "type": "string",
+      "enum": [
+        "switch",
+        "boot",
+        "test",
+        "dry-activate"
+      ]
+    },
+    "GuestActivationStartRequest": {
+      "type": "object",
+      "required": [
+        "activationId",
+        "metadata",
+        "mode",
+        "switchScriptPath",
+        "timeoutMs"
+      ],
+      "properties": {
+        "activationId": {
+          "$ref": "#/definitions/GuestActivationId"
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        },
+        "mode": {
+          "$ref": "#/definitions/GuestActivationMode"
+        },
+        "switchScriptPath": {
+          "$ref": "#/definitions/GuestSwitchScriptPath"
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 3600000.0,
+          "minimum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestActivationStartResponse": {
+      "type": "object",
+      "required": [
+        "activationId",
+        "state"
+      ],
+      "properties": {
+        "activationId": {
+          "$ref": "#/definitions/GuestActivationId"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/definitions/GuestActivationState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestActivationState": {
+      "type": "string",
+      "enum": [
+        "running",
+        "succeeded",
+        "failed",
+        "timed-out",
+        "lost"
+      ]
+    },
+    "GuestActivationStatusRequest": {
+      "type": "object",
+      "required": [
+        "activationId",
+        "metadata"
+      ],
+      "properties": {
+        "activationId": {
+          "$ref": "#/definitions/GuestActivationId"
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestActivationStatusResponse": {
+      "type": "object",
+      "required": [
+        "activationId",
+        "state"
+      ],
+      "properties": {
+        "activationId": {
+          "$ref": "#/definitions/GuestActivationId"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "signal": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "state": {
+          "$ref": "#/definitions/GuestActivationState"
+        },
+        "statusCode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        }
+      },
+      "additionalProperties": false
+    },
     "GuestArg": {
       "type": "string",
       "maxLength": 4096,
@@ -1090,7 +1251,8 @@
         "shell-attached",
         "shell-management",
         "shell-force-attach",
-        "usbip-status"
+        "usbip-status",
+        "system-activation"
       ]
     },
     "GuestConnectAckLine": {
@@ -1192,7 +1354,14 @@
         "shell-daemon-epoch-mismatch",
         "shell-output-gap",
         "usbip-command-timeout",
-        "usbip-invalid-output"
+        "usbip-invalid-output",
+        "activation-invalid-id",
+        "activation-invalid-path",
+        "activation-invalid-mode",
+        "activation-not-found",
+        "activation-status-unavailable",
+        "activation-timed-out",
+        "activation-spawn-failed"
       ]
     },
     "GuestCwd": {
@@ -1496,8 +1665,14 @@
         "vsock",
         "usbip",
         "shell",
-        "shpool"
+        "shpool",
+        "system-activation"
       ]
+    },
+    "GuestSwitchScriptPath": {
+      "type": "string",
+      "maxLength": 4096,
+      "minLength": 1
     },
     "GuestTransportKind": {
       "type": "string",

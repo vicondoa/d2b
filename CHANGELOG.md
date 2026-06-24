@@ -12,6 +12,8 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Guest-control now exposes authenticated in-guest system activation start/status
+  RPCs, with guestd-owned transient systemd units and restart-safe status.
 - Runtime capability projection for qemu-media list/status output now goes
   through focused helpers with direct regression coverage, preserving public JSON
   and human output shape.

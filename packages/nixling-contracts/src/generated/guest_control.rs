@@ -8339,6 +8339,714 @@ impl ::protobuf::reflect::ProtobufValue for UsbipStatusEntry {
     type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
 }
 
+// @@protoc_insertion_point(message:nixling.guest.v1.GuestActivationStartRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct GuestActivationStartRequest {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStartRequest.metadata)
+    pub metadata: ::protobuf::MessageField<RequestMetadata>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStartRequest.activation_id)
+    pub activation_id: ::std::string::String,
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStartRequest.switch_script_path)
+    pub switch_script_path: ::std::string::String,
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStartRequest.mode)
+    pub mode: ::protobuf::EnumOrUnknown<GuestActivationMode>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStartRequest.timeout_ms)
+    pub timeout_ms: u64,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.GuestActivationStartRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a GuestActivationStartRequest {
+    fn default() -> &'a GuestActivationStartRequest {
+        <GuestActivationStartRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl GuestActivationStartRequest {
+    pub fn new() -> GuestActivationStartRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, RequestMetadata>(
+            "metadata",
+            |m: &GuestActivationStartRequest| { &m.metadata },
+            |m: &mut GuestActivationStartRequest| { &mut m.metadata },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "activation_id",
+            |m: &GuestActivationStartRequest| { &m.activation_id },
+            |m: &mut GuestActivationStartRequest| { &mut m.activation_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "switch_script_path",
+            |m: &GuestActivationStartRequest| { &m.switch_script_path },
+            |m: &mut GuestActivationStartRequest| { &mut m.switch_script_path },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "mode",
+            |m: &GuestActivationStartRequest| { &m.mode },
+            |m: &mut GuestActivationStartRequest| { &mut m.mode },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "timeout_ms",
+            |m: &GuestActivationStartRequest| { &m.timeout_ms },
+            |m: &mut GuestActivationStartRequest| { &mut m.timeout_ms },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GuestActivationStartRequest>(
+            "GuestActivationStartRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for GuestActivationStartRequest {
+    const NAME: &'static str = "GuestActivationStartRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                18 => {
+                    self.activation_id = is.read_string()?;
+                },
+                26 => {
+                    self.switch_script_path = is.read_string()?;
+                },
+                32 => {
+                    self.mode = is.read_enum_or_unknown()?;
+                },
+                40 => {
+                    self.timeout_ms = is.read_uint64()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if !self.activation_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.activation_id);
+        }
+        if !self.switch_script_path.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.switch_script_path);
+        }
+        if self.mode != ::protobuf::EnumOrUnknown::new(GuestActivationMode::GUEST_ACTIVATION_MODE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(4, self.mode.value());
+        }
+        if self.timeout_ms != 0 {
+            my_size += ::protobuf::rt::uint64_size(5, self.timeout_ms);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if !self.activation_id.is_empty() {
+            os.write_string(2, &self.activation_id)?;
+        }
+        if !self.switch_script_path.is_empty() {
+            os.write_string(3, &self.switch_script_path)?;
+        }
+        if self.mode != ::protobuf::EnumOrUnknown::new(GuestActivationMode::GUEST_ACTIVATION_MODE_UNSPECIFIED) {
+            os.write_enum(4, ::protobuf::EnumOrUnknown::value(&self.mode))?;
+        }
+        if self.timeout_ms != 0 {
+            os.write_uint64(5, self.timeout_ms)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> GuestActivationStartRequest {
+        GuestActivationStartRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.activation_id.clear();
+        self.switch_script_path.clear();
+        self.mode = ::protobuf::EnumOrUnknown::new(GuestActivationMode::GUEST_ACTIVATION_MODE_UNSPECIFIED);
+        self.timeout_ms = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static GuestActivationStartRequest {
+        static instance: GuestActivationStartRequest = GuestActivationStartRequest {
+            metadata: ::protobuf::MessageField::none(),
+            activation_id: ::std::string::String::new(),
+            switch_script_path: ::std::string::String::new(),
+            mode: ::protobuf::EnumOrUnknown::from_i32(0),
+            timeout_ms: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for GuestActivationStartRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("GuestActivationStartRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for GuestActivationStartRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for GuestActivationStartRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.GuestActivationStartResponse)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct GuestActivationStartResponse {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStartResponse.activation_id)
+    pub activation_id: ::std::string::String,
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStartResponse.state)
+    pub state: ::protobuf::EnumOrUnknown<GuestActivationState>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStartResponse.error)
+    pub error: ::protobuf::MessageField<GuestControlError>,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.GuestActivationStartResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a GuestActivationStartResponse {
+    fn default() -> &'a GuestActivationStartResponse {
+        <GuestActivationStartResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl GuestActivationStartResponse {
+    pub fn new() -> GuestActivationStartResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "activation_id",
+            |m: &GuestActivationStartResponse| { &m.activation_id },
+            |m: &mut GuestActivationStartResponse| { &mut m.activation_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "state",
+            |m: &GuestActivationStartResponse| { &m.state },
+            |m: &mut GuestActivationStartResponse| { &mut m.state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestControlError>(
+            "error",
+            |m: &GuestActivationStartResponse| { &m.error },
+            |m: &mut GuestActivationStartResponse| { &mut m.error },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GuestActivationStartResponse>(
+            "GuestActivationStartResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for GuestActivationStartResponse {
+    const NAME: &'static str = "GuestActivationStartResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.activation_id = is.read_string()?;
+                },
+                16 => {
+                    self.state = is.read_enum_or_unknown()?;
+                },
+                26 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.activation_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.activation_id);
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.state.value());
+        }
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.activation_id.is_empty() {
+            os.write_string(1, &self.activation_id)?;
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.state))?;
+        }
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> GuestActivationStartResponse {
+        GuestActivationStartResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.activation_id.clear();
+        self.state = ::protobuf::EnumOrUnknown::new(GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED);
+        self.error.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static GuestActivationStartResponse {
+        static instance: GuestActivationStartResponse = GuestActivationStartResponse {
+            activation_id: ::std::string::String::new(),
+            state: ::protobuf::EnumOrUnknown::from_i32(0),
+            error: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for GuestActivationStartResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("GuestActivationStartResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for GuestActivationStartResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for GuestActivationStartResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.GuestActivationStatusRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct GuestActivationStatusRequest {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStatusRequest.metadata)
+    pub metadata: ::protobuf::MessageField<RequestMetadata>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStatusRequest.activation_id)
+    pub activation_id: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.GuestActivationStatusRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a GuestActivationStatusRequest {
+    fn default() -> &'a GuestActivationStatusRequest {
+        <GuestActivationStatusRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl GuestActivationStatusRequest {
+    pub fn new() -> GuestActivationStatusRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, RequestMetadata>(
+            "metadata",
+            |m: &GuestActivationStatusRequest| { &m.metadata },
+            |m: &mut GuestActivationStatusRequest| { &mut m.metadata },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "activation_id",
+            |m: &GuestActivationStatusRequest| { &m.activation_id },
+            |m: &mut GuestActivationStatusRequest| { &mut m.activation_id },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GuestActivationStatusRequest>(
+            "GuestActivationStatusRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for GuestActivationStatusRequest {
+    const NAME: &'static str = "GuestActivationStatusRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                18 => {
+                    self.activation_id = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if !self.activation_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.activation_id);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if !self.activation_id.is_empty() {
+            os.write_string(2, &self.activation_id)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> GuestActivationStatusRequest {
+        GuestActivationStatusRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.activation_id.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static GuestActivationStatusRequest {
+        static instance: GuestActivationStatusRequest = GuestActivationStatusRequest {
+            metadata: ::protobuf::MessageField::none(),
+            activation_id: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for GuestActivationStatusRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("GuestActivationStatusRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for GuestActivationStatusRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for GuestActivationStatusRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.GuestActivationStatusResponse)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct GuestActivationStatusResponse {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStatusResponse.activation_id)
+    pub activation_id: ::std::string::String,
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStatusResponse.state)
+    pub state: ::protobuf::EnumOrUnknown<GuestActivationState>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStatusResponse.exit_code)
+    pub exit_code: ::std::option::Option<i32>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStatusResponse.signal)
+    pub signal: ::std::option::Option<u32>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStatusResponse.status_code)
+    pub status_code: ::std::option::Option<i32>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.GuestActivationStatusResponse.error)
+    pub error: ::protobuf::MessageField<GuestControlError>,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.GuestActivationStatusResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a GuestActivationStatusResponse {
+    fn default() -> &'a GuestActivationStatusResponse {
+        <GuestActivationStatusResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl GuestActivationStatusResponse {
+    pub fn new() -> GuestActivationStatusResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(6);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "activation_id",
+            |m: &GuestActivationStatusResponse| { &m.activation_id },
+            |m: &mut GuestActivationStatusResponse| { &mut m.activation_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "state",
+            |m: &GuestActivationStatusResponse| { &m.state },
+            |m: &mut GuestActivationStatusResponse| { &mut m.state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "exit_code",
+            |m: &GuestActivationStatusResponse| { &m.exit_code },
+            |m: &mut GuestActivationStatusResponse| { &mut m.exit_code },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "signal",
+            |m: &GuestActivationStatusResponse| { &m.signal },
+            |m: &mut GuestActivationStatusResponse| { &mut m.signal },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "status_code",
+            |m: &GuestActivationStatusResponse| { &m.status_code },
+            |m: &mut GuestActivationStatusResponse| { &mut m.status_code },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestControlError>(
+            "error",
+            |m: &GuestActivationStatusResponse| { &m.error },
+            |m: &mut GuestActivationStatusResponse| { &mut m.error },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GuestActivationStatusResponse>(
+            "GuestActivationStatusResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for GuestActivationStatusResponse {
+    const NAME: &'static str = "GuestActivationStatusResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.activation_id = is.read_string()?;
+                },
+                16 => {
+                    self.state = is.read_enum_or_unknown()?;
+                },
+                24 => {
+                    self.exit_code = ::std::option::Option::Some(is.read_int32()?);
+                },
+                32 => {
+                    self.signal = ::std::option::Option::Some(is.read_uint32()?);
+                },
+                40 => {
+                    self.status_code = ::std::option::Option::Some(is.read_int32()?);
+                },
+                50 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.activation_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.activation_id);
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.state.value());
+        }
+        if let Some(v) = self.exit_code {
+            my_size += ::protobuf::rt::int32_size(3, v);
+        }
+        if let Some(v) = self.signal {
+            my_size += ::protobuf::rt::uint32_size(4, v);
+        }
+        if let Some(v) = self.status_code {
+            my_size += ::protobuf::rt::int32_size(5, v);
+        }
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.activation_id.is_empty() {
+            os.write_string(1, &self.activation_id)?;
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.state))?;
+        }
+        if let Some(v) = self.exit_code {
+            os.write_int32(3, v)?;
+        }
+        if let Some(v) = self.signal {
+            os.write_uint32(4, v)?;
+        }
+        if let Some(v) = self.status_code {
+            os.write_int32(5, v)?;
+        }
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(6, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> GuestActivationStatusResponse {
+        GuestActivationStatusResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.activation_id.clear();
+        self.state = ::protobuf::EnumOrUnknown::new(GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED);
+        self.exit_code = ::std::option::Option::None;
+        self.signal = ::std::option::Option::None;
+        self.status_code = ::std::option::Option::None;
+        self.error.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static GuestActivationStatusResponse {
+        static instance: GuestActivationStatusResponse = GuestActivationStatusResponse {
+            activation_id: ::std::string::String::new(),
+            state: ::protobuf::EnumOrUnknown::from_i32(0),
+            exit_code: ::std::option::Option::None,
+            signal: ::std::option::Option::None,
+            status_code: ::std::option::Option::None,
+            error: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for GuestActivationStatusResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("GuestActivationStatusResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for GuestActivationStatusResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for GuestActivationStatusResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
 // @@protoc_insertion_point(message:nixling.guest.v1.ShellAttachRequest)
 #[derive(PartialEq,Clone,Default,Debug)]
 pub struct ShellAttachRequest {
@@ -11220,6 +11928,8 @@ pub enum GuestCapability {
     GUEST_CAPABILITY_SHELL_FORCE_ATTACH = 13,
     // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestCapability.GUEST_CAPABILITY_USBIP_STATUS)
     GUEST_CAPABILITY_USBIP_STATUS = 14,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestCapability.GUEST_CAPABILITY_SYSTEM_ACTIVATION)
+    GUEST_CAPABILITY_SYSTEM_ACTIVATION = 15,
 }
 
 impl ::protobuf::Enum for GuestCapability {
@@ -11246,6 +11956,7 @@ impl ::protobuf::Enum for GuestCapability {
             12 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SHELL_MANAGEMENT),
             13 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH),
             14 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_USBIP_STATUS),
+            15 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SYSTEM_ACTIVATION),
             _ => ::std::option::Option::None
         }
     }
@@ -11267,6 +11978,7 @@ impl ::protobuf::Enum for GuestCapability {
             "GUEST_CAPABILITY_SHELL_MANAGEMENT" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SHELL_MANAGEMENT),
             "GUEST_CAPABILITY_SHELL_FORCE_ATTACH" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH),
             "GUEST_CAPABILITY_USBIP_STATUS" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_USBIP_STATUS),
+            "GUEST_CAPABILITY_SYSTEM_ACTIVATION" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SYSTEM_ACTIVATION),
             _ => ::std::option::Option::None
         }
     }
@@ -11287,6 +11999,7 @@ impl ::protobuf::Enum for GuestCapability {
         GuestCapability::GUEST_CAPABILITY_SHELL_MANAGEMENT,
         GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH,
         GuestCapability::GUEST_CAPABILITY_USBIP_STATUS,
+        GuestCapability::GUEST_CAPABILITY_SYSTEM_ACTIVATION,
     ];
 }
 
@@ -11337,6 +12050,8 @@ pub enum GuestSubsystem {
     GUEST_SUBSYSTEM_SHELL = 8,
     // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestSubsystem.GUEST_SUBSYSTEM_SHPOOL)
     GUEST_SUBSYSTEM_SHPOOL = 9,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestSubsystem.GUEST_SUBSYSTEM_SYSTEM_ACTIVATION)
+    GUEST_SUBSYSTEM_SYSTEM_ACTIVATION = 10,
 }
 
 impl ::protobuf::Enum for GuestSubsystem {
@@ -11358,6 +12073,7 @@ impl ::protobuf::Enum for GuestSubsystem {
             7 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_USBIP),
             8 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SHELL),
             9 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SHPOOL),
+            10 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SYSTEM_ACTIVATION),
             _ => ::std::option::Option::None
         }
     }
@@ -11374,6 +12090,7 @@ impl ::protobuf::Enum for GuestSubsystem {
             "GUEST_SUBSYSTEM_USBIP" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_USBIP),
             "GUEST_SUBSYSTEM_SHELL" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SHELL),
             "GUEST_SUBSYSTEM_SHPOOL" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SHPOOL),
+            "GUEST_SUBSYSTEM_SYSTEM_ACTIVATION" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SYSTEM_ACTIVATION),
             _ => ::std::option::Option::None
         }
     }
@@ -11389,6 +12106,7 @@ impl ::protobuf::Enum for GuestSubsystem {
         GuestSubsystem::GUEST_SUBSYSTEM_USBIP,
         GuestSubsystem::GUEST_SUBSYSTEM_SHELL,
         GuestSubsystem::GUEST_SUBSYSTEM_SHPOOL,
+        GuestSubsystem::GUEST_SUBSYSTEM_SYSTEM_ACTIVATION,
     ];
 }
 
@@ -11480,6 +12198,165 @@ impl ::std::default::Default for TerminalKind {
 impl TerminalKind {
     fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
         ::protobuf::reflect::GeneratedEnumDescriptorData::new::<TerminalKind>("TerminalKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:nixling.guest.v1.GuestActivationMode)
+pub enum GuestActivationMode {
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestActivationMode.GUEST_ACTIVATION_MODE_UNSPECIFIED)
+    GUEST_ACTIVATION_MODE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestActivationMode.GUEST_ACTIVATION_MODE_SWITCH)
+    GUEST_ACTIVATION_MODE_SWITCH = 1,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestActivationMode.GUEST_ACTIVATION_MODE_BOOT)
+    GUEST_ACTIVATION_MODE_BOOT = 2,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestActivationMode.GUEST_ACTIVATION_MODE_TEST)
+    GUEST_ACTIVATION_MODE_TEST = 3,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestActivationMode.GUEST_ACTIVATION_MODE_DRY_ACTIVATE)
+    GUEST_ACTIVATION_MODE_DRY_ACTIVATE = 4,
+}
+
+impl ::protobuf::Enum for GuestActivationMode {
+    const NAME: &'static str = "GuestActivationMode";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<GuestActivationMode> {
+        match value {
+            0 => ::std::option::Option::Some(GuestActivationMode::GUEST_ACTIVATION_MODE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(GuestActivationMode::GUEST_ACTIVATION_MODE_SWITCH),
+            2 => ::std::option::Option::Some(GuestActivationMode::GUEST_ACTIVATION_MODE_BOOT),
+            3 => ::std::option::Option::Some(GuestActivationMode::GUEST_ACTIVATION_MODE_TEST),
+            4 => ::std::option::Option::Some(GuestActivationMode::GUEST_ACTIVATION_MODE_DRY_ACTIVATE),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<GuestActivationMode> {
+        match str {
+            "GUEST_ACTIVATION_MODE_UNSPECIFIED" => ::std::option::Option::Some(GuestActivationMode::GUEST_ACTIVATION_MODE_UNSPECIFIED),
+            "GUEST_ACTIVATION_MODE_SWITCH" => ::std::option::Option::Some(GuestActivationMode::GUEST_ACTIVATION_MODE_SWITCH),
+            "GUEST_ACTIVATION_MODE_BOOT" => ::std::option::Option::Some(GuestActivationMode::GUEST_ACTIVATION_MODE_BOOT),
+            "GUEST_ACTIVATION_MODE_TEST" => ::std::option::Option::Some(GuestActivationMode::GUEST_ACTIVATION_MODE_TEST),
+            "GUEST_ACTIVATION_MODE_DRY_ACTIVATE" => ::std::option::Option::Some(GuestActivationMode::GUEST_ACTIVATION_MODE_DRY_ACTIVATE),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [GuestActivationMode] = &[
+        GuestActivationMode::GUEST_ACTIVATION_MODE_UNSPECIFIED,
+        GuestActivationMode::GUEST_ACTIVATION_MODE_SWITCH,
+        GuestActivationMode::GUEST_ACTIVATION_MODE_BOOT,
+        GuestActivationMode::GUEST_ACTIVATION_MODE_TEST,
+        GuestActivationMode::GUEST_ACTIVATION_MODE_DRY_ACTIVATE,
+    ];
+}
+
+impl ::protobuf::EnumFull for GuestActivationMode {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("GuestActivationMode").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for GuestActivationMode {
+    fn default() -> Self {
+        GuestActivationMode::GUEST_ACTIVATION_MODE_UNSPECIFIED
+    }
+}
+
+impl GuestActivationMode {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<GuestActivationMode>("GuestActivationMode")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:nixling.guest.v1.GuestActivationState)
+pub enum GuestActivationState {
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestActivationState.GUEST_ACTIVATION_STATE_UNSPECIFIED)
+    GUEST_ACTIVATION_STATE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestActivationState.GUEST_ACTIVATION_STATE_RUNNING)
+    GUEST_ACTIVATION_STATE_RUNNING = 1,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestActivationState.GUEST_ACTIVATION_STATE_SUCCEEDED)
+    GUEST_ACTIVATION_STATE_SUCCEEDED = 2,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestActivationState.GUEST_ACTIVATION_STATE_FAILED)
+    GUEST_ACTIVATION_STATE_FAILED = 3,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestActivationState.GUEST_ACTIVATION_STATE_TIMED_OUT)
+    GUEST_ACTIVATION_STATE_TIMED_OUT = 4,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestActivationState.GUEST_ACTIVATION_STATE_LOST)
+    GUEST_ACTIVATION_STATE_LOST = 5,
+}
+
+impl ::protobuf::Enum for GuestActivationState {
+    const NAME: &'static str = "GuestActivationState";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<GuestActivationState> {
+        match value {
+            0 => ::std::option::Option::Some(GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING),
+            2 => ::std::option::Option::Some(GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED),
+            3 => ::std::option::Option::Some(GuestActivationState::GUEST_ACTIVATION_STATE_FAILED),
+            4 => ::std::option::Option::Some(GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT),
+            5 => ::std::option::Option::Some(GuestActivationState::GUEST_ACTIVATION_STATE_LOST),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<GuestActivationState> {
+        match str {
+            "GUEST_ACTIVATION_STATE_UNSPECIFIED" => ::std::option::Option::Some(GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED),
+            "GUEST_ACTIVATION_STATE_RUNNING" => ::std::option::Option::Some(GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING),
+            "GUEST_ACTIVATION_STATE_SUCCEEDED" => ::std::option::Option::Some(GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED),
+            "GUEST_ACTIVATION_STATE_FAILED" => ::std::option::Option::Some(GuestActivationState::GUEST_ACTIVATION_STATE_FAILED),
+            "GUEST_ACTIVATION_STATE_TIMED_OUT" => ::std::option::Option::Some(GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT),
+            "GUEST_ACTIVATION_STATE_LOST" => ::std::option::Option::Some(GuestActivationState::GUEST_ACTIVATION_STATE_LOST),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [GuestActivationState] = &[
+        GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED,
+        GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING,
+        GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED,
+        GuestActivationState::GUEST_ACTIVATION_STATE_FAILED,
+        GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT,
+        GuestActivationState::GUEST_ACTIVATION_STATE_LOST,
+    ];
+}
+
+impl ::protobuf::EnumFull for GuestActivationState {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("GuestActivationState").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for GuestActivationState {
+    fn default() -> Self {
+        GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED
+    }
+}
+
+impl GuestActivationState {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<GuestActivationState>("GuestActivationState")
     }
 }
 
@@ -12775,6 +13652,20 @@ pub enum GuestControlErrorKind {
     GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT = 56,
     // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT)
     GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT = 57,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_ID)
+    GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_ID = 58,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_PATH)
+    GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_PATH = 59,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_MODE)
+    GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_MODE = 60,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND)
+    GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND = 61,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE)
+    GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE = 62,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT)
+    GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT = 63,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED)
+    GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED = 64,
 }
 
 impl ::protobuf::Enum for GuestControlErrorKind {
@@ -12844,6 +13735,13 @@ impl ::protobuf::Enum for GuestControlErrorKind {
             55 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP),
             56 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT),
             57 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT),
+            58 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_ID),
+            59 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_PATH),
+            60 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_MODE),
+            61 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND),
+            62 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE),
+            63 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT),
+            64 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED),
             _ => ::std::option::Option::None
         }
     }
@@ -12908,6 +13806,13 @@ impl ::protobuf::Enum for GuestControlErrorKind {
             "GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP),
             "GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT),
             "GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT),
+            "GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_ID" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_ID),
+            "GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_PATH" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_PATH),
+            "GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_MODE" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_MODE),
+            "GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND),
+            "GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE),
+            "GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT),
+            "GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED),
             _ => ::std::option::Option::None
         }
     }
@@ -12971,6 +13876,13 @@ impl ::protobuf::Enum for GuestControlErrorKind {
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP,
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT,
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_ID,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_PATH,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_MODE,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED,
     ];
 }
 
@@ -13233,203 +14145,239 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     .v1.GuestControlErrorR\x05error\"l\n\x10UsbipStatusEntry\x12\x12\n\x04po\
     rt\x18\x01\x20\x01(\rR\x04port\x12\x12\n\x04host\x18\x02\x20\x01(\tR\x04\
     host\x12\x19\n\x08tcp_port\x18\x03\x20\x01(\rR\x07tcpPort\x12\x15\n\x06b\
-    us_id\x18\x04\x20\x01(\tR\x05busId\"\xdf\x01\n\x12ShellAttachRequest\x12\
-    =\n\x08metadata\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.RequestMetadataR\
-    \x08metadata\x12\x17\n\x04name\x18\x02\x20\x01(\tH\0R\x04name\x88\x01\
-    \x01\x12\x14\n\x05force\x18\x03\x20\x01(\x08R\x05force\x12R\n\x15initial\
-    _terminal_size\x18\x04\x20\x01(\x0b2\x1e.nixling.guest.v1.TerminalSizeR\
-    \x13initialTerminalSizeB\x07\n\x05_name\"\x9a\x03\n\x13ShellAttachRespon\
-    se\x12\"\n\nsession_id\x18\x01\x20\x01(\tH\0R\tsessionId\x88\x01\x01\x12\
-    #\n\rresolved_name\x18\x02\x20\x01(\tR\x0cresolvedName\x122\n\x05state\
-    \x18\x03\x20\x01(\x0e2\x1c.nixling.guest.v1.ShellStateR\x05state\x12#\n\
-    \rforce_evicted\x18\x04\x20\x01(\x08R\x0cforceEvicted\x12\x1f\n\x0bcontr\
-    ol_seq\x18\x05\x20\x01(\x04R\ncontrolSeq\x12#\n\routput_cursor\x18\x06\
-    \x20\x01(\x04R\x0coutputCursor\x12Q\n\x10effective_limits\x18\x07\x20\
-    \x01(\x0b2&.nixling.guest.v1.GuestEffectiveLimitsR\x0feffectiveLimits\
-    \x129\n\x05error\x18\x08\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErr\
-    orR\x05errorB\r\n\x0b_session_id\"Q\n\x10ShellListRequest\x12=\n\x08meta\
-    data\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.RequestMetadataR\x08metadat\
-    a\"\xaf\x01\n\x11ShellListResponse\x12!\n\x0cdefault_name\x18\x01\x20\
-    \x01(\tR\x0bdefaultName\x12<\n\x08sessions\x18\x02\x20\x03(\x0b2\x20.nix\
-    ling.guest.v1.ShellListEntryR\x08sessions\x129\n\x05error\x18\x03\x20\
-    \x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\x93\x01\n\x0e\
-    ShellListEntry\x12\x12\n\x04name\x18\x01\x20\x01(\tR\x04name\x122\n\x05s\
-    tate\x18\x02\x20\x01(\x0e2\x1c.nixling.guest.v1.ShellStateR\x05state\x12\
-    \x1a\n\x08attached\x18\x03\x20\x01(\x08R\x08attached\x12\x1d\n\nis_defau\
-    lt\x18\x04\x20\x01(\x08R\tisDefault\"u\n\x12ShellDetachRequest\x12=\n\
-    \x08metadata\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.RequestMetadataR\
-    \x08metadata\x12\x17\n\x04name\x18\x02\x20\x01(\tH\0R\x04name\x88\x01\
-    \x01B\x07\n\x05_name\"e\n\x10ShellKillRequest\x12=\n\x08metadata\x18\x01\
-    \x20\x01(\x0b2!.nixling.guest.v1.RequestMetadataR\x08metadata\x12\x12\n\
-    \x04name\x18\x02\x20\x01(\tR\x04name\"`\n\x17ShellCloseAttachRequest\x12\
-    E\n\x08metadata\x18\x01\x20\x01(\x0b2).nixling.guest.v1.TerminalRequestM\
-    etadataR\x08metadata\"\xca\x01\n\x13ShellDetachResponse\x12#\n\rresolved\
-    _name\x18\x01\x20\x01(\tR\x0cresolvedName\x12\x1a\n\x08detached\x18\x02\
-    \x20\x01(\x08R\x08detached\x127\n\x05cause\x18\x03\x20\x01(\x0e2!.nixlin\
-    g.guest.v1.ShellCloseCauseR\x05cause\x129\n\x05error\x18\x04\x20\x01(\
-    \x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\xae\x01\n\x11Shell\
-    KillResponse\x12\x12\n\x04name\x18\x01\x20\x01(\tR\x04name\x12\x16\n\x06\
-    killed\x18\x02\x20\x01(\x08R\x06killed\x122\n\x05state\x18\x03\x20\x01(\
-    \x0e2\x1c.nixling.guest.v1.ShellStateR\x05state\x129\n\x05error\x18\x04\
-    \x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\xf9\x01\n\
-    \x19TerminalWriteStdinRequest\x12E\n\x08metadata\x18\x01\x20\x01(\x0b2).\
-    nixling.guest.v1.TerminalRequestMetadataR\x08metadata\x12\x16\n\x06offse\
-    t\x18\x02\x20\x01(\x04R\x06offset\x12\x12\n\x04data\x18\x03\x20\x01(\x0c\
-    R\x04data\x12\x1f\n\x0bclose_after\x18\x04\x20\x01(\x08R\ncloseAfter\x12\
-    1\n\x12client_deadline_ms\x18\x05\x20\x01(\x04H\0R\x10clientDeadlineMs\
-    \x88\x01\x01B\x15\n\x13_client_deadline_ms\"\xfe\x01\n\x19TerminalReadOu\
-    tputRequest\x12E\n\x08metadata\x18\x01\x20\x01(\x0b2).nixling.guest.v1.T\
-    erminalRequestMetadataR\x08metadata\x126\n\x06stream\x18\x02\x20\x01(\
-    \x0e2\x1e.nixling.guest.v1.OutputStreamR\x06stream\x12\x16\n\x06offset\
-    \x18\x03\x20\x01(\x04R\x06offset\x12\x17\n\x07max_len\x18\x04\x20\x01(\
-    \x04R\x06maxLen\x12\x12\n\x04wait\x18\x05\x20\x01(\x08R\x04wait\x12\x1d\
-    \n\ntimeout_ms\x18\x06\x20\x01(\x04R\ttimeoutMs\"z\n\x19TerminalCloseStd\
-    inRequest\x12E\n\x08metadata\x18\x01\x20\x01(\x0b2).nixling.guest.v1.Ter\
-    minalRequestMetadataR\x08metadata\x12\x16\n\x06offset\x18\x02\x20\x01(\
-    \x04R\x06offset\"\xad\x01\n\x1bTerminalTtyWinResizeRequest\x12E\n\x08met\
-    adata\x18\x01\x20\x01(\x0b2).nixling.guest.v1.TerminalRequestMetadataR\
-    \x08metadata\x12\x1f\n\x0bcontrol_seq\x18\x02\x20\x01(\x04R\ncontrolSeq\
-    \x12\x12\n\x04rows\x18\x03\x20\x01(\rR\x04rows\x12\x12\n\x04cols\x18\x04\
-    \x20\x01(\rR\x04cols\"\xb8\x01\n\x0eTerminalStatus\x12\x1d\n\texit_code\
-    \x18\x01\x20\x01(\x05H\0R\x08exitCode\x12\x18\n\x06signal\x18\x02\x20\
-    \x01(\rH\0R\x06signal\x12!\n\x0bstatus_code\x18\x03\x20\x01(\x05H\0R\nst\
-    atusCode\x12?\n\x05error\x18\x04\x20\x01(\x0e2'.nixling.guest.v1.GuestCo\
-    ntrolErrorKindH\0R\x05errorB\t\n\x07outcome\"\xd5\x01\n\x11GuestControlE\
-    rror\x12;\n\x04kind\x18\x01\x20\x01(\x0e2'.nixling.guest.v1.GuestControl\
-    ErrorKindR\x04kind\x12E\n\x0bremediation\x18\x02\x20\x01(\x0e2#.nixling.\
-    guest.v1.HealthRemediationR\x0bremediation\x12)\n\x0eretry_after_ms\x18\
-    \x03\x20\x01(\x04H\0R\x0cretryAfterMs\x88\x01\x01B\x11\n\x0f_retry_after\
-    _ms*\x9a\x04\n\x0fGuestCapability\x12\x20\n\x1cGUEST_CAPABILITY_UNSPECIF\
-    IED\x10\0\x12\x1b\n\x17GUEST_CAPABILITY_HEALTH\x10\x01\x12!\n\x1dGUEST_C\
-    APABILITY_CAPABILITIES\x10\x02\x12\"\n\x1eGUEST_CAPABILITY_EXEC_ATTACHED\
-    \x10\x03\x12\"\n\x1eGUEST_CAPABILITY_EXEC_DETACHED\x10\x04\x12\x1d\n\x19\
-    GUEST_CAPABILITY_EXEC_TTY\x10\x05\x12\x1e\n\x1aGUEST_CAPABILITY_EXEC_LOG\
-    S\x10\x06\x12\x1f\n\x1bGUEST_CAPABILITY_TTY_RESIZE\x10\x07\x12\x1c\n\x18\
-    GUEST_CAPABILITY_SIGNALS\x10\x08\x12$\n\x20GUEST_CAPABILITY_READ_GUEST_F\
-    ILE\x10\t\x12!\n\x1dGUEST_CAPABILITY_USBIP_IMPORT\x10\n\x12#\n\x1fGUEST_\
-    CAPABILITY_SHELL_ATTACHED\x10\x0b\x12%\n!GUEST_CAPABILITY_SHELL_MANAGEME\
-    NT\x10\x0c\x12'\n#GUEST_CAPABILITY_SHELL_FORCE_ATTACH\x10\r\x12!\n\x1dGU\
-    EST_CAPABILITY_USBIP_STATUS\x10\x0e*\xab\x02\n\x0eGuestSubsystem\x12\x1f\
-    \n\x1bGUEST_SUBSYSTEM_UNSPECIFIED\x10\0\x12\x1a\n\x16GUEST_SUBSYSTEM_GUE\
-    STD\x10\x01\x12\x19\n\x15GUEST_SUBSYSTEM_USERD\x10\x02\x12\x18\n\x14GUES\
-    T_SUBSYSTEM_EXEC\x10\x03\x12\x1f\n\x1bGUEST_SUBSYSTEM_LOG_STORAGE\x10\
-    \x04\x12\x19\n\x15GUEST_SUBSYSTEM_TOKEN\x10\x05\x12\x19\n\x15GUEST_SUBSY\
-    STEM_VSOCK\x10\x06\x12\x19\n\x15GUEST_SUBSYSTEM_USBIP\x10\x07\x12\x19\n\
-    \x15GUEST_SUBSYSTEM_SHELL\x10\x08\x12\x1a\n\x16GUEST_SUBSYSTEM_SHPOOL\
-    \x10\t*^\n\x0cTerminalKind\x12\x1d\n\x19TERMINAL_KIND_UNSPECIFIED\x10\0\
-    \x12\x16\n\x12TERMINAL_KIND_EXEC\x10\x01\x12\x17\n\x13TERMINAL_KIND_SHEL\
-    L\x10\x02*\xd5\x01\n\nShellState\x12\x1b\n\x17SHELL_STATE_UNSPECIFIED\
-    \x10\0\x12\x18\n\x14SHELL_STATE_ATTACHED\x10\x01\x12\x18\n\x14SHELL_STAT\
-    E_DETACHED\x10\x02\x12\x16\n\x12SHELL_STATE_KILLED\x10\x03\x12\x20\n\x1c\
-    SHELL_STATE_POOL_UNAVAILABLE\x10\x04\x12\x20\n\x1cSHELL_STATE_FEATURE_DI\
-    SABLED\x10\x05\x12\x1a\n\x16SHELL_STATE_OUTPUT_GAP\x10\x06*\xa1\x02\n\
-    \x0fShellCloseCause\x12!\n\x1dSHELL_CLOSE_CAUSE_UNSPECIFIED\x10\0\x12#\n\
-    \x1fSHELL_CLOSE_CAUSE_CLIENT_DETACH\x10\x01\x12&\n\"SHELL_CLOSE_CAUSE_EV\
-    ICTED_BY_FORCE\x10\x02\x12-\n)SHELL_CLOSE_CAUSE_EVICTED_BY_ADMIN_DETACH\
-    \x10\x03\x12%\n!SHELL_CLOSE_CAUSE_KILLED_BY_ADMIN\x10\x04\x12&\n\"SHELL_\
-    CLOSE_CAUSE_POOL_UNAVAILABLE\x10\x05\x12\x20\n\x1cSHELL_CLOSE_CAUSE_OUTP\
-    UT_GAP\x10\x06*L\n\x0bGuestFileId\x12\x1d\n\x19GUEST_FILE_ID_UNSPECIFIED\
-    \x10\0\x12\x1e\n\x1aGUEST_FILE_ID_GUEST_CONFIG\x10\x01*x\n\x11UsbipImpor\
-    tAction\x12#\n\x1fUSBIP_IMPORT_ACTION_UNSPECIFIED\x10\0\x12\x1e\n\x1aUSB\
-    IP_IMPORT_ACTION_ATTACH\x10\x01\x12\x1e\n\x1aUSBIP_IMPORT_ACTION_DETACH\
-    \x10\x02*s\n\x0cHealthOrigin\x12\x1d\n\x19HEALTH_ORIGIN_UNSPECIFIED\x10\
-    \0\x12\x20\n\x1cHEALTH_ORIGIN_GUEST_REPORTED\x10\x01\x12\"\n\x1eHEALTH_O\
-    RIGIN_HOST_SYNTHESIZED\x10\x02*\xb9\x02\n\x0bHealthState\x12\x1c\n\x18HE\
-    ALTH_STATE_UNSPECIFIED\x10\0\x12\x18\n\x14HEALTH_STATE_HEALTHY\x10\x01\
-    \x12\x19\n\x15HEALTH_STATE_DEGRADED\x10\x02\x12+\n'HEALTH_STATE_UNAVAILA\
-    BLE_OLD_GENERATION\x10\x03\x12\x20\n\x1cHEALTH_STATE_LISTENER_ABSENT\x10\
-    \x04\x12&\n\"HEALTH_STATE_TRANSPORT_UNREACHABLE\x10\x05\x12\x1c\n\x18HEA\
-    LTH_STATE_AUTH_FAILED\x10\x06\x12\"\n\x1eHEALTH_STATE_PROTOCOL_MISMATCH\
-    \x10\x07\x12\x1e\n\x1aHEALTH_STATE_STALE_SESSION\x10\x08*\xa4\x05\n\x0cH\
-    ealthReason\x12\x1d\n\x19HEALTH_REASON_UNSPECIFIED\x10\0\x12\x16\n\x12HE\
-    ALTH_REASON_NONE\x10\x01\x12\x20\n\x1cHEALTH_REASON_OLD_GENERATION\x10\
-    \x02\x12!\n\x1dHEALTH_REASON_LISTENER_ABSENT\x10\x03\x12!\n\x1dHEALTH_RE\
-    ASON_CONNECT_REFUSED\x10\x04\x12!\n\x1dHEALTH_REASON_CONNECT_TIMEOUT\x10\
-    \x05\x12\x20\n\x1cHEALTH_REASON_EOF_BEFORE_ACK\x10\x06\x12\x1f\n\x1bHEAL\
-    TH_REASON_MALFORMED_ACK\x10\x07\x12\x1e\n\x1aHEALTH_REASON_ACK_TOO_LONG\
-    \x10\x08\x12\x1e\n\x1aHEALTH_REASON_TRANSPORT_IO\x10\t\x12%\n!HEALTH_REA\
-    SON_AUTH_TOKEN_REJECTED\x10\n\x12.\n*HEALTH_REASON_PROTOCOL_VERSION_UNSU\
-    PPORTED\x10\x0b\x12-\n)HEALTH_REASON_SESSION_GENERATION_MISMATCH\x10\x0c\
-    \x12,\n(HEALTH_REASON_EXEC_SUBSYSTEM_UNAVAILABLE\x10\r\x12)\n%HEALTH_REA\
-    SON_LOG_STORAGE_UNAVAILABLE\x10\x0e\x12\x20\n\x1cHEALTH_REASON_QUOTA_EXC\
-    EEDED\x10\x0f\x12\x1e\n\x1aHEALTH_REASON_RATE_LIMITED\x10\x10\x12.\n*HEA\
-    LTH_REASON_INTERNAL_HEALTH_CHECK_FAILED\x10\x11*\xe0\x02\n\x11HealthReme\
-    diation\x12\"\n\x1eHEALTH_REMEDIATION_UNSPECIFIED\x10\0\x12\x1b\n\x17HEA\
-    LTH_REMEDIATION_NONE\x10\x01\x12\x1c\n\x18HEALTH_REMEDIATION_RETRY\x10\
-    \x02\x12!\n\x1dHEALTH_REMEDIATION_RESTART_VM\x10\x03\x12$\n\x20HEALTH_RE\
-    MEDIATION_UPGRADE_GUEST\x10\x04\x12'\n#HEALTH_REMEDIATION_CHECK_AUTH_TOK\
-    EN\x10\x05\x12+\n'HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE\x10\x06\x12\"\
-    \n\x1eHEALTH_REMEDIATION_REDUCE_LOAD\x10\x07\x12)\n%HEALTH_REMEDIATION_I\
-    NSPECT_GUEST_LOGS\x10\x08*a\n\x0cOutputStream\x12\x1d\n\x19OUTPUT_STREAM\
-    _UNSPECIFIED\x10\0\x12\x18\n\x14OUTPUT_STREAM_STDOUT\x10\x01\x12\x18\n\
-    \x14OUTPUT_STREAM_STDERR\x10\x02*\x96\x01\n\x10WriteDisposition\x12!\n\
-    \x1dWRITE_DISPOSITION_UNSPECIFIED\x10\0\x12\x1e\n\x1aWRITE_DISPOSITION_A\
-    CCEPTED\x10\x01\x12\x1f\n\x1bWRITE_DISPOSITION_DUPLICATE\x10\x02\x12\x1e\
-    \n\x1aWRITE_DISPOSITION_REJECTED\x10\x03*\x9b\x02\n\tExecState\x12\x1a\n\
-    \x16EXEC_STATE_UNSPECIFIED\x10\0\x12\x16\n\x12EXEC_STATE_CREATED\x10\x01\
-    \x12\x16\n\x12EXEC_STATE_RUNNING\x10\x02\x12\x15\n\x11EXEC_STATE_EXITED\
-    \x10\x03\x12\x17\n\x13EXEC_STATE_SIGNALED\x10\x04\x12\x18\n\x14EXEC_STAT\
-    E_CANCELLED\x10\x05\x12&\n\"EXEC_STATE_SLOW_CONSUMER_CANCELLED\x10\x06\
-    \x12\x1d\n\x19EXEC_STATE_PROTOCOL_ERROR\x10\x07\x12\x1a\n\x16EXEC_STATE_\
-    LOST_GUESTD\x10\x08\x12\x15\n\x11EXEC_STATE_REAPED\x10\t*\xbd\x01\n\nStd\
-    inState\x12\x1b\n\x17STDIN_STATE_UNSPECIFIED\x10\0\x12\x14\n\x10STDIN_ST\
-    ATE_OPEN\x10\x01\x12\x17\n\x13STDIN_STATE_CLOSING\x10\x02\x12\x16\n\x12S\
-    TDIN_STATE_CLOSED\x10\x03\x12!\n\x1dSTDIN_STATE_CLOSED_BY_PROCESS\x10\
-    \x04\x12(\n$STDIN_STATE_REJECTED_NOT_INTERACTIVE\x10\x05*y\n\x0cSignalTa\
-    rget\x12\x1d\n\x19SIGNAL_TARGET_UNSPECIFIED\x10\0\x12*\n&SIGNAL_TARGET_F\
-    OREGROUND_PROCESS_GROUP\x10\x01\x12\x1e\n\x1aSIGNAL_TARGET_PROCESS_TREE\
-    \x10\x02*\xd4\x01\n\x10ExecCancelReason\x12\"\n\x1eEXEC_CANCEL_REASON_UN\
-    SPECIFIED\x10\0\x12(\n$EXEC_CANCEL_REASON_CLIENT_DISCONNECT\x10\x01\x12%\
-    \n!EXEC_CANCEL_REASON_USER_REQUESTED\x10\x02\x12$\n\x20EXEC_CANCEL_REASO\
-    N_SLOW_CONSUMER\x10\x03\x12%\n!EXEC_CANCEL_REASON_PROTOCOL_ERROR\x10\x04\
-    *\xd7\x16\n\x15GuestControlErrorKind\x12(\n$GUEST_CONTROL_ERROR_KIND_UNS\
-    PECIFIED\x10\0\x12+\n'GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR\x10\x01\
-    \x12/\n+GUEST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED\x10\x02\x12/\n+GUEST\
-    _CONTROL_ERROR_KIND_STDIN_BACKPRESSURE\x10\x03\x12)\n%GUEST_CONTROL_ERRO\
-    R_KIND_STDIN_CLOSED\x10\x04\x12+\n'GUEST_CONTROL_ERROR_KIND_STDIN_NOT_OP\
-    EN\x10\x05\x124\n0GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED_BY_PROCESS\x10\
-    \x06\x122\n.GUEST_CONTROL_ERROR_KIND_STDIN_OFFSET_MISMATCH\x10\x07\x128\
-    \n4GUEST_CONTROL_ERROR_KIND_STDIN_BYTE_BUDGET_EXHAUSTED\x10\x08\x12+\n'G\
-    UEST_CONTROL_ERROR_KIND_OFFSET_EXPIRED\x10\t\x12-\n)GUEST_CONTROL_ERROR_\
-    KIND_OFFSET_IN_FUTURE\x10\n\x12-\n)GUEST_CONTROL_ERROR_KIND_OFFSET_EXHAU\
-    STED\x10\x0b\x12(\n$GUEST_CONTROL_ERROR_KIND_OUTPUT_LOST\x10\x0c\x123\n/\
-    GUEST_CONTROL_ERROR_KIND_TTY_STDERR_UNAVAILABLE\x10\r\x12)\n%GUEST_CONTR\
-    OL_ERROR_KIND_TTY_REQUIRED\x10\x0e\x123\n/GUEST_CONTROL_ERROR_KIND_EXEC_\
-    CAPACITY_EXCEEDED\x10\x0f\x12:\n6GUEST_CONTROL_ERROR_KIND_EXEC_ATTACH_CA\
-    PACITY_EXCEEDED\x10\x10\x12+\n'GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND\
-    \x10\x11\x120\n,GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_EXITED\x10\x12\x12\
-    0\n,GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_DISABLED\x10\x13\x123\n/GUEST_CO\
-    NTROL_ERROR_KIND_GUEST_EXEC_ROOT_DENIED\x10\x14\x123\n/GUEST_CONTROL_ERR\
-    OR_KIND_GUEST_EXEC_USER_DENIED\x10\x15\x12(\n$GUEST_CONTROL_ERROR_KIND_C\
-    WD_INVALID\x10\x16\x12'\n#GUEST_CONTROL_ERROR_KIND_CWD_DENIED\x10\x17\
-    \x125\n1GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_PATH_UNSAFE\x10\x18\x128\n\
-    4GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_QUOTA_EXCEEDED\x10\x19\x128\n4GUE\
-    ST_CONTROL_ERROR_KIND_READ_WAIT_CAPACITY_EXCEEDED\x10\x1a\x123\n/GUEST_C\
-    ONTROL_ERROR_KIND_WAIT_CAPACITY_EXCEEDED\x10\x1b\x121\n-GUEST_CONTROL_ER\
-    ROR_KIND_SUPERSEDED_READ_WAIT\x10\x1c\x12)\n%GUEST_CONTROL_ERROR_KIND_RA\
-    TE_LIMITED\x10\x1d\x120\n,GUEST_CONTROL_ERROR_KIND_REQUEST_ID_CONFLICT\
-    \x10\x1e\x121\n-GUEST_CONTROL_ERROR_KIND_CONTROL_SEQ_MISMATCH\x10\x1f\
-    \x124\n0GUEST_CONTROL_ERROR_KIND_SLOW_CONSUMER_CANCELLED\x10\x20\x12*\n&\
-    GUEST_CONTROL_ERROR_KIND_STALE_SESSION\x10!\x12E\nAGUEST_CONTROL_ERROR_K\
-    IND_GUEST_CONTROL_UNAVAILABLE_OLD_GENERATION\x10\"\x12(\n$GUEST_CONTROL_\
-    ERROR_KIND_AUTH_FAILED\x10#\x122\n.GUEST_CONTROL_ERROR_KIND_TRANSPORT_UN\
-    REACHABLE\x10$\x12)\n%GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED\x10%\x12+\n'\
-    GUEST_CONTROL_ERROR_KIND_FILE_NOT_FOUND\x10&\x12+\n'GUEST_CONTROL_ERROR_\
-    KIND_FILE_TOO_LARGE\x10'\x12(\n$GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE\x10\
-    (\x12(\n$GUEST_CONTROL_ERROR_KIND_READ_DENIED\x10)\x12,\n(GUEST_CONTROL_\
-    ERROR_KIND_INVALID_PROGRAM\x10*\x12.\n*GUEST_CONTROL_ERROR_KIND_USBIP_UN\
-    AVAILABLE\x10+\x121\n-GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED\x10,\
-    \x121\n-GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID\x10-\x12/\n+GUEST_\
-    CONTROL_ERROR_KIND_USBIP_INVALID_HOST\x10.\x121\n-GUEST_CONTROL_ERROR_KI\
-    ND_GUEST_SHELL_DISABLED\x10/\x12/\n+GUEST_CONTROL_ERROR_KIND_SHELL_INVAL\
-    ID_NAME\x100\x124\n0GUEST_CONTROL_ERROR_KIND_SHELL_CAPACITY_EXCEEDED\x10\
-    1\x12;\n7GUEST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED\x102\
-    \x12,\n(GUEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND\x103\x123\n/GUEST_CONTR\
-    OL_ERROR_KIND_SHELL_ALREADY_ATTACHED\x104\x123\n/GUEST_CONTROL_ERROR_KIN\
-    D_SHELL_POOL_UNAVAILABLE\x105\x128\n4GUEST_CONTROL_ERROR_KIND_SHELL_DAEM\
-    ON_EPOCH_MISMATCH\x106\x12-\n)GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP\
-    \x107\x122\n.GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT\x108\x121\n-\
-    GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT\x109b\x06proto3\
+    us_id\x18\x04\x20\x01(\tR\x05busId\"\x89\x02\n\x1bGuestActivationStartRe\
+    quest\x12=\n\x08metadata\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.Request\
+    MetadataR\x08metadata\x12#\n\ractivation_id\x18\x02\x20\x01(\tR\x0cactiv\
+    ationId\x12,\n\x12switch_script_path\x18\x03\x20\x01(\tR\x10switchScript\
+    Path\x129\n\x04mode\x18\x04\x20\x01(\x0e2%.nixling.guest.v1.GuestActivat\
+    ionModeR\x04mode\x12\x1d\n\ntimeout_ms\x18\x05\x20\x01(\x04R\ttimeoutMs\
+    \"\xbc\x01\n\x1cGuestActivationStartResponse\x12#\n\ractivation_id\x18\
+    \x01\x20\x01(\tR\x0cactivationId\x12<\n\x05state\x18\x02\x20\x01(\x0e2&.\
+    nixling.guest.v1.GuestActivationStateR\x05state\x129\n\x05error\x18\x03\
+    \x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\x82\x01\n\
+    \x1cGuestActivationStatusRequest\x12=\n\x08metadata\x18\x01\x20\x01(\x0b\
+    2!.nixling.guest.v1.RequestMetadataR\x08metadata\x12#\n\ractivation_id\
+    \x18\x02\x20\x01(\tR\x0cactivationId\"\xcb\x02\n\x1dGuestActivationStatu\
+    sResponse\x12#\n\ractivation_id\x18\x01\x20\x01(\tR\x0cactivationId\x12<\
+    \n\x05state\x18\x02\x20\x01(\x0e2&.nixling.guest.v1.GuestActivationState\
+    R\x05state\x12\x20\n\texit_code\x18\x03\x20\x01(\x05H\0R\x08exitCode\x88\
+    \x01\x01\x12\x1b\n\x06signal\x18\x04\x20\x01(\rH\x01R\x06signal\x88\x01\
+    \x01\x12$\n\x0bstatus_code\x18\x05\x20\x01(\x05H\x02R\nstatusCode\x88\
+    \x01\x01\x129\n\x05error\x18\x06\x20\x01(\x0b2#.nixling.guest.v1.GuestCo\
+    ntrolErrorR\x05errorB\x0c\n\n_exit_codeB\t\n\x07_signalB\x0e\n\x0c_statu\
+    s_code\"\xdf\x01\n\x12ShellAttachRequest\x12=\n\x08metadata\x18\x01\x20\
+    \x01(\x0b2!.nixling.guest.v1.RequestMetadataR\x08metadata\x12\x17\n\x04n\
+    ame\x18\x02\x20\x01(\tH\0R\x04name\x88\x01\x01\x12\x14\n\x05force\x18\
+    \x03\x20\x01(\x08R\x05force\x12R\n\x15initial_terminal_size\x18\x04\x20\
+    \x01(\x0b2\x1e.nixling.guest.v1.TerminalSizeR\x13initialTerminalSizeB\
+    \x07\n\x05_name\"\x9a\x03\n\x13ShellAttachResponse\x12\"\n\nsession_id\
+    \x18\x01\x20\x01(\tH\0R\tsessionId\x88\x01\x01\x12#\n\rresolved_name\x18\
+    \x02\x20\x01(\tR\x0cresolvedName\x122\n\x05state\x18\x03\x20\x01(\x0e2\
+    \x1c.nixling.guest.v1.ShellStateR\x05state\x12#\n\rforce_evicted\x18\x04\
+    \x20\x01(\x08R\x0cforceEvicted\x12\x1f\n\x0bcontrol_seq\x18\x05\x20\x01(\
+    \x04R\ncontrolSeq\x12#\n\routput_cursor\x18\x06\x20\x01(\x04R\x0coutputC\
+    ursor\x12Q\n\x10effective_limits\x18\x07\x20\x01(\x0b2&.nixling.guest.v1\
+    .GuestEffectiveLimitsR\x0feffectiveLimits\x129\n\x05error\x18\x08\x20\
+    \x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05errorB\r\n\x0b_sessio\
+    n_id\"Q\n\x10ShellListRequest\x12=\n\x08metadata\x18\x01\x20\x01(\x0b2!.\
+    nixling.guest.v1.RequestMetadataR\x08metadata\"\xaf\x01\n\x11ShellListRe\
+    sponse\x12!\n\x0cdefault_name\x18\x01\x20\x01(\tR\x0bdefaultName\x12<\n\
+    \x08sessions\x18\x02\x20\x03(\x0b2\x20.nixling.guest.v1.ShellListEntryR\
+    \x08sessions\x129\n\x05error\x18\x03\x20\x01(\x0b2#.nixling.guest.v1.Gue\
+    stControlErrorR\x05error\"\x93\x01\n\x0eShellListEntry\x12\x12\n\x04name\
+    \x18\x01\x20\x01(\tR\x04name\x122\n\x05state\x18\x02\x20\x01(\x0e2\x1c.n\
+    ixling.guest.v1.ShellStateR\x05state\x12\x1a\n\x08attached\x18\x03\x20\
+    \x01(\x08R\x08attached\x12\x1d\n\nis_default\x18\x04\x20\x01(\x08R\tisDe\
+    fault\"u\n\x12ShellDetachRequest\x12=\n\x08metadata\x18\x01\x20\x01(\x0b\
+    2!.nixling.guest.v1.RequestMetadataR\x08metadata\x12\x17\n\x04name\x18\
+    \x02\x20\x01(\tH\0R\x04name\x88\x01\x01B\x07\n\x05_name\"e\n\x10ShellKil\
+    lRequest\x12=\n\x08metadata\x18\x01\x20\x01(\x0b2!.nixling.guest.v1.Requ\
+    estMetadataR\x08metadata\x12\x12\n\x04name\x18\x02\x20\x01(\tR\x04name\"\
+    `\n\x17ShellCloseAttachRequest\x12E\n\x08metadata\x18\x01\x20\x01(\x0b2)\
+    .nixling.guest.v1.TerminalRequestMetadataR\x08metadata\"\xca\x01\n\x13Sh\
+    ellDetachResponse\x12#\n\rresolved_name\x18\x01\x20\x01(\tR\x0cresolvedN\
+    ame\x12\x1a\n\x08detached\x18\x02\x20\x01(\x08R\x08detached\x127\n\x05ca\
+    use\x18\x03\x20\x01(\x0e2!.nixling.guest.v1.ShellCloseCauseR\x05cause\
+    \x129\n\x05error\x18\x04\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErr\
+    orR\x05error\"\xae\x01\n\x11ShellKillResponse\x12\x12\n\x04name\x18\x01\
+    \x20\x01(\tR\x04name\x12\x16\n\x06killed\x18\x02\x20\x01(\x08R\x06killed\
+    \x122\n\x05state\x18\x03\x20\x01(\x0e2\x1c.nixling.guest.v1.ShellStateR\
+    \x05state\x129\n\x05error\x18\x04\x20\x01(\x0b2#.nixling.guest.v1.GuestC\
+    ontrolErrorR\x05error\"\xf9\x01\n\x19TerminalWriteStdinRequest\x12E\n\
+    \x08metadata\x18\x01\x20\x01(\x0b2).nixling.guest.v1.TerminalRequestMeta\
+    dataR\x08metadata\x12\x16\n\x06offset\x18\x02\x20\x01(\x04R\x06offset\
+    \x12\x12\n\x04data\x18\x03\x20\x01(\x0cR\x04data\x12\x1f\n\x0bclose_afte\
+    r\x18\x04\x20\x01(\x08R\ncloseAfter\x121\n\x12client_deadline_ms\x18\x05\
+    \x20\x01(\x04H\0R\x10clientDeadlineMs\x88\x01\x01B\x15\n\x13_client_dead\
+    line_ms\"\xfe\x01\n\x19TerminalReadOutputRequest\x12E\n\x08metadata\x18\
+    \x01\x20\x01(\x0b2).nixling.guest.v1.TerminalRequestMetadataR\x08metadat\
+    a\x126\n\x06stream\x18\x02\x20\x01(\x0e2\x1e.nixling.guest.v1.OutputStre\
+    amR\x06stream\x12\x16\n\x06offset\x18\x03\x20\x01(\x04R\x06offset\x12\
+    \x17\n\x07max_len\x18\x04\x20\x01(\x04R\x06maxLen\x12\x12\n\x04wait\x18\
+    \x05\x20\x01(\x08R\x04wait\x12\x1d\n\ntimeout_ms\x18\x06\x20\x01(\x04R\t\
+    timeoutMs\"z\n\x19TerminalCloseStdinRequest\x12E\n\x08metadata\x18\x01\
+    \x20\x01(\x0b2).nixling.guest.v1.TerminalRequestMetadataR\x08metadata\
+    \x12\x16\n\x06offset\x18\x02\x20\x01(\x04R\x06offset\"\xad\x01\n\x1bTerm\
+    inalTtyWinResizeRequest\x12E\n\x08metadata\x18\x01\x20\x01(\x0b2).nixlin\
+    g.guest.v1.TerminalRequestMetadataR\x08metadata\x12\x1f\n\x0bcontrol_seq\
+    \x18\x02\x20\x01(\x04R\ncontrolSeq\x12\x12\n\x04rows\x18\x03\x20\x01(\rR\
+    \x04rows\x12\x12\n\x04cols\x18\x04\x20\x01(\rR\x04cols\"\xb8\x01\n\x0eTe\
+    rminalStatus\x12\x1d\n\texit_code\x18\x01\x20\x01(\x05H\0R\x08exitCode\
+    \x12\x18\n\x06signal\x18\x02\x20\x01(\rH\0R\x06signal\x12!\n\x0bstatus_c\
+    ode\x18\x03\x20\x01(\x05H\0R\nstatusCode\x12?\n\x05error\x18\x04\x20\x01\
+    (\x0e2'.nixling.guest.v1.GuestControlErrorKindH\0R\x05errorB\t\n\x07outc\
+    ome\"\xd5\x01\n\x11GuestControlError\x12;\n\x04kind\x18\x01\x20\x01(\x0e\
+    2'.nixling.guest.v1.GuestControlErrorKindR\x04kind\x12E\n\x0bremediation\
+    \x18\x02\x20\x01(\x0e2#.nixling.guest.v1.HealthRemediationR\x0bremediati\
+    on\x12)\n\x0eretry_after_ms\x18\x03\x20\x01(\x04H\0R\x0cretryAfterMs\x88\
+    \x01\x01B\x11\n\x0f_retry_after_ms*\xc2\x04\n\x0fGuestCapability\x12\x20\
+    \n\x1cGUEST_CAPABILITY_UNSPECIFIED\x10\0\x12\x1b\n\x17GUEST_CAPABILITY_H\
+    EALTH\x10\x01\x12!\n\x1dGUEST_CAPABILITY_CAPABILITIES\x10\x02\x12\"\n\
+    \x1eGUEST_CAPABILITY_EXEC_ATTACHED\x10\x03\x12\"\n\x1eGUEST_CAPABILITY_E\
+    XEC_DETACHED\x10\x04\x12\x1d\n\x19GUEST_CAPABILITY_EXEC_TTY\x10\x05\x12\
+    \x1e\n\x1aGUEST_CAPABILITY_EXEC_LOGS\x10\x06\x12\x1f\n\x1bGUEST_CAPABILI\
+    TY_TTY_RESIZE\x10\x07\x12\x1c\n\x18GUEST_CAPABILITY_SIGNALS\x10\x08\x12$\
+    \n\x20GUEST_CAPABILITY_READ_GUEST_FILE\x10\t\x12!\n\x1dGUEST_CAPABILITY_\
+    USBIP_IMPORT\x10\n\x12#\n\x1fGUEST_CAPABILITY_SHELL_ATTACHED\x10\x0b\x12\
+    %\n!GUEST_CAPABILITY_SHELL_MANAGEMENT\x10\x0c\x12'\n#GUEST_CAPABILITY_SH\
+    ELL_FORCE_ATTACH\x10\r\x12!\n\x1dGUEST_CAPABILITY_USBIP_STATUS\x10\x0e\
+    \x12&\n\"GUEST_CAPABILITY_SYSTEM_ACTIVATION\x10\x0f*\xd2\x02\n\x0eGuestS\
+    ubsystem\x12\x1f\n\x1bGUEST_SUBSYSTEM_UNSPECIFIED\x10\0\x12\x1a\n\x16GUE\
+    ST_SUBSYSTEM_GUESTD\x10\x01\x12\x19\n\x15GUEST_SUBSYSTEM_USERD\x10\x02\
+    \x12\x18\n\x14GUEST_SUBSYSTEM_EXEC\x10\x03\x12\x1f\n\x1bGUEST_SUBSYSTEM_\
+    LOG_STORAGE\x10\x04\x12\x19\n\x15GUEST_SUBSYSTEM_TOKEN\x10\x05\x12\x19\n\
+    \x15GUEST_SUBSYSTEM_VSOCK\x10\x06\x12\x19\n\x15GUEST_SUBSYSTEM_USBIP\x10\
+    \x07\x12\x19\n\x15GUEST_SUBSYSTEM_SHELL\x10\x08\x12\x1a\n\x16GUEST_SUBSY\
+    STEM_SHPOOL\x10\t\x12%\n!GUEST_SUBSYSTEM_SYSTEM_ACTIVATION\x10\n*^\n\x0c\
+    TerminalKind\x12\x1d\n\x19TERMINAL_KIND_UNSPECIFIED\x10\0\x12\x16\n\x12T\
+    ERMINAL_KIND_EXEC\x10\x01\x12\x17\n\x13TERMINAL_KIND_SHELL\x10\x02*\xc6\
+    \x01\n\x13GuestActivationMode\x12%\n!GUEST_ACTIVATION_MODE_UNSPECIFIED\
+    \x10\0\x12\x20\n\x1cGUEST_ACTIVATION_MODE_SWITCH\x10\x01\x12\x1e\n\x1aGU\
+    EST_ACTIVATION_MODE_BOOT\x10\x02\x12\x1e\n\x1aGUEST_ACTIVATION_MODE_TEST\
+    \x10\x03\x12&\n\"GUEST_ACTIVATION_MODE_DRY_ACTIVATE\x10\x04*\xf2\x01\n\
+    \x14GuestActivationState\x12&\n\"GUEST_ACTIVATION_STATE_UNSPECIFIED\x10\
+    \0\x12\"\n\x1eGUEST_ACTIVATION_STATE_RUNNING\x10\x01\x12$\n\x20GUEST_ACT\
+    IVATION_STATE_SUCCEEDED\x10\x02\x12!\n\x1dGUEST_ACTIVATION_STATE_FAILED\
+    \x10\x03\x12$\n\x20GUEST_ACTIVATION_STATE_TIMED_OUT\x10\x04\x12\x1f\n\
+    \x1bGUEST_ACTIVATION_STATE_LOST\x10\x05*\xd5\x01\n\nShellState\x12\x1b\n\
+    \x17SHELL_STATE_UNSPECIFIED\x10\0\x12\x18\n\x14SHELL_STATE_ATTACHED\x10\
+    \x01\x12\x18\n\x14SHELL_STATE_DETACHED\x10\x02\x12\x16\n\x12SHELL_STATE_\
+    KILLED\x10\x03\x12\x20\n\x1cSHELL_STATE_POOL_UNAVAILABLE\x10\x04\x12\x20\
+    \n\x1cSHELL_STATE_FEATURE_DISABLED\x10\x05\x12\x1a\n\x16SHELL_STATE_OUTP\
+    UT_GAP\x10\x06*\xa1\x02\n\x0fShellCloseCause\x12!\n\x1dSHELL_CLOSE_CAUSE\
+    _UNSPECIFIED\x10\0\x12#\n\x1fSHELL_CLOSE_CAUSE_CLIENT_DETACH\x10\x01\x12\
+    &\n\"SHELL_CLOSE_CAUSE_EVICTED_BY_FORCE\x10\x02\x12-\n)SHELL_CLOSE_CAUSE\
+    _EVICTED_BY_ADMIN_DETACH\x10\x03\x12%\n!SHELL_CLOSE_CAUSE_KILLED_BY_ADMI\
+    N\x10\x04\x12&\n\"SHELL_CLOSE_CAUSE_POOL_UNAVAILABLE\x10\x05\x12\x20\n\
+    \x1cSHELL_CLOSE_CAUSE_OUTPUT_GAP\x10\x06*L\n\x0bGuestFileId\x12\x1d\n\
+    \x19GUEST_FILE_ID_UNSPECIFIED\x10\0\x12\x1e\n\x1aGUEST_FILE_ID_GUEST_CON\
+    FIG\x10\x01*x\n\x11UsbipImportAction\x12#\n\x1fUSBIP_IMPORT_ACTION_UNSPE\
+    CIFIED\x10\0\x12\x1e\n\x1aUSBIP_IMPORT_ACTION_ATTACH\x10\x01\x12\x1e\n\
+    \x1aUSBIP_IMPORT_ACTION_DETACH\x10\x02*s\n\x0cHealthOrigin\x12\x1d\n\x19\
+    HEALTH_ORIGIN_UNSPECIFIED\x10\0\x12\x20\n\x1cHEALTH_ORIGIN_GUEST_REPORTE\
+    D\x10\x01\x12\"\n\x1eHEALTH_ORIGIN_HOST_SYNTHESIZED\x10\x02*\xb9\x02\n\
+    \x0bHealthState\x12\x1c\n\x18HEALTH_STATE_UNSPECIFIED\x10\0\x12\x18\n\
+    \x14HEALTH_STATE_HEALTHY\x10\x01\x12\x19\n\x15HEALTH_STATE_DEGRADED\x10\
+    \x02\x12+\n'HEALTH_STATE_UNAVAILABLE_OLD_GENERATION\x10\x03\x12\x20\n\
+    \x1cHEALTH_STATE_LISTENER_ABSENT\x10\x04\x12&\n\"HEALTH_STATE_TRANSPORT_\
+    UNREACHABLE\x10\x05\x12\x1c\n\x18HEALTH_STATE_AUTH_FAILED\x10\x06\x12\"\
+    \n\x1eHEALTH_STATE_PROTOCOL_MISMATCH\x10\x07\x12\x1e\n\x1aHEALTH_STATE_S\
+    TALE_SESSION\x10\x08*\xa4\x05\n\x0cHealthReason\x12\x1d\n\x19HEALTH_REAS\
+    ON_UNSPECIFIED\x10\0\x12\x16\n\x12HEALTH_REASON_NONE\x10\x01\x12\x20\n\
+    \x1cHEALTH_REASON_OLD_GENERATION\x10\x02\x12!\n\x1dHEALTH_REASON_LISTENE\
+    R_ABSENT\x10\x03\x12!\n\x1dHEALTH_REASON_CONNECT_REFUSED\x10\x04\x12!\n\
+    \x1dHEALTH_REASON_CONNECT_TIMEOUT\x10\x05\x12\x20\n\x1cHEALTH_REASON_EOF\
+    _BEFORE_ACK\x10\x06\x12\x1f\n\x1bHEALTH_REASON_MALFORMED_ACK\x10\x07\x12\
+    \x1e\n\x1aHEALTH_REASON_ACK_TOO_LONG\x10\x08\x12\x1e\n\x1aHEALTH_REASON_\
+    TRANSPORT_IO\x10\t\x12%\n!HEALTH_REASON_AUTH_TOKEN_REJECTED\x10\n\x12.\n\
+    *HEALTH_REASON_PROTOCOL_VERSION_UNSUPPORTED\x10\x0b\x12-\n)HEALTH_REASON\
+    _SESSION_GENERATION_MISMATCH\x10\x0c\x12,\n(HEALTH_REASON_EXEC_SUBSYSTEM\
+    _UNAVAILABLE\x10\r\x12)\n%HEALTH_REASON_LOG_STORAGE_UNAVAILABLE\x10\x0e\
+    \x12\x20\n\x1cHEALTH_REASON_QUOTA_EXCEEDED\x10\x0f\x12\x1e\n\x1aHEALTH_R\
+    EASON_RATE_LIMITED\x10\x10\x12.\n*HEALTH_REASON_INTERNAL_HEALTH_CHECK_FA\
+    ILED\x10\x11*\xe0\x02\n\x11HealthRemediation\x12\"\n\x1eHEALTH_REMEDIATI\
+    ON_UNSPECIFIED\x10\0\x12\x1b\n\x17HEALTH_REMEDIATION_NONE\x10\x01\x12\
+    \x1c\n\x18HEALTH_REMEDIATION_RETRY\x10\x02\x12!\n\x1dHEALTH_REMEDIATION_\
+    RESTART_VM\x10\x03\x12$\n\x20HEALTH_REMEDIATION_UPGRADE_GUEST\x10\x04\
+    \x12'\n#HEALTH_REMEDIATION_CHECK_AUTH_TOKEN\x10\x05\x12+\n'HEALTH_REMEDI\
+    ATION_CHECK_GUESTD_SERVICE\x10\x06\x12\"\n\x1eHEALTH_REMEDIATION_REDUCE_\
+    LOAD\x10\x07\x12)\n%HEALTH_REMEDIATION_INSPECT_GUEST_LOGS\x10\x08*a\n\
+    \x0cOutputStream\x12\x1d\n\x19OUTPUT_STREAM_UNSPECIFIED\x10\0\x12\x18\n\
+    \x14OUTPUT_STREAM_STDOUT\x10\x01\x12\x18\n\x14OUTPUT_STREAM_STDERR\x10\
+    \x02*\x96\x01\n\x10WriteDisposition\x12!\n\x1dWRITE_DISPOSITION_UNSPECIF\
+    IED\x10\0\x12\x1e\n\x1aWRITE_DISPOSITION_ACCEPTED\x10\x01\x12\x1f\n\x1bW\
+    RITE_DISPOSITION_DUPLICATE\x10\x02\x12\x1e\n\x1aWRITE_DISPOSITION_REJECT\
+    ED\x10\x03*\x9b\x02\n\tExecState\x12\x1a\n\x16EXEC_STATE_UNSPECIFIED\x10\
+    \0\x12\x16\n\x12EXEC_STATE_CREATED\x10\x01\x12\x16\n\x12EXEC_STATE_RUNNI\
+    NG\x10\x02\x12\x15\n\x11EXEC_STATE_EXITED\x10\x03\x12\x17\n\x13EXEC_STAT\
+    E_SIGNALED\x10\x04\x12\x18\n\x14EXEC_STATE_CANCELLED\x10\x05\x12&\n\"EXE\
+    C_STATE_SLOW_CONSUMER_CANCELLED\x10\x06\x12\x1d\n\x19EXEC_STATE_PROTOCOL\
+    _ERROR\x10\x07\x12\x1a\n\x16EXEC_STATE_LOST_GUESTD\x10\x08\x12\x15\n\x11\
+    EXEC_STATE_REAPED\x10\t*\xbd\x01\n\nStdinState\x12\x1b\n\x17STDIN_STATE_\
+    UNSPECIFIED\x10\0\x12\x14\n\x10STDIN_STATE_OPEN\x10\x01\x12\x17\n\x13STD\
+    IN_STATE_CLOSING\x10\x02\x12\x16\n\x12STDIN_STATE_CLOSED\x10\x03\x12!\n\
+    \x1dSTDIN_STATE_CLOSED_BY_PROCESS\x10\x04\x12(\n$STDIN_STATE_REJECTED_NO\
+    T_INTERACTIVE\x10\x05*y\n\x0cSignalTarget\x12\x1d\n\x19SIGNAL_TARGET_UNS\
+    PECIFIED\x10\0\x12*\n&SIGNAL_TARGET_FOREGROUND_PROCESS_GROUP\x10\x01\x12\
+    \x1e\n\x1aSIGNAL_TARGET_PROCESS_TREE\x10\x02*\xd4\x01\n\x10ExecCancelRea\
+    son\x12\"\n\x1eEXEC_CANCEL_REASON_UNSPECIFIED\x10\0\x12(\n$EXEC_CANCEL_R\
+    EASON_CLIENT_DISCONNECT\x10\x01\x12%\n!EXEC_CANCEL_REASON_USER_REQUESTED\
+    \x10\x02\x12$\n\x20EXEC_CANCEL_REASON_SLOW_CONSUMER\x10\x03\x12%\n!EXEC_\
+    CANCEL_REASON_PROTOCOL_ERROR\x10\x04*\xcf\x19\n\x15GuestControlErrorKind\
+    \x12(\n$GUEST_CONTROL_ERROR_KIND_UNSPECIFIED\x10\0\x12+\n'GUEST_CONTROL_\
+    ERROR_KIND_PROTOCOL_ERROR\x10\x01\x12/\n+GUEST_CONTROL_ERROR_KIND_MAX_CH\
+    UNK_EXCEEDED\x10\x02\x12/\n+GUEST_CONTROL_ERROR_KIND_STDIN_BACKPRESSURE\
+    \x10\x03\x12)\n%GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED\x10\x04\x12+\n'GUE\
+    ST_CONTROL_ERROR_KIND_STDIN_NOT_OPEN\x10\x05\x124\n0GUEST_CONTROL_ERROR_\
+    KIND_STDIN_CLOSED_BY_PROCESS\x10\x06\x122\n.GUEST_CONTROL_ERROR_KIND_STD\
+    IN_OFFSET_MISMATCH\x10\x07\x128\n4GUEST_CONTROL_ERROR_KIND_STDIN_BYTE_BU\
+    DGET_EXHAUSTED\x10\x08\x12+\n'GUEST_CONTROL_ERROR_KIND_OFFSET_EXPIRED\
+    \x10\t\x12-\n)GUEST_CONTROL_ERROR_KIND_OFFSET_IN_FUTURE\x10\n\x12-\n)GUE\
+    ST_CONTROL_ERROR_KIND_OFFSET_EXHAUSTED\x10\x0b\x12(\n$GUEST_CONTROL_ERRO\
+    R_KIND_OUTPUT_LOST\x10\x0c\x123\n/GUEST_CONTROL_ERROR_KIND_TTY_STDERR_UN\
+    AVAILABLE\x10\r\x12)\n%GUEST_CONTROL_ERROR_KIND_TTY_REQUIRED\x10\x0e\x12\
+    3\n/GUEST_CONTROL_ERROR_KIND_EXEC_CAPACITY_EXCEEDED\x10\x0f\x12:\n6GUEST\
+    _CONTROL_ERROR_KIND_EXEC_ATTACH_CAPACITY_EXCEEDED\x10\x10\x12+\n'GUEST_C\
+    ONTROL_ERROR_KIND_EXEC_NOT_FOUND\x10\x11\x120\n,GUEST_CONTROL_ERROR_KIND\
+    _EXEC_ALREADY_EXITED\x10\x12\x120\n,GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_\
+    DISABLED\x10\x13\x123\n/GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_ROOT_DENIED\
+    \x10\x14\x123\n/GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_USER_DENIED\x10\x15\
+    \x12(\n$GUEST_CONTROL_ERROR_KIND_CWD_INVALID\x10\x16\x12'\n#GUEST_CONTRO\
+    L_ERROR_KIND_CWD_DENIED\x10\x17\x125\n1GUEST_CONTROL_ERROR_KIND_RETAINED\
+    _LOG_PATH_UNSAFE\x10\x18\x128\n4GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_QU\
+    OTA_EXCEEDED\x10\x19\x128\n4GUEST_CONTROL_ERROR_KIND_READ_WAIT_CAPACITY_\
+    EXCEEDED\x10\x1a\x123\n/GUEST_CONTROL_ERROR_KIND_WAIT_CAPACITY_EXCEEDED\
+    \x10\x1b\x121\n-GUEST_CONTROL_ERROR_KIND_SUPERSEDED_READ_WAIT\x10\x1c\
+    \x12)\n%GUEST_CONTROL_ERROR_KIND_RATE_LIMITED\x10\x1d\x120\n,GUEST_CONTR\
+    OL_ERROR_KIND_REQUEST_ID_CONFLICT\x10\x1e\x121\n-GUEST_CONTROL_ERROR_KIN\
+    D_CONTROL_SEQ_MISMATCH\x10\x1f\x124\n0GUEST_CONTROL_ERROR_KIND_SLOW_CONS\
+    UMER_CANCELLED\x10\x20\x12*\n&GUEST_CONTROL_ERROR_KIND_STALE_SESSION\x10\
+    !\x12E\nAGUEST_CONTROL_ERROR_KIND_GUEST_CONTROL_UNAVAILABLE_OLD_GENERATI\
+    ON\x10\"\x12(\n$GUEST_CONTROL_ERROR_KIND_AUTH_FAILED\x10#\x122\n.GUEST_C\
+    ONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE\x10$\x12)\n%GUEST_CONTROL_ERROR_\
+    KIND_EXEC_EXPIRED\x10%\x12+\n'GUEST_CONTROL_ERROR_KIND_FILE_NOT_FOUND\
+    \x10&\x12+\n'GUEST_CONTROL_ERROR_KIND_FILE_TOO_LARGE\x10'\x12(\n$GUEST_C\
+    ONTROL_ERROR_KIND_PATH_UNSAFE\x10(\x12(\n$GUEST_CONTROL_ERROR_KIND_READ_\
+    DENIED\x10)\x12,\n(GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM\x10*\x12.\n*\
+    GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE\x10+\x121\n-GUEST_CONTROL_ERR\
+    OR_KIND_USBIP_COMMAND_FAILED\x10,\x121\n-GUEST_CONTROL_ERROR_KIND_USBIP_\
+    INVALID_BUS_ID\x10-\x12/\n+GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST\
+    \x10.\x121\n-GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED\x10/\x12/\n+G\
+    UEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME\x100\x124\n0GUEST_CONTROL_ERR\
+    OR_KIND_SHELL_CAPACITY_EXCEEDED\x101\x12;\n7GUEST_CONTROL_ERROR_KIND_SHE\
+    LL_ATTACH_CAPACITY_EXCEEDED\x102\x12,\n(GUEST_CONTROL_ERROR_KIND_SHELL_N\
+    OT_FOUND\x103\x123\n/GUEST_CONTROL_ERROR_KIND_SHELL_ALREADY_ATTACHED\x10\
+    4\x123\n/GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE\x105\x128\n4GUE\
+    ST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMATCH\x106\x12-\n)GUEST_CONT\
+    ROL_ERROR_KIND_SHELL_OUTPUT_GAP\x107\x122\n.GUEST_CONTROL_ERROR_KIND_USB\
+    IP_COMMAND_TIMEOUT\x108\x121\n-GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OU\
+    TPUT\x109\x122\n.GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_ID\x10:\x12\
+    4\n0GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_PATH\x10;\x124\n0GUEST_C\
+    ONTROL_ERROR_KIND_ACTIVATION_INVALID_MODE\x10<\x121\n-GUEST_CONTROL_ERRO\
+    R_KIND_ACTIVATION_NOT_FOUND\x10=\x12:\n6GUEST_CONTROL_ERROR_KIND_ACTIVAT\
+    ION_STATUS_UNAVAILABLE\x10>\x121\n-GUEST_CONTROL_ERROR_KIND_ACTIVATION_T\
+    IMED_OUT\x10?\x124\n0GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED\
+    \x10@b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -13447,7 +14395,7 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
     file_descriptor.get(|| {
         let generated_file_descriptor = generated_file_descriptor_lazy.get(|| {
             let mut deps = ::std::vec::Vec::with_capacity(0);
-            let mut messages = ::std::vec::Vec::with_capacity(59);
+            let mut messages = ::std::vec::Vec::with_capacity(63);
             messages.push(RequestMetadata::generated_message_descriptor_data());
             messages.push(ExecRequestMetadata::generated_message_descriptor_data());
             messages.push(TerminalRequestMetadata::generated_message_descriptor_data());
@@ -13491,6 +14439,10 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             messages.push(UsbipStatusRequest::generated_message_descriptor_data());
             messages.push(UsbipStatusResponse::generated_message_descriptor_data());
             messages.push(UsbipStatusEntry::generated_message_descriptor_data());
+            messages.push(GuestActivationStartRequest::generated_message_descriptor_data());
+            messages.push(GuestActivationStartResponse::generated_message_descriptor_data());
+            messages.push(GuestActivationStatusRequest::generated_message_descriptor_data());
+            messages.push(GuestActivationStatusResponse::generated_message_descriptor_data());
             messages.push(ShellAttachRequest::generated_message_descriptor_data());
             messages.push(ShellAttachResponse::generated_message_descriptor_data());
             messages.push(ShellListRequest::generated_message_descriptor_data());
@@ -13507,10 +14459,12 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             messages.push(TerminalTtyWinResizeRequest::generated_message_descriptor_data());
             messages.push(TerminalStatus::generated_message_descriptor_data());
             messages.push(GuestControlError::generated_message_descriptor_data());
-            let mut enums = ::std::vec::Vec::with_capacity(18);
+            let mut enums = ::std::vec::Vec::with_capacity(20);
             enums.push(GuestCapability::generated_enum_descriptor_data());
             enums.push(GuestSubsystem::generated_enum_descriptor_data());
             enums.push(TerminalKind::generated_enum_descriptor_data());
+            enums.push(GuestActivationMode::generated_enum_descriptor_data());
+            enums.push(GuestActivationState::generated_enum_descriptor_data());
             enums.push(ShellState::generated_enum_descriptor_data());
             enums.push(ShellCloseCause::generated_enum_descriptor_data());
             enums.push(GuestFileId::generated_enum_descriptor_data());
