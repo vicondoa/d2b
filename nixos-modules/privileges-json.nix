@@ -1164,6 +1164,30 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "UsbipExplicitBind",
+    "subject": "USBIP explicit attach",
+    "scope": "per-busid/env",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "UsbipExplicitFirewallRule",
+    "subject": "USBIP explicit attach firewall",
+    "scope": "per-busid/env",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "UsbipUnbind",
     "subject": "USBIP",
     "scope": "per-busid/env",

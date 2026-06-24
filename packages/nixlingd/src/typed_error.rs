@@ -467,13 +467,10 @@ pub enum TypedError {
         vm: String,
         elapsed_ms: u128,
     },
-    /// Returned when the daemon is in operator-only mode (consecutive
-    /// net-route
-    /// preflight failures crossed the configured threshold) and
-    /// the caller invokes a per-env mutating verb. Read-only
-    /// verbs (`status`, `host doctor --read-only`, `audit`) stay
-    /// available. The sole mutating recovery verb is
-    /// `nixling host reconcile --network --apply`.
+    /// Returned when a caller needs to surface persisted net-route
+    /// preflight degradation. Read-only verbs (`status`,
+    /// `host doctor --read-only`, `audit`) stay available. Focused
+    /// recovery is `nixling host reconcile --network --apply`.
     NetRoutePreflightDegraded {
         consecutive_failures: u32,
         failed_envs: Vec<String>,
@@ -492,6 +489,23 @@ pub enum TypedError {
         busid: String,
         step: crate::usbip_state_machine::UsbipBusidStep,
         reason: String,
+    },
+    /// Explicit-attach: the requested busid is not present in
+    /// `/sys/bus/usb/devices/`. Sysfs presence is the fail-closed gate
+    /// for explicit attach; absent busids are rejected before any broker
+    /// call or firewall mutation. Exit code 67 (same as other USB errors).
+    UsbipBusidNotPresent {
+        busid: String,
+        verb: String,
+    },
+    /// Explicit-attach: another active daemon claim already holds
+    /// the exclusive OFD lock for the requested busid. The daemon
+    /// reads the lock file before any broker call and rejects the
+    /// conflicting explicit attach fail-closed. Exit code 67.
+    UsbipExplicitClaimConflict {
+        busid: String,
+        owner_vm: String,
+        verb: String,
     },
     /// Returned by USB detach/revocation when the daemon cannot prove an exact
     /// VM→proxy flow tuple for the target busid that can be terminated with
@@ -606,6 +620,8 @@ impl TypedError {
             Self::OtelHostBridgeReadinessTimeout { .. } => "otel-host-bridge-readiness-timeout",
             Self::NetRoutePreflightDegraded { .. } => "net-route-preflight-degraded",
             Self::UsbipStepFailed { .. } => "usbip-step-failed",
+            Self::UsbipBusidNotPresent { .. } => "usbip-busid-not-present",
+            Self::UsbipExplicitClaimConflict { .. } => "usbip-explicit-claim-conflict",
             Self::UsbipRevocationNotIsolated { .. } => "usbip-revocation-not-isolated",
             Self::RuntimeCapabilityUnsupported { .. } => "runtime-capability-unsupported",
             Self::GuestControlReadFailed { kind } => kind.wire_kind(),
@@ -652,6 +668,11 @@ impl TypedError {
             // (64), otel-bridge (65), or net-route-degraded (66)
             // adjacent surfaces.
             Self::UsbipStepFailed { .. } => 67,
+            // Explicit-attach pre-flight rejections use exit code 67
+            // (same class as other USB errors) so operators can correlate them
+            // to the USBIP surface.
+            Self::UsbipBusidNotPresent { .. } => 67,
+            Self::UsbipExplicitClaimConflict { .. } => 67,
             Self::UsbipRevocationNotIsolated { .. } => 67,
             Self::RuntimeCapabilityUnsupported { .. } => 70,
             // Guest-control config read failures share one exit code; the
@@ -742,7 +763,7 @@ impl TypedError {
                     failed_envs.join(", ")
                 };
                 format!(
-                    "daemon is in operator-only mode after {consecutive_failures} consecutive net-route preflight failures (envs: {envs}); per-env mutating verbs are blocked"
+                    "net-route preflight has {consecutive_failures} consecutive failures (envs: {envs}); run network reconcile or inspect bridge state"
                 )
             }
             Self::OtelHostBridgeReadinessTimeout { vm, elapsed_ms } => {
@@ -763,6 +784,23 @@ impl TypedError {
                 format!(
                     "usbip busid '{busid}' refused at step '{step}': {}",
                     kind.summary()
+                )
+            }
+            Self::UsbipBusidNotPresent { busid, verb } => {
+                let busid = public_usb_busid(busid);
+                format!(
+                    "{verb}: busid '{busid}' is not present in sysfs; device is absent or not plugged in"
+                )
+            }
+            Self::UsbipExplicitClaimConflict {
+                busid,
+                owner_vm,
+                verb,
+            } => {
+                let busid = public_usb_busid(busid);
+                let owner_vm = public_usb_busid(owner_vm);
+                format!(
+                    "{verb}: busid '{busid}' is already claimed by vm '{owner_vm}'; detach it first"
                 )
             }
             Self::UsbipRevocationNotIsolated { vm, busid, reason } => {
@@ -875,7 +913,7 @@ impl TypedError {
                 "check that the OtelHostBridge runner is healthy: `nixling host doctor` reports its pidfd liveness and last-relay-flush timestamp. If the runner is missing, the broker SpawnRunner for `RunnerRole::OtelHostBridge` failed — inspect the broker audit log. If the vsock host socket does not exist, the obs VM cannot accept OTLP from workload VMs; restart the obs VM. To raise the deadline set `NIXLING_OTEL_BRIDGE_READINESS_TIMEOUT_MS=<ms>`; to fail-closed instead of degrading set `NIXLING_OTEL_BRIDGE_READINESS_STRICT=1`. See docs/reference/otel-host-bridge-readiness.md.".to_owned()
             }
             Self::NetRoutePreflightDegraded { .. } => {
-                "the SOLE mutating recovery verb is `nixling host reconcile --network --apply`. It re-runs the per-env nftables / route / sysctl reconcile through the broker without starting any VM and clears the operator-only-mode counter on success. Read-only verbs (`status`, `host doctor --read-only`, `audit`) remain available. See docs/explanation/host-prepare.md § \"Net-route preflight & operator-only mode\".".to_owned()
+                "`nixling host reconcile --network --apply` re-runs the per-env nftables / route / sysctl reconcile through the broker without starting any VM and clears the net-route preflight history on success. Read-only verbs (`status`, `host doctor --read-only`, `audit`) remain available. See docs/explanation/host-prepare.md § \"Net-route preflight & network reconcile\".".to_owned()
             }
             Self::UsbipStepFailed {
                 busid,
@@ -890,6 +928,21 @@ impl TypedError {
                 format!(
                     "For busid '{busid}', {}. Run `nixling usb probe`, fix the reported USB posture, then retry the lifecycle verb.",
                     kind.remediation()
+                )
+            }
+            Self::UsbipBusidNotPresent { busid, .. } => {
+                let busid = public_usb_busid(busid);
+                format!(
+                    "Plug in the USB device at busid '{busid}', verify it appears in `lsusb`, then retry the attach. Use `nixling usb probe` to inspect current device availability."
+                )
+            }
+            Self::UsbipExplicitClaimConflict {
+                busid, owner_vm, ..
+            } => {
+                let busid = public_usb_busid(busid);
+                let owner_vm = public_usb_busid(owner_vm);
+                format!(
+                    "Run `nixling usb detach {owner_vm} {busid} --apply` to release the existing claim, then retry the attach."
                 )
             }
             Self::UsbipRevocationNotIsolated { vm, busid, reason } => {
@@ -1019,6 +1072,30 @@ impl TypedError {
                     "usbip step failed"
                 );
             }
+            Self::UsbipBusidNotPresent { busid, verb } => {
+                let busid = public_usb_busid(busid);
+                tracing::warn!(
+                    kind = self.kind(),
+                    busid = %busid,
+                    verb = %verb,
+                    "usbip explicit attach rejected: busid not present in sysfs"
+                );
+            }
+            Self::UsbipExplicitClaimConflict {
+                busid,
+                owner_vm,
+                verb,
+            } => {
+                let busid = public_usb_busid(busid);
+                let owner_vm = public_usb_busid(owner_vm);
+                tracing::warn!(
+                    kind = self.kind(),
+                    busid = %busid,
+                    owner_vm = %owner_vm,
+                    verb = %verb,
+                    "usbip explicit attach rejected: active claim conflict"
+                );
+            }
             Self::UsbipRevocationNotIsolated { vm, busid, reason } => {
                 let busid = public_usb_busid(busid);
                 tracing::warn!(
@@ -1064,6 +1141,8 @@ impl TypedError {
             | Self::OtelHostBridgeReadinessTimeout { .. }
             | Self::NetRoutePreflightDegraded { .. }
             | Self::UsbipStepFailed { .. }
+            | Self::UsbipBusidNotPresent { .. }
+            | Self::UsbipExplicitClaimConflict { .. }
             | Self::UsbipRevocationNotIsolated { .. }
             | Self::RuntimeCapabilityUnsupported { .. }
             | Self::GuestControlReadFailed { .. }

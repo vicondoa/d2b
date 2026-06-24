@@ -1,8 +1,22 @@
-//! Shared USBIP wire validation helpers.
+//! Shared USBIP wire validation helpers and explicit-attach DTOs.
 //!
 //! Bus IDs cross the CLI, daemon, broker, and guest-control boundary. Keep the
 //! shape check here so every layer rejects the same traversal-/shell-unsafe
 //! strings before they reach a subprocess argv.
+//!
+//! # Explicit-attach model
+//!
+//! `nixling usb attach <vm> <present-busid> --apply` allows any present USB
+//! device to a USB-capable VM without requiring static busid/vendor allowlists
+//! in the bundle. The claim source distinguishes this explicit path from the
+//! legacy declared path so the daemon can apply the correct broker ops and the
+//! broker can record the correct audit shape.
+//!
+//! The `UsbipDaemonClaimRecord` is the in-process DTO the daemon builds and
+//! passes to broker dispatch. It does NOT cross the public wire; it is an
+//! internal handoff from the daemon's USB handler to the broker op selector.
+
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BusIdError {
@@ -68,6 +82,83 @@ pub fn validate_bus_id(bus_id: &str) -> Result<(), BusIdError> {
             }
         }
         Some(_) => Err(BusIdError::Invalid),
+    }
+}
+
+// ---- Explicit-attach claim DTOs ----
+
+/// Whether an active daemon USB claim originated from a static bundle declaration
+/// or from an explicit `nixling usb attach <vm> <busid> --apply` invocation.
+///
+/// `Declared` claims have bundle-resolved firewall and bind intent refs that the
+/// broker validates against the trusted bundle. `Explicit` claims carry only a
+/// daemon-validated sysfs busid and a USB-capable VM name; the broker uses
+/// `UsbipExplicitBind` / `UsbipExplicitFirewallRule` ops instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "source")]
+pub enum UsbipClaimSource {
+    /// Originated from a static bundle declaration: both a firewall intent ref
+    /// and a bind intent ref exist in the trusted bundle.
+    Declared {
+        /// Opaque bundle firewall intent id, e.g. `usbip-fw-work-1-2`.
+        firewall_ref: String,
+        /// Opaque bundle bind intent id, e.g. `usbip-bind-work-corp-vm-1-2`.
+        bind_ref: String,
+    },
+    /// Originated from an explicit `nixling usb attach <vm> <busid> --apply`
+    /// that passed the sysfs-presence check, the USB-capable gate, and the
+    /// active-claim exclusivity check. No static bundle allowlist is required.
+    Explicit,
+}
+
+impl UsbipClaimSource {
+    /// `true` if this is an explicitly requested attach (no bundle allowlist).
+    pub fn is_explicit(&self) -> bool {
+        matches!(self, Self::Explicit)
+    }
+
+    /// `true` if this claim has bundle-resolved firewall and bind intent refs.
+    pub fn is_declared(&self) -> bool {
+        matches!(self, Self::Declared { .. })
+    }
+}
+
+/// Daemon-internal handoff record for one active USB claim.
+///
+/// Built inside `dispatch_broker_usbip_bind` after all admission checks pass;
+/// passed to broker op selectors that differ between the declared and explicit
+/// paths. Never serialized to the public wire; the broker audit layer sees only
+/// opaque refs or explicit busid+vm+env fields per the op.
+///
+/// The `lock_path` is the OFD-lockable file under
+/// `/run/nixling/locks/usbip/<busid>` that the broker opens/acquires for the
+/// exclusive USB claim. The daemon passes the OFD lock fd via `SCM_RIGHTS`
+/// when dispatching broker USB runner/firewall ops so the kernel enforces
+/// mutual exclusion without a daemon-global in-memory table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsbipDaemonClaimRecord {
+    /// Validated sysfs busid, e.g. `1-2` or `2-1.4.5`.
+    pub busid: String,
+    /// Target VM name (USB-capable, manifest-present).
+    pub vm: String,
+    /// Env the VM belongs to (from manifest entry).
+    pub env: String,
+    /// Per-env proxy listen port for the USBIP proxy (default 3240).
+    pub proxy_port: u16,
+    /// Source of this claim: declared from bundle or explicit operator request.
+    pub source: UsbipClaimSource,
+    /// Absolute path to the per-busid OFD lock file.
+    pub lock_path: String,
+}
+
+impl UsbipDaemonClaimRecord {
+    /// Canonical lock-file path for a validated busid.
+    ///
+    /// The busid must have already passed [`validate_bus_id`] before calling
+    /// this, since the result is used as a filesystem path.
+    pub fn lock_path_for_busid(busid: &str) -> String {
+        format!("/run/nixling/locks/usbip/{busid}")
     }
 }
 

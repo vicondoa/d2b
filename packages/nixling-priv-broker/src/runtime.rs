@@ -1190,6 +1190,22 @@ fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
                 }
             })
         }
+        BrokerRequest::UsbipExplicitBind(req) => {
+            validate_usbip_busid_wire(&req.bus_id).map_err(|reason| {
+                BrokerError::RequestValidation {
+                    operation: "UsbipExplicitBind",
+                    reason,
+                }
+            })
+        }
+        BrokerRequest::UsbipExplicitFirewallRule(req) => {
+            validate_usbip_busid_wire(&req.bus_id).map_err(|reason| {
+                BrokerError::RequestValidation {
+                    operation: "UsbipExplicitFirewallRule",
+                    reason,
+                }
+            })
+        }
         _ => Ok(()),
     }
 }
@@ -1555,6 +1571,14 @@ fn dispatch_request(
         BrokerRequest::UsbipBindFirewallRule { .. } => Err(BrokerError::Unimplemented {
             operation: "UsbipBindFirewallRule",
             target_wave: "W3",
+        }),
+        BrokerRequest::UsbipExplicitBind { .. } => Err(BrokerError::Unimplemented {
+            operation: "UsbipExplicitBind",
+            target_wave: "W5",
+        }),
+        BrokerRequest::UsbipExplicitFirewallRule { .. } => Err(BrokerError::Unimplemented {
+            operation: "UsbipExplicitFirewallRule",
+            target_wave: "W5",
         }),
         BrokerRequest::UsbipProxyReconcile { .. } => Err(BrokerError::UnknownOperation {
             operation: "UsbipProxyReconcile",
@@ -3909,6 +3933,14 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         RealBrokerRequest::SshHostKeyPreflight(_) => Err(BrokerError::Unimplemented {
             operation: "SshHostKeyPreflight",
             target_wave: "P2",
+        }),
+        RealBrokerRequest::UsbipExplicitBind(_) => Err(BrokerError::Unimplemented {
+            operation: "UsbipExplicitBind",
+            target_wave: "W5",
+        }),
+        RealBrokerRequest::UsbipExplicitFirewallRule(_) => Err(BrokerError::Unimplemented {
+            operation: "UsbipExplicitFirewallRule",
+            target_wave: "W5",
         }),
         // Disk-init dispatch. The broker resolves every `DiskInit`
         // plan-op from the trusted bundle for `vm_id` and creates the

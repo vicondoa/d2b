@@ -77,7 +77,7 @@ in
     environment.systemPackages = [ brokerPackage ];
 
     # broker-owned state + bundle dirs; /run/nixling itself is owned by
-    # nixlingd:nixling 0750 from host-daemon.nix (canonical;
+    # root:nixling 1770 with explicit ACLs from host-daemon.nix (canonical;
     # this module MUST NOT touch /run/nixling tmpfiles to avoid the
     # runtime-dir ownership conflict).
     systemd.tmpfiles.rules = [

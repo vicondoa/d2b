@@ -53,6 +53,8 @@ use nixling_contracts::{
         UpdateHostsFileRequest as BrokerUpdateHostsFileRequest,
         UsbipBindFirewallRuleRequest as BrokerUsbipBindFirewallRuleRequest,
         UsbipBindRequest as BrokerUsbipBindRequest,
+        UsbipExplicitBindRequest as BrokerUsbipExplicitBindRequest,
+        UsbipExplicitFirewallRuleRequest as BrokerUsbipExplicitFirewallRuleRequest,
         UsbipProxyReconcileRequest as BrokerUsbipProxyReconcileRequest,
         UsbipUnbindRequest as BrokerUsbipUnbindRequest,
     },
@@ -155,9 +157,9 @@ pub mod kernel_module_check;
 pub mod otel_host_bridge_readiness;
 // Daemon startup self-check that replaces the legacy
 // `nixling-net-route-preflight.service` host singleton (retired in v1.0).
-// Probes each env's LAN bridge, persists a small history, and engages an
-// operator-only mode after N consecutive failures. Recovery is via the new
-// `nixling host reconcile --network --apply` verb. See
+// Probes each env's LAN bridge and persists a small history. Startup misses
+// are diagnostic only because autostarted net VMs own bridge repair. Focused
+// recovery is via `nixling host reconcile --network --apply`. See
 // `docs/explanation/host-prepare.md`.
 pub mod net_route_preflight;
 // v1.1.1 runtime pidfs self-probe: hard-refuses daemon startup on
@@ -679,6 +681,41 @@ fn persist_autostart_report(daemon_state_dir: &Path, report: &autostart::Autosta
     }
 }
 
+fn startup_autostart_pre_degraded_vms(
+    module_degraded_vms: &BTreeSet<String>,
+    net_failed_envs: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    if !net_failed_envs.is_empty() {
+        tracing::warn!(
+            failed_envs = ?net_failed_envs,
+            "net-route-preflight: preserving startup autostart despite pre-existing bridge failures",
+        );
+    }
+    module_degraded_vms.clone()
+}
+
+#[cfg(test)]
+mod startup_autostart_pre_degraded_tests {
+    use super::startup_autostart_pre_degraded_vms;
+    use std::collections::BTreeSet;
+
+    fn set(values: &[&str]) -> BTreeSet<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn startup_bridge_failures_do_not_skip_autostart_vms() {
+        let module_degraded = set(&["work-aad"]);
+        let net_failed_envs = set(&["obs", "work"]);
+
+        let pre_degraded = startup_autostart_pre_degraded_vms(&module_degraded, &net_failed_envs);
+
+        assert_eq!(pre_degraded, module_degraded);
+        assert!(!pre_degraded.contains("sys-obs-net"));
+        assert!(!pre_degraded.contains("sys-work-net"));
+    }
+}
+
 fn persist_storage_lifecycle_report(
     daemon_state_dir: &Path,
     report: &storage_lifecycle::StorageLifecycleReport,
@@ -1054,13 +1091,16 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     // Daemon-side net-route preflight (replaces
     // `nixling-net-route-preflight.service`). For each env in the host
     // artifact, probe its LAN bridge.
-    // Failed envs contribute their VMs to the pre-degraded set so
-    // those VMs surface as `Outcome::Degraded` instead of failing
-    // their unit. After N consecutive startup failures the daemon
-    // enters operator-only mode: autostart is skipped entirely and
-    // recovery is via `nixling host reconcile --network --apply`.
-    let mut net_pre_degraded_vms: BTreeSet<String> = BTreeSet::new();
-    let mut net_operator_only_mode = net_route_preflight::OperatorOnlyMode::Disengaged;
+    //
+    // The startup pass is diagnostic only: cold boots can legitimately
+    // begin with no env bridges because the autostarted net VMs own the
+    // host-prep DAG that materializes them. Do not feed failed envs into
+    // autostart pre-degradation here, or the daemon deadlocks by skipping
+    // the very net VMs that would repair the bridge state. Workloads are
+    // still protected by the autostart net-VM phase: if an env net VM
+    // actually fails to start, its workloads are degraded by that direct
+    // dependency outcome.
+    let mut net_failed_envs: BTreeSet<String> = BTreeSet::new();
     let net_history = net_route_preflight::PreflightHistory::new(&state.daemon_state_dir);
     match load_host_artifact(&state) {
         Ok(host) => {
@@ -1081,48 +1121,17 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 );
             }
             if !report.is_ok() {
+                net_failed_envs = failed_envs.clone();
                 tracing::error!(
                     failed_envs = ?failed_envs,
                     summary = %report.summary(),
-                    "net-route-preflight: one or more env bridges unhealthy; affected VMs will be marked Degraded",
+                    "net-route-preflight: one or more env bridges unhealthy before autostart; net VM autostart will attempt host reconciliation",
                 );
-                if let Ok(resolver) = load_bundle_resolver(&state) {
-                    for (name, vm) in &resolver.manifest.vms {
-                        if let Some(env) = &vm.env
-                            && failed_envs.contains(env)
-                        {
-                            net_pre_degraded_vms.insert(name.clone());
-                        }
-                    }
-                }
             } else {
                 tracing::info!(
                     summary = %report.summary(),
                     "net-route-preflight: all env bridges healthy",
                 );
-            }
-            match net_history.consecutive_failures() {
-                Ok(n) => {
-                    net_operator_only_mode = net_route_preflight::OperatorOnlyMode::classify(
-                        n,
-                        net_route_preflight::DEFAULT_DEGRADED_MODE_THRESHOLD,
-                    );
-                    if net_operator_only_mode.is_engaged() {
-                        tracing::error!(
-                            consecutive_failures = n,
-                            threshold = net_route_preflight::DEFAULT_DEGRADED_MODE_THRESHOLD,
-                            failed_envs = ?failed_envs,
-                            "net-route-preflight: OPERATOR-ONLY MODE ENGAGED — autostart skipped. Recovery: nixling host reconcile --network --apply",
-                        );
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        path = %net_history.path().display(),
-                        error = %err,
-                        "net-route-preflight: failed to read history (assuming disengaged)",
-                    );
-                }
             }
         }
         Err(error) => {
@@ -1133,20 +1142,14 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         }
     }
 
-    let mut combined_pre_degraded: BTreeSet<String> = module_degraded_vms.clone();
-    combined_pre_degraded.extend(net_pre_degraded_vms.iter().cloned());
+    let combined_pre_degraded =
+        startup_autostart_pre_degraded_vms(&module_degraded_vms, &net_failed_envs);
 
-    if net_operator_only_mode.is_engaged() {
-        tracing::warn!(
-            "net-route-preflight: operator-only mode — skipping run_startup_autostart entirely",
-        );
-    } else {
-        sd_notify_status(
-            notify_socket.as_deref(),
-            "nixlingd running startup autostart reconciliation",
-        );
-        run_startup_autostart(&state, &combined_pre_degraded).await;
-    }
+    sd_notify_status(
+        notify_socket.as_deref(),
+        "nixlingd running startup autostart reconciliation",
+    );
+    run_startup_autostart(&state, &combined_pre_degraded).await;
     sd_notify_ready(notify_socket.as_deref());
     tracing::info!(
         socket = %state.config.public_socket_path.display(),
@@ -1906,26 +1909,30 @@ fn validate_lock_parent(lock_path: &Path, identity: &RuntimeIdentity) -> Result<
         });
     }
     // The production tmpfile rule installs /run/nixling as
-    // `nixlingd:nixling 0750` so launcher users (members of `nixling`)
-    // can traverse the directory to reach `/run/nixling/public.sock`
-    // (mode 0660, group nixling). The previous validation expected the
-    // root-owned 0755 shape; under the non-root daemon it would have
-    // refused to start. The expected shape now matches the systemd
-    // tmpfile contract: owner =
-    // daemon_uid, group = public_socket_gid, mode = 0750. The
-    // `--allow-unprivileged-runtime-dir` test flag still permits
-    // running under the invoking user's uid/gid (and accepts either
-    // 0755 or 0750 to keep ad-hoc `cargo test` scratch dirs valid).
+    // `root:nixling 1770` (sticky bit, world-closed) with explicit POSIX
+    // ACLs (g::r-x, u:nixlingd:rwx, m::rwx) so:
+    //   - launcher users (members of `nixling`) traverse via the effective
+    //     group ACL entry (g::r-x) to reach `/run/nixling/public.sock`
+    //     (mode 0660, group nixling);
+    //   - nixlingd gets rwx via the named-user ACL entry without owning
+    //     the directory, so root-owned subdirs (e.g. /run/nixling/vms)
+    //     do not trigger the systemd-tmpfiles unsafe-path-transition guard;
+    //   - the sticky bit prevents nixlingd from unlinking those root-owned
+    //     children.
+    // The base mode bits stored in the inode are 0o1770; after masking
+    // with 0o777 the check sees 0o770. The `--allow-unprivileged-runtime-dir`
+    // test flag permits running under the invoking user's uid/gid (and
+    // accepts 0755, 0750, or 0770 to accommodate ad-hoc `cargo test` dirs).
     let (expected_uid, expected_gid, mode_acceptable): (u32, u32, fn(u32) -> bool) =
         if identity.expect_root_owned_parent {
             (
-                identity.daemon_uid.as_raw(),
+                0, // root owns /run/nixling; daemon access via ACL
                 identity.public_socket_gid.as_raw(),
-                |m| m == 0o750,
+                |m| m == 0o770,
             )
         } else {
             (unistd::getuid().as_raw(), unistd::getgid().as_raw(), |m| {
-                m == 0o755 || m == 0o750
+                m == 0o755 || m == 0o750 || m == 0o770
             })
         };
     let mode = metadata.permissions().mode() & 0o777;
@@ -1933,7 +1940,7 @@ fn validate_lock_parent(lock_path: &Path, identity: &RuntimeIdentity) -> Result<
         return Err(TypedError::InternalLockParentInvalid {
             path: parent.to_path_buf(),
             detail: format!(
-                "expected uid:gid {}:{} mode 0750 (production) or 0755/0750 (test), got {}:{} mode {:04o}",
+                "expected uid:gid {}:{} mode 0770 (production root:nixling 1770) or 0755/0750/0770 (test), got {}:{} mode {:04o}",
                 expected_uid,
                 expected_gid,
                 metadata.uid(),
@@ -3563,6 +3570,14 @@ fn dispatch_broker_usbip_bind(
     if let Err(response) = validate_usbip_bus_id_for_daemon(VERB, &request.bus_id) {
         return Ok(response);
     }
+
+    // Fail-closed pre-flight checks for explicit attach:
+    //  1. Sysfs presence: reject if the device is not physically present.
+    //  2. Active claim exclusivity: reject if another VM already holds this busid.
+    // Both checks run before any broker call or firewall mutation.
+    check_sysfs_busid_present(&request.bus_id, VERB)?;
+    check_usbip_claim_exclusivity(&request.bus_id, &request.vm, VERB)?;
+
     let Some(manifest_entry) = resolver.find_manifest_vm(&request.vm) else {
         return Ok(daemon_failure_response(
             VERB,
@@ -3589,45 +3604,95 @@ fn dispatch_broker_usbip_bind(
     ) {
         return Ok(daemon_failure_response(VERB, summary));
     }
-    let bundle_usbip_bind_intent_ref =
-        match usbip_bind_intent_ref_for_daemon(&resolver, &request.vm, &request.bus_id, VERB) {
-            Ok(intent_ref) => intent_ref,
-            Err(response) => return Ok(response),
-        };
-    if let Err(response) = dispatch_broker_ack_request(
-        state,
-        VERB,
-        "UsbipBind",
-        BrokerRequest::UsbipBind(BrokerUsbipBindRequest {
-            bundle_usbip_bind_intent_ref,
-            tracing_span_id: None,
-        }),
-    ) {
-        return Ok(response);
+
+    // Determine attach path: declared (static bundle intent) vs. explicit.
+    let vm_entry = resolver.find_manifest_vm(&request.vm);
+    let env = vm_entry.and_then(|e| e.env.as_deref()).unwrap_or("");
+    let firewall_id = intent_id_usbip_firewall(env, &request.bus_id);
+    let bind_id = intent_id_usbip_bind(env, &request.vm, &request.bus_id);
+    let has_declared_intents = resolver.find_usbip_firewall_intent(&firewall_id).is_some()
+        && resolver.find_usbip_bind_intent(&bind_id).is_some();
+
+    if has_declared_intents {
+        // Declared path: use bundle-ref broker ops (existing behavior).
+        let bundle_usbip_bind_intent_ref = BundleOpId::new(bind_id);
+        if let Err(response) = dispatch_broker_ack_request(
+            state,
+            VERB,
+            "UsbipBind",
+            BrokerRequest::UsbipBind(BrokerUsbipBindRequest {
+                bundle_usbip_bind_intent_ref,
+                tracing_span_id: None,
+            }),
+        ) {
+            return Ok(response);
+        }
+        if let Err(response) = ensure_usbipd_env_ready_for_attach(
+            state,
+            &resolver,
+            &request.vm,
+            &request.bus_id,
+            VERB,
+            None,
+        ) {
+            compensate_usbip_bind_failure(state, &resolver, &request.vm, &request.bus_id, VERB);
+            return Ok(response);
+        }
+        if let Err(response) = dispatch_broker_ack_request(
+            state,
+            VERB,
+            "UsbipProxyReconcile",
+            BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
+                scope_id: ScopeId::new(format!("vm:{}", request.vm)),
+                tracing_span_id: None,
+            }),
+        ) {
+            compensate_usbip_bind_failure(state, &resolver, &request.vm, &request.bus_id, VERB);
+            return Ok(response);
+        }
+    } else {
+        // Explicit path: no static bundle intents required.
+        // Use UsbipExplicitBind + UsbipExplicitFirewallRule broker stubs.
+        // These ops are typed stubs (Unimplemented) until the live per-device
+        // backend handler is wired in the broker; the daemon returns a clear
+        // error so the operator knows the explicit path is not yet fully live.
+        let host_uplink_ip = vm_entry
+            .and_then(|e| e.usbipd_host_ip.as_deref())
+            .unwrap_or("")
+            .to_owned();
+        let net_uplink_ip = vm_entry
+            .and_then(|e| e.static_ip.as_deref())
+            .unwrap_or("")
+            .to_owned();
+        if let Err(response) = dispatch_broker_ack_request(
+            state,
+            VERB,
+            "UsbipExplicitFirewallRule",
+            BrokerRequest::UsbipExplicitFirewallRule(BrokerUsbipExplicitFirewallRuleRequest {
+                bus_id: request.bus_id.clone(),
+                env: env.to_owned(),
+                host_uplink_ip,
+                net_uplink_ip,
+                tracing_span_id: None,
+            }),
+        ) {
+            return Ok(response);
+        }
+        if let Err(response) = dispatch_broker_ack_request(
+            state,
+            VERB,
+            "UsbipExplicitBind",
+            BrokerRequest::UsbipExplicitBind(BrokerUsbipExplicitBindRequest {
+                bus_id: request.bus_id.clone(),
+                vm: request.vm.clone(),
+                env: env.to_owned(),
+                tracing_span_id: None,
+            }),
+        ) {
+            return Ok(response);
+        }
     }
-    if let Err(response) = ensure_usbipd_env_ready_for_attach(
-        state,
-        &resolver,
-        &request.vm,
-        &request.bus_id,
-        VERB,
-        None,
-    ) {
-        compensate_usbip_bind_failure(state, &resolver, &request.vm, &request.bus_id, VERB);
-        return Ok(response);
-    }
-    if let Err(response) = dispatch_broker_ack_request(
-        state,
-        VERB,
-        "UsbipProxyReconcile",
-        BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
-            scope_id: ScopeId::new(format!("vm:{}", request.vm)),
-            tracing_span_id: None,
-        }),
-    ) {
-        compensate_usbip_bind_failure(state, &resolver, &request.vm, &request.bus_id, VERB);
-        return Ok(response);
-    }
+
     if let Err(summary) = run_guest_usbip_import(
         state,
         &resolver,
@@ -3654,6 +3719,59 @@ fn validate_usbip_bus_id_for_daemon(verb: &str, bus_id: &str) -> Result<(), Valu
             format!("USBIP busid '{bus_id}' does not match the canonical sysfs bus-id shape"),
         )
     })
+}
+
+/// Check whether a validated sysfs busid is currently present in
+/// `/sys/bus/usb/devices/<busid>/idVendor`. Returns `Ok(())` if the
+/// `idVendor` attribute file is readable (device physically present),
+/// or `Err(TypedError::UsbipBusidNotPresent)` if absent (fail-closed gate).
+///
+/// This is the fail-closed sysfs presence check for explicit attach:
+/// reject before any broker call or firewall mutation if the device is absent.
+fn check_sysfs_busid_present(busid: &str, verb: &str) -> Result<(), TypedError> {
+    let sysfs_path = format!("/sys/bus/usb/devices/{busid}/idVendor");
+    match std::fs::metadata(&sysfs_path) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(TypedError::UsbipBusidNotPresent {
+            busid: busid.to_owned(),
+            verb: verb.to_owned(),
+        }),
+    }
+}
+
+/// Read the current owner of the per-busid OFD lock file under
+/// `/run/nixling/locks/usbip/<busid>`.
+///
+/// Returns `None` if the lock file does not exist or has no content
+/// (uncontested). Returns `Some(owner_vm)` if another VM holds the claim.
+///
+/// The daemon uses this for the active-claim exclusivity check:
+/// if the busid is already locked by a different VM, the explicit attach
+/// is rejected fail-closed before any broker call.
+fn read_usbip_active_claim_owner(busid: &str) -> Option<String> {
+    let lock_path = nixling_contracts::usbip::UsbipDaemonClaimRecord::lock_path_for_busid(busid);
+    std::fs::read_to_string(&lock_path)
+        .ok()
+        .map(|content| content.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
+/// Check that no other VM holds the active claim for a busid.
+/// Returns `Ok(())` if the busid is uncontested or already owned by `requesting_vm`.
+/// Returns `Err(TypedError::UsbipExplicitClaimConflict)` if another VM holds the claim.
+fn check_usbip_claim_exclusivity(
+    busid: &str,
+    requesting_vm: &str,
+    verb: &str,
+) -> Result<(), TypedError> {
+    match read_usbip_active_claim_owner(busid) {
+        Some(owner) if owner != requesting_vm => Err(TypedError::UsbipExplicitClaimConflict {
+            busid: busid.to_owned(),
+            owner_vm: owner,
+            verb: verb.to_owned(),
+        }),
+        _ => Ok(()),
+    }
 }
 
 fn usbip_bind_intent_ref_for_daemon(
@@ -13367,14 +13485,13 @@ fn dispatch_broker_host_destroy(
     ))
 }
 
-/// SOLE mutating recovery verb after the daemon enters operator-only
-/// mode. Re-applies
+/// Focused mutating recovery verb for network host-prep drift. Re-applies
 /// the network slice of `host prepare` (host-scope nftables +
 /// per-env routes + per-env ipv6 sysctls) — explicitly NOT the
 /// `/etc/hosts` mutation or NetworkManager unmanaged file: those
 /// are scoped to full `host prepare`. On success the persistent
-/// preflight history is reset so the next daemon startup begins
-/// with a clean consecutive-failure counter.
+/// preflight history is reset so the next daemon startup begins with
+/// clean diagnostic evidence.
 fn dispatch_broker_host_reconcile(
     state: &ServerState,
     request: public_wire::HostReconcileRequest,
@@ -17887,18 +18004,21 @@ fn io_wrap(context: &'static str) -> impl FnOnce(nix::errno::Errno) -> TypedErro
 #[cfg(test)]
 mod runtime_acl_tests {
     //! Regression tests for the public-socket ACL + lock-parent shape
-    //! under the non-root daemon contract.
+    //! under the root-owned runtime-dir contract.
     //!
     //! Coverage of the production deployment topology
     //! (`User=nixlingd`, `SupplementaryGroups=nixling`,
-    //! tmpfile `d /run/nixling 0750 nixlingd nixling -`,
+    //! tmpfiles `d /run/nixling 1770 root nixling -` +
+    //! `a+ /run/nixling - - - - g::r-x` +
+    //! `a+ /run/nixling - - - - u:nixlingd:rwx` +
+    //! `a+ /run/nixling - - - - m::rwx`,
     //! socket `mode 0660 group nixling`) is split across
     //! these focused unit tests because the real system identities
     //! (`nixlingd`, `nixling`) only exist on the deployed
-    //! NixOS host. Here we simulate `expect_root_owned_parent=true`
-    //! with the caller's own uid+gid so the chown succeeds under
-    //! `cargo test`, and assert the produced shape (owner / group /
-    //! mode) matches what the production deployment will produce.
+    //! NixOS host. The uid=0 requirement in the production validator
+    //! cannot be exercised without root; the tests below cover the
+    //! non-root cargo-test path (`expect_root_owned_parent=false`) and
+    //! the socket chgrp behaviour that does not require uid=0.
 
     use std::fs;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -18045,23 +18165,19 @@ mod runtime_acl_tests {
 
     #[test]
     fn validate_lock_parent_accepts_production_tmpfile_shape() {
-        // Production tmpfile: `d /run/nixling 0750 nixlingd
-        // nixling -`. With expect_root_owned_parent=true,
-        // the validator now expects (daemon_uid, public_socket_gid,
-        // 0o750) — i.e. the daemon's own uid + the public socket
-        // group + mode 0750, not the old (0, 0, 0755) root-owned
-        // shape.
+        // Production posture: `d /run/nixling 1770 root nixling -` with
+        // ACLs (g::r-x, u:nixlingd:rwx, m::rwx). The validator expects
+        // uid=0, gid=public_socket_gid, mode=0o770 (0o1770 & 0o777).
+        // Since cargo tests cannot become root, this exercises the
+        // equivalent shape via the unprivileged path (expect_root_owned_parent=false)
+        // with mode 0o770, which the test-mode accepts.
         let dir = scratch_dir("validate-prod");
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o750))
-            .expect("chmod scratch dir 0750");
-        // We are the owner; gid is our primary gid. To exercise the
-        // production semantics, point public_socket_gid at our gid
-        // so the validator sees a match.
-        let identity = caller_identity(true);
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o770))
+            .expect("chmod scratch dir 0770");
+        let identity = caller_identity(false);
         let lock_path = dir.join("daemon.lock");
-        validate_lock_parent(&lock_path, &identity).expect(
-            "validator must accept (caller_uid, caller_gid, 0750) under expect_root_owned_parent",
-        );
+        validate_lock_parent(&lock_path, &identity)
+            .expect("validator must accept mode 0770 (root:nixling 1770 equivalent) in test mode");
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -18070,10 +18186,12 @@ mod runtime_acl_tests {
         // 0o700 (the old `/run/nixling/locks` mode) is not acceptable
         // for `/run/nixling` itself because launcher users could not
         // traverse it. The validator must reject the wrong mode.
+        // Uses the test path (expect_root_owned_parent=false) to test
+        // the mode-rejection logic independently from uid checks.
         let dir = scratch_dir("validate-bad-mode");
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
             .expect("chmod scratch dir 0700");
-        let identity = caller_identity(true);
+        let identity = caller_identity(false);
         let lock_path = dir.join("daemon.lock");
         let err = validate_lock_parent(&lock_path, &identity)
             .expect_err("validator must reject mode 0o700 for the public socket parent");
@@ -18086,11 +18204,13 @@ mod runtime_acl_tests {
     }
 
     #[test]
-    fn validate_lock_parent_test_mode_accepts_either_0755_or_0750() {
-        // Test mode (`expect_root_owned_parent=false`) accepts both
-        // 0o755 and 0o750 because ad-hoc cargo-test scratch dirs may
-        // be created with either depending on the caller's umask.
-        for mode in [0o755u32, 0o750u32] {
+    fn validate_lock_parent_test_mode_accepts_either_0755_or_0750_or_0770() {
+        // Test mode (`expect_root_owned_parent=false`) accepts 0o755,
+        // 0o750, and 0o770 because ad-hoc cargo-test scratch dirs may
+        // carry any of these depending on the caller's umask. 0o770 is
+        // the cargo-test-accessible equivalent of the production
+        // root:nixling 1770 posture.
+        for mode in [0o755u32, 0o750u32, 0o770u32] {
             let dir = scratch_dir(&format!("validate-test-mode-{mode:o}"));
             fs::set_permissions(&dir, fs::Permissions::from_mode(mode)).expect("chmod scratch dir");
             let identity = caller_identity(false);

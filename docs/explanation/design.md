@@ -1001,14 +1001,15 @@ host's primary LAN instead of the env's net VM.
 **Control (v1.0 daemon-only per [ADR 0015](../adr/0015-daemon-only-clean-break.md)):**
 On every startup, `nixlingd` probes each env's LAN bridge under
 `/sys/class/net/<bridge>/operstate` (existence + `operstate != down`)
-as its built-in net-route preflight self-check. Failures surface as
-the typed `net-route-preflight-degraded` envelope (exit 66) and
-flip per-env autostart to a degraded outcome; recovery is via
-`nixling host reconcile --network --apply` after operator remediation. The
-legacy `nixling-net-route-preflight.service` host singleton and the
+as its built-in net-route preflight self-check. Startup failures are
+diagnostic only because cold-boot net VMs create the env bridges during
+their own host-prep DAG; if a net VM then fails to start, normal
+autostart dependency gating degrades that env's workloads. Focused
+network repair remains `nixling host reconcile --network --apply` after
+operator remediation. The legacy `nixling-net-route-preflight.service` host singleton and the
 per-VM `nixling@<vm>.service Requires=` wiring were retired in v1.0
 when the daemon took ownership of every host-mutation path — see
-the "Net-route preflight & operator-only mode" section of
+the "Net-route preflight & network reconcile" section of
 [`host-prepare.md`](../how-to/host-prepare.md) for the v1.0 operator
 flow.
 

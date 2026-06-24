@@ -503,7 +503,7 @@ unit names should not appear in operator-facing remediation.
 
 | Retired singleton | Replacement (daemon-only) | Current state | Reference |
 | --- | --- | --- | --- |
-| `nixling-net-route-preflight.service` | Daemon startup self-check; on failure the daemon enters **degraded mode** (refuses per-env starts; keeps `status`/`doctor`/`audit` read-only available). The **sole** mutating recovery verb is `nixling host reconcile --network --apply`, which the broker dispatches through existing host-prep ops to recreate bridges/routes without starting any VM. | not emitted | `nixling host reconcile --network --apply` |
+| `nixling-net-route-preflight.service` | Daemon startup self-check; startup failures are diagnostic so cold-boot net VMs can still run their host-prep DAG and recreate bridges/routes. Workloads degrade only if their env net VM actually fails to start. Focused repair is `nixling host reconcile --network --apply`, which the broker dispatches through existing host-prep ops without starting any VM. | not emitted | `nixling host reconcile --network --apply` |
 | `nixling-audit-check.service` + `nixling-audit-check.timer` | Daemon health endpoint that reads the broker `OpAuditRecord` daily files via `ExportBrokerAudit`; the Rust CLI `nixling audit` reads through the daemon. No separate systemd timer — `nixling host doctor` polls on demand. | not emitted | `ExportBrokerAudit` |
 | `nixling-ch-exporter.service` | Daemon-emitted scrape metrics with preserved metric names (`nixling_vm_ch_api_up`, `nixling_vm_running`, `nixling_vm_state`) and bounded labels (`vm`/`env`/`role` only by default). The loopback scrape endpoint is `http://127.0.0.1:9101/metrics`; host telemetry egress to the obs VM uses `unix:///run/nixling/otel/host-egress.sock`. | not emitted | [`docs/reference/components-observability.md`](components-observability.md) |
 | `nixling-otel-host-bridge.service` | Broker `SpawnRunner{role: OtelHostBridge}` runner (host-scoped singleton). See the per-runner-role dispatch contract above. | not emitted | `SpawnRunner{role: OtelHostBridge}` |
@@ -548,7 +548,7 @@ never both.
 
 | Legacy unit | Replacement (broker op or daemon surface) | Status |
 | --- | --- | --- |
-| `nixling-net-route-preflight.service` | Daemon startup self-check + degraded mode + `nixling host reconcile --network --apply` (broker `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `SetBridgePortFlags`). | not emitted |
+| `nixling-net-route-preflight.service` | Daemon startup self-check + net-VM autostart dependency gating + `nixling host reconcile --network --apply` (broker `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `SetBridgePortFlags`). | not emitted |
 | `nixling-audit-check.service` + `nixling-audit-check.timer` | Broker `ExportBrokerAudit` + `nixling host doctor` on-demand poll; no timer. | not emitted |
 | `nixling-ch-exporter.service` | `nixlingd` Prometheus exposition at `http://127.0.0.1:9101/metrics` (no broker op — daemon-emitted). | not emitted |
 | `nixling-otel-host-bridge.service` | Broker `SpawnRunner{role: OtelHostBridge}` (host-scoped singleton, broker-supervised). | not emitted |

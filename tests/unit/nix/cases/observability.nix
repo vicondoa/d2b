@@ -697,7 +697,13 @@ let
           readWritePaths = svc.serviceConfig.ReadWritePaths or null;
           umask = svc.serviceConfig.UMask or null;
           suppGroups = svc.serviceConfig.SupplementaryGroups or null;
+          restart = svc.serviceConfig.Restart or null;
+          restartSec = svc.serviceConfig.RestartSec or null;
+          startLimitIntervalSec = svc.unitConfig.StartLimitIntervalSec or null;
           tmpfilesHasIngest = builtins.any (r: lib.hasInfix "/run/nixling/otel/ingest" r) nixos.config.systemd.tmpfiles.rules;
+          # Privileged ExecStartPre (+ prefix) runs as root so setfacl can
+          # set the collector's ACL on /run/nixling/otel and host-egress.sock.
+          execStartPreIsPrivileged = lib.hasPrefix "+" (svc.serviceConfig.ExecStartPre or "");
         };
       expectedExtract = {
         receiverNames = [ "filelog/store_sync_audit" "hostmetrics" "prometheus" ];
@@ -707,7 +713,11 @@ let
         readWritePaths = null;
         umask = null;
         suppGroups = null;
+        restart = "on-failure";
+        restartSec = "3s";
+        startLimitIntervalSec = 0;
         tmpfilesHasIngest = false;
+        execStartPreIsPrivileged = true;
       };
     };
 

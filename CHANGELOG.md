@@ -10,6 +10,39 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- **USB explicit attach** (`nixling usb attach <vm> <present-busid> --apply`):
+  `nixling usb attach` now supports attaching any physically-present USB device
+  to a USB-capable VM without requiring static busid/vendor allowlists in the
+  NixOS bundle configuration. The new explicit path performs three fail-closed
+  pre-flight checks before any broker or firewall mutation: sysfs presence
+  (`/sys/bus/usb/devices/<busid>/idVendor`), USB-capable gate
+  (`RuntimeCapabilityGate::UsbHotplug`), and active claim exclusivity (OFD lock
+  under `/run/nixling/locks/usbip/<busid>`). When a static bundle intent exists
+  for the busid, the declared path is used (existing behavior preserved). When no
+  declared intent is found, the explicit path dispatches two new broker ops —
+  `UsbipExplicitBind` and `UsbipExplicitFirewallRule` — which are typed stubs
+  pending per-device backend handler implementation. New typed errors
+  `UsbipBusidNotPresent` (exit 67) and `UsbipExplicitClaimConflict` (exit 67)
+  surface actionable operator guidance for pre-flight rejections.
+- `UsbipClaimSource` enum in `nixling-contracts` models whether an active daemon
+  USB claim originates from a static bundle declaration (`Declared { firewall_ref,
+  bind_ref }`) or an explicit present-busid attach (`Explicit`).
+- `UsbipDaemonClaimRecord` DTO in `nixling-contracts` captures the in-process
+  daemon representation of an active busid claim including VM, env, proxy port,
+  source, and the OFD lock path.
+- `build_usbip_explicit_plan` in the daemon USB state machine builds a per-busid
+  bring-up plan without requiring a bundle resolver or pre-declared intents.
+- `UsbipExplicitBind` and `UsbipExplicitFirewallRule` broker wire ops carry raw
+  busid, vm, env, and per-env uplink IPs for the per-device backend model;
+  validated by the same busid shape validator as the declared path.
+- 33 new focused Rust tests: 8 focused unit tests in `usbip_state_machine`, and
+  15 contract tests in `usbip_explicit_attach_contract` covering explicit plan
+  shape, claim source enum, lock path derivation, broker op round-trips,
+  deny-unknown-fields, per-device backend model policy, firewall env scope, sysfs
+  presence pre-flight, and codebase policy gates.
+
 ### Changed
 
 - Public daemon list/status handling now uses a request-scoped artifact snapshot
@@ -50,6 +83,20 @@ deprecations ship one minor release before removal.
 - Broker VM activation requests now split store-view preparation, guest-completed
   metadata commit, and offline metadata-only staging so the privileged broker no
   longer executes VM `switch-to-configuration` scripts on the host.
+- Daemon startup no longer lets the diagnostic bridge preflight pre-skip
+  autostarted net VMs on cold boot; net VMs now get to run their host-prep DAG
+  and workloads degrade only if their env net VM actually fails to start.
+- Host OTel collector no longer has directory write authority over
+  `/run/nixling/otel`: the collector's access ACL is now `--x` (traverse only,
+  no create/unlink authority on `host-egress.sock` or sibling entries). The
+  default ACL is retained at `rw` (not `rwx`) with a clamped `rw` mask so the
+  collector inherits read+write on `host-egress.sock` when the broker-spawned
+  bridge creates the socket after boot, while execute bits never propagate to new
+  entries. `StartLimitIntervalSec = 0` ensures systemd does not permanently
+  disable the service if the bridge socket is momentarily absent across restarts.
+- The `/run/nixling` runtime parent is now root-owned with an explicit
+  `nixlingd` ACL, avoiding systemd-tmpfiles unsafe-path-transition failures
+  that skipped per-VM `guest-control` runtime directories after reboot.
 - Broker request handling no longer emits a per-request `Bundle resolver loaded`
   info log, and USBIP proxy reconciliation now treats absent locked hardware as
   a non-fatal ACL-refresh skip instead of spamming paired broker/daemon warnings.

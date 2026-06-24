@@ -276,7 +276,7 @@ enum HostCommand {
     MigrateStorage(HostMigrateStorageArgs),
     /// Install nixlingd + broker units onto the host. --apply mutates.
     Install(HostInstallArgs),
-    /// Recover host network state after the daemon engaged operator-only mode.
+    /// Reconcile host network state (re-run bridge/route/nftables reconcile without starting any VM).
     Reconcile(HostReconcileArgs),
     /// Run the host-side validator suite and write evidence records.
     Validate(HostValidateArgs),
@@ -416,9 +416,8 @@ struct HostInstallArgs {
 
 #[derive(Debug, Args)]
 struct HostReconcileArgs {
-    /// Re-run the network slice of `host prepare` and clear the
-    /// daemon's net-route preflight counter. Currently the only
-    /// available scope.
+    /// Re-run the network slice of `host prepare` (bridge/route/nftables
+    /// reconcile without starting any VM). Currently the only available scope.
     #[arg(long)]
     network: bool,
     /// Plan the reconcile without mutating host state.
@@ -4274,8 +4273,8 @@ fn cmd_host_reconcile(
     args: &HostReconcileArgs,
     _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
-    // SOLE mutating recovery verb for the daemon's net-route preflight
-    // degraded mode.
+    // Focused recovery verb that re-runs the broker-side per-env network
+    // slice without starting any VM.
     // Mandatory flag pair (--dry-run XOR --apply) matches the rest
     // of the mutating verbs. `--network` is required because it is
     // the only scope today; routing without a scope flag would be
