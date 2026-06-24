@@ -1987,9 +1987,11 @@ mod tests {
                     "roleId": "vhost-device-sound"
                 }, {
                     "kind": "storage-contract-invalid",
+                    "contractId": "storage.json",
                     "reason": "duplicate-storage-path-id"
                 }, {
                     "kind": "sync-contract-invalid",
+                    "contractId": "sync.json",
                     "reason": "duplicate-lock-id"
                 }],
             }),

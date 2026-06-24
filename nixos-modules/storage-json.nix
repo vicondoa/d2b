@@ -171,9 +171,9 @@ let
       id = "path:daemon-state";
       scope = "host";
       path = "${toString cfg.site.stateDir}/daemon-state";
-      owner = principal "user" "root";
-      group = principal "group" "nixling";
-      mode = "0750";
+      owner = principal "user" "nixlingd";
+      group = principal "group" "nixlingd";
+      mode = "0700";
       creator = actor "nix-module" "tmpfiles";
       writers = [ (actor "daemon" "nixlingd") ];
       cleanupPolicy = "never";
@@ -185,7 +185,7 @@ let
       path = "/run/nixling/locks";
       lifecycle = "boot-scoped-readoptable";
       persistence = "boot-scoped";
-      owner = principal "user" "root";
+      owner = principal "user" "nixlingd";
       group = principal "group" "nixlingd";
       mode = "0700";
       creator = actor "nix-module" "tmpfiles";
@@ -305,7 +305,7 @@ let
       scope = "host";
       path = "${toString cfg.site.stateDir}/media-registry";
       owner = principal "user" "root";
-      group = principal "group" "root";
+      group = principal "group" "nixlingd";
       mode = "0700";
       creator = actor "broker" "nixling-priv-broker";
       writers = [ (actor "broker" "nixling-priv-broker") ];
@@ -393,7 +393,7 @@ let
         ];
         cleanupPolicy = "never";
         repairPolicy = "nix-activation";
-        invariants = [ "no-symlink" "root-owned-parent" "scope-authorization-required" ];
+        invariants = [ "no-symlink" "scope-authorization-required" ];
       })
       (mkPath {
         id = "path:vm-run:${name}";

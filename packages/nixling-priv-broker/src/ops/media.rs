@@ -14,6 +14,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use nix::libc;
+use nix::unistd::Group;
 use nixling_core::bundle_resolver::BundleResolver;
 use nixling_core::host::{
     QemuMediaFormat, QemuMediaSourceIntent, QemuMediaSourceKind, QemuMediaUsbSelector,
@@ -1976,6 +1977,15 @@ fn write_redacted_registry_index_at_path(
         .and_then(|name| name.to_str())
         .ok_or_else(|| MediaOpError::Registry("redacted-index-name-invalid".to_owned()))?;
     crate::sys::path_safe::atomic_replace_fd(&parent_fd, name, &bytes, 0o640)
+        .map_err(|err| MediaOpError::Registry(err.to_string()))?;
+    let gid = Group::from_name("nixlingd")
+        .map_err(|err| MediaOpError::Registry(format!("resolve nixlingd group: {err}")))?
+        .map(|group| group.gid)
+        .ok_or_else(|| MediaOpError::Registry("nixlingd group missing".to_owned()))?;
+    let file_fd =
+        crate::sys::path_safe::open_file_at_safe(&parent_fd, name, libc::O_RDONLY)
+            .map_err(|err| MediaOpError::Registry(err.to_string()))?;
+    crate::sys::path_safe::fchown(file_fd.as_fd(), None, Some(gid.as_raw()))
         .map_err(|err| MediaOpError::Registry(err.to_string()))
 }
 
