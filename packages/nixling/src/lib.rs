@@ -8474,7 +8474,7 @@ fn render_status_vm_human(
     if let Some(autostart) = &output.autostart {
         let _ = writeln!(text, "autostart: {} ({})", autostart.mode, autostart.reason);
     }
-    let _ = writeln!(text, "nixling@{}: {}", output.name, output.services.nixling);
+    let _ = writeln!(text, "daemon: {}", output.services.nixling);
     if let Some(qemu) = &output.qemu_media {
         let _ = writeln!(
             text,
@@ -8534,15 +8534,11 @@ fn render_status_vm_human(
             );
         }
     } else {
-        let _ = writeln!(
-            text,
-            "microvm@{} (backend): {}",
-            output.name, output.services.microvm
-        );
+        let _ = writeln!(text, "backend-runner: {}", output.services.microvm);
         let _ = writeln!(text, "virtiofsd: {}", output.services.virtiofsd);
         let _ = writeln!(
             text,
-            "interactive: {}",
+            "gpu-runner: {}",
             output
                 .services
                 .gpu

@@ -844,7 +844,7 @@ The split:
 
 - **Nixling owns:** VM / env / sidecar lifecycle, network isolation
   (per-env bridges + net VM + NAT), per-VM `/nix/store` hardlink
-  farm, the `nixling` CLI, and the host-side polkit + key
+  farm, the `nixling` CLI, lifecycle group authorization, and key
   management. Anything that only makes sense on a microVM host.
 - **Domain flakes own:** identity (Himmelblau / Entra), corporate
   trust roots, vendor-specific guest kernel modules, anything that
@@ -1234,7 +1234,7 @@ lives in the cited code.
 Because microvm.nix is a primitive, and most of the bugs and
 attacks that matter at the desktop-workspace layer are above
 its level. microvm.nix gives you a VM; nixling gives you the
-env model, the per-VM isolation glue, the polkit-and-keys story,
+env model, the per-VM isolation glue, the lifecycle-and-keys story,
 the audit conventions, and a single CLI that operates on those
 abstractions. A `nixling.vms.<vm>` declaration is ~10 lines.
 Doing the same thing by hand with microvm.nix is ~150 lines of

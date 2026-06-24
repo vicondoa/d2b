@@ -18,6 +18,8 @@ deprecations ship one minor release before removal.
 - Examples and the default template now describe the daemon-only lifecycle,
   Rust CLI, and `nixling` group authorization model without stale per-VM
   systemd, polkit, route-preflight, or bash-CLI references.
+- Human `nixling status <vm>` output now labels daemon and runner state with
+  daemon-owned terms instead of retired per-VM systemd template names.
 - Runtime capability projection for qemu-media list/status output now goes
   through focused helpers with direct regression coverage, preserving public JSON
   and human output shape.

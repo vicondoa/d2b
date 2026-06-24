@@ -394,7 +394,6 @@ What the variant changes on top of `configuration.nix`:
 | Key                                         | Value                | Why                                                          |
 |---------------------------------------------|----------------------|--------------------------------------------------------------|
 | `nixling.site.allowUnsafeEastWest`          | `true`               | Site-level acknowledgement: this host accepts relaxed east-west isolation for envs that opt in. |
-| `nixling.daemonExperimental.enable`         | `true`               | Set for historical compatibility. In v1.1 this is an obsolete always-on gate (the daemon is the only supervisor); leaving it `true` is a no-op. |
 | `nixling.envs.work.mtu`                     | `1400`               | Reference for a tunneled uplink. Propagates to host bridges, TAPs, the workload guest NIC, and the net VM's NICs (see `net.nix`). |
 | `nixling.envs.work.mssClamp`                | `true`               | Adds the TCP MSS clamp rule on the net VM's nftables forward chain; the emitted `host.json` records the resolved MSS value (`mtu - 40` = `1360` here). |
 | `nixling.envs.work.lan.allowEastWest`       | `true`               | First half of the east-west double opt-in. By itself does nothing; pairs with `site.allowUnsafeEastWest`. |

@@ -175,7 +175,7 @@ Implications:
   main PID and re-adopts existing VM runners.
   After a rebuild, `nixling list`
   flags the VM with `[pending restart]` if its `current` closure
-  has drifted from `booted`. Apply with `nixling vm restart <vm>`.
+  has drifted from `booted`. Apply with `nixling vm restart <vm> --apply`.
 
 - **`booted` symlink is owned by the daemon start path.** The daemon
   updates per-VM `booted`/`current` state so pending-restart detection
