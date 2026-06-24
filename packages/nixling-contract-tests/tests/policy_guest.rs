@@ -195,3 +195,43 @@ fn guest_control_auth_core_token_share_contract_present() {
         "options-vms.nix must declare the auth.tokenFile option"
     );
 }
+
+#[test]
+fn guest_activation_stays_guest_systemd_only_and_restart_safe() {
+    let guest_control = read_repo_file("nixos-modules/guest-control.nix");
+    assert!(
+        guest_control.contains("restartIfChanged = false;"),
+        "nixling-guestd.service must opt out of restartIfChanged so guest activation does not restart guestd"
+    );
+    assert!(
+        guest_control.contains("d /run/nixling-guestd/activations 0700 root root -"),
+        "guest-control.nix must declare the root-owned activation status directory"
+    );
+    assert!(
+        guest_control.contains("--activation-systemd-run-path")
+            && guest_control.contains("--activation-systemctl-path"),
+        "guestd must receive explicit in-guest systemd-run/systemctl paths for activation"
+    );
+
+    let service = read_repo_file("packages/nixling-guestd/src/service.rs");
+    assert!(
+        service.contains("GUEST_CAPABILITY_SYSTEM_ACTIVATION"),
+        "guestd must advertise the closed system-activation capability when usable"
+    );
+    assert!(
+        service.contains("KillMode=control-group") && service.contains("RuntimeMaxSec="),
+        "activation transient units must use systemd control-group lifetime and runtime ceilings"
+    );
+    assert!(
+        !service.contains(r#".arg("--collect")"#),
+        "activation transient units must remain queryable until guestd records terminal status"
+    );
+    assert!(
+        !service.contains(r#".arg("sh")"#) && !service.contains(r#".arg("-c")"#),
+        "activation must not route through a shell wrapper"
+    );
+    assert!(
+        !service.contains("nixlingd.service") && !service.contains("nixling-priv-broker"),
+        "guest activation support must not orchestrate host daemon/broker services"
+    );
+}

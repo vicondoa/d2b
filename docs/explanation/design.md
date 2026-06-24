@@ -605,8 +605,11 @@ up sidecar config changes. The framework provides two paths:
   closure. Use this when `nixling list` flags a VM as
   `[pending restart]` after a `nixos-rebuild switch`.
 - `nixling switch <vm> --apply` — full per-VM closure rebuild + live
-  activation through the daemon (no VM reboot). Use this when you edited
-  the VM's own NixOS module.
+  activation through the daemon's authenticated guest-control path
+  (no VM reboot). Use this when you edited the VM's own NixOS module.
+  The host publishes the prepared toplevel into the VM's store view;
+  guestd runs the activation inside the guest, not through host
+  systemd.
 
 #### Pending-restart detection via `booted` vs `current`
 
@@ -708,6 +711,19 @@ loads `db.dump` on every boot and on every `nixling switch`,
 making `nix-store --query --valid` and `nix-shell` work without
 seeing host paths.
 
+That same store-view boundary is the activation boundary. A host build
+produces the VM's NixOS `system.build.toplevel`, then the
+broker/store-view path publishes the closure into the per-VM live store
+pool. The guest sees the pool through virtiofs as its `/nix/store`.
+For live `switch`, `test`, and `rollback`, `nixlingd` asks guestd over
+authenticated guest-control to activate the prepared toplevel inside
+the running VM and waits for guest activation status before committing
+host generation metadata through the broker. If the VM is stopped,
+offline, or too old to advertise guest activation, live activation
+fails closed; `boot --apply` is the explicit offline staging path for
+the next start. The broker never runs the guest's activation program on
+the host.
+
 ### CLI
 
 The `nixling` command (the Rust crate at
@@ -720,8 +736,10 @@ is the daily-driver interface. Verbs include `list`, `status`,
 (`sync` / `diff` / `approve` / `reject` / `status`), `audio`, `usb`,
 `keys`, `host`, and `audit`. The CLI is the Rust binary, full stop:
 the pre-v1.0 bash CLI (and the generated `nixos-modules/cli.nix`
-shell script) was retired in v1.0, and every lifecycle verb dispatches
-through `nixlingd` → `nixling-priv-broker` (see
+shell script) was retired in v1.0. Host mutations dispatch through
+`nixlingd` → `nixling-priv-broker`; live guest activation dispatches
+through `nixlingd` → authenticated guest-control and only uses the
+broker to publish/commit host-owned generation metadata (see
 [ADR 0015](../adr/0015-daemon-only-clean-break.md) and
 [ADR 0017](../adr/0017-no-bash-fallbacks-invariant.md)). The
 [manifest schema](../reference/manifest-schema.md) and the versioned
@@ -1377,8 +1395,10 @@ signal:
   existing closure. Use this when you ran `nixos-rebuild
   switch` and a sidecar config changed.
 - `nixling switch <vm> --apply` does a per-VM closure rebuild + live
-  activation through the daemon (no VM reboot). Use this when you edited
-  the VM's own NixOS module.
+  guest-control activation through the daemon (no VM reboot). Use this
+  when you edited the VM's own NixOS module. Stopped VMs use
+  `nixling boot <vm> --apply` for offline staging instead of host-side
+  activation.
 
 The alternative — letting NixOS bounce VMs on every rebuild —
 was the v0.1.0 behavior; v0.1.5 changed it after migration

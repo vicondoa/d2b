@@ -69,6 +69,11 @@ pub const VM_SHUTDOWN_BUCKETS_SECONDS: &[f64] = &[
     0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 90.0, 120.0, 300.0, 600.0,
 ];
 
+/// Histogram bucket boundaries for VM activation orchestration phases (seconds).
+pub const ACTIVATION_PHASE_BUCKETS_SECONDS: &[f64] = &[
+    0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 30.0, 120.0, 600.0,
+];
+
 /// Canonical metric inventory. The order is the order the
 /// exposition format will render in.
 pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
@@ -113,6 +118,18 @@ pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
         kind: MetricKind::Histogram,
         labels: &["vm", "vmm", "outcome"],
         buckets_seconds: VM_SHUTDOWN_BUCKETS_SECONDS,
+    },
+    MetricDescriptor {
+        name: "nixling_daemon_activation_phase_duration_seconds",
+        kind: MetricKind::Histogram,
+        labels: &["phase", "mode", "status"],
+        buckets_seconds: ACTIVATION_PHASE_BUCKETS_SECONDS,
+    },
+    MetricDescriptor {
+        name: "nixling_daemon_vm_degraded",
+        kind: MetricKind::Gauge,
+        labels: &["vm", "reason"],
+        buckets_seconds: &[],
     },
     MetricDescriptor {
         name: "nixling_daemon_ownership_drift_total",
@@ -378,6 +395,10 @@ fn help_text(name: &str) -> &'static str {
         "nixling_daemon_broker_request_duration_seconds" => {
             "Round-trip latency of a single broker request."
         }
+        "nixling_daemon_activation_phase_duration_seconds" => {
+            "Wall-clock duration of VM activation orchestration phases."
+        }
+        "nixling_daemon_vm_degraded" => "Per-VM degraded-state gauge by bounded reason.",
         "nixling_daemon_ownership_drift_total" => "Per-VM ownership-preflight drift detections.",
         "nixling_daemon_ssh_host_key_drift_total" => "Per-VM SSH host-key drift detections.",
         "nixling_daemon_pidfd_table_size" => "Live pidfd entries held by the supervisor.",
@@ -537,6 +558,8 @@ mod tests {
                 "nixling_daemon_broker_request_duration_seconds",
                 "nixling_daemon_vm_shutdown_total",
                 "nixling_daemon_vm_shutdown_duration_seconds",
+                "nixling_daemon_activation_phase_duration_seconds",
+                "nixling_daemon_vm_degraded",
                 "nixling_daemon_ownership_drift_total",
                 "nixling_daemon_ssh_host_key_drift_total",
                 "nixling_daemon_pidfd_table_size",
@@ -643,6 +666,10 @@ mod tests {
             "op",
             "vmm",
             "le",
+            "phase",
+            "mode",
+            "status",
+            "reason",
             "subsystem",
             "error_kind",
         ];

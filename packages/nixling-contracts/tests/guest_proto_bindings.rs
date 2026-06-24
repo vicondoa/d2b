@@ -213,3 +213,50 @@ fn generated_usbip_import_shapes_round_trip() {
         "generated USBIP invalid-host discriminant changed"
     );
 }
+
+#[test]
+fn generated_activation_shapes_round_trip() {
+    let mut common = pb::RequestMetadata::new();
+    common.vm_id = "corp-vm".to_owned();
+    common.request_id = "req-activation".to_owned();
+    common.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
+
+    let mut start = pb::GuestActivationStartRequest::new();
+    start.metadata = MessageField::some(common.clone());
+    start.activation_id = "01234567-89ab-cdef-0123-456789abcdef".to_owned();
+    start.switch_script_path =
+        "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-nixos-system/bin/switch-to-configuration"
+            .to_owned();
+    start.mode = EnumOrUnknown::new(pb::GuestActivationMode::GUEST_ACTIVATION_MODE_SWITCH);
+    start.timeout_ms = 600_000;
+    round_trip(start);
+
+    let mut start_response = pb::GuestActivationStartResponse::new();
+    start_response.activation_id = "01234567-89ab-cdef-0123-456789abcdef".to_owned();
+    start_response.state =
+        EnumOrUnknown::new(pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING);
+    round_trip(start_response);
+
+    let mut status = pb::GuestActivationStatusRequest::new();
+    status.metadata = MessageField::some(common);
+    status.activation_id = "01234567-89ab-cdef-0123-456789abcdef".to_owned();
+    round_trip(status);
+
+    let mut status_response = pb::GuestActivationStatusResponse::new();
+    status_response.activation_id = "01234567-89ab-cdef-0123-456789abcdef".to_owned();
+    status_response.state =
+        EnumOrUnknown::new(pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED);
+    status_response.exit_code = Some(0);
+    round_trip(status_response);
+
+    assert_eq!(
+        pb::GuestCapability::GUEST_CAPABILITY_SYSTEM_ACTIVATION as i32,
+        15,
+        "generated activation capability discriminant changed"
+    );
+    assert_eq!(
+        pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT as i32,
+        63,
+        "generated activation timeout discriminant changed"
+    );
+}

@@ -48,6 +48,16 @@ deprecations ship one minor release before removal.
 - Public daemon list/status handling now uses a request-scoped artifact snapshot
   so manifest, process, host, and bundle resolver reads are shared within one
   request without cross-request caching.
+- VM activation now keeps guest systemd isolated from the host: `switch
+  --apply`, `test --apply`, and live `rollback --apply` fail closed when the
+  VM is stopped/offline or does not advertise the guest activation capability,
+  while `boot --apply` is the explicit offline staging path for the next start.
+- `nixlingd` now orchestrates live VM activation as broker prepare,
+  guest-control activation, and broker commit, with per-VM serialization,
+  crash-consistent pending markers, bounded activation metrics, and degraded
+  status/list reporting for unresolved activation state.
+- Guest-control now exposes authenticated in-guest system activation start/status
+  RPCs, with guestd-owned transient systemd units and restart-safe status.
 - Examples and the default template now describe the daemon-only lifecycle,
   Rust CLI, and `nixling` group authorization model without stale per-VM
   systemd, polkit, route-preflight, or bash-CLI references.
@@ -75,6 +85,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Broker VM activation requests now split store-view preparation, guest-completed
+  metadata commit, and offline metadata-only staging so the privileged broker no
+  longer executes VM `switch-to-configuration` scripts on the host.
 - `qemu-media` TAP synchronization locks now render the TAP identifier as a
   resource id instead of a non-path `pathTemplate`, so the generated `sync.json`
   deserializes through the Rust `SyncJson` DTO and `nixlingd` can load the bundle

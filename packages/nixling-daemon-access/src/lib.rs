@@ -1733,6 +1733,8 @@ mod tests {
             graphics,
             is_net_vm: false,
             lifecycle: VmLifecycle {
+                degraded: false,
+                degraded_reasons: Vec::new(),
                 pending_restart,
                 state,
             },

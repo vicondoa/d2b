@@ -14773,6 +14773,8 @@ mod host_install_dispatch_tests {
             graphics: true,
             is_net_vm: false,
             lifecycle: nixling_contracts::public_wire::VmLifecycle {
+                degraded: false,
+                degraded_reasons: Vec::new(),
                 pending_restart: false,
                 state: nixling_contracts::public_wire::VmLifecycleState::Running,
             },
@@ -14808,6 +14810,8 @@ mod host_install_dispatch_tests {
     #[test]
     fn public_list_status_collapses_transient_lifecycle_to_stable_label() {
         let lifecycle = nixling_contracts::public_wire::VmLifecycle {
+            degraded: false,
+            degraded_reasons: Vec::new(),
             pending_restart: false,
             state: nixling_contracts::public_wire::VmLifecycleState::Starting,
         };
@@ -14821,6 +14825,8 @@ mod host_install_dispatch_tests {
     #[test]
     fn public_list_status_preserves_failed_lifecycle_label() {
         let lifecycle = nixling_contracts::public_wire::VmLifecycle {
+            degraded: false,
+            degraded_reasons: Vec::new(),
             pending_restart: false,
             state: nixling_contracts::public_wire::VmLifecycleState::Failed,
         };
@@ -14893,6 +14899,8 @@ mod host_install_dispatch_tests {
             graphics: true,
             is_net_vm: false,
             lifecycle: nixling_contracts::public_wire::VmLifecycle {
+                degraded: false,
+                degraded_reasons: Vec::new(),
                 pending_restart: false,
                 state: nixling_contracts::public_wire::VmLifecycleState::Running,
             },

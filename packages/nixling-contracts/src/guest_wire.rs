@@ -14,7 +14,7 @@ use schemars::{
 use serde::{Deserialize, Serialize};
 
 pub const GUEST_CONTROL_SCHEMA_VERSION: &str = "v2";
-pub const GUEST_CONTROL_PROTOCOL_VERSION: u32 = 5;
+pub const GUEST_CONTROL_PROTOCOL_VERSION: u32 = 6;
 pub const GUEST_CONTROL_VSOCK_PORT: u32 = 14_318;
 pub const TTRPC_FRAME_CAP_BYTES: u64 = 4 * 1024 * 1024;
 pub const DEFAULT_MAX_CHUNK_BYTES: u64 = 64 * 1024;
@@ -336,6 +336,16 @@ bounded_string! {
     GuestUsbipBusId, 31
 }
 
+bounded_string! {
+    /// Host-generated activation id (UUID text).
+    GuestActivationId, 36
+}
+
+bounded_string! {
+    /// Guest /nix/store switch-to-configuration script path.
+    GuestSwitchScriptPath, 4096
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum GuestCapability {
@@ -353,6 +363,7 @@ pub enum GuestCapability {
     ShellManagement,
     ShellForceAttach,
     UsbipStatus,
+    SystemActivation,
 }
 
 /// Closed set of host-declared guest files readable via `ReadGuestFile`.
@@ -375,6 +386,7 @@ pub enum GuestSubsystem {
     Usbip,
     Shell,
     Shpool,
+    SystemActivation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -479,6 +491,10 @@ pub struct GuestControlSchema {
     pub usbip_import_result: UsbipImportResponse,
     pub usbip_status: UsbipStatusRequest,
     pub usbip_status_result: UsbipStatusResponse,
+    pub activate_system_start: GuestActivationStartRequest,
+    pub activate_system_started: GuestActivationStartResponse,
+    pub activate_system_status: GuestActivationStatusRequest,
+    pub activate_system_status_result: GuestActivationStatusResponse,
     pub error: GuestControlError,
 }
 
@@ -1043,6 +1059,62 @@ pub struct ControlAck {
     pub error: Option<GuestControlError>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuestActivationMode {
+    Switch,
+    Boot,
+    Test,
+    DryActivate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuestActivationState {
+    Running,
+    Succeeded,
+    Failed,
+    TimedOut,
+    Lost,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GuestActivationStartRequest {
+    pub metadata: GuestRequestMetadata,
+    pub activation_id: GuestActivationId,
+    pub switch_script_path: GuestSwitchScriptPath,
+    pub mode: GuestActivationMode,
+    #[schemars(range(min = 1, max = 3600000))]
+    pub timeout_ms: u64,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GuestActivationStartResponse {
+    pub activation_id: GuestActivationId,
+    pub state: GuestActivationState,
+    pub error: Option<GuestControlError>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GuestActivationStatusRequest {
+    pub metadata: GuestRequestMetadata,
+    pub activation_id: GuestActivationId,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GuestActivationStatusResponse {
+    pub activation_id: GuestActivationId,
+    pub state: GuestActivationState,
+    pub exit_code: Option<i32>,
+    pub signal: Option<u32>,
+    pub status_code: Option<i32>,
+    pub error: Option<GuestControlError>,
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShellAttachRequest {
@@ -1395,6 +1467,13 @@ pub enum GuestControlErrorKind {
     ShellOutputGap,
     UsbipCommandTimeout,
     UsbipInvalidOutput,
+    ActivationInvalidId,
+    ActivationInvalidPath,
+    ActivationInvalidMode,
+    ActivationNotFound,
+    ActivationStatusUnavailable,
+    ActivationTimedOut,
+    ActivationSpawnFailed,
 }
 
 #[cfg(test)]
@@ -1523,6 +1602,14 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&UsbipImportAction::Attach).unwrap(),
             "\"attach\""
+        );
+        assert_eq!(
+            serde_json::to_string(&GuestActivationMode::DryActivate).unwrap(),
+            "\"dry-activate\""
+        );
+        assert_eq!(
+            serde_json::to_string(&GuestControlErrorKind::ActivationTimedOut).unwrap(),
+            "\"activation-timed-out\""
         );
         assert_eq!(
             serde_json::to_string(&TerminalStatus::Signal { signal: 2 }).unwrap(),

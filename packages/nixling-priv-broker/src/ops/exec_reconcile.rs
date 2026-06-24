@@ -214,6 +214,15 @@ pub trait ReconcileExecutor: Send + Sync {
         intent: &ResolvedStoreViewIntent,
     ) -> Result<(), ReconcileExecError>;
 
+    /// Build or reconcile a store-view generation for in-guest activation
+    /// without publishing generation metadata as current.
+    fn prepare_activation_store_view(
+        &self,
+        intent: &ResolvedStoreViewIntent,
+    ) -> Result<(), ReconcileExecError> {
+        self.prepare_store_view(intent)
+    }
+
     /// Prepare the per-role mount-namespace staging root under the VM's
     /// state dir and return the bind-mount target path.
     fn setup_mount_namespace(
@@ -287,6 +296,50 @@ impl IpRouteVerb {
 
 /// Production executor. Shells out via `std::process::Command`.
 pub struct SystemReconcileExecutor;
+
+fn materialize_store_view(intent: &ResolvedStoreViewIntent) -> Result<(), ReconcileExecError> {
+    if intent.vm.is_empty() {
+        return Err(ReconcileExecError::InvalidInput {
+            detail: "store-view vm is empty".to_owned(),
+        });
+    }
+
+    if !intent.hardlink_farm_path.is_absolute() || !intent.target_view_path.is_absolute() {
+        return Err(ReconcileExecError::InvalidInput {
+            detail: format!(
+                "store-view paths must be absolute, got farm={} target={}",
+                intent.hardlink_farm_path.display(),
+                intent.target_view_path.display(),
+            ),
+        });
+    }
+    let generation_number =
+        u32::try_from(intent.generation).map_err(|_| ReconcileExecError::InvalidInput {
+            detail: format!("generation {} exceeds u32", intent.generation),
+        })?;
+    let generation_dir = crate::ops::store_view_farm::build_farm_cross_mount_safe(
+        &intent.hardlink_farm_path,
+        intent.generation,
+        &intent.closure_paths,
+        &GenerationMarker {
+            closure_hash: intent.closure_identity(),
+            nixling_version: env!("CARGO_PKG_VERSION").to_owned(),
+            activated_at: format!("unix-{}", current_unix_ms()),
+            vm: intent.vm.clone(),
+            generation_number,
+        },
+    )
+    .map_err(map_hardlink_farm_error)?;
+    let _ =
+        hardlink_farm::read_generation_marker(&generation_dir).map_err(map_hardlink_farm_error)?;
+    if !intent.target_view_path.exists() {
+        return Err(ReconcileExecError::Io {
+            path: intent.target_view_path.display().to_string(),
+            detail: "target store-view path missing after hardlink-farm build".to_owned(),
+        });
+    }
+    Ok(())
+}
 
 /// Live-op helper surface shared by the broker dispatch arms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -635,46 +688,11 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         &self,
         intent: &ResolvedStoreViewIntent,
     ) -> Result<(), ReconcileExecError> {
-        if intent.vm.is_empty() {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: "store-view vm is empty".to_owned(),
-            });
-        }
-
-        if !intent.hardlink_farm_path.is_absolute() || !intent.target_view_path.is_absolute() {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: format!(
-                    "store-view paths must be absolute, got farm={} target={}",
-                    intent.hardlink_farm_path.display(),
-                    intent.target_view_path.display(),
-                ),
-            });
-        }
+        materialize_store_view(intent)?;
         let generation_number =
             u32::try_from(intent.generation).map_err(|_| ReconcileExecError::InvalidInput {
                 detail: format!("generation {} exceeds u32", intent.generation),
             })?;
-        let generation_dir = crate::ops::store_view_farm::build_farm_cross_mount_safe(
-            &intent.hardlink_farm_path,
-            intent.generation,
-            &intent.closure_paths,
-            &GenerationMarker {
-                closure_hash: intent.closure_identity(),
-                nixling_version: env!("CARGO_PKG_VERSION").to_owned(),
-                activated_at: format!("unix-{}", current_unix_ms()),
-                vm: intent.vm.clone(),
-                generation_number,
-            },
-        )
-        .map_err(map_hardlink_farm_error)?;
-        let _ = hardlink_farm::read_generation_marker(&generation_dir)
-            .map_err(map_hardlink_farm_error)?;
-        if !intent.target_view_path.exists() {
-            return Err(ReconcileExecError::Io {
-                path: intent.target_view_path.display().to_string(),
-                detail: "target store-view path missing after hardlink-farm build".to_owned(),
-            });
-        }
         // Publish the freshly-built generation as the active store view
         // by atomically swapping `store-view/current -> generations/<N>`,
         // keeping the broker-built store-view farm internally consistent
@@ -695,6 +713,13 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         hardlink_farm::swap_current_symlink(&intent.hardlink_farm_path, generation_number)
             .map_err(map_hardlink_farm_error)?;
         Ok(())
+    }
+
+    fn prepare_activation_store_view(
+        &self,
+        intent: &ResolvedStoreViewIntent,
+    ) -> Result<(), ReconcileExecError> {
+        materialize_store_view(intent)
     }
 
     fn setup_mount_namespace(
@@ -746,65 +771,10 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         source_view_path: &Path,
         mount_view_path: &Path,
     ) -> Result<String, ReconcileExecError> {
-        if mode_arg.is_empty() {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: "activation mode arg is empty".to_owned(),
-            });
-        }
-        if !source_view_path.is_absolute() || !mount_view_path.is_absolute() {
-            return Err(ReconcileExecError::InvalidInput {
-                detail: format!(
-                    "activation script paths must be absolute, got source={} mount={}",
-                    source_view_path.display(),
-                    mount_view_path.display(),
-                ),
-            });
-        }
-        let source_script_path = source_view_path.join("bin/switch-to-configuration");
-        if !source_script_path.exists() {
-            return Err(ReconcileExecError::Io {
-                path: source_script_path.display().to_string(),
-                detail: "switch-to-configuration missing from prepared store view".to_owned(),
-            });
-        }
-        let output = Command::new("/run/current-system/sw/bin/unshare")
-            .arg("--mount")
-            .arg("--propagation")
-            .arg("private")
-            .arg("/bin/sh")
-            .arg("-ceu")
-            .arg(
-                "mount_bin=\"$1\"; src=\"$2\"; dst=\"$3\"; mode=\"$4\"; \"$mount_bin\" --bind \"$src\" \"$dst\"; exec \"$dst/bin/switch-to-configuration\" \"$mode\"",
-            )
-            .arg("--")
-            .arg("/run/current-system/sw/bin/mount")
-            .arg(source_view_path)
-            .arg(mount_view_path)
-            .arg(mode_arg)
-            .env_remove("NOTIFY_SOCKET")
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|e| ReconcileExecError::BinaryMissing {
-                which: "unshare".to_owned(),
-                detail: e.to_string(),
-            })?;
-        if !output.status.success() {
-            return Err(ReconcileExecError::NonZeroExit {
-                which: format!("switch-to-configuration {mode_arg}"),
-                exit_code: output.status.code().unwrap_or(-1),
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            });
-        }
-        Ok(command_summary(
-            &output.stdout,
-            &format!(
-                "{} {} succeeded",
-                mount_view_path
-                    .join("bin/switch-to-configuration")
-                    .display(),
-                mode_arg,
-            ),
-        ))
+        let _ = (mode_arg, source_view_path, mount_view_path);
+        Err(ReconcileExecError::InvalidInput {
+            detail: "broker-side VM activation script execution is disabled; run activation inside the guest and commit metadata with RunActivation phase=commit".to_owned(),
+        })
     }
 
     fn run_gc(&self, keep_generations: Option<u32>) -> Result<String, ReconcileExecError> {
@@ -2119,6 +2089,23 @@ exit 7
             ReconcileOp::RunActivationScript { mode_arg, script_path, .. }
                 if mode_arg == "switch"
                     && script_path == &mount_view_path.join("bin/switch-to-configuration")
+        ));
+    }
+
+    #[test]
+    fn system_executor_run_activation_script_fails_closed() {
+        let exec = SystemReconcileExecutor;
+        let err = exec
+            .run_activation_script(
+                "switch",
+                Path::new("/var/lib/nixling/vms/vm-a/store-view/live/vm-a-system"),
+                Path::new("/var/lib/nixling/vms/vm-a/mount-ns/activation/store-view"),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ReconcileExecError::InvalidInput { ref detail }
+                if detail.contains("broker-side VM activation script execution is disabled")
         ));
     }
 
