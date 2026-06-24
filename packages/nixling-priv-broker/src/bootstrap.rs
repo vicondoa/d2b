@@ -179,6 +179,14 @@ pub mod wire {
             #[serde(default)]
             opaque_target_id: Option<String>,
         },
+        UsbipExplicitBind {
+            #[serde(default)]
+            opaque_target_id: Option<String>,
+        },
+        UsbipExplicitFirewallRule {
+            #[serde(default)]
+            opaque_target_id: Option<String>,
+        },
         UsbipProxyReconcile {
             #[serde(default)]
             opaque_target_id: Option<String>,
@@ -270,6 +278,8 @@ pub mod wire {
                 Self::UpdateHostsFile { .. } => "UpdateHostsFile",
                 Self::UsbipBind { .. } => "UsbipBind",
                 Self::UsbipBindFirewallRule { .. } => "UsbipBindFirewallRule",
+                Self::UsbipExplicitBind { .. } => "UsbipExplicitBind",
+                Self::UsbipExplicitFirewallRule { .. } => "UsbipExplicitFirewallRule",
                 Self::UsbipProxyReconcile { .. } => "UsbipProxyReconcile",
                 Self::UsbipUnbind { .. } => "UsbipUnbind",
             }
@@ -395,6 +405,12 @@ pub mod wire {
                 opaque_target_id: None,
             },
             "UsbipBindFirewallRule" => BrokerRequest::UsbipBindFirewallRule {
+                opaque_target_id: None,
+            },
+            "UsbipExplicitBind" => BrokerRequest::UsbipExplicitBind {
+                opaque_target_id: None,
+            },
+            "UsbipExplicitFirewallRule" => BrokerRequest::UsbipExplicitFirewallRule {
                 opaque_target_id: None,
             },
             "UsbipProxyReconcile" => BrokerRequest::UsbipProxyReconcile {

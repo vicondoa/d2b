@@ -52,12 +52,26 @@ let
     set -eu
     ${pkgs.coreutils}/bin/install -d -m 0750 -o nixlingd -g nixling ${otelRuntimeDir}
     ${pkgs.acl}/bin/setfacl -m u:nixling-host-otel-collector:--x /run/nixling
+    # Access ACL on ${otelRuntimeDir}: collector gets --x (traverse only, NO
+    # write authority on the directory itself). The mask m::rwx preserves the
+    # bridge uid's rwx effective access (set by activation) so it can still
+    # create host-egress.sock here.
+    #
+    # Default ACL: d:u:nixling-host-otel-collector:rw is intentionally kept so
+    # that when the broker-spawned bridge creates host-egress.sock AFTER this
+    # runtimePrep runs, the socket inherits rw for the collector automatically
+    # (connect(2) requires write on the socket file). Without this default ACL
+    # the collector could not connect to a socket created after startup. The
+    # default mask is d:m::rwx (write-capable) so the bridge runner's rwx
+    # effective access on newly created children is not masked away.
     ${pkgs.acl}/bin/setfacl \
-      -m u:nixling-host-otel-collector:rwx \
-      -m d:u:nixling-host-otel-collector:rwx \
+      -m u:nixling-host-otel-collector:--x \
+      -m m::rwx \
+      -m d:u:nixling-host-otel-collector:rw \
+      -m d:m::rwx \
       ${otelRuntimeDir}
     if [ -S ${hostEgressSocket} ]; then
-      ${pkgs.acl}/bin/setfacl -m u:nixling-host-otel-collector:rw ${hostEgressSocket}
+      ${pkgs.acl}/bin/setfacl -m u:nixling-host-otel-collector:rw,m::rw ${hostEgressSocket}
     fi
 
     state_dir=${lib.escapeShellArg config.nixling.site.stateDir}
@@ -286,6 +300,7 @@ lib.mkIf cfg.enable {
     description = "nixling host OpenTelemetry collector";
     wantedBy = [ "multi-user.target" ];
     after = [ "nixlingd.service" ];
+    unitConfig.StartLimitIntervalSec = 0;
     # journald receiver shells out to `journalctl`.
     path = lib.optional scrapeJournal pkgs.systemd;
     serviceConfig = {

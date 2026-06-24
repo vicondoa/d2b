@@ -123,7 +123,11 @@ let
       brokerSocketPath = daemonJson.brokerSocketPath;
       nixlingdServicePresent = builtins.hasAttr "nixlingd" cfg.systemd.services;
       nixlingdSupplementaryGroups = cfg.systemd.services.nixlingd.serviceConfig.SupplementaryGroups;
-      runDirAllowsLocalLaunchers = builtins.elem "d /run/nixling 0750 nixlingd nixling -" cfg.systemd.tmpfiles.rules;
+      runDirAllowsLocalLaunchers =
+        builtins.elem "d /run/nixling 1770 root nixling -" cfg.systemd.tmpfiles.rules
+        && builtins.elem "a+ /run/nixling - - - - g::r-x" cfg.systemd.tmpfiles.rules
+        && builtins.elem "a+ /run/nixling - - - - u:nixlingd:rwx" cfg.systemd.tmpfiles.rules
+        && builtins.elem "a+ /run/nixling - - - - m::rwx" cfg.systemd.tmpfiles.rules;
       realmEntries = lib.sort lib.lessThan (builtins.attrNames cfg.nixling._computed.realmEntrypoints.entries);
       localEntrypoint = cfg.nixling._computed.realmEntrypoints.entries.local;
       hostGatewayJsonPresent = builtins.hasAttr "nixling/gateway.json" cfg.environment.etc;
