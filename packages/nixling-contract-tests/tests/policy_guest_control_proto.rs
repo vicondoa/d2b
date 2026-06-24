@@ -394,6 +394,8 @@ fn guest_control_proto_declares_service_methods_and_descriptor_sentinels() {
         "ReadGuestFile",
         "UsbipImport",
         "UsbipStatus",
+        "ActivateSystemStart",
+        "ActivateSystemStatus",
     ] {
         assert!(
             any_line_matches(&proto, &format!(r"^\s*rpc\s+{method}\s*\(")),
@@ -422,6 +424,12 @@ fn guest_control_proto_declares_service_methods_and_descriptor_sentinels() {
         "detached_ports",
         "imports",
         "tcp_port",
+        "activation_id",
+        "switch_script_path",
+        "timeout_ms",
+        "exit_code",
+        "signal",
+        "status_code",
     ] {
         assert!(
             all_field_names.contains(field),
@@ -472,6 +480,23 @@ fn guest_control_proto_declares_service_methods_and_descriptor_sentinels() {
         "GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT",
         "USBIP_IMPORT_ACTION_ATTACH",
         "USBIP_IMPORT_ACTION_DETACH",
+        "GUEST_CAPABILITY_SYSTEM_ACTIVATION",
+        "GUEST_ACTIVATION_MODE_SWITCH",
+        "GUEST_ACTIVATION_MODE_BOOT",
+        "GUEST_ACTIVATION_MODE_TEST",
+        "GUEST_ACTIVATION_MODE_DRY_ACTIVATE",
+        "GUEST_ACTIVATION_STATE_RUNNING",
+        "GUEST_ACTIVATION_STATE_SUCCEEDED",
+        "GUEST_ACTIVATION_STATE_FAILED",
+        "GUEST_ACTIVATION_STATE_TIMED_OUT",
+        "GUEST_ACTIVATION_STATE_LOST",
+        "GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_ID",
+        "GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_PATH",
+        "GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_MODE",
+        "GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND",
+        "GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE",
+        "GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT",
+        "GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED",
     ] {
         assert!(
             all_enum_values.contains(value),
@@ -559,6 +584,62 @@ fn guest_control_proto_field_numbers_and_reserved_slots_are_stable() {
     assert_field(&shape, "UsbipStatusEntry", "host", "string", 2, false);
     assert_field(&shape, "UsbipStatusEntry", "tcp_port", "uint32", 3, false);
     assert_field(&shape, "UsbipStatusEntry", "bus_id", "string", 4, false);
+    assert_field(
+        &shape,
+        "GuestActivationStartRequest",
+        "activation_id",
+        "string",
+        2,
+        false,
+    );
+    assert_field(
+        &shape,
+        "GuestActivationStartRequest",
+        "switch_script_path",
+        "string",
+        3,
+        false,
+    );
+    assert_field(
+        &shape,
+        "GuestActivationStartRequest",
+        "mode",
+        "GuestActivationMode",
+        4,
+        false,
+    );
+    assert_field(
+        &shape,
+        "GuestActivationStartRequest",
+        "timeout_ms",
+        "uint64",
+        5,
+        false,
+    );
+    assert_field(
+        &shape,
+        "GuestActivationStatusResponse",
+        "exit_code",
+        "int32",
+        3,
+        true,
+    );
+    assert_field(
+        &shape,
+        "GuestActivationStatusResponse",
+        "signal",
+        "uint32",
+        4,
+        true,
+    );
+    assert_field(
+        &shape,
+        "GuestActivationStatusResponse",
+        "status_code",
+        "int32",
+        5,
+        true,
+    );
 
     let hello_response_fields = fields_by_name(&shape, "HelloResponse");
     for rejected in ["health", "capabilities_hash"] {

@@ -77,6 +77,22 @@ const EXPECTED_METRICS: &[ExpectedMetric] = &[
         ]),
     },
     ExpectedMetric {
+        name: "nixling_daemon_activation_phase_duration_seconds",
+        kind: "Histogram",
+        labels: &["phase", "mode", "status"],
+        buckets_expr: "ACTIVATION_PHASE_BUCKETS_SECONDS",
+        bucket_values: Some(&[
+            0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 30.0, 120.0, 600.0,
+        ]),
+    },
+    ExpectedMetric {
+        name: "nixling_daemon_vm_degraded",
+        kind: "Gauge",
+        labels: &["vm", "reason"],
+        buckets_expr: "&[]",
+        bucket_values: None,
+    },
+    ExpectedMetric {
         name: "nixling_daemon_ownership_drift_total",
         kind: "Counter",
         labels: &["vm"],

@@ -1,7 +1,7 @@
 use std::{env, ffi::OsString, path::PathBuf, process};
 
 use nixling_guestd::exec::ExecPolicy;
-use nixling_guestd::service::{DetachedRuntimeConfig, ShellPolicy};
+use nixling_guestd::service::{ActivationRuntimeConfig, DetachedRuntimeConfig, ShellPolicy};
 
 fn main() {
     if let Err(error) = run(env::args_os().skip(1).collect()) {
@@ -37,6 +37,9 @@ fn run(args: Vec<OsString>) -> Result<(), nixling_guestd::service::GuestdService
             if let Some(shell_policy) = parsed.shell_policy {
                 config = config.with_shell_policy(shell_policy);
             }
+            if let Some(activation) = parsed.activation {
+                config = config.with_activation_runtime(activation);
+            }
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -56,6 +59,7 @@ struct ServeArgs {
     guest_config_path: Option<PathBuf>,
     usbip_path: Option<PathBuf>,
     shell_policy: Option<ShellPolicy>,
+    activation: Option<ActivationRuntimeConfig>,
 }
 
 /// Parse `--serve` arguments: the required `--vm-id <name>` plus the optional
@@ -80,6 +84,9 @@ fn parse_serve_args(
     let mut shell_max_attached: u32 = 1;
     let mut shell_runner_path: Option<PathBuf> = None;
     let mut shell_systemctl_path: Option<PathBuf> = None;
+    let mut activation_systemd_run_path: Option<PathBuf> = None;
+    let mut activation_systemctl_path: Option<PathBuf> = None;
+    let mut activation_status_dir: PathBuf = PathBuf::from("/run/nixling-guestd/activations");
     while let Some(arg) = iter.next() {
         match arg.to_str() {
             Some("--vm-id") => {
@@ -148,6 +155,15 @@ fn parse_serve_args(
                     .and_then(|value| value.parse::<u64>().ok())
                     .ok_or(nixling_guestd::service::GuestdServiceError::Ttrpc)?;
             }
+            Some("--activation-systemd-run-path") => {
+                activation_systemd_run_path = Some(parse_abs_path(iter.next())?);
+            }
+            Some("--activation-systemctl-path") => {
+                activation_systemctl_path = Some(parse_abs_path(iter.next())?);
+            }
+            Some("--activation-status-dir") => {
+                activation_status_dir = parse_abs_path(iter.next())?;
+            }
             Some("--interactive-max-runtime-sec") => {
                 interactive_max_runtime_sec = iter
                     .next()
@@ -192,6 +208,16 @@ fn parse_serve_args(
     } else {
         None
     };
+    let activation = match (activation_systemd_run_path, activation_systemctl_path) {
+        (Some(systemd_run_path), Some(systemctl_path)) => Some(ActivationRuntimeConfig {
+            systemd_run_path,
+            systemctl_path,
+            status_dir: activation_status_dir,
+            max_timeout_ms: 60 * 60 * 1_000,
+        }),
+        (None, None) => None,
+        _ => return Err(nixling_guestd::service::GuestdServiceError::Ttrpc),
+    };
 
     Ok(ServeArgs {
         vm_id,
@@ -201,6 +227,7 @@ fn parse_serve_args(
         guest_config_path,
         usbip_path,
         shell_policy,
+        activation,
     })
 }
 

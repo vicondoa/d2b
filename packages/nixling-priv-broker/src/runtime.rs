@@ -3363,7 +3363,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     intent_id: req.vm.clone(),
                 }
             })?;
-            let outcome = backend.run_activation(intent, store_view_intent, req.mode)?;
+            let outcome = backend.run_activation(intent, store_view_intent, req.phase, req.mode)?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3389,6 +3389,10 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     mode: outcome.mode,
                     vm: outcome.vm,
                     generation_number: outcome.generation_number,
+                    guest_switch_script_path: outcome
+                        .guest_switch_script_path
+                        .as_ref()
+                        .map(|path| path.display().to_string()),
                     summary: outcome.summary,
                 },
             )))
@@ -4542,6 +4546,7 @@ trait DispatchBackend {
         &self,
         intent: &nixling_core::bundle_resolver::ResolvedActivationIntent,
         store_view_intent: &nixling_core::bundle_resolver::ResolvedStoreViewIntent,
+        phase: nixling_contracts::broker_wire::ActivationPhase,
         mode: nixling_contracts::broker_wire::ActivationMode,
     ) -> Result<crate::live_handlers::ActivationOutcome, BrokerError>;
 
@@ -4922,10 +4927,11 @@ impl DispatchBackend for LiveDispatchBackend {
         &self,
         intent: &nixling_core::bundle_resolver::ResolvedActivationIntent,
         store_view_intent: &nixling_core::bundle_resolver::ResolvedStoreViewIntent,
+        phase: nixling_contracts::broker_wire::ActivationPhase,
         mode: nixling_contracts::broker_wire::ActivationMode,
     ) -> Result<crate::live_handlers::ActivationOutcome, BrokerError> {
         let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        crate::live_handlers::live_run_activation(&exec, intent, store_view_intent, mode)
+        crate::live_handlers::live_run_activation(&exec, intent, store_view_intent, phase, mode)
             .map_err(map_activation_live_error)
     }
 
@@ -5273,14 +5279,24 @@ pub fn dispatch_run_activation_response_for_intent(
         ))
         .into_response();
     }
-    match crate::live_handlers::live_run_activation(executor, intent, store_view_intent, req.mode)
-        .map_err(map_activation_live_error)
+    match crate::live_handlers::live_run_activation(
+        executor,
+        intent,
+        store_view_intent,
+        req.phase,
+        req.mode,
+    )
+    .map_err(map_activation_live_error)
     {
         Ok(outcome) => {
             BrokerResponse::RunActivation(nixling_contracts::broker_wire::RunActivationResponse {
                 mode: outcome.mode,
                 vm: outcome.vm,
                 generation_number: outcome.generation_number,
+                guest_switch_script_path: outcome
+                    .guest_switch_script_path
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
                 summary: outcome.summary,
             })
         }
@@ -8383,7 +8399,7 @@ mod tests {
     use nix::unistd::Gid;
     #[cfg(not(feature = "layer1-bootstrap"))]
     use nixling_contracts::broker_wire::{
-        ActivationMode, RunActivationRequest, RunActivationResponse,
+        ActivationMode, ActivationPhase, RunActivationRequest, RunActivationResponse,
     };
     #[cfg(not(feature = "layer1-bootstrap"))]
     use nixling_contracts::types::BundleOpId;
@@ -9515,9 +9531,11 @@ mod tests {
             &self,
             intent: &nixling_core::bundle_resolver::ResolvedActivationIntent,
             store_view_intent: &nixling_core::bundle_resolver::ResolvedStoreViewIntent,
+            phase: nixling_contracts::broker_wire::ActivationPhase,
             mode: nixling_contracts::broker_wire::ActivationMode,
         ) -> Result<crate::live_handlers::ActivationOutcome, BrokerError> {
             Ok(crate::live_handlers::ActivationOutcome {
+                phase,
                 mode,
                 vm: intent.vm.clone(),
                 generation_number: intent.generation_number,
@@ -9528,20 +9546,25 @@ mod tests {
                     hardlink_farm_path: store_view_intent.hardlink_farm_path.clone(),
                     target_view_path: store_view_intent.target_view_path.clone(),
                 }),
-                mount_namespace: crate::live_handlers::MountNamespaceOutcome {
-                    vm: intent.vm.clone(),
-                    role_id: "activation".to_owned(),
-                    mount_root: PathBuf::from("/run/nixling/test/mount-root"),
-                    mount_view_path: store_view_intent.target_view_path.clone(),
-                },
-                activation_script_path: store_view_intent
-                    .target_view_path
-                    .join("bin/switch-to-configuration"),
+                guest_switch_script_path: Some(PathBuf::from(format!(
+                    "/nix/store/{}/bin/switch-to-configuration",
+                    store_view_intent
+                        .target_view_path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("alpha-system")
+                ))),
                 activation_script_mode: activation_mode_name(mode).to_owned(),
                 rollback_marker_written: None,
-                current_generation_updated: intent
-                    .generation_number
-                    .or(Some(store_view_intent.generation)),
+                current_generation_updated: if phase
+                    == nixling_contracts::broker_wire::ActivationPhase::Prepare
+                {
+                    None
+                } else {
+                    intent
+                        .generation_number
+                        .or(Some(store_view_intent.generation))
+                },
             })
         }
 
@@ -9796,6 +9819,7 @@ mod tests {
         let request = RunActivationRequest {
             bundle_activation_intent_ref: BundleOpId::new("activation:vm:alpha"),
             mode: ActivationMode::Switch,
+            phase: ActivationPhase::Prepare,
             vm: "alpha".to_owned(),
             tracing_span_id: None,
         };
@@ -9814,24 +9838,16 @@ mod tests {
                 mode: ActivationMode::Switch,
                 ref vm,
                 generation_number: Some(7),
+                guest_switch_script_path: Some(ref path),
                 ..
-            }) if vm == "alpha"
+            }) if vm == "alpha" && path == "/nix/store/alpha-system/bin/switch-to-configuration"
         ));
         let log = exec.take_log();
-        assert_eq!(log.len(), 3);
+        assert_eq!(log.len(), 1);
         assert!(matches!(
             &log[0],
             ReconcileOp::PrepareStoreView { vm, generation, .. }
                 if vm == "alpha" && *generation == 7
-        ));
-        assert!(matches!(
-            &log[1],
-            ReconcileOp::SetupMountNamespace { vm, role_id, .. }
-                if vm == "alpha" && role_id == "activation"
-        ));
-        assert!(matches!(
-            &log[2],
-            ReconcileOp::RunActivationScript { mode_arg, .. } if mode_arg == "switch"
         ));
     }
 
@@ -10319,6 +10335,7 @@ mod tests {
             BrokerRequest::RunActivation(nixling_contracts::broker_wire::RunActivationRequest {
                 bundle_activation_intent_ref: BundleOpId::new(intent_id_activation("corp-vm")),
                 mode: ActivationMode::Switch,
+                phase: ActivationPhase::MetadataOnly,
                 vm: "corp-vm".to_owned(),
                 tracing_span_id: Some(TracingSpanId::new("span-activation")),
             }),

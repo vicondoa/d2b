@@ -4,7 +4,7 @@
 // in plan.md §D-typed-error-boxing. Suppressed until that refactor lands.
 #![allow(clippy::result_large_err)]
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry};
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::future::Future;
@@ -32,7 +32,8 @@ use nixling_constellation_provider::provider::WorkloadProvider;
 use nixling_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
     broker_wire::{
-        ActivationMode as BrokerActivationMode, ApplyNftablesRequest as BrokerApplyNftablesRequest,
+        ActivationMode as BrokerActivationMode, ActivationPhase as BrokerActivationPhase,
+        ApplyNftablesRequest as BrokerApplyNftablesRequest,
         ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest,
         ApplyRouteRequest as BrokerApplyRouteRequest,
         ApplySysctlRequest as BrokerApplySysctlRequest, BrokerCallerRole, BrokerErrorResponse,
@@ -964,6 +965,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         conn_semaphore: concurrency::ConnSemaphore::new(resolve_max_inflight_connections()),
         op_locks: crate::concurrency::OpLockManager::new(),
     };
+    refresh_activation_marker_metrics_on_startup(&state);
     refresh_broker_reap_log(&state, "startup");
 
     match load_bundle_resolver(&state) {
@@ -13736,6 +13738,290 @@ fn dispatch_broker_run_migrate(
     }
 }
 
+const GUEST_SYSTEM_ACTIVATION_TIMEOUT: Duration = Duration::from_secs(600);
+const GUEST_SYSTEM_ACTIVATION_REJOIN_DEADLINE: Duration = Duration::from_secs(660);
+const GUEST_SYSTEM_ACTIVATION_START_DEADLINE: Duration = Duration::from_secs(15);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum HostActivationMarkerState {
+    Pending,
+    Indeterminate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HostActivationPendingMarker {
+    schema_version: u32,
+    vm: String,
+    mode: String,
+    generation_number: Option<u64>,
+    activation_id: String,
+    switch_script_basename: String,
+    switch_script_sha256: String,
+    state: HostActivationMarkerState,
+    created_unix_secs: u64,
+    updated_unix_secs: u64,
+}
+
+#[derive(Default)]
+struct ActivationLockSet {
+    active: Mutex<HashSet<String>>,
+}
+
+struct ActivationLockGuard {
+    vm: String,
+    locks: &'static ActivationLockSet,
+}
+
+impl Drop for ActivationLockGuard {
+    fn drop(&mut self) {
+        self.locks
+            .active
+            .lock()
+            .expect("activation lock poisoned")
+            .remove(&self.vm);
+    }
+}
+
+fn activation_locks() -> &'static ActivationLockSet {
+    static LOCKS: OnceLock<ActivationLockSet> = OnceLock::new();
+    LOCKS.get_or_init(ActivationLockSet::default)
+}
+
+fn try_acquire_activation_lock(vm: &str) -> Result<ActivationLockGuard, Value> {
+    let locks = activation_locks();
+    let mut active = locks.active.lock().expect("activation lock poisoned");
+    if !active.insert(vm.to_owned()) {
+        return Err(invalid_request_response_with_summary(
+            "activation",
+            format!("activation already in progress for vm '{vm}'"),
+            format!(
+                "wait for the existing activation on vm '{vm}' to finish, then retry the command; status/list will report activation-pending if recovery is needed"
+            ),
+        ));
+    }
+    Ok(ActivationLockGuard {
+        vm: vm.to_owned(),
+        locks,
+    })
+}
+
+fn activation_marker_dir(state: &ServerState) -> PathBuf {
+    state.daemon_state_dir.join("activations")
+}
+
+fn activation_marker_path(state: &ServerState, vm: &str) -> PathBuf {
+    activation_marker_dir(state).join(format!("{vm}.json"))
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn generate_activation_id() -> Result<String, TypedError> {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).map_err(|err| TypedError::InternalIo {
+        context: "generate activation id".to_owned(),
+        detail: err.to_string(),
+    })?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Ok(format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15],
+    ))
+}
+
+fn switch_script_basename(path: &str) -> String {
+    Path::new(path)
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .and_then(OsStr::to_str)
+        .unwrap_or("unknown")
+        .to_owned()
+}
+
+fn switch_script_digest(path: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(path.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn build_activation_marker(
+    vm: &str,
+    mode: BrokerActivationMode,
+    generation_number: Option<u64>,
+    activation_id: &str,
+    switch_script_path: &str,
+    state: HostActivationMarkerState,
+) -> HostActivationPendingMarker {
+    let now = now_unix_secs();
+    HostActivationPendingMarker {
+        schema_version: 1,
+        vm: vm.to_owned(),
+        mode: activation_mode_label(mode).to_owned(),
+        generation_number,
+        activation_id: activation_id.to_owned(),
+        switch_script_basename: switch_script_basename(switch_script_path),
+        switch_script_sha256: switch_script_digest(switch_script_path),
+        state,
+        created_unix_secs: now,
+        updated_unix_secs: now,
+    }
+}
+
+fn write_activation_marker_blocking(
+    path: &Path,
+    marker: &HostActivationPendingMarker,
+) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "marker path has no parent"))?;
+    fs::create_dir_all(parent)?;
+    let tmp = parent.join(format!(".{}.{}.tmp", marker.vm, marker.activation_id));
+    {
+        let mut file = OpenOptions::new().create_new(true).write(true).open(&tmp)?;
+        file.write_all(&serde_json::to_vec_pretty(marker).map_err(io::Error::other)?)?;
+        file.write_all(b"\n")?;
+        file.set_permissions(fs::Permissions::from_mode(0o640))?;
+        file.sync_all()?;
+    }
+    fs::rename(&tmp, path)?;
+    File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+fn write_activation_marker(
+    state: &ServerState,
+    marker: &HostActivationPendingMarker,
+) -> Result<(), TypedError> {
+    let path = activation_marker_path(state, &marker.vm);
+    let marker = marker.clone();
+    std::thread::spawn(move || write_activation_marker_blocking(&path, &marker))
+        .join()
+        .map_err(|_| TypedError::InternalIo {
+            context: "write activation pending marker".to_owned(),
+            detail: "marker writer thread panicked".to_owned(),
+        })?
+        .map_err(|err| TypedError::InternalIo {
+            context: "write activation pending marker".to_owned(),
+            detail: err.to_string(),
+        })
+}
+
+fn clear_activation_marker(state: &ServerState, vm: &str) {
+    let path = activation_marker_path(state, vm);
+    let dir = activation_marker_dir(state);
+    let vm = vm.to_owned();
+    let _ = std::thread::spawn(move || {
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                tracing::warn!(vm = %vm, error = %err, path = %path.display(), "clear activation marker failed");
+            }
+        }
+        if let Ok(parent) = File::open(&dir) {
+            let _ = parent.sync_all();
+        }
+    })
+    .join();
+}
+
+fn read_activation_marker(state: &ServerState, vm: &str) -> Option<HostActivationPendingMarker> {
+    let path = activation_marker_path(state, vm);
+    let bytes = fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn refresh_activation_marker_metrics_on_startup(state: &ServerState) {
+    let dir = activation_marker_dir(state);
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(bytes) = fs::read(entry.path()) else {
+            continue;
+        };
+        let Ok(marker) = serde_json::from_slice::<HostActivationPendingMarker>(&bytes) else {
+            continue;
+        };
+        tracing::warn!(
+            vm = %marker.vm,
+            mode = %marker.mode,
+            activation_id = %marker.activation_id,
+            state = ?marker.state,
+            "startup observed unresolved activation marker; VM status/list will report degraded activation-pending"
+        );
+        record_activation_degraded_metric(state, &marker.vm, true);
+    }
+}
+
+fn activation_marker_reason(marker: &HostActivationPendingMarker) -> &'static str {
+    match marker.state {
+        HostActivationMarkerState::Pending => "activation-pending",
+        HostActivationMarkerState::Indeterminate => "activation-indeterminate",
+    }
+}
+
+fn activation_marker_remediation(vm: &str, marker: &HostActivationPendingMarker) -> String {
+    match marker.state {
+        HostActivationMarkerState::Pending => format!(
+            "activation for vm '{vm}' was in progress when the daemon last observed it; retry the same activation or inspect `journalctl -u nixlingd` before forcing recovery"
+        ),
+        HostActivationMarkerState::Indeterminate => format!(
+            "activation for vm '{vm}' reached an indeterminate state; start the VM if needed, then retry status/recovery for activation {} or run a fresh switch after confirming the guest generation",
+            marker.activation_id
+        ),
+    }
+}
+
+fn record_activation_degraded_metric(state: &ServerState, vm: &str, pending: bool) {
+    state.metrics_registry.gauge_set(
+        "nixling_daemon_vm_degraded",
+        &[("vm", vm), ("reason", "activation_pending")],
+        if pending { 1.0 } else { 0.0 },
+    );
+}
+
+fn record_activation_phase_metric(
+    state: &ServerState,
+    phase: &'static str,
+    mode: BrokerActivationMode,
+    status: &'static str,
+    elapsed: Duration,
+) {
+    state.metrics_registry.histogram_observe(
+        "nixling_daemon_activation_phase_duration_seconds",
+        &[
+            ("phase", phase),
+            ("mode", activation_mode_label(mode)),
+            ("status", status),
+        ],
+        elapsed.as_secs_f64(),
+    );
+}
+
 fn activation_mode_label(mode: BrokerActivationMode) -> &'static str {
     match mode {
         BrokerActivationMode::Switch => "switch",
@@ -13745,46 +14031,354 @@ fn activation_mode_label(mode: BrokerActivationMode) -> &'static str {
     }
 }
 
+fn activation_guest_mode(
+    mode: BrokerActivationMode,
+) -> guest_control_health::GuestSystemActivationMode {
+    match mode {
+        BrokerActivationMode::Test => guest_control_health::GuestSystemActivationMode::Test,
+        BrokerActivationMode::Switch
+        | BrokerActivationMode::Rollback
+        | BrokerActivationMode::Boot => guest_control_health::GuestSystemActivationMode::Switch,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct GuestActivationPlan {
+    vm: String,
+    mode: BrokerActivationMode,
+    activation_id: String,
+    switch_script_path: String,
+}
+
+#[derive(Debug, Clone)]
+enum GuestActivationTerminal {
+    Succeeded,
+    DefinitiveFailure {
+        summary: String,
+        remediation: GuestActivationFailureRemediation,
+    },
+    Indeterminate(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuestActivationFailureRemediation {
+    GuestJournal,
+    UpgradeGuest,
+}
+
+#[cfg(test)]
+type TestGuestActivationHook =
+    Arc<dyn Fn(GuestActivationPlan) -> GuestActivationTerminal + Send + Sync + 'static>;
+
+#[cfg(test)]
+fn test_guest_activation_hook_cell() -> &'static Mutex<Option<TestGuestActivationHook>> {
+    static HOOK: OnceLock<Mutex<Option<TestGuestActivationHook>>> = OnceLock::new();
+    HOOK.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+fn test_guest_activation_hook_installed() -> bool {
+    test_guest_activation_hook_cell()
+        .lock()
+        .expect("guest activation hook")
+        .is_some()
+}
+
+#[cfg(not(test))]
+fn test_guest_activation_hook_installed() -> bool {
+    false
+}
+
+fn guest_activation_error_summary(
+    error: &guest_control_health::GuestSystemActivationError,
+) -> String {
+    use guest_control_health::GuestControlHealthError as H;
+    use guest_control_health::GuestSystemActivationError as E;
+    match error {
+        E::CapabilityUnavailable => {
+            "guest-control system activation capability unavailable".to_owned()
+        }
+        E::GuestRejected(kind) => format!("guest rejected activation request ({kind:?})"),
+        E::Protocol => "guest-control activation protocol error".to_owned(),
+        E::Probe(H::Timeout) => "guest-control activation timed out".to_owned(),
+        E::Probe(H::TransportIo) | E::Probe(H::Ttrpc) => {
+            "guest-control transport dropped during activation".to_owned()
+        }
+        E::Probe(H::AuthFailed) => {
+            "guest-control authentication failed during activation".to_owned()
+        }
+        E::Probe(H::Signer) => "guest-control activation signer failed".to_owned(),
+        E::Probe(H::Protocol) => "guest-control activation protocol error".to_owned(),
+        E::Probe(H::StaleSession) => "guest-control stale session during activation".to_owned(),
+    }
+}
+
+fn guest_activation_failure_remediation(
+    error: &guest_control_health::GuestSystemActivationError,
+) -> GuestActivationFailureRemediation {
+    match error {
+        guest_control_health::GuestSystemActivationError::CapabilityUnavailable => {
+            GuestActivationFailureRemediation::UpgradeGuest
+        }
+        _ => GuestActivationFailureRemediation::GuestJournal,
+    }
+}
+
+fn guest_activation_error_is_indeterminate(
+    error: &guest_control_health::GuestSystemActivationError,
+) -> bool {
+    use nixling_contracts::guest_proto::GuestControlErrorKind as Kind;
+    matches!(
+        error,
+        guest_control_health::GuestSystemActivationError::Probe(
+            guest_control_health::GuestControlHealthError::TransportIo
+                | guest_control_health::GuestControlHealthError::Ttrpc
+                | guest_control_health::GuestControlHealthError::Timeout
+        ) | guest_control_health::GuestSystemActivationError::GuestRejected(
+            Kind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND
+                | Kind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE
+        )
+    )
+}
+
+fn guest_activation_error_is_not_found(
+    error: &guest_control_health::GuestSystemActivationError,
+) -> bool {
+    matches!(
+        error,
+        guest_control_health::GuestSystemActivationError::GuestRejected(
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND
+        )
+    )
+}
+
+fn run_guest_system_activation(
+    state: &ServerState,
+    params: Option<guest_control_bridge::ProbeParams>,
+    plan: GuestActivationPlan,
+) -> GuestActivationTerminal {
+    tracing::info!(
+        vm = %plan.vm,
+        mode = activation_mode_label(plan.mode),
+        activation_id = %plan.activation_id,
+        "starting guest-control system activation"
+    );
+    #[cfg(test)]
+    if let Some(hook) = test_guest_activation_hook_cell()
+        .lock()
+        .expect("guest activation hook")
+        .clone()
+    {
+        return hook(plan);
+    }
+
+    let Some(params) = params else {
+        return GuestActivationTerminal::DefinitiveFailure {
+            summary: "guest-control transport parameters unavailable".to_owned(),
+            remediation: GuestActivationFailureRemediation::UpgradeGuest,
+        };
+    };
+    let start = guest_control_health::GuestSystemActivationStart {
+        activation_id: plan.activation_id.clone(),
+        switch_script_path: plan.switch_script_path.clone(),
+        mode: activation_guest_mode(plan.mode),
+        timeout_ms: u64::try_from(GUEST_SYSTEM_ACTIVATION_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+    };
+    let started = match guest_control_bridge::run_activation_start_on_dedicated_thread(
+        params.clone(),
+        state.config.broker_socket_path.clone(),
+        start,
+        GUEST_SYSTEM_ACTIVATION_START_DEADLINE,
+    ) {
+        Ok(status) => status,
+        Err(error) => {
+            let summary = guest_activation_error_summary(&error);
+            return if guest_activation_error_is_indeterminate(&error) {
+                match rejoin_guest_activation_status(state, params, plan.activation_id.clone()) {
+                    GuestActivationTerminal::Indeterminate(detail) => {
+                        GuestActivationTerminal::Indeterminate(format!("{summary}; {detail}"))
+                    }
+                    terminal => terminal,
+                }
+            } else {
+                GuestActivationTerminal::DefinitiveFailure {
+                    summary,
+                    remediation: guest_activation_failure_remediation(&error),
+                }
+            };
+        }
+    };
+    if !matches!(
+        started.state,
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING
+            | pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED
+    ) {
+        return guest_activation_state_to_terminal(started);
+    }
+    if started.state == pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED {
+        return GuestActivationTerminal::Succeeded;
+    }
+
+    rejoin_guest_activation_status(state, params, plan.activation_id)
+}
+
+fn rejoin_guest_activation_status(
+    state: &ServerState,
+    params: guest_control_bridge::ProbeParams,
+    activation_id: String,
+) -> GuestActivationTerminal {
+    let deadline = Instant::now() + GUEST_SYSTEM_ACTIVATION_REJOIN_DEADLINE;
+    let mut consecutive_not_found = 0_u32;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return GuestActivationTerminal::Indeterminate(
+                "guest activation status deadline elapsed".to_owned(),
+            );
+        }
+        match guest_control_bridge::run_activation_status_on_dedicated_thread(
+            params.clone(),
+            state.config.broker_socket_path.clone(),
+            activation_id.clone(),
+            remaining.min(Duration::from_secs(15)),
+        ) {
+            Ok(status) => match status.state {
+                pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING => {
+                    consecutive_not_found = 0;
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                _ => return guest_activation_state_to_terminal(status),
+            },
+            Err(error) if guest_activation_error_is_indeterminate(&error) => {
+                if guest_activation_error_is_not_found(&error) {
+                    consecutive_not_found = consecutive_not_found.saturating_add(1);
+                    if consecutive_not_found >= 12 {
+                        return GuestActivationTerminal::Indeterminate(
+                            "guest activation was not found after reconnect; start RPC may not have reached guestd".to_owned(),
+                        );
+                    }
+                } else {
+                    consecutive_not_found = 0;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            Err(error) => {
+                return GuestActivationTerminal::DefinitiveFailure {
+                    summary: guest_activation_error_summary(&error),
+                    remediation: guest_activation_failure_remediation(&error),
+                };
+            }
+        }
+    }
+}
+
+fn guest_activation_state_to_terminal(
+    status: guest_control_health::GuestSystemActivationStatus,
+) -> GuestActivationTerminal {
+    match status.state {
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED => {
+            GuestActivationTerminal::Succeeded
+        }
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_FAILED => {
+            GuestActivationTerminal::DefinitiveFailure {
+                summary: format!(
+                    "guest activation failed (exit={:?}, signal={:?}, status={:?})",
+                    status.exit_code, status.signal, status.status_code
+                ),
+                remediation: GuestActivationFailureRemediation::GuestJournal,
+            }
+        }
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT => {
+            GuestActivationTerminal::DefinitiveFailure {
+                summary: "guest activation timed out".to_owned(),
+                remediation: GuestActivationFailureRemediation::GuestJournal,
+            }
+        }
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST
+        | pb::GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED
+        | pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING => {
+            GuestActivationTerminal::Indeterminate(format!(
+                "guest activation status is {}",
+                activation_state_label(status.state)
+            ))
+        }
+    }
+}
+
+fn activation_state_label(state: pb::GuestActivationState) -> &'static str {
+    match state {
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING => "running",
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED => "succeeded",
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_FAILED => "failed",
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT => "timed-out",
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST => "lost",
+        pb::GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED => "unspecified",
+    }
+}
+
 fn dispatch_broker_activation(
     state: &ServerState,
     request: public_wire::ActivationRequest,
     verb: &'static str,
     mode: BrokerActivationMode,
 ) -> Result<Value, TypedError> {
-    const OP_NAME: &str = "RunActivation";
-
     if let Some(response) = mutating_verb_preflight(verb, &request.flags, Some(request.vm.as_str()))
     {
         return Ok(response);
     }
 
-    match dispatch_broker_request(
+    if mode == BrokerActivationMode::Boot {
+        if !test_guest_activation_hook_installed() {
+            ensure_vm_runtime_capability(
+                state,
+                &request.vm,
+                RuntimeCapabilityGate::ConfigSync,
+                verb,
+            )?;
+        }
+        return dispatch_broker_activation_metadata_only(state, request, verb, mode);
+    }
+
+    dispatch_live_guest_activation(state, request, verb, mode)
+}
+
+fn dispatch_run_activation_phase(
+    state: &ServerState,
+    request: &public_wire::ActivationRequest,
+    verb: &'static str,
+    mode: BrokerActivationMode,
+    phase: BrokerActivationPhase,
+) -> Result<nixling_contracts::broker_wire::RunActivationResponse, Value> {
+    const OP_NAME: &str = "RunActivation";
+    let started = Instant::now();
+    let result = dispatch_broker_request(
         state,
         BrokerRequest::RunActivation(BrokerRunActivationRequest {
             bundle_activation_intent_ref: BundleOpId::new(intent_id_activation(&request.vm)),
             mode,
+            phase,
             vm: request.vm.clone(),
             tracing_span_id: None,
         }),
-    ) {
+    );
+    let metric_phase = match phase {
+        BrokerActivationPhase::Prepare => "prepare",
+        BrokerActivationPhase::Commit => "commit",
+        BrokerActivationPhase::MetadataOnly => "metadata-only",
+    };
+    match result {
         Ok(BrokerResponse::RunActivation(response)) => {
-            let generation_suffix = response
-                .generation_number
-                .map(|generation| format!(", generationNumber={generation}"))
-                .unwrap_or_default();
-            Ok(applied_response(
-                verb,
-                format!(
-                    "nixling {verb} --apply executed via the native daemon → broker path \
-                     (vm={}, mode={}, summary={}{})",
-                    response.vm,
-                    activation_mode_label(response.mode),
-                    response.summary,
-                    generation_suffix,
-                ),
-            ))
+            record_activation_phase_metric(state, metric_phase, mode, "success", started.elapsed());
+            Ok(response)
         }
         Ok(BrokerResponse::Error(error)) => {
+            record_activation_phase_metric(
+                state,
+                metric_phase,
+                mode,
+                "broker-error",
+                started.elapsed(),
+            );
             tracing::warn!(
                 broker_kind = %error.kind,
                 broker_operation = %error.operation,
@@ -13798,7 +14392,7 @@ fn dispatch_broker_activation(
                 error.target_wave.as_deref(),
                 &error.kind,
             );
-            Ok(broker_failure_response(
+            Err(broker_failure_response(
                 verb,
                 summary,
                 remediation,
@@ -13806,6 +14400,13 @@ fn dispatch_broker_activation(
             ))
         }
         Ok(other) => {
+            record_activation_phase_metric(
+                state,
+                metric_phase,
+                mode,
+                "protocol-error",
+                started.elapsed(),
+            );
             tracing::warn!(
                 op_name = OP_NAME,
                 broker_response_kind = %broker_response_kind(&other),
@@ -13813,26 +14414,289 @@ fn dispatch_broker_activation(
             );
             let (summary, remediation) =
                 redact_broker_error_for_launcher(OP_NAME, None, "Broker.Protocol");
-            Ok(broker_failure_response(verb, summary, remediation, None))
+            Err(broker_failure_response(verb, summary, remediation, None))
         }
         Err(error) => {
+            record_activation_phase_metric(
+                state,
+                metric_phase,
+                mode,
+                "dispatch-error",
+                started.elapsed(),
+            );
             tracing::warn!(op_name = OP_NAME, error = ?error, "broker dispatch failed");
             let (summary, remediation) = redact_broker_dispatch_failure_for_launcher(OP_NAME);
-            Ok(broker_failure_response(verb, summary, remediation, None))
+            Err(broker_failure_response(verb, summary, remediation, None))
         }
     }
+}
+
+fn dispatch_broker_activation_metadata_only(
+    state: &ServerState,
+    request: public_wire::ActivationRequest,
+    verb: &'static str,
+    mode: BrokerActivationMode,
+) -> Result<Value, TypedError> {
+    let response = match dispatch_run_activation_phase(
+        state,
+        &request,
+        verb,
+        mode,
+        BrokerActivationPhase::MetadataOnly,
+    ) {
+        Ok(response) => response,
+        Err(frame) => return Ok(frame),
+    };
+    let generation_suffix = response
+        .generation_number
+        .map(|generation| format!(", generationNumber={generation}"))
+        .unwrap_or_default();
+    Ok(applied_response(
+        verb,
+        format!(
+            "nixling {verb} --apply staged VM activation metadata only \
+             (vm={}, mode={}, summary={}{})",
+            response.vm,
+            activation_mode_label(response.mode),
+            response.summary,
+            generation_suffix,
+        ),
+    ))
+}
+
+fn dispatch_live_guest_activation(
+    state: &ServerState,
+    request: public_wire::ActivationRequest,
+    verb: &'static str,
+    mode: BrokerActivationMode,
+) -> Result<Value, TypedError> {
+    let _guard = match try_acquire_activation_lock(&request.vm) {
+        Ok(guard) => guard,
+        Err(frame) => return Ok(frame),
+    };
+
+    if !state
+        .pidfd_table
+        .still_alive_same_start_time(&request.vm, VM_RUNNER_ROLE_ID)
+    {
+        return Ok(invalid_request_response_with_summary(
+            verb,
+            format!(
+                "VM '{}' is stopped/offline; {verb} requires live guest activation",
+                request.vm
+            ),
+            format!(
+                "start the VM with `nixling vm start {} --apply` and retry `nixling {verb} {} --apply`; for offline next-boot staging use `nixling boot {} --apply`",
+                request.vm, request.vm, request.vm
+            ),
+        ));
+    }
+
+    if !test_guest_activation_hook_installed() {
+        ensure_vm_runtime_capability(state, &request.vm, RuntimeCapabilityGate::ConfigSync, verb)?;
+    }
+
+    let probe_params = if test_guest_activation_hook_installed() {
+        None
+    } else {
+        let resolver = load_bundle_resolver(state)?;
+        ensure_vm_runtime_capability(
+            state,
+            &request.vm,
+            RuntimeCapabilityGate::GuestControl,
+            verb,
+        )?;
+        match resolve_guest_control_probe_params(state, &resolver, &request.vm) {
+            Ok(params) => Some(params),
+            Err(detail) => {
+                tracing::warn!(
+                    vm = %request.vm,
+                    subsystem = "guest-control-activation",
+                    "guest-control activation: probe params unresolved: {detail}"
+                );
+                return Ok(invalid_request_response_with_summary(
+                    verb,
+                    format!(
+                        "guest-control activation for vm '{}' could not resolve guest-control transport",
+                        request.vm
+                    ),
+                    format!(
+                        "Admin: rebuild/start vm '{}' with guest-control enabled, then retry `nixling {verb} {} --apply`.",
+                        request.vm, request.vm
+                    ),
+                ));
+            }
+        }
+    };
+
+    let prepare = match dispatch_run_activation_phase(
+        state,
+        &request,
+        verb,
+        mode,
+        BrokerActivationPhase::Prepare,
+    ) {
+        Ok(response) => response,
+        Err(frame) => return Ok(frame),
+    };
+    let Some(switch_script_path) = prepare.guest_switch_script_path.clone() else {
+        return Ok(daemon_failure_response(
+            verb,
+            format!(
+                "RunActivation prepare for vm '{}' did not return a guest switch script path",
+                request.vm
+            ),
+        ));
+    };
+    let activation_id = generate_activation_id()?;
+    let mut marker = build_activation_marker(
+        &request.vm,
+        mode,
+        prepare.generation_number,
+        &activation_id,
+        &switch_script_path,
+        HostActivationMarkerState::Pending,
+    );
+    let marker_started = Instant::now();
+    match write_activation_marker(state, &marker) {
+        Ok(()) => {
+            record_activation_phase_metric(
+                state,
+                "marker-write",
+                mode,
+                "success",
+                marker_started.elapsed(),
+            );
+            record_activation_degraded_metric(state, &request.vm, true);
+        }
+        Err(error) => {
+            record_activation_phase_metric(
+                state,
+                "marker-write",
+                mode,
+                "failure",
+                marker_started.elapsed(),
+            );
+            return Err(error);
+        }
+    }
+
+    let guest_started = Instant::now();
+    let guest = run_guest_system_activation(
+        state,
+        probe_params,
+        GuestActivationPlan {
+            vm: request.vm.clone(),
+            mode,
+            activation_id: activation_id.clone(),
+            switch_script_path: switch_script_path.clone(),
+        },
+    );
+    match guest {
+        GuestActivationTerminal::Succeeded => {
+            record_activation_phase_metric(
+                state,
+                "guest",
+                mode,
+                "success",
+                guest_started.elapsed(),
+            );
+        }
+        GuestActivationTerminal::DefinitiveFailure {
+            summary,
+            remediation,
+        } => {
+            record_activation_phase_metric(
+                state,
+                "guest",
+                mode,
+                "failure",
+                guest_started.elapsed(),
+            );
+            clear_activation_marker(state, &request.vm);
+            record_activation_degraded_metric(state, &request.vm, false);
+            let remediation = match remediation {
+                GuestActivationFailureRemediation::GuestJournal => format!(
+                    "Inspect the guest journal for `nixling-activation-{}` and retry after fixing the guest activation failure.",
+                    activation_id
+                ),
+                GuestActivationFailureRemediation::UpgradeGuest => format!(
+                    "The running guest does not support in-guest activation. Use `nixling boot {} --apply`, then restart the VM with `nixling vm restart {} --apply` to boot the generation that includes the guest activation capability.",
+                    request.vm, request.vm
+                ),
+            };
+            return Ok(broker_failure_response(
+                verb,
+                format!("guest activation failed for vm '{}': {summary}", request.vm),
+                remediation,
+                None,
+            ));
+        }
+        GuestActivationTerminal::Indeterminate(summary) => {
+            record_activation_phase_metric(
+                state,
+                "guest",
+                mode,
+                "indeterminate",
+                guest_started.elapsed(),
+            );
+            marker.state = HostActivationMarkerState::Indeterminate;
+            marker.updated_unix_secs = now_unix_secs();
+            let _ = write_activation_marker(state, &marker);
+            record_activation_degraded_metric(state, &request.vm, true);
+            return Ok(broker_failure_response(
+                verb,
+                format!(
+                    "guest activation indeterminate for vm '{}': {summary}",
+                    request.vm
+                ),
+                format!(
+                    "The host kept an activation-pending marker for vm '{}'. Check `nixling status {}` and retry once guest-control is healthy; broker commit was not run.",
+                    request.vm, request.vm
+                ),
+                None,
+            ));
+        }
+    }
+
+    let commit = match dispatch_run_activation_phase(
+        state,
+        &request,
+        verb,
+        mode,
+        BrokerActivationPhase::Commit,
+    ) {
+        Ok(response) => response,
+        Err(frame) => {
+            marker.state = HostActivationMarkerState::Indeterminate;
+            marker.updated_unix_secs = now_unix_secs();
+            let _ = write_activation_marker(state, &marker);
+            record_activation_degraded_metric(state, &request.vm, true);
+            return Ok(frame);
+        }
+    };
+    clear_activation_marker(state, &request.vm);
+    record_activation_degraded_metric(state, &request.vm, false);
+    let generation_suffix = commit
+        .generation_number
+        .map(|generation| format!(", generationNumber={generation}"))
+        .unwrap_or_default();
+    Ok(applied_response(
+        verb,
+        format!(
+            "nixling {verb} --apply prepared the VM store view via the broker, ran activation inside the guest over guest-control, then committed metadata via the broker (vm={}, mode={}, summary={}{})",
+            commit.vm,
+            activation_mode_label(commit.mode),
+            commit.summary,
+            generation_suffix,
+        ),
+    ))
 }
 
 fn dispatch_broker_switch(
     state: &ServerState,
     request: public_wire::ActivationRequest,
 ) -> Result<Value, TypedError> {
-    ensure_vm_runtime_capability(
-        state,
-        &request.vm,
-        RuntimeCapabilityGate::ConfigSync,
-        "switch",
-    )?;
     dispatch_broker_activation(state, request, "switch", BrokerActivationMode::Switch)
 }
 
@@ -13840,12 +14704,6 @@ fn dispatch_broker_boot(
     state: &ServerState,
     request: public_wire::ActivationRequest,
 ) -> Result<Value, TypedError> {
-    ensure_vm_runtime_capability(
-        state,
-        &request.vm,
-        RuntimeCapabilityGate::ConfigSync,
-        "boot",
-    )?;
     dispatch_broker_activation(state, request, "boot", BrokerActivationMode::Boot)
 }
 
@@ -13853,12 +14711,6 @@ fn dispatch_broker_test(
     state: &ServerState,
     request: public_wire::ActivationRequest,
 ) -> Result<Value, TypedError> {
-    ensure_vm_runtime_capability(
-        state,
-        &request.vm,
-        RuntimeCapabilityGate::ConfigSync,
-        "test",
-    )?;
     dispatch_broker_activation(state, request, "test", BrokerActivationMode::Test)
 }
 
@@ -13866,12 +14718,6 @@ fn dispatch_broker_rollback(
     state: &ServerState,
     request: public_wire::ActivationRequest,
 ) -> Result<Value, TypedError> {
-    ensure_vm_runtime_capability(
-        state,
-        &request.vm,
-        RuntimeCapabilityGate::ConfigSync,
-        "rollback",
-    )?;
     dispatch_broker_activation(state, request, "rollback", BrokerActivationMode::Rollback)
 }
 
@@ -14433,8 +15279,32 @@ fn public_vm_lifecycle(
     };
 
     let running = lifecycle_state == "Running";
+    let activation_marker = read_activation_marker(state, vm);
+    if let Some(marker) = activation_marker.as_ref() {
+        record_activation_degraded_metric(state, vm, true);
+        tracing::warn!(
+            vm = %vm,
+            mode = %marker.mode,
+            activation_id = %marker.activation_id,
+            state = ?marker.state,
+            "status/list observed unresolved activation marker"
+        );
+    } else {
+        record_activation_degraded_metric(state, vm, false);
+    }
+    let degraded_reasons = activation_marker
+        .as_ref()
+        .map(|marker| {
+            vec![json!({
+                "reason": activation_marker_reason(marker),
+                "remediation": activation_marker_remediation(vm, marker),
+            })]
+        })
+        .unwrap_or_default();
 
     json!({
+        "degraded": !degraded_reasons.is_empty(),
+        "degradedReasons": degraded_reasons,
         "pendingRestart": running && public_pending_restart(manifest_entry),
         "state": lifecycle_state,
     })
@@ -17158,16 +18028,11 @@ mod runtime_acl_tests {
 
     use super::{RuntimeIdentity, bind_public_socket, validate_lock_parent};
 
-    fn scratch_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "nixlingd-runtime-acl-{}-{}-{}",
-            tag,
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or_default(),
-        ));
+    static SCRATCH_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn scratch_dir(_tag: &str) -> PathBuf {
+        let nonce = SCRATCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("nlr-{}-{nonce}", std::process::id()));
         fs::create_dir_all(&dir).expect("create scratch dir");
         dir
     }
@@ -18538,7 +19403,7 @@ mod broker_dispatch_tests {
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command};
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
     use std::time::{Duration, Instant};
     use std::{fs, thread};
 
@@ -18548,16 +19413,17 @@ mod broker_dispatch_tests {
     };
     use nix::unistd::close;
     use nixling_contracts::broker_wire::{
-        BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, ChildExitKind,
-        ChildExitStatus, ChildReapedNotification, DeregisterRunnerPidfdResponse,
-        PollChildReapedResponse, RunnerRole, RunnerSignal, SignalRunnerResponse,
-        SpawnRunnerResponse,
+        ActivationMode as BrokerActivationMode, ActivationPhase as BrokerActivationPhase,
+        BrokerCallerRole, BrokerErrorResponse, BrokerRequest, BrokerRequestEnvelope,
+        BrokerResponse, ChildExitKind, ChildExitStatus, ChildReapedNotification,
+        DeregisterRunnerPidfdResponse, PollChildReapedResponse, RunnerRole, RunnerSignal,
+        SignalRunnerResponse, SpawnRunnerResponse,
     };
     use nixling_contracts::guest_proto as pb;
     use nixling_contracts::public_wire::{
         ActivationRequest, GcRequest, HostDestroyRequest, HostInstallRequest, HostPrepareRequest,
         KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest, ShellCloseCause,
-        ShellName, ShellSessionState, TrustRequest, VmLifecycleRequest,
+        ShellName, ShellSessionState, StatusRequest, TrustRequest, VmLifecycleRequest,
     };
     use nixling_contracts::types::{RoleId, VmId};
     use nixling_core::processes::ProcessRole;
@@ -18574,21 +19440,24 @@ mod broker_dispatch_tests {
         parse_proc_stat_starttime,
     };
     use super::{
-        ArtifactPaths, DaemonConfig, PeerIdentity, PeerRole, ProviderGracefulInputs,
-        QemuBrokerShutdownProvider, ServerState, VM_RUNNER_ROLE_ID, VmShutdownOutcome,
-        VmStartNodeMode, adopt_orphaned_runners_on_startup_with, block_on_future, daemon_audit,
+        ArtifactPaths, DaemonConfig, HostActivationMarkerState, PeerIdentity, PeerRole,
+        ProviderGracefulInputs, QemuBrokerShutdownProvider, ServerState, VM_RUNNER_ROLE_ID,
+        VmShutdownOutcome, VmStartNodeMode, activation_marker_path,
+        adopt_orphaned_runners_on_startup_with, block_on_future, daemon_audit,
         dispatch_broker_boot, dispatch_broker_gc, dispatch_broker_host_destroy,
         dispatch_broker_host_prepare, dispatch_broker_keys_rotate, dispatch_broker_rollback,
         dispatch_broker_rotate_known_host, dispatch_broker_run_host_install,
         dispatch_broker_run_migrate, dispatch_broker_switch, dispatch_broker_test,
         dispatch_broker_trust, dispatch_broker_vm_restart, dispatch_broker_vm_start,
         dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout, dispatch_request,
-        force_shutdown_generation, map_shell_attach_response, map_shell_detach_response,
-        map_shell_kill_response, map_shell_list_response, note_force_shutdown_request,
-        prove_role_cgroup_empty_or_escalate, provider_shutdown,
-        redact_broker_dispatch_failure_for_launcher, redact_broker_error_for_launcher,
-        resolve_store_view_intent_for_vm, rollback_failed_vm_start, run_provider_graceful_shutdown,
-        stale_qemu_media_dependency_roles_from_entries, vm_start_node_mode,
+        dispatch_status, force_shutdown_generation, map_shell_attach_response,
+        map_shell_detach_response, map_shell_kill_response, map_shell_list_response,
+        note_force_shutdown_request, prove_role_cgroup_empty_or_escalate, provider_shutdown,
+        read_activation_marker, redact_broker_dispatch_failure_for_launcher,
+        redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
+        rollback_failed_vm_start, run_provider_graceful_shutdown,
+        stale_qemu_media_dependency_roles_from_entries, try_acquire_activation_lock,
+        vm_start_node_mode,
     };
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
@@ -18880,6 +19749,15 @@ mod broker_dispatch_tests {
                 }
             }),
         );
+        for path in [
+            &manifest_path,
+            &processes_path,
+            &bundle_path,
+            &privileges_path,
+        ] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o640))
+                .expect("chmod minimal bundle fixture");
+        }
 
         ArtifactPaths {
             bundle_path,
@@ -19073,6 +19951,15 @@ mod broker_dispatch_tests {
                 }
             }),
         );
+        for path in [
+            &manifest_path,
+            &processes_path,
+            &bundle_path,
+            &privileges_path,
+        ] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o640))
+                .expect("chmod custom bundle fixture");
+        }
 
         ArtifactPaths {
             bundle_path,
@@ -19177,6 +20064,52 @@ mod broker_dispatch_tests {
             fs::remove_file(&server_socket_path).ok();
         });
         (socket_path, join)
+    }
+
+    struct GuestActivationHookGuard;
+
+    impl Drop for GuestActivationHookGuard {
+        fn drop(&mut self) {
+            *super::test_guest_activation_hook_cell()
+                .lock()
+                .expect("guest activation hook") = None;
+        }
+    }
+
+    fn install_guest_activation_hook<F>(hook: F) -> GuestActivationHookGuard
+    where
+        F: Fn(super::GuestActivationPlan) -> super::GuestActivationTerminal + Send + Sync + 'static,
+    {
+        *super::test_guest_activation_hook_cell()
+            .lock()
+            .expect("guest activation hook") = Some(Arc::new(hook));
+        GuestActivationHookGuard
+    }
+
+    fn activation_test_serial() -> MutexGuard<'static, ()> {
+        static SERIAL: OnceLock<Mutex<()>> = OnceLock::new();
+        SERIAL
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn run_activation_response(
+        request: &nixling_contracts::broker_wire::RunActivationRequest,
+        summary: &str,
+    ) -> BrokerResponse {
+        BrokerResponse::RunActivation(nixling_contracts::broker_wire::RunActivationResponse {
+            mode: request.mode,
+            vm: request.vm.clone(),
+            generation_number: Some(42),
+            guest_switch_script_path: (request.phase
+                == nixling_contracts::broker_wire::ActivationPhase::Prepare)
+                .then(|| {
+                    "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-vm-a-system/bin/switch-to-configuration"
+                        .to_owned()
+                }),
+            summary: summary.to_owned(),
+        })
     }
 
     /// The production `BrokerSigner` must forward a `GuestControlSign`
@@ -19908,8 +20841,14 @@ mod broker_dispatch_tests {
 
     #[test]
     fn switch_broker_unreachable_returns_broker_error() {
+        let _serial = activation_test_serial();
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("switch-unreachable"));
+        let _runner = register_sleep_runner(&state, "vm-a", false);
+        let _hook =
+            install_guest_activation_hook(|_| panic!("unreachable broker must prevent guest"));
         let response = dispatch_broker_switch(
-            &test_state_with_broker_socket(unreachable_broker_socket_path("switch-unreachable")),
+            &state,
             ActivationRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
@@ -19940,8 +20879,14 @@ mod broker_dispatch_tests {
 
     #[test]
     fn test_broker_unreachable_returns_broker_error() {
+        let _serial = activation_test_serial();
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("test-unreachable"));
+        let _runner = register_sleep_runner(&state, "vm-a", false);
+        let _hook =
+            install_guest_activation_hook(|_| panic!("unreachable broker must prevent guest"));
         let response = dispatch_broker_test(
-            &test_state_with_broker_socket(unreachable_broker_socket_path("test-unreachable")),
+            &state,
             ActivationRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
@@ -19956,8 +20901,14 @@ mod broker_dispatch_tests {
 
     #[test]
     fn rollback_broker_unreachable_returns_broker_error() {
+        let _serial = activation_test_serial();
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("rollback-unreachable"));
+        let _runner = register_sleep_runner(&state, "vm-a", false);
+        let _hook =
+            install_guest_activation_hook(|_| panic!("unreachable broker must prevent guest"));
         let response = dispatch_broker_rollback(
-            &test_state_with_broker_socket(unreachable_broker_socket_path("rollback-unreachable")),
+            &state,
             ActivationRequest {
                 vm: "vm-a".to_owned(),
                 flags: MutationFlags {
@@ -19968,6 +20919,363 @@ mod broker_dispatch_tests {
         )
         .expect("rollback response");
         assert_unreachable_broker_response(response, "rollback", "RunActivation");
+    }
+
+    #[test]
+    fn activation_switch_sequences_prepare_guest_commit_and_clears_marker() {
+        let _serial = activation_test_serial();
+        let phases = Arc::new(Mutex::new(Vec::new()));
+        let phases_server = Arc::clone(&phases);
+        let (socket_path, broker) =
+            start_test_broker_server("activation-sequence", 2, move |_, env, fd| {
+                match env.request {
+                    BrokerRequest::RunActivation(request) => {
+                        phases_server.lock().unwrap().push(request.phase);
+                        assert_eq!(request.mode, BrokerActivationMode::Switch);
+                        write_test_json_frame(fd, &run_activation_response(&request, "ok"))
+                            .expect("write activation response");
+                    }
+                    other => panic!("unexpected broker request: {other:?}"),
+                }
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let _runner = register_sleep_runner(&state, "vm-a", false);
+        let guest_calls = Arc::new(Mutex::new(Vec::new()));
+        let guest_calls_hook = Arc::clone(&guest_calls);
+        let _hook = install_guest_activation_hook(move |plan| {
+            guest_calls_hook.lock().unwrap().push((
+                plan.vm.clone(),
+                plan.mode,
+                plan.switch_script_path.clone(),
+            ));
+            super::GuestActivationTerminal::Succeeded
+        });
+
+        let response = dispatch_broker_switch(
+            &state,
+            ActivationRequest {
+                vm: "vm-a".to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+            },
+        )
+        .expect("switch response");
+
+        assert_eq!(
+            response.get("outcome").and_then(Value::as_str),
+            Some("applied")
+        );
+        assert!(!activation_marker_path(&state, "vm-a").exists());
+        assert_eq!(
+            *phases.lock().unwrap(),
+            vec![
+                BrokerActivationPhase::Prepare,
+                BrokerActivationPhase::Commit
+            ]
+        );
+        assert_eq!(guest_calls.lock().unwrap().len(), 1);
+        assert!(
+            response
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("guest-control")
+        );
+        broker.join().expect("join broker");
+    }
+
+    #[test]
+    fn activation_guest_failure_prevents_commit_and_clears_marker() {
+        let _serial = activation_test_serial();
+        let (socket_path, broker) =
+            start_test_broker_server("activation-guest-failure", 1, move |_, env, fd| {
+                match env.request {
+                    BrokerRequest::RunActivation(request) => {
+                        assert_eq!(request.phase, BrokerActivationPhase::Prepare);
+                        write_test_json_frame(fd, &run_activation_response(&request, "prepared"))
+                            .expect("write prepare response");
+                    }
+                    other => panic!("unexpected broker request: {other:?}"),
+                }
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let _runner = register_sleep_runner(&state, "vm-a", false);
+        let _hook =
+            install_guest_activation_hook(|_| super::GuestActivationTerminal::DefinitiveFailure {
+                summary: "exit=1".to_owned(),
+                remediation: super::GuestActivationFailureRemediation::GuestJournal,
+            });
+
+        let response = dispatch_broker_test(
+            &state,
+            ActivationRequest {
+                vm: "vm-a".to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+            },
+        )
+        .expect("test response");
+
+        assert_eq!(
+            response.get("outcome").and_then(Value::as_str),
+            Some("broker-error")
+        );
+        assert!(!activation_marker_path(&state, "vm-a").exists());
+        broker.join().expect("join broker");
+    }
+
+    #[test]
+    fn activation_indeterminate_keeps_marker_and_status_degrades() {
+        let _serial = activation_test_serial();
+        let (socket_path, broker) =
+            start_test_broker_server("activation-indeterminate", 1, move |_, env, fd| {
+                match env.request {
+                    BrokerRequest::RunActivation(request) => {
+                        assert_eq!(request.phase, BrokerActivationPhase::Prepare);
+                        write_test_json_frame(fd, &run_activation_response(&request, "prepared"))
+                            .expect("write prepare response");
+                    }
+                    other => panic!("unexpected broker request: {other:?}"),
+                }
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let _runner = register_sleep_runner(&state, "vm-a", false);
+        let _hook = install_guest_activation_hook(|_| {
+            super::GuestActivationTerminal::Indeterminate("transport dropped".to_owned())
+        });
+
+        let response = dispatch_broker_rollback(
+            &state,
+            ActivationRequest {
+                vm: "vm-a".to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+            },
+        )
+        .expect("rollback response");
+
+        assert_eq!(
+            response.get("outcome").and_then(Value::as_str),
+            Some("broker-error")
+        );
+        let marker = read_activation_marker(&state, "vm-a").expect("marker kept");
+        assert_eq!(marker.state, HostActivationMarkerState::Indeterminate);
+        let status = dispatch_status(
+            &state,
+            StatusRequest {
+                check_bridges: false,
+                vm: Some("vm-a".to_owned()),
+            },
+        )
+        .expect("status");
+        assert_eq!(
+            status
+                .pointer("/status/entries/0/lifecycle/degraded")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            status
+                .pointer("/status/entries/0/lifecycle/degradedReasons/0/reason")
+                .and_then(Value::as_str),
+            Some("activation-indeterminate")
+        );
+        broker.join().expect("join broker");
+    }
+
+    #[test]
+    fn activation_prepare_failure_prevents_guest_start() {
+        let _serial = activation_test_serial();
+        let (socket_path, broker) =
+            start_test_broker_server("activation-prepare-failure", 1, move |_, env, fd| match env
+                .request
+            {
+                BrokerRequest::RunActivation(request) => {
+                    assert_eq!(request.phase, BrokerActivationPhase::Prepare);
+                    write_test_json_frame(
+                        fd,
+                        &BrokerResponse::Error(BrokerErrorResponse {
+                            kind: "Broker.LiveHandlerFailed".to_owned(),
+                            operation: "RunActivation".to_owned(),
+                            target_wave: None,
+                            message: "prepare failed".to_owned(),
+                            action: "fix".to_owned(),
+                        }),
+                    )
+                    .expect("write error");
+                }
+                other => panic!("unexpected broker request: {other:?}"),
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let _runner = register_sleep_runner(&state, "vm-a", false);
+        let called = Arc::new(Mutex::new(false));
+        let called_hook = Arc::clone(&called);
+        let _hook = install_guest_activation_hook(move |_| {
+            *called_hook.lock().unwrap() = true;
+            super::GuestActivationTerminal::Succeeded
+        });
+
+        let response = dispatch_broker_switch(
+            &state,
+            ActivationRequest {
+                vm: "vm-a".to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+            },
+        )
+        .expect("switch response");
+
+        assert_eq!(
+            response.get("outcome").and_then(Value::as_str),
+            Some("broker-error")
+        );
+        assert!(!*called.lock().unwrap());
+        broker.join().expect("join broker");
+    }
+
+    #[test]
+    fn activation_boot_is_metadata_only_and_does_not_call_guest() {
+        let _serial = activation_test_serial();
+        let (socket_path, broker) =
+            start_test_broker_server("activation-boot-metadata", 1, move |_, env, fd| {
+                match env.request {
+                    BrokerRequest::RunActivation(request) => {
+                        assert_eq!(request.mode, BrokerActivationMode::Boot);
+                        assert_eq!(request.phase, BrokerActivationPhase::MetadataOnly);
+                        write_test_json_frame(fd, &run_activation_response(&request, "metadata"))
+                            .expect("write metadata response");
+                    }
+                    other => panic!("unexpected broker request: {other:?}"),
+                }
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let _hook =
+            install_guest_activation_hook(|_| panic!("boot must not call guest activation"));
+
+        let response = dispatch_broker_boot(
+            &state,
+            ActivationRequest {
+                vm: "vm-a".to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+            },
+        )
+        .expect("boot response");
+
+        assert_eq!(
+            response.get("outcome").and_then(Value::as_str),
+            Some("applied")
+        );
+        assert!(
+            response
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("metadata only")
+        );
+        broker.join().expect("join broker");
+    }
+
+    #[test]
+    fn activation_stopped_vm_and_capability_missing_fail_closed() {
+        let _serial = activation_test_serial();
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("activation-stopped"));
+        let stopped = dispatch_broker_switch(
+            &state,
+            ActivationRequest {
+                vm: "vm-a".to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+            },
+        )
+        .expect("switch response");
+        assert_eq!(
+            stopped.get("outcome").and_then(Value::as_str),
+            Some("invalid-request")
+        );
+        assert!(
+            stopped
+                .get("remediation")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("nixling boot vm-a --apply")
+        );
+
+        let (socket_path, broker) = start_test_broker_server(
+            "activation-capability-missing",
+            1,
+            move |_, env, fd| match env.request {
+                BrokerRequest::RunActivation(request) => {
+                    assert_eq!(request.phase, BrokerActivationPhase::Prepare);
+                    write_test_json_frame(fd, &run_activation_response(&request, "prepared"))
+                        .expect("write prepare response");
+                }
+                other => panic!("unexpected broker request: {other:?}"),
+            },
+        );
+        let state = test_state_with_broker_socket(socket_path);
+        let _runner = register_sleep_runner(&state, "vm-a", false);
+        let _hook =
+            install_guest_activation_hook(|_| super::GuestActivationTerminal::DefinitiveFailure {
+                summary: "guest-control system activation capability unavailable".to_owned(),
+                remediation: super::GuestActivationFailureRemediation::UpgradeGuest,
+            });
+        let missing = dispatch_broker_switch(
+            &state,
+            ActivationRequest {
+                vm: "vm-a".to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+            },
+        )
+        .expect("switch response");
+        assert_eq!(
+            missing.get("outcome").and_then(Value::as_str),
+            Some("broker-error")
+        );
+        assert!(
+            missing
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("capability unavailable")
+        );
+        assert!(
+            missing
+                .get("remediation")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("nixling boot vm-a --apply")
+        );
+        broker.join().expect("join broker");
+    }
+
+    #[test]
+    fn activation_same_vm_lock_rejects_concurrent_request() {
+        let _serial = activation_test_serial();
+        let guard = try_acquire_activation_lock("vm-a").expect("first activation lock");
+        let second = try_acquire_activation_lock("vm-a");
+        assert!(second.is_err(), "second activation must be rejected");
+        drop(guard);
+        assert!(
+            try_acquire_activation_lock("vm-a").is_ok(),
+            "lock releases after guard drop"
+        );
     }
 
     #[test]

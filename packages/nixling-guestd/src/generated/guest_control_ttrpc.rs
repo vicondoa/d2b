@@ -188,6 +188,18 @@ impl GuestControlClient {
         ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "UsbipStatus", cres);
         Ok(cres)
     }
+
+    pub fn activate_system_start(&self, ctx: ttrpc::context::Context, req: &super::guest_control::GuestActivationStartRequest) -> ::ttrpc::Result<super::guest_control::GuestActivationStartResponse> {
+        let mut cres = super::guest_control::GuestActivationStartResponse::new();
+        ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "ActivateSystemStart", cres);
+        Ok(cres)
+    }
+
+    pub fn activate_system_status(&self, ctx: ttrpc::context::Context, req: &super::guest_control::GuestActivationStatusRequest) -> ::ttrpc::Result<super::guest_control::GuestActivationStatusResponse> {
+        let mut cres = super::guest_control::GuestActivationStatusResponse::new();
+        ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "ActivateSystemStatus", cres);
+        Ok(cres)
+    }
 }
 
 struct HelloMethod {
@@ -487,6 +499,28 @@ impl ::ttrpc::r#async::MethodHandler for UsbipStatusMethod {
     }
 }
 
+struct ActivateSystemStartMethod {
+    service: Arc<dyn GuestControl + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for ActivateSystemStartMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest_control, GuestActivationStartRequest, activate_system_start);
+    }
+}
+
+struct ActivateSystemStatusMethod {
+    service: Arc<dyn GuestControl + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for ActivateSystemStatusMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest_control, GuestActivationStatusRequest, activate_system_status);
+    }
+}
+
 #[async_trait]
 pub trait GuestControl: Sync {
     async fn hello(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::HelloRequest) -> ::ttrpc::Result<super::guest_control::HelloResponse> {
@@ -569,6 +603,12 @@ pub trait GuestControl: Sync {
     }
     async fn usbip_status(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::UsbipStatusRequest) -> ::ttrpc::Result<super::guest_control::UsbipStatusResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/UsbipStatus is not supported".to_string())))
+    }
+    async fn activate_system_start(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::GuestActivationStartRequest) -> ::ttrpc::Result<super::guest_control::GuestActivationStartResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/ActivateSystemStart is not supported".to_string())))
+    }
+    async fn activate_system_status(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::GuestActivationStatusRequest) -> ::ttrpc::Result<super::guest_control::GuestActivationStatusResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/ActivateSystemStatus is not supported".to_string())))
     }
 }
 
@@ -657,6 +697,12 @@ pub fn create_guest_control(service: Arc<dyn GuestControl + Send + Sync>) -> Has
 
     methods.insert("UsbipStatus".to_string(),
                     Box::new(UsbipStatusMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("ActivateSystemStart".to_string(),
+                    Box::new(ActivateSystemStartMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("ActivateSystemStatus".to_string(),
+                    Box::new(ActivateSystemStatusMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
 
     ret.insert("nixling.guest.v1.GuestControl".to_string(), ::ttrpc::r#async::Service{ methods, streams });
     ret
