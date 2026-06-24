@@ -69,6 +69,8 @@ deprecations ship one minor release before removal.
   systemd, polkit, route-preflight, or bash-CLI references.
 - Human `nixling status <vm>` output now labels daemon and runner state with
   daemon-owned terms instead of retired per-VM systemd template names.
+- Broker user-namespace sync-pipe creation and parent-side sync I/O now use safe
+  fd wrappers while preserving `O_CLOEXEC`, cleanup, and reap semantics.
 - Runtime capability projection for qemu-media list/status output now goes
   through focused helpers with direct regression coverage, preserving public JSON
   and human output shape.
