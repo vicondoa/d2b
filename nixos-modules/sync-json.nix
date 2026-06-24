@@ -140,7 +140,7 @@ let
     id = "lock:qemu-media-tap:${vm}";
     scope = "vm:${vm}";
     path = "tap:${cfg.manifest.${vm}.tap}";
-    owner = actor "broker" "nixling-priv-broker";
+    owner = actor "role" "role:${vm}:qemu-media";
     scopeClass = "vm";
     root = "kernel";
     normalizedPath = "tap/${cfg.manifest.${vm}.tap}";
@@ -163,19 +163,19 @@ let
       ];
       inheritancePolicy = "close-on-exec";
       fdPassingPolicy = fdNone;
-      acquireOrder = order "vm" "run" "locks/usbip/${busid}" id;
+      acquireOrder = order "host" "run" "run/nixling/locks/usbip/${busid}" id;
       timeoutPolicy = {
         kind = "fail-fast";
         timeoutMs = null;
       };
       stalePolicy = {
-        kind = "manual-recovery";
+        kind = "file-record-owner-match";
         degradedReason = "lock-owner-ambiguous";
       };
-      adoptionPolicy = "quarantine-on-ambiguity";
+      adoptionPolicy = "reacquire-after-proof";
       degradeScope = "vm";
       releaseAuthority = actor "broker" "nixling-priv-broker";
-      cloexecRequired = false;
+      cloexecRequired = true;
     };
 
   usbipLocks = lib.flatten (lib.mapAttrsToList

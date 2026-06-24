@@ -322,7 +322,7 @@ fn host_mutation_sources_are_registered_with_storage_or_sync_policy() {
 fn literal_nixling_tmpfiles_paths() -> BTreeSet<String> {
     let mut paths = BTreeSet::new();
     let rule_re = Regex::new(
-        r#"(?m)^\s*"?[a-zA-Z][!+=~^-]*\s+((?:/var/lib|/run|/etc)/nixling(?:/[^ "'\t\n]*)?)"#,
+        r#"(?m)^\s*"?[a-zA-Z][!+=~^-]*\s+((?:/var/lib|/var/cache|/run|/etc)/nixling(?:/[^ "'\t\n]*)?)"#,
     )
     .expect("tmpfiles path regex");
     for path in collect_repo_files("nixos-modules", "nix") {
@@ -370,6 +370,7 @@ fn rendered_storage_roots_or_static_fallback() -> BTreeSet<String> {
     BTreeSet::from([
         "/etc/nixling".to_owned(),
         "/run/nixling".to_owned(),
+        "/var/cache/nixling".to_owned(),
         "/var/lib/nixling".to_owned(),
     ])
 }
@@ -380,7 +381,7 @@ fn host_mutation_sources() -> BTreeSet<String> {
     )
     .expect("mutation context regex");
     let surface_re = Regex::new(
-        r"(/var/lib/nixling(?:/|\b)|/run/nixling(?:/|\b)|/etc/nixling(?:/|\b)|cfg\.site\.stateDir|cfg\.store\.stateDir|evidence_dir|\.lock|locks/)",
+        r"(/var/lib/nixling(?:/|\b)|/var/cache/nixling(?:/|\b)|/run/nixling(?:/|\b)|/etc/nixling(?:/|\b)|cfg\.site\.stateDir|cfg\.store\.stateDir|evidence_dir|\.lock|locks/)",
     )
     .expect("surface regex");
 

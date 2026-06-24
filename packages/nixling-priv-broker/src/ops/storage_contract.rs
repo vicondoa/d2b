@@ -23,7 +23,7 @@ pub enum StorageContractError {
     UnknownLock(String),
     Refused { subject: String, reason: String },
     Invalid { subject: String, detail: String },
-    Io { path: PathBuf, detail: String },
+    Io { path_hash: String, detail: String },
 }
 
 impl std::fmt::Display for StorageContractError {
@@ -33,7 +33,9 @@ impl std::fmt::Display for StorageContractError {
             Self::UnknownLock(id) => write!(f, "unknown lock contract id {id:?}"),
             Self::Refused { subject, reason } => write!(f, "{subject}: refused: {reason}"),
             Self::Invalid { subject, detail } => write!(f, "{subject}: invalid: {detail}"),
-            Self::Io { path, detail } => write!(f, "I/O error on {}: {detail}", path.display()),
+            Self::Io { path_hash, detail } => {
+                write!(f, "I/O error on storage-path#{path_hash}: {detail}")
+            }
         }
     }
 }
@@ -97,7 +99,7 @@ pub fn reconcile_storage_scope(
                     Some(gid.as_raw()),
                 )
                 .map_err(|err| StorageContractError::Io {
-                    path: path_buf.clone(),
+                    path_hash: stable_hash_str(path_buf.to_string_lossy().as_ref()),
                     detail: err.to_string(),
                 })?;
                 let status = match result {
@@ -236,17 +238,6 @@ fn validate_owned_root_against(
         });
     }
     Ok(())
-}
-
-fn owned_root_for(path: &Path) -> Option<&'static Path> {
-    [
-        Path::new("/etc/nixling"),
-        Path::new("/var/lib/nixling"),
-        Path::new("/run/nixling"),
-        Path::new("/var/cache/nixling"),
-    ]
-    .into_iter()
-    .find(|root| path.starts_with(root))
 }
 
 fn canonicalize_existing(path: &Path, subject: &str) -> Result<PathBuf, StorageContractError> {
@@ -389,10 +380,7 @@ mod tests {
 
     #[test]
     fn owned_roots_are_closed() {
-        assert_eq!(
-            owned_root_for(Path::new("/run/nixling")).unwrap(),
-            Path::new("/run/nixling")
-        );
+        assert!(validate_owned_root(Path::new("/run/nixling"), "x").is_ok());
         assert_refused_reason(
             validate_owned_root(Path::new("/var/lib/nixling/../../etc/malicious"), "x"),
             "storage-path-parent-dir-refused",

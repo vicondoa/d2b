@@ -232,7 +232,7 @@ EOF
         wlproxyRunDir = "/run/nixling-wlproxy/${name}";
       in
       lib.concatLists [
-      (tmpfilesDir "/var/lib/nixling/vms/${name}" "0750" "nixling-${name}-qemu-media" "nixling-${name}-qemu-media")
+      (tmpfilesDir "/var/lib/nixling/vms/${name}/qemu-media" "0750" "nixling-${name}-qemu-media" "nixling-${name}-qemu-media")
       (runtimeLeafDir vmRunDir "0750" "nixlingd" "nixling")
       (runtimeAclMask vmRunDir)
       (runtimeAclUser vmRunDir qemuMediaPrincipal "rwx")

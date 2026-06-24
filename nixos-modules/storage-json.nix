@@ -122,6 +122,18 @@ let
       creator = actor "nix-module" "tmpfiles";
     })
     (mkPath {
+      id = "path:cache-root";
+      scope = "host";
+      path = "/var/cache/nixling";
+      persistence = "persistent";
+      owner = principal "user" "root";
+      group = principal "group" "nixlingd";
+      mode = "0750";
+      creator = actor "nix-module" "tmpfiles";
+      cleanupPolicy = "never";
+      repairPolicy = "nix-activation";
+    })
+    (mkPath {
       id = "path:run-root";
       scope = "host";
       path = "/run/nixling";
@@ -160,8 +172,8 @@ let
       scope = "host";
       path = "${toString cfg.site.stateDir}/daemon-state";
       owner = principal "user" "root";
-      group = principal "group" "nixlingd";
-      mode = "0755";
+      group = principal "group" "nixling";
+      mode = "0750";
       creator = actor "nix-module" "tmpfiles";
       writers = [ (actor "daemon" "nixlingd") ];
       cleanupPolicy = "never";
@@ -173,7 +185,7 @@ let
       path = "/run/nixling/locks";
       lifecycle = "boot-scoped-readoptable";
       persistence = "boot-scoped";
-      owner = principal "user" "nixlingd";
+      owner = principal "user" "root";
       group = principal "group" "nixlingd";
       mode = "0700";
       creator = actor "nix-module" "tmpfiles";
@@ -347,8 +359,8 @@ let
       path = "${toString cfg.site.stateDir}/daemon-state/${file}";
       kind = "regular-file";
       owner = principal "user" "nixlingd";
-      group = principal "group" "nixlingd";
-      mode = "0644";
+      group = principal "group" "nixling";
+      mode = "0640";
       creator = actor "daemon" "nixlingd";
       writers = [ (actor "daemon" "nixlingd") ];
       readers = [
@@ -426,8 +438,8 @@ let
         scope = "vm:${name}";
         path = "${toString cfg.site.stateDir}/daemon-state/${name}";
         owner = principal "user" "nixlingd";
-        group = principal "group" "nixlingd";
-        mode = "0755";
+        group = principal "group" "nixling";
+        mode = "0750";
         creator = actor "daemon" "nixlingd";
         writers = [ (actor "daemon" "nixlingd") ];
         readers = [ (actor "daemon" "nixlingd") ];
@@ -441,8 +453,8 @@ let
         path = "${toString cfg.site.stateDir}/daemon-state/${name}/runtime.<role>.json";
         kind = "regular-file";
         owner = principal "user" "nixlingd";
-        group = principal "group" "nixlingd";
-        mode = "0644";
+        group = principal "group" "nixling";
+        mode = "0640";
         creator = actor "daemon" "nixlingd";
         writers = [ (actor "daemon" "nixlingd") ];
         readers = [ (actor "daemon" "nixlingd") ];
@@ -456,8 +468,8 @@ let
         path = "${toString cfg.site.stateDir}/daemon-state/${name}/api-ready.json";
         kind = "regular-file";
         owner = principal "user" "nixlingd";
-        group = principal "group" "nixlingd";
-        mode = "0644";
+        group = principal "group" "nixling";
+        mode = "0640";
         creator = actor "daemon" "nixlingd";
         writers = [ (actor "daemon" "nixlingd") ];
         readers = [
@@ -656,7 +668,7 @@ let
       (mkPath {
         id = "path:qemu-media-vm-state:${name}";
         scope = "vm:${name}";
-        path = "${toString cfg.store.stateDir}/${name}";
+        path = "${toString cfg.store.stateDir}/${name}/qemu-media";
         owner = principal "user" "nixling-${name}-qemu-media";
         group = principal "group" "nixling-${name}-qemu-media";
         mode = "0750";
@@ -709,10 +721,7 @@ let
         group = principal "group" "nixling-${name}-qemu-media";
         mode = "0660";
         creator = actor "role" "role:${name}:qemu-media";
-        writers = [
-          (actor "role" "role:${name}:qemu-media")
-          (actor "broker" "nixling-priv-broker")
-        ];
+        writers = [ (actor "broker" "nixling-priv-broker") ];
         readers = [
           (actor "broker" "nixling-priv-broker")
         ];
