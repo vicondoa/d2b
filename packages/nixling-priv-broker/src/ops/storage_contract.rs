@@ -226,11 +226,11 @@ fn validate_owned_root_against(
         .copied()
         .find(|root| path.starts_with(root))
         .ok_or_else(|| StorageContractError::Refused {
-        subject: subject.to_owned(),
-        reason: "storage-path-outside-owned-roots".to_owned(),
-    })?;
-    let canonical_root = canonicalize_existing(root, subject)?;
-    let canonical_target = canonicalize_existing_or_parent(path, subject)?;
+            subject: subject.to_owned(),
+            reason: "storage-path-outside-owned-roots".to_owned(),
+        })?;
+    let canonical_root = canonicalize_existing_or_nearest_ancestor(root, subject)?;
+    let canonical_target = canonicalize_existing_or_nearest_ancestor(path, subject)?;
     if !canonical_target.starts_with(&canonical_root) {
         return Err(StorageContractError::Refused {
             subject: subject.to_owned(),
@@ -240,41 +240,43 @@ fn validate_owned_root_against(
     Ok(())
 }
 
-fn canonicalize_existing(path: &Path, subject: &str) -> Result<PathBuf, StorageContractError> {
-    std::fs::canonicalize(path).map_err(|err| StorageContractError::Refused {
-        subject: subject.to_owned(),
-        reason: format!("storage-root-canonicalize-failed:{err}"),
-    })
-}
-
-fn canonicalize_existing_or_parent(
+fn canonicalize_existing_or_nearest_ancestor(
     path: &Path,
     subject: &str,
 ) -> Result<PathBuf, StorageContractError> {
-    match std::fs::canonicalize(path) {
-        Ok(path) => Ok(path),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            let parent = path.parent().ok_or_else(|| StorageContractError::Refused {
-                subject: subject.to_owned(),
-                reason: "storage-path-has-no-parent".to_owned(),
-            })?;
-            let canonical_parent =
-                std::fs::canonicalize(parent).map_err(|err| StorageContractError::Refused {
+    let mut current = path;
+    let mut missing_suffix = Vec::new();
+    loop {
+        match std::fs::canonicalize(current) {
+            Ok(canonical) => {
+                let mut resolved = canonical;
+                for component in missing_suffix.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                let leaf = current
+                    .file_name()
+                    .ok_or_else(|| StorageContractError::Refused {
+                        subject: subject.to_owned(),
+                        reason: "storage-path-has-no-leaf".to_owned(),
+                    })?;
+                missing_suffix.push(leaf.to_os_string());
+                current = current
+                    .parent()
+                    .ok_or_else(|| StorageContractError::Refused {
+                        subject: subject.to_owned(),
+                        reason: "storage-path-has-no-parent".to_owned(),
+                    })?;
+            }
+            Err(err) => {
+                return Err(StorageContractError::Refused {
                     subject: subject.to_owned(),
-                    reason: format!("storage-parent-canonicalize-failed:{err}"),
-                })?;
-            let leaf = path
-                .file_name()
-                .ok_or_else(|| StorageContractError::Refused {
-                    subject: subject.to_owned(),
-                    reason: "storage-path-has-no-leaf".to_owned(),
-                })?;
-            Ok(canonical_parent.join(leaf))
+                    reason: format!("storage-path-canonicalize-failed:{err}"),
+                });
+            }
         }
-        Err(err) => Err(StorageContractError::Refused {
-            subject: subject.to_owned(),
-            reason: format!("storage-path-canonicalize-failed:{err}"),
-        }),
     }
 }
 
@@ -440,12 +442,11 @@ mod tests {
             sync_with_lock(lock("lock:daemon", true, FdPassingMechanism::None, false)),
         );
 
-        let checked = reconcile_storage_scope(
-            &resolver,
-            &BundleOpId::new("path:external-grant"),
-            true,
-        )
-        .expect("external grant rows are check-only and do not validate as filesystem paths");
+        let checked =
+            reconcile_storage_scope(&resolver, &BundleOpId::new("path:external-grant"), true)
+                .expect(
+                    "external grant rows are check-only and do not validate as filesystem paths",
+                );
         assert_eq!(checked.status, StorageReconcileStatus::CheckedOnly);
         assert!(!checked.applied);
     }

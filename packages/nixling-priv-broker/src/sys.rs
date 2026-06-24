@@ -818,7 +818,8 @@ pub mod path_safe {
                 Err(err) => return Err(err),
             };
             let mut stage_file = File::from(stage_fd);
-            if let Err(err) = write_temp_file(&mut stage_file, contents, mode, owner_uid, owner_gid) {
+            if let Err(err) = write_temp_file(&mut stage_file, contents, mode, owner_uid, owner_gid)
+            {
                 drop(stage_file);
                 let _ = unlinkat_raw(dir_fd.as_raw_fd(), &stage_name);
                 return Err(err);
@@ -1188,16 +1189,14 @@ pub mod path_safe {
             owner_gid,
         ) {
             Ok(()) => Ok(()),
-            Err(err) if proc_link_fallback_allowed(&err) => {
-                atomic_replace_via_named_stage(
-                    dir_fd,
-                    target_name,
-                    contents,
-                    mode,
-                    owner_uid,
-                    owner_gid,
-                )
-            }
+            Err(err) if proc_link_fallback_allowed(&err) => atomic_replace_via_named_stage(
+                dir_fd,
+                target_name,
+                contents,
+                mode,
+                owner_uid,
+                owner_gid,
+            ),
             Err(err) => Err(err),
         }
     }

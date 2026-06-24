@@ -1988,24 +1988,19 @@ fn write_redacted_registry_index_at_path(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| MediaOpError::Registry("redacted-index-name-invalid".to_owned()))?;
-    let gid = Group::from_name("nixlingd")
-        .map_err(|err| MediaOpError::Registry(format!("resolve nixlingd group: {err}")))?
-        .map(|group| group.gid)
-        .ok_or_else(|| MediaOpError::Registry("nixlingd group missing".to_owned()))?;
     let owner_gid = if Uid::effective().is_root() {
+        let gid = Group::from_name("nixlingd")
+            .map_err(|err| MediaOpError::Registry(format!("resolve nixlingd group: {err}")))?
+            .map(|group| group.gid)
+            .ok_or_else(|| MediaOpError::Registry("nixlingd group missing".to_owned()))?;
         Some(gid.as_raw())
     } else {
         None
     };
     crate::sys::path_safe::atomic_replace_fd_with_owner(
-        &parent_fd,
-        name,
-        &bytes,
-        0o640,
-        None,
-        owner_gid,
+        &parent_fd, name, &bytes, 0o640, None, owner_gid,
     )
-        .map_err(|err| MediaOpError::Registry(err.to_string()))
+    .map_err(|err| MediaOpError::Registry(err.to_string()))
 }
 
 fn qemu_media_identity_hash(by_id_names: &[String]) -> String {
