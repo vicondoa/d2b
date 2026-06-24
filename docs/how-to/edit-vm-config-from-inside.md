@@ -42,7 +42,7 @@ nixling.vms.work.guestConfigFile = ./vms/work.guest.nix;
 }
 ```
 
-Rebuild the host once (`nixling switch work`). The guest now carries:
+Rebuild the host once (`nixling switch work --apply`). The guest now carries:
 
 - `/etc/nixling/guest-config.nix` — a **read-only** copy of the current
   approved guest config (always reflects what's live).
@@ -118,7 +118,7 @@ When `ssh.user` is unset the working copy is owned by `root`.
 5. **Build + activate.**
 
    ```bash
-   nixling switch work
+   nixling switch work --apply
    ```
 
    The `guestConfigFile` containment assertion runs during this eval —
@@ -128,14 +128,14 @@ When `ssh.user` is unset the working copy is owned by `root`.
 ## You can also build on the host
 
 Nothing forces the in-VM loop. Editing `./vms/work.guest.nix` directly
-on the host and running `nixling switch work` works exactly the same —
+on the host and running `nixling switch work --apply` works exactly the same —
 the same file, the same containment. The in-VM loop is just an
 ergonomic way to iterate from inside the workspace.
 
 ## Status
 
 `nixling config status --all` lists VMs with a pending (un-approved)
-staged config. `nixling status` and `nixling up` / `start` also print a
+staged config. `nixling status` and `nixling vm start` also print a
 note when a VM has a pending edit (human output only), so an in-progress
 edit isn't silently forgotten before you approve it.
 

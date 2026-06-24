@@ -266,15 +266,15 @@ Concretely:
 nixling list
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # personal-app       personal  false     false false   10.30.0.10      stopped
-# sys-personal-net   personal  false     false false   192.0.2.6       systemd (net-vm)
-# sys-work-net       work      false     false false   192.0.2.2       systemd (net-vm)
+# sys-personal-net   personal  false     false false   192.0.2.6       running (net-vm)
+# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
 # work-app           work      false     false false   10.20.0.10      stopped
 
 nixling status
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # personal-app       personal  false     false false   10.30.0.10      stopped
-# sys-personal-net   personal  false     false false   192.0.2.6       systemd (net-vm)
-# sys-work-net       work      false     false false   192.0.2.2       systemd (net-vm)
+# sys-personal-net   personal  false     false false   192.0.2.6       running (net-vm)
+# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
 # work-app           work      false     false false   10.20.0.10      stopped
 #
 # === Bridge health ===
@@ -284,9 +284,9 @@ nixling status
 # br-work-up           UP         up      UP           ok
 # br-work-lan          NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
 
-# Net VMs (`sys-<env>-net`) show STATUS=`systemd (net-vm)` — they
-# are framework-managed and `autostart = true` by construction in
-# `nixos-modules/network.nix`. Workload VMs default to `stopped`
+# Net VMs (`sys-<env>-net`) show STATUS=`running (net-vm)` after
+# activation. They are framework-managed and `autostart = true` by
+# construction in `nixos-modules/network.nix`. Workload VMs default to `stopped`
 # until you `nixling vm start <vm> --apply` (or set `autostart = true` per-VM).
 
 nixling vm start work-app --apply
@@ -302,34 +302,25 @@ ssh -i /var/lib/nixling/keys/work-app_ed25519 alice@10.20.0.10 \
 
 ## Troubleshooting
 
-### `nixling@<vm>.service` won't start; `nixling-net-route-preflight.service` failed
+### A VM start reports host route or CIDR drift
 
-The route preflight oneshot probes each env's workload IP and
-refuses to let any nixling VM start if a host route resolves via
-the wrong device (i.e. not the env's expected `br-<env>-up`
-uplink bridge). The unit is `Type=oneshot`, ordered before every
-`nixling@<vm>.service` via `requiredBy`/`before`, and on failure
-its stderr names the offending env. Common causes:
+`nixlingd` owns the per-VM lifecycle DAG, and the broker owns host
+network mutations. There is no per-VM systemd template or route-preflight
+singleton to restart. If a start/status/host-check path reports that an
+env workload route resolves through the wrong device (instead of the
+expected `br-<env>-up` uplink bridge), common causes are:
 
 - **Stale `ip route` entry from a previous config** that conflicts
   with the env's uplink. Inspect with
   `ip route show table all | grep -E '10\.(20|30)\.'`. Delete
-  stragglers with `sudo ip route del <route>` and then
-  `systemctl reset-failed nixling-net-route-preflight`.
+  stragglers with `sudo ip route del <route>`, then re-run
+  `nixling host check` or the VM start command.
 - **Chosen env CIDR overlaps a route the host already owns**
   (Tailscale subnet, WireGuard, VPN-pushed route). Pick a disjoint
   CIDR or unset the conflicting route source.
 - **Bridge `br-<env>-up` not present** — typically a botched
-  rebuild. Re-run `sudo nixos-rebuild switch` and watch
-  `systemd-networkd` logs for the bridge.
-
-The preflight's exact error format is:
-
-```
-nixling-net-route-preflight: ERROR env '<env>' workload IP <x.y.z.10> resolves via:
-  <ip-route-output>
-  expected dev br-<env>-up; check for stale routes / CIDR overlaps.
-```
+  rebuild. Re-run `sudo nixos-rebuild switch`, restart `nixlingd` if the
+  switch replaced it, and inspect `systemd-networkd` logs for the bridge.
 
 ## Common gotchas
 
@@ -344,8 +335,8 @@ nixling-net-route-preflight: ERROR env '<env>' workload IP <x.y.z.10> resolves v
   This is the entire point of multi-env.
 - **The host CAN reach both LANs** via the static routes
   `network.nix` installs (`10.20.0.0/24 via 192.0.2.2` and
-  `10.30.0.0/24 via 192.0.2.6`). If `nixling-net-route-preflight`
-  trips, this is the chain that broke.
+  `10.30.0.0/24 via 192.0.2.6`). If host route diagnostics fail,
+  this is the chain that broke.
 - **USBIP backend port assignment is alphabetical.** Adding a new
   env that sorts before `personal` shifts the backend ports
   underneath; the uplink-side `<host-uplink-ip>:3240` bind is
@@ -364,12 +355,12 @@ nixling-net-route-preflight: ERROR env '<env>' workload IP <x.y.z.10> resolves v
 
 ## After subsequent rebuilds
 
-Every per-VM lifecycle service in the framework carries
-`restartIfChanged = false`, so a `nixos-rebuild switch` updates
-unit files but does NOT cycle running VMs. After rebuilding,
-`nixling list` flags any VM whose declared closure has drifted
-from the running one as `[pending restart]`; apply with
-`nixling vm restart <vm> --apply`. See
+`nixos-rebuild switch` updates the declared nixling bundle and may
+restart `nixlingd`, but daemon restarts are continuation events:
+running VM runners are re-adopted rather than cycled. After rebuilding,
+`nixling list` flags any VM whose declared closure has drifted from the
+running one as `[pending restart]`; apply with `nixling vm restart
+<vm> --apply`. See
 [`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)
@@ -403,7 +394,6 @@ What the variant changes on top of `configuration.nix`:
 | Key                                         | Value                | Why                                                          |
 |---------------------------------------------|----------------------|--------------------------------------------------------------|
 | `nixling.site.allowUnsafeEastWest`          | `true`               | Site-level acknowledgement: this host accepts relaxed east-west isolation for envs that opt in. |
-| `nixling.daemonExperimental.enable`         | `true`               | Set for historical compatibility. In v1.1 this is an obsolete always-on gate (the daemon is the only supervisor); leaving it `true` is a no-op. |
 | `nixling.envs.work.mtu`                     | `1400`               | Reference for a tunneled uplink. Propagates to host bridges, TAPs, the workload guest NIC, and the net VM's NICs (see `net.nix`). |
 | `nixling.envs.work.mssClamp`                | `true`               | Adds the TCP MSS clamp rule on the net VM's nftables forward chain; the emitted `host.json` records the resolved MSS value (`mtu - 40` = `1360` here). |
 | `nixling.envs.work.lan.allowEastWest`       | `true`               | First half of the east-west double opt-in. By itself does nothing; pairs with `site.allowUnsafeEastWest`. |
@@ -456,7 +446,7 @@ Daemon-supervised VMs:
 
 - are NOT wired into `multi-user.target.wants` even when
   `autostart = true` (the NixOS module emits no per-VM
-  `nixling@<vm>` autostart unit at all);
+  autostart template unit at all);
 - do NOT surface a per-node systemd `unit` in the emitted
   `processes.json` (single-writer invariant — the daemon owns
   lifecycle via pidfd, so the bundle never points a systemd unit at a
@@ -464,9 +454,8 @@ Daemon-supervised VMs:
 - produce the env-level `host.json` network state and per-VM
   `closures/<vm>.json` artifacts the daemon needs at reconcile time.
 
-There are no framework-declared `nixling@<vm>.service` /
-`microvm@<vm>.service` template instances; the legacy systemd-template
-path was retired in v1.1.
+There are no framework-declared per-VM template instances; the legacy
+systemd-template path was retired in v1.1.
 
 ### Where the host reconcile lives
 
@@ -495,8 +484,8 @@ The dedicated Layer-1 nix-unit case
 [`tests/unit/nix/cases/multi-env-daemon-backed.nix`](../../tests/unit/nix/cases/multi-env-daemon-backed.nix)
 asserts the env-level propagation, the `bridgePortFlags`
 double-opt-in, and that the daemon-supervised VMs surface no
-`microvm@<vm>` / `nixling@<vm>` systemd unit references in the emitted
-`vms.json` / `processes.json`.
+per-VM systemd unit references in the emitted `vms.json` /
+`processes.json`.
 
 > **Note on the in-tree path** — the version of `flake.nix` checked
 > into this directory uses `nixling.url = "path:../..";` so the

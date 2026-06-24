@@ -99,26 +99,24 @@ at `/var/lib/nixling/keys/corp-vm_ed25519`.
 nixling list       # corp-vm + sys-work-net
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # corp-vm            work      false     false false   10.20.0.10      stopped
-# sys-work-net       work      false     false false   192.0.2.2       systemd (net-vm)
+# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
 
 nixling status     # same table + a "=== Bridge health ===" footer
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # corp-vm            work      false     false false   10.20.0.10      stopped
-# sys-work-net       work      false     false false   192.0.2.2       systemd (net-vm)
+# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
 #
 # === Bridge health ===
 # BRIDGE               STATE      ADMIN   EXPECTED     RESULT
 # br-work-up           UP         up      UP           ok
 # br-work-lan          NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
 
-# STATUS values: `systemd` = autostarted via `nixling@<vm>.service`
-# (always for net VMs, optional for workload VMs that set
-# `autostart = true`). `interactive` = launched via `nixling up`
-# from a Plasma terminal (typical for graphics VMs). `stopped` =
-# not running.
-nixling up corp-vm                 # boot it
+# STATUS values: `running` = supervised by nixlingd with a live runner;
+# `running (net-vm)` marks the auto-declared per-env net VM; `stopped`
+# = no live runner.
+nixling vm start corp-vm --apply   # boot it
 ssh -i /var/lib/nixling/keys/corp-vm_ed25519 alice@10.20.0.10 hostname
-nixling down corp-vm
+nixling vm stop corp-vm --apply
 ```
 
 `sys-work-net` (and every per-env net VM) is `autostart = true` by
@@ -128,19 +126,19 @@ autostarted unless you flip `nixling.vms.<vm>.autostart = true`.
 
 ### After every subsequent rebuild
 
-Every per-VM lifecycle service carries `restartIfChanged = false`,
-so a `nixos-rebuild switch` updates unit files but does NOT cycle
-running VMs (this protects in-flight session state). After
-rebuilding, check whether any VM has pending changes:
+`nixos-rebuild switch` updates the declared nixling bundle and may
+restart `nixlingd`, but daemon restarts are continuation events:
+running VM runners are re-adopted rather than cycled. After rebuilding,
+check whether any VM has pending changes:
 
 ```bash
 nixling list
-# … STATUS column shows `systemd [pending restart]` for VMs whose
+# ... STATUS column shows `running [pending restart]` for VMs whose
 # `current` closure differs from `booted` while they're running.
 
-nixling restart <vm>               # apply pending unit-file changes
+nixling vm restart <vm> --apply    # apply the new declared VM closure
 # or
-nixling switch <vm>                # full per-VM closure rebuild + live activation
+nixling switch <vm> --apply        # full per-VM closure rebuild + live activation
 ```
 
 `nixling status <vm>` (per-VM view) reports `pending-restart: yes/no`

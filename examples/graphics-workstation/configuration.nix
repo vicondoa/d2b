@@ -80,9 +80,8 @@
     # Required for any VM with graphics.enable or audio.enable.
     waylandUser = "alice";
 
-    # Members of `nixling` get a polkit grant on the
-    # framework's own systemd units; without this, `nixling vm start`
-    # would prompt for sudo every time.
+    # Members of `nixling` can call the daemon public socket for
+    # lifecycle operations such as `nixling vm start`.
     launcherUsers = [ "alice" ];
 
     # Install host-side YubiKey support (Yubico udev rules; the
