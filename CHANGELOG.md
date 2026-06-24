@@ -37,7 +37,7 @@ deprecations ship one minor release before removal.
 - `UsbipExplicitBind` and `UsbipExplicitFirewallRule` broker wire ops carry raw
   busid, vm, env, and per-env uplink IPs for the per-device backend model;
   validated by the same busid shape validator as the declared path.
-- 33 new focused Rust tests: 8 Phase 4 unit tests in `usbip_state_machine`, and
+- 33 new focused Rust tests: 8 focused unit tests in `usbip_state_machine`, and
   15 contract tests in `usbip_explicit_attach_contract` covering explicit plan
   shape, claim source enum, lock path derivation, broker op round-trips,
   deny-unknown-fields, per-device backend model policy, firewall env scope, sysfs

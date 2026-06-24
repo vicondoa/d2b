@@ -142,7 +142,7 @@ pub enum BrokerRequest {
     UsbipBindFirewallRule(UsbipBindFirewallRuleRequest),
     UsbipProxyReconcile(UsbipProxyReconcileRequest),
     UsbipUnbind(UsbipUnbindRequest),
-    /// Phase 4 explicit-attach: bind a present sysfs busid for a USB-capable VM
+    /// Explicit-attach: bind a present sysfs busid for a USB-capable VM
     /// without requiring static bundle firewall/bind intent refs.
     ///
     /// The daemon has already validated: (1) the busid is present in sysfs,
@@ -153,7 +153,7 @@ pub enum BrokerRequest {
     /// Currently a typed stub (`Unimplemented`) — the live handler wires the
     /// per-device backend path without restarting shared per-env backends.
     UsbipExplicitBind(UsbipExplicitBindRequest),
-    /// Phase 4 explicit-attach: install a per-busid nftables carve-out scoped
+    /// Explicit-attach: install a per-busid nftables carve-out scoped
     /// to the target VM's env bridge (not the full per-env USBIP table entry).
     ///
     /// Carries the daemon-validated env bridge identity so the broker can build
@@ -1285,7 +1285,7 @@ pub struct UsbipUnbindRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// Phase 4 explicit-attach: bind a present sysfs busid for a USB-capable VM
+/// Explicit-attach: bind a present sysfs busid for a USB-capable VM
 /// without a bundle intent ref. The daemon has already completed:
 ///  1. sysfs busid presence check (fail-closed if device absent),
 ///  2. USB-capable gate (`runtime.capabilities.usbHotplug`),
@@ -1306,7 +1306,7 @@ pub struct UsbipExplicitBindRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// Phase 4 explicit-attach: install a per-busid nftables carve-out scoped
+/// Explicit-attach: install a per-busid nftables carve-out scoped
 /// to the target VM's env bridge. The broker builds the scoped
 /// `inet nixling` input rule from `host_uplink_ip` (the env bridge
 /// side) and `net_uplink_ip` (the net-VM uplink) so the carve-out is

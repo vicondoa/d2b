@@ -710,7 +710,7 @@ the requested busid. Three fail-closed checks run before any broker call:
 The explicit path dispatches `UsbipExplicitFirewallRule` (env-scoped nftables
 rule keyed on the per-env uplink IPs) and `UsbipExplicitBind` (per-device backend
 setup). Both ops are currently typed stubs; the live per-device backend handler
-lands in a subsequent phase. The declared path (static bundle intents) is
+is deferred to later implementation. The declared path (static bundle intents) is
 unaffected.
 
 **Status**

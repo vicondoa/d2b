@@ -3569,7 +3569,7 @@ fn dispatch_broker_usbip_bind(
         return Ok(response);
     }
 
-    // Phase 4 fail-closed pre-flight checks for explicit attach:
+    // Fail-closed pre-flight checks for explicit attach:
     //  1. Sysfs presence: reject if the device is not physically present.
     //  2. Active claim exclusivity: reject if another VM already holds this busid.
     // Both checks run before any broker call or firewall mutation.
@@ -3724,7 +3724,7 @@ fn validate_usbip_bus_id_for_daemon(verb: &str, bus_id: &str) -> Result<(), Valu
 /// `idVendor` attribute file is readable (device physically present),
 /// or `Err(TypedError::UsbipBusidNotPresent)` if absent (fail-closed gate).
 ///
-/// This is the fail-closed sysfs presence check for Phase 4 explicit attach:
+/// This is the fail-closed sysfs presence check for explicit attach:
 /// reject before any broker call or firewall mutation if the device is absent.
 fn check_sysfs_busid_present(busid: &str, verb: &str) -> Result<(), TypedError> {
     let sysfs_path = format!("/sys/bus/usb/devices/{busid}/idVendor");

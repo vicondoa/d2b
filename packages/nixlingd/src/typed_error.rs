@@ -490,7 +490,7 @@ pub enum TypedError {
         step: crate::usbip_state_machine::UsbipBusidStep,
         reason: String,
     },
-    /// Phase 4 explicit-attach: the requested busid is not present in
+    /// Explicit-attach: the requested busid is not present in
     /// `/sys/bus/usb/devices/`. Sysfs presence is the fail-closed gate
     /// for explicit attach; absent busids are rejected before any broker
     /// call or firewall mutation. Exit code 67 (same as other USB errors).
@@ -498,7 +498,7 @@ pub enum TypedError {
         busid: String,
         verb: String,
     },
-    /// Phase 4 explicit-attach: another active daemon claim already holds
+    /// Explicit-attach: another active daemon claim already holds
     /// the exclusive OFD lock for the requested busid. The daemon
     /// reads the lock file before any broker call and rejects the
     /// conflicting explicit attach fail-closed. Exit code 67.
@@ -668,7 +668,7 @@ impl TypedError {
             // (64), otel-bridge (65), or net-route-degraded (66)
             // adjacent surfaces.
             Self::UsbipStepFailed { .. } => 67,
-            // Phase 4 explicit-attach pre-flight rejections use exit code 67
+            // Explicit-attach pre-flight rejections use exit code 67
             // (same class as other USB errors) so operators can correlate them
             // to the USBIP surface.
             Self::UsbipBusidNotPresent { .. } => 67,

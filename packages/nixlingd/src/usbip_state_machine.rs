@@ -706,7 +706,7 @@ mod tests {
         assert!(env.remediation.contains("1-2"));
     }
 
-    // ---- Phase 4 explicit-attach plan tests ----
+    // ---- Explicit-attach plan tests ----
 
     #[test]
     fn explicit_plan_does_not_require_bundle_intents() {

@@ -1588,7 +1588,7 @@
           }
         },
         {
-          "description": "Phase 4 explicit-attach: bind a present sysfs busid for a USB-capable VM without requiring static bundle firewall/bind intent refs.\n\nThe daemon has already validated: (1) the busid is present in sysfs, (2) the target VM has `runtime.capabilities.usbHotplug = true`, (3) no other active claim holds this busid. The broker validates the busid shape, acquires the per-busid OFD lock, and runs the `usbip bind` helper.\n\nCurrently a typed stub (`Unimplemented`) — the live handler wires the per-device backend path without restarting shared per-env backends.",
+          "description": "Explicit-attach: bind a present sysfs busid for a USB-capable VM without requiring static bundle firewall/bind intent refs.\n\nThe daemon has already validated: (1) the busid is present in sysfs, (2) the target VM has `runtime.capabilities.usbHotplug = true`, (3) no other active claim holds this busid. The broker validates the busid shape, acquires the per-busid OFD lock, and runs the `usbip bind` helper.\n\nCurrently a typed stub (`Unimplemented`) — the live handler wires the per-device backend path without restarting shared per-env backends.",
           "type": "object",
           "required": [
             "kind",
@@ -1607,7 +1607,7 @@
           }
         },
         {
-          "description": "Phase 4 explicit-attach: install a per-busid nftables carve-out scoped to the target VM's env bridge (not the full per-env USBIP table entry).\n\nCarries the daemon-validated env bridge identity so the broker can build the scoped `inet nixling` rule without a bundle firewall intent ref.\n\nCurrently a typed stub (`Unimplemented`).",
+          "description": "Explicit-attach: install a per-busid nftables carve-out scoped to the target VM's env bridge (not the full per-env USBIP table entry).\n\nCarries the daemon-validated env bridge identity so the broker can build the scoped `inet nixling` rule without a bundle firewall intent ref.\n\nCurrently a typed stub (`Unimplemented`).",
           "type": "object",
           "required": [
             "kind",
@@ -9477,7 +9477,7 @@
       "additionalProperties": false
     },
     "UsbipExplicitBindRequest": {
-      "description": "Phase 4 explicit-attach: bind a present sysfs busid for a USB-capable VM without a bundle intent ref. The daemon has already completed: 1. sysfs busid presence check (fail-closed if device absent), 2. USB-capable gate (`runtime.capabilities.usbHotplug`), 3. active-claim exclusivity check (OFD lock read).\n\nThe broker acquires the per-busid OFD lock, runs `usbip bind`, and spawns a per-device backend (not the shared per-env backend).",
+      "description": "Explicit-attach: bind a present sysfs busid for a USB-capable VM without a bundle intent ref. The daemon has already completed: 1. sysfs busid presence check (fail-closed if device absent), 2. USB-capable gate (`runtime.capabilities.usbHotplug`), 3. active-claim exclusivity check (OFD lock read).\n\nThe broker acquires the per-busid OFD lock, runs `usbip bind`, and spawns a per-device backend (not the shared per-env backend).",
       "type": "object",
       "required": [
         "busId",
@@ -9508,7 +9508,7 @@
       "additionalProperties": false
     },
     "UsbipExplicitFirewallRuleRequest": {
-      "description": "Phase 4 explicit-attach: install a per-busid nftables carve-out scoped to the target VM's env bridge. The broker builds the scoped `inet nixling` input rule from `host_uplink_ip` (the env bridge side) and `net_uplink_ip` (the net-VM uplink) so the carve-out is strictly limited to traffic from the owner env's net VM.",
+      "description": "Explicit-attach: install a per-busid nftables carve-out scoped to the target VM's env bridge. The broker builds the scoped `inet nixling` input rule from `host_uplink_ip` (the env bridge side) and `net_uplink_ip` (the net-VM uplink) so the carve-out is strictly limited to traffic from the owner env's net VM.",
       "type": "object",
       "required": [
         "busId",

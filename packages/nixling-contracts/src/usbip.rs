@@ -1,10 +1,10 @@
-//! Shared USBIP wire validation helpers and Phase 4 explicit-attach DTOs.
+//! Shared USBIP wire validation helpers and explicit-attach DTOs.
 //!
 //! Bus IDs cross the CLI, daemon, broker, and guest-control boundary. Keep the
 //! shape check here so every layer rejects the same traversal-/shell-unsafe
 //! strings before they reach a subprocess argv.
 //!
-//! # Phase 4 explicit-attach model
+//! # Explicit-attach model
 //!
 //! `nixling usb attach <vm> <present-busid> --apply` allows any present USB
 //! device to a USB-capable VM without requiring static busid/vendor allowlists
@@ -85,7 +85,7 @@ pub fn validate_bus_id(bus_id: &str) -> Result<(), BusIdError> {
     }
 }
 
-// ---- Phase 4 explicit-attach claim DTOs ----
+// ---- Explicit-attach claim DTOs ----
 
 /// Whether an active daemon USB claim originated from a static bundle declaration
 /// or from an explicit `nixling usb attach <vm> <busid> --apply` invocation.

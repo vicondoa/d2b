@@ -1,4 +1,4 @@
-/// Phase 4 explicit USB attach contract tests.
+/// Explicit USB attach contract tests.
 ///
 /// These tests verify the shape, policy, and reject behavior for the
 /// `nixling usb attach <vm> <present-busid> --apply` explicit path — the
