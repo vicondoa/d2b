@@ -32,7 +32,8 @@ use nixling_constellation_provider::provider::WorkloadProvider;
 use nixling_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
     broker_wire::{
-        ActivationMode as BrokerActivationMode, ApplyNftablesRequest as BrokerApplyNftablesRequest,
+        ActivationMode as BrokerActivationMode, ActivationPhase as BrokerActivationPhase,
+        ApplyNftablesRequest as BrokerApplyNftablesRequest,
         ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest,
         ApplyRouteRequest as BrokerApplyRouteRequest,
         ApplySysctlRequest as BrokerApplySysctlRequest, BrokerCallerRole, BrokerErrorResponse,
@@ -13646,6 +13647,7 @@ fn dispatch_broker_activation(
         BrokerRequest::RunActivation(BrokerRunActivationRequest {
             bundle_activation_intent_ref: BundleOpId::new(intent_id_activation(&request.vm)),
             mode,
+            phase: BrokerActivationPhase::MetadataOnly,
             vm: request.vm.clone(),
             tracing_span_id: None,
         }),

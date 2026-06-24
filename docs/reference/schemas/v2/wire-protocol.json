@@ -77,6 +77,14 @@
         "rollback"
       ]
     },
+    "ActivationPhase": {
+      "type": "string",
+      "enum": [
+        "prepare",
+        "commit",
+        "metadata-only"
+      ]
+    },
     "ActivationRequest": {
       "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
       "type": "object",
@@ -7036,6 +7044,14 @@
         "mode": {
           "$ref": "#/definitions/ActivationMode"
         },
+        "phase": {
+          "default": "metadata-only",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ActivationPhase"
+            }
+          ]
+        },
         "tracingSpanId": {
           "default": null,
           "type": [
@@ -7065,6 +7081,12 @@
           ],
           "format": "uint64",
           "minimum": 0.0
+        },
+        "guestSwitchScriptPath": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "mode": {
           "$ref": "#/definitions/ActivationMode"
