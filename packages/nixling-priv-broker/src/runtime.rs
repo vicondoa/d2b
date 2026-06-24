@@ -5987,7 +5987,7 @@ fn read_usb_audit_serial_hmac_key_file(
         nix::sys::stat::Mode::empty(),
     ) {
         Ok(fd) => fd,
-        Err(err) if err == nix::errno::Errno::ENOENT => return Ok(None),
+        Err(nix::errno::Errno::ENOENT) => return Ok(None),
         Err(err) => {
             return Err(BrokerError::LiveHandler(format!(
                 "open USB audit serial HMAC key failed: {err}"
@@ -6654,11 +6654,6 @@ fn build_explicit_usbip_rule_body(
 
     let bridge_ifname = env_config.bridge.as_str();
     // Validate the bridge ifname is safe for nft literals.
-    if nixling_host::nftables::NftBatch::parse(&format!("table inet t {{ chain c {{ }}\n}}")).is_ok()
-    {
-        // The ifname is safe to embed in a quoted nft rule expression.
-        // (We validate it doesn't contain quotes or metacharacters below.)
-    }
     if bridge_ifname.contains('"') || bridge_ifname.contains('\\') || bridge_ifname.contains('\0')
     {
         return Err(BrokerError::LiveHandler(format!(
@@ -6687,12 +6682,13 @@ fn grant_explicit_usbip_backend_acl(
     let backend_uid = explicit_usbip_backend_uid(resolver, env)?;
     #[cfg(test)]
     {
+        let _ = bus_id;
         let _ = (expected_identity, expected_device_node);
         test_usbip_backend_acl_events()
             .lock()
             .map_err(|_| BrokerError::Protocol("test USBIP ACL event mutex poisoned".to_owned()))?
             .push(TestUsbipBackendAclEvent::Grant { uid: backend_uid });
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(test))]
     {
@@ -6719,18 +6715,18 @@ fn grant_explicit_usbip_backend_acl(
                     last_error = Some(err.to_string());
                 }
             }
-            if granted {
-                if let Err(error) = verify_explicit_usbip_device_stable(
+            if granted
+                && let Err(error) = verify_explicit_usbip_device_stable(
                     bus_id,
                     expected_identity,
                     &expected_device_node,
-                ) {
-                    let _ = crate::live_handlers::live_revoke_verified_device_acl(
-                        &expected_device_node,
-                        backend_uid,
-                    );
-                    return Err(error);
-                }
+                )
+            {
+                let _ = crate::live_handlers::live_revoke_verified_device_acl(
+                    &expected_device_node,
+                    backend_uid,
+                );
+                return Err(error);
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
@@ -6785,11 +6781,12 @@ fn revoke_explicit_usbip_backend_acl(
     let backend_uid = explicit_usbip_backend_uid(resolver, env)?;
     #[cfg(test)]
     {
+        let _ = bus_id;
         test_usbip_backend_acl_events()
             .lock()
             .map_err(|_| BrokerError::Protocol("test USBIP ACL event mutex poisoned".to_owned()))?
             .push(TestUsbipBackendAclEvent::Revoke { uid: backend_uid });
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(test))]
     {
