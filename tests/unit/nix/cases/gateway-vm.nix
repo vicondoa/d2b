@@ -125,6 +125,7 @@ let
       nixlingdSupplementaryGroups = cfg.systemd.services.nixlingd.serviceConfig.SupplementaryGroups;
       runDirAllowsLocalLaunchers =
         builtins.elem "d /run/nixling 1770 root nixling -" cfg.systemd.tmpfiles.rules
+        && builtins.elem "z /run/nixling 1770 root nixling -" cfg.systemd.tmpfiles.rules
         && builtins.elem "a+ /run/nixling - - - - g::r-x" cfg.systemd.tmpfiles.rules
         && builtins.elem "a+ /run/nixling - - - - u:nixlingd:rwx" cfg.systemd.tmpfiles.rules
         && builtins.elem "a+ /run/nixling - - - - m::rwx" cfg.systemd.tmpfiles.rules;
