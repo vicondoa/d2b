@@ -40,6 +40,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Broker SIGCHLD reaper startup now installs the child-signal stream before the
+  runtime is returned, closing a load-sensitive child-reap race surfaced by the
+  broker reap tests.
 - Broker request handling no longer emits a per-request `Bundle resolver loaded`
   info log, and USBIP proxy reconciliation now treats absent locked hardware as
   a non-fatal ACL-refresh skip instead of spamming paired broker/daemon warnings.

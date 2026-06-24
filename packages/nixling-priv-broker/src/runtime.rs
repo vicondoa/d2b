@@ -8092,20 +8092,24 @@ fn start_sigchld_reaper(audit_log: Arc<AuditLog>) -> tokio::runtime::Runtime {
         .build()
         .expect("broker sigchld reaper tokio runtime");
 
-    rt.spawn(async move {
+    let sigchld = rt.block_on(async {
         use tokio::signal::unix::{SignalKind, signal};
 
-        let mut sigchld = match signal(SignalKind::child()) {
-            Ok(s) => s,
-            Err(err) => {
-                tracing::error!(
-                    error = %err,
-                    "broker: failed to install SIGCHLD handler; pidfd reap loop disabled"
-                );
-                return;
-            }
-        };
+        signal(SignalKind::child())
+    });
 
+    let mut sigchld = match sigchld {
+        Ok(s) => s,
+        Err(err) => {
+            tracing::error!(
+                error = %err,
+                "broker: failed to install SIGCHLD handler; pidfd reap loop disabled"
+            );
+            return rt;
+        }
+    };
+
+    rt.spawn(async move {
         loop {
             if sigchld.recv().await.is_none() {
                 break;
@@ -12981,7 +12985,7 @@ mod tests {
                 let lock = LOCK
                     .get_or_init(|| Mutex::new(()))
                     .lock()
-                    .expect("reap test lock");
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 clear_reap_state();
                 Self { _lock: lock }
             }
