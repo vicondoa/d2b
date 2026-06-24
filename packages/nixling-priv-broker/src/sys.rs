@@ -539,16 +539,6 @@ pub mod path_safe {
         )
     }
 
-    fn atomic_replace_unsupported(target_name: &CString, detail: impl Into<String>) -> io::Error {
-        io::Error::new(
-            io::ErrorKind::Unsupported,
-            PathSafeError::AtomicReplaceUnsupported {
-                target_name: target_name.to_string_lossy().into_owned(),
-                detail: detail.into(),
-            },
-        )
-    }
-
     #[allow(unsafe_code)]
     fn openat2_raw(
         dirfd: RawFd,
@@ -609,6 +599,20 @@ pub mod path_safe {
                 flags,
             )
         };
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    #[allow(unsafe_code)]
+    fn renameat_raw(
+        olddirfd: RawFd,
+        oldpath: &CString,
+        newdirfd: RawFd,
+        newpath: &CString,
+    ) -> io::Result<()> {
+        let ret = unsafe { libc::renameat(olddirfd, oldpath.as_ptr(), newdirfd, newpath.as_ptr()) };
         if ret < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -767,13 +771,12 @@ pub mod path_safe {
                 ) {
                     Ok(()) => unlinkat_raw(dir_fd.as_raw_fd(), stage_name)?,
                     Err(exchange_err) if renameat2_flag_unsupported(&exchange_err) => {
-                        let _ = unlinkat_raw(dir_fd.as_raw_fd(), stage_name);
-                        return Err(atomic_replace_unsupported(
+                        renameat_raw(
+                            dir_fd.as_raw_fd(),
+                            stage_name,
+                            dir_fd.as_raw_fd(),
                             target_name,
-                            format!(
-                                "renameat2(RENAME_EXCHANGE) unsupported for existing target: {exchange_err}"
-                            ),
-                        ));
+                        )?;
                     }
                     Err(exchange_err) => {
                         let _ = unlinkat_raw(dir_fd.as_raw_fd(), stage_name);
@@ -782,11 +785,12 @@ pub mod path_safe {
                 }
             }
             Err(err) if renameat2_flag_unsupported(&err) => {
-                let _ = unlinkat_raw(dir_fd.as_raw_fd(), stage_name);
-                return Err(atomic_replace_unsupported(
+                renameat_raw(
+                    dir_fd.as_raw_fd(),
+                    stage_name,
+                    dir_fd.as_raw_fd(),
                     target_name,
-                    format!("renameat2(RENAME_NOREPLACE) unsupported for safe install: {err}"),
-                ));
+                )?;
             }
             Err(err) => {
                 let _ = unlinkat_raw(dir_fd.as_raw_fd(), stage_name);

@@ -235,6 +235,44 @@ fn no_bash_exec_fixture_coverage() {
 // broker-op mapping. Static gate — no nixpkgs eval required.
 // ---------------------------------------------------------------------------
 
+#[test]
+fn broker_never_shells_out_to_vm_switch_to_configuration() {
+    let files = [
+        "packages/nixling-priv-broker/src/live_handlers.rs",
+        "packages/nixling-priv-broker/src/runtime.rs",
+        "packages/nixling-priv-broker/src/ops/exec_reconcile.rs",
+    ];
+    for rel in files {
+        let content = read_repo_file(rel);
+        let production = content
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap_or(content.as_str());
+        assert!(
+            !production.contains("exec \"$dst/bin/switch-to-configuration\"")
+                && !production.contains("switch-to-configuration\" \"$mode\""),
+            "{rel}: production broker code must not execute VM switch-to-configuration"
+        );
+        let lines: Vec<_> = production.lines().collect();
+        for (idx, line) in lines.iter().enumerate() {
+            if !line.contains("switch-to-configuration") {
+                continue;
+            }
+            let start = idx.saturating_sub(12);
+            let end = usize::min(lines.len(), idx + 13);
+            let window = lines[start..end].join("\n");
+            assert!(
+                !window.contains("Command::new")
+                    && !window.contains("/bin/sh")
+                    && !window.contains("unshare")
+                    && !window.contains("mount --bind"),
+                "{rel}: switch-to-configuration may only be returned as a guest path, not executed from host context near line {}",
+                idx + 1
+            );
+        }
+    }
+}
+
 /// The ten canonical host-prep step kinds, in the order the bash gate lists
 /// them.
 const HOST_PREP_STEP_KINDS: &[&str] = &[

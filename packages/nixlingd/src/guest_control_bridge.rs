@@ -34,8 +34,10 @@ use nixling_contracts::guest_auth::AUTH_NONCE_LEN;
 
 use crate::guest_control_health::{
     AttemptBudget, GuestControlHealthError, GuestControlHealthEvidence, GuestControlSigner,
-    GuestFileReadError, GuestUsbipAction, GuestUsbipImportCall, GuestUsbipImportError,
+    GuestFileReadError, GuestSystemActivationError, GuestSystemActivationStart,
+    GuestSystemActivationStatus, GuestUsbipAction, GuestUsbipImportCall, GuestUsbipImportError,
     GuestUsbipImportResult, GuestUsbipStatusResult, TtrpcGuestControlClient,
+    activate_system_start_authenticated, activate_system_status_authenticated,
     connected_stream_to_ttrpc_socket, guest_control_health_ready, probe_guest_control_health,
     read_guest_config_authenticated, usbip_import_authenticated, usbip_status_authenticated,
 };
@@ -176,6 +178,26 @@ pub trait GuestControlProbe: Send + Sync {
         host: Option<&str>,
         bus_id: Option<&str>,
     ) -> Result<GuestUsbipStatusResult, GuestUsbipImportError>;
+
+    fn activate_system_start(
+        &self,
+        params: &ProbeParams,
+        attempt_timeout: Duration,
+        start: &GuestSystemActivationStart,
+    ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
+        let _ = (params, attempt_timeout, start);
+        Err(GuestSystemActivationError::CapabilityUnavailable)
+    }
+
+    fn activate_system_status(
+        &self,
+        params: &ProbeParams,
+        attempt_timeout: Duration,
+        activation_id: &str,
+    ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
+        let _ = (params, attempt_timeout, activation_id);
+        Err(GuestSystemActivationError::CapabilityUnavailable)
+    }
 }
 
 /// Production probe: connects the vsock socket, builds the ttRPC client,
@@ -241,6 +263,29 @@ impl GuestControlProbe for RealGuestControlProbe {
             attempt_timeout,
             host,
             bus_id,
+        )
+    }
+
+    fn activate_system_start(
+        &self,
+        params: &ProbeParams,
+        attempt_timeout: Duration,
+        start: &GuestSystemActivationStart,
+    ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
+        run_activation_start_once(params, &self.broker_socket_path, attempt_timeout, start)
+    }
+
+    fn activate_system_status(
+        &self,
+        params: &ProbeParams,
+        attempt_timeout: Duration,
+        activation_id: &str,
+    ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
+        run_activation_status_once(
+            params,
+            &self.broker_socket_path,
+            attempt_timeout,
+            activation_id,
         )
     }
 }
@@ -414,6 +459,58 @@ pub fn run_usbip_status_once(
     })
 }
 
+pub fn run_activation_start_once(
+    params: &ProbeParams,
+    broker_socket_path: &Path,
+    attempt_timeout: Duration,
+    start: &GuestSystemActivationStart,
+) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
+    let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
+    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let nonce = host_nonce()
+        .map_err(|_| GuestSystemActivationError::Probe(GuestControlHealthError::Signer))?;
+    let runtime = build_probe_runtime().map_err(GuestSystemActivationError::Probe)?;
+    runtime.block_on(async {
+        let client =
+            connect_and_build_client(params, budget).map_err(GuestSystemActivationError::Probe)?;
+        activate_system_start_authenticated(
+            &params.vm_id,
+            Some(VMADDR_CID_HOST),
+            nonce,
+            &client,
+            &signer,
+            start,
+        )
+        .await
+    })
+}
+
+pub fn run_activation_status_once(
+    params: &ProbeParams,
+    broker_socket_path: &Path,
+    attempt_timeout: Duration,
+    activation_id: &str,
+) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
+    let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
+    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let nonce = host_nonce()
+        .map_err(|_| GuestSystemActivationError::Probe(GuestControlHealthError::Signer))?;
+    let runtime = build_probe_runtime().map_err(GuestSystemActivationError::Probe)?;
+    runtime.block_on(async {
+        let client =
+            connect_and_build_client(params, budget).map_err(GuestSystemActivationError::Probe)?;
+        activate_system_status_authenticated(
+            &params.vm_id,
+            Some(VMADDR_CID_HOST),
+            nonce,
+            &client,
+            &signer,
+            activation_id,
+        )
+        .await
+    })
+}
+
 /// Whether a config-read failure is a transient connect-level failure
 /// worth retrying within the config-sync deadline. A missing/refused CH
 /// vsock socket during startup/restart (TransportIo), a ttRPC transport
@@ -437,6 +534,27 @@ fn usbip_import_error_is_transient(error: &GuestUsbipImportError) -> bool {
             | GuestUsbipImportError::Probe(GuestControlHealthError::Ttrpc)
             | GuestUsbipImportError::Probe(GuestControlHealthError::Timeout)
     )
+}
+
+pub fn activation_error_is_transient(error: &GuestSystemActivationError) -> bool {
+    matches!(
+        error,
+        GuestSystemActivationError::Probe(GuestControlHealthError::TransportIo)
+            | GuestSystemActivationError::Probe(GuestControlHealthError::Ttrpc)
+            | GuestSystemActivationError::Probe(GuestControlHealthError::Timeout)
+    )
+}
+
+pub fn activation_status_error_is_transient(error: &GuestSystemActivationError) -> bool {
+    use nixling_contracts::guest_proto::GuestControlErrorKind as Kind;
+    activation_error_is_transient(error)
+        || matches!(
+            error,
+            GuestSystemActivationError::GuestRejected(
+                Kind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND
+                    | Kind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE
+            )
+        )
 }
 
 /// State-aware config-read loop, mirroring [`run_guest_control_readiness_loop`].
@@ -561,6 +679,112 @@ pub fn run_usbip_status_on_dedicated_thread(
     })
     .join()
     .map_err(|_| GuestUsbipImportError::Probe(GuestControlHealthError::TransportIo))?
+}
+
+pub fn run_activation_start_on_dedicated_thread(
+    params: ProbeParams,
+    broker_socket_path: PathBuf,
+    start: GuestSystemActivationStart,
+    deadline: Duration,
+) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
+    std::thread::spawn(move || {
+        let probe = RealGuestControlProbe::new(broker_socket_path);
+        let clock = RealProbeClock::new();
+        run_guest_control_activation_start_loop(
+            &probe,
+            &params,
+            &start,
+            deadline,
+            GUEST_CONTROL_RETRY_BACKOFF,
+            &clock,
+        )
+    })
+    .join()
+    .map_err(|_| GuestSystemActivationError::Probe(GuestControlHealthError::TransportIo))?
+}
+
+pub fn run_activation_status_on_dedicated_thread(
+    params: ProbeParams,
+    broker_socket_path: PathBuf,
+    activation_id: String,
+    deadline: Duration,
+) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
+    std::thread::spawn(move || {
+        let probe = RealGuestControlProbe::new(broker_socket_path);
+        let clock = RealProbeClock::new();
+        run_guest_control_activation_status_loop(
+            &probe,
+            &params,
+            &activation_id,
+            deadline,
+            GUEST_CONTROL_RETRY_BACKOFF,
+            &clock,
+        )
+    })
+    .join()
+    .map_err(|_| GuestSystemActivationError::Probe(GuestControlHealthError::TransportIo))?
+}
+
+pub fn run_guest_control_activation_start_loop(
+    probe: &dyn GuestControlProbe,
+    params: &ProbeParams,
+    start: &GuestSystemActivationStart,
+    deadline: Duration,
+    retry_backoff: Duration,
+    clock: &dyn ProbeClock,
+) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
+    loop {
+        let remaining = deadline.saturating_sub(clock.elapsed());
+        if remaining.is_zero() {
+            return Err(GuestSystemActivationError::Probe(
+                GuestControlHealthError::Timeout,
+            ));
+        }
+        let attempt_timeout = remaining.max(Duration::from_millis(1));
+        match probe.activate_system_start(params, attempt_timeout, start) {
+            Ok(status) => return Ok(status),
+            Err(err) => {
+                if !activation_error_is_transient(&err) {
+                    return Err(err);
+                }
+                if clock.elapsed().saturating_add(retry_backoff) >= deadline {
+                    return Err(err);
+                }
+                clock.sleep(retry_backoff);
+            }
+        }
+    }
+}
+
+pub fn run_guest_control_activation_status_loop(
+    probe: &dyn GuestControlProbe,
+    params: &ProbeParams,
+    activation_id: &str,
+    deadline: Duration,
+    retry_backoff: Duration,
+    clock: &dyn ProbeClock,
+) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
+    loop {
+        let remaining = deadline.saturating_sub(clock.elapsed());
+        if remaining.is_zero() {
+            return Err(GuestSystemActivationError::Probe(
+                GuestControlHealthError::Timeout,
+            ));
+        }
+        let attempt_timeout = remaining.max(Duration::from_millis(1));
+        match probe.activate_system_status(params, attempt_timeout, activation_id) {
+            Ok(status) => return Ok(status),
+            Err(err) => {
+                if !activation_status_error_is_transient(&err) {
+                    return Err(err);
+                }
+                if clock.elapsed().saturating_add(retry_backoff) >= deadline {
+                    return Err(err);
+                }
+                clock.sleep(retry_backoff);
+            }
+        }
+    }
 }
 
 pub fn run_guest_control_usbip_import_loop(
@@ -1373,6 +1597,78 @@ mod tests {
         }
     }
 
+    struct ScriptedActivationProbe {
+        status_outcomes:
+            Mutex<Vec<Result<GuestSystemActivationStatus, GuestSystemActivationError>>>,
+        attempt_timeouts: Mutex<Vec<Duration>>,
+    }
+
+    impl ScriptedActivationProbe {
+        fn new(
+            status_outcomes: Vec<Result<GuestSystemActivationStatus, GuestSystemActivationError>>,
+        ) -> Self {
+            Self {
+                status_outcomes: Mutex::new(status_outcomes),
+                attempt_timeouts: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl GuestControlProbe for ScriptedActivationProbe {
+        fn probe_health(
+            &self,
+            _params: &ProbeParams,
+            _attempt_timeout: Duration,
+        ) -> Result<GuestControlHealthEvidence, GuestControlHealthError> {
+            unreachable!("activation status loop never probes health directly")
+        }
+
+        fn read_config(
+            &self,
+            _params: &ProbeParams,
+            _attempt_timeout: Duration,
+        ) -> Result<Vec<u8>, GuestFileReadError> {
+            unreachable!("activation status loop never reads config")
+        }
+
+        fn usbip_import(
+            &self,
+            _params: &ProbeParams,
+            _attempt_timeout: Duration,
+            _action: GuestUsbipAction,
+            _host: &str,
+            _bus_id: &str,
+        ) -> Result<GuestUsbipImportResult, GuestUsbipImportError> {
+            unreachable!("activation status loop never imports USBIP")
+        }
+
+        fn usbip_status(
+            &self,
+            _params: &ProbeParams,
+            _attempt_timeout: Duration,
+            _host: Option<&str>,
+            _bus_id: Option<&str>,
+        ) -> Result<GuestUsbipStatusResult, GuestUsbipImportError> {
+            unreachable!("activation status loop never reads USBIP status")
+        }
+
+        fn activate_system_status(
+            &self,
+            _params: &ProbeParams,
+            attempt_timeout: Duration,
+            _activation_id: &str,
+        ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
+            self.attempt_timeouts.lock().unwrap().push(attempt_timeout);
+            let mut outcomes = self.status_outcomes.lock().unwrap();
+            if outcomes.is_empty() {
+                return Err(GuestSystemActivationError::Probe(
+                    GuestControlHealthError::TransportIo,
+                ));
+            }
+            outcomes.remove(0)
+        }
+    }
+
     impl GuestControlProbe for ScriptedUsbipProbe {
         fn probe_health(
             &self,
@@ -1496,6 +1792,39 @@ mod tests {
             ))
         ));
         assert!(probe.attempt_timeouts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn activation_status_loop_rejoins_after_unknown_activation_id() {
+        use nixling_contracts::guest_proto::{GuestActivationState, GuestControlErrorKind};
+
+        let probe = ScriptedActivationProbe::new(vec![
+            Err(GuestSystemActivationError::GuestRejected(
+                GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND,
+            )),
+            Ok(GuestSystemActivationStatus {
+                state: GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED,
+                exit_code: Some(0),
+                signal: None,
+                status_code: Some(0),
+            }),
+        ]);
+        let clock = FakeClock::new();
+        let result = run_guest_control_activation_status_loop(
+            &probe,
+            &test_params(),
+            "activation-1",
+            Duration::from_secs(10),
+            GUEST_CONTROL_RETRY_BACKOFF,
+            &clock,
+        )
+        .expect("status rejoin succeeds");
+
+        assert_eq!(
+            result.state,
+            GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED
+        );
+        assert_eq!(probe.attempt_timeouts.lock().unwrap().len(), 2);
     }
 
     #[test]

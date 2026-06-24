@@ -214,6 +214,59 @@ fn ui_color_contract_docs_match_schema_surface() {
     }
 }
 
+#[test]
+fn activation_docs_do_not_describe_host_side_guest_activation() {
+    let cli = read_repo_file("docs/reference/cli-contract.md");
+    let daemon_api = read_repo_file("docs/reference/daemon-api.md");
+    let readme = read_repo_file("README.md");
+    let design = read_repo_file("docs/explanation/design.md");
+
+    for (rel, content) in [
+        ("docs/reference/cli-contract.md", cli.as_str()),
+        ("docs/reference/daemon-api.md", daemon_api.as_str()),
+        ("README.md", readme.as_str()),
+        ("docs/explanation/design.md", design.as_str()),
+    ] {
+        let lower = content.to_lowercase();
+        for forbidden in [
+            "broker directly executes switch-to-configuration",
+            "broker runs switch-to-configuration",
+            "runactivation executes switch-to-configuration",
+            "host runs switch-to-configuration for the guest",
+        ] {
+            assert!(
+                !lower.contains(forbidden),
+                "{rel} claims the host/broker directly executes guest activation: {forbidden}"
+            );
+        }
+    }
+
+    for required in [
+        "guestd to activate that prepared toplevel",
+        "Stopped/offline VMs fail closed",
+        "`boot --apply` is the explicit way to stage a new toplevel",
+        "There is no host-side execution of guest activation scripts",
+    ] {
+        assert!(
+            cli.contains(required),
+            "cli-contract activation docs are missing required safe-activation wording: {required}"
+        );
+    }
+    assert!(
+        daemon_api
+            .contains("Live activation (`Switch`, `Test`, and live `Rollback`) is not a broker"),
+        "daemon-api must state live activation is not a broker script-execution surface"
+    );
+    assert!(
+        readme.contains("guestd activates the prepared toplevel"),
+        "README must explain that guestd activates prepared toplevels inside the VM"
+    );
+    assert!(
+        design.contains("The broker never runs the guest's activation program"),
+        "design overview must document the host-systemd isolation boundary"
+    );
+}
+
 /// Faithful port of the bash gate's `awk` extraction of the `enum NativeCommand`
 /// subcommand set. Two forms are recognised inside the enum block:
 ///   1. An explicit override `#[command(name = "...")]` on the line immediately

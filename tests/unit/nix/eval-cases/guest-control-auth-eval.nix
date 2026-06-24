@@ -87,8 +87,13 @@ let
       service.serviceConfig.LoadCredential;
     assert builtins.elem "/run/nixling-guest-control-host" service.unitConfig.RequiresMountsFor;
     assert service.wantedBy == [ "multi-user.target" ];
+    assert service.restartIfChanged == false;
     assert lib.hasInfix "/bin/nixling-guestd --serve --vm-id corp-vm"
       service.serviceConfig.ExecStart;
+    assert lib.hasInfix "--activation-systemd-run-path" service.serviceConfig.ExecStart;
+    assert lib.hasInfix "--activation-systemctl-path" service.serviceConfig.ExecStart;
+    assert builtins.elem "d /run/nixling-guestd 0700 root root -" guestConfig.systemd.tmpfiles.rules;
+    assert builtins.elem "d /run/nixling-guestd/activations 0700 root root -" guestConfig.systemd.tmpfiles.rules;
     assert !(builtins.hasAttr "nixling-guestd" nixos.config.systemd.services);
     assert !(lib.hasInfix tokenFile serviceJson);
     assert processVm != null;

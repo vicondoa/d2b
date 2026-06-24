@@ -48,6 +48,15 @@ service GuestControl {
   // Framework op: side-effect-free guest-side USBIP import observation. Auth
   // gated like UsbipImport; runs only the host-declared guest usbip binary.
   rpc UsbipStatus(UsbipStatusRequest) returns (UsbipStatusResponse);
+
+  // Framework op: guest-root system activation inside the VM. The host sends
+  // a store switch-to-configuration path and closed activation mode; guestd
+  // validates both and starts a detached transient unit in the guest systemd.
+  rpc ActivateSystemStart(GuestActivationStartRequest) returns (GuestActivationStartResponse);
+
+  // Framework op: rejoinable status for an activation transient unit. Status is
+  // backed by guestd root-owned /run state and never returns stdout/stderr.
+  rpc ActivateSystemStatus(GuestActivationStatusRequest) returns (GuestActivationStatusResponse);
 }
 
 message RequestMetadata {
@@ -397,6 +406,34 @@ message UsbipStatusEntry {
   string bus_id = 4;
 }
 
+message GuestActivationStartRequest {
+  RequestMetadata metadata = 1;
+  string activation_id = 2;
+  string switch_script_path = 3;
+  GuestActivationMode mode = 4;
+  uint64 timeout_ms = 5;
+}
+
+message GuestActivationStartResponse {
+  string activation_id = 1;
+  GuestActivationState state = 2;
+  GuestControlError error = 3;
+}
+
+message GuestActivationStatusRequest {
+  RequestMetadata metadata = 1;
+  string activation_id = 2;
+}
+
+message GuestActivationStatusResponse {
+  string activation_id = 1;
+  GuestActivationState state = 2;
+  optional int32 exit_code = 3;
+  optional uint32 signal = 4;
+  optional int32 status_code = 5;
+  GuestControlError error = 6;
+}
+
 message ShellAttachRequest {
   RequestMetadata metadata = 1;
   optional string name = 2;
@@ -520,6 +557,7 @@ enum GuestCapability {
   GUEST_CAPABILITY_SHELL_MANAGEMENT = 12;
   GUEST_CAPABILITY_SHELL_FORCE_ATTACH = 13;
   GUEST_CAPABILITY_USBIP_STATUS = 14;
+  GUEST_CAPABILITY_SYSTEM_ACTIVATION = 15;
 }
 
 enum GuestSubsystem {
@@ -533,12 +571,30 @@ enum GuestSubsystem {
   GUEST_SUBSYSTEM_USBIP = 7;
   GUEST_SUBSYSTEM_SHELL = 8;
   GUEST_SUBSYSTEM_SHPOOL = 9;
+  GUEST_SUBSYSTEM_SYSTEM_ACTIVATION = 10;
 }
 
 enum TerminalKind {
   TERMINAL_KIND_UNSPECIFIED = 0;
   TERMINAL_KIND_EXEC = 1;
   TERMINAL_KIND_SHELL = 2;
+}
+
+enum GuestActivationMode {
+  GUEST_ACTIVATION_MODE_UNSPECIFIED = 0;
+  GUEST_ACTIVATION_MODE_SWITCH = 1;
+  GUEST_ACTIVATION_MODE_BOOT = 2;
+  GUEST_ACTIVATION_MODE_TEST = 3;
+  GUEST_ACTIVATION_MODE_DRY_ACTIVATE = 4;
+}
+
+enum GuestActivationState {
+  GUEST_ACTIVATION_STATE_UNSPECIFIED = 0;
+  GUEST_ACTIVATION_STATE_RUNNING = 1;
+  GUEST_ACTIVATION_STATE_SUCCEEDED = 2;
+  GUEST_ACTIVATION_STATE_FAILED = 3;
+  GUEST_ACTIVATION_STATE_TIMED_OUT = 4;
+  GUEST_ACTIVATION_STATE_LOST = 5;
 }
 
 enum ShellState {
@@ -733,4 +789,11 @@ enum GuestControlErrorKind {
   GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP = 55;
   GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT = 56;
   GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OUTPUT = 57;
+  GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_ID = 58;
+  GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_PATH = 59;
+  GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_MODE = 60;
+  GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND = 61;
+  GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE = 62;
+  GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT = 63;
+  GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED = 64;
 }
