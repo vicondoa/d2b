@@ -285,6 +285,13 @@ in
     expected = true;
   };
 
+  "activation-runtime-tmpfiles/role-acl-script-grants-run-vms-parent-traversal" = {
+    expr =
+      lib.hasInfix ''setfacl -m "u:$uid:x" /run/nixling 2>/dev/null || true'' roleAclText
+      && lib.hasInfix ''setfacl -m "u:$uid:x" /run/nixling/vms 2>/dev/null || true'' roleAclText;
+    expected = true;
+  };
+
   "activation-runtime-tmpfiles/state-dir-acl-script-no-static-sidecar-loop" = {
     expr =
       !(lib.hasInfix "for suffix in gpu swtpm audio video wlproxy qemu-media" stateDirAclText)
