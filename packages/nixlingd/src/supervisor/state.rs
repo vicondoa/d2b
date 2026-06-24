@@ -35,7 +35,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use nixling_ipc::broker_wire::RunnerRole;
+use nixling_contracts::broker_wire::RunnerRole;
 use serde::{Deserialize, Serialize};
 
 /// One persisted runner slot. Mirrors what the daemon learnt from a

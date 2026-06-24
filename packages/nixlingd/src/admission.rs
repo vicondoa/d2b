@@ -1,6 +1,6 @@
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use nixling_constellation_core::PrincipalId;
-use nixling_ipc::public_wire;
+use nixling_contracts::public_wire;
 use socket2::Socket;
 use uzers::{get_user_by_uid, get_user_groups};
 

@@ -126,7 +126,7 @@ fn stop_dag_reconcile_surface() {
     // ==> planner uses only existing broker ops (no new wire variants).
     // The planner must not introduce a new BrokerRequest variant; assert the
     // three ops it composes against are present (reused, not redeclared).
-    let wire = read_repo_file("packages/nixling-ipc/src/broker_wire.rs");
+    let wire = read_repo_file("packages/nixling-contracts/src/broker_wire.rs");
     for variant in ["ApplyNftables", "UsbipBind", "UsbipUnbind"] {
         assert!(
             wire.contains(&format!("{variant}({variant}Request)")),

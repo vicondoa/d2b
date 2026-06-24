@@ -1,6 +1,6 @@
 #![doc = "Guest user-session agent primitives for nixling exec."]
 
-use nixling_ipc::guest_wire::{
+use nixling_contracts::guest_wire::{
     ExecId, GuestBootId, GuestControlErrorKind, OutputStream, TerminalSize,
 };
 

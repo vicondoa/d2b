@@ -90,7 +90,7 @@ W3 must pick:
    v1.1-P10 migrates existing v1.0 scope-based audit records / path
    parsers (`nixling-host`, `nixlingd::supervisor::pidfd`) to the
    role-leaf taxonomy. The path-class enum lands in
-   `packages/nixling-ipc/src/audit_path_class.rs` in v1.1-P10.
+   `packages/nixling-contracts/src/audit_path_class.rs` in v1.1-P10.
 
 2. **8-step algorithm, split into Phase A (privileged setup) and
    Phase B (post-delegation runtime mutation).** The broker performs

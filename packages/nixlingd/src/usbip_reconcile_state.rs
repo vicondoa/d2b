@@ -2036,7 +2036,7 @@ pub fn trim_sysfs_value(raw: &str) -> String {
 
 /// Parse a Linux USB busid (`1-2.4`) into bus and physical port chain.
 pub fn parse_usb_busid_topology(bus_id: &str) -> Result<UsbBusPortTopology, UsbTopologyParseError> {
-    nixling_ipc::usbip::validate_bus_id(bus_id)
+    nixling_contracts::usbip::validate_bus_id(bus_id)
         .map_err(|_| UsbTopologyParseError::InvalidBusId(bus_id.to_owned()))?;
     let (bus, ports) = match bus_id.split_once('-') {
         Some((bus, ports)) => (bus, Some(ports)),
@@ -3227,7 +3227,7 @@ pub struct UsbipPublicStatus {
 }
 
 fn scrub_usb_hex_id(value: Option<&str>) -> Option<String> {
-    nixling_ipc::usbip::sanitize_usb_hex_id(value)
+    nixling_contracts::usbip::sanitize_usb_hex_id(value)
 }
 
 fn scrub_public_claim_ref(value: &str) -> String {
@@ -3239,7 +3239,7 @@ fn scrub_public_claim_ref(value: &str) -> String {
 
     if valid_opaque
         && !looks_like_trace_id(value)
-        && nixling_ipc::usbip::validate_bus_id(value).is_err()
+        && nixling_contracts::usbip::validate_bus_id(value).is_err()
     {
         value.to_owned()
     } else {

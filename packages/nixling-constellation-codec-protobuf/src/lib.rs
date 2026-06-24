@@ -10,7 +10,7 @@ use nixling_constellation_core::{
     TraceContext, WorkloadId,
 };
 use nixling_constellation_provider::ProtocolCodec;
-use nixling_ipc::MAX_FRAME_SIZE;
+use nixling_contracts::MAX_FRAME_SIZE;
 use prost::Message;
 
 /// Stable codec id negotiated by ADR 0032 protobuf peers.

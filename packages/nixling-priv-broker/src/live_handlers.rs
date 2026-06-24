@@ -32,12 +32,12 @@ use crate::ops::exec_reconcile::{
 use crate::ops::spawn_runner::{
     SpawnRunnerError, SpawnRunnerPlan, SpawnRunnerPlanInput, build_cstring_vectors, preflight,
 };
+use nixling_contracts::broker_wire::ActivationMode;
 use nixling_core::bundle_resolver::{
     HostRuntime, ResolvedActivationIntent, ResolvedStoreViewIntent,
 };
 use nixling_core::minijail_profile::CgroupPlacement;
 use nixling_host::hardlink_farm;
-use nixling_ipc::broker_wire::ActivationMode;
 use rustix::fs::{CWD, Mode, OFlags, ResolveFlags};
 
 /// Aggregate error type for live handlers. Kept narrow so the
@@ -3209,6 +3209,7 @@ fn maybe_harden_swtpm_dir(
 mod tests {
     use super::*;
     use crate::ops::exec_reconcile::{FakeReconcileExecutor, ReconcileOp};
+    use nixling_contracts::broker_wire::ActivationMode;
     use nixling_core::bundle_resolver::{
         HostRuntime, HostRuntimeArtifact, HostRuntimeIfName, InstallerArtifact,
         ResolvedActivationIntent, ResolvedGcIntent, ResolvedHostKeyTrustIntent,
@@ -3219,7 +3220,6 @@ mod tests {
         CgroupPlacement, MountPolicy, NamespaceSet, WritablePath,
     };
     use nixling_host::cgroup::fake::FakeCgroupBackend;
-    use nixling_ipc::broker_wire::ActivationMode;
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
 

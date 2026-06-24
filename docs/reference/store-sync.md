@@ -399,12 +399,12 @@ asserts `len() == 0`.
   `build-store-view` / `replace-store-view-live` from stdin JSON.
 - `packages/nixling-priv-broker/src/runtime.rs` — wire dispatch
   arm (`RealBrokerRequest::StoreSync(req) => …`).
-- `packages/nixling-ipc/src/broker_wire.rs` — typed request/
+- `packages/nixling-contracts/src/broker_wire.rs` — typed request/
   response structs + enum variants. The wire carries both the
   collision-free `generation_id` (response) and the u32
   `generation_token` (request + response); the token is display/wire
   only and is never the on-disk key.
-- `packages/nixling-ipc/src/types.rs` — `BundleClosureRef`
+- `packages/nixling-contracts/src/types.rs` — `BundleClosureRef`
   opaque newtype.
 - `packages/nixling-priv-broker/src/ops/audit_op.rs` —
   `OperationFields::StoreSync` newtype over `StoreSyncAuditFields`.

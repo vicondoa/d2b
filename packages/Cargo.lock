@@ -1592,8 +1592,8 @@ dependencies = [
  "nix 0.29.0",
  "nixling-constellation-core",
  "nixling-constellation-router",
+ "nixling-contracts",
  "nixling-core",
- "nixling-ipc",
  "rustix 0.38.44",
  "schemars",
  "serde",
@@ -1608,7 +1608,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "nixling-constellation-core",
  "nixling-constellation-provider",
- "nixling-ipc",
+ "nixling-contracts",
  "prost 0.13.5",
  "serde_json",
 ]
@@ -1667,10 +1667,21 @@ dependencies = [
 name = "nixling-contract-tests"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "nixling-contracts",
  "nixling-core",
  "nixling-host",
- "nixling-ipc",
  "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nixling-contracts"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "nixling-core",
+ "protobuf",
+ "schemars",
  "serde",
  "serde_json",
 ]
@@ -1698,7 +1709,7 @@ dependencies = [
  "nix 0.29.0",
  "nixling-constellation-core",
  "nixling-constellation-provider",
- "nixling-ipc",
+ "nixling-contracts",
  "serde",
  "serde_json",
  "tokio",
@@ -1756,8 +1767,8 @@ dependencies = [
  "futures",
  "hmac",
  "nixling-constellation-core",
+ "nixling-contracts",
  "nixling-exec-runner",
- "nixling-ipc",
  "protobuf",
  "rustix 0.38.44",
  "sha2",
@@ -1776,8 +1787,8 @@ dependencies = [
  "nix 0.29.0",
  "nixling-constellation-core",
  "nixling-constellation-provider",
+ "nixling-contracts",
  "nixling-core",
- "nixling-ipc",
  "rustix 0.38.44",
  "schemars",
  "serde",
@@ -1806,17 +1817,6 @@ dependencies = [
  "nixling-host",
  "serde_json",
  "tokio",
-]
-
-[[package]]
-name = "nixling-ipc"
-version = "0.0.0-bootstrap"
-dependencies = [
- "nixling-core",
- "protobuf",
- "schemars",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -1863,7 +1863,7 @@ dependencies = [
 name = "nixling-userd"
 version = "0.0.0-bootstrap"
 dependencies = [
- "nixling-ipc",
+ "nixling-contracts",
 ]
 
 [[package]]
@@ -1892,11 +1892,11 @@ dependencies = [
  "nixling-constellation-core",
  "nixling-constellation-provider",
  "nixling-constellation-router",
+ "nixling-contracts",
  "nixling-core",
  "nixling-gateway",
  "nixling-gateway-runtime",
  "nixling-host",
- "nixling-ipc",
  "nixling-provider-aca",
  "nixling-provider-relay",
  "parking_lot",
@@ -4068,8 +4068,8 @@ dependencies = [
  "clap_mangen",
  "nixling",
  "nixling-constellation-core",
+ "nixling-contracts",
  "nixling-core",
- "nixling-ipc",
  "protobuf-codegen",
  "schemars",
  "serde",

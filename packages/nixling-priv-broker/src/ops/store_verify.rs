@@ -15,9 +15,11 @@ use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
 use nix::fcntl::{FlockArg, flock};
+use nixling_contracts::broker_wire::{
+    StoreVerifyResponse, StoreVerifyStatus, StoreVerifyUnknownReason,
+};
 use nixling_core::bundle_resolver::ResolvedStoreViewIntent;
 use nixling_host::hardlink_farm;
-use nixling_ipc::broker_wire::{StoreVerifyResponse, StoreVerifyStatus, StoreVerifyUnknownReason};
 use serde::{Deserialize, Serialize};
 
 use crate::ops::store_sync::{StoreSyncError, StoreSyncOutcome, run_store_sync_repair};

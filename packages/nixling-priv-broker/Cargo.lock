@@ -328,6 +328,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nixling-contracts"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "nixling-core",
+ "protobuf",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nixling-core"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -349,8 +360,8 @@ dependencies = [
  "nix",
  "nixling-constellation-core",
  "nixling-constellation-provider",
+ "nixling-contracts",
  "nixling-core",
- "nixling-ipc",
  "rustix 0.38.44",
  "schemars",
  "serde",
@@ -359,25 +370,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "nixling-ipc"
-version = "0.0.0-bootstrap"
-dependencies = [
- "nixling-core",
- "protobuf",
- "schemars",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "nixling-priv-broker"
 version = "0.0.0-bootstrap"
 dependencies = [
  "hmac",
  "nix",
+ "nixling-contracts",
  "nixling-core",
  "nixling-host",
- "nixling-ipc",
  "rustix 0.38.44",
  "serde",
  "serde_json",

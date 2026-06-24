@@ -154,7 +154,7 @@ pub struct LiveOpenDeviceOutcome {
 pub fn live_open_kvm(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
-    req: &nixling_ipc::broker_wire::OpenKvmRequest,
+    req: &nixling_contracts::broker_wire::OpenKvmRequest,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<LiveOpenDeviceOutcome, super::OpError> {
     live_open_device_common(resolver, req.role_id.as_str(), DeviceClass::Kvm)
@@ -163,7 +163,7 @@ pub fn live_open_kvm(
 pub fn live_open_vhost_net(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
-    req: &nixling_ipc::broker_wire::OpenVhostNetRequest,
+    req: &nixling_contracts::broker_wire::OpenVhostNetRequest,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<LiveOpenDeviceOutcome, super::OpError> {
     live_open_device_common(resolver, req.role_id.as_str(), DeviceClass::VhostNet)
@@ -172,7 +172,7 @@ pub fn live_open_vhost_net(
 pub fn live_open_fuse(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
-    req: &nixling_ipc::broker_wire::OpenFuseRequest,
+    req: &nixling_contracts::broker_wire::OpenFuseRequest,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<LiveOpenDeviceOutcome, super::OpError> {
     live_open_device_common(resolver, req.role_id.as_str(), DeviceClass::Fuse)
@@ -181,7 +181,7 @@ pub fn live_open_fuse(
 pub fn live_open_device(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
-    req: &nixling_ipc::broker_wire::OpenDeviceRequest,
+    req: &nixling_contracts::broker_wire::OpenDeviceRequest,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<LiveOpenDeviceOutcome, super::OpError> {
     let requested_class: DeviceClass = serde_json::from_value(serde_json::Value::String(

@@ -40,10 +40,10 @@
 //! the broker rewrote anything, which the daemon logs but does
 //! not treat as a failure signal.
 
+use nixling_contracts::broker_wire::{RunRotateKnownHostRequest, RunRotateKnownHostResponse};
+use nixling_contracts::types::BundleOpId;
 use nixling_core::bundle_resolver::intent_id_rotate_known_host;
 use nixling_core::manifest_v04::ManifestV04;
-use nixling_ipc::broker_wire::{RunRotateKnownHostRequest, RunRotateKnownHostResponse};
-use nixling_ipc::types::BundleOpId;
 
 use crate::typed_error::TypedError;
 

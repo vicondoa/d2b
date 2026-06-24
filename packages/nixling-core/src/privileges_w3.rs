@@ -58,7 +58,7 @@ pub enum W3BrokerOperation {
 
 impl W3BrokerOperation {
     /// Returns the on-wire enum tag (matching the
-    /// [`nixling_ipc::broker_wire::BrokerRequest`] discriminant) for
+    /// [`nixling_contracts::broker_wire::BrokerRequest`] discriminant) for
     /// this operation.
     pub const fn wire_tag(self) -> &'static str {
         match self {
@@ -88,7 +88,7 @@ impl W3BrokerOperation {
 
     /// Returns every W3 broker operation in stable order. Consumed by
     /// the `Capabilities::broker_operations` advertisement in
-    /// `nixling-ipc` and by the broker-enum-disposition gate.
+    /// `nixling-contracts` and by the broker-enum-disposition gate.
     pub const fn all() -> &'static [W3BrokerOperation] {
         &[
             Self::DelegateCgroupV2,

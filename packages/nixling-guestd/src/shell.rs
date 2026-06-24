@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use nixling_constellation_core as constellation;
-use nixling_ipc::guest_proto as pb;
+use nixling_contracts::guest_proto as pb;
 use protobuf::{EnumOrUnknown, MessageField};
 
 pub const DEFAULT_SHELL_SESSIONS_PER_VM: u32 = 8;

@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use nixling_ipc::cli_output::{
+use nixling_contracts::cli_output::{
     AuthRoleV2, AuthStatusOutputV2, HostCheckOutputV2, HostCheckSeverityV2, ListOutputV2,
     StatusInventoryOutputV2, StatusVmOutputV2,
 };

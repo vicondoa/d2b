@@ -22,7 +22,7 @@ workspace = true
 [dependencies]
 nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
 nixling-constellation-provider = { path = "../nixling-constellation-provider", version = "0.0.0-bootstrap" }
-nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
+nixling-contracts = { path = "../nixling-contracts", version = "0.0.0-bootstrap" }
 prost = "0.13"
 
 [dev-dependencies]

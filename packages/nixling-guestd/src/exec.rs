@@ -34,7 +34,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use nixling_ipc::guest_wire::GuestControlErrorKind as WireErrorKind;
+use nixling_contracts::guest_wire::GuestControlErrorKind as WireErrorKind;
 
 use crate::exec_pty::{PtyProcessSpawner, SpawnedPtyProcess, StdinWriteOk, TerminalSize, TtyState};
 

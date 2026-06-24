@@ -12,7 +12,7 @@ workspace = true
 clap = { version = "4", features = ["derive"] }
 nix = { version = "0.29", default-features = false, features = ["socket", "user", "signal"] }
 nixling-core = { path = "../nixling-core", version = "0.0.0-bootstrap" }
-nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
+nixling-contracts = { path = "../nixling-contracts", version = "0.0.0-bootstrap" }
 nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
 nixling-constellation-router = { path = "../nixling-constellation-router", version = "0.0.0-bootstrap" }
 rustix = { workspace = true }

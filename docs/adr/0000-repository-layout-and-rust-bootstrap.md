@@ -38,7 +38,7 @@ accepted decisions instead of relying on one large portability plan.
    `rust-toolchain.toml` lives at `packages/rust-toolchain.toml`, and
    every cargo invocation in CI and docs uses
    `--manifest-path packages/Cargo.toml` or `(cd packages && cargo ...)`.
-3. W0a workspace members are `nixling-core`, `nixling-ipc`, `xtask`,
+3. W0a workspace members are `nixling-core`, `nixling-contracts`, `xtask`,
    `nixling`, and `nixlingd`.
 4. The workspace sets `unsafe_code = "forbid"`; per-crate exceptions are
    allowed only through future ADRs.

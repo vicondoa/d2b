@@ -15,11 +15,7 @@ use nix::sys::socket::{
     AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, connect, recv, send, socket,
 };
 use nix::unistd::Uid;
-use nixling_core::{
-    bundle::Bundle, bundle_resolver::HostRuntime, closures::ClosureMetadata,
-    error::Error as CoreError, host::HostJson, host_check, processes::ProcessesJson,
-};
-use nixling_ipc::{
+use nixling_contracts::{
     Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
     SemverRange,
     broker_wire::{
@@ -40,6 +36,10 @@ use nixling_ipc::{
         VmStatus as IpcVmStatus,
     },
     types::{MediaRef, validate_usb_bus_id},
+};
+use nixling_core::{
+    bundle::Bundle, bundle_resolver::HostRuntime, closures::ClosureMetadata,
+    error::Error as CoreError, host::HostJson, host_check, processes::ProcessesJson,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -1445,7 +1445,7 @@ where
         .map_err(|err| CliFailure::new(1, format!("failed to encode {context}: {err}")))
 }
 
-fn daemon_supported_features() -> Vec<nixling_ipc::FeatureFlag> {
+fn daemon_supported_features() -> Vec<nixling_contracts::FeatureFlag> {
     vec![
         KnownFeatureFlag::TypedErrors.wire_value(),
         KnownFeatureFlag::ExportBrokerAudit.wire_value(),
@@ -1860,8 +1860,8 @@ fn cmd_shell_attach(
     })?;
     let mut transport = shell_owner_transport(context)?;
     let size = exec_client::current_window_size()
-        .map(|(rows, cols)| nixling_ipc::terminal_wire::TerminalSize { rows, cols })
-        .unwrap_or(nixling_ipc::terminal_wire::TerminalSize { rows: 24, cols: 80 });
+        .map(|(rows, cols)| nixling_contracts::terminal_wire::TerminalSize { rows, cols })
+        .unwrap_or(nixling_contracts::terminal_wire::TerminalSize { rows: 24, cols: 80 });
     let start = transport.round_trip(&ShellOp::Attach(public_wire::ShellAttachArgs {
         vm: vm.to_owned(),
         name,
@@ -1990,7 +1990,7 @@ where
     let mut stdin_offset = 0_u64;
     let mut stdout_offset = 0_u64;
     let mut control_op_id = 1_u64;
-    let mut buf = vec![0_u8; nixling_ipc::public_wire::EXEC_MAX_CHUNK_BYTES as usize];
+    let mut buf = vec![0_u8; nixling_contracts::public_wire::EXEC_MAX_CHUNK_BYTES as usize];
     let mut pending_stdin: Vec<u8> = Vec::new();
     let mut detach_escape_pending = false;
     loop {
@@ -1999,7 +1999,7 @@ where
                 exec_client::ExecSignal::Winch => {
                     if let Some((rows, cols)) = host.window_size() {
                         let _ = transport.round_trip(&ShellOp::Resize(
-                            nixling_ipc::terminal_wire::TerminalResize {
+                            nixling_contracts::terminal_wire::TerminalResize {
                                 session: session.to_owned(),
                                 rows,
                                 cols,
@@ -2057,10 +2057,10 @@ where
 
         let mut sent = 0_usize;
         while sent < pending_stdin.len() {
-            let end = (sent + nixling_ipc::public_wire::EXEC_MAX_CHUNK_BYTES as usize)
+            let end = (sent + nixling_contracts::public_wire::EXEC_MAX_CHUNK_BYTES as usize)
                 .min(pending_stdin.len());
             let response = transport.round_trip(&ShellOp::WriteStdin(
-                nixling_ipc::terminal_wire::TerminalWriteStdin {
+                nixling_contracts::terminal_wire::TerminalWriteStdin {
                     session: session.to_owned(),
                     offset: stdin_offset,
                     chunk_base64: nixling_core::base64_codec::encode(&pending_stdin[sent..end]),
@@ -2095,11 +2095,11 @@ where
         }
 
         let response = transport.round_trip(&ShellOp::ReadOutput(
-            nixling_ipc::terminal_wire::TerminalReadOutput {
+            nixling_contracts::terminal_wire::TerminalReadOutput {
                 session: session.to_owned(),
-                stream: nixling_ipc::terminal_wire::TerminalStream::Stdout,
+                stream: nixling_contracts::terminal_wire::TerminalStream::Stdout,
                 offset: stdout_offset,
-                max_len: nixling_ipc::public_wire::EXEC_MAX_CHUNK_BYTES,
+                max_len: nixling_contracts::public_wire::EXEC_MAX_CHUNK_BYTES,
                 wait: true,
                 timeout_ms: 40,
             },
@@ -3023,7 +3023,7 @@ fn finish_config_sync_from_reply(
             // Defense in depth: the daemon already bounds the encoded payload,
             // but the host re-enforces the raw cap and never trusts a
             // guest-reported size.
-            if bytes.len() as u64 > nixling_ipc::guest_wire::READ_GUEST_FILE_MAX_BYTES {
+            if bytes.len() as u64 > nixling_contracts::guest_wire::READ_GUEST_FILE_MAX_BYTES {
                 return Err(guest_control_config_failure(
                     "guest-control-file-too-large",
                     "validating the received guest config size",
@@ -5986,14 +5986,14 @@ struct OwnerSocketTransport {
 }
 
 impl terminal_client::TerminalTransport for OwnerSocketTransport {
-    type Op = nixling_ipc::public_wire::ExecOp;
-    type Response = nixling_ipc::public_wire::ExecOpResponse;
+    type Op = nixling_contracts::public_wire::ExecOp;
+    type Response = nixling_contracts::public_wire::ExecOpResponse;
     type Error = exec_client::ExecClientError;
 
     fn round_trip(
         &mut self,
-        op: &nixling_ipc::public_wire::ExecOp,
-    ) -> Result<nixling_ipc::public_wire::ExecOpResponse, exec_client::ExecClientError> {
+        op: &nixling_contracts::public_wire::ExecOp,
+    ) -> Result<nixling_contracts::public_wire::ExecOpResponse, exec_client::ExecClientError> {
         let op_id = self.next_op_id;
         self.next_op_id = self.next_op_id.wrapping_add(1);
         let frame = exec_client::encode_exec_op_frame(op, op_id)?;
@@ -6263,7 +6263,7 @@ fn parse_vm_exec_u64_flag(flag: &str, value: &str) -> Result<u64, String> {
 /// multiplexes stdin/stdout/stderr/signals over one owner connection. The
 /// guest owns the PTY; the CLI only manages host terminal state.
 fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> {
-    use nixling_ipc::public_wire::{ExecEnvVar, ExecOp, ExecStartArgs, ExecTermSize};
+    use nixling_contracts::public_wire::{ExecEnvVar, ExecOp, ExecStartArgs, ExecTermSize};
 
     // 1. Validate flags BEFORE touching host terminal state or the daemon.
     let action = match parse_vm_exec_action(args) {
@@ -6499,7 +6499,7 @@ fn cmd_vm_exec_management(
     management: &VmExecManagementCommand,
     vm: &str,
 ) -> Result<i32, CliFailure> {
-    use nixling_ipc::public_wire::{
+    use nixling_contracts::public_wire::{
         ExecDetachedKillArgs, ExecDetachedListArgs, ExecDetachedLogsArgs, ExecDetachedStatusArgs,
         ExecOp,
     };
@@ -6591,15 +6591,15 @@ fn cmd_vm_exec_management(
 
 fn exec_send_one_op(
     context: &Context,
-    op: nixling_ipc::public_wire::ExecOp,
-) -> Result<nixling_ipc::public_wire::ExecOpResponse, exec_client::ExecClientError> {
+    op: nixling_contracts::public_wire::ExecOp,
+) -> Result<nixling_contracts::public_wire::ExecOpResponse, exec_client::ExecClientError> {
     let mut transport = exec_owner_transport(context)?;
     transport.round_trip(&op)
 }
 
 fn exec_render_detached_create(
     args: &VmExecArgs,
-    result: &nixling_ipc::public_wire::ExecDetachedCreateResult,
+    result: &nixling_contracts::public_wire::ExecDetachedCreateResult,
 ) -> Result<i32, CliFailure> {
     if exec_effective_json(args) {
         exec_print_json(&VmExecCreateOutputV1 {
@@ -6616,7 +6616,7 @@ fn exec_render_detached_create(
 
 fn exec_render_detached_list(
     args: &VmExecArgs,
-    result: &nixling_ipc::public_wire::ExecDetachedListResult,
+    result: &nixling_contracts::public_wire::ExecDetachedListResult,
 ) -> Result<i32, CliFailure> {
     if exec_effective_json(args) {
         let execs = result
@@ -6673,7 +6673,7 @@ fn exec_render_detached_list(
 
 fn exec_render_detached_status(
     args: &VmExecArgs,
-    result: &nixling_ipc::public_wire::ExecDetachedStatusResult,
+    result: &nixling_contracts::public_wire::ExecDetachedStatusResult,
 ) -> Result<i32, CliFailure> {
     if exec_effective_json(args) {
         exec_print_json(&VmExecStatusOutputV1 {
@@ -6714,7 +6714,7 @@ fn exec_render_detached_status(
 
 fn exec_render_detached_logs(
     args: &VmExecArgs,
-    result: &nixling_ipc::public_wire::ExecDetachedLogsResult,
+    result: &nixling_contracts::public_wire::ExecDetachedLogsResult,
 ) -> Result<i32, CliFailure> {
     let (stdout, stderr) = match exec_decode_detached_logs(result) {
         Ok(decoded) => decoded,
@@ -6767,7 +6767,7 @@ fn exec_render_detached_logs(
 }
 
 fn exec_decode_detached_logs(
-    result: &nixling_ipc::public_wire::ExecDetachedLogsResult,
+    result: &nixling_contracts::public_wire::ExecDetachedLogsResult,
 ) -> Result<(Vec<u8>, Vec<u8>), exec_client::ExecClientError> {
     let stdout = match nixling_core::base64_codec::decode(&result.stdout_base64) {
         Ok(bytes) => bytes,
@@ -6790,7 +6790,7 @@ fn exec_decode_detached_logs(
 
 fn exec_render_detached_kill(
     args: &VmExecArgs,
-    result: &nixling_ipc::public_wire::ExecDetachedKillResult,
+    result: &nixling_contracts::public_wire::ExecDetachedKillResult,
 ) -> Result<i32, CliFailure> {
     let outcome = exec_kill_outcome_label(result.result);
     if exec_effective_json(args) {
@@ -6818,8 +6818,8 @@ fn exec_print_json<T: Serialize>(value: &T) -> Result<(), CliFailure> {
     print_exec_json(&value)
 }
 
-fn exec_state_label(state: nixling_ipc::guest_wire::ExecState) -> &'static str {
-    use nixling_ipc::guest_wire::ExecState;
+fn exec_state_label(state: nixling_contracts::guest_wire::ExecState) -> &'static str {
+    use nixling_contracts::guest_wire::ExecState;
 
     match state {
         ExecState::Created => "created",
@@ -6835,9 +6835,9 @@ fn exec_state_label(state: nixling_ipc::guest_wire::ExecState) -> &'static str {
 }
 
 fn exec_kill_outcome_label(
-    outcome: nixling_ipc::public_wire::ExecDetachedKillOutcome,
+    outcome: nixling_contracts::public_wire::ExecDetachedKillOutcome,
 ) -> &'static str {
-    use nixling_ipc::public_wire::ExecDetachedKillOutcome;
+    use nixling_contracts::public_wire::ExecDetachedKillOutcome;
 
     match outcome {
         ExecDetachedKillOutcome::Cancelling => "cancelling",
@@ -6868,7 +6868,9 @@ fn exec_loss_summary(dropped_bytes: u64, truncated: bool) -> String {
     )
 }
 
-fn exec_list_offsets_summary(entry: &nixling_ipc::public_wire::ExecDetachedListEntry) -> String {
+fn exec_list_offsets_summary(
+    entry: &nixling_contracts::public_wire::ExecDetachedListEntry,
+) -> String {
     format!(
         "all={}..{} stdout={}..{} stderr={}..{}",
         entry.start_offset,
@@ -6880,7 +6882,7 @@ fn exec_list_offsets_summary(entry: &nixling_ipc::public_wire::ExecDetachedListE
     )
 }
 
-fn exec_list_loss_summary(entry: &nixling_ipc::public_wire::ExecDetachedListEntry) -> String {
+fn exec_list_loss_summary(entry: &nixling_contracts::public_wire::ExecDetachedListEntry) -> String {
     format!(
         "all={} stdout={} stderr={}",
         exec_loss_summary(entry.dropped_bytes, entry.truncated),
@@ -6889,7 +6891,7 @@ fn exec_list_loss_summary(entry: &nixling_ipc::public_wire::ExecDetachedListEntr
     )
 }
 
-fn exec_logs_incomplete(result: &nixling_ipc::public_wire::ExecDetachedLogsResult) -> bool {
+fn exec_logs_incomplete(result: &nixling_contracts::public_wire::ExecDetachedLogsResult) -> bool {
     result.dropped_bytes > 0
         || result.truncated
         || result.stdout_dropped_bytes > 0
@@ -6898,7 +6900,7 @@ fn exec_logs_incomplete(result: &nixling_ipc::public_wire::ExecDetachedLogsResul
         || result.stderr_truncated
 }
 
-fn exec_logs_warning(result: &nixling_ipc::public_wire::ExecDetachedLogsResult) -> String {
+fn exec_logs_warning(result: &nixling_contracts::public_wire::ExecDetachedLogsResult) -> String {
     format!(
         "nixling: vm exec logs: retained output incomplete (startOffset={} endOffset={} droppedBytes={} truncated={} stdoutStartOffset={} stdoutEndOffset={} stdoutNextOffset={} stdoutEof={} stdoutDroppedBytes={} stdoutTruncated={} stderrStartOffset={} stderrEndOffset={} stderrNextOffset={} stderrEof={} stderrDroppedBytes={} stderrTruncated={})\n",
         result.start_offset,
@@ -6961,7 +6963,7 @@ fn exec_json_success_value(
     outcome: &exec_client::ExecOutcome,
     host: &exec_client::CapturingHostIo,
 ) -> (Value, i32) {
-    use nixling_ipc::public_wire::ExecTerminalStatus;
+    use nixling_contracts::public_wire::ExecTerminalStatus;
 
     let exit_code = exec_client::exit_code_for_terminal(&outcome.terminal);
     let mut map = exec_json_base(args);
@@ -9736,7 +9738,7 @@ fn try_store_verify_via_socket(
 ) -> Result<StoreVerifySocketOutcome, CliFailure> {
     let request = encode_type_tagged_message(
         "storeVerify",
-        &nixling_ipc::public_wire::StoreVerifyRequest {
+        &nixling_contracts::public_wire::StoreVerifyRequest {
             vm: vm.to_owned(),
             repair,
         },
@@ -10034,7 +10036,7 @@ mod host_install_dispatch_tests {
         output_service_capabilities, parse_host_shutdown_hook_args, parse_vm_exec_action,
         public_wire, render_usb_probe_human, send, socket, storage_migration_checkpoint_id,
     };
-    use nixling_ipc::Version;
+    use nixling_contracts::Version;
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
     static TEST_SOCKET_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -10811,7 +10813,7 @@ mod host_install_dispatch_tests {
     struct FakeShellTransport {
         ops: Vec<public_wire::ShellOp>,
         write_accepts: VecDeque<u64>,
-        read_chunks: VecDeque<nixling_ipc::terminal_wire::TerminalReadOutputChunk>,
+        read_chunks: VecDeque<nixling_contracts::terminal_wire::TerminalReadOutputChunk>,
         close_transport_unavailable: bool,
     }
 
@@ -10824,7 +10826,7 @@ mod host_install_dispatch_tests {
             self.ops.push(op.clone());
             match op {
                 public_wire::ShellOp::Resize(_) => Ok(public_wire::ShellOpResponse::Resize(
-                    nixling_ipc::terminal_wire::TerminalControlResult { delivered: true },
+                    nixling_contracts::terminal_wire::TerminalControlResult { delivered: true },
                 )),
                 public_wire::ShellOp::WriteStdin(write) => {
                     let offered_len = nixling_core::base64_codec::decode(&write.chunk_base64)
@@ -10832,7 +10834,7 @@ mod host_install_dispatch_tests {
                         .len() as u64;
                     let accepted_len = self.write_accepts.pop_front().unwrap_or(offered_len);
                     Ok(public_wire::ShellOpResponse::WriteStdin(
-                        nixling_ipc::terminal_wire::TerminalWriteStdinResult {
+                        nixling_contracts::terminal_wire::TerminalWriteStdinResult {
                             accepted_len,
                             next_offset: write.offset + accepted_len,
                             backpressured: false,
@@ -10910,14 +10912,16 @@ mod host_install_dispatch_tests {
             ops: Vec::new(),
             write_accepts: VecDeque::new(),
             close_transport_unavailable: false,
-            read_chunks: VecDeque::from([nixling_ipc::terminal_wire::TerminalReadOutputChunk {
-                data_base64: nixling_core::base64_codec::encode(b"hello\n"),
-                next_offset: 6,
-                eof: true,
-                dropped_bytes: 0,
-                truncated: false,
-                timed_out: false,
-            }]),
+            read_chunks: VecDeque::from([
+                nixling_contracts::terminal_wire::TerminalReadOutputChunk {
+                    data_base64: nixling_core::base64_codec::encode(b"hello\n"),
+                    next_offset: 6,
+                    eof: true,
+                    dropped_bytes: 0,
+                    truncated: false,
+                    timed_out: false,
+                },
+            ]),
         };
         let mut host = FakeShellHost {
             stdin: Some(b"echo hi\n".to_vec()),
@@ -10933,7 +10937,7 @@ mod host_install_dispatch_tests {
         assert_eq!(host.stdout, b"hello\n");
         assert!(matches!(
             transport.ops.first(),
-            Some(public_wire::ShellOp::Resize(nixling_ipc::terminal_wire::TerminalResize {
+            Some(public_wire::ShellOp::Resize(nixling_contracts::terminal_wire::TerminalResize {
                 session,
                 rows: 44,
                 cols: 120,
@@ -10943,7 +10947,7 @@ mod host_install_dispatch_tests {
         assert!(matches!(
             transport.ops.get(1),
             Some(public_wire::ShellOp::WriteStdin(
-                nixling_ipc::terminal_wire::TerminalWriteStdin {
+                nixling_contracts::terminal_wire::TerminalWriteStdin {
                     session,
                     offset: 0,
                     chunk_base64,
@@ -10955,9 +10959,9 @@ mod host_install_dispatch_tests {
         assert!(matches!(
             transport.ops.get(2),
             Some(public_wire::ShellOp::ReadOutput(
-                nixling_ipc::terminal_wire::TerminalReadOutput {
+                nixling_contracts::terminal_wire::TerminalReadOutput {
                     session,
-                    stream: nixling_ipc::terminal_wire::TerminalStream::Stdout,
+                    stream: nixling_contracts::terminal_wire::TerminalStream::Stdout,
                     offset: 0,
                     wait: true,
                     ..
@@ -11054,14 +11058,16 @@ mod host_install_dispatch_tests {
             ops: Vec::new(),
             write_accepts: VecDeque::from([3, 4]),
             close_transport_unavailable: false,
-            read_chunks: VecDeque::from([nixling_ipc::terminal_wire::TerminalReadOutputChunk {
-                data_base64: String::new(),
-                next_offset: 0,
-                eof: true,
-                dropped_bytes: 0,
-                truncated: false,
-                timed_out: false,
-            }]),
+            read_chunks: VecDeque::from([
+                nixling_contracts::terminal_wire::TerminalReadOutputChunk {
+                    data_base64: String::new(),
+                    next_offset: 0,
+                    eof: true,
+                    dropped_bytes: 0,
+                    truncated: false,
+                    timed_out: false,
+                },
+            ]),
         };
         let mut host = FakeShellHost {
             stdin: Some(b"abcdefg".to_vec()),
@@ -14757,7 +14763,7 @@ mod host_install_dispatch_tests {
 
     #[test]
     fn public_list_entries_drive_legacy_list_status_without_pidfd_read() {
-        let services = nixling_ipc::public_wire::PublicVmServices {
+        let services = nixling_contracts::public_wire::PublicVmServices {
             nixling: "active".to_owned(),
             microvm: "running".to_owned(),
             virtiofsd: "running".to_owned(),
@@ -14767,18 +14773,18 @@ mod host_install_dispatch_tests {
             snd: None,
             swtpm: None,
         };
-        let entry = nixling_ipc::public_wire::ListEntry {
+        let entry = nixling_contracts::public_wire::ListEntry {
             env: Some("dev".to_owned()),
             graphics: true,
             is_net_vm: false,
-            lifecycle: nixling_ipc::public_wire::VmLifecycle {
+            lifecycle: nixling_contracts::public_wire::VmLifecycle {
                 pending_restart: false,
-                state: nixling_ipc::public_wire::VmLifecycleState::Running,
+                state: nixling_contracts::public_wire::VmLifecycleState::Running,
             },
             name: "vm-a".to_owned(),
             autostart: None,
             qemu_media: None,
-            runtime: nixling_ipc::public_wire::RuntimeSummary {
+            runtime: nixling_contracts::public_wire::RuntimeSummary {
                 detail: "running".to_owned(),
                 kind: None,
                 operation_capabilities: Default::default(),
@@ -14806,9 +14812,9 @@ mod host_install_dispatch_tests {
 
     #[test]
     fn public_list_status_collapses_transient_lifecycle_to_stable_label() {
-        let lifecycle = nixling_ipc::public_wire::VmLifecycle {
+        let lifecycle = nixling_contracts::public_wire::VmLifecycle {
             pending_restart: false,
-            state: nixling_ipc::public_wire::VmLifecycleState::Starting,
+            state: nixling_contracts::public_wire::VmLifecycleState::Starting,
         };
 
         assert_eq!(
@@ -14819,9 +14825,9 @@ mod host_install_dispatch_tests {
 
     #[test]
     fn public_list_status_preserves_failed_lifecycle_label() {
-        let lifecycle = nixling_ipc::public_wire::VmLifecycle {
+        let lifecycle = nixling_contracts::public_wire::VmLifecycle {
             pending_restart: false,
-            state: nixling_ipc::public_wire::VmLifecycleState::Failed,
+            state: nixling_contracts::public_wire::VmLifecycleState::Failed,
         };
 
         assert_eq!(
@@ -14886,25 +14892,25 @@ mod host_install_dispatch_tests {
             ssh_user: Some("alice".to_owned()),
             runtime: None,
         };
-        let public = nixling_ipc::public_wire::VmStatus {
+        let public = nixling_contracts::public_wire::VmStatus {
             bridge_checks: Vec::new(),
             env: Some("dev".to_owned()),
             graphics: true,
             is_net_vm: false,
-            lifecycle: nixling_ipc::public_wire::VmLifecycle {
+            lifecycle: nixling_contracts::public_wire::VmLifecycle {
                 pending_restart: false,
-                state: nixling_ipc::public_wire::VmLifecycleState::Running,
+                state: nixling_contracts::public_wire::VmLifecycleState::Running,
             },
             name: "vm-a".to_owned(),
             autostart: None,
             qemu_media: None,
-            runtime: nixling_ipc::public_wire::RuntimeSummary {
+            runtime: nixling_contracts::public_wire::RuntimeSummary {
                 detail: "running".to_owned(),
                 kind: None,
                 operation_capabilities: Default::default(),
                 services: Vec::new(),
             },
-            services: nixling_ipc::public_wire::PublicVmServices {
+            services: nixling_contracts::public_wire::PublicVmServices {
                 nixling: "active".to_owned(),
                 microvm: "running".to_owned(),
                 virtiofsd: "running".to_owned(),
@@ -15560,7 +15566,7 @@ mod exec_json_envelope_tests {
     //! status number (the 70-vs-70 case): `source` + `reason` +
     //! `guestExitCode`/`transportExitCode` carry the distinction.
 
-    use nixling_ipc::public_wire::ExecTerminalStatus;
+    use nixling_contracts::public_wire::ExecTerminalStatus;
 
     use super::{VmExecArgs, exec_client, exec_json_failure_value, exec_json_success_value};
 
@@ -15947,7 +15953,7 @@ mod config_cmd_tests {
         let dir = scratch("gc-sync-big");
         let staging = dir.join("work.guest.nix");
         let oversize =
-            vec![b'a'; (nixling_ipc::guest_wire::READ_GUEST_FILE_MAX_BYTES as usize) + 1];
+            vec![b'a'; (nixling_contracts::guest_wire::READ_GUEST_FILE_MAX_BYTES as usize) + 1];
         let reply = read_guest_config_reply(&oversize);
         let err = super::finish_config_sync_from_reply(&reply, &staging, false)
             .expect_err("oversize must be rejected");

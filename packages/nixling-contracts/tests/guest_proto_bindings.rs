@@ -1,5 +1,5 @@
-use nixling_ipc::guest_proto as pb;
-use nixling_ipc::guest_wire::{
+use nixling_contracts::guest_proto as pb;
+use nixling_contracts::guest_wire::{
     GUEST_CONTROL_PROTOCOL_VERSION, GUEST_CONTROL_VSOCK_PORT, HARD_MAX_CHUNK_BYTES,
 };
 use protobuf::{EnumOrUnknown, Message, MessageField};
@@ -144,7 +144,7 @@ fn generated_exec_expired_error_kind_matches_guest_wire() {
         "generated ExecExpired discriminant changed"
     );
     assert_eq!(
-        serde_json::to_string(&nixling_ipc::guest_wire::GuestControlErrorKind::ExecExpired)
+        serde_json::to_string(&nixling_contracts::guest_wire::GuestControlErrorKind::ExecExpired)
             .unwrap(),
         "\"exec-expired\"",
     );

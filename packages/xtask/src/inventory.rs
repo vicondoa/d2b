@@ -522,7 +522,7 @@ fn classify_generated_surface(path: &str) -> Option<&'static str> {
         Some("cli-manpage")
     } else if path.starts_with("docs/completions/") {
         Some("cli-completion")
-    } else if path.starts_with("packages/nixling-ipc/proto/") && path.ends_with(".proto") {
+    } else if path.starts_with("packages/nixling-contracts/proto/") && path.ends_with(".proto") {
         Some("guest-control-proto-source")
     } else if path.contains("/src/generated/") {
         Some("generated-rust-binding")

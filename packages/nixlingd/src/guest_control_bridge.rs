@@ -26,11 +26,11 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use nixling_ipc::broker_wire::{
+use nixling_contracts::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerResponse, GuestControlSignRequest,
     GuestControlSignResponse,
 };
-use nixling_ipc::guest_auth::AUTH_NONCE_LEN;
+use nixling_contracts::guest_auth::AUTH_NONCE_LEN;
 
 use crate::guest_control_health::{
     AttemptBudget, GuestControlHealthError, GuestControlHealthEvidence, GuestControlSigner,
@@ -786,7 +786,7 @@ impl ReadinessObservation {
 /// outcome. Used as a metric/span label, so the range is a small fixed
 /// vocabulary — never free-form text and never guest-supplied content.
 pub fn health_state_label(evidence: &GuestControlHealthEvidence) -> &'static str {
-    use nixling_ipc::guest_proto::HealthState;
+    use nixling_contracts::guest_proto::HealthState;
     match evidence.health.state.enum_value() {
         Ok(HealthState::HEALTH_STATE_HEALTHY) => "healthy",
         Ok(HealthState::HEALTH_STATE_DEGRADED) => "degraded",
@@ -819,7 +819,7 @@ pub fn error_kind_label(error: &GuestControlHealthError) -> &'static str {
 /// `HealthReason` vocabulary — never free-form text and never
 /// guest-supplied content.
 pub fn health_reason_label(evidence: &GuestControlHealthEvidence) -> &'static str {
-    use nixling_ipc::guest_proto::HealthReason;
+    use nixling_contracts::guest_proto::HealthReason;
     match evidence.health.reason.enum_value() {
         Ok(HealthReason::HEALTH_REASON_NONE) => "none",
         Ok(HealthReason::HEALTH_REASON_OLD_GENERATION) => "old-generation",
@@ -851,10 +851,10 @@ pub fn health_reason_label(evidence: &GuestControlHealthEvidence) -> &'static st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nixling_ipc::broker_wire::{
+    use nixling_contracts::broker_wire::{
         BrokerErrorResponse, GuestControlProofRole, GuestControlSignRequest,
     };
-    use nixling_ipc::guest_auth::AUTH_TAG_LEN;
+    use nixling_contracts::guest_auth::AUTH_TAG_LEN;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -917,7 +917,7 @@ mod tests {
 
         // Wrong (non-sign) response variant -> Signer.
         let wrong = map_broker_sign_response(Ok(BrokerResponse::PollChildReaped(
-            nixling_ipc::broker_wire::PollChildReapedResponse {
+            nixling_contracts::broker_wire::PollChildReapedResponse {
                 notifications: vec![],
             },
         )));
@@ -948,16 +948,16 @@ mod tests {
             AttemptBudget::from_now(Duration::from_millis(50), GUEST_CONTROL_ATTEMPT_CAP),
         );
         let request = GuestControlSignRequest {
-            vm_id: nixling_ipc::types::VmId::new("corp-vm"),
+            vm_id: nixling_contracts::types::VmId::new("corp-vm"),
             role: GuestControlProofRole::HostProof,
-            protocol_version: nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
-            direction: nixling_ipc::broker_wire::GuestControlDirection::HostToGuest,
-            purpose: nixling_ipc::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
-            guest_control_port: nixling_ipc::guest_auth::GUEST_CONTROL_AUTH_PORT,
+            protocol_version: nixling_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
+            direction: nixling_contracts::broker_wire::GuestControlDirection::HostToGuest,
+            purpose: nixling_contracts::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
+            guest_control_port: nixling_contracts::guest_auth::GUEST_CONTROL_AUTH_PORT,
             peer_cid: Some(VMADDR_CID_HOST),
             host_nonce: vec![0x11; AUTH_NONCE_LEN],
             guest_nonce: vec![0x22; AUTH_NONCE_LEN],
-            guest_boot_id: nixling_ipc::broker_wire::GuestBootIdWire::new("boot-1"),
+            guest_boot_id: nixling_contracts::broker_wire::GuestBootIdWire::new("boot-1"),
             capabilities_hash: None,
             tracing_span_id: None,
         };
@@ -977,7 +977,7 @@ mod tests {
     /// Build a minimal Healthy evidence so the readiness loop's
     /// ready-decision can be exercised without a live guest.
     fn healthy_evidence() -> GuestControlHealthEvidence {
-        use nixling_ipc::guest_proto as pb;
+        use nixling_contracts::guest_proto as pb;
         let mut health = pb::HealthResponse::new();
         health.origin =
             protobuf::EnumOrUnknown::new(pb::HealthOrigin::HEALTH_ORIGIN_GUEST_REPORTED);
@@ -985,11 +985,11 @@ mod tests {
         health.reason = protobuf::EnumOrUnknown::new(pb::HealthReason::HEALTH_REASON_NONE);
         health.remediation =
             protobuf::EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_NONE);
-        health.protocol_version = nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        health.protocol_version = nixling_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
         GuestControlHealthEvidence {
             vm_id: "corp-vm".to_owned(),
             guest_boot_id: "boot-1".to_owned(),
-            protocol_version: nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
+            protocol_version: nixling_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
             capabilities_hash: "caps-sha256".to_owned(),
             health,
         }
@@ -1012,7 +1012,7 @@ mod tests {
     /// treats DEGRADED as a SUCCESS (ready), so this drives the
     /// degraded-success readiness path end to end.
     fn degraded_evidence() -> GuestControlHealthEvidence {
-        use nixling_ipc::guest_proto as pb;
+        use nixling_contracts::guest_proto as pb;
         let mut health = pb::HealthResponse::new();
         health.origin =
             protobuf::EnumOrUnknown::new(pb::HealthOrigin::HEALTH_ORIGIN_GUEST_REPORTED);
@@ -1026,11 +1026,11 @@ mod tests {
             .push(protobuf::EnumOrUnknown::new(
                 pb::GuestSubsystem::GUEST_SUBSYSTEM_EXEC,
             ));
-        health.protocol_version = nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        health.protocol_version = nixling_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
         GuestControlHealthEvidence {
             vm_id: "corp-vm".to_owned(),
             guest_boot_id: "boot-1".to_owned(),
-            protocol_version: nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
+            protocol_version: nixling_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
             capabilities_hash: "caps-sha256".to_owned(),
             health,
         }
@@ -1650,16 +1650,16 @@ mod tests {
             AttemptBudget::from_now(Duration::ZERO, GUEST_CONTROL_ATTEMPT_CAP),
         );
         let request = GuestControlSignRequest {
-            vm_id: nixling_ipc::types::VmId::new("corp-vm"),
+            vm_id: nixling_contracts::types::VmId::new("corp-vm"),
             role: GuestControlProofRole::HostProof,
-            protocol_version: nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
-            direction: nixling_ipc::broker_wire::GuestControlDirection::HostToGuest,
-            purpose: nixling_ipc::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
-            guest_control_port: nixling_ipc::guest_auth::GUEST_CONTROL_AUTH_PORT,
+            protocol_version: nixling_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
+            direction: nixling_contracts::broker_wire::GuestControlDirection::HostToGuest,
+            purpose: nixling_contracts::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
+            guest_control_port: nixling_contracts::guest_auth::GUEST_CONTROL_AUTH_PORT,
             peer_cid: Some(VMADDR_CID_HOST),
             host_nonce: vec![0x11; AUTH_NONCE_LEN],
             guest_nonce: vec![0x22; AUTH_NONCE_LEN],
-            guest_boot_id: nixling_ipc::broker_wire::GuestBootIdWire::new("boot-1"),
+            guest_boot_id: nixling_contracts::broker_wire::GuestBootIdWire::new("boot-1"),
             capabilities_hash: None,
             tracing_span_id: None,
         };
@@ -1716,19 +1716,19 @@ mod tests {
             assert_eq!(request.vm_id.as_str(), "corp-vm");
             assert_eq!(
                 request.protocol_version,
-                nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION
+                nixling_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION
             );
             assert_eq!(
                 request.direction,
-                nixling_ipc::broker_wire::GuestControlDirection::HostToGuest
+                nixling_contracts::broker_wire::GuestControlDirection::HostToGuest
             );
             assert_eq!(
                 request.purpose,
-                nixling_ipc::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1
+                nixling_contracts::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1
             );
             assert_eq!(
                 request.guest_control_port,
-                nixling_ipc::guest_auth::GUEST_CONTROL_AUTH_PORT
+                nixling_contracts::guest_auth::GUEST_CONTROL_AUTH_PORT
             );
             assert_eq!(request.peer_cid, Some(VMADDR_CID_HOST));
             assert_eq!(request.host_nonce, host_nonce.to_vec());
@@ -1771,22 +1771,24 @@ mod tests {
     impl crate::guest_control_health::GuestControlRpc for HappyFakeClient {
         async fn hello(
             &self,
-            _request: nixling_ipc::guest_proto::HelloRequest,
-        ) -> Result<nixling_ipc::guest_proto::HelloResponse, GuestControlHealthError> {
-            use nixling_ipc::guest_proto as pb;
+            _request: nixling_contracts::guest_proto::HelloRequest,
+        ) -> Result<nixling_contracts::guest_proto::HelloResponse, GuestControlHealthError>
+        {
+            use nixling_contracts::guest_proto as pb;
             let mut response = pb::HelloResponse::new();
             response.guest_nonce = vec![0x22; AUTH_NONCE_LEN];
             response.guest_boot_id = "boot-1".to_owned();
-            response.protocol_version = nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+            response.protocol_version =
+                nixling_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
             Ok(response)
         }
 
         async fn authenticate(
             &self,
-            _request: nixling_ipc::guest_proto::AuthenticateRequest,
-        ) -> Result<nixling_ipc::guest_proto::AuthenticateResponse, GuestControlHealthError>
+            _request: nixling_contracts::guest_proto::AuthenticateRequest,
+        ) -> Result<nixling_contracts::guest_proto::AuthenticateResponse, GuestControlHealthError>
         {
-            use nixling_ipc::guest_proto as pb;
+            use nixling_contracts::guest_proto as pb;
             let mut response = pb::AuthenticateResponse::new();
             response.guest_auth_tag = Some(vec![0x77; AUTH_TAG_LEN]);
             response.capabilities_hash = Some("caps-sha256".to_owned());
@@ -1795,33 +1797,34 @@ mod tests {
 
         async fn health(
             &self,
-            _request: nixling_ipc::guest_proto::HealthRequest,
-        ) -> Result<nixling_ipc::guest_proto::HealthResponse, GuestControlHealthError> {
+            _request: nixling_contracts::guest_proto::HealthRequest,
+        ) -> Result<nixling_contracts::guest_proto::HealthResponse, GuestControlHealthError>
+        {
             Ok(healthy_evidence().health)
         }
 
         async fn read_guest_file(
             &self,
-            _request: nixling_ipc::guest_proto::ReadGuestFileRequest,
-        ) -> Result<nixling_ipc::guest_proto::ReadGuestFileResponse, GuestControlHealthError>
+            _request: nixling_contracts::guest_proto::ReadGuestFileRequest,
+        ) -> Result<nixling_contracts::guest_proto::ReadGuestFileResponse, GuestControlHealthError>
         {
-            Ok(nixling_ipc::guest_proto::ReadGuestFileResponse::new())
+            Ok(nixling_contracts::guest_proto::ReadGuestFileResponse::new())
         }
 
         async fn usbip_import(
             &self,
-            _request: nixling_ipc::guest_proto::UsbipImportRequest,
-        ) -> Result<nixling_ipc::guest_proto::UsbipImportResponse, GuestControlHealthError>
+            _request: nixling_contracts::guest_proto::UsbipImportRequest,
+        ) -> Result<nixling_contracts::guest_proto::UsbipImportResponse, GuestControlHealthError>
         {
-            Ok(nixling_ipc::guest_proto::UsbipImportResponse::new())
+            Ok(nixling_contracts::guest_proto::UsbipImportResponse::new())
         }
 
         async fn usbip_status(
             &self,
-            _request: nixling_ipc::guest_proto::UsbipStatusRequest,
-        ) -> Result<nixling_ipc::guest_proto::UsbipStatusResponse, GuestControlHealthError>
+            _request: nixling_contracts::guest_proto::UsbipStatusRequest,
+        ) -> Result<nixling_contracts::guest_proto::UsbipStatusResponse, GuestControlHealthError>
         {
-            Ok(nixling_ipc::guest_proto::UsbipStatusResponse::new())
+            Ok(nixling_contracts::guest_proto::UsbipStatusResponse::new())
         }
     }
 
@@ -1925,10 +1928,10 @@ mod tests {
     /// Build evidence whose every guest-controlled string carries a
     /// sentinel, so a leak into the observability projection is detectable.
     fn sentinel_evidence(
-        state: nixling_ipc::guest_proto::HealthState,
-        reason: nixling_ipc::guest_proto::HealthReason,
+        state: nixling_contracts::guest_proto::HealthState,
+        reason: nixling_contracts::guest_proto::HealthReason,
     ) -> GuestControlHealthEvidence {
-        use nixling_ipc::guest_proto as pb;
+        use nixling_contracts::guest_proto as pb;
         let sentinel = "SENTINEL-LEAK-7b3f";
         let mut health = pb::HealthResponse::new();
         health.origin =
@@ -1937,11 +1940,11 @@ mod tests {
         health.reason = protobuf::EnumOrUnknown::new(reason);
         health.remediation =
             protobuf::EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_NONE);
-        health.protocol_version = nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        health.protocol_version = nixling_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
         GuestControlHealthEvidence {
             vm_id: sentinel.to_owned(),
             guest_boot_id: sentinel.to_owned(),
-            protocol_version: nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
+            protocol_version: nixling_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
             capabilities_hash: sentinel.to_owned(),
             health,
         }
@@ -1966,7 +1969,7 @@ mod tests {
 
     #[test]
     fn readiness_observation_carries_no_guest_bytes_and_uses_closed_enums() {
-        use nixling_ipc::guest_proto::{HealthReason, HealthState};
+        use nixling_contracts::guest_proto::{HealthReason, HealthState};
 
         // Success projection: guest-reported strings (vm_id, guest_boot_id,
         // capabilities_hash) must NEVER reach the observation fields.

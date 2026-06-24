@@ -17,7 +17,7 @@ use std::{
 
 use async_trait::async_trait;
 use futures::stream;
-use nixling_ipc::{
+use nixling_contracts::{
     guest_proto as pb,
     guest_wire::{GUEST_CONTROL_PROTOCOL_VERSION, READ_GUEST_FILE_MAX_BYTES},
 };
@@ -2724,7 +2724,7 @@ fn validate_guest_usbip_host(host: &str) -> Result<(), pb::GuestControlErrorKind
 
 fn validate_guest_usbip_bus_id(bus_id: &str) -> Result<(), pb::GuestControlErrorKind> {
     use pb::GuestControlErrorKind as K;
-    nixling_ipc::usbip::validate_bus_id(bus_id)
+    nixling_contracts::usbip::validate_bus_id(bus_id)
         .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID)
 }
 
@@ -5239,10 +5239,10 @@ mod tests {
         assert!(response.error.is_none());
         let encoded = response.write_to_bytes().unwrap();
         assert!(
-            (encoded.len() as u64) < nixling_ipc::guest_wire::TTRPC_FRAME_CAP_BYTES,
+            (encoded.len() as u64) < nixling_contracts::guest_wire::TTRPC_FRAME_CAP_BYTES,
             "encoded cap response {} must fit ttRPC frame cap {}",
             encoded.len(),
-            nixling_ipc::guest_wire::TTRPC_FRAME_CAP_BYTES
+            nixling_contracts::guest_wire::TTRPC_FRAME_CAP_BYTES
         );
         std::fs::remove_dir_all(&dir).ok();
     }

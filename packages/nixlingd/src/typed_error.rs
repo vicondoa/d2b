@@ -570,7 +570,7 @@ fn redact_path_like_tokens(detail: &str) -> String {
 }
 
 fn public_usb_busid(busid: &str) -> &str {
-    if nixling_ipc::usbip::validate_bus_id(busid).is_ok() {
+    if nixling_contracts::usbip::validate_bus_id(busid).is_ok() {
         busid
     } else {
         "<invalid-busid>"

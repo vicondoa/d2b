@@ -25,7 +25,7 @@
 
 pub use super::pidfd_table::*;
 
-use nixling_ipc::broker_wire::RunnerRole;
+use nixling_contracts::broker_wire::RunnerRole;
 use serde::{Deserialize, Serialize};
 
 /// Operator policy that controls how the watchdog reacts to a

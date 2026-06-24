@@ -1,6 +1,6 @@
 use std::{fs, io, path::PathBuf};
 
-use nixling_ipc::{
+use nixling_contracts::{
     cli_output::*,
     public_wire::{
         ListEntry as IpcListEntry, PublicVmServices,
@@ -769,7 +769,7 @@ pub(crate) fn list_status_label(
 }
 
 pub(crate) fn public_lifecycle_status_label(
-    lifecycle: &nixling_ipc::public_wire::VmLifecycle,
+    lifecycle: &nixling_contracts::public_wire::VmLifecycle,
 ) -> String {
     if lifecycle.pending_restart {
         return "pending-restart".to_owned();
@@ -787,7 +787,7 @@ pub(crate) fn public_lifecycle_status_label(
 }
 
 pub(crate) fn public_lifecycle_list_status_label(
-    lifecycle: &nixling_ipc::public_wire::VmLifecycle,
+    lifecycle: &nixling_contracts::public_wire::VmLifecycle,
 ) -> String {
     if lifecycle.pending_restart {
         return "pending-restart".to_owned();

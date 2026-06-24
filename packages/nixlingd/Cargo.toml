@@ -18,7 +18,7 @@ parking_lot = { version = "0.12", features = ["arc_lock"] }
 rustix = { workspace = true }
 nixling-core = { path = "../nixling-core", version = "0.0.0-bootstrap" }
 nixling-host = { path = "../nixling-host", version = "0.0.0-bootstrap" }
-nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
+nixling-contracts = { path = "../nixling-contracts", version = "0.0.0-bootstrap" }
 # v2 constellation contract crates (ADR 0032). The peer-module skeletons in
 # src/constellation_stubs.rs wire this trait surface; they are compile-only
 # and NOT called from the running daemon (zero behavior change).

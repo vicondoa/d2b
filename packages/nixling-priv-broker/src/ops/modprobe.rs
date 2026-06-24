@@ -13,13 +13,13 @@
 
 use serde::{Deserialize, Serialize};
 
+use nixling_contracts::broker_wire::ModprobeIfAllowedRequest;
 use nixling_core::bundle_resolver::BundleResolver;
 use nixling_core::host_w3::KernelModuleEntry;
 use nixling_host::modules::{
     ModuleDisposition, ProbeInputs, probe_modules_disabled, probe_with,
     read_builtin_modules_with_fallback, read_loaded_modules,
 };
-use nixling_ipc::broker_wire::ModprobeIfAllowedRequest;
 
 use crate::audit::AuditLog;
 use crate::ops::exec_reconcile::SystemLiveExec;

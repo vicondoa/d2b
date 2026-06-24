@@ -35,7 +35,7 @@ use std::time::Duration;
 use nix::sys::socket::{
     AddressFamily, Backlog, SockFlag, SockType, UnixAddr, bind, listen, socket,
 };
-use nixling_ipc::broker_wire::{
+use nixling_contracts::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, HelloRequest,
 };
 use nixling_priv_broker::protocol::{connect_seqpacket, recv_json_frame, send_json_frame};

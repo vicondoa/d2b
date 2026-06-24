@@ -4,7 +4,7 @@
 //! # Motivation
 //!
 //! Per the security contract in
-//! `packages/nixling-ipc/src/types.rs::BundleOpId`, mutating broker
+//! `packages/nixling-contracts/src/types.rs::BundleOpId`, mutating broker
 //! requests carry opaque IDs that the broker resolves against its own
 //! trusted copy of the bundle — the daemon never names raw paths, raw
 //! uids/gids, raw argv, raw nft rule text, raw routes, or raw sysctl

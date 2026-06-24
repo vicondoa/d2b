@@ -24,7 +24,7 @@
 #![allow(clippy::needless_borrow)]
 
 // The non-bootstrap runtime path is supported and wires against the
-// real opaque-ID `nixling_ipc::broker_wire::BrokerRequest` contract via
+// real opaque-ID `nixling_contracts::broker_wire::BrokerRequest` contract via
 // the `live_handlers` module. The bootstrap path remains available
 // behind the `layer1-bootstrap` feature for the legacy probe-hello /
 // probe-stub / probe-export-audit test harnesses; new code should

@@ -51,7 +51,7 @@ use crate::bootstrap::manifest as manifest_api;
 #[cfg(feature = "layer1-bootstrap")]
 use crate::bootstrap::wire::{BrokerRequest, BrokerResponse, CallerRole, RequestEnvelope};
 #[cfg(not(feature = "layer1-bootstrap"))]
-use nixling_ipc::broker_wire::{
+use nixling_contracts::broker_wire::{
     BrokerCallerRole as CallerRole, BrokerRequest, BrokerRequestEnvelope as RequestEnvelope,
     BrokerResponse,
 };
@@ -1566,7 +1566,7 @@ fn dispatch_request(
 }
 
 /// Real-wire dispatch. Matches the opaque-ID
-/// `nixling_ipc::broker_wire::BrokerRequest` tuple-newtype shape and
+/// `nixling_contracts::broker_wire::BrokerRequest` tuple-newtype shape and
 /// wires the live executors into the dispatch arms that have a ready
 /// implementation today.
 ///
@@ -1616,11 +1616,11 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
     resolver: Option<&Arc<BundleResolver>>,
     backend: &B,
 ) -> Result<DispatchResult, BrokerError> {
+    use nixling_contracts::broker_wire::BrokerRequest as RealBrokerRequest;
     use nixling_core::bundle_resolver::{
         intent_id_hosts_host, intent_id_nft_env, intent_id_nft_host, intent_id_nm_unmanaged_host,
         intent_id_route_env, intent_id_runner, intent_id_sysctl,
     };
-    use nixling_ipc::broker_wire::BrokerRequest as RealBrokerRequest;
     let bundle_metadata = audit_bundle_metadata(resolver.map(std::sync::Arc::as_ref));
     macro_rules! write_decision_op_record {
         ($($args:tt)*) => {
@@ -2014,13 +2014,14 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     expected_start_time_ticks: req.expected_start_time_ticks,
                 },
             )?;
-            let response = BrokerResponse::OpenPidfd(nixling_ipc::broker_wire::OpenPidfdResponse {
-                vm_id: req.vm_id.clone(),
-                role_id: req.role_id.clone(),
-                pid: outcome.pid,
-                verified_start_time_ticks: outcome.verified_start_time_ticks,
-                pidfd_index: 0,
-            });
+            let response =
+                BrokerResponse::OpenPidfd(nixling_contracts::broker_wire::OpenPidfdResponse {
+                    vm_id: req.vm_id.clone(),
+                    role_id: req.role_id.clone(),
+                    pid: outcome.pid,
+                    verified_start_time_ticks: outcome.verified_start_time_ticks,
+                    pidfd_index: 0,
+                });
             Ok(DispatchResult::with_fd(response, outcome.pidfd))
         }
         RealBrokerRequest::SignalRunner(req) => {
@@ -2064,7 +2065,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(BrokerResponse::SignalRunner(
-                nixling_ipc::broker_wire::SignalRunnerResponse {
+                nixling_contracts::broker_wire::SignalRunnerResponse {
                     signaled: true,
                     vm_id: req.vm_id,
                     role_id: req.role_id,
@@ -2106,7 +2107,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             )?;
             Ok(DispatchResult::no_fds(
                 BrokerResponse::DeregisterRunnerPidfd(
-                    nixling_ipc::broker_wire::DeregisterRunnerPidfdResponse {
+                    nixling_contracts::broker_wire::DeregisterRunnerPidfdResponse {
                         vm_id: req.vm_id,
                         role_id: req.role_id,
                         removed,
@@ -2159,7 +2160,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             // error envelope.
             if matches!(
                 req.role,
-                nixling_ipc::broker_wire::RunnerRole::OtelHostBridge
+                nixling_contracts::broker_wire::RunnerRole::OtelHostBridge
             ) && intent.vm_name != resolver.manifest.observability.vm_name
             {
                 let expected_obs_vm = resolver.manifest.observability.vm_name.clone();
@@ -2366,7 +2367,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 },
             )?;
             let response =
-                BrokerResponse::SpawnRunner(nixling_ipc::broker_wire::SpawnRunnerResponse {
+                BrokerResponse::SpawnRunner(nixling_contracts::broker_wire::SpawnRunnerResponse {
                     vm_id: req.vm_id.clone(),
                     role_id: req.role_id.clone(),
                     role: req.role,
@@ -2416,11 +2417,12 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     bridge_ifname,
                 },
             )?;
-            let response =
-                BrokerResponse::CreatePersistentTap(nixling_ipc::broker_wire::TapReadyResponse {
+            let response = BrokerResponse::CreatePersistentTap(
+                nixling_contracts::broker_wire::TapReadyResponse {
                     bridge: outcome.bridge_ifname,
                     tap: outcome.tap_ifname,
-                });
+                },
+            );
             Ok(DispatchResult::no_fds(response))
         }
         RealBrokerRequest::CreateTapFd(req) => {
@@ -2456,7 +2458,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 },
             )?;
             let response =
-                BrokerResponse::CreateTapFd(nixling_ipc::broker_wire::TapReadyResponse {
+                BrokerResponse::CreateTapFd(nixling_contracts::broker_wire::TapReadyResponse {
                     bridge: outcome.bridge_ifname,
                     tap: outcome.tap_ifname,
                 });
@@ -2529,8 +2531,8 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 crate::ops::cgroup::live_open_cgroup_dir(&exec, resolver, &req, audit_log)
                     .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
             let path_class = match req.path_class {
-                nixling_ipc::types::PathClass::Runtime => "runtime",
-                nixling_ipc::types::PathClass::Vm => "vm",
+                nixling_contracts::types::PathClass::Runtime => "runtime",
+                nixling_contracts::types::PathClass::Vm => "vm",
             };
             write_success_op_record!(
                 audit_log,
@@ -2868,7 +2870,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 )
                 .map_err(|err| BrokerError::Protocol(err.to_string()))?;
             Ok(DispatchResult::no_fds(BrokerResponse::PollChildReaped(
-                nixling_ipc::broker_wire::PollChildReapedResponse { notifications },
+                nixling_contracts::broker_wire::PollChildReapedResponse { notifications },
             )))
         }
         RealBrokerRequest::PrepareRuntimeDir(req) => {
@@ -3076,7 +3078,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                         OperationFields::StoreSync(audit_fields),
                     )?;
                     Ok(DispatchResult::no_fds(BrokerResponse::StoreSync(
-                        nixling_ipc::broker_wire::StoreSyncResponse {
+                        nixling_contracts::broker_wire::StoreSyncResponse {
                             vm: outcome.vm,
                             generation_id: outcome.generation_id,
                             generation_token: outcome.generation_token,
@@ -3125,8 +3127,8 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 if req.repair
                     && matches!(
                         initial.status,
-                        nixling_ipc::broker_wire::StoreVerifyStatus::Drift
-                            | nixling_ipc::broker_wire::StoreVerifyStatus::Unknown
+                        nixling_contracts::broker_wire::StoreVerifyStatus::Drift
+                            | nixling_contracts::broker_wire::StoreVerifyStatus::Unknown
                     )
                 {
                     let sync_started = std::time::Instant::now();
@@ -3314,7 +3316,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(BrokerResponse::RunMigrate(
-                nixling_ipc::broker_wire::RunMigrateResponse {
+                nixling_contracts::broker_wire::RunMigrateResponse {
                     migrated_vm_count: outcome.migrated_vm_count,
                     notes: outcome.notes,
                 },
@@ -3362,7 +3364,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(BrokerResponse::RunActivation(
-                nixling_ipc::broker_wire::RunActivationResponse {
+                nixling_contracts::broker_wire::RunActivationResponse {
                     mode: outcome.mode,
                     vm: outcome.vm,
                     generation_number: outcome.generation_number,
@@ -3396,7 +3398,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(BrokerResponse::RunGc(
-                nixling_ipc::broker_wire::RunGcResponse {
+                nixling_contracts::broker_wire::RunGcResponse {
                     keep_generations: outcome.keep_generations,
                     retained_store_path_count: outcome.retained_store_path_count,
                     summary: outcome.summary,
@@ -3435,7 +3437,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(BrokerResponse::RunKeysRotate(
-                nixling_ipc::broker_wire::RunKeysRotateResponse {
+                nixling_contracts::broker_wire::RunKeysRotateResponse {
                     vm: outcome.vm,
                     key_path: outcome.key_path.display().to_string(),
                     public_key_fingerprint: outcome.public_key_fingerprint,
@@ -3474,7 +3476,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(BrokerResponse::RunHostKeyTrust(
-                nixling_ipc::broker_wire::RunHostKeyTrustResponse {
+                nixling_contracts::broker_wire::RunHostKeyTrustResponse {
                     vm: outcome.vm,
                     static_ip: outcome.static_ip,
                     known_hosts_path: outcome.known_hosts_path.display().to_string(),
@@ -3517,7 +3519,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(BrokerResponse::RunRotateKnownHost(
-                nixling_ipc::broker_wire::RunRotateKnownHostResponse {
+                nixling_contracts::broker_wire::RunRotateKnownHostResponse {
                     vm: outcome.vm,
                     static_ip: outcome.static_ip,
                     known_hosts_path: outcome.known_hosts_path.display().to_string(),
@@ -4068,10 +4070,10 @@ type GuestControlHmac = Hmac<Sha256>;
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn handle_guest_control_sign(
-    req: nixling_ipc::broker_wire::GuestControlSignRequest,
+    req: nixling_contracts::broker_wire::GuestControlSignRequest,
     config: &ServerConfig,
     resolver: Option<&Arc<BundleResolver>>,
-) -> Result<nixling_ipc::broker_wire::GuestControlSignResponse, BrokerError> {
+) -> Result<nixling_contracts::broker_wire::GuestControlSignResponse, BrokerError> {
     req.validate_shape()
         .map_err(|reason| BrokerError::GuestControlSignRefused { reason })?;
     let resolver = resolver.ok_or(BrokerError::BundleResolverUnavailable)?;
@@ -4090,28 +4092,28 @@ fn handle_guest_control_sign(
     mac.update(&transcript);
     let tag = mac.finalize().into_bytes().to_vec();
     token.fill(0);
-    Ok(nixling_ipc::broker_wire::GuestControlSignResponse { tag })
+    Ok(nixling_contracts::broker_wire::GuestControlSignResponse { tag })
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn guest_control_transcript_len(
-    req: &nixling_ipc::broker_wire::GuestControlSignRequest,
+    req: &nixling_contracts::broker_wire::GuestControlSignRequest,
 ) -> Result<usize, BrokerError> {
     Ok(guest_control_transcript(req)?.len())
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn guest_control_transcript(
-    req: &nixling_ipc::broker_wire::GuestControlSignRequest,
+    req: &nixling_contracts::broker_wire::GuestControlSignRequest,
 ) -> Result<Vec<u8>, BrokerError> {
-    use nixling_ipc::broker_wire::GuestControlProofRole;
-    use nixling_ipc::guest_auth::{
+    use nixling_contracts::broker_wire::GuestControlProofRole;
+    use nixling_contracts::guest_auth::{
         self, AUTH_NONCE_LEN, AuthDirection, AuthPurpose, GUEST_CONTROL_AUTH_PORT,
         GuestAuthTranscript, ProofRole,
     };
     req.validate_shape()
         .map_err(|reason| BrokerError::GuestControlSignRefused { reason })?;
-    if req.protocol_version != nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION
+    if req.protocol_version != nixling_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION
         || req.guest_control_port != GUEST_CONTROL_AUTH_PORT
     {
         return Err(BrokerError::GuestControlSignRefused {
@@ -4251,30 +4253,30 @@ fn owner_is_safe_for_guest_control_token(uid: u32) -> bool {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn activation_mode_name(mode: nixling_ipc::broker_wire::ActivationMode) -> &'static str {
+fn activation_mode_name(mode: nixling_contracts::broker_wire::ActivationMode) -> &'static str {
     match mode {
-        nixling_ipc::broker_wire::ActivationMode::Switch => "switch",
-        nixling_ipc::broker_wire::ActivationMode::Boot => "boot",
-        nixling_ipc::broker_wire::ActivationMode::Test => "test",
-        nixling_ipc::broker_wire::ActivationMode::Rollback => "rollback",
+        nixling_contracts::broker_wire::ActivationMode::Switch => "switch",
+        nixling_contracts::broker_wire::ActivationMode::Boot => "boot",
+        nixling_contracts::broker_wire::ActivationMode::Test => "test",
+        nixling_contracts::broker_wire::ActivationMode::Rollback => "rollback",
     }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn runner_signal_name(signal: nixling_ipc::broker_wire::RunnerSignal) -> &'static str {
+fn runner_signal_name(signal: nixling_contracts::broker_wire::RunnerSignal) -> &'static str {
     match signal {
-        nixling_ipc::broker_wire::RunnerSignal::Term => "term",
-        nixling_ipc::broker_wire::RunnerSignal::Kill => "kill",
-        nixling_ipc::broker_wire::RunnerSignal::Quit => "quit",
+        nixling_contracts::broker_wire::RunnerSignal::Term => "term",
+        nixling_contracts::broker_wire::RunnerSignal::Kill => "kill",
+        nixling_contracts::broker_wire::RunnerSignal::Quit => "quit",
     }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn runner_signal_number(signal: nixling_ipc::broker_wire::RunnerSignal) -> i32 {
+fn runner_signal_number(signal: nixling_contracts::broker_wire::RunnerSignal) -> i32 {
     match signal {
-        nixling_ipc::broker_wire::RunnerSignal::Term => libc::SIGTERM,
-        nixling_ipc::broker_wire::RunnerSignal::Kill => libc::SIGKILL,
-        nixling_ipc::broker_wire::RunnerSignal::Quit => libc::SIGQUIT,
+        nixling_contracts::broker_wire::RunnerSignal::Term => libc::SIGTERM,
+        nixling_contracts::broker_wire::RunnerSignal::Kill => libc::SIGKILL,
+        nixling_contracts::broker_wire::RunnerSignal::Quit => libc::SIGQUIT,
     }
 }
 
@@ -4289,12 +4291,14 @@ fn runner_pidfd_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
 /// a `std::sync::Mutex` so both the tokio reap task and the synchronous
 /// accept loop can access it safely.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn child_reap_buffer()
--> &'static Mutex<std::collections::VecDeque<nixling_ipc::broker_wire::ChildReapedNotification>> {
+fn child_reap_buffer() -> &'static Mutex<
+    std::collections::VecDeque<nixling_contracts::broker_wire::ChildReapedNotification>,
+> {
     use std::collections::VecDeque;
 
-    static BUFFER: OnceLock<Mutex<VecDeque<nixling_ipc::broker_wire::ChildReapedNotification>>> =
-        OnceLock::new();
+    static BUFFER: OnceLock<
+        Mutex<VecDeque<nixling_contracts::broker_wire::ChildReapedNotification>>,
+    > = OnceLock::new();
     BUFFER.get_or_init(|| Mutex::new(VecDeque::with_capacity(256)))
 }
 
@@ -4304,7 +4308,7 @@ const CHILD_REAP_BUFFER_CAP: usize = 256;
 /// Push one notification to the ring buffer.
 /// If the buffer is full, drops the oldest entry and logs a warning.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn push_child_reap_notification(notif: nixling_ipc::broker_wire::ChildReapedNotification) {
+fn push_child_reap_notification(notif: nixling_contracts::broker_wire::ChildReapedNotification) {
     let mut buf = match child_reap_buffer().lock() {
         Ok(g) => g,
         Err(_) => {
@@ -4327,7 +4331,7 @@ fn push_child_reap_notification(notif: nixling_ipc::broker_wire::ChildReapedNoti
 
 /// Drain the ring buffer (used by PollChildReaped handler).
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn drain_child_reap_buffer() -> Vec<nixling_ipc::broker_wire::ChildReapedNotification> {
+fn drain_child_reap_buffer() -> Vec<nixling_contracts::broker_wire::ChildReapedNotification> {
     match child_reap_buffer().lock() {
         Ok(mut buf) => buf.drain(..).collect(),
         Err(_) => {
@@ -4377,7 +4381,7 @@ fn reserve_runner_id_for_spawn(runner_id: &str) -> Result<(), BrokerError> {
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn signal_registered_runner(
     runner_id: &str,
-    signal: nixling_ipc::broker_wire::RunnerSignal,
+    signal: nixling_contracts::broker_wire::RunnerSignal,
 ) -> Result<(), BrokerError> {
     let registry = runner_pidfd_registry()
         .lock()
@@ -4393,9 +4397,9 @@ fn signal_registered_runner(
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn tracing_span_id_str(
-    tracing_span_id: Option<&nixling_ipc::types::TracingSpanId>,
+    tracing_span_id: Option<&nixling_contracts::types::TracingSpanId>,
 ) -> Option<&str> {
-    tracing_span_id.map(nixling_ipc::types::TracingSpanId::as_str)
+    tracing_span_id.map(nixling_contracts::types::TracingSpanId::as_str)
 }
 
 /// Maps a classified [`crate::ops::store_sync_audit::ErrorStage`] to the
@@ -4461,9 +4465,9 @@ trait DispatchBackend {
 
     fn set_bridge_port_flags(
         &self,
-        req: &nixling_ipc::broker_wire::SetBridgePortFlagsRequest,
+        req: &nixling_contracts::broker_wire::SetBridgePortFlagsRequest,
         resolver: &BundleResolver,
-    ) -> Result<nixling_ipc::broker_wire::BridgePortFlagsResponse, BrokerError>;
+    ) -> Result<nixling_contracts::broker_wire::BridgePortFlagsResponse, BrokerError>;
 
     fn setup_mount_namespace(
         &self,
@@ -4482,7 +4486,7 @@ trait DispatchBackend {
     fn signal_runner(
         &self,
         runner_id: &str,
-        signal: nixling_ipc::broker_wire::RunnerSignal,
+        signal: nixling_contracts::broker_wire::RunnerSignal,
     ) -> Result<(), BrokerError>;
 
     fn spawn_runner(
@@ -4490,15 +4494,15 @@ trait DispatchBackend {
         runner_id: &str,
         plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
         resolver: &BundleResolver,
-        req: &nixling_ipc::broker_wire::SpawnRunnerRequest,
+        req: &nixling_contracts::broker_wire::SpawnRunnerRequest,
         audit_log: &crate::audit::AuditLog,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError>;
 
     fn run_host_install(
         &self,
-        req: &nixling_ipc::broker_wire::RunHostInstallRequest,
+        req: &nixling_contracts::broker_wire::RunHostInstallRequest,
         resolver: Option<&BundleResolver>,
-    ) -> Result<nixling_ipc::broker_wire::RunHostInstallResponse, BrokerError>;
+    ) -> Result<nixling_contracts::broker_wire::RunHostInstallResponse, BrokerError>;
 
     fn run_migrate(
         &self,
@@ -4509,7 +4513,7 @@ trait DispatchBackend {
         &self,
         intent: &nixling_core::bundle_resolver::ResolvedActivationIntent,
         store_view_intent: &nixling_core::bundle_resolver::ResolvedStoreViewIntent,
-        mode: nixling_ipc::broker_wire::ActivationMode,
+        mode: nixling_contracts::broker_wire::ActivationMode,
     ) -> Result<crate::live_handlers::ActivationOutcome, BrokerError>;
 
     fn run_gc(
@@ -4556,18 +4560,18 @@ trait DispatchBackend {
 
     fn qemu_media_system_powerdown(
         &self,
-        req: &nixling_ipc::broker_wire::QemuMediaLifecycleRequest,
-    ) -> Result<nixling_ipc::broker_wire::QemuMediaLifecycleResponse, BrokerError>;
+        req: &nixling_contracts::broker_wire::QemuMediaLifecycleRequest,
+    ) -> Result<nixling_contracts::broker_wire::QemuMediaLifecycleResponse, BrokerError>;
 
     fn qemu_media_query_status(
         &self,
-        req: &nixling_ipc::broker_wire::QemuMediaQueryStatusRequest,
-    ) -> Result<nixling_ipc::broker_wire::QemuMediaQueryStatusResponse, BrokerError>;
+        req: &nixling_contracts::broker_wire::QemuMediaQueryStatusRequest,
+    ) -> Result<nixling_contracts::broker_wire::QemuMediaQueryStatusResponse, BrokerError>;
 
     fn qemu_media_quit(
         &self,
-        req: &nixling_ipc::broker_wire::QemuMediaLifecycleRequest,
-    ) -> Result<nixling_ipc::broker_wire::QemuMediaLifecycleResponse, BrokerError>;
+        req: &nixling_contracts::broker_wire::QemuMediaLifecycleRequest,
+    ) -> Result<nixling_contracts::broker_wire::QemuMediaLifecycleResponse, BrokerError>;
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -4580,12 +4584,12 @@ struct LiveDispatchBackend {
 fn prepare_runner_preopened_fds(
     _plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
     resolver: &BundleResolver,
-    req: &nixling_ipc::broker_wire::SpawnRunnerRequest,
+    req: &nixling_contracts::broker_wire::SpawnRunnerRequest,
     audit_log: &crate::audit::AuditLog,
     daemon_uid: u32,
     daemon_gid: u32,
 ) -> Result<Vec<std::os::fd::OwnedFd>, BrokerError> {
-    if req.role != nixling_ipc::broker_wire::RunnerRole::QemuMedia {
+    if req.role != nixling_contracts::broker_wire::RunnerRole::QemuMedia {
         return Ok(Vec::new());
     }
 
@@ -4593,7 +4597,7 @@ fn prepare_runner_preopened_fds(
     let outcome = crate::ops::tap::live_create_tap_fd(
         &exec,
         resolver,
-        &nixling_ipc::broker_wire::CreateTapFdRequest {
+        &nixling_contracts::broker_wire::CreateTapFdRequest {
             vm_id: req.vm_id.clone(),
             role_id: req.role_id.clone(),
             tracing_span_id: req.tracing_span_id.clone(),
@@ -4604,9 +4608,9 @@ fn prepare_runner_preopened_fds(
 
     let reconcile = crate::ops::exec_reconcile::SystemReconcileExecutor;
     let _bridge_flags = dispatch_set_bridge_port_flags_inner(
-        &nixling_ipc::broker_wire::SetBridgePortFlagsRequest {
+        &nixling_contracts::broker_wire::SetBridgePortFlagsRequest {
             vm_id: req.vm_id.clone(),
-            role_id: nixling_ipc::types::RoleId::new("workload-lan"),
+            role_id: nixling_contracts::types::RoleId::new("workload-lan"),
             tracing_span_id: req.tracing_span_id.clone(),
         },
         resolver,
@@ -4761,9 +4765,9 @@ impl DispatchBackend for LiveDispatchBackend {
 
     fn set_bridge_port_flags(
         &self,
-        req: &nixling_ipc::broker_wire::SetBridgePortFlagsRequest,
+        req: &nixling_contracts::broker_wire::SetBridgePortFlagsRequest,
         resolver: &BundleResolver,
-    ) -> Result<nixling_ipc::broker_wire::BridgePortFlagsResponse, BrokerError> {
+    ) -> Result<nixling_contracts::broker_wire::BridgePortFlagsResponse, BrokerError> {
         let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
         dispatch_set_bridge_port_flags_inner(req, resolver, &exec)
     }
@@ -4800,7 +4804,7 @@ impl DispatchBackend for LiveDispatchBackend {
     fn signal_runner(
         &self,
         runner_id: &str,
-        signal: nixling_ipc::broker_wire::RunnerSignal,
+        signal: nixling_contracts::broker_wire::RunnerSignal,
     ) -> Result<(), BrokerError> {
         signal_registered_runner(runner_id, signal)
     }
@@ -4810,7 +4814,7 @@ impl DispatchBackend for LiveDispatchBackend {
         runner_id: &str,
         plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
         resolver: &BundleResolver,
-        req: &nixling_ipc::broker_wire::SpawnRunnerRequest,
+        req: &nixling_contracts::broker_wire::SpawnRunnerRequest,
         audit_log: &crate::audit::AuditLog,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
         // Reserve the runner_id BEFORE spawning the child: refuse a
@@ -4869,9 +4873,9 @@ impl DispatchBackend for LiveDispatchBackend {
 
     fn run_host_install(
         &self,
-        req: &nixling_ipc::broker_wire::RunHostInstallRequest,
+        req: &nixling_contracts::broker_wire::RunHostInstallRequest,
         resolver: Option<&BundleResolver>,
-    ) -> Result<nixling_ipc::broker_wire::RunHostInstallResponse, BrokerError> {
+    ) -> Result<nixling_contracts::broker_wire::RunHostInstallResponse, BrokerError> {
         let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
         dispatch_run_host_install_response_inner(req, resolver, &exec)
     }
@@ -4889,7 +4893,7 @@ impl DispatchBackend for LiveDispatchBackend {
         &self,
         intent: &nixling_core::bundle_resolver::ResolvedActivationIntent,
         store_view_intent: &nixling_core::bundle_resolver::ResolvedStoreViewIntent,
-        mode: nixling_ipc::broker_wire::ActivationMode,
+        mode: nixling_contracts::broker_wire::ActivationMode,
     ) -> Result<crate::live_handlers::ActivationOutcome, BrokerError> {
         let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
         crate::live_handlers::live_run_activation(&exec, intent, store_view_intent, mode)
@@ -5039,24 +5043,24 @@ impl DispatchBackend for LiveDispatchBackend {
 
     fn qemu_media_system_powerdown(
         &self,
-        req: &nixling_ipc::broker_wire::QemuMediaLifecycleRequest,
-    ) -> Result<nixling_ipc::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
+        req: &nixling_contracts::broker_wire::QemuMediaLifecycleRequest,
+    ) -> Result<nixling_contracts::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
         crate::ops::media::system_powerdown(req)
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))
     }
 
     fn qemu_media_query_status(
         &self,
-        req: &nixling_ipc::broker_wire::QemuMediaQueryStatusRequest,
-    ) -> Result<nixling_ipc::broker_wire::QemuMediaQueryStatusResponse, BrokerError> {
+        req: &nixling_contracts::broker_wire::QemuMediaQueryStatusRequest,
+    ) -> Result<nixling_contracts::broker_wire::QemuMediaQueryStatusResponse, BrokerError> {
         crate::ops::media::query_status(req)
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))
     }
 
     fn qemu_media_quit(
         &self,
-        req: &nixling_ipc::broker_wire::QemuMediaLifecycleRequest,
-    ) -> Result<nixling_ipc::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
+        req: &nixling_contracts::broker_wire::QemuMediaLifecycleRequest,
+    ) -> Result<nixling_contracts::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
         crate::ops::media::quit(req).map_err(|err| BrokerError::LiveHandler(err.to_string()))
     }
 }
@@ -5080,10 +5084,10 @@ fn live_exec(config: &ServerConfig) -> crate::ops::exec_reconcile::SystemLiveExe
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn dispatch_set_bridge_port_flags_inner(
-    req: &nixling_ipc::broker_wire::SetBridgePortFlagsRequest,
+    req: &nixling_contracts::broker_wire::SetBridgePortFlagsRequest,
     resolver: &BundleResolver,
     executor: &dyn crate::ops::exec_reconcile::ReconcileExecutor,
-) -> Result<nixling_ipc::broker_wire::BridgePortFlagsResponse, BrokerError> {
+) -> Result<nixling_contracts::broker_wire::BridgePortFlagsResponse, BrokerError> {
     crate::ops::tap::live_set_bridge_port_flags(executor, resolver, req)
         .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
@@ -5108,11 +5112,11 @@ fn map_activation_live_error(error: crate::live_handlers::LiveHandlerError) -> B
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn dispatch_run_host_install_intent_inner(
-    req: &nixling_ipc::broker_wire::RunHostInstallRequest,
+    req: &nixling_contracts::broker_wire::RunHostInstallRequest,
     intent: &nixling_core::bundle_resolver::ResolvedInstallerIntent,
     host_runtime: Option<&nixling_core::bundle_resolver::HostRuntimeArtifact>,
     executor: &dyn crate::ops::exec_reconcile::ReconcileExecutor,
-) -> Result<nixling_ipc::broker_wire::RunHostInstallResponse, BrokerError> {
+) -> Result<nixling_contracts::broker_wire::RunHostInstallResponse, BrokerError> {
     let outcome = crate::live_handlers::live_run_host_install_with_runtime(
         executor,
         intent,
@@ -5122,7 +5126,7 @@ fn dispatch_run_host_install_intent_inner(
         host_runtime,
     )
     .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
-    Ok(nixling_ipc::broker_wire::RunHostInstallResponse {
+    Ok(nixling_contracts::broker_wire::RunHostInstallResponse {
         installed: outcome.installed,
         enabled: outcome.enabled,
         started: outcome.started,
@@ -5132,10 +5136,10 @@ fn dispatch_run_host_install_intent_inner(
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn dispatch_run_host_install_response_inner(
-    req: &nixling_ipc::broker_wire::RunHostInstallRequest,
+    req: &nixling_contracts::broker_wire::RunHostInstallRequest,
     resolver: Option<&BundleResolver>,
     executor: &dyn crate::ops::exec_reconcile::ReconcileExecutor,
-) -> Result<nixling_ipc::broker_wire::RunHostInstallResponse, BrokerError> {
+) -> Result<nixling_contracts::broker_wire::RunHostInstallResponse, BrokerError> {
     let resolver = require_resolver_ref(resolver)?;
     let intent = resolver
         .find_installer_intent(req.bundle_installer_intent_ref.as_str())
@@ -5155,7 +5159,7 @@ fn dispatch_run_host_install_response_inner(
 /// only after a successful install; integration tests use this wrapper
 /// to assert the typed negative-path responses directly.
 pub fn dispatch_run_host_install_response(
-    req: &nixling_ipc::broker_wire::RunHostInstallRequest,
+    req: &nixling_contracts::broker_wire::RunHostInstallRequest,
     resolver: Option<&BundleResolver>,
     executor: &dyn crate::ops::exec_reconcile::ReconcileExecutor,
 ) -> BrokerResponse {
@@ -5177,7 +5181,7 @@ pub fn dispatch_run_host_install_response(
 pub fn probe_bundle_load_response(bundle_path: &std::path::Path) -> BrokerResponse {
     match try_load_resolver(bundle_path) {
         BundleSlot::Loaded(_) => {
-            BrokerResponse::ValidateBundle(nixling_ipc::broker_wire::ValidateBundleResponse {
+            BrokerResponse::ValidateBundle(nixling_contracts::broker_wire::ValidateBundleResponse {
                 valid: true,
             })
         }
@@ -5199,7 +5203,7 @@ pub fn probe_bundle_load_response_with_policy(
 ) -> BrokerResponse {
     match try_load_resolver_with_policy(bundle_path, policy) {
         BundleSlot::Loaded(_) => {
-            BrokerResponse::ValidateBundle(nixling_ipc::broker_wire::ValidateBundleResponse {
+            BrokerResponse::ValidateBundle(nixling_contracts::broker_wire::ValidateBundleResponse {
                 valid: true,
             })
         }
@@ -5215,7 +5219,7 @@ pub fn probe_bundle_load_response_with_policy(
 /// writable artifact paths while still exercising the dispatch-layer
 /// success/error envelope mapping.
 pub fn dispatch_run_host_install_response_for_intent(
-    req: &nixling_ipc::broker_wire::RunHostInstallRequest,
+    req: &nixling_contracts::broker_wire::RunHostInstallRequest,
     intent: &nixling_core::bundle_resolver::ResolvedInstallerIntent,
     host_runtime: Option<&nixling_core::bundle_resolver::HostRuntimeArtifact>,
     executor: &dyn crate::ops::exec_reconcile::ReconcileExecutor,
@@ -5228,7 +5232,7 @@ pub fn dispatch_run_host_install_response_for_intent(
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 pub fn dispatch_run_activation_response_for_intent(
-    req: &nixling_ipc::broker_wire::RunActivationRequest,
+    req: &nixling_contracts::broker_wire::RunActivationRequest,
     intent: &nixling_core::bundle_resolver::ResolvedActivationIntent,
     store_view_intent: &nixling_core::bundle_resolver::ResolvedStoreViewIntent,
     executor: &dyn crate::ops::exec_reconcile::ReconcileExecutor,
@@ -5244,7 +5248,7 @@ pub fn dispatch_run_activation_response_for_intent(
         .map_err(map_activation_live_error)
     {
         Ok(outcome) => {
-            BrokerResponse::RunActivation(nixling_ipc::broker_wire::RunActivationResponse {
+            BrokerResponse::RunActivation(nixling_contracts::broker_wire::RunActivationResponse {
                 mode: outcome.mode,
                 vm: outcome.vm,
                 generation_number: outcome.generation_number,
@@ -5306,7 +5310,10 @@ fn usbip_binary_path() -> PathBuf {
 /// We use the wire value as both the opaque key and the human-readable
 /// name today — the daemon emits them identically.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn lookup_vm_name(_resolver: &Arc<BundleResolver>, vm_id: &nixling_ipc::types::VmId) -> String {
+fn lookup_vm_name(
+    _resolver: &Arc<BundleResolver>,
+    vm_id: &nixling_contracts::types::VmId,
+) -> String {
     vm_id.as_str().to_owned()
 }
 
@@ -5450,8 +5457,8 @@ fn usb_audit_device_identity(
 ) -> UsbAuditDeviceIdentity {
     let serial = serial.map(str::trim).filter(|value| !value.is_empty());
     UsbAuditDeviceIdentity {
-        vendor_id: Some(nixling_ipc::usbip::format_usb_hex_id(identity.0)),
-        product_id: Some(nixling_ipc::usbip::format_usb_hex_id(identity.1)),
+        vendor_id: Some(nixling_contracts::usbip::format_usb_hex_id(identity.0)),
+        product_id: Some(nixling_contracts::usbip::format_usb_hex_id(identity.1)),
         serial_observed: serial.is_some(),
         serial_correlation: serial.and_then(|serial| {
             keyring.and_then(|keys| usb_serial_correlation(serial, &keys.current))
@@ -6187,9 +6194,9 @@ fn usbip_backend_runner_intent<'a>(
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn runner_role_for_process_role(
     role: &nixling_core::processes::ProcessRole,
-) -> Option<nixling_ipc::broker_wire::RunnerRole> {
+) -> Option<nixling_contracts::broker_wire::RunnerRole> {
+    use nixling_contracts::broker_wire::RunnerRole;
     use nixling_core::processes::ProcessRole;
-    use nixling_ipc::broker_wire::RunnerRole;
 
     match role {
         ProcessRole::SwtpmPreStartFlush => Some(RunnerRole::SwtpmFlush),
@@ -6213,7 +6220,7 @@ fn runner_role_for_process_role(
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_spawn_runner_request_matches_intent(
-    req: &nixling_ipc::broker_wire::SpawnRunnerRequest,
+    req: &nixling_contracts::broker_wire::SpawnRunnerRequest,
     intent: &nixling_core::bundle_resolver::ResolvedRunnerIntent,
 ) -> Result<(), BrokerError> {
     if req.vm_id.as_str() != intent.vm_name {
@@ -6319,10 +6326,10 @@ fn extend_usbip_backend_device_binds(
     resolver: &BundleResolver,
     vm_id: &str,
     role_id: &str,
-    role: &nixling_ipc::broker_wire::RunnerRole,
+    role: &nixling_contracts::broker_wire::RunnerRole,
     mount_policy: &mut nixling_core::minijail_profile::MountPolicy,
 ) -> Result<(), BrokerError> {
-    if !matches!(role, nixling_ipc::broker_wire::RunnerRole::Usbip)
+    if !matches!(role, nixling_contracts::broker_wire::RunnerRole::Usbip)
         || role_id != "backend"
         || !vm_id.starts_with("sys-")
         || !vm_id.ends_with("-usbipd")
@@ -6376,10 +6383,10 @@ fn extend_usbip_backend_device_binds(
 fn extend_audio_runner_pipewire_props(
     vm_id: &str,
     role_id: &str,
-    role: &nixling_ipc::broker_wire::RunnerRole,
+    role: &nixling_contracts::broker_wire::RunnerRole,
     env: &mut Vec<String>,
 ) -> Result<(), BrokerError> {
-    if !matches!(role, nixling_ipc::broker_wire::RunnerRole::Audio) || role_id != "audio" {
+    if !matches!(role, nixling_contracts::broker_wire::RunnerRole::Audio) || role_id != "audio" {
         return Ok(());
     }
     let state_path = PathBuf::from(format!(
@@ -6457,10 +6464,13 @@ fn audio_state_value<'a>(
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn cleanup_cloud_hypervisor_stale_sockets(
-    role: &nixling_ipc::broker_wire::RunnerRole,
+    role: &nixling_contracts::broker_wire::RunnerRole,
     argv: &[String],
 ) -> Result<(), BrokerError> {
-    if !matches!(role, nixling_ipc::broker_wire::RunnerRole::CloudHypervisor) {
+    if !matches!(
+        role,
+        nixling_contracts::broker_wire::RunnerRole::CloudHypervisor
+    ) {
         return Ok(());
     }
     for path in cloud_hypervisor_socket_paths(argv) {
@@ -6471,10 +6481,10 @@ fn cleanup_cloud_hypervisor_stale_sockets(
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn cleanup_video_stale_socket(
-    role: &nixling_ipc::broker_wire::RunnerRole,
+    role: &nixling_contracts::broker_wire::RunnerRole,
     argv: &[String],
 ) -> Result<(), BrokerError> {
-    if !matches!(role, nixling_ipc::broker_wire::RunnerRole::Video) {
+    if !matches!(role, nixling_contracts::broker_wire::RunnerRole::Video) {
         return Ok(());
     }
     let path = video_socket_path(argv)?;
@@ -6517,10 +6527,13 @@ fn video_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError> {
 // (non-listening) socket before spawn so obs-VM restarts self-heal.
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn cleanup_otel_host_bridge_stale_socket(
-    role: &nixling_ipc::broker_wire::RunnerRole,
+    role: &nixling_contracts::broker_wire::RunnerRole,
     argv: &[String],
 ) -> Result<(), BrokerError> {
-    if !matches!(role, nixling_ipc::broker_wire::RunnerRole::OtelHostBridge) {
+    if !matches!(
+        role,
+        nixling_contracts::broker_wire::RunnerRole::OtelHostBridge
+    ) {
         return Ok(());
     }
     let path = otel_host_bridge_socket_path(argv)?;
@@ -7940,7 +7953,7 @@ fn hello_ok_response() -> BrokerResponse {
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
     {
-        BrokerResponse::Hello(nixling_ipc::broker_wire::HelloResponse {
+        BrokerResponse::Hello(nixling_contracts::broker_wire::HelloResponse {
             server_version: "0.0.0-w2".to_owned(),
             selected_version: "0.0.0-w2".to_owned(),
             capabilities: CAPABILITIES.iter().map(|item| (*item).to_owned()).collect(),
@@ -7955,7 +7968,7 @@ fn validate_bundle_ok_response() -> BrokerResponse {
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
     {
-        BrokerResponse::ValidateBundle(nixling_ipc::broker_wire::ValidateBundleResponse {
+        BrokerResponse::ValidateBundle(nixling_contracts::broker_wire::ValidateBundleResponse {
             valid: true,
         })
     }
@@ -7968,15 +7981,15 @@ fn export_broker_audit_ok_response(lines: Vec<String>) -> BrokerResponse {
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
     {
-        BrokerResponse::ExportBrokerAudit(nixling_ipc::broker_wire::ExportBrokerAuditResponse {
-            lines,
-        })
+        BrokerResponse::ExportBrokerAudit(
+            nixling_contracts::broker_wire::ExportBrokerAuditResponse { lines },
+        )
     }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn ack_response(operation: &str) -> BrokerResponse {
-    BrokerResponse::Ack(nixling_ipc::broker_wire::AckResponse {
+    BrokerResponse::Ack(nixling_contracts::broker_wire::AckResponse {
         accepted: true,
         operation: operation.to_owned(),
     })
@@ -8023,7 +8036,7 @@ fn error_response(
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
     {
-        BrokerResponse::Error(nixling_ipc::broker_wire::BrokerErrorResponse {
+        BrokerResponse::Error(nixling_contracts::broker_wire::BrokerErrorResponse {
             kind: kind.to_owned(),
             operation: operation.to_owned(),
             target_wave: target_wave.map(str::to_owned),
@@ -8089,7 +8102,7 @@ fn start_sigchld_reaper(audit_log: Arc<AuditLog>) -> tokio::runtime::Runtime {
 fn reap_all_pidfds(audit_log: &AuditLog) {
     use nix::errno::Errno;
     use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
-    use nixling_ipc::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+    use nixling_contracts::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
 
     let runner_ids: Vec<String> = match runner_pidfd_registry().lock() {
         Ok(reg) => reg.keys().cloned().collect(),
@@ -8213,7 +8226,7 @@ fn broker_audit_log_handle() -> &'static OnceLock<Arc<AuditLog>> {
 fn targeted_reap_runner(runner_id: &str, pidfd: std::os::fd::BorrowedFd<'_>) {
     use nix::errno::Errno;
     use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
-    use nixling_ipc::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+    use nixling_contracts::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
 
     let wait_flags = WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG;
     match waitid(Id::PIDFd(pidfd), wait_flags) {
@@ -8270,7 +8283,7 @@ fn targeted_reap_runner(runner_id: &str, pidfd: std::os::fd::BorrowedFd<'_>) {
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn deliver_targeted_reap(
     runner_id: &str,
-    notif: nixling_ipc::broker_wire::ChildReapedNotification,
+    notif: nixling_contracts::broker_wire::ChildReapedNotification,
 ) {
     match broker_audit_log_handle().get() {
         Some(audit_log) => remove_and_notify(runner_id, notif, audit_log.as_ref()),
@@ -8292,7 +8305,7 @@ fn deliver_targeted_reap(
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn remove_and_notify(
     runner_id: &str,
-    notif: nixling_ipc::broker_wire::ChildReapedNotification,
+    notif: nixling_contracts::broker_wire::ChildReapedNotification,
     audit_log: &AuditLog,
 ) {
     if let Ok(mut reg) = runner_pidfd_registry().lock() {
@@ -8312,11 +8325,13 @@ mod tests {
     use crate::ops::exec_reconcile::{FakeReconcileExecutor, ReconcileOp};
     use nix::unistd::Gid;
     #[cfg(not(feature = "layer1-bootstrap"))]
+    use nixling_contracts::broker_wire::{
+        ActivationMode, RunActivationRequest, RunActivationResponse,
+    };
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    use nixling_contracts::types::BundleOpId;
+    #[cfg(not(feature = "layer1-bootstrap"))]
     use nixling_core::bundle_resolver::{ResolvedActivationIntent, ResolvedStoreViewIntent};
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    use nixling_ipc::broker_wire::{ActivationMode, RunActivationRequest, RunActivationResponse};
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    use nixling_ipc::types::BundleOpId;
     #[cfg(not(feature = "layer1-bootstrap"))]
     use serde::Serialize;
     use serde_json::Value;
@@ -8348,8 +8363,8 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn runner_role_mapping_covers_video_and_spawnable_roles() {
+        use nixling_contracts::broker_wire::RunnerRole;
         use nixling_core::processes::ProcessRole;
-        use nixling_ipc::broker_wire::RunnerRole;
 
         let cases = [
             (
@@ -8382,15 +8397,16 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn qemu_media_enroll_request_fields_redact_raw_busid() {
-        let request =
-            BrokerRequest::QemuMediaEnroll(nixling_ipc::broker_wire::QemuMediaEnrollRequest {
-                vm_id: nixling_ipc::types::VmId::new("media"),
-                media_ref: nixling_ipc::types::MediaRef::new("installer-usb"),
+        let request = BrokerRequest::QemuMediaEnroll(
+            nixling_contracts::broker_wire::QemuMediaEnrollRequest {
+                vm_id: nixling_contracts::types::VmId::new("media"),
+                media_ref: nixling_contracts::types::MediaRef::new("installer-usb"),
                 bus_id: "1-2.3".to_owned(),
-                tracing_span_id: Some(nixling_ipc::types::TracingSpanId::new(
+                tracing_span_id: Some(nixling_contracts::types::TracingSpanId::new(
                     "usb-start-0000000000000001",
                 )),
-            });
+            },
+        );
 
         let fields = request_fields_value(&request).expect("redacted fields");
         assert_eq!(fields["vmId"], "media");
@@ -8405,12 +8421,13 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn qemu_media_hotplug_request_fields_redact_runtime_busid() {
-        let request =
-            BrokerRequest::QemuMediaAttach(nixling_ipc::broker_wire::QemuMediaHotplugRequest {
-                vm_id: nixling_ipc::types::VmId::new("media"),
+        let request = BrokerRequest::QemuMediaAttach(
+            nixling_contracts::broker_wire::QemuMediaHotplugRequest {
+                vm_id: nixling_contracts::types::VmId::new("media"),
                 bus_id: "1-2.3".to_owned(),
                 tracing_span_id: None,
-            });
+            },
+        );
 
         let fields = request_fields_value(&request).expect("redacted fields");
         assert_eq!(fields["vmId"], "media");
@@ -8424,32 +8441,32 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_request_fields_project_trace_presence_without_trace_value() {
-        let trace = nixling_ipc::types::TracingSpanId::new("usb-start-0000000000000001");
+        let trace = nixling_contracts::types::TracingSpanId::new("usb-start-0000000000000001");
         let requests = [
-            BrokerRequest::UsbipBind(nixling_ipc::broker_wire::UsbipBindRequest {
-                bundle_usbip_bind_intent_ref: nixling_ipc::types::BundleOpId::new(
+            BrokerRequest::UsbipBind(nixling_contracts::broker_wire::UsbipBindRequest {
+                bundle_usbip_bind_intent_ref: nixling_contracts::types::BundleOpId::new(
                     "usbip-bind:env:work:vm:corp-vm:bus:1-2.3",
                 ),
                 tracing_span_id: Some(trace.clone()),
             }),
-            BrokerRequest::UsbipUnbind(nixling_ipc::broker_wire::UsbipUnbindRequest {
-                bundle_usbip_bind_intent_ref: nixling_ipc::types::BundleOpId::new(
+            BrokerRequest::UsbipUnbind(nixling_contracts::broker_wire::UsbipUnbindRequest {
+                bundle_usbip_bind_intent_ref: nixling_contracts::types::BundleOpId::new(
                     "usbip-bind:env:work:vm:corp-vm:bus:1-2.3",
                 ),
                 preserve_durable_claim: true,
                 tracing_span_id: Some(trace.clone()),
             }),
             BrokerRequest::UsbipBindFirewallRule(
-                nixling_ipc::broker_wire::UsbipBindFirewallRuleRequest {
-                    bundle_usbip_firewall_intent_ref: nixling_ipc::types::BundleOpId::new(
+                nixling_contracts::broker_wire::UsbipBindFirewallRuleRequest {
+                    bundle_usbip_firewall_intent_ref: nixling_contracts::types::BundleOpId::new(
                         "usbip-fw:env:work:bus:1-2.3",
                     ),
                     tracing_span_id: Some(trace.clone()),
                 },
             ),
             BrokerRequest::UsbipProxyReconcile(
-                nixling_ipc::broker_wire::UsbipProxyReconcileRequest {
-                    scope_id: nixling_ipc::types::ScopeId::new("vm:corp-vm"),
+                nixling_contracts::broker_wire::UsbipProxyReconcileRequest {
+                    scope_id: nixling_contracts::types::ScopeId::new("vm:corp-vm"),
                     tracing_span_id: Some(trace.clone()),
                 },
             ),
@@ -8469,8 +8486,8 @@ mod tests {
     #[test]
     fn qemu_media_boot_request_fields_are_vm_only() {
         let request =
-            BrokerRequest::QemuMediaBoot(nixling_ipc::broker_wire::QemuMediaBootRequest {
-                vm_id: nixling_ipc::types::VmId::new("media"),
+            BrokerRequest::QemuMediaBoot(nixling_contracts::broker_wire::QemuMediaBootRequest {
+                vm_id: nixling_contracts::types::VmId::new("media"),
                 tracing_span_id: None,
             });
 
@@ -8486,8 +8503,8 @@ mod tests {
     #[test]
     fn qemu_media_lifecycle_request_fields_are_bounded() {
         let request = BrokerRequest::QemuMediaQueryStatus(
-            nixling_ipc::broker_wire::QemuMediaQueryStatusRequest {
-                vm_id: nixling_ipc::types::VmId::new("media"),
+            nixling_contracts::broker_wire::QemuMediaQueryStatusRequest {
+                vm_id: nixling_contracts::types::VmId::new("media"),
                 shutdown_context: true,
                 tracing_span_id: None,
             },
@@ -9139,22 +9156,22 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     fn guest_control_sign_request(
-        role: nixling_ipc::broker_wire::GuestControlProofRole,
-    ) -> nixling_ipc::broker_wire::GuestControlSignRequest {
-        nixling_ipc::broker_wire::GuestControlSignRequest {
-            vm_id: nixling_ipc::types::VmId::new("corp-vm"),
+        role: nixling_contracts::broker_wire::GuestControlProofRole,
+    ) -> nixling_contracts::broker_wire::GuestControlSignRequest {
+        nixling_contracts::broker_wire::GuestControlSignRequest {
+            vm_id: nixling_contracts::types::VmId::new("corp-vm"),
             role,
-            protocol_version: nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
-            direction: nixling_ipc::broker_wire::GuestControlDirection::HostToGuest,
-            purpose: nixling_ipc::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
-            guest_control_port: nixling_ipc::guest_auth::GUEST_CONTROL_AUTH_PORT,
+            protocol_version: nixling_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
+            direction: nixling_contracts::broker_wire::GuestControlDirection::HostToGuest,
+            purpose: nixling_contracts::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
+            guest_control_port: nixling_contracts::guest_auth::GUEST_CONTROL_AUTH_PORT,
             peer_cid: Some(2),
-            host_nonce: vec![0x11; nixling_ipc::guest_auth::AUTH_NONCE_LEN],
-            guest_nonce: vec![0x22; nixling_ipc::guest_auth::AUTH_NONCE_LEN],
-            guest_boot_id: nixling_ipc::broker_wire::GuestBootIdWire::new("boot-1"),
+            host_nonce: vec![0x11; nixling_contracts::guest_auth::AUTH_NONCE_LEN],
+            guest_nonce: vec![0x22; nixling_contracts::guest_auth::AUTH_NONCE_LEN],
+            guest_boot_id: nixling_contracts::broker_wire::GuestBootIdWire::new("boot-1"),
             capabilities_hash: match role {
-                nixling_ipc::broker_wire::GuestControlProofRole::HostProof => None,
-                nixling_ipc::broker_wire::GuestControlProofRole::GuestProof => {
+                nixling_contracts::broker_wire::GuestControlProofRole::HostProof => None,
+                nixling_contracts::broker_wire::GuestControlProofRole::GuestProof => {
                     Some("caps-sha256".to_owned())
                 }
             },
@@ -9170,12 +9187,17 @@ mod tests {
         let config = test_server_config(root.path(), &bundle.bundle_path);
         write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
         let response = handle_guest_control_sign(
-            guest_control_sign_request(nixling_ipc::broker_wire::GuestControlProofRole::HostProof),
+            guest_control_sign_request(
+                nixling_contracts::broker_wire::GuestControlProofRole::HostProof,
+            ),
             &config,
             Some(&bundle.resolver),
         )
         .expect("sign");
-        assert_eq!(response.tag.len(), nixling_ipc::guest_auth::AUTH_TAG_LEN);
+        assert_eq!(
+            response.tag.len(),
+            nixling_contracts::guest_auth::AUTH_TAG_LEN
+        );
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -9186,8 +9208,9 @@ mod tests {
         let config = test_server_config(root.path(), &bundle.bundle_path);
         write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
 
-        let mut bad =
-            guest_control_sign_request(nixling_ipc::broker_wire::GuestControlProofRole::HostProof);
+        let mut bad = guest_control_sign_request(
+            nixling_contracts::broker_wire::GuestControlProofRole::HostProof,
+        );
         bad.capabilities_hash = Some("caps-sha256".to_owned());
         assert!(matches!(
             handle_guest_control_sign(bad, &config, Some(&bundle.resolver)),
@@ -9198,7 +9221,7 @@ mod tests {
         assert!(matches!(
             handle_guest_control_sign(
                 guest_control_sign_request(
-                    nixling_ipc::broker_wire::GuestControlProofRole::HostProof
+                    nixling_contracts::broker_wire::GuestControlProofRole::HostProof
                 ),
                 &config,
                 Some(&bundle.resolver),
@@ -9334,10 +9357,10 @@ mod tests {
 
         fn set_bridge_port_flags(
             &self,
-            req: &nixling_ipc::broker_wire::SetBridgePortFlagsRequest,
+            req: &nixling_contracts::broker_wire::SetBridgePortFlagsRequest,
             _resolver: &BundleResolver,
-        ) -> Result<nixling_ipc::broker_wire::BridgePortFlagsResponse, BrokerError> {
-            Ok(nixling_ipc::broker_wire::BridgePortFlagsResponse {
+        ) -> Result<nixling_contracts::broker_wire::BridgePortFlagsResponse, BrokerError> {
+            Ok(nixling_contracts::broker_wire::BridgePortFlagsResponse {
                 bridge: nixling_core::host::IfName::new("nlworkbr0").expect("fake bridge ifname"),
                 isolated: true,
                 neigh_suppress: true,
@@ -9379,7 +9402,7 @@ mod tests {
         fn signal_runner(
             &self,
             runner_id: &str,
-            _signal: nixling_ipc::broker_wire::RunnerSignal,
+            _signal: nixling_contracts::broker_wire::RunnerSignal,
         ) -> Result<(), BrokerError> {
             if self.has_runner(runner_id)? {
                 Ok(())
@@ -9395,7 +9418,7 @@ mod tests {
             runner_id: &str,
             _plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
             _resolver: &BundleResolver,
-            _req: &nixling_ipc::broker_wire::SpawnRunnerRequest,
+            _req: &nixling_contracts::broker_wire::SpawnRunnerRequest,
             _audit_log: &crate::audit::AuditLog,
         ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
             self.remember_runner(runner_id)?;
@@ -9410,10 +9433,10 @@ mod tests {
 
         fn run_host_install(
             &self,
-            req: &nixling_ipc::broker_wire::RunHostInstallRequest,
+            req: &nixling_contracts::broker_wire::RunHostInstallRequest,
             _resolver: Option<&BundleResolver>,
-        ) -> Result<nixling_ipc::broker_wire::RunHostInstallResponse, BrokerError> {
-            Ok(nixling_ipc::broker_wire::RunHostInstallResponse {
+        ) -> Result<nixling_contracts::broker_wire::RunHostInstallResponse, BrokerError> {
+            Ok(nixling_contracts::broker_wire::RunHostInstallResponse {
                 installed: true,
                 enabled: req.enable,
                 started: req.start && !req.no_start,
@@ -9435,7 +9458,7 @@ mod tests {
             &self,
             intent: &nixling_core::bundle_resolver::ResolvedActivationIntent,
             store_view_intent: &nixling_core::bundle_resolver::ResolvedStoreViewIntent,
-            mode: nixling_ipc::broker_wire::ActivationMode,
+            mode: nixling_contracts::broker_wire::ActivationMode,
         ) -> Result<crate::live_handlers::ActivationOutcome, BrokerError> {
             Ok(crate::live_handlers::ActivationOutcome {
                 mode,
@@ -9549,36 +9572,41 @@ mod tests {
 
         fn qemu_media_system_powerdown(
             &self,
-            req: &nixling_ipc::broker_wire::QemuMediaLifecycleRequest,
-        ) -> Result<nixling_ipc::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
-            Ok(nixling_ipc::broker_wire::QemuMediaLifecycleResponse {
+            req: &nixling_contracts::broker_wire::QemuMediaLifecycleRequest,
+        ) -> Result<nixling_contracts::broker_wire::QemuMediaLifecycleResponse, BrokerError>
+        {
+            Ok(nixling_contracts::broker_wire::QemuMediaLifecycleResponse {
                 vm_id: req.vm_id.clone(),
-                command: nixling_ipc::broker_wire::QemuMediaLifecycleAction::SystemPowerdown,
+                command: nixling_contracts::broker_wire::QemuMediaLifecycleAction::SystemPowerdown,
             })
         }
 
         fn qemu_media_query_status(
             &self,
-            req: &nixling_ipc::broker_wire::QemuMediaQueryStatusRequest,
-        ) -> Result<nixling_ipc::broker_wire::QemuMediaQueryStatusResponse, BrokerError> {
+            req: &nixling_contracts::broker_wire::QemuMediaQueryStatusRequest,
+        ) -> Result<nixling_contracts::broker_wire::QemuMediaQueryStatusResponse, BrokerError>
+        {
             let status = if req.shutdown_context {
-                nixling_ipc::broker_wire::QemuMediaVmStatus::ConnectionLostDuringShutdown
+                nixling_contracts::broker_wire::QemuMediaVmStatus::ConnectionLostDuringShutdown
             } else {
-                nixling_ipc::broker_wire::QemuMediaVmStatus::Running
+                nixling_contracts::broker_wire::QemuMediaVmStatus::Running
             };
-            Ok(nixling_ipc::broker_wire::QemuMediaQueryStatusResponse {
-                vm_id: req.vm_id.clone(),
-                status,
-            })
+            Ok(
+                nixling_contracts::broker_wire::QemuMediaQueryStatusResponse {
+                    vm_id: req.vm_id.clone(),
+                    status,
+                },
+            )
         }
 
         fn qemu_media_quit(
             &self,
-            req: &nixling_ipc::broker_wire::QemuMediaLifecycleRequest,
-        ) -> Result<nixling_ipc::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
-            Ok(nixling_ipc::broker_wire::QemuMediaLifecycleResponse {
+            req: &nixling_contracts::broker_wire::QemuMediaLifecycleRequest,
+        ) -> Result<nixling_contracts::broker_wire::QemuMediaLifecycleResponse, BrokerError>
+        {
+            Ok(nixling_contracts::broker_wire::QemuMediaLifecycleResponse {
                 vm_id: req.vm_id.clone(),
-                command: nixling_ipc::broker_wire::QemuMediaLifecycleAction::Quit,
+                command: nixling_contracts::broker_wire::QemuMediaLifecycleAction::Quit,
             })
         }
     }
@@ -9586,11 +9614,11 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn qemu_media_lifecycle_dispatch_audits_mutations_but_not_status_poll() {
-        use nixling_ipc::broker_wire::{
+        use nixling_contracts::broker_wire::{
             BrokerCallerRole, BrokerRequest, QemuMediaLifecycleAction, QemuMediaLifecycleRequest,
             QemuMediaQueryStatusRequest, QemuMediaVmStatus,
         };
-        use nixling_ipc::types::{TracingSpanId, VmId};
+        use nixling_contracts::types::{TracingSpanId, VmId};
 
         let root = test_audit_dir("qemu-lifecycle-dispatch-audit");
         let bundle = build_test_bundle(&root);
@@ -9757,6 +9785,11 @@ mod tests {
         ignore = "v1.1.1fu11: requires write access to /var/lib/nixling/runtime/ which only root can do; run with --cfg test_root in a privileged test environment"
     )]
     fn dispatch_request_writes_typed_op_audit_records_for_all_live_arms() {
+        use nixling_contracts::broker_wire::{
+            ActivationMode, BrokerAuditFilter, BrokerCallerRole, BrokerRequest, RunnerAllocation,
+            RunnerAllocationKind, RunnerRole, RunnerSignal,
+        };
+        use nixling_contracts::types::{BundleOpId, RoleId, ScopeId, TracingSpanId, VmId};
         use nixling_core::bundle_resolver::{
             intent_id_activation, intent_id_gc_host, intent_id_hosts_host,
             intent_id_installer_host, intent_id_keys_rotate, intent_id_migrate_host,
@@ -9764,11 +9797,6 @@ mod tests {
             intent_id_route_env, intent_id_runner, intent_id_sysctl, intent_id_trust,
             intent_id_usbip_firewall,
         };
-        use nixling_ipc::broker_wire::{
-            ActivationMode, BrokerAuditFilter, BrokerCallerRole, BrokerRequest, RunnerAllocation,
-            RunnerAllocationKind, RunnerRole, RunnerSignal,
-        };
-        use nixling_ipc::types::{BundleOpId, RoleId, ScopeId, TracingSpanId, VmId};
 
         let root = test_audit_dir("dispatch-typed-op-audit");
         let bundle = build_test_bundle(&root);
@@ -9858,7 +9886,7 @@ mod tests {
         };
 
         let hello = assert_dispatch(
-            BrokerRequest::Hello(nixling_ipc::broker_wire::HelloRequest {
+            BrokerRequest::Hello(nixling_contracts::broker_wire::HelloRequest {
                 client_version: "1.2.3".to_owned(),
                 supported_features: vec!["typed-audit".to_owned()],
             }),
@@ -9894,10 +9922,12 @@ mod tests {
         };
         let export_filter_json = serde_json::to_string(&export_filter).expect("serialize filter");
         let export = assert_dispatch(
-            BrokerRequest::ExportBrokerAudit(nixling_ipc::broker_wire::ExportBrokerAuditRequest {
-                since: Some("2026-01-01T00:00:00Z".to_owned()),
-                filter: Some(export_filter),
-            }),
+            BrokerRequest::ExportBrokerAudit(
+                nixling_contracts::broker_wire::ExportBrokerAuditRequest {
+                    since: Some("2026-01-01T00:00:00Z".to_owned()),
+                    filter: Some(export_filter),
+                },
+            ),
             "ExportBrokerAudit",
             OperationFields::ExportBrokerAudit {
                 since: Some("2026-01-01T00:00:00Z".to_owned()),
@@ -9912,13 +9942,15 @@ mod tests {
 
         assert_ack(
             assert_dispatch(
-                BrokerRequest::ApplyNftables(nixling_ipc::broker_wire::ApplyNftablesRequest {
-                    bundle_nft_intent_ref: BundleOpId::new(intent_id_nft_host()),
-                    scope_id: ScopeId::new("host"),
-                    desired_hash: Some("fnv1a64:feedfacefeedface".to_owned()),
-                    destroy: false,
-                    tracing_span_id: Some(TracingSpanId::new("span-nft")),
-                }),
+                BrokerRequest::ApplyNftables(
+                    nixling_contracts::broker_wire::ApplyNftablesRequest {
+                        bundle_nft_intent_ref: BundleOpId::new(intent_id_nft_host()),
+                        scope_id: ScopeId::new("host"),
+                        desired_hash: Some("fnv1a64:feedfacefeedface".to_owned()),
+                        destroy: false,
+                        tracing_span_id: Some(TracingSpanId::new("span-nft")),
+                    },
+                ),
                 "ApplyNftables",
                 OperationFields::ApplyNftables {
                     bundle_nft_intent_ref: intent_id_nft_host(),
@@ -9933,7 +9965,7 @@ mod tests {
 
         assert_ack(
             assert_dispatch(
-                BrokerRequest::ApplyRoute(nixling_ipc::broker_wire::ApplyRouteRequest {
+                BrokerRequest::ApplyRoute(nixling_contracts::broker_wire::ApplyRouteRequest {
                     bundle_route_intent_ref: BundleOpId::new(intent_id_route_env("work", 0)),
                     scope_id: ScopeId::new("env:work"),
                     destroy: false,
@@ -9953,7 +9985,7 @@ mod tests {
 
         assert_ack(
             assert_dispatch(
-                BrokerRequest::ApplySysctl(nixling_ipc::broker_wire::ApplySysctlRequest {
+                BrokerRequest::ApplySysctl(nixling_contracts::broker_wire::ApplySysctlRequest {
                     bundle_sysctl_intent_ref: BundleOpId::new(intent_id_sysctl(
                         "work",
                         "nlworktap0",
@@ -9980,11 +10012,13 @@ mod tests {
 
         assert_ack(
             assert_dispatch(
-                BrokerRequest::UpdateHostsFile(nixling_ipc::broker_wire::UpdateHostsFileRequest {
-                    bundle_hosts_intent_ref: BundleOpId::new(intent_id_hosts_host()),
-                    destroy: false,
-                    tracing_span_id: Some(TracingSpanId::new("span-hosts")),
-                }),
+                BrokerRequest::UpdateHostsFile(
+                    nixling_contracts::broker_wire::UpdateHostsFileRequest {
+                        bundle_hosts_intent_ref: BundleOpId::new(intent_id_hosts_host()),
+                        destroy: false,
+                        tracing_span_id: Some(TracingSpanId::new("span-hosts")),
+                    },
+                ),
                 "UpdateHostsFile",
                 OperationFields::UpdateHostsFile {
                     bundle_hosts_intent_ref: intent_id_hosts_host(),
@@ -9998,7 +10032,7 @@ mod tests {
         assert_ack(
             assert_dispatch(
                 BrokerRequest::ApplyNmUnmanaged(
-                    nixling_ipc::broker_wire::ApplyNmUnmanagedRequest {
+                    nixling_contracts::broker_wire::ApplyNmUnmanagedRequest {
                         bundle_nm_intent_ref: BundleOpId::new(intent_id_nm_unmanaged_host()),
                         scope_id: ScopeId::new("host"),
                         destroy: false,
@@ -10019,7 +10053,7 @@ mod tests {
         assert_ack(
             assert_dispatch(
                 BrokerRequest::PrepareStoreView(
-                    nixling_ipc::broker_wire::PrepareStoreViewRequest {
+                    nixling_contracts::broker_wire::PrepareStoreViewRequest {
                         vm_id: VmId::new("corp-vm"),
                         tracing_span_id: Some(TracingSpanId::new("span-store-view")),
                     },
@@ -10040,7 +10074,7 @@ mod tests {
 
         let set_bridge_port_flags = assert_dispatch(
             BrokerRequest::SetBridgePortFlags(
-                nixling_ipc::broker_wire::SetBridgePortFlagsRequest {
+                nixling_contracts::broker_wire::SetBridgePortFlagsRequest {
                     vm_id: VmId::new("corp-vm"),
                     role_id: RoleId::new("lan"),
                     tracing_span_id: Some(TracingSpanId::new("span-bridge-flags")),
@@ -10071,7 +10105,7 @@ mod tests {
         assert_ack(
             assert_dispatch(
                 BrokerRequest::SetupMountNamespace(
-                    nixling_ipc::broker_wire::SetupMountNamespaceRequest {
+                    nixling_contracts::broker_wire::SetupMountNamespaceRequest {
                         vm_id: VmId::new("corp-vm"),
                         role_id: RoleId::new("ch-runner"),
                         tracing_span_id: Some(TracingSpanId::new("span-mount-ns")),
@@ -10094,7 +10128,7 @@ mod tests {
         );
 
         let open_pidfd = assert_dispatch(
-            BrokerRequest::OpenPidfd(nixling_ipc::broker_wire::OpenPidfdRequest {
+            BrokerRequest::OpenPidfd(nixling_contracts::broker_wire::OpenPidfdRequest {
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
                 pid: 4242,
@@ -10120,7 +10154,7 @@ mod tests {
         }
 
         let signal_runner = assert_dispatch(
-            BrokerRequest::SignalRunner(nixling_ipc::broker_wire::SignalRunnerRequest {
+            BrokerRequest::SignalRunner(nixling_contracts::broker_wire::SignalRunnerRequest {
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
                 signal: RunnerSignal::Term,
@@ -10146,7 +10180,7 @@ mod tests {
         }
 
         let spawn_runner = assert_dispatch(
-            BrokerRequest::SpawnRunner(nixling_ipc::broker_wire::SpawnRunnerRequest {
+            BrokerRequest::SpawnRunner(nixling_contracts::broker_wire::SpawnRunnerRequest {
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
                 role: RunnerRole::CloudHypervisor,
@@ -10183,7 +10217,7 @@ mod tests {
         }
 
         let run_host_install = assert_dispatch(
-            BrokerRequest::RunHostInstall(nixling_ipc::broker_wire::RunHostInstallRequest {
+            BrokerRequest::RunHostInstall(nixling_contracts::broker_wire::RunHostInstallRequest {
                 bundle_installer_intent_ref: BundleOpId::new(intent_id_installer_host()),
                 enable: true,
                 start: true,
@@ -10209,7 +10243,7 @@ mod tests {
         }
 
         let run_migrate = assert_dispatch(
-            BrokerRequest::RunMigrate(nixling_ipc::broker_wire::RunMigrateRequest {
+            BrokerRequest::RunMigrate(nixling_contracts::broker_wire::RunMigrateRequest {
                 bundle_migrate_intent_ref: BundleOpId::new(intent_id_migrate_host()),
                 tracing_span_id: Some(TracingSpanId::new("span-migrate")),
             }),
@@ -10225,7 +10259,7 @@ mod tests {
         }
 
         let run_activation = assert_dispatch(
-            BrokerRequest::RunActivation(nixling_ipc::broker_wire::RunActivationRequest {
+            BrokerRequest::RunActivation(nixling_contracts::broker_wire::RunActivationRequest {
                 bundle_activation_intent_ref: BundleOpId::new(intent_id_activation("corp-vm")),
                 mode: ActivationMode::Switch,
                 vm: "corp-vm".to_owned(),
@@ -10249,7 +10283,7 @@ mod tests {
         }
 
         let run_gc = assert_dispatch(
-            BrokerRequest::RunGc(nixling_ipc::broker_wire::RunGcRequest {
+            BrokerRequest::RunGc(nixling_contracts::broker_wire::RunGcRequest {
                 bundle_gc_intent_ref: BundleOpId::new(intent_id_gc_host()),
                 keep_generations: Some(3),
                 tracing_span_id: Some(TracingSpanId::new("span-gc")),
@@ -10270,7 +10304,7 @@ mod tests {
         }
 
         let run_keys_rotate = assert_dispatch(
-            BrokerRequest::RunKeysRotate(nixling_ipc::broker_wire::RunKeysRotateRequest {
+            BrokerRequest::RunKeysRotate(nixling_contracts::broker_wire::RunKeysRotateRequest {
                 bundle_keys_intent_ref: BundleOpId::new(intent_id_keys_rotate("corp-vm")),
                 vm: "corp-vm".to_owned(),
                 tracing_span_id: Some(TracingSpanId::new("span-keys")),
@@ -10291,11 +10325,13 @@ mod tests {
         }
 
         let run_host_key_trust = assert_dispatch(
-            BrokerRequest::RunHostKeyTrust(nixling_ipc::broker_wire::RunHostKeyTrustRequest {
-                bundle_trust_intent_ref: BundleOpId::new(intent_id_trust("corp-vm")),
-                vm: "corp-vm".to_owned(),
-                tracing_span_id: Some(TracingSpanId::new("span-trust")),
-            }),
+            BrokerRequest::RunHostKeyTrust(
+                nixling_contracts::broker_wire::RunHostKeyTrustRequest {
+                    bundle_trust_intent_ref: BundleOpId::new(intent_id_trust("corp-vm")),
+                    vm: "corp-vm".to_owned(),
+                    tracing_span_id: Some(TracingSpanId::new("span-trust")),
+                },
+            ),
             "RunHostKeyTrust",
             OperationFields::RunHostKeyTrust {
                 bundle_trust_intent_ref: intent_id_trust("corp-vm"),
@@ -10314,7 +10350,7 @@ mod tests {
 
         let run_rotate_known_host = assert_dispatch(
             BrokerRequest::RunRotateKnownHost(
-                nixling_ipc::broker_wire::RunRotateKnownHostRequest {
+                nixling_contracts::broker_wire::RunRotateKnownHostRequest {
                     bundle_rotate_known_host_intent_ref: BundleOpId::new(
                         intent_id_rotate_known_host("corp-vm"),
                     ),
@@ -10340,7 +10376,7 @@ mod tests {
 
         assert_ack(
             assert_dispatch(
-                BrokerRequest::UsbipBind(nixling_ipc::broker_wire::UsbipBindRequest {
+                BrokerRequest::UsbipBind(nixling_contracts::broker_wire::UsbipBindRequest {
                     bundle_usbip_bind_intent_ref: BundleOpId::new(
                         nixling_core::bundle_resolver::intent_id_usbip_bind(
                             "work", "corp-vm", "1-2.3",
@@ -10367,7 +10403,7 @@ mod tests {
 
         assert_ack(
             assert_dispatch(
-                BrokerRequest::UsbipUnbind(nixling_ipc::broker_wire::UsbipUnbindRequest {
+                BrokerRequest::UsbipUnbind(nixling_contracts::broker_wire::UsbipUnbindRequest {
                     bundle_usbip_bind_intent_ref: BundleOpId::new(
                         nixling_core::bundle_resolver::intent_id_usbip_bind(
                             "work", "corp-vm", "1-2.3",
@@ -10388,7 +10424,7 @@ mod tests {
         assert_ack(
             assert_dispatch(
                 BrokerRequest::UsbipProxyReconcile(
-                    nixling_ipc::broker_wire::UsbipProxyReconcileRequest {
+                    nixling_contracts::broker_wire::UsbipProxyReconcileRequest {
                         scope_id: ScopeId::new("global"),
                         tracing_span_id: Some(TracingSpanId::new("usb-proxy-0000000000000003")),
                     },
@@ -10403,7 +10439,7 @@ mod tests {
         assert_ack(
             assert_dispatch(
                 BrokerRequest::UsbipBindFirewallRule(
-                    nixling_ipc::broker_wire::UsbipBindFirewallRuleRequest {
+                    nixling_contracts::broker_wire::UsbipBindFirewallRuleRequest {
                         bundle_usbip_firewall_intent_ref: BundleOpId::new(
                             intent_id_usbip_firewall("work", "1-2.3"),
                         ),
@@ -10421,7 +10457,7 @@ mod tests {
 
         let qemu_powerdown = assert_dispatch(
             BrokerRequest::QemuMediaSystemPowerdown(
-                nixling_ipc::broker_wire::QemuMediaLifecycleRequest {
+                nixling_contracts::broker_wire::QemuMediaLifecycleRequest {
                     vm_id: VmId::new("media"),
                     tracing_span_id: Some(TracingSpanId::new("span-qmp-powerdown")),
                 },
@@ -10437,7 +10473,7 @@ mod tests {
             BrokerResponse::QemuMediaSystemPowerdown(response) => {
                 assert_eq!(
                     response.command,
-                    nixling_ipc::broker_wire::QemuMediaLifecycleAction::SystemPowerdown
+                    nixling_contracts::broker_wire::QemuMediaLifecycleAction::SystemPowerdown
                 );
             }
             other => panic!("expected QemuMediaSystemPowerdown response, got {other:?}"),
@@ -10446,7 +10482,7 @@ mod tests {
         let before_query = capture.lock().expect("capture before query").len();
         let query_context = DispatchAuditContext::from_request(
             &BrokerRequest::QemuMediaQueryStatus(
-                nixling_ipc::broker_wire::QemuMediaQueryStatusRequest {
+                nixling_contracts::broker_wire::QemuMediaQueryStatusRequest {
                     vm_id: VmId::new("media"),
                     shutdown_context: true,
                     tracing_span_id: Some(TracingSpanId::new("span-qmp-status")),
@@ -10458,7 +10494,7 @@ mod tests {
         .expect("query audit context");
         let query_result = dispatch_request_with_backend(
             BrokerRequest::QemuMediaQueryStatus(
-                nixling_ipc::broker_wire::QemuMediaQueryStatusRequest {
+                nixling_contracts::broker_wire::QemuMediaQueryStatusRequest {
                     vm_id: VmId::new("media"),
                     shutdown_context: true,
                     tracing_span_id: Some(TracingSpanId::new("span-qmp-status")),
@@ -10478,7 +10514,7 @@ mod tests {
             BrokerResponse::QemuMediaQueryStatus(response) => {
                 assert_eq!(
                     response.status,
-                    nixling_ipc::broker_wire::QemuMediaVmStatus::ConnectionLostDuringShutdown
+                    nixling_contracts::broker_wire::QemuMediaVmStatus::ConnectionLostDuringShutdown
                 );
             }
             other => panic!("expected QemuMediaQueryStatus response, got {other:?}"),
@@ -10490,10 +10526,12 @@ mod tests {
         );
 
         let qemu_quit = assert_dispatch(
-            BrokerRequest::QemuMediaQuit(nixling_ipc::broker_wire::QemuMediaLifecycleRequest {
-                vm_id: VmId::new("media"),
-                tracing_span_id: Some(TracingSpanId::new("span-qmp-quit")),
-            }),
+            BrokerRequest::QemuMediaQuit(
+                nixling_contracts::broker_wire::QemuMediaLifecycleRequest {
+                    vm_id: VmId::new("media"),
+                    tracing_span_id: Some(TracingSpanId::new("span-qmp-quit")),
+                },
+            ),
             "QemuMediaQuit",
             OperationFields::QemuMediaQuit {
                 vm_id: "media".to_owned(),
@@ -10505,7 +10543,7 @@ mod tests {
             BrokerResponse::QemuMediaQuit(response) => {
                 assert_eq!(
                     response.command,
-                    nixling_ipc::broker_wire::QemuMediaLifecycleAction::Quit
+                    nixling_contracts::broker_wire::QemuMediaLifecycleAction::Quit
                 );
             }
             other => panic!("expected QemuMediaQuit response, got {other:?}"),
@@ -10514,7 +10552,7 @@ mod tests {
         assert_ack(
             assert_dispatch(
                 BrokerRequest::SeedDnsmasqLease(
-                    nixling_ipc::broker_wire::SeedDnsmasqLeaseRequest {
+                    nixling_contracts::broker_wire::SeedDnsmasqLeaseRequest {
                         vm_id: VmId::new("corp-vm"),
                         scope_id: ScopeId::new("env:work"),
                         tracing_span_id: Some(TracingSpanId::new("span-dnsmasq")),
@@ -10533,7 +10571,7 @@ mod tests {
         assert_ack(
             assert_dispatch(
                 BrokerRequest::BindMountFromHardlinkFarm(
-                    nixling_ipc::broker_wire::BindMountFromHardlinkFarmRequest {
+                    nixling_contracts::broker_wire::BindMountFromHardlinkFarmRequest {
                         vm_id: VmId::new("corp-vm"),
                         bundle_store_view_intent_ref: None,
                         tracing_span_id: Some(TracingSpanId::new("span-bind-mount")),
@@ -10562,11 +10600,11 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn spawn_runner_rejects_invalid_minijail_profile() {
-        use nixling_core::bundle_resolver::intent_id_runner;
-        use nixling_ipc::broker_wire::{
+        use nixling_contracts::broker_wire::{
             BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
         };
-        use nixling_ipc::types::{BundleOpId, RoleId, TracingSpanId, VmId};
+        use nixling_contracts::types::{BundleOpId, RoleId, TracingSpanId, VmId};
+        use nixling_core::bundle_resolver::intent_id_runner;
 
         let root = test_audit_dir("spawn-runner-invalid-minijail");
         let bundle = build_invalid_minijail_test_bundle(&root);
@@ -10581,17 +10619,18 @@ mod tests {
         let backend = FakeDispatchBackend::default();
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
-        let request = BrokerRequest::SpawnRunner(nixling_ipc::broker_wire::SpawnRunnerRequest {
-            vm_id: VmId::new("corp-vm"),
-            role_id: RoleId::new("ch-runner"),
-            role: RunnerRole::CloudHypervisor,
-            bundle_runner_intent_ref: BundleOpId::new(intent_id_runner("corp-vm", "ch-runner")),
-            runtime_allocations: vec![RunnerAllocation {
-                kind: RunnerAllocationKind::VsockCid,
-                opaque_ref: "cid:42".to_owned(),
-            }],
-            tracing_span_id: Some(TracingSpanId::new("span-invalid-spawn")),
-        });
+        let request =
+            BrokerRequest::SpawnRunner(nixling_contracts::broker_wire::SpawnRunnerRequest {
+                vm_id: VmId::new("corp-vm"),
+                role_id: RoleId::new("ch-runner"),
+                role: RunnerRole::CloudHypervisor,
+                bundle_runner_intent_ref: BundleOpId::new(intent_id_runner("corp-vm", "ch-runner")),
+                runtime_allocations: vec![RunnerAllocation {
+                    kind: RunnerAllocationKind::VsockCid,
+                    opaque_ref: "cid:42".to_owned(),
+                }],
+                tracing_span_id: Some(TracingSpanId::new("span-invalid-spawn")),
+            });
         let expected_request_fields = request_fields_value(&request).expect("request fields");
         let audit_context = DispatchAuditContext::from_request(&request, 5150, &caller_role)
             .expect("audit context");
@@ -10715,10 +10754,10 @@ mod tests {
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
-    fn store_sync_request(generation_token: u32) -> nixling_ipc::broker_wire::BrokerRequest {
+    fn store_sync_request(generation_token: u32) -> nixling_contracts::broker_wire::BrokerRequest {
+        use nixling_contracts::broker_wire::{BrokerRequest, StoreSyncRequest};
+        use nixling_contracts::types::{BundleClosureRef, TracingSpanId, VmId};
         use nixling_core::bundle_resolver::intent_id_store_view;
-        use nixling_ipc::broker_wire::{BrokerRequest, StoreSyncRequest};
-        use nixling_ipc::types::{BundleClosureRef, TracingSpanId, VmId};
 
         BrokerRequest::StoreSync(StoreSyncRequest {
             vm_id: VmId::new("corp-vm"),
@@ -10737,7 +10776,7 @@ mod tests {
         use crate::ops::store_sync_audit::{
             AuthzOutcome, CleanupReason, CleanupStatus, ErrorStage, SyncStatus,
         };
-        use nixling_ipc::broker_wire::BrokerCallerRole;
+        use nixling_contracts::broker_wire::BrokerCallerRole;
 
         let root = test_audit_dir("store-sync-dispatch-success");
         let (bundle, _farm) = store_sync_dispatch_bundle(&root, 7);
@@ -10836,7 +10875,7 @@ mod tests {
     #[test]
     fn store_sync_dispatch_fast_path_emits_single_skipped_record() {
         use crate::ops::store_sync_audit::{CleanupReason, CleanupStatus, SyncStatus};
-        use nixling_ipc::broker_wire::BrokerCallerRole;
+        use nixling_contracts::broker_wire::BrokerCallerRole;
 
         let root = test_audit_dir("store-sync-dispatch-fast-path");
         let (bundle, _farm) = store_sync_dispatch_bundle(&root, 7);
@@ -10936,7 +10975,7 @@ mod tests {
         use crate::ops::store_sync_audit::{
             AuthzOutcome, CleanupReason, CleanupStatus, ErrorStage, SyncStatus,
         };
-        use nixling_ipc::broker_wire::BrokerCallerRole;
+        use nixling_contracts::broker_wire::BrokerCallerRole;
 
         let root = test_audit_dir("store-sync-dispatch-failure");
         // Resolved generation is 7; the wire asks for 8 → GenerationMismatch
@@ -11076,10 +11115,10 @@ mod tests {
     #[test]
     fn store_verify_repair_emits_store_sync_audit_and_export() {
         use crate::ops::store_sync_audit::SyncStatus;
-        use nixling_ipc::broker_wire::{
+        use nixling_contracts::broker_wire::{
             BrokerCallerRole, BrokerRequest, BrokerResponse, StoreVerifyRequest, StoreVerifyStatus,
         };
-        use nixling_ipc::types::{TracingSpanId, VmId};
+        use nixling_contracts::types::{TracingSpanId, VmId};
 
         let root = test_audit_dir("store-verify-repair-audit");
         let (bundle, farm) = store_sync_dispatch_bundle(&root, 7);
@@ -11224,7 +11263,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn cleanup_otel_host_bridge_stale_socket_noop_for_other_role() {
-        use nixling_ipc::broker_wire::RunnerRole;
+        use nixling_contracts::broker_wire::RunnerRole;
         // A non-bridge role must short-circuit Ok before touching argv or
         // the filesystem, even with an otherwise-dangerous argv.
         let argv = vec!["UNIX-LISTEN:/etc/shadow,fork".to_owned()];
@@ -11235,7 +11274,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn cleanup_otel_host_bridge_stale_socket_rejects_path_outside_otel_runtime_dir() {
-        use nixling_ipc::broker_wire::RunnerRole;
+        use nixling_contracts::broker_wire::RunnerRole;
         // The prefix guard must refuse any socket outside the nixling OTel
         // runtime dir so a malformed bundle can never unlink an arbitrary
         // path before the guarded `cleanup_stale_unix_socket_without_probe`.
@@ -11254,11 +11293,11 @@ mod tests {
         // for another role. OtelHostBridge is now represented in the
         // process graph, so the normal closed-set intent matching path
         // catches this before the obs-VM-specific check.
-        use nixling_core::bundle_resolver::intent_id_runner;
-        use nixling_ipc::broker_wire::{
+        use nixling_contracts::broker_wire::{
             BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
         };
-        use nixling_ipc::types::{BundleOpId, RoleId, TracingSpanId, VmId};
+        use nixling_contracts::types::{BundleOpId, RoleId, TracingSpanId, VmId};
+        use nixling_core::bundle_resolver::intent_id_runner;
 
         let root = test_audit_dir("spawn-runner-otel-host-bridge-wrong-vm");
         let bundle = build_test_bundle(&root);
@@ -11273,20 +11312,21 @@ mod tests {
         let backend = FakeDispatchBackend::default();
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
-        let request = BrokerRequest::SpawnRunner(nixling_ipc::broker_wire::SpawnRunnerRequest {
-            vm_id: VmId::new("corp-vm"),
-            role_id: RoleId::new("ch-runner"),
-            // Use the existing corp-vm runner intent but assert
-            // it as an OtelHostBridge spawn — closed-set
-            // validation must refuse because corp-vm != "obs".
-            role: RunnerRole::OtelHostBridge,
-            bundle_runner_intent_ref: BundleOpId::new(intent_id_runner("corp-vm", "ch-runner")),
-            runtime_allocations: vec![RunnerAllocation {
-                kind: RunnerAllocationKind::VsockCid,
-                opaque_ref: "cid:42".to_owned(),
-            }],
-            tracing_span_id: Some(TracingSpanId::new("span-otel-bridge-refusal")),
-        });
+        let request =
+            BrokerRequest::SpawnRunner(nixling_contracts::broker_wire::SpawnRunnerRequest {
+                vm_id: VmId::new("corp-vm"),
+                role_id: RoleId::new("ch-runner"),
+                // Use the existing corp-vm runner intent but assert
+                // it as an OtelHostBridge spawn — closed-set
+                // validation must refuse because corp-vm != "obs".
+                role: RunnerRole::OtelHostBridge,
+                bundle_runner_intent_ref: BundleOpId::new(intent_id_runner("corp-vm", "ch-runner")),
+                runtime_allocations: vec![RunnerAllocation {
+                    kind: RunnerAllocationKind::VsockCid,
+                    opaque_ref: "cid:42".to_owned(),
+                }],
+                tracing_span_id: Some(TracingSpanId::new("span-otel-bridge-refusal")),
+            });
         let audit_context = DispatchAuditContext::from_request(&request, 5152, &caller_role)
             .expect("audit context");
 
@@ -11328,14 +11368,14 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn spawn_runner_rejects_otel_host_bridge_intent_for_non_obs_vm() {
+        use nixling_contracts::broker_wire::{
+            BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
+        };
+        use nixling_contracts::types::{BundleOpId, RoleId, TracingSpanId, VmId};
         use nixling_core::bundle_resolver::{BundleVerifyPolicy, intent_id_runner};
         use nixling_core::minijail_profile::{CgroupPlacement, WritablePath};
         use nixling_core::processes::{NodeId, ProcessNode, ProcessRole, ProcessesJson};
         use nixling_core::test_support::RoleProfileBuilder;
-        use nixling_ipc::broker_wire::{
-            BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
-        };
-        use nixling_ipc::types::{BundleOpId, RoleId, TracingSpanId, VmId};
 
         let root = test_audit_dir("spawn-runner-otel-host-bridge-non-obs-vm");
         let bundle = build_test_bundle(&root);
@@ -11396,17 +11436,18 @@ mod tests {
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
         let intent_ref = intent_id_runner("corp-vm", "otel-host-bridge");
-        let request = BrokerRequest::SpawnRunner(nixling_ipc::broker_wire::SpawnRunnerRequest {
-            vm_id: VmId::new("corp-vm"),
-            role_id: RoleId::new("otel-host-bridge"),
-            role: RunnerRole::OtelHostBridge,
-            bundle_runner_intent_ref: BundleOpId::new(intent_ref.clone()),
-            runtime_allocations: vec![RunnerAllocation {
-                kind: RunnerAllocationKind::VsockCid,
-                opaque_ref: "cid:1000".to_owned(),
-            }],
-            tracing_span_id: Some(TracingSpanId::new("span-otel-bridge-wrong-vm")),
-        });
+        let request =
+            BrokerRequest::SpawnRunner(nixling_contracts::broker_wire::SpawnRunnerRequest {
+                vm_id: VmId::new("corp-vm"),
+                role_id: RoleId::new("otel-host-bridge"),
+                role: RunnerRole::OtelHostBridge,
+                bundle_runner_intent_ref: BundleOpId::new(intent_ref.clone()),
+                runtime_allocations: vec![RunnerAllocation {
+                    kind: RunnerAllocationKind::VsockCid,
+                    opaque_ref: "cid:1000".to_owned(),
+                }],
+                tracing_span_id: Some(TracingSpanId::new("span-otel-bridge-wrong-vm")),
+            });
         let audit_context = DispatchAuditContext::from_request(&request, 5153, &caller_role)
             .expect("audit context");
 
@@ -11450,8 +11491,8 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn signal_runner_returns_no_pidfd_for_unknown_runner() {
-        use nixling_ipc::broker_wire::{BrokerCallerRole, BrokerRequest, RunnerSignal};
-        use nixling_ipc::types::{RoleId, VmId};
+        use nixling_contracts::broker_wire::{BrokerCallerRole, BrokerRequest, RunnerSignal};
+        use nixling_contracts::types::{RoleId, VmId};
 
         let root = test_audit_dir("signal-runner-missing-pidfd");
         let bundle = build_test_bundle(&root);
@@ -11466,14 +11507,15 @@ mod tests {
         let backend = FakeDispatchBackend::default();
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
-        let request = BrokerRequest::SignalRunner(nixling_ipc::broker_wire::SignalRunnerRequest {
-            vm_id: VmId::new("corp-vm"),
-            role_id: RoleId::new("missing"),
-            signal: RunnerSignal::Term,
-            pid: None,
-            expected_start_time_ticks: None,
-            tracing_span_id: None,
-        });
+        let request =
+            BrokerRequest::SignalRunner(nixling_contracts::broker_wire::SignalRunnerRequest {
+                vm_id: VmId::new("corp-vm"),
+                role_id: RoleId::new("missing"),
+                signal: RunnerSignal::Term,
+                pid: None,
+                expected_start_time_ticks: None,
+                tracing_span_id: None,
+            });
         let audit_context = DispatchAuditContext::from_request(&request, 5151, &caller_role)
             .expect("audit context");
 
@@ -11619,11 +11661,11 @@ mod tests {
     fn usb_broker_ipc_refuses_non_daemon_so_peercred_before_dispatch() {
         use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
         use nix::unistd::Uid;
-        use nixling_ipc::broker_wire::{
+        use nixling_contracts::broker_wire::{
             BrokerCallerRole, BrokerRequestEnvelope, UsbipBindFirewallRuleRequest,
             UsbipBindRequest, UsbipProxyReconcileRequest, UsbipUnbindRequest,
         };
-        use nixling_ipc::types::{BundleOpId, ScopeId};
+        use nixling_contracts::types::{BundleOpId, ScopeId};
         use std::os::fd::AsRawFd;
         use std::sync::Mutex;
 
@@ -11725,11 +11767,11 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_broker_ipc_validation_rejects_traversal_and_oversized_inputs() {
-        use nixling_ipc::broker_wire::{
+        use nixling_contracts::broker_wire::{
             ModprobeIfAllowedRequest, UsbipBindFirewallRuleRequest, UsbipBindRequest,
             UsbipProxyReconcileRequest, UsbipUnbindRequest,
         };
-        use nixling_ipc::types::{BundleOpId, ScopeId};
+        use nixling_contracts::types::{BundleOpId, ScopeId};
 
         let cases = vec![
             (
@@ -11805,10 +11847,10 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_broker_ipc_validation_is_shape_only_not_authorization() {
-        use nixling_ipc::broker_wire::{
+        use nixling_contracts::broker_wire::{
             UsbipBindFirewallRuleRequest, UsbipBindRequest, UsbipProxyReconcileRequest,
         };
-        use nixling_ipc::types::{BundleOpId, ScopeId};
+        use nixling_contracts::types::{BundleOpId, ScopeId};
 
         let requests = [
             BrokerRequest::UsbipBind(UsbipBindRequest {
@@ -12022,7 +12064,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_bind_audit_failure_rolls_back_backend_bind_and_acl() {
-        use nixling_ipc::broker_wire::{BrokerCallerRole, BrokerRequest};
+        use nixling_contracts::broker_wire::{BrokerCallerRole, BrokerRequest};
 
         let root = test_audit_dir("usbip-bind-audit-failure-rollback");
         let bundle = build_test_bundle(&root);
@@ -12044,7 +12086,7 @@ mod tests {
         let caller_gid = Gid::current().as_raw();
         let intent_id =
             nixling_core::bundle_resolver::intent_id_usbip_bind("work", "corp-vm", "1-2.3");
-        let request = BrokerRequest::UsbipBind(nixling_ipc::broker_wire::UsbipBindRequest {
+        let request = BrokerRequest::UsbipBind(nixling_contracts::broker_wire::UsbipBindRequest {
             bundle_usbip_bind_intent_ref: BundleOpId::new(intent_id.as_str()),
             tracing_span_id: None,
         });
@@ -12332,8 +12374,8 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_bind_with_previous_serial_hmac_key_emits_one_rotation_audit_record_per_key_pair() {
-        use nixling_ipc::broker_wire::{BrokerCallerRole, BrokerRequest};
-        use nixling_ipc::types::TracingSpanId;
+        use nixling_contracts::broker_wire::{BrokerCallerRole, BrokerRequest};
+        use nixling_contracts::types::TracingSpanId;
         use std::os::unix::fs::PermissionsExt;
 
         let root = test_audit_dir("usb-serial-hmac-rotation-audit");
@@ -12390,7 +12432,7 @@ mod tests {
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
         let make_request = |span_id: &str| {
-            BrokerRequest::UsbipBind(nixling_ipc::broker_wire::UsbipBindRequest {
+            BrokerRequest::UsbipBind(nixling_contracts::broker_wire::UsbipBindRequest {
                 bundle_usbip_bind_intent_ref: BundleOpId::new(
                     nixling_core::bundle_resolver::intent_id_usbip_bind("work", "corp-vm", "1-2.3"),
                 ),
@@ -12856,7 +12898,9 @@ mod tests {
         use super::*;
         use nix::sys::signal::{Signal, kill};
         use nix::unistd::Pid;
-        use nixling_ipc::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+        use nixling_contracts::broker_wire::{
+            ChildExitKind, ChildExitStatus, ChildReapedNotification,
+        };
         use std::process::Command;
         use std::sync::{Mutex, MutexGuard, OnceLock};
         use std::time::{Duration, Instant};

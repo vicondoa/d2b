@@ -26,14 +26,8 @@ use nixling_constellation_core::{
         AuditSinkHealthReason, AuditStreamKind,
     },
 };
-use nixling_core::{
-    bundle::Bundle, closures::ClosureMetadata, error::Error, host::HostJson,
-    manifest_v04::ManifestV04, minijail_profile::MinijailProfile, privileges::PrivilegesJson,
-    processes::ProcessesJson, storage::StorageJson, storage_lifecycle::StorageLifecycleReport,
-    sync::SyncJson,
-};
-use nixling_ipc::guest_wire::GuestControlSchema;
-use nixling_ipc::{
+use nixling_contracts::guest_wire::GuestControlSchema;
+use nixling_contracts::{
     WireProtocolSchema,
     cli_output::{
         AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, ListOutputV2, OpInspectOutputV1,
@@ -42,6 +36,12 @@ use nixling_ipc::{
         VmDisplayCloseOutputV1, VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1,
         VmExecListOutputV1, VmExecLogsOutputV1, VmExecStatusOutputV1,
     },
+};
+use nixling_core::{
+    bundle::Bundle, closures::ClosureMetadata, error::Error, host::HostJson,
+    manifest_v04::ManifestV04, minijail_profile::MinijailProfile, privileges::PrivilegesJson,
+    processes::ProcessesJson, storage::StorageJson, storage_lifecycle::StorageLifecycleReport,
+    sync::SyncJson,
 };
 use schemars::schema::RootSchema;
 
@@ -190,7 +190,7 @@ fn run_inventory(output_path: Option<PathBuf>) -> std::process::ExitCode {
 
 fn gen_guest_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
-    let proto_dir = repo_root.join("packages/nixling-ipc/proto");
+    let proto_dir = repo_root.join("packages/nixling-contracts/proto");
     let proto = proto_dir.join("guest_control.proto");
     let out_dir = repo_root.join("packages/nixling-guestd/src/generated");
     fs::create_dir_all(&out_dir)?;
@@ -212,9 +212,9 @@ fn gen_guest_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
 
 fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
-    let proto_dir = repo_root.join("packages/nixling-ipc/proto");
+    let proto_dir = repo_root.join("packages/nixling-contracts/proto");
     let proto = proto_dir.join("guest_control.proto");
-    let out_dir = repo_root.join("packages/nixling-ipc/src/generated");
+    let out_dir = repo_root.join("packages/nixling-contracts/src/generated");
     fs::create_dir_all(&out_dir)?;
     let out_file = out_dir.join("guest_control.rs");
     let temp_proto_dir = create_exclusive_temp_dir("nixling-guest-proto")?;
@@ -652,7 +652,7 @@ fn gen_daemon_api() -> Result<PathBuf, Box<dyn std::error::Error>> {
 }
 
 fn parse_ipc_items(repo_root: &Path) -> Result<Vec<RustItem>, Box<dyn std::error::Error>> {
-    let ipc_dir = repo_root.join("packages/nixling-ipc/src");
+    let ipc_dir = repo_root.join("packages/nixling-contracts/src");
     let mut files = fs::read_dir(&ipc_dir)?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
@@ -1009,7 +1009,7 @@ fn render_request_section(items: &[RustItem]) -> String {
             ("Public socket request types", public),
             ("Broker socket request types", broker),
         ],
-        "No request types were found under `packages/nixling-ipc/src/` yet.",
+        "No request types were found under `packages/nixling-contracts/src/` yet.",
     )
 }
 
@@ -1032,7 +1032,7 @@ fn render_response_section(items: &[RustItem]) -> String {
             ("Public socket response types", public),
             ("Broker socket response types", broker),
         ],
-        "No response types were found under `packages/nixling-ipc/src/` yet.",
+        "No response types were found under `packages/nixling-contracts/src/` yet.",
     )
 }
 
@@ -1060,7 +1060,7 @@ fn render_enum_section(items: &[RustItem]) -> String {
             ("Lifecycle enum", lifecycle),
             ("Other documented enums", other),
         ],
-        "No documented enums were found under `packages/nixling-ipc/src/` yet.",
+        "No documented enums were found under `packages/nixling-contracts/src/` yet.",
     )
 }
 

@@ -23,7 +23,7 @@ pub const HARD_MAX_CHUNK_BYTES: u64 = 1024 * 1024;
 /// Maximum raw byte size of a single-shot `ReadGuestFile` payload.
 ///
 /// Deliberately set BELOW both the public.sock 1 MiB frame
-/// (`nixling_ipc::MAX_FRAME_SIZE`) and the ttRPC frame cap, with margin for the
+/// (`nixling_contracts::MAX_FRAME_SIZE`) and the ttRPC frame cap, with margin for the
 /// base64 + JSON envelope a public.sock response adds: 512 KiB raw base64-encodes
 /// to ~699 KiB, which still fits a 1 MiB frame with envelope overhead. A guest
 /// file larger than this fails with `FileTooLarge` BEFORE any read/allocation.

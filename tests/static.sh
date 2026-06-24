@@ -1216,7 +1216,7 @@ nl_static_gate_end "W1 bundle/schema static gates"
 
 # -----------------------------------------------------------------------------
 # Control-plane skeleton gates (per the plan-of-record, plan.md §
-# "###: Rust workspace and API skeleton"). These cover the nixling-ipc
+# "###: Rust workspace and API skeleton"). These cover the nixling-contracts
 # wire types, nixling-priv-broker dispatch, nixlingd socket auth + state
 # lock + version negotiation, the Rust-native CLI shim, generated docs +
 # error-codes, and bounded fuzz of the manifest_v04 / bundle parsers.

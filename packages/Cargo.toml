@@ -19,7 +19,7 @@ members = [
     "nixling-guestd",
     "nixling-userd",
     "nixling-exec-runner",
-    "nixling-ipc",
+    "nixling-contracts",
     "nixling",
     "nixlingd",
     "nixling-wayland-filter",
@@ -59,7 +59,7 @@ schemars = { version = "0.8", features = ["derive"] }
 # that first consumes them (s2 for rtnetlink, s3 for nftables) so the
 # license / advisory whitelist update lands in the same commit that
 # adds the consumer. See plan.md §"W3 broker variant additions" — the
-# wire contract for routes/nft is fully encoded in nixling-ipc here,
+# wire contract for routes/nft is fully encoded in nixling-contracts here,
 # so scope agents have everything they need to pull these crates in.
 rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "mount", "thread", "pty", "termios", "stdio"] }
 # W3 s2: declared in workspace.dependencies so future scope work (and

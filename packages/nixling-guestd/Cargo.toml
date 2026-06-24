@@ -12,7 +12,7 @@ workspace = true
 async-trait = "0.1"
 futures = "0.3"
 hmac = "0.12"
-nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
+nixling-contracts = { path = "../nixling-contracts", version = "0.0.0-bootstrap" }
 nixling-exec-runner = { path = "../nixling-exec-runner", version = "0.0.0-bootstrap" }
 nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
 protobuf = "3.7.2"

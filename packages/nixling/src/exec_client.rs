@@ -13,12 +13,12 @@ use std::collections::VecDeque;
 use std::io::{self, Write as _};
 use std::sync::{Arc, Mutex};
 
-use nixling_core::base64_codec;
-use nixling_ipc::public_wire::{
+use nixling_contracts::public_wire::{
     ExecCloseArgs, ExecOp, ExecOpResponse, ExecReadOutputArgs, ExecReadOutputResult,
     ExecResizeArgs, ExecSignalArgs, ExecStartResult, ExecStream, ExecTerminalStatus, ExecWaitArgs,
     ExecWaitResult, ExecWriteStdinArgs, ExecWriteStdinResult,
 };
+use nixling_core::base64_codec;
 use serde_json::Value;
 
 use crate::terminal_client::{TerminalHostIo, TerminalSignalSource, TerminalTransport};
@@ -44,7 +44,7 @@ pub const EXIT_EXEC_INTERNAL: i32 = 42;
 
 /// Maximum decoded stdin/stdout chunk the CLI moves per op. Mirrors the daemon
 /// `EXEC_MAX_CHUNK_BYTES` cap so a single op never approaches the frame cap.
-pub const EXEC_CLI_CHUNK_BYTES: u64 = nixling_ipc::public_wire::EXEC_MAX_CHUNK_BYTES;
+pub const EXEC_CLI_CHUNK_BYTES: u64 = nixling_contracts::public_wire::EXEC_MAX_CHUNK_BYTES;
 
 /// Where a terminal failure originated. Surfaced in the `--json` envelope so a
 /// consumer can disambiguate a guest exit code from a transport exit code that
@@ -359,7 +359,7 @@ pub fn expect_start(resp: ExecOpResponse) -> Result<ExecStartResult, ExecClientE
 
 pub fn expect_detached_create(
     resp: ExecOpResponse,
-) -> Result<nixling_ipc::public_wire::ExecDetachedCreateResult, ExecClientError> {
+) -> Result<nixling_contracts::public_wire::ExecDetachedCreateResult, ExecClientError> {
     match resp {
         ExecOpResponse::DetachedCreate(result) => Ok(result),
         other => Err(ExecClientError::protocol(format!(
@@ -371,7 +371,7 @@ pub fn expect_detached_create(
 
 pub fn expect_detached_list(
     resp: ExecOpResponse,
-) -> Result<nixling_ipc::public_wire::ExecDetachedListResult, ExecClientError> {
+) -> Result<nixling_contracts::public_wire::ExecDetachedListResult, ExecClientError> {
     match resp {
         ExecOpResponse::List(result) => Ok(result),
         other => Err(ExecClientError::protocol(format!(
@@ -383,7 +383,7 @@ pub fn expect_detached_list(
 
 pub fn expect_detached_logs(
     resp: ExecOpResponse,
-) -> Result<nixling_ipc::public_wire::ExecDetachedLogsResult, ExecClientError> {
+) -> Result<nixling_contracts::public_wire::ExecDetachedLogsResult, ExecClientError> {
     match resp {
         ExecOpResponse::Logs(result) => Ok(result),
         other => Err(ExecClientError::protocol(format!(
@@ -395,7 +395,7 @@ pub fn expect_detached_logs(
 
 pub fn expect_detached_status(
     resp: ExecOpResponse,
-) -> Result<nixling_ipc::public_wire::ExecDetachedStatusResult, ExecClientError> {
+) -> Result<nixling_contracts::public_wire::ExecDetachedStatusResult, ExecClientError> {
     match resp {
         ExecOpResponse::Status(result) => Ok(result),
         other => Err(ExecClientError::protocol(format!(
@@ -407,7 +407,7 @@ pub fn expect_detached_status(
 
 pub fn expect_detached_kill(
     resp: ExecOpResponse,
-) -> Result<nixling_ipc::public_wire::ExecDetachedKillResult, ExecClientError> {
+) -> Result<nixling_contracts::public_wire::ExecDetachedKillResult, ExecClientError> {
     match resp {
         ExecOpResponse::Kill(result) => Ok(result),
         other => Err(ExecClientError::protocol(format!(
@@ -1110,7 +1110,7 @@ fn nix_errno_to_io(errno: nix::errno::Errno) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nixling_ipc::public_wire::ExecControlResult;
+    use nixling_contracts::public_wire::ExecControlResult;
     use std::collections::VecDeque;
 
     /// A scripted owner transport: records every op, answers reads from
@@ -1200,7 +1200,7 @@ mod tests {
                 ExecOp::Close(_) => {
                     self.close_seen = true;
                     Ok(ExecOpResponse::Close(
-                        nixling_ipc::public_wire::ExecCloseResult { stdin_closed: true },
+                        nixling_contracts::public_wire::ExecCloseResult { stdin_closed: true },
                     ))
                 }
                 ExecOp::WriteStdin(args) => {

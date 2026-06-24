@@ -43,13 +43,13 @@
 //! | `OwnershipMatrixCheck`     | [`BrokerRequest::OwnershipMatrixCheck`] *(stub)*     |
 //! | `SshHostKeyPreflight`      | [`BrokerRequest::SshHostKeyPreflight`] *(stub)*      |
 //!
-//! [`BrokerRequest::CreateTapFd`]: nixling_ipc::broker_wire::BrokerRequest::CreateTapFd
-//! [`BrokerRequest::OpenVhostNet`]: nixling_ipc::broker_wire::BrokerRequest::OpenVhostNet
-//! [`BrokerRequest::ApplyNftables`]: nixling_ipc::broker_wire::BrokerRequest::ApplyNftables
-//! [`BrokerRequest::SeedDnsmasqLease`]: nixling_ipc::broker_wire::BrokerRequest::SeedDnsmasqLease
-//! [`BrokerRequest::BindMountFromHardlinkFarm`]: nixling_ipc::broker_wire::BrokerRequest::BindMountFromHardlinkFarm
-//! [`BrokerRequest::OwnershipMatrixCheck`]: nixling_ipc::broker_wire::BrokerRequest::OwnershipMatrixCheck
-//! [`BrokerRequest::SshHostKeyPreflight`]: nixling_ipc::broker_wire::BrokerRequest::SshHostKeyPreflight
+//! [`BrokerRequest::CreateTapFd`]: nixling_contracts::broker_wire::BrokerRequest::CreateTapFd
+//! [`BrokerRequest::OpenVhostNet`]: nixling_contracts::broker_wire::BrokerRequest::OpenVhostNet
+//! [`BrokerRequest::ApplyNftables`]: nixling_contracts::broker_wire::BrokerRequest::ApplyNftables
+//! [`BrokerRequest::SeedDnsmasqLease`]: nixling_contracts::broker_wire::BrokerRequest::SeedDnsmasqLease
+//! [`BrokerRequest::BindMountFromHardlinkFarm`]: nixling_contracts::broker_wire::BrokerRequest::BindMountFromHardlinkFarm
+//! [`BrokerRequest::OwnershipMatrixCheck`]: nixling_contracts::broker_wire::BrokerRequest::OwnershipMatrixCheck
+//! [`BrokerRequest::SshHostKeyPreflight`]: nixling_contracts::broker_wire::BrokerRequest::SshHostKeyPreflight
 //!
 //! Topological order (minimal fixture VM)
 //! --------------------------------------
@@ -66,9 +66,9 @@
 //! The exact graph and the per-VM set is derived in
 //! [`build_host_prep_dag`].
 
+use nixling_contracts::types::{BundleOpId, ScopeId, VmId};
 use nixling_core::bundle_resolver::BundleResolver;
 use nixling_core::runtime::RuntimeKind;
-use nixling_ipc::types::{BundleOpId, ScopeId, VmId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};

@@ -12,6 +12,8 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Renamed the internal contract/DTO crate to `nixling-contracts` and added
+  workspace taxonomy checks for contract and standalone workspace coverage.
 - CI workflow make-target policy coverage moved from a shell meta gate to a Rust
   contract test with pinned successor coverage.
 - The Tier 0 first-pass implementation moved under `tests/tools/` while keeping
@@ -1021,7 +1023,7 @@ deprecations ship one minor release before removal.
   runtime as a per-exec `RuntimeMaxSec` backstop when non-zero.
 
 
-  `packages/nixling-ipc/proto/guest_control.proto` — generated schema plus
+  `packages/nixling-contracts/proto/guest_control.proto` — generated schema plus
   protobuf source for the ADR 0028 ttRPC contract, covering health, Hello,
   capabilities, exec lifecycle, chunked stdio RPC shapes, bounded health
   labels, bounded string identifiers/payload metadata, oneof-style terminal
@@ -1056,9 +1058,9 @@ deprecations ship one minor release before removal.
   guest-control transport port. This is transport groundwork only: it does not
   change VM readiness, status output, CLI help, or exec behavior.
 
-- `packages/nixling-ipc/src/generated/guest_control.rs` now contains committed
+- `packages/nixling-contracts/src/generated/guest_control.rs` now contains committed
   protobuf message bindings generated from
-  `packages/nixling-ipc/proto/guest_control.proto` via
+  `packages/nixling-contracts/proto/guest_control.proto` via
   `cargo run --locked --manifest-path packages/Cargo.toml -p xtask -- gen-guest-proto`.
   The new
   `tests/guest-proto-bindings.sh` gate verifies the generated bindings are

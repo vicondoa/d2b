@@ -3,7 +3,7 @@
 > Diataxis: reference. Stable catalog of every closed-enum operation
 > the privileged broker (`nixling-priv-broker`) is allowed to perform
 > on behalf of the unprivileged `nixlingd` daemon. The wire-level
-> source of truth is `nixling_ipc::BrokerRequest`; this page is the
+> source of truth is `nixling_contracts::BrokerRequest`; this page is the
 > human-readable index keyed by operation name.
 
 Every row carries three policy flags:
@@ -364,7 +364,7 @@ daemon-only surface is `nixlingd.service` +
 broker `SpawnRunner`.
 
 `StoreSync` is live. `SshKeygenProbe` remains documented as future
-work and is not part of the current `nixling_ipc::BrokerRequest` /
+work and is not part of the current `nixling_contracts::BrokerRequest` /
 `packages/nixling-core/src/privileges.rs` surface.
 
 > Host-prep composes the existing broker ops `CreateTapFd` /
