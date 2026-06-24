@@ -128,52 +128,48 @@ fn output_autostart_posture(vm: &ManifestVm) -> Option<IpcVmAutostartPosture> {
     })
 }
 
+const QEMU_MEDIA_DEFAULT_RUNTIME_CAPABILITIES: &[&str] = &["display", "lifecycle", "usb-hotplug"];
+const QEMU_MEDIA_DEFAULT_UNSUPPORTED_CAPABILITIES: &[&str] = &[
+    "config-sync",
+    "exec",
+    "guest-control",
+    "in-guest-observability",
+    "keys",
+    concat!("s", "sh"),
+    "store-sync",
+];
+
 fn output_runtime_capabilities(vm: &ManifestVm) -> Vec<String> {
-    let Some(runtime) = vm.runtime.as_ref() else {
-        return Vec::new();
-    };
-    let mut supported = runtime
-        .capabilities
-        .iter()
-        .filter(|(_capability, supported)| **supported)
-        .map(|(capability, _supported)| capability_name_for_output(capability).to_owned())
-        .collect::<Vec<_>>();
-    if supported.is_empty() && runtime.kind == "qemu-media" && runtime.capabilities.is_empty() {
-        supported = vec![
-            "display".to_owned(),
-            "lifecycle".to_owned(),
-            "usb-hotplug".to_owned(),
-        ];
-    }
-    supported.sort();
-    supported.dedup();
-    supported
+    output_runtime_capabilities_by_support(vm, true, QEMU_MEDIA_DEFAULT_RUNTIME_CAPABILITIES)
 }
 
 fn output_unsupported_capabilities(vm: &ManifestVm) -> Vec<String> {
+    output_runtime_capabilities_by_support(vm, false, QEMU_MEDIA_DEFAULT_UNSUPPORTED_CAPABILITIES)
+}
+
+fn output_runtime_capabilities_by_support(
+    vm: &ManifestVm,
+    supported: bool,
+    qemu_media_default: &[&str],
+) -> Vec<String> {
     let Some(runtime) = vm.runtime.as_ref() else {
         return Vec::new();
     };
-    let mut unsupported = runtime
+    let mut capabilities = runtime
         .capabilities
         .iter()
-        .filter(|(_capability, supported)| !**supported)
-        .map(|(capability, _supported)| capability_name_for_output(capability).to_owned())
+        .filter(|(_capability, is_supported)| **is_supported == supported)
+        .map(|(capability, _is_supported)| capability_name_for_output(capability).to_owned())
         .collect::<Vec<_>>();
-    if unsupported.is_empty() && runtime.kind == "qemu-media" && runtime.capabilities.is_empty() {
-        unsupported = vec![
-            "config-sync".to_owned(),
-            "exec".to_owned(),
-            "guest-control".to_owned(),
-            "in-guest-observability".to_owned(),
-            "keys".to_owned(),
-            "s".to_owned() + "sh",
-            "store-sync".to_owned(),
-        ];
+    if capabilities.is_empty() && runtime.kind == "qemu-media" && runtime.capabilities.is_empty() {
+        capabilities = qemu_media_default
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect();
     }
-    unsupported.sort();
-    unsupported.dedup();
-    unsupported
+    capabilities.sort();
+    capabilities.dedup();
+    capabilities
 }
 
 pub(crate) fn output_service_capabilities(services: &StatusServicesOutputV2) -> Vec<String> {
@@ -871,4 +867,68 @@ fn readiness_name_for_node(
         }
     }
     readiness_name(readiness)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+    use crate::ManifestRuntime;
+
+    fn manifest_vm_with_runtime(kind: &str, capabilities: BTreeMap<String, bool>) -> ManifestVm {
+        ManifestVm {
+            name: "installer".to_owned(),
+            env: Some("dev".to_owned()),
+            graphics: false,
+            tpm: false,
+            audio: false,
+            usbip_yubikey: false,
+            static_ip: None,
+            is_net_vm: false,
+            state_dir: "/var/lib/nixling/vms/installer".to_owned(),
+            bridge: "br-dev-lan".to_owned(),
+            ssh_user: None,
+            runtime: Some(ManifestRuntime {
+                kind: kind.to_owned(),
+                capabilities,
+            }),
+        }
+    }
+
+    #[test]
+    fn qemu_media_default_capability_projection_is_stable() {
+        let vm = manifest_vm_with_runtime("qemu-media", BTreeMap::new());
+
+        assert_eq!(
+            output_runtime_capabilities(&vm),
+            vec!["display", "lifecycle", "usb-hotplug"]
+        );
+        assert_eq!(
+            output_unsupported_capabilities(&vm),
+            vec![
+                "config-sync",
+                "exec",
+                "guest-control",
+                "in-guest-observability",
+                "keys",
+                "ssh",
+                "store-sync"
+            ]
+        );
+    }
+
+    #[test]
+    fn explicit_runtime_capability_projection_overrides_qemu_defaults() {
+        let vm = manifest_vm_with_runtime(
+            "qemu-media",
+            BTreeMap::from([
+                ("guestControl".to_owned(), false),
+                ("usbHotplug".to_owned(), true),
+            ]),
+        );
+
+        assert_eq!(output_runtime_capabilities(&vm), vec!["usb-hotplug"]);
+        assert_eq!(output_unsupported_capabilities(&vm), vec!["guest-control"]);
+    }
 }
