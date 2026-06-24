@@ -166,9 +166,6 @@ deprecations ship one minor release before removal.
 - Added contract-test policy coverage for host-mutable path/lock surfaces,
   requiring storage/sync contract rows, opaque broker IPC inputs, and a single
   repair owner for new mutable host state.
-- Storage lifecycle diagnostics now include bounded contract identifiers on
-  storage/sync validation issues, making invalid generated contracts actionable
-  without exposing raw managed paths.
 - ADR 0035 Wave 5 added a contract-test policy that classifies every
   `ProcessRole` and requires runner roles to carry Rust argv-builder plus
   runner matrix/contract coverage before new roles land.
