@@ -3239,24 +3239,21 @@ pub mod pidfd_sys {
             // — it's never read on the parent side. Explicit drop
             // for the reader half makes the intent obvious.
             drop(sync.read_fd);
-            let buf = [0u8; 1];
-            // SAFETY: write 1 byte to the sync pipe so the child's
-            // read() returns. Pipe is still open (we kept write_fd
-            // via the OwnedFd in `sync.write_fd`); the call below
-            // returns 1 on success.
-            let n = unsafe { libc::write(sync.write_fd.as_raw_fd(), buf.as_ptr() as *const _, 1) };
-            if n != 1 {
-                let err = if n < 0 {
-                    io::Error::last_os_error()
-                } else {
-                    io::Error::new(
+            match rustix::io::write(&sync.write_fd, &[0u8; 1]) {
+                Ok(1) => {}
+                Ok(_) => {
+                    drop(sync.write_fd);
+                    let _ = reap_spawn_runner_error_child(outcome.pid);
+                    return Err(io::Error::new(
                         io::ErrorKind::WriteZero,
                         "short user namespace sync pipe write",
-                    )
-                };
-                drop(sync.write_fd);
-                let _ = reap_spawn_runner_error_child(outcome.pid);
-                return Err(err);
+                    ));
+                }
+                Err(err) => {
+                    drop(sync.write_fd);
+                    let _ = reap_spawn_runner_error_child(outcome.pid);
+                    return Err(io::Error::from_raw_os_error(err.raw_os_error()));
+                }
             }
         }
 
@@ -3322,20 +3319,9 @@ pub mod pidfd_sys {
         write_fd: OwnedFd,
     }
 
-    #[allow(unsafe_code)]
     fn make_sync_pipe() -> io::Result<SyncPipe> {
-        use std::os::fd::FromRawFd;
-        let mut fds: [libc::c_int; 2] = [-1, -1];
-        // SAFETY: pipe2 expects [c_int; 2]; we pass an owned local.
-        let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
-        if rc < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: pipe2 returns valid fds we now own. FromRawFd
-        // takes ownership; we wrap each fd in OwnedFd so Drop
-        // closes them.
-        let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-        let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+        let (read_fd, write_fd) = nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC)
+            .map_err(|err| io::Error::from_raw_os_error(err as i32))?;
         Ok(SyncPipe { read_fd, write_fd })
     }
 }
@@ -3343,7 +3329,7 @@ pub mod pidfd_sys {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::fd::{AsRawFd, OwnedFd};
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     use nix::libc;
@@ -3594,32 +3580,32 @@ mod tests {
         );
     }
 
-    #[allow(unsafe_code)]
     fn owned_pipe_for_test() -> (OwnedFd, OwnedFd) {
-        let mut fds: [libc::c_int; 2] = [-1, -1];
-        let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
-        assert_eq!(rc, 0, "pipe2 failed: {}", std::io::Error::last_os_error());
-        let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-        let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
-        (read_fd, write_fd)
+        nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).expect("pipe2 failed")
     }
 
-    #[allow(unsafe_code)]
     fn read_pipe_once(read_fd: &OwnedFd) -> String {
         let mut buf = [0u8; 64];
-        let n = unsafe {
-            libc::read(
-                read_fd.as_raw_fd(),
-                buf.as_mut_ptr() as *mut libc::c_void,
-                buf.len(),
-            )
-        };
-        assert!(
-            n >= 0,
-            "pipe read failed: {}",
-            std::io::Error::last_os_error()
+        let n = rustix::io::read(read_fd, &mut buf).expect("pipe read failed");
+        String::from_utf8(buf[..n].to_vec()).expect("pipe data is utf8")
+    }
+
+    fn assert_fd_cloexec(fd: &OwnedFd) {
+        let flags = nix::fcntl::fcntl(fd.as_raw_fd(), nix::fcntl::FcntlArg::F_GETFD)
+            .expect("F_GETFD succeeds for pipe fd");
+        assert_ne!(
+            flags & libc::FD_CLOEXEC,
+            0,
+            "sync pipe fd must be close-on-exec"
         );
-        String::from_utf8(buf[..n as usize].to_vec()).expect("pipe data is utf8")
+    }
+
+    #[test]
+    fn sync_pipe_fds_are_cloexec() {
+        let (read_fd, write_fd) = owned_pipe_for_test();
+
+        assert_fd_cloexec(&read_fd);
+        assert_fd_cloexec(&write_fd);
     }
 
     #[test]
@@ -3659,7 +3645,7 @@ mod tests {
             "            cgroup_already_placed,"
         );
         let user_ns_maps = "write_user_namespace_maps(outcome.pid, spec)";
-        let user_ns_signal = "libc::write(sync.write_fd.as_raw_fd()";
+        let user_ns_signal = "rustix::io::write(&sync.write_fd";
         let reap_error_child = concat!("reap_spawn_runner", "_error_child(outcome.pid)");
         let removed_child_helper = concat!("write_self", "_to_cgroup");
         assert!(
@@ -3688,8 +3674,8 @@ mod tests {
         );
         assert_eq!(
             source.matches(reap_error_child).count(),
-            3,
-            "fallback cgroup, user-NS map, and sync-write errors must each reap before returning Err"
+            4,
+            "fallback cgroup, user-NS map, sync-write error, and sync-write short-write paths must each reap before returning Err"
         );
         assert!(
             !source.contains(removed_child_helper),
