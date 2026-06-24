@@ -97,7 +97,7 @@ in
 
   "nixlingd-startup-smoke/tmpfiles-daemon-state" = {
     expr = rulesForPath "/var/lib/nixling/daemon-state";
-    expected = [ "d /var/lib/nixling/daemon-state 0750 nixlingd nixling -" ];
+    expected = [ "d /var/lib/nixling/daemon-state 0700 nixlingd nixlingd -" ];
   };
 
   "nixlingd-startup-smoke/socket-listen-seqpacket" = {

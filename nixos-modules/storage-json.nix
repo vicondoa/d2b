@@ -103,7 +103,7 @@ let
       path = "/etc/nixling";
       lifecycle = "config";
       persistence = "persistent";
-      owner = principal "user" "root";
+      owner = principal "user" "nixlingd";
       group = principal "group" "nixlingd";
       creator = actor "nix-module" "environment.etc";
       writers = [ (actor "nix-module" "environment.etc") ];
@@ -117,7 +117,7 @@ let
       scope = "host";
       path = toString cfg.site.stateDir;
       persistence = "persistent";
-      owner = principal "user" "root";
+      owner = principal "user" "nixlingd";
       group = principal "group" "nixlingd";
       creator = actor "nix-module" "tmpfiles";
     })
@@ -140,8 +140,8 @@ let
       lifecycle = "boot-scoped-readoptable";
       persistence = "boot-scoped";
       owner = principal "user" "root";
-      group = principal "group" "nixling";
-      mode = "0750";
+      group = principal "group" "nixlingd";
+      mode = "0700";
       creator = actor "nix-module" "tmpfiles";
       cleanupPolicy = "boot";
       leaseClass = "process-pidfd";
@@ -200,7 +200,7 @@ let
       path = "/run/nixling/locks/usbip";
       lifecycle = "boot-scoped-readoptable";
       persistence = "boot-scoped";
-      owner = principal "user" "nixlingd";
+      owner = principal "user" "root";
       group = principal "group" "nixlingd";
       mode = "0750";
       creator = actor "nix-module" "tmpfiles";
@@ -284,7 +284,7 @@ let
     (mkPath {
       id = "path:validation-evidence-records";
       scope = "host";
-      path = "${cfg.daemonExperimental.defaultFlipEvidenceDir}/<wave>.json";
+      path = "${cfg.daemonExperimental.defaultFlipEvidenceDir}/<readiness-key>.json";
       kind = "regular-file";
       owner = principal "user" "root";
       group = principal "group" "nixling";
@@ -323,7 +323,7 @@ let
       persistence = "boot-scoped";
       owner = principal "user" "root";
       group = principal "group" "root";
-      mode = "0644";
+      mode = "0640";
       creator = actor "broker" "nixling-priv-broker";
       writers = [ (actor "broker" "nixling-priv-broker") ];
       readers = [
@@ -402,8 +402,8 @@ let
         lifecycle = "boot-scoped-readoptable";
         persistence = "boot-scoped";
         owner = principal "user" "nixlingd";
-        group = principal "group" "nixling";
-        mode = "0750";
+        group = principal "group" "nixlingd";
+        mode = "0700";
         creator = actor "nix-module" "tmpfiles";
         writers = [
           (actor "daemon" "nixlingd")
@@ -421,7 +421,7 @@ let
         lifecycle = "boot-scoped-readoptable";
         persistence = "boot-scoped";
         owner = principal "user" "nixlingd";
-        group = principal "group" "nixling";
+        group = principal "group" "nixlingd";
         mode = "0750";
         creator = actor "nix-module" "tmpfiles";
         writers = [
@@ -438,7 +438,7 @@ let
         scope = "vm:${name}";
         path = "${toString cfg.site.stateDir}/daemon-state/${name}";
         owner = principal "user" "nixlingd";
-        group = principal "group" "nixling";
+        group = principal "group" "nixlingd";
         mode = "0750";
         creator = actor "daemon" "nixlingd";
         writers = [ (actor "daemon" "nixlingd") ];
@@ -514,7 +514,7 @@ let
         ];
         cleanupPolicy = "cutover-only";
         repairPolicy = "broker-reconcile";
-        invariants = [ "no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only" ];
+        invariants = [ "no-symlink" "broker-opaque-id-only" ];
       })
       (mkPath {
         id = "path:store-view-marker:${name}";

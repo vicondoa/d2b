@@ -33,3 +33,7 @@ authority.
   dead-owner proof has completed.
 - Path hashes are for structured audit/local doctor output only; they must
   never become metric labels.
+- Every host-mutable path has one repair owner. New paths must either reuse an
+  existing generated storage row or add a row whose repair policy routes
+  reconciliation through that single owner; ad-hoc chmod/chown/cleanup paths are
+  not part of the contract.

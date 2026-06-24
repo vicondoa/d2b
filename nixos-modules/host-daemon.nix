@@ -379,7 +379,7 @@ in
       "d /run/nixling/locks/usbip 0750 root nixlingd -"
       "d /run/nixling/state 0700 nixlingd nixlingd -"
       "d /var/lib/nixling 0750 root nixlingd -"
-      "d /var/lib/nixling/daemon-state 0750 nixlingd nixling -"
+      "d /var/lib/nixling/daemon-state 0700 nixlingd nixlingd -"
       "d /var/cache/nixling 0750 root nixlingd -"
       "d /etc/nixling 0750 root nixlingd -"
     ];

@@ -121,10 +121,14 @@
         {
           "type": "object",
           "required": [
+            "contractId",
             "kind",
             "reason"
           ],
           "properties": {
+            "contractId": {
+              "type": "string"
+            },
             "kind": {
               "type": "string",
               "enum": [
@@ -139,10 +143,14 @@
         {
           "type": "object",
           "required": [
+            "contractId",
             "kind",
             "reason"
           ],
           "properties": {
+            "contractId": {
+              "type": "string"
+            },
             "kind": {
               "type": "string",
               "enum": [

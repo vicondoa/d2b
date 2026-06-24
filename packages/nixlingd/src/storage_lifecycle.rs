@@ -46,6 +46,7 @@ pub fn run_startup_contract_check(resolver: &BundleResolver) -> StorageLifecycle
     if let Some(storage) = storage {
         if let Err(detail) = storage.validate_unique_ids() {
             issues.push(StorageLifecycleIssue::StorageContractInvalid {
+                contract_id: "storage.json".to_owned(),
                 reason: classify_storage_validation_reason(&detail),
             });
         }
@@ -60,6 +61,7 @@ pub fn run_startup_contract_check(resolver: &BundleResolver) -> StorageLifecycle
     if let Some(sync) = sync {
         if let Err(detail) = sync.validate_lock_order() {
             issues.push(StorageLifecycleIssue::SyncContractInvalid {
+                contract_id: "sync.json".to_owned(),
                 reason: classify_sync_validation_reason(&detail),
             });
         }
@@ -259,8 +261,9 @@ mod tests {
             matches!(
                 issue,
                 StorageLifecycleIssue::StorageContractInvalid {
+                    contract_id,
                     reason: StorageContractValidationReason::DuplicateStoragePathId
-                }
+                } if contract_id == "storage.json"
             )
         }));
         let serialized = serde_json::to_string(&report).expect("serialize report");
@@ -283,8 +286,9 @@ mod tests {
             matches!(
                 issue,
                 StorageLifecycleIssue::SyncContractInvalid {
+                    contract_id,
                     reason: SyncContractValidationReason::DuplicateLockId
-                }
+                } if contract_id == "sync.json"
             )
         }));
     }
@@ -303,8 +307,9 @@ mod tests {
             matches!(
                 issue,
                 StorageLifecycleIssue::SyncContractInvalid {
+                    contract_id,
                     reason: SyncContractValidationReason::OfdLockMissingCloexec
-                }
+                } if contract_id == "sync.json"
             )
         }));
         let serialized = serde_json::to_string(&report).expect("serialize OFD report");
@@ -326,8 +331,9 @@ mod tests {
             matches!(
                 issue,
                 StorageLifecycleIssue::SyncContractInvalid {
+                    contract_id,
                     reason: SyncContractValidationReason::FdPassingMissingLeaseTransferRecord
-                }
+                } if contract_id == "sync.json"
             )
         }));
         let serialized = serde_json::to_string(&report).expect("serialize fd report");

@@ -113,7 +113,7 @@ struct RegistryIdentity {
     block_device: String,
 }
 
-const REDACTED_INDEX_PATH: &str = "/run/nixling/qemu-media-registry-index.json";
+const REDACTED_INDEX_STORAGE_REF: &str = "path:qemu-media-redacted-index";
 const QMP_MAX_RESPONSE_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,7 +217,7 @@ pub fn enroll(
     let record = MediaRegistryRecord::from_identity(source, identity);
     write_registry_record(resolver, &record)?;
     let records = read_all_registry_records(resolver).unwrap_or_else(|_| vec![record.clone()]);
-    write_redacted_registry_index(&records)?;
+    write_redacted_registry_index(resolver, &records)?;
     let udev_rule_written = write_runtime_udev_rules(resolver, &records)?;
     let udev_reloaded = reload_udev_rules();
 
@@ -236,7 +236,7 @@ pub fn enroll(
 
 pub fn refresh_registry(resolver: &BundleResolver) -> Result<RefreshOutcome, MediaOpError> {
     let records = read_all_registry_records(resolver)?;
-    let redacted_index_written = write_redacted_registry_index(&records).map(|_| true)?;
+    let redacted_index_written = write_redacted_registry_index(resolver, &records).map(|_| true)?;
     let udev_rule_written = write_runtime_udev_rules(resolver, &records)?;
     let udev_reloaded = reload_udev_rules();
     Ok(RefreshOutcome {
@@ -412,7 +412,7 @@ fn open_declared_source<'a>(
                 let identity = read_usb_identity_for_selector(selector)?;
                 audit = write_declared_selector_artifacts(
                     &registry_dir(resolver)?,
-                    Path::new(REDACTED_INDEX_PATH),
+                    &redacted_index_path(resolver)?,
                     &rules_path(resolver)?,
                     source,
                     &identity,
@@ -1937,8 +1937,19 @@ fn write_declared_selector_artifacts(
     Ok(audit)
 }
 
-fn write_redacted_registry_index(records: &[MediaRegistryRecord]) -> Result<(), MediaOpError> {
-    write_redacted_registry_index_at_path(Path::new(REDACTED_INDEX_PATH), records)
+fn redacted_index_path(resolver: &BundleResolver) -> Result<PathBuf, MediaOpError> {
+    resolver
+        .find_storage_path_spec(REDACTED_INDEX_STORAGE_REF)
+        .map(|spec| PathBuf::from(spec.path_template.as_str()))
+        .ok_or_else(|| MediaOpError::Registry("redacted-index-storage-ref-missing".to_owned()))
+}
+
+fn write_redacted_registry_index(
+    resolver: &BundleResolver,
+    records: &[MediaRegistryRecord],
+) -> Result<(), MediaOpError> {
+    let path = redacted_index_path(resolver)?;
+    write_redacted_registry_index_at_path(&path, records)
 }
 
 fn write_redacted_registry_index_at_path(
@@ -1964,7 +1975,7 @@ fn write_redacted_registry_index_at_path(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| MediaOpError::Registry("redacted-index-name-invalid".to_owned()))?;
-    crate::sys::path_safe::atomic_replace_fd(&parent_fd, name, &bytes, 0o644)
+    crate::sys::path_safe::atomic_replace_fd(&parent_fd, name, &bytes, 0o640)
         .map_err(|err| MediaOpError::Registry(err.to_string()))
 }
 

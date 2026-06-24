@@ -22,3 +22,6 @@ degraded-state handling.
 - Multi-lock operations acquire locks through the declared total order.
 - Ambiguous owner state degrades/quarantines the protected scope rather than
   force-unlocking behind a possible live owner.
+- Every host-mutable lock surface has one repair owner. New locks must be
+  represented by a generated sync row and reconciled through that owner instead
+  of through side-channel lock files or cleanup scripts.

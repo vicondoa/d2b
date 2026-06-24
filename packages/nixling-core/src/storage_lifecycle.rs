@@ -52,9 +52,13 @@ pub enum StorageLifecycleIssue {
     },
     BundleResolverUnavailable,
     StorageContractInvalid {
+        #[serde(rename = "contractId")]
+        contract_id: String,
         reason: StorageContractValidationReason,
     },
     SyncContractInvalid {
+        #[serde(rename = "contractId")]
+        contract_id: String,
         reason: SyncContractValidationReason,
     },
     MissingRestartPolicy {
