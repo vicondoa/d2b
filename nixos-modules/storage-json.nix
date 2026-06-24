@@ -305,7 +305,7 @@ let
       scope = "host";
       path = "${toString cfg.site.stateDir}/media-registry";
       owner = principal "user" "root";
-      group = principal "group" "nixlingd";
+      group = principal "group" "root";
       mode = "0700";
       creator = actor "broker" "nixling-priv-broker";
       writers = [ (actor "broker" "nixling-priv-broker") ];
@@ -402,8 +402,8 @@ let
         lifecycle = "boot-scoped-readoptable";
         persistence = "boot-scoped";
         owner = principal "user" "nixlingd";
-        group = principal "group" "nixlingd";
-        mode = "0700";
+        group = principal "group" "nixling";
+        mode = "1770";
         creator = actor "nix-module" "tmpfiles";
         writers = [
           (actor "daemon" "nixlingd")
@@ -421,8 +421,8 @@ let
         lifecycle = "boot-scoped-readoptable";
         persistence = "boot-scoped";
         owner = principal "user" "nixlingd";
-        group = principal "group" "nixlingd";
-        mode = "0750";
+        group = principal "group" "nixling";
+        mode = "0770";
         creator = actor "nix-module" "tmpfiles";
         writers = [
           (actor "daemon" "nixlingd")
