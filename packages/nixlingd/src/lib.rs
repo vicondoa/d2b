@@ -13936,8 +13936,17 @@ struct GuestActivationPlan {
 #[derive(Debug, Clone)]
 enum GuestActivationTerminal {
     Succeeded,
-    DefinitiveFailure(String),
+    DefinitiveFailure {
+        summary: String,
+        remediation: GuestActivationFailureRemediation,
+    },
     Indeterminate(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuestActivationFailureRemediation {
+    GuestJournal,
+    UpgradeGuest,
 }
 
 #[cfg(test)]
@@ -13984,6 +13993,17 @@ fn guest_activation_error_summary(
         E::Probe(H::Signer) => "guest-control activation signer failed".to_owned(),
         E::Probe(H::Protocol) => "guest-control activation protocol error".to_owned(),
         E::Probe(H::StaleSession) => "guest-control stale session during activation".to_owned(),
+    }
+}
+
+fn guest_activation_failure_remediation(
+    error: &guest_control_health::GuestSystemActivationError,
+) -> GuestActivationFailureRemediation {
+    match error {
+        guest_control_health::GuestSystemActivationError::CapabilityUnavailable => {
+            GuestActivationFailureRemediation::UpgradeGuest
+        }
+        _ => GuestActivationFailureRemediation::GuestJournal,
     }
 }
 
@@ -14036,9 +14056,10 @@ fn run_guest_system_activation(
     }
 
     let Some(params) = params else {
-        return GuestActivationTerminal::DefinitiveFailure(
-            "guest-control transport parameters unavailable".to_owned(),
-        );
+        return GuestActivationTerminal::DefinitiveFailure {
+            summary: "guest-control transport parameters unavailable".to_owned(),
+            remediation: GuestActivationFailureRemediation::UpgradeGuest,
+        };
     };
     let start = guest_control_health::GuestSystemActivationStart {
         activation_id: plan.activation_id.clone(),
@@ -14063,7 +14084,10 @@ fn run_guest_system_activation(
                     terminal => terminal,
                 }
             } else {
-                GuestActivationTerminal::DefinitiveFailure(summary)
+                GuestActivationTerminal::DefinitiveFailure {
+                    summary,
+                    remediation: guest_activation_failure_remediation(&error),
+                }
             };
         }
     };
@@ -14122,9 +14146,10 @@ fn rejoin_guest_activation_status(
                 std::thread::sleep(Duration::from_millis(250));
             }
             Err(error) => {
-                return GuestActivationTerminal::DefinitiveFailure(guest_activation_error_summary(
-                    &error,
-                ));
+                return GuestActivationTerminal::DefinitiveFailure {
+                    summary: guest_activation_error_summary(&error),
+                    remediation: guest_activation_failure_remediation(&error),
+                };
             }
         }
     }
@@ -14138,13 +14163,19 @@ fn guest_activation_state_to_terminal(
             GuestActivationTerminal::Succeeded
         }
         pb::GuestActivationState::GUEST_ACTIVATION_STATE_FAILED => {
-            GuestActivationTerminal::DefinitiveFailure(format!(
-                "guest activation failed (exit={:?}, signal={:?}, status={:?})",
-                status.exit_code, status.signal, status.status_code
-            ))
+            GuestActivationTerminal::DefinitiveFailure {
+                summary: format!(
+                    "guest activation failed (exit={:?}, signal={:?}, status={:?})",
+                    status.exit_code, status.signal, status.status_code
+                ),
+                remediation: GuestActivationFailureRemediation::GuestJournal,
+            }
         }
         pb::GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT => {
-            GuestActivationTerminal::DefinitiveFailure("guest activation timed out".to_owned())
+            GuestActivationTerminal::DefinitiveFailure {
+                summary: "guest activation timed out".to_owned(),
+                remediation: GuestActivationFailureRemediation::GuestJournal,
+            }
         }
         pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST
         | pb::GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED
@@ -14454,7 +14485,10 @@ fn dispatch_live_guest_activation(
                 guest_started.elapsed(),
             );
         }
-        GuestActivationTerminal::DefinitiveFailure(summary) => {
+        GuestActivationTerminal::DefinitiveFailure {
+            summary,
+            remediation,
+        } => {
             record_activation_phase_metric(
                 state,
                 "guest",
@@ -14464,13 +14498,20 @@ fn dispatch_live_guest_activation(
             );
             clear_activation_marker(state, &request.vm);
             record_activation_degraded_metric(state, &request.vm, false);
-            return Ok(broker_failure_response(
-                verb,
-                format!("guest activation failed for vm '{}': {summary}", request.vm),
-                format!(
+            let remediation = match remediation {
+                GuestActivationFailureRemediation::GuestJournal => format!(
                     "Inspect the guest journal for `nixling-activation-{}` and retry after fixing the guest activation failure.",
                     activation_id
                 ),
+                GuestActivationFailureRemediation::UpgradeGuest => format!(
+                    "The running guest does not support in-guest activation. Use `nixling boot {} --apply`, then restart the VM with `nixling vm restart {} --apply` to boot the generation that includes the guest activation capability.",
+                    request.vm, request.vm
+                ),
+            };
+            return Ok(broker_failure_response(
+                verb,
+                format!("guest activation failed for vm '{}': {summary}", request.vm),
+                remediation,
                 None,
             ));
         }
@@ -20841,9 +20882,11 @@ mod broker_dispatch_tests {
             });
         let state = test_state_with_broker_socket(socket_path);
         let _runner = register_sleep_runner(&state, "vm-a", false);
-        let _hook = install_guest_activation_hook(|_| {
-            super::GuestActivationTerminal::DefinitiveFailure("exit=1".to_owned())
-        });
+        let _hook =
+            install_guest_activation_hook(|_| super::GuestActivationTerminal::DefinitiveFailure {
+                summary: "exit=1".to_owned(),
+                remediation: super::GuestActivationFailureRemediation::GuestJournal,
+            });
 
         let response = dispatch_broker_test(
             &state,
@@ -21065,11 +21108,11 @@ mod broker_dispatch_tests {
         );
         let state = test_state_with_broker_socket(socket_path);
         let _runner = register_sleep_runner(&state, "vm-a", false);
-        let _hook = install_guest_activation_hook(|_| {
-            super::GuestActivationTerminal::DefinitiveFailure(
-                "guest-control system activation capability unavailable".to_owned(),
-            )
-        });
+        let _hook =
+            install_guest_activation_hook(|_| super::GuestActivationTerminal::DefinitiveFailure {
+                summary: "guest-control system activation capability unavailable".to_owned(),
+                remediation: super::GuestActivationFailureRemediation::UpgradeGuest,
+            });
         let missing = dispatch_broker_switch(
             &state,
             ActivationRequest {
@@ -21091,6 +21134,13 @@ mod broker_dispatch_tests {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .contains("capability unavailable")
+        );
+        assert!(
+            missing
+                .get("remediation")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("nixling boot vm-a --apply")
         );
         broker.join().expect("join broker");
     }

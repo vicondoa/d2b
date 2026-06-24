@@ -1191,21 +1191,6 @@ impl ActivationRuntime {
         .await
         .map_err(|_| ActivationError::StatusUnavailable)?
     }
-
-    fn write_record(
-        &self,
-        activation_id: &str,
-        snapshot: &ActivationStatusSnapshot,
-    ) -> Result<(), ActivationError> {
-        write_activation_record_blocking(&self.status_dir, activation_id, snapshot)
-    }
-
-    fn read_record(
-        &self,
-        activation_id: &str,
-    ) -> Result<ActivationStatusSnapshot, ActivationError> {
-        read_activation_record_blocking(&self.status_dir, activation_id)
-    }
 }
 
 fn activation_record_path(
@@ -5927,7 +5912,7 @@ mod tests {
     #[tokio::test]
     async fn activation_status_rejoins_persisted_terminal_record() {
         let dir = scratch_dir("activation-rejoin");
-        let (runtime, _starts) =
+        let (_runtime, _starts) =
             activation_runtime(dir.clone(), FakeActivationUnits::with_query(None));
         let done = ActivationStatusSnapshot {
             state: pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED,
@@ -5935,7 +5920,7 @@ mod tests {
             signal: None,
             status_code: None,
         };
-        runtime.write_record(valid_activation_id(), &done).unwrap();
+        write_activation_record_blocking(&dir, valid_activation_id(), &done).unwrap();
 
         let (runtime_after_restart, _starts) =
             activation_runtime(dir.clone(), FakeActivationUnits::with_query(None));
@@ -5962,9 +5947,12 @@ mod tests {
         let dir = scratch_dir("activation-lost");
         let (runtime, _starts) =
             activation_runtime(dir.clone(), FakeActivationUnits::with_query(None));
-        runtime
-            .write_record(valid_activation_id(), &ActivationStatusSnapshot::running())
-            .unwrap();
+        write_activation_record_blocking(
+            &dir,
+            valid_activation_id(),
+            &ActivationStatusSnapshot::running(),
+        )
+        .unwrap();
         let service = service_with_activation(73, Some(runtime));
         authenticate(&service).await;
         let response = service
@@ -5978,12 +5966,7 @@ mod tests {
             response.state.enum_value().unwrap(),
             pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST
         );
-        let persisted = service
-            .activation
-            .as_ref()
-            .unwrap()
-            .read_record(valid_activation_id())
-            .unwrap();
+        let persisted = read_activation_record_blocking(&dir, valid_activation_id()).unwrap();
         assert_eq!(
             persisted.state,
             pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST
