@@ -55,11 +55,17 @@ pub enum StorageLifecycleIssue {
         #[serde(rename = "contractId")]
         contract_id: String,
         reason: StorageContractValidationReason,
+        #[serde(rename = "offendingId", skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
+        offending_id: Option<String>,
     },
     SyncContractInvalid {
         #[serde(rename = "contractId")]
         contract_id: String,
         reason: SyncContractValidationReason,
+        #[serde(rename = "offendingId", skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
+        offending_id: Option<String>,
     },
     MissingRestartPolicy {
         vm: String,
@@ -119,6 +125,18 @@ pub fn classify_storage_validation_reason(detail: &str) -> StorageContractValida
     }
 }
 
+pub fn storage_validation_offending_id(detail: &str) -> Option<String> {
+    if let Some(id) = detail.strip_prefix("duplicate storage path id ") {
+        bounded_contract_detail(id)
+    } else if let Some(id) = detail.strip_prefix("duplicate restart policy for ") {
+        bounded_contract_detail(id)
+    } else if let Some(id) = detail.strip_prefix("duplicate degraded reason ") {
+        bounded_contract_detail(id)
+    } else {
+        None
+    }
+}
+
 pub fn classify_sync_validation_reason(detail: &str) -> SyncContractValidationReason {
     if detail.starts_with("duplicate lock id ") {
         SyncContractValidationReason::DuplicateLockId
@@ -133,6 +151,38 @@ pub fn classify_sync_validation_reason(detail: &str) -> SyncContractValidationRe
     } else {
         SyncContractValidationReason::Unclassified
     }
+}
+
+pub fn sync_validation_offending_id(detail: &str) -> Option<String> {
+    if let Some(id) = detail.strip_prefix("duplicate lock id ") {
+        bounded_contract_detail(id)
+    } else if let Some(rest) = detail.strip_prefix("OFD lock ") {
+        rest.strip_suffix(" must require O_CLOEXEC")
+            .and_then(bounded_contract_detail)
+    } else if let Some(rest) = detail.strip_prefix("fd-passing lock ") {
+        rest.strip_suffix(" must require a lease transfer record")
+            .and_then(bounded_contract_detail)
+    } else if let Some(rest) = detail.strip_prefix("lock ") {
+        rest.split_once(" shares acquire order key with ")
+            .and_then(|(id, _)| bounded_contract_detail(id))
+    } else {
+        None
+    }
+}
+
+fn bounded_contract_detail(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed.len() > 128
+        || !trimmed
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_' | b'.'))
+    {
+        return None;
+    }
+    Some(trimmed.to_owned())
 }
 
 #[cfg(test)]
@@ -182,6 +232,22 @@ mod tests {
                 "kind": "adoptable-missing-cgroup-leaf",
                 "vm": "corp-vm",
                 "roleId": "cloud-hypervisor"
+            })
+        );
+
+        let invalid_storage = serde_json::to_value(StorageLifecycleIssue::StorageContractInvalid {
+            contract_id: "storage.json".to_owned(),
+            reason: StorageContractValidationReason::DuplicateStoragePathId,
+            offending_id: Some("path:run-root".to_owned()),
+        })
+        .expect("serialize invalid storage issue");
+        assert_eq!(
+            invalid_storage,
+            json!({
+                "kind": "storage-contract-invalid",
+                "contractId": "storage.json",
+                "reason": "duplicate-storage-path-id",
+                "offendingId": "path:run-root"
             })
         );
     }

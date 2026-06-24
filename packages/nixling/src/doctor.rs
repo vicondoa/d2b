@@ -46,7 +46,10 @@ use serde_json::{Value, json};
 
 use nixling_core::{
     manifest_v04::ManifestV04,
-    storage_lifecycle::{StorageLifecycleIssue, StorageLifecycleReport},
+    storage_lifecycle::{
+        StorageContractValidationReason, StorageLifecycleIssue, StorageLifecycleReport,
+        SyncContractValidationReason,
+    },
 };
 
 use crate::{Context, SeqpacketUnixSocket};
@@ -1041,6 +1044,7 @@ fn check_storage_lifecycle_report(daemon_state_dir: &Path, report: &mut DoctorRe
     let issue_kinds = parsed.issue_kinds_csv();
     let issue_count = parsed.issues.len();
     let legacy_only = parsed.has_only_legacy_contract_issue();
+    let invalid_contract_summary = storage_lifecycle_invalid_contract_summary(&parsed.issues);
     let mut data = json!({
         "schemaVersion": parsed.schema_version.clone(),
         "storageContractPresent": parsed.storage_contract_present,
@@ -1079,8 +1083,13 @@ fn check_storage_lifecycle_report(daemon_state_dir: &Path, report: &mut DoctorRe
             "storage-lifecycle-report",
             DoctorStatus::Fail,
             format!(
-                "storage lifecycle startup contract check degraded: issueKinds={}; remediation: {}",
-                issue_kinds, STORAGE_LIFECYCLE_REMEDIATION
+                "storage lifecycle startup contract check degraded: issueKinds={}{}; remediation: {}",
+                issue_kinds,
+                invalid_contract_summary
+                    .as_deref()
+                    .map(|summary| format!(" invalidContracts={summary}"))
+                    .unwrap_or_default(),
+                STORAGE_LIFECYCLE_REMEDIATION
             ),
             data,
         );
@@ -1096,6 +1105,57 @@ fn check_storage_lifecycle_report(daemon_state_dir: &Path, report: &mut DoctorRe
             ),
             data,
         );
+    }
+}
+
+fn storage_lifecycle_invalid_contract_summary(issues: &[StorageLifecycleIssue]) -> Option<String> {
+    let details = issues
+        .iter()
+        .filter_map(|issue| match issue {
+            StorageLifecycleIssue::StorageContractInvalid {
+                contract_id,
+                reason,
+                offending_id,
+            } => Some(format!(
+                "storage:{}:{}:{}",
+                contract_id,
+                storage_contract_reason_slug(reason),
+                offending_id.as_deref().unwrap_or("unknown")
+            )),
+            StorageLifecycleIssue::SyncContractInvalid {
+                contract_id,
+                reason,
+                offending_id,
+            } => Some(format!(
+                "sync:{}:{}:{}",
+                contract_id,
+                sync_contract_reason_slug(reason),
+                offending_id.as_deref().unwrap_or("unknown")
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    (!details.is_empty()).then(|| details.join(","))
+}
+
+fn storage_contract_reason_slug(reason: &StorageContractValidationReason) -> &'static str {
+    match reason {
+        StorageContractValidationReason::DuplicateStoragePathId => "duplicate-storage-path-id",
+        StorageContractValidationReason::DuplicateRestartPolicy => "duplicate-restart-policy",
+        StorageContractValidationReason::DuplicateDegradedReason => "duplicate-degraded-reason",
+        StorageContractValidationReason::Unclassified => "unclassified",
+    }
+}
+
+fn sync_contract_reason_slug(reason: &SyncContractValidationReason) -> &'static str {
+    match reason {
+        SyncContractValidationReason::DuplicateLockId => "duplicate-lock-id",
+        SyncContractValidationReason::OfdLockMissingCloexec => "ofd-lock-missing-cloexec",
+        SyncContractValidationReason::FdPassingMissingLeaseTransferRecord => {
+            "fd-passing-missing-lease-transfer-record"
+        }
+        SyncContractValidationReason::DuplicateAcquireOrder => "duplicate-acquire-order",
+        SyncContractValidationReason::Unclassified => "unclassified",
     }
 }
 
@@ -1988,11 +2048,13 @@ mod tests {
                 }, {
                     "kind": "storage-contract-invalid",
                     "contractId": "storage.json",
-                    "reason": "duplicate-storage-path-id"
+                    "reason": "duplicate-storage-path-id",
+                    "offendingId": "path:run-root"
                 }, {
                     "kind": "sync-contract-invalid",
                     "contractId": "sync.json",
-                    "reason": "duplicate-lock-id"
+                    "reason": "duplicate-lock-id",
+                    "offendingId": "lock:daemon"
                 }],
             }),
         );
@@ -2008,8 +2070,10 @@ mod tests {
         assert!(!check.detail.contains("cloud-hypervisor"));
         assert!(!check.detail.contains("another-vm"));
         assert!(!check.detail.contains("vhost-device-sound"));
-        assert!(!check.detail.contains("duplicate-storage-path-id"));
-        assert!(!check.detail.contains("duplicate-lock-id"));
+        assert!(check.detail.contains("duplicate-storage-path-id"));
+        assert!(check.detail.contains("path:run-root"));
+        assert!(check.detail.contains("duplicate-lock-id"));
+        assert!(check.detail.contains("lock:daemon"));
         assert!(check.detail.contains("remediation:"));
         let data = check.data.as_ref().unwrap();
         assert_eq!(

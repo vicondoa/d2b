@@ -12,9 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
-- `storage-lifecycle-report.json` now includes bounded `contractId` fields on
-  storage/sync contract validation issues, and broker storage I/O diagnostics
-  redact absolute managed paths as `storage-path#<hash>`.
+- `storage-lifecycle-report.json` now includes bounded `contractId` and
+  `offendingId` fields on storage/sync contract validation issues, and broker
+  storage I/O diagnostics redact absolute managed paths as
+  `storage-path#<hash>`.
 - QEMU media's redacted registry index is now private to declared daemon/broker
   readers (`0640`) and QEMU media state lives under a dedicated per-VM
   `qemu-media` subdirectory.

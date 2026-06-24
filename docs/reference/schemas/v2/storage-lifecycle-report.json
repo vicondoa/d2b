@@ -135,6 +135,12 @@
                 "storage-contract-invalid"
               ]
             },
+            "offendingId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "reason": {
               "$ref": "#/definitions/StorageContractValidationReason"
             }
@@ -155,6 +161,12 @@
               "type": "string",
               "enum": [
                 "sync-contract-invalid"
+              ]
+            },
+            "offendingId": {
+              "type": [
+                "string",
+                "null"
               ]
             },
             "reason": {
