@@ -70,9 +70,14 @@ deprecations ship one minor release before removal.
 - Daemon startup no longer lets the diagnostic bridge preflight pre-skip
   autostarted net VMs on cold boot; net VMs now get to run their host-prep DAG
   and workloads degrade only if their env net VM actually fails to start.
-- Host OTel collector startup now preserves write-capable ACL masks on
-  `/run/nixling/otel` and `host-egress.sock`, so the collector can use the
-  broker-spawned bridge socket when it appears after boot.
+- Host OTel collector no longer has directory write authority over
+  `/run/nixling/otel`: the collector's access ACL is now `--x` (traverse only,
+  no create/unlink authority on `host-egress.sock` or sibling entries). The
+  default ACL is retained at `rw` (not `rwx`) with a clamped `rw` mask so the
+  collector inherits read+write on `host-egress.sock` when the broker-spawned
+  bridge creates the socket after boot, while execute bits never propagate to new
+  entries. `StartLimitIntervalSec = 0` ensures systemd does not permanently
+  disable the service if the bridge socket is momentarily absent across restarts.
 - The `/run/nixling` runtime parent is now root-owned with an explicit
   `nixlingd` ACL, avoiding systemd-tmpfiles unsafe-path-transition failures
   that skipped per-VM `guest-control` runtime directories after reboot.
