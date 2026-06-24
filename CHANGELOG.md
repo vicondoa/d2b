@@ -48,6 +48,11 @@ deprecations ship one minor release before removal.
 - Public daemon list/status handling now uses a request-scoped artifact snapshot
   so manifest, process, host, and bundle resolver reads are shared within one
   request without cross-request caching.
+- Examples and the default template now describe the daemon-only lifecycle,
+  Rust CLI, and `nixling` group authorization model without stale per-VM
+  systemd, polkit, route-preflight, or bash-CLI references.
+- Human `nixling status <vm>` output now labels daemon and runner state with
+  daemon-owned terms instead of retired per-VM systemd template names.
 - Runtime capability projection for qemu-media list/status output now goes
   through focused helpers with direct regression coverage, preserving public JSON
   and human output shape.
@@ -70,6 +75,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Broker SIGCHLD reaper startup now installs the child-signal stream before the
+  runtime is returned, closing a load-sensitive child-reap race surfaced by the
+  broker reap tests.
 - Daemon startup no longer lets the diagnostic bridge preflight pre-skip
   autostarted net VMs on cold boot; net VMs now get to run their host-prep DAG
   and workloads degrade only if their env net VM actually fails to start.

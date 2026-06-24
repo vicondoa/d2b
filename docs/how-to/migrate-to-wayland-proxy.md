@@ -125,11 +125,11 @@ Apply the configuration and restart the affected VM:
 
 ```bash
 sudo nixos-rebuild switch
-nixling down work --apply
-nixling up work --apply
+nixling vm stop work --apply
+nixling vm start work --apply
 ```
 
-After `nixling up`, confirm the guest starts successfully and windows
+After `nixling vm start`, confirm the guest starts successfully and windows
 appear on the host compositor.
 
 ## Verifying the migration
@@ -181,7 +181,7 @@ the migration:
 1. Set `graphics.crossDomainTrusted = false` and
    `graphics.waylandFilter.enable = false`.
 2. Run `sudo nixos-rebuild switch`.
-3. Restart the VM: `nixling down <vm> --apply && nixling up <vm> --apply`.
+3. Restart the VM: `nixling vm stop <vm> --apply && nixling vm start <vm> --apply`.
 
 The VM will stop using the filtered cross-domain Wayland path until
 `crossDomainTrusted` is enabled again. Standard virtio-gpu display

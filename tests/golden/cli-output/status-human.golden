@@ -1,10 +1,10 @@
 === corp-vm ===
 env: work
 runtime: unknown (daemon-experimental, W4 not landed)
-nixling@corp-vm: inactive
-microvm@corp-vm (backend): inactive
+daemon: inactive
+backend-runner: inactive
 virtiofsd: inactive
-interactive: stopped
+gpu-runner: stopped
 ssh: declared alice@10.20.0.10
 pending-restart: no
 current: (missing)

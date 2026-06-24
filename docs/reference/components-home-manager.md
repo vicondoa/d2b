@@ -13,7 +13,7 @@ wires it with the framework's sensible defaults (`useGlobalPkgs`,
 `extraSpecialArgs`), and exposes a `nixling.homeManager.users`
 attrset whose per-user values are forwarded into upstream
 `home-manager.users`. One `nixos-rebuild switch` (or, for
-VM-only changes, one `nixling switch <vm>`) rebuilds the guest's
+VM-only changes, one `nixling switch <vm> --apply`) rebuilds the guest's
 system + home environment atomically — there is no separate
 `home-manager switch` invocation inside the VM.
 

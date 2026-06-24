@@ -58,7 +58,7 @@ all guest-side wiring is unconditional within the module.
     cycle the running swtpm. Killing swtpm under a live VM means
     the guest loses its TPM socket and Entra/Intune device-bound
     credentials become unreachable; the framework refuses to do
-    this silently. Use `nixling vm restart <vm>` to apply pending
+    this silently. Use `nixling vm restart <vm> --apply` to apply pending
     changes. (Pre-v0.1.7 this was the broken
     `unitConfig.X-RestartIfChanged = false` form; see v0.1.7
     CHANGELOG.)
@@ -97,7 +97,7 @@ CH TPM socket, the guest's libtpms enters failure mode, and
 Entra/Intune device-bound creds become unreachable. After a
 rebuild, `nixling list` flags the VM with `[pending restart]` if
 its `current` closure has drifted from `booted`; apply with
-`nixling vm restart <vm>` (clean down+up cycles swtpm and CH
+`nixling vm restart <vm> --apply` (clean down+up cycles swtpm and CH
 together so the TPM socket survives the round-trip). See
 [`docs/reference/cli-contract.md` — Pending-restart signal](./cli-contract.md#pending-restart-signal-v015).
 
