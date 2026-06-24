@@ -3748,14 +3748,16 @@ fn run_guest_usbip_status(
     vm: &str,
     bus_id: &str,
     timeout: Duration,
-) -> Result<guest_control_health::GuestUsbipStatusResult, String> {
+) -> Result<guest_control_health::GuestUsbipStatusResult, GuestUsbipStatusError> {
     let Some(entry) = resolver.manifest.vms.get(vm) else {
-        return Err(format!("VM '{vm}' is not present in the trusted manifest"));
+        return Err(GuestUsbipStatusError::Failed(format!(
+            "VM '{vm}' is not present in the trusted manifest"
+        )));
     };
     let Some(host) = entry.usbipd_host_ip.as_deref() else {
-        return Err(format!(
+        return Err(GuestUsbipStatusError::Failed(format!(
             "VM '{vm}' has no per-env USBIP host IP in the trusted manifest"
-        ));
+        )));
     };
     let params = resolve_guest_control_probe_params(state, resolver, vm).map_err(|detail| {
         tracing::warn!(
@@ -3764,9 +3766,9 @@ fn run_guest_usbip_status(
             error_kind = "transport-io",
             "guest-control USBIP status: probe params unresolved: {detail}"
         );
-        format!(
+        GuestUsbipStatusError::Failed(format!(
             "guest-control USBIP status for vm '{vm}' could not resolve guest-control transport"
-        )
+        ))
     })?;
     guest_control_bridge::run_usbip_status_on_dedicated_thread(
         params,
@@ -3775,7 +3777,7 @@ fn run_guest_usbip_status(
         Some(bus_id.to_owned()),
         timeout,
     )
-    .map_err(|error| guest_usbip_import_error_summary(vm, error))
+    .map_err(|error| classify_guest_usbip_status_error(vm, error))
 }
 
 fn persisted_same_vm_usbip_claims(
@@ -3941,10 +3943,10 @@ impl usbip_reconcile_state::UsbipVmStartReconcileExecutor
             &claim.bus_id,
             guest_control_bridge::GUEST_CONTROL_USBIP_IMPORT_TIMEOUT,
         )
-        .map_err(|summary| {
+        .map_err(|error| {
             usbip_reconcile_state::UsbipLifecycleStepError::new(
                 usbip_reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
-                summary,
+                error.summary().to_owned(),
             )
         })?;
         let imported = status
@@ -4250,6 +4252,38 @@ fn guest_usbip_import_error_summary(
         E::InvalidOutput => "guest usbip command output was invalid",
     };
     format!("guest-control USBIP import failed for vm '{vm}': {detail}")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GuestUsbipStatusError {
+    Timeout(String),
+    Failed(String),
+}
+
+impl GuestUsbipStatusError {
+    fn summary(&self) -> &str {
+        match self {
+            Self::Timeout(summary) | Self::Failed(summary) => summary,
+        }
+    }
+}
+
+fn classify_guest_usbip_status_error(
+    vm: &str,
+    error: guest_control_health::GuestUsbipImportError,
+) -> GuestUsbipStatusError {
+    let is_timeout = matches!(
+        error,
+        guest_control_health::GuestUsbipImportError::Probe(
+            guest_control_health::GuestControlHealthError::Timeout
+        ) | guest_control_health::GuestUsbipImportError::CommandTimeout
+    );
+    let summary = guest_usbip_import_error_summary(vm, error);
+    if is_timeout {
+        GuestUsbipStatusError::Timeout(summary)
+    } else {
+        GuestUsbipStatusError::Failed(summary)
+    }
 }
 
 fn compensate_usbip_bind_failure(
@@ -4723,22 +4757,14 @@ fn usbip_probe_entry_from_intent(
                         ));
                     }
                 }
-                Err(_) => {
-                    guest_import = public_wire::UsbipGuestImportState::Unavailable;
-                    degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
-                        usbip_reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
-                        Some(format!(
-                            "Start the VM with `nixling vm start {vm} --apply`, then run `nixling usb attach {vm} {bus} --apply`.",
-                            vm = intent.vm_name,
-                            bus = intent.bus_id
-                        )),
-                    ));
-                    remediation_commands.push(format!(
-                        "nixling usb attach {vm} {bus} --apply",
-                        vm = intent.vm_name,
-                        bus = intent.bus_id
-                    ));
-                }
+                Err(error) => push_guest_usbip_status_error(
+                    error,
+                    &intent.vm_name,
+                    &intent.bus_id,
+                    &mut guest_import,
+                    &mut degraded_reasons,
+                    &mut remediation_commands,
+                ),
             }
         }
         degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
@@ -4816,6 +4842,35 @@ fn usbip_probe_entry_from_intent(
         topology_policy,
         degraded_reasons,
         remediation_commands,
+    }
+}
+
+fn push_guest_usbip_status_error(
+    error: GuestUsbipStatusError,
+    vm: &str,
+    bus_id: &str,
+    guest_import: &mut public_wire::UsbipGuestImportState,
+    degraded_reasons: &mut Vec<public_wire::UsbipProbeDegradedReason>,
+    remediation_commands: &mut Vec<String>,
+) {
+    if matches!(error, GuestUsbipStatusError::Timeout(_)) {
+        *guest_import = public_wire::UsbipGuestImportState::Unknown;
+        degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
+            usbip_reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
+            Some(format!(
+                "{}; retry `nixling usb probe` for a full diagnostic budget.",
+                error.summary()
+            )),
+        ));
+    } else {
+        *guest_import = public_wire::UsbipGuestImportState::Unavailable;
+        degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
+            usbip_reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
+            Some(format!(
+                "Start the VM with `nixling vm start {vm} --apply`, then run `nixling usb attach {vm} {bus_id} --apply`."
+            )),
+        ));
+        remediation_commands.push(format!("nixling usb attach {vm} {bus_id} --apply"));
     }
 }
 
@@ -15998,6 +16053,43 @@ mod public_status_tests {
         assert_eq!(
             services.get("virtiofsd").and_then(Value::as_str),
             Some("running")
+        );
+    }
+
+    #[test]
+    fn guest_usbip_status_timeout_is_unknown_without_start_remediation() {
+        let mut guest_import = public_wire::UsbipGuestImportState::Unavailable;
+        let mut degraded_reasons = Vec::new();
+        let mut remediation_commands = vec!["nixling usb attach stale 1-2 --apply".to_owned()];
+
+        push_guest_usbip_status_error(
+            GuestUsbipStatusError::Timeout(
+                "guest-control USBIP import failed for vm 'corp-vm': guest-control USBIP import timed out"
+                    .to_owned(),
+            ),
+            "corp-vm",
+            "1-2",
+            &mut guest_import,
+            &mut degraded_reasons,
+            &mut remediation_commands,
+        );
+
+        assert_eq!(guest_import, public_wire::UsbipGuestImportState::Unknown);
+        assert!(
+            degraded_reasons
+                .iter()
+                .any(|reason| reason.remediation.contains("full diagnostic budget"))
+        );
+        assert!(
+            !degraded_reasons
+                .iter()
+                .any(|reason| reason.remediation.contains("vm start corp-vm")),
+            "status timeout must not tell operators to start an already-running VM"
+        );
+        assert_eq!(
+            remediation_commands,
+            vec!["nixling usb attach stale 1-2 --apply"],
+            "timeouts do not add attach/start remediation commands"
         );
     }
 
