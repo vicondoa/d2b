@@ -551,10 +551,10 @@ daemon-side runtime-view contract and reads it from nixlingd's public socket.
 ```text
 $ nixling status corp-vm
 === corp-vm ===
-nixling@corp-vm: inactive
-microvm@corp-vm (backend): inactive
+daemon: inactive
+backend-runner: inactive
 virtiofsd: inactive
-interactive: stopped
+gpu-runner: stopped
 sshd@10.20.0.10: unreachable
 pending-restart: no
 
@@ -2671,9 +2671,9 @@ With `--json` each verb emits a single stdout object:
 - `config status` → `{ "command": "config status", "pending": [ <vm>… ] }`
   (the single-VM form reports a list with 0 or 1 entry).
 
-Pending-staging notes (`nixling status`, `nixling up`/`start`, and the
-mutating verbs) are emitted on **stderr** for human output only, so they
-never perturb a `--json` stdout envelope.
+Pending-staging notes (`nixling status`, `nixling vm start`, and the mutating
+verbs) are emitted on **stderr** for human output only, so they never perturb a
+`--json` stdout envelope.
 
 ### `shell`
 

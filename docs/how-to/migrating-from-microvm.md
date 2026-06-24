@@ -508,16 +508,16 @@ closure is flagged in the STATUS column:
 
 ```
 NAME             ENV    GRAPHICS TPM   USBIP   STATIC_IP       STATUS
-work             work   true     true  true    10.20.0.10      systemd [pending restart]
+work             work   true     true  true    10.20.0.10      running [pending restart]
 ```
 
 Apply with:
 
 ```bash
-nixling vm restart <vm>
+nixling vm restart <vm> --apply
 ```
 
-(Or `nixling switch <vm>` if you want a per-VM closure rebuild +
+(Or `nixling switch <vm> --apply` if you want a per-VM closure rebuild +
 live activation via SSH; restart cycles the existing closure
 cleanly.)
 
@@ -554,8 +554,8 @@ change. For the full predicate semantics see
 - **Per-VM /nix/store.** Each guest sees only its own closure plus
   the microvm.nix runner — a closure-limited `/nix/store` view backed
   by a per-VM hardlink farm under `/var/lib/nixling/vms/<vm>/store/`.
-  Zero byte duplication. `nixling switch <vm>` updates it live without
-  a VM reboot. Back up `/var/lib/nixling/` only to encrypted,
+  Zero byte duplication. `nixling switch <vm> --apply` updates it live
+  without a VM reboot. Back up `/var/lib/nixling/` only to encrypted,
   access-controlled media.
 - **Explicit lifecycle.** In v1.0 (per ADR 0015) `nixling vm start /
   stop / restart` dispatch through `nixlingd` → `nixling-priv-broker`;
@@ -597,14 +597,10 @@ change. For the full predicate semantics see
 - **Framework-owned shares.** Do not add a `/nix/store` entry to
   `microvm.shares` in `nixling.vms.<vm>.config` — the framework
   injects it with `lib.mkForce`.
-- **`microvm@<vm>.service` is wrapped, not replaced — but only at
-  evaluation time.** In v1.0 (per ADR 0015) the per-VM lifecycle is
-  fully owned by `nixlingd` → `nixling-priv-broker` via the
-  supervisor DAG; the legacy `nixling@<vm>.service` wrapper was
-  retired. Use `nixling vm start / vm stop / vm restart` for
-  day-to-day lifecycle. The upstream `microvm@<vm>.service` template
-  is still emitted by `microvm.nix` and can be used directly if you
-  need to bypass nixling entirely for debugging.
+- **The daemon owns VM lifecycle.** In v1.0 (per ADR 0015) per-VM
+  lifecycle moved fully to `nixlingd` -> `nixling-priv-broker` via the
+  supervisor DAG; the legacy systemd wrapper path was retired. Use
+  `nixling vm start / vm stop / vm restart` for day-to-day lifecycle.
 
 ## Naming conventions you'll see post-migration
 
@@ -621,9 +617,8 @@ change. For the full predicate semantics see
 - `nixling-priv-broker.{service,socket}` — socket-activated privileged
   broker (single audited host-mutation surface; see
   [`docs/reference/privileges.md`](../reference/privileges.md)).
-- `microvm@<vm>.service` — upstream unit (still emitted by
-  `microvm.nix` for debugging; in v1.0 the broker `SpawnRunner` is
-  the lifecycle of record).
+- broker-spawned VM runners — in v1.0 the broker `SpawnRunner` path is
+  the lifecycle of record.
 - `nixling` — host group whose members can drive `vm start
   / vm stop / vm restart` against `nixlingd`'s public socket (mode
   0660, group `nixling`).
@@ -667,13 +662,13 @@ as root.
 `ip link delete vm-<oldname>` and rerun `nixos-rebuild switch`. The
 framework only manages the taps it declares.
 
-**`nixling switch <vm>` errors with `cross-FS hardlink refused`.**
+**`nixling switch <vm> --apply` errors with `cross-FS hardlink refused`.**
 `/var/lib/nixling` and `/nix/store` are on different filesystems.
 The per-VM store needs same-FS hardlinks; move
 `/var/lib/nixling` to the same FS as `/nix/store` (typically by
 remounting or relocating).
 
-**Polkit prompt still appears on `nixling vm start`.**
+**`nixling vm start` is denied by the daemon socket.**
 The invoking user is not in `nixling`. Add them to
 `nixling.site.launcherUsers` (which only adjoins the group; you must
 still declare the user) and re-log-in so the group membership
@@ -682,7 +677,7 @@ takes effect.
 **SSH into the VM still uses your old key.**
 The guest's `authorized_keys` is populated at boot by
 `nixling-load-host-keys.service`. Restart the VM
-(`nixling vm stop <vm> && nixling vm start <vm>`) or, inside the guest,
+(`nixling vm stop <vm> --apply && nixling vm start <vm> --apply`) or, inside the guest,
 `systemctl restart nixling-load-host-keys.service`.
 
 **`microvm.vms.<vm>` declared in two places.**
@@ -691,10 +686,10 @@ You left an old `microvm.vms.<name>` block alongside the new
 the translation.
 
 **Per-env net VM (`sys-<env>-net`) won't start.**
-`systemctl status microvm@sys-<env>-net` first. The most common
-cause is that the env's `lanSubnet` is not a `/24` ending in `.0`,
-or `uplinkSubnet` is not a `/30`. Eval should have caught this; if
-it didn't, file an issue.
+Check `nixling vm status sys-<env>-net` first. The most common cause is
+that the env's `lanSubnet` is not a `/24` ending in `.0`, or
+`uplinkSubnet` is not a `/30`. Eval should have caught this; if it
+didn't, file an issue.
 
 ## See also
 

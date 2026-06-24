@@ -78,8 +78,8 @@ in
     # VMs).
     waylandUser = user;
 
-    # Users who get the `nixling` group + polkit grant
-    # to run `nixling up/down/...` without `sudo`.
+    # Users who get the `nixling` lifecycle group for commands such as
+    # `nixling vm start <vm> --apply` without `sudo`.
     launcherUsers = [ user ];
 
     # SSH public keys to inject into every nixling VM's

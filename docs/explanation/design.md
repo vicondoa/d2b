@@ -601,10 +601,10 @@ filesystem caches discard).
 The trade-off is that consumers must explicitly opt into picking
 up sidecar config changes. The framework provides two paths:
 
-- `nixling vm restart <vm>` — clean `down` + `up` of the existing
+- `nixling vm restart <vm> --apply` — clean `down` + `up` of the existing
   closure. Use this when `nixling list` flags a VM as
   `[pending restart]` after a `nixos-rebuild switch`.
-- `nixling switch <vm>` — full per-VM closure rebuild + live
+- `nixling switch <vm> --apply` — full per-VM closure rebuild + live
   activation through the daemon's authenticated guest-control path
   (no VM reboot). Use this when you edited the VM's own NixOS module.
   The host publishes the prepared toplevel into the VM's store view;
@@ -862,7 +862,7 @@ The split:
 
 - **Nixling owns:** VM / env / sidecar lifecycle, network isolation
   (per-env bridges + net VM + NAT), per-VM `/nix/store` hardlink
-  farm, the `nixling` CLI, and the host-side polkit + key
+  farm, the `nixling` CLI, lifecycle group authorization, and key
   management. Anything that only makes sense on a microVM host.
 - **Domain flakes own:** identity (Himmelblau / Entra), corporate
   trust roots, vendor-specific guest kernel modules, anything that
@@ -1253,7 +1253,7 @@ lives in the cited code.
 Because microvm.nix is a primitive, and most of the bugs and
 attacks that matter at the desktop-workspace layer are above
 its level. microvm.nix gives you a VM; nixling gives you the
-env model, the per-VM isolation glue, the polkit-and-keys story,
+env model, the per-VM isolation glue, the lifecycle-and-keys story,
 the audit conventions, and a single CLI that operates on those
 abstractions. A `nixling.vms.<vm>` declaration is ~10 lines.
 Doing the same thing by hand with microvm.nix is ~150 lines of
@@ -1391,10 +1391,10 @@ signal:
 - `nixling list` flags any VM whose declared closure
   (`current` symlink) has drifted from the running one
   (`booted` symlink) with `[pending restart]`.
-- `nixling vm restart <vm>` does a clean `down` + `up` of the
+- `nixling vm restart <vm> --apply` does a clean `down` + `up` of the
   existing closure. Use this when you ran `nixos-rebuild
   switch` and a sidecar config changed.
-- `nixling switch <vm>` does a per-VM closure rebuild + live
+- `nixling switch <vm> --apply` does a per-VM closure rebuild + live
   guest-control activation through the daemon (no VM reboot). Use this
   when you edited the VM's own NixOS module. Stopped VMs use
   `nixling boot <vm> --apply` for offline staging instead of host-side

@@ -96,11 +96,11 @@ old labels in saved SigNoz queries.
 
 ## Step 3: Rebuild and restart affected VMs
 
-On hosts where `nixling switch <vm>` is unreliable, restart VMs with:
+On hosts where `nixling switch <vm> --apply` is unreliable, restart VMs with:
 
 ```bash
-nixling down <vm> --apply
-nixling up <vm> --apply
+nixling vm stop <vm> --apply
+nixling vm start <vm> --apply
 ```
 
 When changing the nixling checkout or bundle contract, restart the daemon

@@ -165,7 +165,7 @@ killing this sidecar mid-VM produces silent speakers and mic
 stuck in whatever state it was in. After a rebuild, `nixling
 list` flags the VM with `[pending restart]` if its `current`
 closure has drifted from `booted`; apply with `nixling vm restart
-<vm>` (clean down+up cycles the audio sidecar and CH together so
+<vm> --apply` (clean down+up cycles the audio sidecar and CH together so
 the socket gets re-established). See
 [`docs/reference/cli-contract.md` — Pending-restart signal](./cli-contract.md#pending-restart-signal-v015).
 
@@ -211,9 +211,8 @@ In [`components/audio/guest.nix`](../../nixos-modules/components/audio/guest.nix
   device on the running VM (would unplug the soundcard mid-flight)
   — the WirePlumber rule null-routes the streams instead.
 - Audio-enabled VMs MUST have `autostart = false`. Eval-time
-  assertion in `audio/host.nix` enforces this: `microvm@<vm>.service`
-  would boot the VM without starting `nixling-<vm>-gpu.service`,
-  leaving no CH process for the sidecar to hand a socket to.
+  assertion in `audio/host.nix` enforces this so the daemon does not
+  start a graphics/audio VM without an operator Wayland session.
 - The state file always lives at
   `/var/lib/nixling/vms/<vm>/state/audio-state.json`. A one-time
   activation-script migration moves the legacy
@@ -262,7 +261,7 @@ sidecar-as-system-service. Compared to the GPU sidecar template:
 
 - **VM silent / no soundcard in `aplay -l`.** Both mic and speaker
   are off — `nixling audio status <vm>` will confirm. Toggle one on
-  and restart the VM (`nixling vm stop <vm> && nixling vm start <vm>`) so
+  and restart the VM (`nixling vm stop <vm> --apply && nixling vm start <vm> --apply`) so
   `audioArgsScript` re-emits `--generic-vhost-user`.
 - **Audible static / dropped frames on the host's own playback
   while a nixling VM is running.** Almost always a WirePlumber
@@ -274,8 +273,7 @@ sidecar-as-system-service. Compared to the GPU sidecar template:
   — those match HARDWARE devices, not client streams.
 - **`autostart = true` + `audio.enable = true` eval failure.**
   Intentional. Set one or the other. The sidecar lifecycle is
-  bound to `nixling vm start <vm>`, which `microvm@<vm>.service` doesn't
-  trigger.
+  bound to `nixling vm start <vm> --apply` from an operator session.
 - **vhost-device-sound times out waiting for snd.sock.** Most
   often a PipeWire connect failure: the sidecar dials
   `/run/user/<uid>/pipewire-0` and gives up if the operator's

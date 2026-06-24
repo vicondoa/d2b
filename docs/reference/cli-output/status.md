@@ -54,10 +54,10 @@ $ nixling status corp-vm
 === corp-vm ===
 env: work
 runtime: unknown
-nixling@corp-vm: active
-microvm@corp-vm (backend): running
+daemon: active
+backend-runner: running
 virtiofsd: running
-interactive: stopped
+gpu-runner: stopped
 usb: degraded
   - busid=1-2 status=degraded session-claim=held-by-desired-owner host-bind=unknown carrier=unknown proxy=unknown guest-import=detached topology=unknown policy=allowed
     degraded: guest-import-unavailable - the guest USBIP import has not converged

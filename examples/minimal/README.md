@@ -97,9 +97,9 @@ the rebuild, on the host you will find:
 | `sys-personal-net` (microVM)                           | Auto-declared headless net VM. Runs NAT, dnsmasq, and the per-env firewall blocklist. Set to `autostart = true`. |
 | `personal-dev` (microVM)                                | Your declared workload VM. Tap on `br-personal-lan`, IP `10.99.0.10`, DHCP-driven inside the guest. |
 | USBIP runners                                           | Not materialised by this headless starter unless a VM opts into `usbip.yubikey = true`; see the USBIP reference/how-to before adding YubiKey passthrough. |
-| `nixling-store-sync@*.service` + per-VM timers     | Hardlink farms under `/var/lib/nixling/<vm>/store/` mirroring each VM's closure. |
-| `/var/lib/nixling/keys/personal-dev_ed25519`            | Framework-managed Ed25519 key for SSH into `personal-dev`. Regenerated on activation if missing. |
-| `nixling` CLI on `$PATH`                           | `nixling list` shows declared VMs + env metadata; `nixling switch personal-dev` rebuilds and live-applies inside the running VM. |
+| Per-VM store farm                                  | Daemon-owned hardlink farm under `/var/lib/nixling/vms/<vm>/store/` mirroring each VM's closure. |
+| `/var/lib/nixling/keys/personal-dev_ed25519`       | Framework-managed Ed25519 key for SSH into `personal-dev`. Regenerated on activation if missing. |
+| `nixling` CLI on `$PATH`                           | `nixling list` shows declared VMs + env metadata; `nixling switch personal-dev --apply` rebuilds and live-applies inside the running VM. |
 
 All of that comes from the ~25-line flake plus the small consumer
 config in this directory. The framework is opinionated by design;
@@ -146,12 +146,12 @@ is **not** autostarted.
 nixling list
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # personal-dev       personal      false     false false   10.99.0.10      stopped
-# sys-personal-net   personal  false     false false   192.0.2.2       systemd (net-vm)
+# sys-personal-net   personal  false     false false   192.0.2.2       running (net-vm)
 
 nixling status
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # personal-dev       personal      false     false false   10.99.0.10      stopped
-# sys-personal-net   personal  false     false false   192.0.2.2       systemd (net-vm)
+# sys-personal-net   personal  false     false false   192.0.2.2       running (net-vm)
 #
 # === Bridge health ===
 # BRIDGE               STATE      ADMIN   EXPECTED     RESULT
@@ -159,11 +159,8 @@ nixling status
 # br-personal-lan          NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
 
 # STATUS legend:
-#   systemd      — autostarted by the framework's `nixling@<vm>.service`
-#                  wrapper (or the underlying `microvm@<vm>.service`).
-#                  Net VMs always show this; tagged `systemd (net-vm)`.
-#   interactive  — launched ad-hoc via `nixling vm start <vm> --apply` from a Plasma
-#                  terminal (typical for graphics VMs).
+#   running      — supervised by nixlingd with a live runner.
+#                  Net VMs are tagged `running (net-vm)`.
 #   stopped      — not running.
 
 nixling vm start personal-dev --apply
@@ -193,12 +190,12 @@ nixling vm stop personal-dev --apply
 
 ## After subsequent rebuilds
 
-Every per-VM lifecycle service in the framework carries
-`restartIfChanged = false`, so a `nixos-rebuild switch` updates
-unit files but does NOT cycle running VMs. After rebuilding,
-`nixling list` flags any VM whose declared closure has drifted
-from the running one as `[pending restart]`; apply with
-`nixling vm restart <vm> --apply`. See
+`nixos-rebuild switch` updates the declared nixling bundle and may
+restart `nixlingd`, but daemon restarts are continuation events:
+running VM runners are re-adopted rather than cycled. After rebuilding,
+`nixling list` flags any VM whose declared closure has drifted from the
+running one as `[pending restart]`; apply with `nixling vm restart
+<vm> --apply`. See
 [`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)
