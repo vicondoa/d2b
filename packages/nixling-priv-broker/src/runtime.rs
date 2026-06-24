@@ -753,7 +753,7 @@ fn try_load_resolver_with_policy(
     // attrs: result/outcome/reason/intent-counts.
     match BundleResolver::load_with_policy(bundle_path, policy) {
         Ok(resolver) => {
-            tracing::info!(
+            tracing::debug!(
                 load_outcome = "ok",
                 nft = resolver.nft_intent_ids().count(),
                 route = resolver.route_intent_ids().count(),
@@ -6161,9 +6161,33 @@ fn revoke_usbip_backend_device_acl(
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn reconcile_active_usbip_backend_acls(resolver: &Arc<BundleResolver>) -> Result<(), BrokerError> {
     for intent in active_locked_usbip_bind_intents(resolver)? {
-        let inspection =
-            crate::ops::usbip_host::enforce_usbip_physical_policy(&intent, usb_device_sysfs_root())
-                .map_err(|err| map_usbip_host_inspection_error_for_intent(&intent, err))?;
+        let inspection = match crate::ops::usbip_host::enforce_usbip_physical_policy(
+            &intent,
+            usb_device_sysfs_root(),
+        ) {
+            Ok(inspection) => inspection,
+            Err(crate::ops::usbip_host::UsbipHostInspectionError::DeviceMissing { bus_id }) => {
+                tracing::debug!(
+                    bus_id = %bus_id,
+                    vm = %intent.vm_name,
+                    "USBIP proxy reconcile skipped backend ACL refresh for absent device"
+                );
+                continue;
+            }
+            Err(
+                crate::ops::usbip_host::UsbipHostInspectionError::DeviceDepartedDuringInspection {
+                    bus_id,
+                },
+            ) => {
+                tracing::debug!(
+                    bus_id = %bus_id,
+                    vm = %intent.vm_name,
+                    "USBIP proxy reconcile skipped backend ACL refresh for device that departed during inspection"
+                );
+                continue;
+            }
+            Err(err) => return Err(map_usbip_host_inspection_error_for_intent(&intent, err)),
+        };
         grant_usbip_backend_device_acl(
             resolver,
             &intent,
@@ -12264,6 +12288,48 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usbip_proxy_reconcile_skips_absent_locked_device_acl_refresh() {
+        let _usb_sysfs_guard = usb_sysfs_test_lock();
+        let root = test_audit_dir("usbip-proxy-reconcile-absent-device");
+        let bundle = build_test_bundle(&root);
+        let intent = test_usbip_intent_with_lock(&root, &bundle);
+        let _ = take_test_usbip_backend_acl_events();
+        let base = std::env::var_os("CARGO_TARGET_TMPDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+        let sysfs_root = base.join("runtime-usb-sysfs-root");
+        TEST_USB_SYSFS_ROOT
+            .set(sysfs_root.clone())
+            .unwrap_or_else(|_| assert_eq!(TEST_USB_SYSFS_ROOT.get(), Some(&sysfs_root)));
+        let _ = fs::remove_dir_all(&sysfs_root);
+        crate::ops::usbip_lock::acquire_lock(
+            &intent.lock_path,
+            &intent.vm_name,
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        )
+        .expect("seed lock for absent device");
+
+        reconcile_active_usbip_backend_acls(&bundle.resolver)
+            .expect("absent locked hardware should not make proxy reconcile fail");
+
+        assert_eq!(
+            take_test_usbip_backend_acl_events(),
+            Vec::new(),
+            "reconcile must not grant an ACL when the locked USB hardware is absent"
+        );
+        assert_eq!(
+            crate::ops::usbip_lock::peek_owner(&intent.lock_path),
+            Some(intent.vm_name.clone()),
+            "reconcile preserves the durable claim for later device return"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&sysfs_root);
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
