@@ -286,24 +286,6 @@ let
       sensitivity = "private";
       invariants = [ "no-symlink" "broker-opaque-id-only" ];
     })
-    (mkPath {
-      id = "path:qemu-media-runtime-udev-rules";
-      scope = "host";
-      path = "/run/udev/rules.d/99-nixling-media-ignore.rules";
-      kind = "regular-file";
-      lifecycle = "boot-scoped-readoptable";
-      persistence = "boot-scoped";
-      owner = principal "user" "root";
-      group = principal "group" "root";
-      mode = "0600";
-      creator = actor "broker" "nixling-priv-broker";
-      writers = [ (actor "broker" "nixling-priv-broker") ];
-      readers = [ (actor "broker" "nixling-priv-broker") ];
-      cleanupPolicy = "boot";
-      repairPolicy = "broker-reconcile";
-      sensitivity = "private";
-      invariants = [ "no-symlink" "root-owned-parent" "broker-opaque-id-only" "scope-authorization-required" ];
-    })
   ] ++ lib.optionals (tpmVms != { }) [
     (mkPath {
       id = "path:swtpm-marker-root";
@@ -371,7 +353,7 @@ let
         persistence = "boot-scoped";
         owner = principal "user" "nixlingd";
         group = principal "group" "nixling";
-        mode = "0755";
+        mode = "0750";
         creator = actor "nix-module" "tmpfiles";
         writers = [
           (actor "daemon" "nixlingd")
@@ -690,28 +672,6 @@ let
         repairPolicy = "broker-fail-closed";
         leaseClass = "process-pidfd";
         invariants = [ "no-symlink" "scope-authorization-required" ];
-      })
-      (mkPath {
-        id = "path:qemu-media-tap:${name}";
-        scope = "vm:${name}";
-        path = "tap:${cfg.manifest.${name}.tap}";
-        kind = "external-grant-only";
-        lifecycle = "boot-scoped-readoptable";
-        persistence = "boot-scoped";
-        owner = principal "user" "root";
-        group = principal "group" "root";
-        mode = "0000";
-        creator = actor "broker" "nixling-priv-broker";
-        writers = [ (actor "broker" "nixling-priv-broker") ];
-        readers = [
-          (actor "daemon" "nixlingd")
-          (actor "role" "role:${name}:qemu-media")
-        ];
-        cleanupPolicy = "process-exit-with-proof";
-        repairPolicy = "broker-fail-closed";
-        leaseClass = "process-pidfd";
-        noFollow = false;
-        invariants = [ "broker-opaque-id-only" "scope-authorization-required" ];
       })
       (mkPath {
         id = "path:qemu-media-registry-vm:${name}";

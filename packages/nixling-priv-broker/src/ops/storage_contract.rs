@@ -67,6 +67,16 @@ pub fn reconcile_storage_scope(
         });
     }
     let path_buf = PathBuf::from(path);
+    if spec.kind == StoragePathKind::ExternalGrantOnly {
+        return Ok(ReconcileStorageScopeResponse {
+            storage_ref: storage_ref.clone(),
+            scope: spec.scope.as_str().to_owned(),
+            kind: format!("{:?}", spec.kind),
+            status: StorageReconcileStatus::CheckedOnly,
+            applied: false,
+            path_hash,
+        });
+    }
     validate_owned_root(&path_buf, storage_ref.as_str())?;
     if apply && apply_is_check_only(&path_buf) {
         return Err(StorageContractError::Refused {
@@ -431,6 +441,25 @@ mod tests {
         let err = reconcile_storage_scope(&resolver, &BundleOpId::new("path:regular-file"), true)
             .expect_err("regular files are check-only in broker reconcile");
         assert_refused_reason(Err(err), "storage-apply-supported-for-directory-only");
+    }
+
+    #[test]
+    fn reconcile_external_grant_skips_filesystem_root_validation() {
+        let resolver = resolver_with_storage_path(
+            "path:external-grant",
+            "/sys/class/net/work-l2",
+            StoragePathKind::ExternalGrantOnly,
+            sync_with_lock(lock("lock:daemon", true, FdPassingMechanism::None, false)),
+        );
+
+        let checked = reconcile_storage_scope(
+            &resolver,
+            &BundleOpId::new("path:external-grant"),
+            true,
+        )
+        .expect("external grant rows are check-only and do not validate as filesystem paths");
+        assert_eq!(checked.status, StorageReconcileStatus::CheckedOnly);
+        assert!(!checked.applied);
     }
 
     #[test]

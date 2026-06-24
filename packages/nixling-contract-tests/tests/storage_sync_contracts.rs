@@ -175,6 +175,13 @@ fn rendered_storage_contract_covers_process_writable_paths_when_fixture_availabl
         "storage.json should include role/readiness Unix socket paths"
     );
     assert!(
+        storage
+            .paths
+            .iter()
+            .all(|path| { !path.path_template.as_str().starts_with("/run/udev/") }),
+        "storage.json must not claim broker-owned storage authority over foreign /run/udev state"
+    );
+    assert!(
         sync.locks
             .iter()
             .any(|lock| lock.kind == LockKind::Ofd && lock.cloexec_required),
