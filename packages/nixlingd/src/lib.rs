@@ -232,6 +232,7 @@ const VM_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS: u64 = 90;
 const PROVIDER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PUBLIC_STATUS_PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
+const PUBLIC_STATUS_GUEST_USBIP_TIMEOUT: Duration = Duration::from_millis(250);
 const EMPTY_VMM_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 const CGROUP_EMPTY_POST_KILL_WAIT: Duration = Duration::from_secs(5);
 const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
@@ -3746,6 +3747,7 @@ fn run_guest_usbip_status(
     resolver: &BundleResolver,
     vm: &str,
     bus_id: &str,
+    timeout: Duration,
 ) -> Result<guest_control_health::GuestUsbipStatusResult, String> {
     let Some(entry) = resolver.manifest.vms.get(vm) else {
         return Err(format!("VM '{vm}' is not present in the trusted manifest"));
@@ -3771,7 +3773,7 @@ fn run_guest_usbip_status(
         broker_socket_path(state),
         Some(host.to_owned()),
         Some(bus_id.to_owned()),
-        guest_control_bridge::GUEST_CONTROL_USBIP_IMPORT_TIMEOUT,
+        timeout,
     )
     .map_err(|error| guest_usbip_import_error_summary(vm, error))
 }
@@ -3932,13 +3934,19 @@ impl usbip_reconcile_state::UsbipVmStartReconcileExecutor
         usbip_reconcile_state::UsbipGuestImportState,
         usbip_reconcile_state::UsbipLifecycleStepError,
     > {
-        let status = run_guest_usbip_status(self.state, self.resolver, &claim.vm, &claim.bus_id)
-            .map_err(|summary| {
-                usbip_reconcile_state::UsbipLifecycleStepError::new(
-                    usbip_reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
-                    summary,
-                )
-            })?;
+        let status = run_guest_usbip_status(
+            self.state,
+            self.resolver,
+            &claim.vm,
+            &claim.bus_id,
+            guest_control_bridge::GUEST_CONTROL_USBIP_IMPORT_TIMEOUT,
+        )
+        .map_err(|summary| {
+            usbip_reconcile_state::UsbipLifecycleStepError::new(
+                usbip_reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
+                summary,
+            )
+        })?;
         let imported = status
             .imports
             .iter()
@@ -4617,7 +4625,14 @@ fn dispatch_broker_usbip_probe(state: &ServerState) -> Result<Value, TypedError>
         .iter()
         .map(String::as_str)
         .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
-        .map(|intent| usbip_probe_entry_from_intent(state, &resolver, intent))
+        .map(|intent| {
+            usbip_probe_entry_from_intent(
+                state,
+                &resolver,
+                intent,
+                Some(guest_control_bridge::GUEST_CONTROL_USBIP_IMPORT_TIMEOUT),
+            )
+        })
         .collect();
     entries.extend(qemu_media_probe_entries(&resolver));
     Ok(wire::usbip_probe_response(
@@ -4629,6 +4644,7 @@ fn usbip_probe_entry_from_intent(
     state: &ServerState,
     resolver: &BundleResolver,
     intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+    guest_status_timeout: Option<Duration>,
 ) -> public_wire::UsbipProbeEntry {
     let owner_vm = fs::read_to_string(&intent.lock_path)
         .ok()
@@ -4673,22 +4689,46 @@ fn usbip_probe_entry_from_intent(
                 )),
             ));
         }
-        match run_guest_usbip_status(state, resolver, &intent.vm_name, &intent.bus_id) {
-            Ok(status) => {
-                let imported = status
-                    .imports
-                    .iter()
-                    .any(|entry| entry.bus_id == intent.bus_id);
-                guest_import = if imported {
-                    public_wire::UsbipGuestImportState::Imported
-                } else {
-                    public_wire::UsbipGuestImportState::Detached
-                };
-                if !imported {
+        if let Some(guest_status_timeout) = guest_status_timeout {
+            match run_guest_usbip_status(
+                state,
+                resolver,
+                &intent.vm_name,
+                &intent.bus_id,
+                guest_status_timeout,
+            ) {
+                Ok(status) => {
+                    let imported = status
+                        .imports
+                        .iter()
+                        .any(|entry| entry.bus_id == intent.bus_id);
+                    guest_import = if imported {
+                        public_wire::UsbipGuestImportState::Imported
+                    } else {
+                        public_wire::UsbipGuestImportState::Detached
+                    };
+                    if !imported {
+                        degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
+                            usbip_reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
+                            Some(format!(
+                                "Run `nixling usb attach {vm} {bus} --apply` after the VM is running.",
+                                vm = intent.vm_name,
+                                bus = intent.bus_id
+                            )),
+                        ));
+                        remediation_commands.push(format!(
+                            "nixling usb attach {vm} {bus} --apply",
+                            vm = intent.vm_name,
+                            bus = intent.bus_id
+                        ));
+                    }
+                }
+                Err(_) => {
+                    guest_import = public_wire::UsbipGuestImportState::Unavailable;
                     degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
                         usbip_reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
                         Some(format!(
-                            "Run `nixling usb attach {vm} {bus} --apply` after the VM is running.",
+                            "Start the VM with `nixling vm start {vm} --apply`, then run `nixling usb attach {vm} {bus} --apply`.",
                             vm = intent.vm_name,
                             bus = intent.bus_id
                         )),
@@ -4699,22 +4739,6 @@ fn usbip_probe_entry_from_intent(
                         bus = intent.bus_id
                     ));
                 }
-            }
-            Err(_) => {
-                guest_import = public_wire::UsbipGuestImportState::Unavailable;
-                degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
-                    usbip_reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
-                    Some(format!(
-                        "Start the VM with `nixling vm start {vm} --apply`, then run `nixling usb attach {vm} {bus} --apply`.",
-                        vm = intent.vm_name,
-                        bus = intent.bus_id
-                    )),
-                ));
-                remediation_commands.push(format!(
-                    "nixling usb attach {vm} {bus} --apply",
-                    vm = intent.vm_name,
-                    bus = intent.bus_id
-                ));
             }
         }
         degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
@@ -4966,7 +4990,14 @@ fn public_usb_status_for_vm(
         .usbip_bind_intent_ids()
         .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
         .filter(|intent| intent.vm_name == vm)
-        .map(|intent| usbip_probe_entry_from_intent(state, resolver, intent))
+        .map(|intent| {
+            usbip_probe_entry_from_intent(
+                state,
+                resolver,
+                intent,
+                Some(PUBLIC_STATUS_GUEST_USBIP_TIMEOUT),
+            )
+        })
         .collect();
     if entries.is_empty() {
         return None;

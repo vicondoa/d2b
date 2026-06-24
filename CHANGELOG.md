@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Public daemon `status` keeps guest USBIP import state, but now uses a short
+  status-specific guest-control budget so stale or slow guest USB probes cannot
+  push wlcontrol past its public-socket timeout.
 - Public daemon `list` and `status` responses now build per-VM status entries
   in parallel, so slow provider or guest-control probes cannot serially push
   wlcontrol past its public-socket timeout.
