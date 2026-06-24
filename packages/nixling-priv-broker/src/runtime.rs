@@ -1198,14 +1198,11 @@ fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
                 }
             })
         }
-        BrokerRequest::UsbipExplicitFirewallRule(req) => {
-            validate_usbip_busid_wire(&req.bus_id).map_err(|reason| {
-                BrokerError::RequestValidation {
-                    operation: "UsbipExplicitFirewallRule",
-                    reason,
-                }
-            })
-        }
+        BrokerRequest::UsbipExplicitFirewallRule(req) => validate_usbip_busid_wire(&req.bus_id)
+            .map_err(|reason| BrokerError::RequestValidation {
+                operation: "UsbipExplicitFirewallRule",
+                reason,
+            }),
         _ => Ok(()),
     }
 }
