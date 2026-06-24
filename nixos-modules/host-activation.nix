@@ -581,13 +581,10 @@ in
             for uid in $(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .profile.uid' "$bundle_json" | ${pkgs.coreutils}/bin/sort -u); do
               [ "$uid" = "0" ] && continue
               ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /var/lib/nixling 2>/dev/null || true
-              # Option B: also grant traversal on
-              # /run/nixling (mode 0750 nixlingd:nixling)
-              # so ephemeral role UIDs (audio, video, etc.) can
-              # reach the per-VM socket dir. virtiofsd skips this
-              # via its own pivot_root + CAP_SYS_ADMIN; other
-              # sidecars need explicit ACL.
+              # Grant traversal on both shared runtime parents so numeric
+              # per-role UIDs can reach /run/nixling/vms/<vm> sockets.
               ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/nixling 2>/dev/null || true
+              ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/nixling/vms 2>/dev/null || true
               if echo "$guest_control_virtiofsd_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
                 ${activationHelper} clear-acl-on-path --path "/var/lib/nixling/guest-control-${name}" --require-kind directory --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
                 ${activationHelper} clear-acl-on-path --path "/var/lib/nixling/guest-control-${name}/token" --require-kind regular --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
