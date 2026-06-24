@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Provider/realm policy coverage now explicitly guards host daemon, broker, and
+  bundle artifacts from storing realm credentials, remote registries, or realm
+  audit state while keeping capability-denied remote dispatch fail-closed.
 - Renamed the internal contract/DTO crate to `nixling-contracts` and added
   workspace taxonomy checks for contract and standalone workspace coverage.
 - CI workflow make-target policy coverage moved from a shell meta gate to a Rust

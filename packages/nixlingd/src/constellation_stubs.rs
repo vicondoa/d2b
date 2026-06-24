@@ -388,8 +388,10 @@ mod tests {
         }
     }
 
-    fn remote_registration(principal: &PrincipalId) -> RemoteNodeRegistration {
-        let caps = CapabilitySet::empty().with(Capability::Lifecycle);
+    fn remote_registration_with_caps(
+        principal: &PrincipalId,
+        caps: CapabilitySet,
+    ) -> RemoteNodeRegistration {
         RemoteNodeRegistration {
             summary: NodeSummary {
                 id: NodeId::parse("remote-host").unwrap(),
@@ -402,6 +404,13 @@ mod tests {
             substrate_adapter: ProviderId::parse("nixos-host-substrate").unwrap(),
             generation: ProtocolToken::parse("gen-1").unwrap(),
         }
+    }
+
+    fn remote_registration(principal: &PrincipalId) -> RemoteNodeRegistration {
+        remote_registration_with_caps(
+            principal,
+            CapabilitySet::empty().with(Capability::Lifecycle),
+        )
     }
 
     #[derive(Default)]
@@ -559,6 +568,38 @@ mod tests {
             .unwrap();
         assert!(matches!(outcome, RemoteDispatchOutcome::Sent { .. }));
         assert_eq!(peer.sends, 1);
+    }
+
+    #[test]
+    fn peer_daemon_denies_missing_capability_before_peer_send() {
+        let principal = PrincipalId::parse("gateway-principal").unwrap();
+        let mut daemon = PeerDaemon::with_gateway_principal(
+            principal.clone(),
+            CapabilitySet::empty().with(Capability::Lifecycle),
+        );
+        daemon
+            .remote_nodes_mut()
+            .register(
+                remote_registration_with_caps(&principal, CapabilitySet::empty()),
+                std::time::Instant::now(),
+            )
+            .unwrap();
+
+        let mut peer = FakePeerClient::default();
+        let request = remote_start_req(&principal, "op-remote-denied", "idem-remote-denied");
+        let err = daemon
+            .dispatch_remote(&request, &ProtocolToken::parse("gen-1").unwrap(), &mut peer)
+            .expect_err("missing remote lifecycle capability fails before peer send");
+
+        assert_eq!(
+            err.kind,
+            nixling_constellation_router::RemoteNodeErrorKind::CapabilityDenied
+        );
+        assert_eq!(err.missing_capability, Some(Capability::Lifecycle));
+        assert_eq!(
+            peer.sends, 0,
+            "capability denial must happen before remote peer side effects"
+        );
     }
 
     #[test]
