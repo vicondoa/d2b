@@ -142,6 +142,25 @@ pub enum BrokerRequest {
     UsbipBindFirewallRule(UsbipBindFirewallRuleRequest),
     UsbipProxyReconcile(UsbipProxyReconcileRequest),
     UsbipUnbind(UsbipUnbindRequest),
+    /// Explicit-attach: bind a present sysfs busid for a USB-capable VM
+    /// without requiring static bundle firewall/bind intent refs.
+    ///
+    /// The daemon has already validated: (1) the busid is present in sysfs,
+    /// (2) the target VM has `runtime.capabilities.usbHotplug = true`, (3) no
+    /// other active claim holds this busid. The broker validates the busid shape,
+    /// acquires the per-busid OFD lock, and runs the `usbip bind` helper.
+    ///
+    /// Currently a typed stub (`Unimplemented`) — the live handler wires the
+    /// per-device backend path without restarting shared per-env backends.
+    UsbipExplicitBind(UsbipExplicitBindRequest),
+    /// Explicit-attach: install a per-busid nftables carve-out scoped
+    /// to the target VM's env bridge (not the full per-env USBIP table entry).
+    ///
+    /// Carries the daemon-validated env bridge identity so the broker can build
+    /// the scoped `inet nixling` rule without a bundle firewall intent ref.
+    ///
+    /// Currently a typed stub (`Unimplemented`).
+    UsbipExplicitFirewallRule(UsbipExplicitFirewallRuleRequest),
     ValidateBundle,
     /// Write the per-VM dnsmasq lease file. Replaces leaves of the
     /// retired `microvm-setup@<vm>.service`. Currently a typed stub
@@ -247,6 +266,8 @@ impl BrokerRequest {
             Self::UsbipBindFirewallRule(_) => "UsbipBindFirewallRule",
             Self::UsbipProxyReconcile(_) => "UsbipProxyReconcile",
             Self::UsbipUnbind(_) => "UsbipUnbind",
+            Self::UsbipExplicitBind(_) => "UsbipExplicitBind",
+            Self::UsbipExplicitFirewallRule(_) => "UsbipExplicitFirewallRule",
             Self::ValidateBundle => "ValidateBundle",
             Self::SeedDnsmasqLease(_) => "SeedDnsmasqLease",
             Self::BindMountFromHardlinkFarm(_) => "BindMountFromHardlinkFarm",
@@ -1260,6 +1281,47 @@ pub struct UsbipUnbindRequest {
     /// unbind/ACL revoke.
     #[serde(default)]
     pub preserve_durable_claim: bool,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Explicit-attach: bind a present sysfs busid for a USB-capable VM
+/// without a bundle intent ref. The daemon has already completed:
+///  1. sysfs busid presence check (fail-closed if device absent),
+///  2. USB-capable gate (`runtime.capabilities.usbHotplug`),
+///  3. active-claim exclusivity check (OFD lock read).
+///
+/// The broker acquires the per-busid OFD lock, runs `usbip bind`, and
+/// spawns a per-device backend (not the shared per-env backend).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbipExplicitBindRequest {
+    /// Daemon-validated sysfs busid (max 31 chars, no metacharacters).
+    pub bus_id: String,
+    /// USB-capable target VM (must exist in the trusted manifest).
+    pub vm: String,
+    /// Env the VM belongs to, used for firewall scope and audit.
+    pub env: String,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Explicit-attach: install a per-busid nftables carve-out scoped
+/// to the target VM's env bridge. The broker builds the scoped
+/// `inet nixling` input rule from `host_uplink_ip` (the env bridge
+/// side) and `net_uplink_ip` (the net-VM uplink) so the carve-out is
+/// strictly limited to traffic from the owner env's net VM.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbipExplicitFirewallRuleRequest {
+    /// Daemon-validated sysfs busid (max 31 chars, no metacharacters).
+    pub bus_id: String,
+    /// Env name for audit and rule scoping.
+    pub env: String,
+    /// The per-env host-uplink IP bound by the USBIP proxy listener.
+    pub host_uplink_ip: String,
+    /// The per-env net-VM uplink source IP for anti-spoof matching.
+    pub net_uplink_ip: String,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }

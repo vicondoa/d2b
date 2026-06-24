@@ -287,7 +287,7 @@ fails partway through, the operator runbook is:
 For the security-policy framing — how this runbook integrates with
 GitHub Security Advisory disclosure — read [`SECURITY.md`](../../SECURITY.md).
 
-## Net-route preflight & operator-only mode
+## Net-route preflight & network reconcile
 
 > There is no `nixling-net-route-preflight.service` host singleton.
 > The daemon owns the equivalent self-check directly inside
@@ -296,25 +296,23 @@ GitHub Security Advisory disclosure — read [`SECURITY.md`](../../SECURITY.md).
 
 On every startup, `nixlingd` probes each env's LAN bridge under
 `/sys/class/net/<bridge>/operstate` (existence + `operstate != down`).
-The result feeds two layers:
+The startup result is diagnostic and history-only: cold boots can
+legitimately begin with the env bridges absent because the autostarted
+net VMs own the host-prep DAG that creates and raises them. A failed
+startup preflight therefore does **not** pre-skip the env's net VM or
+workloads. If the net VM itself fails during autostart, the normal
+autostart dependency gate marks that env's workloads degraded (not
+failed), while read-only verbs continue to work.
 
-1. **Per-env autostart degradation.** VMs whose env failed the
-   preflight are pre-marked `Outcome::Degraded { reason }` by
-   the autostart pass; they appear as `degraded` (not `failed`)
-   in `nixling status` / `nixling vm list`. Read-only verbs
-   continue to work.
-2. **Operator-only mode** (default threshold `N = 3` consecutive
-   startup failures). The daemon persists a small jsonl history
-   at `<daemon-state-dir>/net-route-preflight-history.jsonl`
-   (atomic rename; retention `32` records). Once the threshold
-   is met, the autostart pass is skipped entirely and per-env
-   mutating verbs are blocked. `status`, `host doctor
-   --read-only`, and `audit` remain available so operators can
-   diagnose the host.
+The daemon persists a small jsonl history at
+`<daemon-state-dir>/net-route-preflight-history.jsonl` (atomic rename;
+retention `32` records) for diagnostics and manual recovery evidence.
+The explicit recovery verb remains useful when bridge/route state is
+known-bad outside the normal net-VM autostart path.
 
 ### Recovery: `nixling host reconcile --network --apply`
 
-This is the **sole** mutating recovery verb (admin-only). It
+This is the focused mutating recovery verb (admin-only). It
 re-runs the broker-side network slice of `host prepare`
 (`ApplyNftables(host)` + per-env `ApplyRoute` + per-env
 `ApplySysctl`) without starting any VM, and on success resets
@@ -332,9 +330,9 @@ $ nixling host reconcile --network --apply
 
 The verb honours the standard `--dry-run` / `--apply` mandatory
 pair and emits the typed error `--apply-or-dry-run-required`
-(exit 78) when neither is set. The typed error returned when
-operator-only mode is engaged is `net-route-preflight-degraded` (exit 66);
-its remediation field points back to this section.
+(exit 78) when neither is set. The `net-route-preflight-degraded`
+typed envelope (exit 66) uses this section as its remediation target
+when a caller surfaces explicit network-preflight degradation.
 
 ## Cross-references
 

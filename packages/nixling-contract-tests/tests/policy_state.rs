@@ -389,6 +389,26 @@ fn store_sync_export() {
             "rotated export files inherit collector read via a default ACL",
             r#"setfacl -d -m "u:nixling-host-otel-collector:r--" "\$export_dir""#,
         ),
+        (
+            "host collector gets traverse-only access on host egress runtime dir",
+            r#"-m u:nixling-host-otel-collector:--x"#,
+        ),
+        (
+            "host egress socket default ACL grants collector connect permission",
+            r#"-m d:u:nixling-host-otel-collector:rw"#,
+        ),
+        (
+            "host egress runtime dir keeps a write-capable ACL mask for socket defaults",
+            r#"-m m::rwx"#,
+        ),
+        (
+            "host egress runtime dir keeps a write-capable default ACL mask",
+            r#"-m d:m::rwx"#,
+        ),
+        (
+            "existing host egress socket ACL refresh includes a write-capable mask",
+            r#"setfacl -m u:nixling-host-otel-collector:rw,m::rw \$\{hostEgressSocket\}"#,
+        ),
     ];
 
     let denies: &[(&str, &str)] = &[

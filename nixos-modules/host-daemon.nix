@@ -344,26 +344,31 @@ in
     };
 
     systemd.tmpfiles.rules = [
-      # nixlingd runs non-root, so it must own
-      # /run/nixling, /run/nixling/locks, /run/nixling/state, and the
-      # daemon.lock file. /etc/nixling and /var/lib/nixling stay
-      # root-owned and group-readable by nixlingd (the broker
-      # audit log under /var/lib/nixling/audit/ is broker-owned and
-      # written by root; the daemon only reads). /etc/nixling/
-      # config + bundle/host/processes are root:nixlingd 0640 so the
-      # daemon reads without write.
+      # nixlingd runs non-root, so it gets an explicit rwx ACL on
+      # /run/nixling and owns /run/nixling/locks, /run/nixling/state,
+      # and the daemon.lock file. Keep the /run/nixling parent itself
+      # root-owned: systemd-tmpfiles refuses to create root-owned
+      # descendants such as /run/nixling/vms beneath a daemon-owned
+      # parent as an unsafe path transition. /etc/nixling and
+      # /var/lib/nixling stay root-owned and group-readable by nixlingd
+      # (the broker audit log under /var/lib/nixling/audit/ is
+      # broker-owned and written by root; the daemon only reads).
+      # /etc/nixling/ config + bundle/host/processes are root:nixlingd
+      # 0640 so the daemon reads without write.
       #
-      # /run/nixling is group-owned by
-      # `nixling` (mode 0750) so launcher users — members
-      # of `nixling` via the daemon-config.json
-      # `publicSocketGroup` — can `x` (traverse) the directory to
-      # reach `public.sock`. With nixlingd:nixling 0750
-      # owner nixlingd has rwx (read/write the dir; bind/remove the
-      # socket); group nixling has r-x (list contents +
-      # traverse to the socket file); world has --- (no access). The
-      # public socket itself is mode 0660 group nixling
+      # /run/nixling is group-owned by `nixling` (mode 1770) so
+      # launcher users — members of `nixling` via daemon-config.json's
+      # `publicSocketGroup` — can `x` (traverse) the directory to reach
+      # `public.sock`. The explicit group ACL narrows launcher effective
+      # access back to r-x while the named nixlingd ACL grants read/write for
+      # bind/remove of the socket. The sticky bit prevents nixlingd from
+      # unlinking root-owned children such as /run/nixling/vms. The public
+      # socket itself is mode 0660 group nixling
       # (see packages/nixlingd/src/lib.rs::bind_public_socket).
-      "d /run/nixling 0750 nixlingd nixling -"
+      "d /run/nixling 1770 root nixling -"
+      "a+ /run/nixling - - - - g::r-x"
+      "a+ /run/nixling - - - - u:nixlingd:rwx"
+      "a+ /run/nixling - - - - m::rwx"
       "f /run/nixling/daemon.lock 0640 nixlingd nixlingd -"
       # /run/nixling/locks holds per-VM `flock(LOCK_EX |
       # LOCK_NB)` files taken by the daemon for the entire `up` /

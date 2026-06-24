@@ -309,7 +309,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (reconcile)
 _arguments "${_arguments_options[@]}" : \
-'--network[Re-run the network slice of \`host prepare\` and clear the daemon'\''s net-route preflight counter. Currently the only available scope]' \
+'--network[Re-run the network slice of \`host prepare\` (bridge/route/nftables reconcile without starting any VM). Currently the only available scope]' \
 '(--apply)--dry-run[Plan the reconcile without mutating host state]' \
 '(--dry-run)--apply[Apply the reconcile (mutates host state)]' \
 '(--human)--json[]' \
@@ -2032,7 +2032,7 @@ _nixling__subcmd__help__subcmd__host_commands() {
 'doctor:Read-only deep diagnostics for the daemon + broker state' \
 'migrate-storage:Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands' \
 'install:Install nixlingd + broker units onto the host. --apply mutates' \
-'reconcile:Recover host network state after the daemon engaged operator-only mode' \
+'reconcile:Reconcile host network state (re-run bridge/route/nftables reconcile without starting any VM)' \
 'validate:Run the host-side validator suite and write evidence records' \
     )
     _describe -t commands 'nixling help host commands' commands "$@"
@@ -2304,7 +2304,7 @@ _nixling__subcmd__host_commands() {
 'doctor:Read-only deep diagnostics for the daemon + broker state' \
 'migrate-storage:Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands' \
 'install:Install nixlingd + broker units onto the host. --apply mutates' \
-'reconcile:Recover host network state after the daemon engaged operator-only mode' \
+'reconcile:Reconcile host network state (re-run bridge/route/nftables reconcile without starting any VM)' \
 'validate:Run the host-side validator suite and write evidence records' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -2334,7 +2334,7 @@ _nixling__subcmd__host__subcmd__help_commands() {
 'doctor:Read-only deep diagnostics for the daemon + broker state' \
 'migrate-storage:Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands' \
 'install:Install nixlingd + broker units onto the host. --apply mutates' \
-'reconcile:Recover host network state after the daemon engaged operator-only mode' \
+'reconcile:Reconcile host network state (re-run bridge/route/nftables reconcile without starting any VM)' \
 'validate:Run the host-side validator suite and write evidence records' \
 'help:Print this message or the help of the given subcommand(s)' \
     )

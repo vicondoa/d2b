@@ -163,7 +163,10 @@ let
           nixlingGatewayRuntimePackage
         ];
         systemd.tmpfiles.rules = [
-          "d /run/nixling 0750 nixlingd nixling -"
+          "d /run/nixling 1770 root nixling -"
+          "a+ /run/nixling - - - - g::r-x"
+          "a+ /run/nixling - - - - u:nixlingd:rwx"
+          "a+ /run/nixling - - - - m::rwx"
           "f /run/nixling/daemon.lock 0640 nixlingd nixlingd -"
           "d /run/nixling/locks 0700 nixlingd nixlingd -"
           "d /run/nixling/state 0700 nixlingd nixlingd -"

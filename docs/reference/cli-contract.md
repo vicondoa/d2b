@@ -661,7 +661,7 @@ The bridge-health probe is part of the read-only status surface, even though rec
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | `false` | Print the daemon → broker USBIP attach plan plus the authenticated guestd import step without mutating host or guest state. |
-| `--apply` | boolean | `false` | Ask `nixlingd` to first reconcile any stale guest-side import through guestd, run `UsbipBind` (acquiring the per-busid lock and validating ownership), apply the USBIP firewall carve-out, ensure the per-env USBIP backend/proxy runners are ready, run `UsbipProxyReconcile`, then ask guestd over authenticated guest-control to import the selected busid from the per-env backend. |
+| `--apply` | boolean | `false` | Ask `nixlingd` to run three fail-closed pre-flight checks (sysfs presence, USB-capable gate, active claim exclusivity), then dispatch the appropriate broker path: **declared path** (when a static bundle intent exists for the busid — `UsbipBind` + firewall carve-out + `UsbipProxyReconcile`), or **explicit path** (when no declared intent exists — `UsbipExplicitFirewallRule` + `UsbipExplicitBind` per-device ops), then ask guestd over authenticated guest-control to import the selected busid. |
 | `--json` | boolean | `false` | Emit the dry-run summary as structured JSON. |
 | `--human` | boolean | `false` | Force the human dry-run summary on stdout. |
 
@@ -670,7 +670,7 @@ The bridge-health probe is part of the read-only status surface, even though rec
 | Argument | Semantics |
 | --- | --- |
 | `vm` | Required VM name. |
-| `busid` | Required host USB busid in the canonical `B-P[.P...]` form (for example `1-2` or `2-1.4`). |
+| `busid` | Required host USB busid in the canonical `B-P[.P...]` form (for example `1-2` or `2-1.4`). Does not require the busid to be pre-declared in the NixOS bundle configuration. |
 
 **Exit codes**
 
@@ -679,6 +679,7 @@ The bridge-health probe is part of the read-only status surface, even though rec
 | `0` | Success. | — |
 | `1` | `nixlingd` is unreachable, or the daemon returned a non-typed USBIP failure. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Missing VM / busid or another usage error. | [`usage`](./error-codes.md#usage) |
+| `67` | The USB device busid is not present in sysfs (`usbip-busid-not-present`), or another VM already holds an active claim on this busid (`usbip-explicit-claim-conflict`). | [`usbip-busid-not-present`](./error-codes.md#usbip-busid-not-present), [`usbip-explicit-claim-conflict`](./error-codes.md#usbip-explicit-claim-conflict) |
 | `78` | The daemon reached the broker but the native USBIP apply path was refused. | [`broker-error`](./error-codes.md#broker-error) |
 
 **Human example**
@@ -687,6 +688,30 @@ The bridge-health probe is part of the read-only status surface, even though rec
 $ nixling usb attach corp-vm 1-2 --dry-run
 nixling usb attach --dry-run: would bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for busid '1-2' for vm 'corp-vm', reconcile the USBIP proxy, and ask guestd to import the device
 ```
+
+**Explicit attach (present-busid, no static allowlist required)**
+
+`nixling usb attach` accepts any USB device that is physically present in sysfs
+without requiring a static busid or vendor allowlist in the NixOS configuration.
+The daemon selects the **explicit path** when no declared bundle intent exists for
+the requested busid. Three fail-closed checks run before any broker call:
+
+1. **Sysfs presence** — the daemon checks `/sys/bus/usb/devices/<busid>/idVendor`.
+   If absent, the attach fails with `UsbipBusidNotPresent` (exit 67) and guides
+   the operator to plug in the device before retrying.
+2. **USB-capable gate** — the VM must have `RuntimeCapabilityGate::UsbHotplug`
+   declared in its manifest. Non-USB-capable VMs fail with a typed
+   `RuntimeCapabilityUnsupported` error.
+3. **Active claim exclusivity** — the daemon reads the OFD lock under
+   `/run/nixling/locks/usbip/<busid>`. If another VM already holds the claim, the
+   attach fails with `UsbipExplicitClaimConflict` (exit 67) naming the owner VM
+   and guiding the operator to detach from the owner first.
+
+The explicit path dispatches `UsbipExplicitFirewallRule` (env-scoped nftables
+rule keyed on the per-env uplink IPs) and `UsbipExplicitBind` (per-device backend
+setup). Both ops are currently typed stubs; the live per-device backend handler
+is deferred to later implementation. The declared path (static bundle intents) is
+unaffected.
 
 **Status**
 

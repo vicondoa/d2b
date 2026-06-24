@@ -428,7 +428,7 @@ in
   # daemon-native runtime roots are owned by host-activation.nix tmpfiles.
   # when daemonExperimental is
   # enabled, /run/nixling is owned exclusively by host-daemon.nix
-  # (nixlingd:nixling 0750). This module emits its OWN
+  # (root:nixling 1770 with explicit ACLs). This module emits its OWN
   # /run/nixling rule only in the pre-daemon path. The duplicate
   # `if daemonExperimental … 0755 root root` form is REMOVED.
   systemd.tmpfiles.rules = lib.optionals (! cfg.daemonExperimental.enable) [

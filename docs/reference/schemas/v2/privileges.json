@@ -203,6 +203,8 @@
             "UpdateHostsFile",
             "UsbipBind",
             "UsbipBindFirewallRule",
+            "UsbipExplicitBind",
+            "UsbipExplicitFirewallRule",
             "UsbipProxyReconcile",
             "UsbipUnbind",
             "ValidateBundle",

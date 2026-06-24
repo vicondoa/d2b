@@ -1588,6 +1588,44 @@
           }
         },
         {
+          "description": "Explicit-attach: bind a present sysfs busid for a USB-capable VM without requiring static bundle firewall/bind intent refs.\n\nThe daemon has already validated: (1) the busid is present in sysfs, (2) the target VM has `runtime.capabilities.usbHotplug = true`, (3) no other active claim holds this busid. The broker validates the busid shape, acquires the per-busid OFD lock, and runs the `usbip bind` helper.\n\nCurrently a typed stub (`Unimplemented`) — the live handler wires the per-device backend path without restarting shared per-env backends.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "UsbipExplicitBind"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UsbipExplicitBindRequest"
+            }
+          }
+        },
+        {
+          "description": "Explicit-attach: install a per-busid nftables carve-out scoped to the target VM's env bridge (not the full per-env USBIP table entry).\n\nCarries the daemon-validated env bridge identity so the broker can build the scoped `inet nixling` rule without a bundle firewall intent ref.\n\nCurrently a typed stub (`Unimplemented`).",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "UsbipExplicitFirewallRule"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UsbipExplicitFirewallRuleRequest"
+            }
+          }
+        },
+        {
           "type": "object",
           "required": [
             "kind"
@@ -4897,7 +4935,7 @@
           "type": "boolean"
         },
         "network": {
-          "description": "Re-run the per-env nftables / route / sysctl reconcile and clear the operator-only-mode counter on success.",
+          "description": "Re-run the per-env nftables / route / sysctl reconcile.",
           "default": false,
           "type": "boolean"
         }
@@ -6064,7 +6102,7 @@
           }
         },
         {
-          "description": "Dedicated reconcile verb that re-runs the daemon-side net-route preflight + the broker-side per-env nftables / route / sysctl reconcile without starting any VM. On success it resets the operator-only-mode counter so future daemon startups are no longer locked out of autostart. The CLI exposes this as `nixling host reconcile --network --apply`.",
+          "description": "Dedicated reconcile verb that re-runs the broker-side per-env nftables / route / sysctl reconcile without starting any VM. The CLI exposes this as `nixling host reconcile --network --apply`.",
           "type": "object",
           "required": [
             "kind",
@@ -9434,6 +9472,73 @@
         },
         "state": {
           "$ref": "#/definitions/UsbipDurableClaimState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipExplicitBindRequest": {
+      "description": "Explicit-attach: bind a present sysfs busid for a USB-capable VM without a bundle intent ref. The daemon has already completed: 1. sysfs busid presence check (fail-closed if device absent), 2. USB-capable gate (`runtime.capabilities.usbHotplug`), 3. active-claim exclusivity check (OFD lock read).\n\nThe broker acquires the per-busid OFD lock, runs `usbip bind`, and spawns a per-device backend (not the shared per-env backend).",
+      "type": "object",
+      "required": [
+        "busId",
+        "env",
+        "vm"
+      ],
+      "properties": {
+        "busId": {
+          "description": "Daemon-validated sysfs busid (max 31 chars, no metacharacters).",
+          "type": "string"
+        },
+        "env": {
+          "description": "Env the VM belongs to, used for firewall scope and audit.",
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "description": "USB-capable target VM (must exist in the trusted manifest).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipExplicitFirewallRuleRequest": {
+      "description": "Explicit-attach: install a per-busid nftables carve-out scoped to the target VM's env bridge. The broker builds the scoped `inet nixling` input rule from `host_uplink_ip` (the env bridge side) and `net_uplink_ip` (the net-VM uplink) so the carve-out is strictly limited to traffic from the owner env's net VM.",
+      "type": "object",
+      "required": [
+        "busId",
+        "env",
+        "hostUplinkIp",
+        "netUplinkIp"
+      ],
+      "properties": {
+        "busId": {
+          "description": "Daemon-validated sysfs busid (max 31 chars, no metacharacters).",
+          "type": "string"
+        },
+        "env": {
+          "description": "Env name for audit and rule scoping.",
+          "type": "string"
+        },
+        "hostUplinkIp": {
+          "description": "The per-env host-uplink IP bound by the USBIP proxy listener.",
+          "type": "string"
+        },
+        "netUplinkIp": {
+          "description": "The per-env net-VM uplink source IP for anti-spoof matching.",
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
