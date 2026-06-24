@@ -9,5 +9,5 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
+nixling-contracts = { path = "../nixling-contracts", version = "0.0.0-bootstrap" }
 

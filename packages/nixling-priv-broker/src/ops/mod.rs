@@ -12,7 +12,7 @@
 //!
 //! The integrator wires these handlers into `runtime::dispatch_request`
 //! in a separate commit. Scopes keep the integration surface one-way:
-//! these modules depend on `nixling-host` and `nixling-ipc`, but
+//! these modules depend on `nixling-host` and `nixling-contracts`, but
 //! nothing in the runtime depends on them beyond the integrator-managed
 //! dispatch wiring.
 

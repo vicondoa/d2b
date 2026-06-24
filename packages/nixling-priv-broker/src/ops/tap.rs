@@ -188,7 +188,7 @@ pub struct LiveCreateTapOutcome {
 pub fn live_create_tap_fd(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
-    req: &nixling_ipc::broker_wire::CreateTapFdRequest,
+    req: &nixling_contracts::broker_wire::CreateTapFdRequest,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<LiveCreateTapOutcome, super::OpError> {
     let intent = resolver
@@ -227,7 +227,7 @@ pub fn live_create_tap_fd(
 pub fn live_create_persistent_tap(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
-    req: &nixling_ipc::broker_wire::CreatePersistentTapRequest,
+    req: &nixling_contracts::broker_wire::CreatePersistentTapRequest,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<LiveCreateTapOutcome, super::OpError> {
     let intent = resolver
@@ -355,8 +355,8 @@ struct LiveBridgePortTarget {
 pub fn live_set_bridge_port_flags(
     _executor: &dyn ReconcileExecutor,
     resolver: &BundleResolver,
-    req: &nixling_ipc::broker_wire::SetBridgePortFlagsRequest,
-) -> Result<nixling_ipc::broker_wire::BridgePortFlagsResponse, LiveSetBridgePortFlagsError> {
+    req: &nixling_contracts::broker_wire::SetBridgePortFlagsRequest,
+) -> Result<nixling_contracts::broker_wire::BridgePortFlagsResponse, LiveSetBridgePortFlagsError> {
     let target = resolve_live_bridge_port_target(resolver, req)?;
     let ip_binary = ip_binary_path();
     live_set_bridge_port_flags_with_ops(
@@ -370,7 +370,7 @@ fn live_set_bridge_port_flags_with_ops<F, G>(
     target: &LiveBridgePortTarget,
     mut apply: F,
     mut readback: G,
-) -> Result<nixling_ipc::broker_wire::BridgePortFlagsResponse, LiveSetBridgePortFlagsError>
+) -> Result<nixling_contracts::broker_wire::BridgePortFlagsResponse, LiveSetBridgePortFlagsError>
 where
     F: FnMut(&str, BridgePortFlagSet) -> Result<(), ReconcileExecError>,
     G: FnMut(&str) -> Result<BridgePortFlagSet, ReconcileExecError>,
@@ -392,7 +392,7 @@ where
             }
         },
     )?;
-    Ok(nixling_ipc::broker_wire::BridgePortFlagsResponse {
+    Ok(nixling_contracts::broker_wire::BridgePortFlagsResponse {
         bridge: nixling_core::host::IfName::new(&target.bridge).map_err(|err| {
             LiveSetBridgePortFlagsError::Resolve(format!("resolved bridge ifname invalid: {err}"))
         })?,
@@ -406,7 +406,7 @@ where
 
 fn resolve_live_bridge_port_target(
     resolver: &BundleResolver,
-    req: &nixling_ipc::broker_wire::SetBridgePortFlagsRequest,
+    req: &nixling_contracts::broker_wire::SetBridgePortFlagsRequest,
 ) -> Result<LiveBridgePortTarget, LiveSetBridgePortFlagsError> {
     let vm_name = req.vm_id.as_str();
     let manifest_vm =
@@ -1028,9 +1028,9 @@ mod tests {
     #[test]
     fn live_set_bridge_port_flags_uses_netlink_apply_and_readback() {
         let resolver = live_bridge_flag_resolver();
-        let req = nixling_ipc::broker_wire::SetBridgePortFlagsRequest {
-            vm_id: nixling_ipc::types::VmId::new("corp-vm"),
-            role_id: nixling_ipc::types::RoleId::new("workload-lan"),
+        let req = nixling_contracts::broker_wire::SetBridgePortFlagsRequest {
+            vm_id: nixling_contracts::types::VmId::new("corp-vm"),
+            role_id: nixling_contracts::types::RoleId::new("workload-lan"),
             tracing_span_id: None,
         };
         let target = resolve_live_bridge_port_target(&resolver, &req).expect("resolve bridge port");
@@ -1067,9 +1067,9 @@ mod tests {
     #[test]
     fn live_set_bridge_port_flags_fails_closed_on_readback_drift() {
         let resolver = live_bridge_flag_resolver();
-        let req = nixling_ipc::broker_wire::SetBridgePortFlagsRequest {
-            vm_id: nixling_ipc::types::VmId::new("corp-vm"),
-            role_id: nixling_ipc::types::RoleId::new("workload-lan"),
+        let req = nixling_contracts::broker_wire::SetBridgePortFlagsRequest {
+            vm_id: nixling_contracts::types::VmId::new("corp-vm"),
+            role_id: nixling_contracts::types::RoleId::new("workload-lan"),
             tracing_span_id: None,
         };
         let target = resolve_live_bridge_port_target(&resolver, &req).expect("resolve bridge port");

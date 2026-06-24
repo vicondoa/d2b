@@ -8,12 +8,12 @@
 use std::path::{Path, PathBuf};
 
 use nix::unistd::{Gid, Group, Uid, User};
-use nixling_core::bundle_resolver::BundleResolver;
-use nixling_core::storage::{PrincipalKind, PrincipalRef, StoragePathKind};
-use nixling_ipc::broker_wire::{
+use nixling_contracts::broker_wire::{
     ReconcileStorageScopeResponse, StorageReconcileStatus, ValidateLockSpecResponse,
 };
-use nixling_ipc::types::BundleOpId;
+use nixling_contracts::types::BundleOpId;
+use nixling_core::bundle_resolver::BundleResolver;
+use nixling_core::storage::{PrincipalKind, PrincipalRef, StoragePathKind};
 
 use super::hosts::stable_hash_str;
 
@@ -348,6 +348,7 @@ fn resolve_gid(principal: &PrincipalRef) -> Result<Gid, StorageContractError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nixling_contracts::types::BundleOpId;
     use nixling_core::bundle::Bundle;
     use nixling_core::bundle_resolver::BundleResolver;
     use nixling_core::contract_id::{ContractId, ContractText, PathTemplate};
@@ -365,7 +366,6 @@ mod tests {
         LockAdoptionPolicy, LockKind, LockScopeClass, LockSpec, LockStaleKind, LockStalePolicy,
         LockTimeoutKind, LockTimeoutPolicy, SyncJson,
     };
-    use nixling_ipc::types::BundleOpId;
 
     #[test]
     fn template_paths_are_check_only_unless_expanded() {
@@ -511,13 +511,14 @@ mod tests {
 
     #[test]
     fn broker_storage_and_sync_requests_are_opaque_id_only() {
-        let storage =
-            serde_json::to_value(nixling_ipc::broker_wire::ReconcileStorageScopeRequest {
+        let storage = serde_json::to_value(
+            nixling_contracts::broker_wire::ReconcileStorageScopeRequest {
                 storage_ref: BundleOpId::new("path:run-root"),
                 apply: true,
                 tracing_span_id: None,
-            })
-            .expect("serialize storage request");
+            },
+        )
+        .expect("serialize storage request");
         assert_eq!(
             storage
                 .as_object()
@@ -532,7 +533,7 @@ mod tests {
             ]
         );
 
-        let lock = serde_json::to_value(nixling_ipc::broker_wire::ValidateLockSpecRequest {
+        let lock = serde_json::to_value(nixling_contracts::broker_wire::ValidateLockSpecRequest {
             lock_ref: BundleOpId::new("lock:daemon"),
             tracing_span_id: None,
         })

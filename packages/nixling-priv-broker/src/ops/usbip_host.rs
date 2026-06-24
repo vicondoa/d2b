@@ -374,7 +374,7 @@ fn vendor_product_allowed(allowlist: &[VendorProductPair], vendor: u16, product:
 }
 
 fn validate_bus_id_for_path(bus_id: &str) -> Result<(), UsbipHostInspectionError> {
-    nixling_ipc::usbip::validate_bus_id(bus_id).map_err(|_| {
+    nixling_contracts::usbip::validate_bus_id(bus_id).map_err(|_| {
         UsbipHostInspectionError::InvalidBusId {
             bus_id: bus_id.to_owned(),
         }

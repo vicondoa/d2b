@@ -7,7 +7,7 @@
 
 use std::io;
 
-use nixling_ipc::broker_wire::RunnerAllocation;
+use nixling_contracts::broker_wire::RunnerAllocation;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -858,7 +858,7 @@ impl From<&OpAuditRecord<'_>> for OwnedOpAuditRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nixling_ipc::broker_wire::RunnerAllocationKind;
+    use nixling_contracts::broker_wire::RunnerAllocationKind;
     use serde_json::json;
 
     macro_rules! roundtrip_test {

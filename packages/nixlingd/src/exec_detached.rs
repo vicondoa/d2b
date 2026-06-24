@@ -10,14 +10,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use nixling_core::base64_codec;
-use nixling_ipc::guest_proto as pb;
-use nixling_ipc::guest_wire::ExecState as PublicExecState;
-use nixling_ipc::public_wire::{
+use nixling_contracts::guest_proto as pb;
+use nixling_contracts::guest_wire::ExecState as PublicExecState;
+use nixling_contracts::public_wire::{
     self, ExecDetachedCreateResult, ExecDetachedKillOutcome, ExecDetachedKillResult,
     ExecDetachedListEntry, ExecDetachedListResult, ExecDetachedLogsResult,
     ExecDetachedStatusResult,
 };
+use nixling_core::base64_codec;
 use protobuf::{EnumOrUnknown, MessageField};
 
 use crate::exec_session::{ExecOpDeadlines, ExecOpError, ExecStartSpec, GuestOpError};
@@ -730,7 +730,7 @@ fn common_metadata(vm_id: &str, request_id: &str) -> pb::RequestMetadata {
     let mut metadata = pb::RequestMetadata::new();
     metadata.vm_id = vm_id.to_owned();
     metadata.request_id = request_id.to_owned();
-    metadata.protocol_version = nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+    metadata.protocol_version = nixling_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
     metadata
 }
 

@@ -13,7 +13,7 @@ workspace = true
 # prep commit; W3 scope agents s1-s4 fill them in.
 #
 # Dependency rule (per W3 file-ownership map): nixling-host depends only
-# on nixling-core + nixling-ipc + low-level OS crates declared in the
+# on nixling-core + nixling-contracts + low-level OS crates declared in the
 # workspace. It must NEVER depend on nixlingd or nixling-priv-broker
 # (both are downstream consumers).
 
@@ -28,7 +28,7 @@ fake-backends = []
 nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
 nixling-constellation-provider = { path = "../nixling-constellation-provider", version = "0.0.0-bootstrap" }
 nixling-core = { path = "../nixling-core", version = "0.0.0-bootstrap" }
-nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
+nixling-contracts = { path = "../nixling-contracts", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 serde.workspace = true
 serde_json.workspace = true

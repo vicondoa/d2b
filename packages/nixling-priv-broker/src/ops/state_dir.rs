@@ -11,8 +11,8 @@ use crate::sys::path_safe::{DirCreateResult, ensure_dir, ensure_dir_preserve_exi
 use std::io;
 use std::path::{Path, PathBuf};
 
+use nixling_contracts::types::PathClass;
 use nixling_core::bundle_resolver::BundleResolver;
-use nixling_ipc::types::PathClass;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -130,7 +130,7 @@ fn production_path(p: &Path) -> bool {
 pub fn live_prepare_runtime_dir(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
-    req: &nixling_ipc::broker_wire::PrepareDirRequest,
+    req: &nixling_contracts::broker_wire::PrepareDirRequest,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<(), super::OpError> {
     if req.path_class != PathClass::Runtime {
@@ -163,7 +163,7 @@ pub fn live_prepare_runtime_dir(
 pub fn live_prepare_state_dir(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
-    req: &nixling_ipc::broker_wire::PrepareDirRequest,
+    req: &nixling_contracts::broker_wire::PrepareDirRequest,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<(), super::OpError> {
     if req.path_class != PathClass::Vm {

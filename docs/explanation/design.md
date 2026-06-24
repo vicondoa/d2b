@@ -1662,7 +1662,7 @@ authority-bearing primitives this work introduces.
    resolves the bundle row server-side and applies the rendered
    argv against the role's bundle-derived uid/gid + caps + seccomp
    + cgroup. Wire-test fixtures
-   ([`spawn_runner_rejects_each_legacy_authority_field`](../../packages/nixling-ipc/src/broker_wire.rs))
+   ([`spawn_runner_rejects_each_legacy_authority_field`](../../packages/nixling-contracts/src/broker_wire.rs))
    pin the rejection contract for each of the 12 legacy authority
    fields (argv, env, uid, gid, caps, seccompProfile, kernelPath,
    initrdPath, cmdline, apiSocketMode, chBinaryPath, vsockCid) AND

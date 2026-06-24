@@ -27,12 +27,12 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
-use nixling_core::base64_codec;
-use nixling_ipc::public_wire::{
+use nixling_contracts::public_wire::{
     EXEC_MAX_CHUNK_BYTES, ExecCloseResult, ExecControlResult, ExecOp, ExecOpResponse,
     ExecReadOutputResult, ExecStartResult, ExecStream, ExecTerminalStatus, ExecWaitResult,
     ExecWriteStdinResult,
 };
+use nixling_core::base64_codec;
 use tokio::sync::{mpsc, oneshot};
 
 pub use crate::terminal_session::{
@@ -1053,7 +1053,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use nixling_ipc::public_wire::{
+    use nixling_contracts::public_wire::{
         ExecCloseArgs, ExecReadOutputArgs, ExecResizeArgs, ExecSignalArgs, ExecStream,
         ExecWaitArgs, ExecWriteStdinArgs,
     };

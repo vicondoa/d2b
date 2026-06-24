@@ -28,7 +28,7 @@ use nixling_constellation_provider::{
     provider::{DaemonAccessApi, DaemonAccessTransport},
     types::{DaemonAccessMode, SafeLabel, TransportSession, TransportTarget},
 };
-use nixling_ipc::{
+use nixling_contracts::{
     FeatureFlag, Hello, HelloOk, HelloRejected, KnownFeatureFlag, MAX_FRAME_SIZE,
     PUBLIC_SOCKET_PATH, SemverRange,
     public_wire::{
@@ -1191,7 +1191,7 @@ mod tests {
         sys::socket::{Backlog, MsgFlags, accept4, bind, listen, send},
         unistd::close,
     };
-    use nixling_ipc::{
+    use nixling_contracts::{
         Version,
         public_wire::{PublicVmServices, RuntimeSummary, VmLifecycle},
     };

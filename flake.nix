@@ -48,7 +48,7 @@
           mkdir -p $out/packages
           cp -r ${./packages/nixling-constellation-core} $out/packages/nixling-constellation-core
           cp -r ${./packages/nixling-core} $out/packages/nixling-core
-          cp -r ${./packages/nixling-ipc} $out/packages/nixling-ipc
+          cp -r ${./packages/nixling-contracts} $out/packages/nixling-contracts
           cp -r ${./packages/nixling-guestd} $out/packages/nixling-guestd
           cp -r ${./packages/nixling-userd} $out/packages/nixling-userd
           cp -r ${./packages/nixling-exec-runner} $out/packages/nixling-exec-runner
@@ -106,7 +106,7 @@
           members = [
             "nixling-constellation-core",
             "nixling-core",
-            "nixling-ipc",
+            "nixling-contracts",
             "nixling-guestd",
             "nixling-userd",
             "nixling-exec-runner",
@@ -511,7 +511,7 @@
           mkdir -p $out/packages
           cp -r ${./packages/nixling-constellation-core} $out/packages/nixling-constellation-core
           cp -r ${./packages/nixling-core} $out/packages/nixling-core
-          cp -r ${./packages/nixling-ipc} $out/packages/nixling-ipc
+          cp -r ${./packages/nixling-contracts} $out/packages/nixling-contracts
           cp -r ${./packages/nixling-guestd} $out/packages/nixling-guestd
           cp -r ${./packages/nixling-userd} $out/packages/nixling-userd
           cp -r ${./packages/nixling-exec-runner} $out/packages/nixling-exec-runner
@@ -569,7 +569,7 @@
           members = [
             "nixling-constellation-core",
             "nixling-core",
-            "nixling-ipc",
+            "nixling-contracts",
             "nixling-guestd",
             "nixling-userd",
             "nixling-exec-runner",

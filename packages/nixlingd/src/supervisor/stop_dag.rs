@@ -12,7 +12,7 @@
 //! The planner deliberately does NOT add new broker wire variants: every
 //! emitted action maps to the `ApplyNftables`, `UsbipBind`, or
 //! `UsbipUnbind` ops that already
-//! ship in `packages/nixling-ipc/src/broker_wire.rs`.
+//! ship in `packages/nixling-contracts/src/broker_wire.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};
 

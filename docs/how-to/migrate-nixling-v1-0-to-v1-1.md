@@ -146,7 +146,7 @@ getfacl /var/lib/nixling | head -20          # expect per-sidecar user:nixling-<
 `nixos-modules/default.nix`. The OTel host-bridge ACL contract
 migrated into the broker pre-spawn pipeline
 (`RunnerRole::OtelHostBridge` in
-`packages/nixling-ipc/src/broker_wire.rs`, handler in
+`packages/nixling-contracts/src/broker_wire.rs`, handler in
 `packages/nixling-priv-broker/src/runtime.rs`).
 
 No operator-visible change if your v1.0 deployment used the

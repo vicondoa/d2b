@@ -2,7 +2,7 @@
 //!
 //! This module is intentionally transport/runtime free so guestd, nixlingd,
 //! and the privileged broker can share one canonical HMAC transcript encoder
-//! without pulling ttRPC into `nixling-ipc`.
+//! without pulling ttRPC into `nixling-contracts`.
 
 pub const AUTH_TRANSCRIPT_VERSION: u32 = 1;
 pub const AUTH_NONCE_LEN: usize = 32;

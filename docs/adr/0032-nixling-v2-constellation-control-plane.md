@@ -864,11 +864,11 @@ messages.
 - `packages/nixlingd/src/lib.rs` is the local daemon entry point and
   already separates public socket handling, broker socket use, state
   locking, per-VM lifecycle, guest-control bridges, and typed errors.
-- `packages/nixling-ipc/src/lib.rs` defines public/private IPC
+- `packages/nixling-contracts/src/lib.rs` defines public/private IPC
   constants, frame caps, feature flags, protocol versioning, and broker
   capability negotiation.
-- `packages/nixling-ipc/src/public_wire.rs` and
-  `packages/nixling-ipc/src/broker_wire.rs` are the DTO seams for local
+- `packages/nixling-contracts/src/public_wire.rs` and
+  `packages/nixling-contracts/src/broker_wire.rs` are the DTO seams for local
   requests. They should not become WAN protocols.
 - `packages/nixling-core/src/bundle.rs`,
   `packages/nixling-core/src/manifest_v04.rs`,
@@ -879,7 +879,7 @@ messages.
 
 ### Guest control
 
-- `packages/nixling-ipc/src/guest_wire.rs` defines the guest-control
+- `packages/nixling-contracts/src/guest_wire.rs` defines the guest-control
   schema version, ttRPC frame cap, guest-control vsock port, chunk caps,
   and bounded `ReadGuestFile` rules.
 - `packages/nixlingd/src/guest_control_vsock.rs` and

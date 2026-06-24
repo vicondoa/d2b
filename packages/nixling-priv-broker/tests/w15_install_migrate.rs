@@ -1,6 +1,11 @@
 use std::os::fd::AsRawFd;
 
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
+use nixling_contracts::broker_wire::{
+    BrokerErrorResponse, BrokerResponse, RunHostInstallResponse, RunMigrateResponse,
+};
+#[cfg(not(feature = "layer1-bootstrap"))]
+use nixling_contracts::{broker_wire::RunHostInstallRequest, types::BundleOpId};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use nixling_core::{
     bundle::{Bundle, BundleGeneration, BundleManagedKeys},
@@ -12,11 +17,6 @@ use nixling_core::{
     manifest_v04::ManifestV04,
     processes::ProcessesJson,
 };
-use nixling_ipc::broker_wire::{
-    BrokerErrorResponse, BrokerResponse, RunHostInstallResponse, RunMigrateResponse,
-};
-#[cfg(not(feature = "layer1-bootstrap"))]
-use nixling_ipc::{broker_wire::RunHostInstallRequest, types::BundleOpId};
 use nixling_priv_broker::protocol::{recv_json_frame, send_json_frame};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use nixling_priv_broker::{

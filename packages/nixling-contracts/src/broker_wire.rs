@@ -6,7 +6,7 @@
 //! ifname set, a raw `/etc/hosts` entry list, a raw uid/gid, raw argv
 //! or env, raw caps, or a raw seccomp profile path. The broker uses
 //! the opaque IDs to look up the typed intent in its own trusted bundle
-//! copy. See `nixling_ipc::types` for the newtype set.
+//! copy. See `nixling_contracts::types` for the newtype set.
 
 use crate::guest_auth::AUTH_NONCE_LEN;
 use crate::types::{

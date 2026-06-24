@@ -8,15 +8,15 @@ use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use nixling_ipc::broker_wire::{
+use nixling_contracts::broker_wire::{
     GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection, GuestControlProofRole,
     GuestControlSignRequest, GuestControlSignResponse,
 };
-use nixling_ipc::guest_auth::{
+use nixling_contracts::guest_auth::{
     AUTH_NONCE_LEN, AUTH_TAG_LEN, AUTH_TRANSCRIPT_VERSION, GUEST_CONTROL_AUTH_PORT,
 };
-use nixling_ipc::guest_proto as pb;
-use nixling_ipc::guest_wire::{GUEST_CONTROL_PROTOCOL_VERSION, READ_GUEST_FILE_MAX_BYTES};
+use nixling_contracts::guest_proto as pb;
+use nixling_contracts::guest_wire::{GUEST_CONTROL_PROTOCOL_VERSION, READ_GUEST_FILE_MAX_BYTES};
 use protobuf::{Message, MessageField};
 use subtle::ConstantTimeEq;
 
@@ -596,7 +596,7 @@ where
             || entry.tcp_port == 0
             || entry.tcp_port > u16::MAX as u32
             || entry.host.parse::<std::net::IpAddr>().is_err()
-            || nixling_ipc::usbip::validate_bus_id(&entry.bus_id).is_err()
+            || nixling_contracts::usbip::validate_bus_id(&entry.bus_id).is_err()
         {
             return Err(GuestUsbipImportError::Protocol);
         }
@@ -750,7 +750,7 @@ fn sign_request(
     capabilities_hash: Option<String>,
 ) -> GuestControlSignRequest {
     GuestControlSignRequest {
-        vm_id: nixling_ipc::types::VmId::new(vm_id),
+        vm_id: nixling_contracts::types::VmId::new(vm_id),
         role,
         protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
         direction: GuestControlDirection::HostToGuest,

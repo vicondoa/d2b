@@ -144,7 +144,7 @@ fn legacy_group_allowlist() -> Regex {
         r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*# nixling-launcher\{,s\} → nixling rename\. No module references the[[:space:]]*",
         r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*users\.groups\.nixling-launchers = \{ \};[[:space:]]*",
         r"packages/nixling-core/src/privileges\.rs:[0-9]+:.*nixling-launcher.*",
-        r"packages/nixling-ipc/src/broker_wire\.rs:[0-9]+:.*nixling-launcher.*",
+        r"packages/nixling-contracts/src/broker_wire\.rs:[0-9]+:.*nixling-launcher.*",
         r"packages/nixling-priv-broker/src/bootstrap\.rs:[0-9]+:.*nixling-launcher.*",
         r"nixos-modules/privileges-json\.nix:[0-9]+:.*nixling-launcher.*",
         r"tests/legacy-group-name-denylist(-self-test)?\.sh:[0-9]+:.*",
@@ -211,33 +211,37 @@ fn vm_submodule_cutover() {
 // ---------------------------------------------------------------------------
 // Migrated from tests/static-rust-dependency-direction.sh.
 //
-// The Rust workspace dependency graph flows one way: ipc/core are leaves;
-// host depends on core+ipc; the binaries (nixling, nixlingd) and the privileged
-// broker (nixling-priv-broker, a sibling workspace) sit above. The broker must
-// NOT depend on nixlingd/nixling; the CLI/daemon must NOT depend on the broker.
+// The Rust workspace dependency graph flows one way: contracts/core are leaves;
+// host depends on core+contracts; the binaries (nixling, nixlingd) and the
+// privileged broker (nixling-priv-broker, a sibling workspace) sit above. The
+// broker must NOT depend on nixlingd/nixling; the CLI/daemon must NOT depend on
+// the broker.
 // This is a pure static parse of the `Cargo.toml` files. It also asserts the
-// CLI and daemon actually import `nixling_ipc` from their source trees.
+// CLI and daemon actually import `nixling_contracts` from their source trees.
 // ---------------------------------------------------------------------------
 #[test]
 fn static_rust_dependency_direction() {
     // (crate, allowed in-workspace deps) — verbatim port of the bash WANT map.
     let want: &[(&str, &[&str])] = &[
         ("nixling-core", &[]),
-        ("nixling-ipc", &["nixling-core"]),
-        ("nixling-host", &["nixling-core", "nixling-ipc"]),
+        ("nixling-contracts", &["nixling-core"]),
+        ("nixling-host", &["nixling-core", "nixling-contracts"]),
         (
             "xtask",
-            &["nixling-core", "nixling-ipc", "nixling", "nixlingd"],
+            &["nixling-core", "nixling-contracts", "nixling", "nixlingd"],
         ),
-        ("nixling", &["nixling-core", "nixling-ipc"]),
-        ("nixlingd", &["nixling-core", "nixling-host", "nixling-ipc"]),
+        ("nixling", &["nixling-core", "nixling-contracts"]),
+        (
+            "nixlingd",
+            &["nixling-core", "nixling-host", "nixling-contracts"],
+        ),
         (
             "nixling-priv-broker",
-            &["nixling-core", "nixling-host", "nixling-ipc"],
+            &["nixling-core", "nixling-host", "nixling-contracts"],
         ),
     ];
     let internal_crate = Regex::new(
-        r"^(nixling-core|nixling-host|nixling-ipc|nixling-priv-broker|nixling|nixlingd|xtask)$",
+        r"^(nixling-core|nixling-host|nixling-contracts|nixling-priv-broker|nixling|nixlingd|xtask)$",
     )
     .expect("valid internal-crate regex");
 
@@ -270,44 +274,45 @@ fn static_rust_dependency_direction() {
     );
 
     // The CLI and daemon must reach the broker only over IPC — assert each
-    // actually imports `nixling_ipc` from its own source tree.
-    let use_ipc = Regex::new(r"use[[:space:]]+nixling_ipc::").expect("valid use-import regex");
+    // actually imports `nixling_contracts` from its own source tree.
+    let use_contracts =
+        Regex::new(r"use[[:space:]]+nixling_contracts::").expect("valid use-import regex");
     for crate_name in ["nixling", "nixlingd"] {
         let src_root = format!("packages/{crate_name}/src");
-        let imports_ipc = git_listed_files(&[&src_root]).into_iter().any(|rel| {
+        let imports_contracts = git_listed_files(&[&src_root]).into_iter().any(|rel| {
             read_repo_file_opt(&rel)
-                .map(|content| use_ipc.is_match(&content))
+                .map(|content| use_contracts.is_match(&content))
                 .unwrap_or(false)
         });
         assert!(
-            imports_ipc,
-            "static-rust-dependency-direction: {crate_name} does not import nixling_ipc \
+            imports_contracts,
+            "static-rust-dependency-direction: {crate_name} does not import nixling_contracts \
              from its source tree"
         );
     }
 }
 
 #[test]
-fn cli_output_contracts_live_in_ipc() {
+fn cli_output_contracts_live_in_contract_crate() {
     let cli = read_repo_file_opt("packages/nixling/src/lib.rs").expect("read nixling lib.rs");
-    let ipc = read_repo_file_opt("packages/nixling-ipc/src/cli_output.rs")
-        .expect("read nixling-ipc cli_output.rs");
+    let ipc = read_repo_file_opt("packages/nixling-contracts/src/cli_output.rs")
+        .expect("read nixling-contracts cli_output.rs");
     let xtask = read_repo_file_opt("packages/xtask/src/main.rs").expect("read xtask main.rs");
 
     for type_name in MIGRATED_CLI_OUTPUT_TYPES {
         assert!(
             !cli_defines_type(&cli, type_name),
-            "{type_name} must live in nixling-ipc::cli_output, not packages/nixling/src/lib.rs"
+            "{type_name} must live in nixling-contracts::cli_output, not packages/nixling/src/lib.rs"
         );
         assert!(
             !xtask_imports_nixling_type(&xtask, type_name),
-            "xtask must import {type_name} from nixling_ipc::cli_output, not the nixling presentation crate"
+            "xtask must import {type_name} from nixling_contracts::cli_output, not the nixling presentation crate"
         );
     }
 
     assert!(
         xtask.contains("cli_output::"),
-        "gen-cli-schemas must import CLI output schemas from nixling_ipc::cli_output"
+        "gen-cli-schemas must import CLI output schemas from nixling_contracts::cli_output"
     );
 
     for type_name in STRICT_CLI_OUTPUT_OBJECT_TYPES {

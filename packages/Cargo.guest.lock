@@ -528,7 +528,7 @@ dependencies = [
  "hmac",
  "nixling-constellation-core",
  "nixling-exec-runner",
- "nixling-ipc",
+ "nixling-contracts",
  "protobuf",
  "rustix 0.38.44",
  "sha2",
@@ -538,7 +538,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nixling-ipc"
+name = "nixling-contracts"
 version = "0.0.0-bootstrap"
 dependencies = [
  "nixling-core",
@@ -552,7 +552,7 @@ dependencies = [
 name = "nixling-userd"
 version = "0.0.0-bootstrap"
 dependencies = [
- "nixling-ipc",
+ "nixling-contracts",
 ]
 
 [[package]]

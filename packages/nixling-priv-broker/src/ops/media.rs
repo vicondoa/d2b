@@ -15,6 +15,13 @@ use std::time::Duration;
 
 use nix::libc;
 use nix::unistd::{Group, Uid};
+use nixling_contracts::broker_wire::{
+    QemuMediaBootRequest, QemuMediaEnrollRequest, QemuMediaEnrollResponse, QemuMediaHotplugEvent,
+    QemuMediaHotplugRequest, QemuMediaHotplugResponse, QemuMediaHotplugStatus,
+    QemuMediaLifecycleAction, QemuMediaLifecycleRequest, QemuMediaLifecycleResponse,
+    QemuMediaQueryStatusRequest, QemuMediaQueryStatusResponse, QemuMediaRefreshRegistryResponse,
+    QemuMediaVmStatus,
+};
 use nixling_core::bundle_resolver::BundleResolver;
 use nixling_core::host::{
     QemuMediaFormat, QemuMediaSourceIntent, QemuMediaSourceKind, QemuMediaUsbSelector,
@@ -22,13 +29,6 @@ use nixling_core::host::{
 use nixling_host::media::{
     MediaAccessMode, QemuMediaHotplugAction, QemuMediaHotplugScaffold, SafeUsbCandidate,
     UsbPhysicalIdentity,
-};
-use nixling_ipc::broker_wire::{
-    QemuMediaBootRequest, QemuMediaEnrollRequest, QemuMediaEnrollResponse, QemuMediaHotplugEvent,
-    QemuMediaHotplugRequest, QemuMediaHotplugResponse, QemuMediaHotplugStatus,
-    QemuMediaLifecycleAction, QemuMediaLifecycleRequest, QemuMediaLifecycleResponse,
-    QemuMediaQueryStatusRequest, QemuMediaQueryStatusResponse, QemuMediaRefreshRegistryResponse,
-    QemuMediaVmStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -288,7 +288,7 @@ pub fn query_status(
 }
 
 fn qmp_query_status_from_path(
-    vm_id: &nixling_ipc::types::VmId,
+    vm_id: &nixling_contracts::types::VmId,
     path: &Path,
     shutdown_context: bool,
 ) -> Result<QemuMediaQueryStatusResponse, MediaOpError> {
@@ -552,8 +552,8 @@ fn hotplug_response(
     statuses: Vec<QemuMediaHotplugStatus>,
 ) -> QemuMediaHotplugResponse {
     QemuMediaHotplugResponse {
-        vm_id: nixling_ipc::types::VmId::new(vm.to_owned()),
-        media_ref: nixling_ipc::types::MediaRef::new(scaffold.media_ref),
+        vm_id: nixling_contracts::types::VmId::new(vm.to_owned()),
+        media_ref: nixling_contracts::types::MediaRef::new(scaffold.media_ref),
         slot: scaffold.slot,
         read_only: source.read_only,
         qmp_commands,
@@ -2576,7 +2576,7 @@ mod tests {
     fn qmp_query_status_treats_missing_socket_as_shutdown_context() {
         let dir = qmp_tempdir();
         let missing = dir.path().join("missing.sock");
-        let vm = nixling_ipc::types::VmId::new("media");
+        let vm = nixling_contracts::types::VmId::new("media");
 
         let response = qmp_query_status_from_path(&vm, &missing, true)
             .expect("missing QMP socket during shutdown is expected");

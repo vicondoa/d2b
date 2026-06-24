@@ -196,7 +196,7 @@ dispositions:
   does NOT enumerate the broker SpawnRunner role variants, so
   v1.1+ implementations and reviewers MUST treat this ADR 0018
   matrix as authoritative for the `RunnerRole` enum. The
-  `packages/nixling-ipc/src/runner_role.rs` enum that lands in
+  `packages/nixling-contracts/src/runner_role.rs` enum that lands in
   v1.1-P10 derives its variants from this matrix, and the
   `tests/broker-spawn-audit-parity-eval.sh` gate enforces parity
   between the Rust enum and the matrix rows (resolves R10
@@ -478,14 +478,14 @@ reaping, with the daemon as an observer:
      watchdog (configurable, default 30s) flags
      never-acked notifications via a `OneShotCompleteAckTimeout`
      audit event but does NOT block the broker. The Rust DTO
-     (lands in `packages/nixling-ipc/src/broker_wire.rs` in
+     (lands in `packages/nixling-contracts/src/broker_wire.rs` in
      v1.1-P10):
 
      ```rust
-     // packages/nixling-ipc/src/broker_wire.rs (v1.1-P10 addition)
+     // packages/nixling-contracts/src/broker_wire.rs (v1.1-P10 addition)
      //
      // Derive set matches the existing broker-wire enum convention
-     // (per `packages/nixling-ipc/src/broker_wire.rs` v1.0 HEAD):
+     // (per `packages/nixling-contracts/src/broker_wire.rs` v1.0 HEAD):
      // every wire DTO must derive Debug + Clone + PartialEq + Eq +
      // serde::Serialize + serde::Deserialize + schemars::JsonSchema.
      // The R9 rust reviewer flagged the earlier minimal Serialize/
@@ -512,7 +512,7 @@ reaping, with the daemon as an observer:
 
      The struct uses camelCase JSON keys (`runnerRole`,
      `runnerId`, `exitStatus`, `orphanKilled`,
-     `cleanupOutcome`) to match the existing nixling-ipc wire
+     `cleanupOutcome`) to match the existing nixling-contracts wire
      style (resolves R8 rust major); the enum variants
      serialize as kebab-case via `serde(rename_all)`. The
      ADR 0010 update for the new variant lands as part of
@@ -1534,7 +1534,7 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
     field (v1.1-P10 daemon-api update):
 
     ```rust
-    // packages/nixling-ipc/src/public_wire.rs (v1.1-P10 addition)
+    // packages/nixling-contracts/src/public_wire.rs (v1.1-P10 addition)
     //
     // Derive set matches existing public-wire DTO convention:
     // Debug + Clone + PartialEq + Eq + serde::Serialize +

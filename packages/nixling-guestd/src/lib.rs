@@ -12,7 +12,7 @@ pub mod service;
 pub mod shell;
 pub mod terminal_io;
 
-use nixling_ipc::guest_wire::{
+use nixling_contracts::guest_wire::{
     ExecCreateRequest, ExecId, GUEST_CONTROL_PROTOCOL_VERSION, GuestBootId, GuestCapability,
     GuestControlErrorKind, GuestExecRequestMetadata, GuestSubsystem, HealthOrigin, HealthReason,
     HealthRemediation, HealthResponse, HealthState, OutputStream, ReadOutputRequest,

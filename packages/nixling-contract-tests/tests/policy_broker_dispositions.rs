@@ -122,7 +122,7 @@ fn schema_variants() -> BTreeSet<String> {
 
 fn real_dispatcher_source() -> String {
     let runtime = read_repo_file(RUNTIME_REL);
-    let start_marker = "use nixling_ipc::broker_wire::BrokerRequest as RealBrokerRequest;";
+    let start_marker = "use nixling_contracts::broker_wire::BrokerRequest as RealBrokerRequest;";
     let start = runtime
         .find(start_marker)
         .expect("broker-enum-disposition: real-wire dispatcher alias not found in runtime.rs");

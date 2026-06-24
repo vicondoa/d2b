@@ -15,7 +15,7 @@
 //!
 //! The broker integration is wired through a new
 //! `BrokerRequest::RenderDnsmasqEnvConf` op in
-//! `nixling-ipc::broker_wire`; the broker writes
+//! `nixling-contracts::broker_wire`; the broker writes
 //! `/var/lib/nixling/dnsmasq/<env>.conf` atomically
 //! (write-to-tempfile + rename) with mode `0640 root:nixlingd`
 //! per the ADR 0018 spec. The daemon-side host-prep DAG calls

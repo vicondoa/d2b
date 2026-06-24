@@ -382,7 +382,7 @@ impl AuditLog {
     /// forensics).
     pub fn write_child_reaped(
         &self,
-        notif: &nixling_ipc::broker_wire::ChildReapedNotification,
+        notif: &nixling_contracts::broker_wire::ChildReapedNotification,
     ) -> io::Result<()> {
         #[derive(serde::Serialize)]
         struct ChildReapedAuditEntry<'a> {
@@ -390,7 +390,7 @@ impl AuditLog {
             op: &'static str,
             runner_id: &'a str,
             pid: i32,
-            exit_status: &'a nixling_ipc::broker_wire::ChildExitStatus,
+            exit_status: &'a nixling_contracts::broker_wire::ChildExitStatus,
             reaped_at_ms: i64,
         }
         let ts = std::time::SystemTime::now()

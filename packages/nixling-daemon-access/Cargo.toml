@@ -13,12 +13,12 @@ workspace = true
 
 # Transport-neutral CLI<->nixlingd semantic API + the local Unix binding
 # (ADR 0032). Reproduces current CLI->daemon behavior over the existing
-# public.sock wire (delegates to nixling-ipc public-wire types; no new
+# public.sock wire (delegates to nixling-contracts public-wire types; no new
 # wire). relay/direct_tls are declared-but-unimplemented slots.
 [dependencies]
 nixling-constellation-core = { path = "../nixling-constellation-core", version = "0.0.0-bootstrap" }
 nixling-constellation-provider = { path = "../nixling-constellation-provider", version = "0.0.0-bootstrap" }
-nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
+nixling-contracts = { path = "../nixling-contracts", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 nix = { version = "0.29", default-features = false, features = ["socket"] }
 serde.workspace = true

@@ -1,5 +1,5 @@
 use nixling_contract_tests::read_repo_file;
-use nixling_ipc::{
+use nixling_contracts::{
     guest_wire::{
         GUEST_CONTROL_PROTOCOL_VERSION, GuestRequestMetadata, GuestUsbipBusId, GuestUsbipHost,
         GuestVmId, RequestId, UsbipStatusEntry, UsbipStatusRequest, UsbipStatusResponse,
@@ -250,21 +250,22 @@ fn public_usb_probe_json_schema_matches_dto_semantics() {
                 source_kind: None,
                 candidate_bus_ids: Vec::new(),
                 follow_up_command: None,
-                durable_claim: nixling_ipc::public_wire::UsbipDurableClaimStatus {
-                    state: nixling_ipc::public_wire::UsbipDurableClaimState::HeldByDesiredOwner,
+                durable_claim: nixling_contracts::public_wire::UsbipDurableClaimStatus {
+                    state:
+                        nixling_contracts::public_wire::UsbipDurableClaimState::HeldByDesiredOwner,
                     owner_vm: Some("corp-vm".to_owned()),
                 },
-                host: nixling_ipc::public_wire::UsbipHostProbeStatus {
-                    bind: nixling_ipc::public_wire::UsbipHostBindState::BoundToUsbipHost,
-                    carrier: nixling_ipc::public_wire::UsbipHostCarrierState::Ready,
-                    proxy: nixling_ipc::public_wire::UsbipProxyState::Listening,
+                host: nixling_contracts::public_wire::UsbipHostProbeStatus {
+                    bind: nixling_contracts::public_wire::UsbipHostBindState::BoundToUsbipHost,
+                    carrier: nixling_contracts::public_wire::UsbipHostCarrierState::Ready,
+                    proxy: nixling_contracts::public_wire::UsbipProxyState::Listening,
                 },
-                guest: nixling_ipc::public_wire::UsbipGuestProbeStatus {
-                    import: nixling_ipc::public_wire::UsbipGuestImportState::Imported,
+                guest: nixling_contracts::public_wire::UsbipGuestProbeStatus {
+                    import: nixling_contracts::public_wire::UsbipGuestImportState::Imported,
                 },
-                topology_policy: nixling_ipc::public_wire::UsbipTopologyPolicyStatus {
-                    topology: nixling_ipc::public_wire::UsbipTopologyState::Match,
-                    policy: nixling_ipc::public_wire::UsbipPolicyState::Allowed,
+                topology_policy: nixling_contracts::public_wire::UsbipTopologyPolicyStatus {
+                    topology: nixling_contracts::public_wire::UsbipTopologyState::Match,
+                    policy: nixling_contracts::public_wire::UsbipPolicyState::Allowed,
                 },
                 degraded_reasons: Vec::new(),
                 remediation_commands: Vec::new(),

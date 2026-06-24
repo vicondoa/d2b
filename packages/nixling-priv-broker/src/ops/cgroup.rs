@@ -24,12 +24,12 @@ use std::fmt;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 
+use nixling_contracts::broker_wire::OpenCgroupDirRequest;
+use nixling_contracts::types::{PathClass as BrokerPathClass, ScopeId};
 use nixling_core::bundle_resolver::BundleResolver;
 use nixling_host::cgroup::{
     self as host_cgroup, CgroupBackend, CgroupError, Controller, NIXLING_SLICE_NAME,
 };
-use nixling_ipc::broker_wire::OpenCgroupDirRequest;
-use nixling_ipc::types::{PathClass as BrokerPathClass, ScopeId};
 
 use crate::ops::exec_reconcile::SystemLiveExec;
 
@@ -512,7 +512,7 @@ pub struct LiveOpenCgroupDirOutcome {
 pub fn live_delegate_cgroup_v2(
     exec: &SystemLiveExec,
     resolver: &BundleResolver,
-    req: &nixling_ipc::broker_wire::DelegateCgroupV2Request,
+    req: &nixling_contracts::broker_wire::DelegateCgroupV2Request,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<(), super::OpError> {
     let subject = req.scope_id.as_str().trim_start_matches("vm:");
@@ -545,7 +545,7 @@ pub fn live_open_cgroup_dir(
             live_delegate_cgroup_v2(
                 exec,
                 resolver,
-                &nixling_ipc::broker_wire::DelegateCgroupV2Request {
+                &nixling_contracts::broker_wire::DelegateCgroupV2Request {
                     scope_id: ScopeId::new("runtime"),
                     tracing_span_id: req.tracing_span_id.clone(),
                 },
@@ -564,7 +564,7 @@ pub fn live_open_cgroup_dir(
             live_delegate_cgroup_v2(
                 exec,
                 resolver,
-                &nixling_ipc::broker_wire::DelegateCgroupV2Request {
+                &nixling_contracts::broker_wire::DelegateCgroupV2Request {
                     scope_id: ScopeId::new(vm_name),
                     tracing_span_id: req.tracing_span_id.clone(),
                 },

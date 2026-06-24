@@ -45,13 +45,13 @@ Each artifact now carries a
 matching v2 markdown companion beside the committed JSON schema.
 `cargo xtask gen-schemas` regenerates the JSON files under
 `schemas/v2/` from the Rust DTOs in `nixling-core` and
-`nixling-ipc`; keep the markdown companions in sync in the same
+`nixling-contracts`; keep the markdown companions in sync in the same
 commit whenever the schema changes.
 
 ## Drift policy
 
 The committed schema files are derived from Rust DTOs in `nixling-core`
-and `nixling-ipc`. The drift gate is:
+and `nixling-contracts`. The drift gate is:
 
 ```bash
 cargo xtask gen-schemas

@@ -43,7 +43,7 @@ mod daemon_version_file {
         );
         assert_eq!(
             version["protocolVersion"],
-            Value::from(u64::from(nixling_ipc::PROTOCOL_VERSION))
+            Value::from(u64::from(nixling_contracts::PROTOCOL_VERSION))
         );
 
         let (rc, output) = test_client(&fixture.socket_path, &[HELLO_FRAME]);

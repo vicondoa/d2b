@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use hmac::{Hmac, Mac};
-use nixling_ipc::{
+use nixling_contracts::{
     guest_auth::{self, GuestAuthTranscript},
     guest_proto as pb,
     guest_wire::{GUEST_CONTROL_PROTOCOL_VERSION, HARD_MAX_CHUNK_BYTES, TTRPC_FRAME_CAP_BYTES},
@@ -12,7 +12,7 @@ use sha2::Sha256;
 
 use crate::{AuthError, TokenSource};
 
-pub use nixling_ipc::guest_auth::{
+pub use nixling_contracts::guest_auth::{
     AUTH_NONCE_LEN, AUTH_TAG_LEN, AUTH_TRANSCRIPT_VERSION, AuthDirection, AuthPurpose,
     GUEST_CONTROL_AUTH_PORT, ProofRole,
 };

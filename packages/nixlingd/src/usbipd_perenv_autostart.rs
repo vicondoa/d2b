@@ -25,8 +25,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use nixling_contracts::broker_wire::RunnerRole;
 use nixling_core::manifest_v04::ManifestV04;
-use nixling_ipc::broker_wire::RunnerRole;
 use serde::{Deserialize, Serialize};
 
 /// VM-scope prefix for the per-env usbipd anchor. The full scope is

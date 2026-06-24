@@ -1,15 +1,15 @@
 use crate::typed_error::{ErrorEnvelope, TypedError};
-use nixling_core::host::IfName;
-use nixling_ipc::{
+use nixling_contracts::{
     FeatureFlag, Hello, HelloOk, HelloRejected, HelloRejectedReason, Version,
     broker_wire::ExportBrokerAuditResponse,
     public_wire::{self, AuthStatusResponse},
 };
+use nixling_core::host::IfName;
 use semver::{Version as SemverVersion, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-pub use nixling_ipc::MAX_FRAME_SIZE;
+pub use nixling_contracts::MAX_FRAME_SIZE;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -673,7 +673,7 @@ fn map_parse_error(error: serde_json::Error) -> TypedError {
 #[cfg(test)]
 mod tests {
     use super::{Request, parse_request, shell_response_with_id};
-    use nixling_ipc::public_wire::{ShellListResult, ShellName, ShellOp, ShellOpResponse};
+    use nixling_contracts::public_wire::{ShellListResult, ShellName, ShellOp, ShellOpResponse};
 
     #[test]
     fn shell_request_parses_as_typed_shell_op() {

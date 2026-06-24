@@ -56,7 +56,7 @@ pub enum WaitTermination {
     /// `wait_terminated` returned immediately on `ECHILD` using the
     /// buffered exit status rather than re-entering `/proc` polling.
     TerminatedByBroker {
-        exit_status: nixling_ipc::broker_wire::ChildExitStatus,
+        exit_status: nixling_contracts::broker_wire::ChildExitStatus,
     },
     TimedOut,
 }
@@ -70,7 +70,7 @@ pub enum WaitTermination {
 /// spinning on `/proc` polling.
 #[derive(Debug, Default)]
 pub struct BrokerReapLog {
-    inner: Mutex<HashMap<i32, nixling_ipc::broker_wire::ChildReapedNotification>>,
+    inner: Mutex<HashMap<i32, nixling_contracts::broker_wire::ChildReapedNotification>>,
 }
 
 impl BrokerReapLog {
@@ -79,12 +79,15 @@ impl BrokerReapLog {
     }
 
     /// Insert (or overwrite) a ChildReaped event keyed by PID.
-    pub fn insert(&self, notif: nixling_ipc::broker_wire::ChildReapedNotification) {
+    pub fn insert(&self, notif: nixling_contracts::broker_wire::ChildReapedNotification) {
         self.inner.lock().insert(notif.pid, notif);
     }
 
     /// Remove and return the event for `pid`, if any.
-    pub fn take(&self, pid: i32) -> Option<nixling_ipc::broker_wire::ChildReapedNotification> {
+    pub fn take(
+        &self,
+        pid: i32,
+    ) -> Option<nixling_contracts::broker_wire::ChildReapedNotification> {
         self.inner.lock().remove(&pid)
     }
 
@@ -93,7 +96,7 @@ impl BrokerReapLog {
         &self,
         vm: &str,
         role: &str,
-    ) -> Option<nixling_ipc::broker_wire::ChildReapedNotification> {
+    ) -> Option<nixling_contracts::broker_wire::ChildReapedNotification> {
         let runner_id = format!("{vm}:{role}");
         let mut inner = self.inner.lock();
         let pid = inner
@@ -112,7 +115,7 @@ impl BrokerReapLog {
         &self,
         vm: &str,
         role: &str,
-    ) -> Option<nixling_ipc::broker_wire::ChildReapedNotification> {
+    ) -> Option<nixling_contracts::broker_wire::ChildReapedNotification> {
         let runner_id = format!("{vm}:{role}");
         self.inner
             .lock()
@@ -901,11 +904,11 @@ mod tests {
         assert_eq!(table.len(), 1, "dup_pidfd_for must not deregister");
 
         let reap_log = BrokerReapLog::new();
-        reap_log.insert(nixling_ipc::broker_wire::ChildReapedNotification {
+        reap_log.insert(nixling_contracts::broker_wire::ChildReapedNotification {
             runner_id: "work:swtpm".to_owned(),
             pid: 7777,
-            exit_status: nixling_ipc::broker_wire::ChildExitStatus {
-                kind: nixling_ipc::broker_wire::ChildExitKind::Exited,
+            exit_status: nixling_contracts::broker_wire::ChildExitStatus {
+                kind: nixling_contracts::broker_wire::ChildExitKind::Exited,
                 code: Some(1),
                 signal: None,
             },
@@ -1157,7 +1160,9 @@ mod tests {
     #[test]
     fn wait_terminated_echild_uses_broker_reap_log() {
         use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
-        use nixling_ipc::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+        use nixling_contracts::broker_wire::{
+            ChildExitKind, ChildExitStatus, ChildReapedNotification,
+        };
 
         let child = Command::new("sleep")
             .arg("1")
@@ -1228,7 +1233,9 @@ mod tests {
 
     #[test]
     fn child_reap_buffer_survives_disconnect_reconnect() {
-        use nixling_ipc::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+        use nixling_contracts::broker_wire::{
+            ChildExitKind, ChildExitStatus, ChildReapedNotification,
+        };
 
         let log = BrokerReapLog::new();
         log.insert(ChildReapedNotification {

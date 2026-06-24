@@ -76,7 +76,7 @@ gate, so route it through panel review. Target: whole gate under
 
 `cargo run -p xtask -- gen-cli-schemas` emits `ApiReadySimple` /
 `ApiReadyStatusV1` definitions (from the `api_ready` field on
-`StatusRequest`/status response in `packages/nixling-ipc/src/public_wire.rs`,
+`StatusRequest`/status response in `packages/nixling-contracts/src/public_wire.rs`,
 shipped in v1.2), but the committed `status.schema.json` predates them
 and was never regenerated. No drift gate enforces this file
 (`cli-json-drift.sh` only checks host-check rendering), so CI is green

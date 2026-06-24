@@ -84,7 +84,7 @@ never names raw paths/uids/argv on the wire; every step carries an
 opaque `BundleStepRef` that the broker resolves against its own
 copy of the bundle.
 
-| Step                          | Broker op (`nixling_ipc::broker_wire::BrokerRequest::…`) | Implementation status                                                                  |
+| Step                          | Broker op (`nixling_contracts::broker_wire::BrokerRequest::…`) | Implementation status                                                                  |
 | ----------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `ApplyNmUnmanaged`            | `ApplyNmUnmanaged`                                       | Live; runs BEFORE tap creation so NetworkManager does not race the broker's `TUNSETIFF` + `dev set master`, and replaces the `00-nixling-unmanaged.conf` materializer leaf of `microvm-setup@<vm>.service`. |
 | `BringUpTapInterface`         | `CreateTapFd` (or `CreatePersistentTap`)                 | Live; the per-VM start path resolves the tap intent row and creates or reuses the tap as needed. |

@@ -106,16 +106,18 @@ pub enum UsbipArgvError {
 /// - ASCII digits only — Unicode digits like ٢ (Arabic-Indic 2)
 ///   refused.
 pub fn validate_bus_id(bus_id: &str) -> Result<(), UsbipArgvError> {
-    match nixling_ipc::usbip::validate_bus_id(bus_id) {
+    match nixling_contracts::usbip::validate_bus_id(bus_id) {
         Ok(()) => Ok(()),
-        Err(nixling_ipc::usbip::BusIdError::Empty) => Err(UsbipArgvError::EmptyBusId),
-        Err(nixling_ipc::usbip::BusIdError::Invalid) => Err(UsbipArgvError::InvalidBusId {
+        Err(nixling_contracts::usbip::BusIdError::Empty) => Err(UsbipArgvError::EmptyBusId),
+        Err(nixling_contracts::usbip::BusIdError::Invalid) => Err(UsbipArgvError::InvalidBusId {
             bus_id: bus_id.to_owned(),
         }),
-        Err(nixling_ipc::usbip::BusIdError::TooLong { max }) => Err(UsbipArgvError::BusIdTooLong {
-            bus_id: bus_id.to_owned(),
-            max,
-        }),
+        Err(nixling_contracts::usbip::BusIdError::TooLong { max }) => {
+            Err(UsbipArgvError::BusIdTooLong {
+                bus_id: bus_id.to_owned(),
+                max,
+            })
+        }
     }
 }
 

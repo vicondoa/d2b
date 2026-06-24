@@ -31,7 +31,7 @@ slow-consumer cancellation.
 ## Service surface
 
 The committed protobuf service source is
-[`packages/nixling-ipc/proto/guest_control.proto`](../../packages/nixling-ipc/proto/guest_control.proto).
+[`packages/nixling-contracts/proto/guest_control.proto`](../../packages/nixling-contracts/proto/guest_control.proto).
 Lifecycle requests carry `vm_id`, `request_id`, and negotiated
 `protocol_version` in `RequestMetadata`; exec-specific requests also carry
 `exec_id` and the Hello-returned `guest_boot_id` in `ExecRequestMetadata` so

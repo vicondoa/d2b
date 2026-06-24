@@ -7,9 +7,9 @@ ttRPC/protobuf surface. It snapshots the guest daemon control messages, health
 states, exec lifecycle messages, and chunked stdio RPC shapes that host
 `nixlingd` and guest `nixling-guestd` must keep aligned. The protobuf service
 source lives at
-[`packages/nixling-ipc/proto/guest_control.proto`](../../../../packages/nixling-ipc/proto/guest_control.proto).
+[`packages/nixling-contracts/proto/guest_control.proto`](../../../../packages/nixling-contracts/proto/guest_control.proto).
 The generated Rust bindings are intentionally split by role:
-`packages/nixling-ipc/src/generated/guest_control.rs` is message-only and
+`packages/nixling-contracts/src/generated/guest_control.rs` is message-only and
 `ttrpc`-free, while `packages/nixling-guestd/src/generated/guest_control_ttrpc.rs`
 contains the guestd-local service bindings.
 

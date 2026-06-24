@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use nixling_ipc::guest_proto as pb;
+use nixling_contracts::guest_proto as pb;
 use protobuf::{EnumOrUnknown, MessageField};
 
 use crate::exec_session::{
@@ -30,7 +30,7 @@ use crate::guest_control_health::{
     AttemptBudget, GuestControlHealthError, TtrpcGuestControlClient, probe_guest_control_health,
 };
 use crate::terminal_session::TerminalBackend;
-use nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+use nixling_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
 
 /// Generous absolute deadline for the whole establish (connect + auth +
 /// `ExecCreate`). Per-op deadlines are separate and fresh.
@@ -248,7 +248,7 @@ pub(crate) fn build_exec_create_request(
         request.initial_terminal_size = MessageField::some(size);
     }
     let mut policy = pb::OutputPolicy::new();
-    policy.max_chunk_bytes = nixling_ipc::public_wire::EXEC_MAX_CHUNK_BYTES;
+    policy.max_chunk_bytes = nixling_contracts::public_wire::EXEC_MAX_CHUNK_BYTES;
     request.output_policy = MessageField::some(policy);
     request
 }

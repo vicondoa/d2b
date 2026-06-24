@@ -7,7 +7,7 @@ use nixling_contract_tests::{read_repo_file, repo_path_exists};
 use regex::Regex;
 use serde_json::{Map, Value};
 
-const PROTO_REL: &str = "packages/nixling-ipc/proto/guest_control.proto";
+const PROTO_REL: &str = "packages/nixling-contracts/proto/guest_control.proto";
 const SCHEMA_REL: &str = "docs/reference/schemas/v2/guest-control.json";
 
 #[derive(Clone, Debug)]

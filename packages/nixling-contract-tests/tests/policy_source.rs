@@ -363,7 +363,7 @@ fn host_prep_dag_nixling_host_reexport() {
 
 #[test]
 fn host_prep_dag_broker_wire_scaffolds() {
-    let wire_rel = "packages/nixling-ipc/src/broker_wire.rs";
+    let wire_rel = "packages/nixling-contracts/src/broker_wire.rs";
     let runtime_rel = "packages/nixling-priv-broker/src/runtime.rs";
     assert!(
         repo_path_exists(wire_rel),

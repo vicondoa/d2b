@@ -22,7 +22,7 @@
 //! deregisters. All deregistration (pidfd_table + snapshot + broker
 //! registry) stays in the fail-fast rollback path.
 
-use nixling_ipc::broker_wire::ChildExitStatus;
+use nixling_contracts::broker_wire::ChildExitStatus;
 
 use crate::supervisor::pidfd_table::{BrokerReapLog, PidfdTable, read_proc_start_time_pub};
 
@@ -210,7 +210,7 @@ fn poll_pollin(fd: &impl std::os::fd::AsFd) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nixling_ipc::broker_wire::ChildExitKind;
+    use nixling_contracts::broker_wire::ChildExitKind;
 
     fn status(code: i32) -> ChildExitStatus {
         ChildExitStatus {
@@ -318,7 +318,7 @@ mod tests {
     #[test]
     fn stale_same_role_reap_for_different_pid_does_not_fast_fail_live_runner() {
         use crate::supervisor::pidfd_table::{BrokerReapLog, PidfdEntry, PidfdTable};
-        use nixling_ipc::broker_wire::{ChildExitStatus, ChildReapedNotification};
+        use nixling_contracts::broker_wire::{ChildExitStatus, ChildReapedNotification};
 
         let mut child = std::process::Command::new("sleep")
             .arg("30")

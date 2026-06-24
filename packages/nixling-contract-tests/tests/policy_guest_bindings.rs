@@ -36,9 +36,9 @@ fn assert_no_line_matches(content: &str, pattern: &str, context: &str) {
 
 #[test]
 fn guest_proto_bindings_are_message_only_and_codegen_free() {
-    let generated_file_rel = "packages/nixling-ipc/src/generated/guest_control.rs";
-    let ipc_manifest_rel = "packages/nixling-ipc/Cargo.toml";
-    let ipc_build_rs_rel = "packages/nixling-ipc/build.rs";
+    let generated_file_rel = "packages/nixling-contracts/src/generated/guest_control.rs";
+    let ipc_manifest_rel = "packages/nixling-contracts/Cargo.toml";
+    let ipc_build_rs_rel = "packages/nixling-contracts/build.rs";
 
     assert!(
         repo_path_exists(generated_file_rel),
@@ -65,16 +65,16 @@ fn guest_proto_bindings_are_message_only_and_codegen_free() {
     assert_no_line_matches(
         &ipc_manifest,
         r"ttrpc",
-        "guest-proto-bindings: nixling-ipc must not depend on ttrpc for message-only bindings",
+        "guest-proto-bindings: nixling-contracts must not depend on ttrpc for message-only bindings",
     );
     assert!(
         !repo_path_exists(ipc_build_rs_rel),
-        "guest-proto-bindings: nixling-ipc must not generate guest protobuf bindings during normal builds"
+        "guest-proto-bindings: nixling-contracts must not generate guest protobuf bindings during normal builds"
     );
     assert_no_line_matches(
         &ipc_manifest,
         r"^\[build-dependencies\]|protobuf-codegen|prost-build|tonic-build|\bprotoc\b",
-        "guest-proto-bindings: nixling-ipc must keep protobuf code generation in xtask only",
+        "guest-proto-bindings: nixling-contracts must keep protobuf code generation in xtask only",
     );
 }
 
@@ -83,7 +83,7 @@ fn guest_ttrpc_bindings_are_xtask_only_and_ipc_stays_ttrpc_free() {
     let generated_file_rel = "packages/nixling-guestd/src/generated/guest_control_ttrpc.rs";
     let guestd_manifest_rel = "packages/nixling-guestd/Cargo.toml";
     let guestd_build_rs_rel = "packages/nixling-guestd/build.rs";
-    let ipc_manifest_rel = "packages/nixling-ipc/Cargo.toml";
+    let ipc_manifest_rel = "packages/nixling-contracts/Cargo.toml";
 
     assert!(
         repo_path_exists(generated_file_rel),
@@ -120,6 +120,6 @@ fn guest_ttrpc_bindings_are_xtask_only_and_ipc_stays_ttrpc_free() {
     assert_no_line_matches(
         &ipc_manifest,
         r"ttrpc",
-        "guest-ttrpc-bindings: nixling-ipc must remain message-only and ttrpc-free",
+        "guest-ttrpc-bindings: nixling-contracts must remain message-only and ttrpc-free",
     );
 }

@@ -374,7 +374,7 @@ Example:
 compat-ADR0042-added-20260815-wire-v6-handshake
 from=wire-v5
 to=wire-v6
-owner=packages/nixling-ipc
+owner=packages/nixling-contracts
 removeWhen=minSupportedWireVersion >= 6
 validation=packages/nixling-contract-tests/tests/policy_compat.rs
 ```
@@ -601,14 +601,14 @@ Goal: move shared JSON/wire/output models out of CLI and daemon hub files.
 Tasks:
 
 1. Classify all serde/json schema structs in `nixling`, `nixlingd`,
-   `nixling-ipc`, and `nixling-core` as one of:
+   `nixling-contracts`, and `nixling-core` as one of:
    - wire contract;
    - bundle contract;
    - CLI output contract;
    - daemon internal state;
    - presentation-only view.
 2. Move stable CLI output DTOs and daemon API DTOs to a contract crate
-   boundary. The exact home may be an expanded `nixling-ipc` or a narrower
+   boundary. The exact home may be an expanded `nixling-contracts` or a narrower
    `nixling-contracts` crate, but dependency direction must stay acyclic:
    presentation crates depend on contracts; contracts do not depend on CLI
    or daemon execution crates.
@@ -621,7 +621,7 @@ Primary targets:
 
 - `packages/nixling/src/lib.rs`;
 - `packages/nixlingd/src/lib.rs`;
-- `packages/nixling-ipc/src/public_wire.rs`;
+- `packages/nixling-contracts/src/public_wire.rs`;
 - `packages/nixling-core/src/*`;
 - `packages/xtask/src/main.rs`;
 - `docs/reference/cli-output/`;

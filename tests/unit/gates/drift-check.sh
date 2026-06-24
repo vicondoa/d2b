@@ -63,7 +63,7 @@ drift_paths=(
   docs/manpages/
   docs/completions/
   docs/reference/cli-output/
-  packages/nixling-ipc/src/generated
+  packages/nixling-contracts/src/generated
   packages/nixling-guestd/src/generated
 )
 
