@@ -14,6 +14,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use nix::libc;
+use nix::unistd::{Group, Uid};
 use nixling_core::bundle_resolver::BundleResolver;
 use nixling_core::host::{
     QemuMediaFormat, QemuMediaSourceIntent, QemuMediaSourceKind, QemuMediaUsbSelector,
@@ -113,7 +114,7 @@ struct RegistryIdentity {
     block_device: String,
 }
 
-const REDACTED_INDEX_PATH: &str = "/run/nixling/qemu-media-registry-index.json";
+const REDACTED_INDEX_STORAGE_REF: &str = "path:qemu-media-redacted-index";
 const QMP_MAX_RESPONSE_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,7 +218,7 @@ pub fn enroll(
     let record = MediaRegistryRecord::from_identity(source, identity);
     write_registry_record(resolver, &record)?;
     let records = read_all_registry_records(resolver).unwrap_or_else(|_| vec![record.clone()]);
-    write_redacted_registry_index(&records)?;
+    write_redacted_registry_index(resolver, &records)?;
     let udev_rule_written = write_runtime_udev_rules(resolver, &records)?;
     let udev_reloaded = reload_udev_rules();
 
@@ -236,7 +237,7 @@ pub fn enroll(
 
 pub fn refresh_registry(resolver: &BundleResolver) -> Result<RefreshOutcome, MediaOpError> {
     let records = read_all_registry_records(resolver)?;
-    let redacted_index_written = write_redacted_registry_index(&records).map(|_| true)?;
+    let redacted_index_written = write_redacted_registry_index(resolver, &records).map(|_| true)?;
     let udev_rule_written = write_runtime_udev_rules(resolver, &records)?;
     let udev_reloaded = reload_udev_rules();
     Ok(RefreshOutcome {
@@ -412,7 +413,7 @@ fn open_declared_source<'a>(
                 let identity = read_usb_identity_for_selector(selector)?;
                 audit = write_declared_selector_artifacts(
                     &registry_dir(resolver)?,
-                    Path::new(REDACTED_INDEX_PATH),
+                    &redacted_index_path(resolver)?,
                     &rules_path(resolver)?,
                     source,
                     &identity,
@@ -1895,7 +1896,12 @@ fn write_registry_record_at_root(
     owner_gid: u32,
 ) -> Result<(), MediaOpError> {
     std::fs::create_dir_all(root).map_err(|err| MediaOpError::Registry(err.to_string()))?;
-    crate::sys::path_safe::ensure_dir(root, 0o700, Some(owner_uid), Some(owner_gid))
+    let root_owner = if Uid::effective().is_root() {
+        Some(0)
+    } else {
+        None
+    };
+    crate::sys::path_safe::ensure_dir(root, 0o700, root_owner, root_owner)
         .map_err(|err| MediaOpError::Registry(err.to_string()))?;
     let root_fd = crate::sys::path_safe::open_dir_path_safe(&root)
         .map_err(|err| MediaOpError::Registry(err.to_string()))?;
@@ -1906,11 +1912,18 @@ fn write_registry_record_at_root(
     let mut bytes =
         serde_json::to_vec_pretty(record).map_err(|err| MediaOpError::Registry(err.to_string()))?;
     bytes.push(b'\n');
-    crate::sys::path_safe::atomic_replace_fd(
+    let record_owner = if Uid::effective().is_root() {
+        (Some(owner_uid), Some(owner_gid))
+    } else {
+        (None, None)
+    };
+    crate::sys::path_safe::atomic_replace_fd_with_owner(
         &vm_fd,
         &format!("{}.json", record.media_ref),
         &bytes,
         0o600,
+        record_owner.0,
+        record_owner.1,
     )
     .map_err(|err| MediaOpError::Registry(err.to_string()))
 }
@@ -1937,8 +1950,19 @@ fn write_declared_selector_artifacts(
     Ok(audit)
 }
 
-fn write_redacted_registry_index(records: &[MediaRegistryRecord]) -> Result<(), MediaOpError> {
-    write_redacted_registry_index_at_path(Path::new(REDACTED_INDEX_PATH), records)
+fn redacted_index_path(resolver: &BundleResolver) -> Result<PathBuf, MediaOpError> {
+    resolver
+        .find_storage_path_spec(REDACTED_INDEX_STORAGE_REF)
+        .map(|spec| PathBuf::from(spec.path_template.as_str()))
+        .ok_or_else(|| MediaOpError::Registry("redacted-index-storage-ref-missing".to_owned()))
+}
+
+fn write_redacted_registry_index(
+    resolver: &BundleResolver,
+    records: &[MediaRegistryRecord],
+) -> Result<(), MediaOpError> {
+    let path = redacted_index_path(resolver)?;
+    write_redacted_registry_index_at_path(&path, records)
 }
 
 fn write_redacted_registry_index_at_path(
@@ -1964,8 +1988,19 @@ fn write_redacted_registry_index_at_path(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| MediaOpError::Registry("redacted-index-name-invalid".to_owned()))?;
-    crate::sys::path_safe::atomic_replace_fd(&parent_fd, name, &bytes, 0o644)
-        .map_err(|err| MediaOpError::Registry(err.to_string()))
+    let owner_gid = if Uid::effective().is_root() {
+        let gid = Group::from_name("nixlingd")
+            .map_err(|err| MediaOpError::Registry(format!("resolve nixlingd group: {err}")))?
+            .map(|group| group.gid)
+            .ok_or_else(|| MediaOpError::Registry("nixlingd group missing".to_owned()))?;
+        Some(gid.as_raw())
+    } else {
+        None
+    };
+    crate::sys::path_safe::atomic_replace_fd_with_owner(
+        &parent_fd, name, &bytes, 0o640, None, owner_gid,
+    )
+    .map_err(|err| MediaOpError::Registry(err.to_string()))
 }
 
 fn qemu_media_identity_hash(by_id_names: &[String]) -> String {

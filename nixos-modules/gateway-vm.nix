@@ -169,6 +169,7 @@ let
           "d /run/nixling/state 0700 nixlingd nixlingd -"
           "d /var/lib/nixling 0750 nixlingd nixlingd -"
           "d /var/lib/nixling/daemon-state 0700 nixlingd nixlingd -"
+          "d /var/cache/nixling 0750 root nixlingd -"
         ] ++ (map (dir: "d ${dir} 0700 nixlingd nixlingd -") (gatewayStateDirs gw));
         systemd.services.nixlingd = {
           description = "nixling realm gateway daemon";

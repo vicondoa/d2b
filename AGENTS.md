@@ -947,7 +947,10 @@ Touch these only with a clear plan and a corresponding test run.
   broker-resolved opaque ids, anchored path resolution, OFD locks with
   `O_CLOEXEC`, explicit fd transfer only, restart-aware adoption before
   cleanup, and typed degraded-state reporting instead of broad chmod,
-  chown, setfacl, or `/run/nixling` sweeps.
+  chown, setfacl, or `/run/nixling` sweeps. Every new host-mutable
+  path or lock surface must add or reuse a generated `storage.json` /
+  `sync.json` row, name a single repair owner, and route repair through
+  that owner rather than adding a second activation/broker/daemon fixer.
 
 ## cgroup slice naming + ownership-marker conventions
 

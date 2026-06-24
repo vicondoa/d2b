@@ -23,7 +23,7 @@ pub enum StorageContractError {
     UnknownLock(String),
     Refused { subject: String, reason: String },
     Invalid { subject: String, detail: String },
-    Io { path: PathBuf, detail: String },
+    Io { path_hash: String, detail: String },
 }
 
 impl std::fmt::Display for StorageContractError {
@@ -33,7 +33,9 @@ impl std::fmt::Display for StorageContractError {
             Self::UnknownLock(id) => write!(f, "unknown lock contract id {id:?}"),
             Self::Refused { subject, reason } => write!(f, "{subject}: refused: {reason}"),
             Self::Invalid { subject, detail } => write!(f, "{subject}: invalid: {detail}"),
-            Self::Io { path, detail } => write!(f, "I/O error on {}: {detail}", path.display()),
+            Self::Io { path_hash, detail } => {
+                write!(f, "I/O error on storage-path#{path_hash}: {detail}")
+            }
         }
     }
 }
@@ -67,6 +69,16 @@ pub fn reconcile_storage_scope(
         });
     }
     let path_buf = PathBuf::from(path);
+    if spec.kind == StoragePathKind::ExternalGrantOnly {
+        return Ok(ReconcileStorageScopeResponse {
+            storage_ref: storage_ref.clone(),
+            scope: spec.scope.as_str().to_owned(),
+            kind: format!("{:?}", spec.kind),
+            status: StorageReconcileStatus::CheckedOnly,
+            applied: false,
+            path_hash,
+        });
+    }
     validate_owned_root(&path_buf, storage_ref.as_str())?;
     if apply && apply_is_check_only(&path_buf) {
         return Err(StorageContractError::Refused {
@@ -87,7 +99,7 @@ pub fn reconcile_storage_scope(
                     Some(gid.as_raw()),
                 )
                 .map_err(|err| StorageContractError::Io {
-                    path: path_buf.clone(),
+                    path_hash: stable_hash_str(path_buf.to_string_lossy().as_ref()),
                     detail: err.to_string(),
                 })?;
                 let status = match result {
@@ -183,6 +195,23 @@ fn apply_is_check_only(path: &Path) -> bool {
 }
 
 fn validate_owned_root(path: &Path, subject: &str) -> Result<(), StorageContractError> {
+    validate_owned_root_against(
+        path,
+        subject,
+        &[
+            Path::new("/etc/nixling"),
+            Path::new("/var/lib/nixling"),
+            Path::new("/run/nixling"),
+            Path::new("/var/cache/nixling"),
+        ],
+    )
+}
+
+fn validate_owned_root_against(
+    path: &Path,
+    subject: &str,
+    roots: &[&Path],
+) -> Result<(), StorageContractError> {
     if path
         .components()
         .any(|component| matches!(component, std::path::Component::ParentDir))
@@ -192,12 +221,16 @@ fn validate_owned_root(path: &Path, subject: &str) -> Result<(), StorageContract
             reason: "storage-path-parent-dir-refused".to_owned(),
         });
     }
-    let root = owned_root_for(path).ok_or_else(|| StorageContractError::Refused {
-        subject: subject.to_owned(),
-        reason: "storage-path-outside-owned-roots".to_owned(),
-    })?;
-    let canonical_root = canonicalize_existing(root, subject)?;
-    let canonical_target = canonicalize_existing_or_parent(path, subject)?;
+    let root = roots
+        .iter()
+        .copied()
+        .find(|root| path.starts_with(root))
+        .ok_or_else(|| StorageContractError::Refused {
+            subject: subject.to_owned(),
+            reason: "storage-path-outside-owned-roots".to_owned(),
+        })?;
+    let canonical_root = canonicalize_existing_or_nearest_ancestor(root, subject)?;
+    let canonical_target = canonicalize_existing_or_nearest_ancestor(path, subject)?;
     if !canonical_target.starts_with(&canonical_root) {
         return Err(StorageContractError::Refused {
             subject: subject.to_owned(),
@@ -207,52 +240,43 @@ fn validate_owned_root(path: &Path, subject: &str) -> Result<(), StorageContract
     Ok(())
 }
 
-fn owned_root_for(path: &Path) -> Option<&'static Path> {
-    [
-        Path::new("/etc/nixling"),
-        Path::new("/var/lib/nixling"),
-        Path::new("/run/nixling"),
-        Path::new("/var/cache/nixling"),
-    ]
-    .into_iter()
-    .find(|root| path.starts_with(root))
-}
-
-fn canonicalize_existing(path: &Path, subject: &str) -> Result<PathBuf, StorageContractError> {
-    std::fs::canonicalize(path).map_err(|err| StorageContractError::Refused {
-        subject: subject.to_owned(),
-        reason: format!("storage-root-canonicalize-failed:{err}"),
-    })
-}
-
-fn canonicalize_existing_or_parent(
+fn canonicalize_existing_or_nearest_ancestor(
     path: &Path,
     subject: &str,
 ) -> Result<PathBuf, StorageContractError> {
-    match std::fs::canonicalize(path) {
-        Ok(path) => Ok(path),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            let parent = path.parent().ok_or_else(|| StorageContractError::Refused {
-                subject: subject.to_owned(),
-                reason: "storage-path-has-no-parent".to_owned(),
-            })?;
-            let canonical_parent =
-                std::fs::canonicalize(parent).map_err(|err| StorageContractError::Refused {
+    let mut current = path;
+    let mut missing_suffix = Vec::new();
+    loop {
+        match std::fs::canonicalize(current) {
+            Ok(canonical) => {
+                let mut resolved = canonical;
+                for component in missing_suffix.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                let leaf = current
+                    .file_name()
+                    .ok_or_else(|| StorageContractError::Refused {
+                        subject: subject.to_owned(),
+                        reason: "storage-path-has-no-leaf".to_owned(),
+                    })?;
+                missing_suffix.push(leaf.to_os_string());
+                current = current
+                    .parent()
+                    .ok_or_else(|| StorageContractError::Refused {
+                        subject: subject.to_owned(),
+                        reason: "storage-path-has-no-parent".to_owned(),
+                    })?;
+            }
+            Err(err) => {
+                return Err(StorageContractError::Refused {
                     subject: subject.to_owned(),
-                    reason: format!("storage-parent-canonicalize-failed:{err}"),
-                })?;
-            let leaf = path
-                .file_name()
-                .ok_or_else(|| StorageContractError::Refused {
-                    subject: subject.to_owned(),
-                    reason: "storage-path-has-no-leaf".to_owned(),
-                })?;
-            Ok(canonical_parent.join(leaf))
+                    reason: format!("storage-path-canonicalize-failed:{err}"),
+                });
+            }
         }
-        Err(err) => Err(StorageContractError::Refused {
-            subject: subject.to_owned(),
-            reason: format!("storage-path-canonicalize-failed:{err}"),
-        }),
     }
 }
 
@@ -324,6 +348,24 @@ fn resolve_gid(principal: &PrincipalRef) -> Result<Gid, StorageContractError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nixling_core::bundle::Bundle;
+    use nixling_core::bundle_resolver::BundleResolver;
+    use nixling_core::contract_id::{ContractId, ContractText, PathTemplate};
+    use nixling_core::host::HostJson;
+    use nixling_core::manifest_v04::ManifestV04;
+    use nixling_core::processes::ProcessesJson;
+    use nixling_core::storage::{
+        ActorKind, ActorRef, CleanupPolicy, DegradeScope, DegradedReason, LeaseClass,
+        LedgerStorageClass, PrincipalKind, PrincipalRef, RepairPolicy, SensitivityClass,
+        StorageAdoptionPolicy, StorageInvariant, StorageJson, StorageLifecycle, StoragePathSpec,
+        StoragePersistence, StorageRestartPolicy,
+    };
+    use nixling_core::sync::{
+        FdPassingMechanism, FdPassingPolicy, InheritancePolicy, LockAcquireOrder,
+        LockAdoptionPolicy, LockKind, LockScopeClass, LockSpec, LockStaleKind, LockStalePolicy,
+        LockTimeoutKind, LockTimeoutPolicy, SyncJson,
+    };
+    use nixling_ipc::types::BundleOpId;
 
     #[test]
     fn template_paths_are_check_only_unless_expanded() {
@@ -340,30 +382,33 @@ mod tests {
 
     #[test]
     fn owned_roots_are_closed() {
-        assert_eq!(
-            owned_root_for(Path::new("/run/nixling")).unwrap(),
-            Path::new("/run/nixling")
+        assert!(validate_owned_root(Path::new("/run/nixling"), "x").is_ok());
+        assert_refused_reason(
+            validate_owned_root(Path::new("/var/lib/nixling/../../etc/malicious"), "x"),
+            "storage-path-parent-dir-refused",
         );
-        assert!(
-            validate_owned_root(Path::new("/var/lib/nixling/../../etc/malicious"), "x").is_err()
+        assert_refused_reason(
+            validate_owned_root(Path::new("/var/lib/nixling/../nixling-escape"), "x"),
+            "storage-path-parent-dir-refused",
         );
-        assert!(validate_owned_root(Path::new("/tmp/nixling"), "x").is_err());
+        assert_refused_reason(
+            validate_owned_root(Path::new("/home/not-nixling"), "x"),
+            "storage-path-outside-owned-roots",
+        );
     }
 
     #[test]
     fn canonical_root_check_rejects_symlink_escape() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = project_scratch("canonical-root-check-rejects-symlink-escape");
         let root = tmp.path().join("root");
-        let outside = tmp.path().join("outside");
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::create_dir_all(&outside).unwrap();
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
-            let canonical_root = std::fs::canonicalize(&root).unwrap();
-            let canonical_target =
-                canonicalize_existing_or_parent(&root.join("escape/new"), "x").unwrap();
-            assert!(!canonical_target.starts_with(canonical_root));
+            std::os::unix::fs::symlink("/etc", root.join("escape")).unwrap();
+            assert_refused_reason(
+                validate_owned_root_against(&root.join("escape/passwd"), "x", &[&root]),
+                "storage-path-escapes-owned-root",
+            );
         }
     }
 
@@ -372,5 +417,376 @@ mod tests {
         assert_eq!(parse_mode("0750", "x").unwrap(), 0o750);
         assert_eq!(parse_mode("0", "x").unwrap(), 0);
         assert!(parse_mode("bad", "x").is_err());
+    }
+
+    #[test]
+    fn reconcile_refuses_non_directory_apply_without_mutation() {
+        let resolver = resolver_with_storage_path(
+            "path:regular-file",
+            "/var/lib/nixling/storage-contract-regular-file",
+            StoragePathKind::RegularFile,
+            sync_with_lock(lock("lock:daemon", true, FdPassingMechanism::None, false)),
+        );
+
+        let err = reconcile_storage_scope(&resolver, &BundleOpId::new("path:regular-file"), true)
+            .expect_err("regular files are check-only in broker reconcile");
+        assert_refused_reason(Err(err), "storage-apply-supported-for-directory-only");
+    }
+
+    #[test]
+    fn reconcile_external_grant_skips_filesystem_root_validation() {
+        let resolver = resolver_with_storage_path(
+            "path:external-grant",
+            "/sys/class/net/work-l2",
+            StoragePathKind::ExternalGrantOnly,
+            sync_with_lock(lock("lock:daemon", true, FdPassingMechanism::None, false)),
+        );
+
+        let checked =
+            reconcile_storage_scope(&resolver, &BundleOpId::new("path:external-grant"), true)
+                .expect(
+                    "external grant rows are check-only and do not validate as filesystem paths",
+                );
+        assert_eq!(checked.status, StorageReconcileStatus::CheckedOnly);
+        assert!(!checked.applied);
+    }
+
+    #[test]
+    fn reconcile_refuses_etc_nixling_apply_attempts() {
+        let resolver = resolver_with_storage_path(
+            "path:config-root",
+            "/etc/nixling/bundle.json",
+            StoragePathKind::Directory,
+            sync_with_lock(lock("lock:daemon", true, FdPassingMechanism::None, false)),
+        );
+
+        let err = reconcile_storage_scope(&resolver, &BundleOpId::new("path:config-root"), true)
+            .expect_err("nix-managed config roots are not broker-mutated");
+        assert_refused_reason(Err(err), "storage-config-root-is-nix-managed");
+    }
+
+    #[test]
+    fn validate_lock_spec_requires_ofd_cloexec_and_fd_transfer_lease_records() {
+        let missing_cloexec = resolver_with_storage_path(
+            "path:run-root",
+            "/run/nixling",
+            StoragePathKind::Directory,
+            sync_with_lock(lock("lock:daemon", false, FdPassingMechanism::None, false)),
+        );
+        let err = validate_lock_spec(&missing_cloexec, &BundleOpId::new("lock:daemon"))
+            .expect_err("OFD locks must require close-on-exec");
+        assert_invalid_detail(Err(err), "ofd-lock-missing-cloexec");
+
+        let missing_lease = resolver_with_storage_path(
+            "path:run-root",
+            "/run/nixling",
+            StoragePathKind::Directory,
+            sync_with_lock(lock(
+                "lock:daemon",
+                true,
+                FdPassingMechanism::ScmRights,
+                false,
+            )),
+        );
+        let err = validate_lock_spec(&missing_lease, &BundleOpId::new("lock:daemon"))
+            .expect_err("fd transfer locks must require lease transfer records");
+        assert_invalid_detail(Err(err), "fd-transfer-missing-lease-record");
+
+        let valid = resolver_with_storage_path(
+            "path:run-root",
+            "/run/nixling",
+            StoragePathKind::Directory,
+            sync_with_lock(lock(
+                "lock:daemon",
+                true,
+                FdPassingMechanism::ScmRights,
+                true,
+            )),
+        );
+        let response =
+            validate_lock_spec(&valid, &BundleOpId::new("lock:daemon")).expect("valid lock");
+        assert!(response.cloexec_required);
+        assert_eq!(response.fd_passing_mechanism, "ScmRights");
+    }
+
+    #[test]
+    fn broker_storage_and_sync_requests_are_opaque_id_only() {
+        let storage =
+            serde_json::to_value(nixling_ipc::broker_wire::ReconcileStorageScopeRequest {
+                storage_ref: BundleOpId::new("path:run-root"),
+                apply: true,
+                tracing_span_id: None,
+            })
+            .expect("serialize storage request");
+        assert_eq!(
+            storage
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![
+                "apply".to_owned(),
+                "storageRef".to_owned(),
+                "tracingSpanId".to_owned(),
+            ]
+        );
+
+        let lock = serde_json::to_value(nixling_ipc::broker_wire::ValidateLockSpecRequest {
+            lock_ref: BundleOpId::new("lock:daemon"),
+            tracing_span_id: None,
+        })
+        .expect("serialize lock request");
+        assert_eq!(
+            lock.as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["lockRef".to_owned(), "tracingSpanId".to_owned()]
+        );
+        for value in [&storage, &lock] {
+            for forbidden in [
+                "path",
+                "pathTemplate",
+                "mode",
+                "owner",
+                "group",
+                "cleanupPolicy",
+                "repairPolicy",
+                "fdPassingPolicy",
+            ] {
+                assert!(
+                    value.get(forbidden).is_none(),
+                    "request must not carry broker-resolved field {forbidden}: {value}"
+                );
+            }
+        }
+    }
+
+    fn assert_refused_reason(
+        result: Result<(), StorageContractError>,
+        expected_reason: &'static str,
+    ) {
+        match result {
+            Err(StorageContractError::Refused { reason, .. }) => {
+                assert_eq!(reason, expected_reason);
+            }
+            other => panic!("expected refused reason {expected_reason}, got {other:?}"),
+        }
+    }
+
+    fn assert_invalid_detail(
+        result: Result<ValidateLockSpecResponse, StorageContractError>,
+        expected_detail: &'static str,
+    ) {
+        match result {
+            Err(StorageContractError::Invalid { detail, .. }) => {
+                assert_eq!(detail, expected_detail);
+            }
+            other => panic!("expected invalid detail {expected_detail}, got {other:?}"),
+        }
+    }
+
+    struct ScratchDir(PathBuf);
+
+    impl ScratchDir {
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn project_scratch(name: &str) -> ScratchDir {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("storage-contract-test-scratch");
+        std::fs::create_dir_all(&root).unwrap();
+        let dir = root.join(format!(
+            "{}-{}",
+            name,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        ScratchDir(dir)
+    }
+
+    fn resolver_with_storage_path(
+        id: &str,
+        path: &str,
+        kind: StoragePathKind,
+        sync_contract: SyncJson,
+    ) -> BundleResolver {
+        let storage_contract = storage(id, path, kind);
+        let bundle = Bundle {
+            bundle_version: 6,
+            schema_version: "v2".to_owned(),
+            public_manifest_path: "manifest.json".to_owned(),
+            host_path: "host.json".to_owned(),
+            processes_path: "processes.json".to_owned(),
+            privileges_path: "privileges.json".to_owned(),
+            storage_path: Some("storage.json".to_owned()),
+            sync_path: Some("sync.json".to_owned()),
+            closures: Vec::new(),
+            minijail_profiles: Vec::new(),
+            managed_keys: Default::default(),
+            generation: nixling_core::bundle::BundleGeneration {
+                generator: "test".to_owned(),
+                source_revision: None,
+                generated_at: None,
+            },
+            bundle_hash: None,
+            artifact_hashes: None,
+        };
+        BundleResolver::from_artifacts_with_optional_contracts(
+            bundle,
+            minimal_host(),
+            ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: Vec::new(),
+            },
+            Some(storage_contract),
+            Some(sync_contract),
+            manifest(),
+        )
+    }
+
+    fn storage(id: &str, path: &str, kind: StoragePathKind) -> StorageJson {
+        StorageJson {
+            schema_version: "v2".to_owned(),
+            roots: Vec::new(),
+            paths: vec![StoragePathSpec {
+                id: ContractId::parse(id).unwrap(),
+                scope: ContractId::parse("host").unwrap(),
+                path_template: PathTemplate::parse(path).unwrap(),
+                kind,
+                lifecycle: StorageLifecycle::BootScopedReadoptable,
+                persistence: StoragePersistence::BootScoped,
+                owner: principal(PrincipalKind::Uid, "0"),
+                group: principal(PrincipalKind::Gid, "0"),
+                mode: "0750".to_owned(),
+                access_acl: Vec::new(),
+                default_acl: Vec::new(),
+                creator: actor(ActorKind::Broker, "nixling-priv-broker"),
+                writers: vec![actor(ActorKind::Broker, "nixling-priv-broker")],
+                readers: vec![actor(ActorKind::Daemon, "nixlingd")],
+                cleanup_policy: CleanupPolicy::Boot,
+                repair_policy: RepairPolicy::BrokerReconcile,
+                restart_policy: StorageRestartPolicy::PreserveAcrossDaemonRestart,
+                adoption_policy: StorageAdoptionPolicy::AdoptWithLiveOwnerProof,
+                lease_class: LeaseClass::None,
+                sensitivity: SensitivityClass::Private,
+                no_follow: true,
+                recursive: false,
+                invariants: vec![StorageInvariant::NoSymlink],
+            }],
+            restart_policies: Vec::new(),
+            degraded_states: vec![nixling_core::storage::DegradedStateSpec {
+                reason: DegradedReason::LockOwnerAmbiguous,
+                scope: DegradeScope::Host,
+                storage_class: LedgerStorageClass::TamperEvidentSegmented,
+                remediation_id: ContractId::parse("remediate:vm-status").unwrap(),
+            }],
+            remediations: vec![nixling_core::storage::RemediationSpec {
+                id: ContractId::parse("remediate:vm-status").unwrap(),
+                command: ContractText::parse("nixling vm status <vm>").unwrap(),
+                description: ContractText::parse("Inspect VM status").unwrap(),
+            }],
+        }
+    }
+
+    fn sync_with_lock(lock: LockSpec) -> SyncJson {
+        SyncJson {
+            schema_version: "v2".to_owned(),
+            locks: vec![lock],
+        }
+    }
+
+    fn lock(
+        id: &str,
+        cloexec_required: bool,
+        mechanism: FdPassingMechanism,
+        lease_transfer_record_required: bool,
+    ) -> LockSpec {
+        LockSpec {
+            id: ContractId::parse(id).unwrap(),
+            scope: ContractId::parse("host").unwrap(),
+            path_template: Some(PathTemplate::parse("/run/nixling/daemon.lock").unwrap()),
+            resource_id: None,
+            kind: LockKind::Ofd,
+            owner_process: actor(ActorKind::Daemon, "nixlingd"),
+            allowed_holders: vec![actor(ActorKind::Daemon, "nixlingd")],
+            inheritance_policy: InheritancePolicy::CloseOnExec,
+            fd_passing_policy: FdPassingPolicy {
+                mechanism,
+                lease_transfer_record_required,
+            },
+            acquire_order: LockAcquireOrder {
+                scope_class: LockScopeClass::Global,
+                anchored_root: ContractId::parse("run").unwrap(),
+                normalized_path: ContractId::parse("daemon.lock").unwrap(),
+                lock_id: ContractId::parse(id).unwrap(),
+            },
+            timeout_policy: LockTimeoutPolicy {
+                kind: LockTimeoutKind::FailFast,
+                timeout_ms: None,
+            },
+            stale_policy: LockStalePolicy {
+                kind: LockStaleKind::PidfdProofRequired,
+                degraded_reason: DegradedReason::LockOwnerAmbiguous,
+            },
+            adoption_policy: LockAdoptionPolicy::ReacquireAfterProof,
+            degrade_scope: DegradeScope::Host,
+            release_authority: actor(ActorKind::Daemon, "nixlingd"),
+            cloexec_required,
+        }
+    }
+
+    fn actor(kind: ActorKind, value: &str) -> ActorRef {
+        ActorRef {
+            kind,
+            value: ContractId::parse(value).unwrap(),
+        }
+    }
+
+    fn principal(kind: PrincipalKind, value: &str) -> PrincipalRef {
+        PrincipalRef {
+            kind,
+            value: ContractId::parse(value).unwrap(),
+        }
+    }
+
+    fn minimal_host() -> HostJson {
+        serde_json::from_str(r##"{
+            "schemaVersion":"v2",
+            "site":{"allowUnsafeEastWest":false},
+            "environments":[],
+            "nftables":{"family":"inet","table":"nixling","chains":[],"tableHashAfterApply":null,"ownershipId":"test"},
+            "hostsFile":{"startMarker":"# begin","endMarker":"# end","rule":"test"},
+            "networkManager":{"filePath":"/etc/NetworkManager/conf.d/00-nixling.conf","matchCriteria":[],"reloadBehavior":"none","ownership":{"owner":"root","group":"root","mode":"0644","driftPolicy":"replace-managed-block"}},
+            "kernelModules":[],
+            "fdOwnership":[],
+            "cloudHypervisorCapabilities":[],
+            "ifNameMappings":[],
+            "ch":{"netHandoffMode":"tap-fd"},
+            "firewallCoexistencePolicy":{"manager":"none","policy":"coexist","rationale":"test"}
+        }"##)
+        .expect("minimal HostJson")
+    }
+
+    fn manifest() -> ManifestV04 {
+        ManifestV04::from_slice(
+            br#"{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"obsVsockCid":0,"obsVsockHostSocket":"","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318,"signozUrl":"","vmName":""}}"#,
+        )
+        .expect("minimal ManifestV04")
     }
 }

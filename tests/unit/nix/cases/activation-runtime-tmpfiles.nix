@@ -108,6 +108,7 @@ in
   "activation-runtime-tmpfiles/state-root-posture" = {
     expr = lib.all (rule: builtins.elem rule tmpfiles) [
       "d /var/lib/nixling 0750 root nixlingd -"
+      "d /var/cache/nixling 0750 root nixlingd -"
       "z /var/lib/nixling 0750 root nixlingd -"
       "a+ /var/lib/nixling - - - - u:microvm:--x"
       "a+ /var/lib/nixling - - - - g:kvm:--x"
@@ -258,8 +259,10 @@ in
       "a+ /run/nixling/vms - - - - u:nixling-media-qemu-media:--x"
       "a+ /run/nixling-wlproxy - - - - u:nixling-media-qemu-media:--x"
       "a+ /run/nixling-wlproxy - - - - u:nixling-media-wlproxy:--x"
-      "d /run/nixling/vms/media 0770 nixlingd nixling -"
-      "z /run/nixling/vms/media 0770 nixlingd nixling -"
+      "d /var/lib/nixling/vms/media/qemu-media 0750 nixling-media-qemu-media nixling-media-qemu-media -"
+      "z /var/lib/nixling/vms/media/qemu-media 0750 nixling-media-qemu-media nixling-media-qemu-media -"
+      "d /run/nixling/vms/media 0750 nixlingd nixling -"
+      "z /run/nixling/vms/media 0750 nixlingd nixling -"
       "a+ /run/nixling/vms/media - - - - m::rwx"
       "a+ /run/nixling/vms/media - - - - u:nixling-media-qemu-media:rwx"
       "d /run/nixling-wlproxy/media 0770 nixlingd nixling -"

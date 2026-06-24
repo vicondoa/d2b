@@ -14,7 +14,7 @@ use nixling_core::storage::RestartClass;
 pub use nixling_core::storage_lifecycle::{
     StorageContractValidationReason, StorageLifecycleIssue, StorageLifecycleReport,
     SyncContractValidationReason, classify_storage_validation_reason,
-    classify_sync_validation_reason,
+    classify_sync_validation_reason, storage_validation_offending_id, sync_validation_offending_id,
 };
 
 pub const STORAGE_LIFECYCLE_CONTRACT_BUNDLE_VERSION: u32 = 6;
@@ -46,7 +46,9 @@ pub fn run_startup_contract_check(resolver: &BundleResolver) -> StorageLifecycle
     if let Some(storage) = storage {
         if let Err(detail) = storage.validate_unique_ids() {
             issues.push(StorageLifecycleIssue::StorageContractInvalid {
+                contract_id: "storage.json".to_owned(),
                 reason: classify_storage_validation_reason(&detail),
+                offending_id: storage_validation_offending_id(&detail),
             });
         }
     } else if contracts_expected {
@@ -60,7 +62,9 @@ pub fn run_startup_contract_check(resolver: &BundleResolver) -> StorageLifecycle
     if let Some(sync) = sync {
         if let Err(detail) = sync.validate_lock_order() {
             issues.push(StorageLifecycleIssue::SyncContractInvalid {
+                contract_id: "sync.json".to_owned(),
                 reason: classify_sync_validation_reason(&detail),
+                offending_id: sync_validation_offending_id(&detail),
             });
         }
     } else if contracts_expected {
@@ -174,6 +178,37 @@ mod tests {
     }
 
     #[test]
+    fn reports_missing_restart_policy_for_each_process_node() {
+        let mut resolver = resolver_with_contracts(false, true);
+        let mut second = resolver.processes.vms[0].nodes[0].clone();
+        second.id = nixling_core::processes::NodeId("virtiofsd-ro-store".to_owned());
+        second.role = ProcessRole::Virtiofsd;
+        second.profile.profile_id = "vm-corp-vm-virtiofsd-ro-store".to_owned();
+        second.profile.cgroup_placement.subtree =
+            "nixling.slice/corp-vm/virtiofsd-ro-store".to_owned();
+        resolver.processes.vms[0].nodes.push(second);
+
+        let report = run_startup_contract_check(&resolver);
+        let missing: BTreeSet<_> = report
+            .issues
+            .iter()
+            .filter_map(|issue| match issue {
+                StorageLifecycleIssue::MissingRestartPolicy { vm, role_id } => {
+                    Some((vm.as_str(), role_id.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            missing,
+            BTreeSet::from([
+                ("corp-vm", "cloud-hypervisor"),
+                ("corp-vm", "virtiofsd-ro-store")
+            ])
+        );
+    }
+
+    #[test]
     fn reports_adoptable_policy_without_cgroup_leaf() {
         let resolver = resolver_with_contracts(true, false);
         let report = run_startup_contract_check(&resolver);
@@ -228,10 +263,16 @@ mod tests {
             matches!(
                 issue,
                 StorageLifecycleIssue::StorageContractInvalid {
-                    reason: StorageContractValidationReason::DuplicateStoragePathId
-                }
+                    contract_id,
+                    reason: StorageContractValidationReason::DuplicateStoragePathId,
+                    offending_id
+                } if contract_id == "storage.json" && offending_id.as_deref() == Some("path:run-root")
             )
         }));
+        let serialized = serde_json::to_string(&report).expect("serialize report");
+        assert!(serialized.contains("duplicate-storage-path-id"));
+        assert!(serialized.contains("path:run-root"));
+        assert!(!serialized.contains("/run/nixling"));
     }
 
     #[test]
@@ -248,10 +289,73 @@ mod tests {
             matches!(
                 issue,
                 StorageLifecycleIssue::SyncContractInvalid {
-                    reason: SyncContractValidationReason::DuplicateLockId
-                }
+                    contract_id,
+                    reason: SyncContractValidationReason::DuplicateLockId,
+                    offending_id
+                } if contract_id == "sync.json" && offending_id.as_deref() == Some("lock:daemon")
             )
         }));
+    }
+
+    #[test]
+    fn reports_sync_ofd_and_fd_transfer_policy_as_reason_slugs() {
+        let mut missing_cloexec = sync();
+        missing_cloexec.locks[0].cloexec_required = false;
+        let resolver = resolver_with_optional_contracts(
+            STORAGE_LIFECYCLE_CONTRACT_BUNDLE_VERSION,
+            Some(storage(true, true)),
+            Some(missing_cloexec),
+        );
+        let report = run_startup_contract_check(&resolver);
+        assert!(report.issues.iter().any(|issue| {
+            matches!(
+                issue,
+                StorageLifecycleIssue::SyncContractInvalid {
+                    contract_id,
+                    reason: SyncContractValidationReason::OfdLockMissingCloexec,
+                    offending_id
+                } if contract_id == "sync.json" && offending_id.as_deref() == Some("lock:daemon")
+            )
+        }));
+        let serialized = serde_json::to_string(&report).expect("serialize OFD report");
+        assert!(serialized.contains("ofd-lock-missing-cloexec"));
+        assert!(serialized.contains("lock:daemon"));
+
+        let mut missing_lease = sync();
+        missing_lease.locks[0].fd_passing_policy.mechanism = FdPassingMechanism::ScmRights;
+        missing_lease.locks[0]
+            .fd_passing_policy
+            .lease_transfer_record_required = false;
+        let resolver = resolver_with_optional_contracts(
+            STORAGE_LIFECYCLE_CONTRACT_BUNDLE_VERSION,
+            Some(storage(true, true)),
+            Some(missing_lease),
+        );
+        let report = run_startup_contract_check(&resolver);
+        assert!(report.issues.iter().any(|issue| {
+            matches!(
+                issue,
+                StorageLifecycleIssue::SyncContractInvalid {
+                    contract_id,
+                    reason: SyncContractValidationReason::FdPassingMissingLeaseTransferRecord,
+                    offending_id
+                } if contract_id == "sync.json" && offending_id.as_deref() == Some("lock:daemon")
+            )
+        }));
+        let serialized = serde_json::to_string(&report).expect("serialize fd report");
+        assert!(serialized.contains("fd-passing-missing-lease-transfer-record"));
+        assert!(serialized.contains("lock:daemon"));
+    }
+
+    #[test]
+    fn startup_report_carries_diagnostics_without_pidfd_authority() {
+        let resolver = resolver_with_contracts(true, false);
+        let report = run_startup_contract_check(&resolver);
+        let serialized = serde_json::to_string(&report).expect("serialize report");
+        assert!(serialized.contains("adoptable-missing-cgroup-leaf"));
+        assert!(!serialized.contains("pidfd"));
+        assert!(!serialized.contains("pidFd"));
+        assert!(!serialized.contains("state.json"));
     }
 
     #[test]
@@ -263,6 +367,19 @@ mod tests {
         assert_eq!(
             classify_sync_validation_reason("future sync validation failure"),
             SyncContractValidationReason::Unclassified,
+        );
+        assert_eq!(
+            storage_validation_offending_id("duplicate storage path id path:run-root").as_deref(),
+            Some("path:run-root"),
+        );
+        assert_eq!(
+            sync_validation_offending_id("lock lock:two shares acquire order key with lock:one")
+                .as_deref(),
+            Some("lock:two"),
+        );
+        assert_eq!(
+            storage_validation_offending_id("duplicate storage path id /run/nixling").as_deref(),
+            None,
         );
     }
 

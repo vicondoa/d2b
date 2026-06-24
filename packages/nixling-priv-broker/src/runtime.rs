@@ -8342,7 +8342,7 @@ mod tests {
         TEST_USB_SYSFS_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
-            .expect("usb sysfs test lock")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -12182,6 +12182,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_bind_audit_failure_does_not_rollback_same_vm_replay() {
+        let _usb_sysfs_guard = usb_sysfs_test_lock();
         let root = test_audit_dir("usbip-bind-audit-failure-replay-preserve");
         let bundle = build_test_bundle(&root);
         let intent = test_usbip_intent_with_lock(&root, &bundle);

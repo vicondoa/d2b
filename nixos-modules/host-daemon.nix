@@ -380,6 +380,7 @@ in
       "d /run/nixling/state 0700 nixlingd nixlingd -"
       "d /var/lib/nixling 0750 root nixlingd -"
       "d /var/lib/nixling/daemon-state 0700 nixlingd nixlingd -"
+      "d /var/cache/nixling 0750 root nixlingd -"
       "d /etc/nixling 0750 root nixlingd -"
     ];
 

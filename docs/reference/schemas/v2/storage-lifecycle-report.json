@@ -121,14 +121,24 @@
         {
           "type": "object",
           "required": [
+            "contractId",
             "kind",
             "reason"
           ],
           "properties": {
+            "contractId": {
+              "type": "string"
+            },
             "kind": {
               "type": "string",
               "enum": [
                 "storage-contract-invalid"
+              ]
+            },
+            "offendingId": {
+              "type": [
+                "string",
+                "null"
               ]
             },
             "reason": {
@@ -139,14 +149,24 @@
         {
           "type": "object",
           "required": [
+            "contractId",
             "kind",
             "reason"
           ],
           "properties": {
+            "contractId": {
+              "type": "string"
+            },
             "kind": {
               "type": "string",
               "enum": [
                 "sync-contract-invalid"
+              ]
+            },
+            "offendingId": {
+              "type": [
+                "string",
+                "null"
               ]
             },
             "reason": {

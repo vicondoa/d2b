@@ -10,6 +10,16 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Changed
+
+- `storage-lifecycle-report.json` now includes bounded `contractId` and
+  `offendingId` fields on storage/sync contract validation issues, and broker
+  storage I/O diagnostics redact absolute managed paths as
+  `storage-path#<hash>`.
+- QEMU media's redacted registry index is now private to declared daemon/broker
+  readers (`0640`) and QEMU media state lives under a dedicated per-VM
+  `qemu-media` subdirectory.
+
 ### Fixed
 
 - Activation now grants every numeric per-role runtime UID traversal on both
@@ -154,6 +164,12 @@ deprecations ship one minor release before removal.
 
 ### Internal
 
+- Extended generated `sync.json` coverage for daemon lock roots, per-VM
+  lifecycle locks, store-view sync locks, and USBIP lock claims without
+  changing live lock implementations.
+- Added contract-test policy coverage for host-mutable path/lock surfaces,
+  requiring storage/sync contract rows, opaque broker IPC inputs, and a single
+  repair owner for new mutable host state.
 - ADR 0035 Wave 5 added a contract-test policy that classifies every
   `ProcessRole` and requires runner roles to carry Rust argv-builder plus
   runner matrix/contract coverage before new roles land.

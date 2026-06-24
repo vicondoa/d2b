@@ -15,6 +15,6 @@ repair still resolves trusted bundle IDs through the broker and must
 not trust this report as authority.
 
 The report never contains raw managed paths. Issue entries use a closed
-`kind` taxonomy and bounded VM/role identifiers from the bundle. The
-schema is generated at
+`kind` taxonomy plus bounded contract, VM, role, and offending contract-row
+identifiers from the bundle. The schema is generated at
 [`docs/reference/schemas/v2/storage-lifecycle-report.json`](./schemas/v2/storage-lifecycle-report.json).
