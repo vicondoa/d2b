@@ -34,6 +34,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Broker request handling no longer emits a per-request `Bundle resolver loaded`
+  info log, and USBIP proxy reconciliation now treats absent locked hardware as
+  a non-fatal ACL-refresh skip instead of spamming paired broker/daemon warnings.
 - `storage.json` validation-evidence rows now use bounded contract identifiers
   for actor values, so rendered fixtures deserialize through the Rust storage
   contract DTOs.
