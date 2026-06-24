@@ -1574,11 +1574,11 @@ fn dispatch_request(
         }),
         BrokerRequest::UsbipExplicitBind { .. } => Err(BrokerError::Unimplemented {
             operation: "UsbipExplicitBind",
-            target_wave: "P4",
+            target_wave: "W5",
         }),
         BrokerRequest::UsbipExplicitFirewallRule { .. } => Err(BrokerError::Unimplemented {
             operation: "UsbipExplicitFirewallRule",
-            target_wave: "P4",
+            target_wave: "W5",
         }),
         BrokerRequest::UsbipProxyReconcile { .. } => Err(BrokerError::UnknownOperation {
             operation: "UsbipProxyReconcile",
@@ -3932,11 +3932,11 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         }),
         RealBrokerRequest::UsbipExplicitBind(_) => Err(BrokerError::Unimplemented {
             operation: "UsbipExplicitBind",
-            target_wave: "P4",
+            target_wave: "W5",
         }),
         RealBrokerRequest::UsbipExplicitFirewallRule(_) => Err(BrokerError::Unimplemented {
             operation: "UsbipExplicitFirewallRule",
-            target_wave: "P4",
+            target_wave: "W5",
         }),
         // Disk-init dispatch. The broker resolves every `DiskInit`
         // plan-op from the trusted bundle for `vm_id` and creates the
