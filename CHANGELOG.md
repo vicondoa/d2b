@@ -93,6 +93,16 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- `nixling vm exec` and `nixling vm exec -d` no longer time out with
+  `guest-control-timeout` (exit 69) when a long-running GUI application
+  (such as Firefox) is starting up in the target VM. During peak startup
+  the VM is under heavy virtiofs I/O load; vsock connection setup and the
+  six-step authenticated handshake (connect, Hello, broker sign,
+  Authenticate, broker sign, Health) each approach their 3-second per-op
+  cap, requiring up to 18 s of budget. The establishment deadline was
+  raised from 12 s to 20 s (covering all six operations at their full cap
+  plus 2 s headroom). The detached-create RPC deadline was raised from
+  12 s to 20 s for the same reason.
 - Broker VM activation requests now split store-view preparation, guest-completed
   metadata commit, and offline metadata-only staging so the privileged broker no
   longer executes VM `switch-to-configuration` scripts on the host.

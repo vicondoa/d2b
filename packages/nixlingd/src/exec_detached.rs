@@ -34,7 +34,11 @@ use crate::{
     resolve_guest_control_probe_params,
 };
 
-const DETACHED_CREATE_DEADLINE: Duration = Duration::from_secs(12);
+// Host-side deadline for the ExecCreate RPC. guestd's detached registry
+// waits up to 10 s for the runner to write its status file
+// (`CREATE_TIMEOUT_MS`); 20 s covers that window plus scheduling slack,
+// consistent with `exec_session_real::ESTABLISH_TIMEOUT`.
+const DETACHED_CREATE_DEADLINE: Duration = Duration::from_secs(20);
 const DETACHED_CANCEL_DEADLINE: Duration = Duration::from_secs(30);
 #[cfg(test)]
 const DETACHED_CREATE_GUEST_WINDOW: Duration = Duration::from_millis(10_000);
