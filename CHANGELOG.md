@@ -49,6 +49,13 @@ deprecations ship one minor release before removal.
   `usb_json_contract`; and 3 network-scoping contract tests in
   `usb_network_scoping`.
 
+### Fixed
+
+- `nixling usb detach <vm> <busid> --apply` now reaches the broker
+  `UsbipUnbind` cleanup path instead of stopping at a hardcoded ambiguous-flow
+  refusal, so stale USBIP host claims can be released and subsequent attaches can
+  recover without raw `usbip` commands.
+
 ### Changed
 
 - Public daemon list/status handling now uses a request-scoped artifact snapshot
@@ -109,6 +116,9 @@ deprecations ship one minor release before removal.
 - Broker VM activation requests now split store-view preparation, guest-completed
   metadata commit, and offline metadata-only staging so the privileged broker no
   longer executes VM `switch-to-configuration` scripts on the host.
+- `/run/nixling` tmpfiles ACL ordering now reasserts the ACL mask after per-VM
+  traversal entries, so `nixlingd` keeps effective write access to its daemon
+  lock after a host switch.
 - `qemu-media` TAP synchronization locks now render the TAP identifier as a
   resource id instead of a non-path `pathTemplate`, so the generated `sync.json`
   deserializes through the Rust `SyncJson` DTO and `nixlingd` can load the bundle

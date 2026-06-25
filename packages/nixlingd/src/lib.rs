@@ -3652,10 +3652,6 @@ fn dispatch_broker_usbip_bind(
         }
     } else {
         // Explicit path: no static bundle intents required.
-        // Use UsbipExplicitBind + UsbipExplicitFirewallRule broker stubs.
-        // These ops are typed stubs (Unimplemented) until the live per-device
-        // backend handler is wired in the broker; the daemon returns a clear
-        // error so the operator knows the explicit path is not yet fully live.
         let host_uplink_ip = vm_entry
             .and_then(|e| e.usbipd_host_ip.as_deref())
             .unwrap_or("")
@@ -4558,37 +4554,59 @@ fn dispatch_broker_usbip_unbind(
     if let Err(response) = validate_usbip_bus_id_for_daemon(VERB, &request.bus_id) {
         return Ok(response);
     }
-    if let Err(response) =
-        usbip_bind_intent_ref_for_daemon(&resolver, &request.vm, &request.bus_id, VERB)
-    {
-        return Ok(response);
-    }
-    let revocation_plan = usbip_reconcile_state::plan_usbip_revocation_flow_termination(
-        usbip_reconcile_state::UsbipProxyFlowObservation::SharedOrAmbiguous,
-    );
-    Ok(usbip_revocation_not_isolated_response(
-        VERB,
+    let intent_ref =
+        match usbip_bind_intent_ref_for_daemon(&resolver, &request.vm, &request.bus_id, VERB) {
+            Ok(intent_ref) => intent_ref,
+            Err(response) => return Ok(response),
+        };
+
+    if let Err(summary) = run_guest_usbip_import(
+        state,
+        &resolver,
         &request.vm,
         &request.bus_id,
-        revocation_plan
-            .fail_closed_reason
-            .unwrap_or(usbip_reconcile_state::UsbipRevocationFlowFailure::MissingExactTuple),
-    ))
-}
-
-fn usbip_revocation_not_isolated_response(
-    verb: &str,
-    vm: &str,
-    busid: &str,
-    reason: usbip_reconcile_state::UsbipRevocationFlowFailure,
-) -> Value {
-    let envelope = TypedError::UsbipRevocationNotIsolated {
-        vm: vm.to_owned(),
-        busid: busid.to_owned(),
-        reason,
+        guest_control_health::GuestUsbipAction::Detach,
+    ) {
+        tracing::warn!(
+            vm = %request.vm,
+            bus_id = %request.bus_id,
+            summary = %summary,
+            "USBIP guest detach failed; continuing host-side detach cleanup"
+        );
     }
-    .to_envelope();
-    broker_failure_response(verb, envelope.message, envelope.remediation, None)
+
+    if let Err(response) = dispatch_broker_ack_request(
+        state,
+        VERB,
+        "UsbipUnbind",
+        BrokerRequest::UsbipUnbind(BrokerUsbipUnbindRequest {
+            bundle_usbip_bind_intent_ref: intent_ref,
+            preserve_durable_claim: false,
+            tracing_span_id: None,
+        }),
+    ) {
+        return Ok(response);
+    }
+
+    if let Err(response) = dispatch_broker_ack_request(
+        state,
+        VERB,
+        "UsbipProxyReconcile",
+        BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
+            scope_id: ScopeId::new(format!("vm:{}", request.vm)),
+            tracing_span_id: None,
+        }),
+    ) {
+        return Ok(response);
+    }
+
+    Ok(applied_response(
+        VERB,
+        format!(
+            "nixling usb detach --apply: detached busid '{}' from vm '{}' and released the host claim",
+            request.bus_id, request.vm
+        ),
+    ))
 }
 
 fn vm_is_qemu_media(resolver: &BundleResolver, vm: &str) -> Result<bool, TypedError> {
