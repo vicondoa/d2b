@@ -59,6 +59,9 @@ deprecations ship one minor release before removal.
   root `ExecStartPre`, preventing NixOS switch-time restarts from racing
   `systemd-tmpfiles-resetup` and starting with `nixlingd` write access clipped to
   effective `r-x`.
+- USB probe/status no longer marks a declared USBIP device `degraded` with
+  `probe-incomplete` after guest-control confirms that the busid is already
+  imported in the guest.
 
 ### Changed
 

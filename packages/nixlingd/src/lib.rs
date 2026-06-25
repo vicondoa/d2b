@@ -4861,6 +4861,7 @@ fn usbip_probe_entry_from_intent(
                 )),
             ));
         }
+        let guest_status_requested = guest_status_timeout.is_some();
         if let Some(guest_status_timeout) = guest_status_timeout {
             match run_guest_usbip_status(
                 state,
@@ -4905,14 +4906,18 @@ fn usbip_probe_entry_from_intent(
                 ),
             }
         }
-        degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
-            usbip_reconcile_state::UsbipDegradedReason::ProbeIncomplete,
-            Some(format!(
-                "Run `nixling usb attach {vm} {bus} --apply` to reconcile host and guest USB state.",
-                vm = intent.vm_name,
-                bus = intent.bus_id
-            )),
-        ));
+        if !guest_status_requested
+            || !matches!(guest_import, public_wire::UsbipGuestImportState::Imported)
+        {
+            degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
+                usbip_reconcile_state::UsbipDegradedReason::ProbeIncomplete,
+                Some(format!(
+                    "Run `nixling usb attach {vm} {bus} --apply` to reconcile host and guest USB state.",
+                    vm = intent.vm_name,
+                    bus = intent.bus_id
+                )),
+            ));
+        }
     } else if matches!(
         durable_state,
         public_wire::UsbipDurableClaimState::HeldByOtherOwner
