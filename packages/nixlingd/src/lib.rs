@@ -509,6 +509,9 @@ struct ServerState {
     /// thread inside `dispatch_request` so a mutating lifecycle op cannot
     /// race another op on the same VM (or any per-VM op for a global op).
     op_locks: concurrency::OpLockManager,
+    /// Daemon-owned fast list/status read model. This is per ServerState so
+    /// independent daemon instances/tests never evict each other's snapshots.
+    public_status_read_model: Arc<PublicStatusReadModel>,
 }
 
 struct GatewayDisplayRuntime {
@@ -968,6 +971,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         gateway_display,
         conn_semaphore: concurrency::ConnSemaphore::new(resolve_max_inflight_connections()),
         op_locks: crate::concurrency::OpLockManager::new(),
+        public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
     };
     refresh_activation_marker_metrics_on_startup(&state);
     refresh_broker_reap_log(&state, "startup");
@@ -2573,7 +2577,7 @@ fn dispatch_request(
     let _op_lock = state.op_locks.acquire(&request.lock_class());
     let result = dispatch_request_locked(state, peer, request);
     if invalidates_status_model {
-        public_status_read_model().invalidate();
+        state.public_status_read_model.invalidate();
     }
     result
 }
@@ -15201,11 +15205,6 @@ impl PublicStatusReadModel {
     }
 }
 
-fn public_status_read_model() -> &'static PublicStatusReadModel {
-    static MODEL: OnceLock<PublicStatusReadModel> = OnceLock::new();
-    MODEL.get_or_init(PublicStatusReadModel::new)
-}
-
 fn public_artifact_fingerprint(
     state: &ServerState,
 ) -> Result<PublicArtifactFingerprint, TypedError> {
@@ -15256,11 +15255,11 @@ fn attach_read_model_metadata(
         "freshness": "fresh",
         "deepRefresh": "available",
     });
-    if kind == "status" {
-        if let Some(status) = frame.get_mut("status").and_then(Value::as_object_mut) {
-            status.insert("readModel".to_owned(), metadata);
-            return frame;
-        }
+    if kind == "status"
+        && let Some(status) = frame.get_mut("status").and_then(Value::as_object_mut)
+    {
+        status.insert("readModel".to_owned(), metadata);
+        return frame;
     }
     if let Some(object) = frame.as_object_mut() {
         object.insert("readModel".to_owned(), metadata);
@@ -15341,12 +15340,12 @@ fn dispatch_list(
     request: public_wire::ListRequest,
 ) -> Result<Value, TypedError> {
     let cacheable = request.vm.is_none() && request.env.is_none();
-    if cacheable && let Some(cached) = public_status_read_model().load_list(state) {
+    if cacheable && let Some(cached) = state.public_status_read_model.load_list(state) {
         return Ok(cached);
     }
     let frame = build_public_list(state, request)?;
     if cacheable {
-        return Ok(public_status_read_model().publish_list(state, frame));
+        return Ok(state.public_status_read_model.publish_list(state, frame));
     }
     Ok(frame)
 }
@@ -15423,12 +15422,12 @@ fn dispatch_status(
     request: public_wire::StatusRequest,
 ) -> Result<Value, TypedError> {
     let cacheable = request.vm.is_none() && !request.check_bridges;
-    if cacheable && let Some(cached) = public_status_read_model().load_status(state) {
+    if cacheable && let Some(cached) = state.public_status_read_model.load_status(state) {
         return Ok(cached);
     }
     let frame = build_public_status(state, request)?;
     if cacheable {
-        return Ok(public_status_read_model().publish_status(state, frame));
+        return Ok(state.public_status_read_model.publish_status(state, frame));
     }
     Ok(frame)
 }
@@ -16042,6 +16041,7 @@ mod public_status_tests {
             gateway_display: crate::new_gateway_display_runtime_for_tests(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         };
         (state, dir)
     }
@@ -18653,6 +18653,7 @@ mod detached_exec_routing_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         }
     }
 
@@ -19319,6 +19320,7 @@ mod accept_loop_concurrency_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         };
         (state, dir)
     }
@@ -19837,6 +19839,7 @@ mod broker_dispatch_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         }
     }
 
@@ -19867,6 +19870,7 @@ mod broker_dispatch_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         }
     }
 
@@ -21733,6 +21737,7 @@ mod broker_dispatch_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -21949,6 +21954,7 @@ mod broker_dispatch_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         };
 
         let listener = socket(
@@ -22194,6 +22200,7 @@ mod broker_dispatch_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
@@ -23997,6 +24004,7 @@ mod broker_dispatch_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         };
 
         // Emit the same event that the timeout handler in

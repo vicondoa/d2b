@@ -5260,6 +5260,16 @@
         "vms"
       ],
       "properties": {
+        "readModel": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PublicReadModelMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "vms": {
           "type": "array",
           "items": {
@@ -5633,6 +5643,48 @@
         },
         "vmId": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PublicReadModelMetadata": {
+      "type": "object",
+      "required": [
+        "deepRefresh",
+        "freshness",
+        "generation",
+        "kind",
+        "schemaVersion",
+        "sourceFingerprint",
+        "updatedAtUnixMs"
+      ],
+      "properties": {
+        "deepRefresh": {
+          "type": "string"
+        },
+        "freshness": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "kind": {
+          "type": "string"
+        },
+        "schemaVersion": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "sourceFingerprint": {
+          "type": "string"
+        },
+        "updatedAtUnixMs": {
+          "type": "integer",
+          "format": "uint128",
+          "minimum": 0.0
         }
       },
       "additionalProperties": false
@@ -8762,6 +8814,16 @@
           "items": {
             "$ref": "#/definitions/VmStatus"
           }
+        },
+        "readModel": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PublicReadModelMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false

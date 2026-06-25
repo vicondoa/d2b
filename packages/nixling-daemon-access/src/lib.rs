@@ -1049,7 +1049,10 @@ fn parse_list_response(response: &[u8]) -> ProviderResult<ListResponse> {
             "daemon returned an unexpected list reply",
         ));
     }
-    decode_value::<ListResponseFrame>(value).map(|frame| ListResponse { vms: frame.vms })
+    decode_value::<ListResponseFrame>(value).map(|frame| ListResponse {
+        vms: frame.vms,
+        read_model: None,
+    })
 }
 
 fn reject_error_frame(request_type: &'static str, response: &[u8]) -> ProviderResult<()> {
@@ -1644,6 +1647,7 @@ mod tests {
             .collect();
         let expected = DaemonVmList::from(ListResponse {
             vms: entries.clone(),
+            read_model: None,
         });
         let server = thread::spawn({
             let response_entries = entries.clone();
