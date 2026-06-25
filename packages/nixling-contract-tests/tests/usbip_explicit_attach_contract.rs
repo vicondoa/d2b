@@ -348,3 +348,26 @@ fn usb_detach_dispatches_host_unbind_instead_of_static_ambiguous_refusal() {
         "nixling usb detach must not hardcode an ambiguous-flow refusal before trying broker cleanup"
     );
 }
+
+#[test]
+fn usb_probe_does_not_mark_imported_devices_probe_incomplete() {
+    let lib_rs = read_repo_file("packages/nixlingd/src/lib.rs");
+    let probe_start = lib_rs
+        .find("fn usbip_probe_entry_from_intent")
+        .expect("usbip_probe_entry_from_intent exists");
+    let probe_end = lib_rs[probe_start..]
+        .find("fn push_guest_usbip_status_error")
+        .map(|offset| probe_start + offset)
+        .expect("next function after usbip_probe_entry_from_intent exists");
+    let probe_body = &lib_rs[probe_start..probe_end];
+
+    assert!(
+        probe_body.contains("GuestImportState::Imported"),
+        "USB probe must inspect whether guest status confirms the busid is imported"
+    );
+    assert!(
+        probe_body
+            .contains("!matches!(guest_import, public_wire::UsbipGuestImportState::Imported)"),
+        "USB probe must not add probe-incomplete degradation for devices already imported in the guest"
+    );
+}
