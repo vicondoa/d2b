@@ -32,9 +32,17 @@ use crate::guest_control_health::{
 use crate::terminal_session::TerminalBackend;
 use nixling_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
 
-/// Generous absolute deadline for the whole establish (connect + auth +
-/// `ExecCreate`). Per-op deadlines are separate and fresh.
-pub(crate) const ESTABLISH_TIMEOUT: Duration = Duration::from_secs(12);
+/// Absolute deadline for the whole establish phase (connect + auth handshake:
+/// `CONNECT`-ack, Hello, sign, Authenticate, sign, Health).
+/// `ExecCreate` uses a separate fresh per-op deadline (`ExecOpDeadlines`).
+///
+/// The establish phase has six sequential operations, each capped at
+/// `GUEST_CONTROL_ATTEMPT_CAP` (3 s). Under heavy guest load — for example,
+/// while a GUI application (Firefox, etc.) is doing its initial virtiofs burst
+/// loading hundreds of shared libraries — every operation can approach its
+/// per-op cap, requiring up to 6 × 3 s = 18 s of budget. 20 s leaves 2 s of
+/// headroom for scheduling jitter without changing the per-op cap or protocol.
+pub(crate) const ESTABLISH_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Production exec connector. Owns the resolved probe params + broker socket
 /// path so it is `Send + Sync` and can move into the worker thread.
