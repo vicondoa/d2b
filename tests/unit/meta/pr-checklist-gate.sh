@@ -52,9 +52,12 @@ check_item() {
 check_item 'make check checkbox' '^- \[[ xX]\] \*\*`make check` passes locally\*\*'
 check_item 'make test-integration checkbox' '^- \[[ xX]\] \*\*`make test-integration` passes on the host before PR creation\*\*'
 check_item 'make test-host-integration checkbox' '^- \[[ xX]\] \*\*`make test-host-integration` passes on the host before PR creation\*\*'
+check_item 'test-integration N/A escape hatch' 'N/A: pure policy/docs/checklist change with no daemon, broker, NixOS'
+check_item 'test-host-integration N/A escape hatch' 'N/A: pure policy/docs/checklist change with no daemon, broker, NixOS'
 check_item 'manual test-hardware checkbox' '^- \[[ xX]\] \*\*Manual `make test-hardware` run\*\*'
 check_item 'make-target wiring checkbox' '^- \[[ xX]\] \*\*New/changed tests are wired into a `make` target\*\*'
 check_item 'docs and CI lockstep checkbox' '^- \[[ xX]\] \*\*Docs \+ CI updated in lockstep\*\*'
+check_item 'no AI metadata instruction' 'Do not include AI agent, assistant, or model metadata'
 
 if [ "$fail" -ne 0 ]; then
   echo "pr-checklist-gate: mandatory checklist is incomplete" >&2

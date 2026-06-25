@@ -25,10 +25,6 @@
 //! before installing the filter.  When this call returns `EPERM`, the test
 //! is skipped gracefully (not failed).
 
-// The fork-based tests in this module use libc syscall wrappers in
-// the child closure.  We allow unsafe only for those specific items.
-#![allow(unsafe_code)]
-
 use nix::libc;
 use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd::Pid;
@@ -56,6 +52,7 @@ const EXIT_INSTALL_FAILED: libc::c_int = 43;
 // ── helper ────────────────────────────────────────────────────────────
 
 /// `true` when the calling process can set `PR_SET_NO_NEW_PRIVS`.
+#[allow(unsafe_code)]
 fn can_set_no_new_privs() -> bool {
     // SAFETY: prctl with PR_SET_NO_NEW_PRIVS is side-effect-free on
     // failure; on success it is a one-way ratchet used by seccomp.
@@ -71,6 +68,7 @@ fn can_set_no_new_privs() -> bool {
 /// Parent asserts `WIFEXITED && exit_code == EXIT_POSITIVE_OK`.
 #[test]
 #[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
 fn behavioral_positive_allowed_ioctl_does_not_sigsys() {
     if !can_set_no_new_privs() {
         eprintln!(
@@ -134,6 +132,7 @@ fn behavioral_positive_allowed_ioctl_does_not_sigsys() {
 /// `WIFSIGNALED && WTERMSIG == SIGSYS`.
 #[test]
 #[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
 fn behavioral_negative_undeclared_ioctl_delivers_sigsys() {
     if !can_set_no_new_privs() {
         eprintln!(
