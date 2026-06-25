@@ -82,6 +82,8 @@ in
       launcherTraverseAcl = builtins.elem "a+ /run/nixling - - - - g::r-x" tmpfiles;
       daemonWriteAcl = builtins.elem "a+ /run/nixling - - - - u:nixlingd:rwx" tmpfiles;
       writeCapableMask = builtins.elem "a+ /run/nixling - - - - m::rwx" tmpfiles;
+      finalRunNixlingRules =
+        lib.take 2 (lib.reverseList (builtins.filter (rule: lib.hasPrefix "a+ /run/nixling - - - - " rule) tmpfiles));
     };
     expected = {
       rootOwnedStickyParent = true;
@@ -89,6 +91,10 @@ in
       launcherTraverseAcl = true;
       daemonWriteAcl = true;
       writeCapableMask = true;
+      finalRunNixlingRules = [
+        "a+ /run/nixling - - - - default:m::rwx"
+        "a+ /run/nixling - - - - m::rwx"
+      ];
     };
   };
 
