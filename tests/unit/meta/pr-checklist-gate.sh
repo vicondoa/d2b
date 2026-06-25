@@ -26,6 +26,11 @@ elif [ -p /dev/stdin ] || [ -f /dev/stdin ]; then
   source_label="-"
 fi
 
+is_template=0
+case "$source_label" in
+  ".github/PULL_REQUEST_TEMPLATE.md"|*/.github/PULL_REQUEST_TEMPLATE.md) is_template=1 ;;
+esac
+
 if [ "$source_label" = "-" ]; then
   body=$(cat)
 else
@@ -52,12 +57,15 @@ check_item() {
 check_item 'make check checkbox' '^- \[[ xX]\] \*\*`make check` passes locally\*\*'
 check_item 'make test-integration checkbox' '^- \[[ xX]\] \*\*`make test-integration` passes on the host before PR creation\*\*'
 check_item 'make test-host-integration checkbox' '^- \[[ xX]\] \*\*`make test-host-integration` passes on the host before PR creation\*\*'
-check_item 'test-integration N/A escape hatch' 'N/A: pure policy/docs/checklist change with no daemon, broker, NixOS'
-check_item 'test-host-integration N/A escape hatch' 'N/A: pure policy/docs/checklist change with no daemon, broker, NixOS'
 check_item 'manual test-hardware checkbox' '^- \[[ xX]\] \*\*Manual `make test-hardware` run\*\*'
 check_item 'make-target wiring checkbox' '^- \[[ xX]\] \*\*New/changed tests are wired into a `make` target\*\*'
 check_item 'docs and CI lockstep checkbox' '^- \[[ xX]\] \*\*Docs \+ CI updated in lockstep\*\*'
-check_item 'no AI metadata instruction' 'Do not include AI agent, assistant, or model metadata'
+
+if [ "$is_template" -eq 1 ]; then
+  check_item 'test-integration N/A escape hatch' 'N/A: pure policy/docs/checklist change with no daemon, broker, NixOS'
+  check_item 'test-host-integration N/A escape hatch' 'N/A: pure policy/docs/checklist change with no daemon, broker, NixOS'
+  check_item 'no AI metadata instruction' 'Do not include AI agent, assistant, or model metadata'
+fi
 
 if [ "$fail" -ne 0 ]; then
   echo "pr-checklist-gate: mandatory checklist is incomplete" >&2
