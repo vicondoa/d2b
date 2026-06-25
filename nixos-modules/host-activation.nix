@@ -264,6 +264,11 @@ in
     (tmpfilesDir "/run/nixling-wlproxy" "0750" "root" "nixling")
     perVmRuntimeTraversalAcls
     perQemuMediaRuntimeTraversalAcls
+    # The traversal ACLs above add many --x named users. systemd-tmpfiles
+    # recalculates the ACL mask after each a+ rule, so reassert m::rwx after
+    # those entries or nixlingd's named rwx ACL becomes effectively r-x and the
+    # daemon cannot open /run/nixling/daemon.lock after a switch.
+    (tmpfilesAcl "/run/nixling" "m::rwx")
     perNormalVmPostureTmpfiles
     perQemuMediaPostureTmpfiles
     # Reassert last: later named-user ACL grants on /run/nixling can otherwise
