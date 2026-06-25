@@ -147,7 +147,8 @@ in
       in
       builtins.elem "a+ /run/nixling - - - - u:nixlingd:rwx" runNixlingRules
       && builtins.elem "a+ /run/nixling - - - - u:nixling-corp-vm-snd:--x" runNixlingRules
-      && lib.last runNixlingRules == "a+ /run/nixling - - - - m::rwx";
+      && builtins.elemAt runNixlingRules ((builtins.length runNixlingRules) - 2) == "a+ /run/nixling - - - - m::rwx"
+      && lib.last runNixlingRules == "a+ /run/nixling - - - - default:m::rwx";
     expected = true;
   };
 

@@ -22,10 +22,12 @@ deprecations ship one minor release before removal.
   under `/run/nixling/locks/usbip/<busid>`). When a static bundle intent exists
   for the busid, the declared path is used (existing behavior preserved). When no
   declared intent is found, the explicit path dispatches two new broker ops —
-  `UsbipExplicitBind` and `UsbipExplicitFirewallRule` — which are typed stubs
-  pending per-device backend handler implementation. New typed errors
-  `UsbipBusidNotPresent` (exit 67) and `UsbipExplicitClaimConflict` (exit 67)
-  surface actionable operator guidance for pre-flight rejections.
+  `UsbipExplicitBind` and `UsbipExplicitFirewallRule` — which perform per-device
+  backend ACL grant (without allowlist validation), scoped nftables carveout
+  install preserving all active declared and explicit carveouts, and compensating
+  rollback on any failure. New typed errors `UsbipBusidNotPresent` (exit 67) and
+  `UsbipExplicitClaimConflict` (exit 67) surface actionable operator guidance for
+  pre-flight rejections.
 - `UsbipClaimSource` enum in `nixling-contracts` models whether an active daemon
   USB claim originates from a static bundle declaration (`Declared { firewall_ref,
   bind_ref }`) or an explicit present-busid attach (`Explicit`).
@@ -37,11 +39,15 @@ deprecations ship one minor release before removal.
 - `UsbipExplicitBind` and `UsbipExplicitFirewallRule` broker wire ops carry raw
   busid, vm, env, and per-env uplink IPs for the per-device backend model;
   validated by the same busid shape validator as the declared path.
-- 33 new focused Rust tests: 8 focused unit tests in `usbip_state_machine`, and
-  15 contract tests in `usbip_explicit_attach_contract` covering explicit plan
+- 38 new focused Rust tests: 8 focused unit tests in `usbip_state_machine`, 15
+  contract tests in `usbip_explicit_attach_contract` covering explicit plan
   shape, claim source enum, lock path derivation, broker op round-trips,
   deny-unknown-fields, per-device backend model policy, firewall env scope, sysfs
-  presence pre-flight, and codebase policy gates.
+  presence pre-flight, and codebase policy gates; 2 audit roundtrip tests in the
+  broker for the new `UsbipExplicitBind` and `UsbipExplicitFirewallRule`
+  `OperationFields` variants; 2 JSON-schema contract tests in
+  `usb_json_contract`; and 3 network-scoping contract tests in
+  `usb_network_scoping`.
 
 ### Changed
 
@@ -87,6 +93,16 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- `nixling vm exec` and `nixling vm exec -d` no longer time out with
+  `guest-control-timeout` (exit 69) when a long-running GUI application
+  (such as Firefox) is starting up in the target VM. During peak startup
+  the VM is under heavy virtiofs I/O load; vsock connection setup and the
+  six-step authenticated handshake (connect, Hello, broker sign,
+  Authenticate, broker sign, Health) each approach their 3-second per-op
+  cap, requiring up to 18 s of budget. The establishment deadline was
+  raised from 12 s to 20 s (covering all six operations at their full cap
+  plus 2 s headroom). The detached-create RPC deadline was raised from
+  12 s to 20 s for the same reason.
 - Broker VM activation requests now split store-view preparation, guest-completed
   metadata commit, and offline metadata-only staging so the privileged broker no
   longer executes VM `switch-to-configuration` scripts on the host.
