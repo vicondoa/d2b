@@ -140,6 +140,18 @@ in
     expected = true;
   };
 
+  "activation-runtime-tmpfiles/run-parent-mask-after-traversal-acls" = {
+    expr =
+      let
+        runNixlingRules = rulesForPath "/run/nixling";
+      in
+      builtins.elem "a+ /run/nixling - - - - u:nixlingd:rwx" runNixlingRules
+      && builtins.elem "a+ /run/nixling - - - - u:nixling-corp-vm-snd:--x" runNixlingRules
+      && builtins.elemAt runNixlingRules ((builtins.length runNixlingRules) - 2) == "a+ /run/nixling - - - - m::rwx"
+      && lib.last runNixlingRules == "a+ /run/nixling - - - - default:m::rwx";
+    expected = true;
+  };
+
   "activation-runtime-tmpfiles/gpu-parent" = {
     expr = lib.all (rule: builtins.elem rule tmpfiles) [
       "d /run/nixling-gpu 0750 root nixling -"
