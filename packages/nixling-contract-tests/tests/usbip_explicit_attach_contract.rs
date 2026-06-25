@@ -307,18 +307,44 @@ fn sysfs_presence_check_is_fail_closed_before_broker_dispatch() {
 }
 
 // ---------------------------------------------------------------------------
-// Broker ops are registered as Unimplemented stubs in layer1-bootstrap
+// Broker ops are registered in the runtime dispatch
 // ---------------------------------------------------------------------------
 
 #[test]
-fn explicit_ops_appear_in_broker_runtime_as_unimplemented_stubs() {
+fn explicit_ops_appear_in_broker_runtime_dispatch() {
     let runtime = read_repo_file("packages/nixling-priv-broker/src/runtime.rs");
     assert!(
         runtime.contains("UsbipExplicitBind"),
-        "broker runtime.rs must handle UsbipExplicitBind (at least as Unimplemented stub)"
+        "broker runtime.rs must handle UsbipExplicitBind"
     );
     assert!(
         runtime.contains("UsbipExplicitFirewallRule"),
-        "broker runtime.rs must handle UsbipExplicitFirewallRule (at least as Unimplemented stub)"
+        "broker runtime.rs must handle UsbipExplicitFirewallRule"
+    );
+}
+
+#[test]
+fn usb_detach_dispatches_host_unbind_instead_of_static_ambiguous_refusal() {
+    let lib_rs = read_repo_file("packages/nixlingd/src/lib.rs");
+    let detach_start = lib_rs
+        .find("fn dispatch_broker_usbip_unbind")
+        .expect("dispatch_broker_usbip_unbind exists");
+    let detach_end = lib_rs[detach_start..]
+        .find("fn vm_is_qemu_media")
+        .map(|offset| detach_start + offset)
+        .expect("next function after dispatch_broker_usbip_unbind exists");
+    let detach_body = &lib_rs[detach_start..detach_end];
+
+    assert!(
+        detach_body.contains("BrokerRequest::UsbipUnbind"),
+        "nixling usb detach must dispatch the broker UsbipUnbind path so stale host claims can be released"
+    );
+    assert!(
+        detach_body.contains("preserve_durable_claim: false"),
+        "explicit detach must release the durable host claim after host cleanup succeeds"
+    );
+    assert!(
+        !detach_body.contains("UsbipProxyFlowObservation::SharedOrAmbiguous"),
+        "nixling usb detach must not hardcode an ambiguous-flow refusal before trying broker cleanup"
     );
 }

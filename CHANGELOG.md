@@ -49,6 +49,13 @@ deprecations ship one minor release before removal.
   `usb_json_contract`; and 3 network-scoping contract tests in
   `usb_network_scoping`.
 
+### Fixed
+
+- `nixling usb detach <vm> <busid> --apply` now reaches the broker
+  `UsbipUnbind` cleanup path instead of stopping at a hardcoded ambiguous-flow
+  refusal, so stale USBIP host claims can be released and subsequent attaches can
+  recover without raw `usbip` commands.
+
 ### Changed
 
 - Public daemon list/status handling now uses a request-scoped artifact snapshot
