@@ -266,6 +266,9 @@ in
     perQemuMediaRuntimeTraversalAcls
     perNormalVmPostureTmpfiles
     perQemuMediaPostureTmpfiles
+    # Reassert last: later named-user ACL grants on /run/nixling can otherwise
+    # recompute the ACL mask down to r-x and clip nixlingd's rwx access.
+    (runtimeAclMask "/run/nixling")
   ];
 
   system.activationScripts.nixlingGroupMigration =
