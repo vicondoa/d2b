@@ -23,8 +23,6 @@
 //! `dup2` (internally used by the shell) clears FD_CLOEXEC on fd 3.
 
 #![cfg(not(feature = "layer1-bootstrap"))]
-// unsafe needed for clearing FD_CLOEXEC on the listen socket before spawn.
-#![allow(unsafe_code)]
 
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -75,6 +73,7 @@ fn bind_seqpacket_listen(path: &std::path::Path) -> io::Result<OwnedFd> {
 /// The listen socket is passed into the shell via its inherited fd number;
 /// the shell redirects it to fd 3 before exec-ing the broker.
 #[test]
+#[allow(unsafe_code)]
 fn broker_adopts_socket_activated_fd_and_serves_hello() {
     let scratch = scratch_dir();
     let sock_path = scratch.path().join("priv.sock");

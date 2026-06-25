@@ -85,6 +85,9 @@ deprecations ship one minor release before removal.
   daemon-owned terms instead of retired per-VM systemd template names.
 - Broker user-namespace sync-pipe creation and parent-side sync I/O now use safe
   fd wrappers while preserving `O_CLOEXEC`, cleanup, and reap semantics.
+- The PR checklist and policy tests now include an efficiency ratchet for host
+  gate N/A justifications, AI/model metadata hygiene, metric label cardinality,
+  noisy PID logging, and file-wide unsafe-code allowances.
 - Runtime capability projection for qemu-media list/status output now goes
   through focused helpers with direct regression coverage, preserving public JSON
   and human output shape.

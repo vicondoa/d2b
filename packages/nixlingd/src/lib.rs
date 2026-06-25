@@ -9607,7 +9607,6 @@ fn wait_for_one_shot_exit(
                     Ok(ProcState::ParseFailed) => {
                         if !parse_fail_warned {
                             tracing::warn!(
-                                pid,
                                 "wait_for_one_shot_exit: /proc/<pid>/stat unparseable; \
                                  continuing to poll (will surface as oneshot-timeout if persistent)"
                             );
@@ -9615,7 +9614,7 @@ fn wait_for_one_shot_exit(
                         }
                     }
                     Err(err) => {
-                        tracing::debug!(pid, %err, "read_proc_state I/O error; continuing to poll");
+                        tracing::debug!(%err, "read_proc_state I/O error; continuing to poll");
                     }
                 }
                 if Instant::now() >= deadline {

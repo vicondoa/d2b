@@ -1,5 +1,4 @@
-#![allow(unsafe_code)]
-
+#[allow(unsafe_code)]
 pub fn run(args: libshpool::Args) -> anyhow::Result<()> {
     // libshpool 0.11.0 documents `run` as unsafe because it can initialize
     // global tracing state, daemonize, and exit the process. The helper is the
@@ -7,6 +6,7 @@ pub fn run(args: libshpool::Args) -> anyhow::Result<()> {
     unsafe { libshpool::run(args, None) }
 }
 
+#[allow(unsafe_code)]
 pub fn run_with_home(args: libshpool::Args, home: &std::path::Path) -> anyhow::Result<()> {
     // The daemon helper is single-threaded before this call and exits by running
     // libshpool; mutating HOME here is the narrow process-boundary effect the

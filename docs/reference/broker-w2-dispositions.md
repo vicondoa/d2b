@@ -71,8 +71,8 @@ side-effect audit operation that never reaches the wire dispatcher).
 | UpdateHostsFile | promoted-live | Resolves the trusted hosts-file intent and reconciles the managed `/etc/hosts` block. | live in production broker |
 | UsbipBind | promoted-live | Resolves the trusted USBIP bind intent, enforces the allowlist, binds the device, and grants the backend ACL. | live in production broker |
 | UsbipBindFirewallRule | promoted-live | Resolves the trusted USBIP firewall intent and reconciles the per-busid nftables carve-out. | live in production broker |
-| UsbipExplicitBind | stubbed-unimplemented | Per-device backend bind for explicit present-busid attach (no bundle intent required); stub pending per-device backend handler. | future work |
-| UsbipExplicitFirewallRule | stubbed-unimplemented | Env-scoped nftables carve-out for explicit present-busid attach (no bundle intent required); stub pending per-device backend handler. | future work |
+| UsbipExplicitBind | promoted-live | Binds an explicit present-busid device, acquires the per-busid lock, grants the per-device backend ACL, and audits redacted device identity without requiring a bundle allowlist. | live in production broker |
+| UsbipExplicitFirewallRule | promoted-live | Reconciles the env-scoped nftables carve-out for an explicit present-busid attach while preserving currently active carve-outs. | live in production broker |
 | UsbipProxyReconcile | promoted-live | Reconciles USBIP proxy lock expectations derived from trusted bundle intents. | live in production broker |
 | UsbipUnbind | promoted-live | Resolves the current USBIP owner, revokes the backend ACL, and unbinds the device. | live in production broker |
 | ValidateLockSpec | promoted-live | Resolves the trusted sync contract row and validates lock policy without mutating host state. | live in production broker |

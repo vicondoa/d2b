@@ -1,5 +1,7 @@
 <!-- nixling PR template. The checklist below is MANDATORY and validated by
-     tests/unit/meta/pr-checklist-gate.sh. -->
+     tests/unit/meta/pr-checklist-gate.sh.
+
+     Do not include AI agent, assistant, or model metadata in this PR body. -->
 
 ## Summary
 
@@ -9,9 +11,13 @@
 
 - [ ] **`make check` passes locally** (paste the summary).
 - [ ] **`make test-integration` passes on the host before PR creation**
-      (paste the summary).
+      (paste the summary), **or** state
+      `N/A: pure policy/docs/checklist change with no daemon, broker, NixOS
+      module, runtime, network, or generated-artifact behavior change`.
 - [ ] **`make test-host-integration` passes on the host before PR creation**
-      (paste the summary).
+      (paste the summary), **or** state
+      `N/A: pure policy/docs/checklist change with no daemon, broker, NixOS
+      module, runtime, network, or generated-artifact behavior change`.
 - [ ] **Manual `make test-hardware` run** on a NixOS host **with the real
       devices** (GPU / YubiKey / hardware-TPM), if this change touches
       graphics/GPU, video decode, USBIP/YubiKey, hardware-TPM, or a full
