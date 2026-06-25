@@ -438,6 +438,10 @@ in
         # subtree to the daemon user").
         User = "nixlingd";
         Group = "nixlingd";
+        ExecStartPre = [
+          "+${pkgs.coreutils}/bin/chmod 1770 /run/nixling"
+          "+${pkgs.acl}/bin/setfacl -m g::r-x,u:nixlingd:rwx,m::rwx /run/nixling"
+        ];
         ExecStart = "${nixlingdPackage}/bin/nixlingd serve --config /etc/nixling/daemon-config.json";
         ExecStop = "+${hostShutdownHook}";
         TimeoutStopSec = lib.mkDefault "${toString nixlingdStopTimeoutSeconds}s";
