@@ -33,11 +33,11 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const USBIP_UNBIND_HELPER_TIMEOUT: Duration = Duration::from_secs(10);
-const USBIP_UNBIND_MAX_ATTEMPTS: usize = 4;
-const USBIP_UNBIND_RETRY_BASE: Duration = Duration::from_millis(40);
-const USBIP_UNBIND_STDERR_LIMIT: usize = 8 * 1024;
-const USBIP_UNBIND_STDERR_DRAIN_GRACE: Duration = Duration::from_millis(250);
+const USBIP_DRIVER_HELPER_TIMEOUT: Duration = Duration::from_secs(10);
+const USBIP_DRIVER_MAX_ATTEMPTS: usize = 4;
+const USBIP_DRIVER_RETRY_BASE: Duration = Duration::from_millis(40);
+const USBIP_DRIVER_STDERR_LIMIT: usize = 8 * 1024;
+const USBIP_DRIVER_STDERR_DRAIN_GRACE: Duration = Duration::from_millis(250);
 const USBIP_STREAM_FD_RELEASE_GRACE: Duration = Duration::from_millis(750);
 const USBIP_STATUS_USED: &str = "2";
 
@@ -612,8 +612,8 @@ impl ReconcileExecutor for SystemReconcileExecutor {
                 detail: format!("invalid usbip bus_id {bus_id:?}: {err:?}"),
             }
         })?;
-        if subcommand == UsbipSubcommand::Unbind {
-            return run_usbip_unbind_isolated(usbip_binary, bus_id);
+        if matches!(subcommand, UsbipSubcommand::Bind | UsbipSubcommand::Unbind) {
+            return run_usbip_driver_isolated(usbip_binary, subcommand, bus_id);
         }
         let output = Command::new(usbip_binary)
             .arg(subcommand.as_str())
@@ -985,17 +985,21 @@ fn map_hardlink_farm_error(error: HardlinkFarmError) -> ReconcileExecError {
     }
 }
 
-fn run_usbip_unbind_isolated(usbip_binary: &Path, bus_id: &str) -> Result<(), ReconcileExecError> {
-    let deadline = Instant::now() + USBIP_UNBIND_HELPER_TIMEOUT;
+fn run_usbip_driver_isolated(
+    usbip_binary: &Path,
+    subcommand: UsbipSubcommand,
+    bus_id: &str,
+) -> Result<(), ReconcileExecError> {
+    let deadline = Instant::now() + USBIP_DRIVER_HELPER_TIMEOUT;
     let mut last_error = None;
 
-    for attempt in 0..USBIP_UNBIND_MAX_ATTEMPTS {
-        let result = run_usbip_unbind_helper_once(usbip_binary, bus_id, deadline);
+    for attempt in 0..USBIP_DRIVER_MAX_ATTEMPTS {
+        let result = run_usbip_driver_helper_once(usbip_binary, subcommand, bus_id, deadline);
         match result {
             Ok(()) => return Ok(()),
             Err(error)
                 if usbip_unbind_error_is_transient(&error)
-                    && attempt + 1 < USBIP_UNBIND_MAX_ATTEMPTS =>
+                    && attempt + 1 < USBIP_DRIVER_MAX_ATTEMPTS =>
             {
                 last_error = Some(error);
                 let delay = usbip_unbind_retry_delay(bus_id, attempt);
@@ -1008,23 +1012,21 @@ fn run_usbip_unbind_isolated(usbip_binary: &Path, bus_id: &str) -> Result<(), Re
             Err(error) => return Err(error),
         }
     }
-
     Err(last_error.unwrap_or_else(|| ReconcileExecError::TimedOut {
-        which: "usbip unbind".to_owned(),
-        timeout_ms: USBIP_UNBIND_HELPER_TIMEOUT.as_millis() as u64,
-        remediation:
-            "driver detach did not complete before the retry budget expired; the broker kept the USBIP session claim for manual recovery"
-                .to_owned(),
+        which: format!("usbip {}", subcommand.as_str()),
+        timeout_ms: USBIP_DRIVER_HELPER_TIMEOUT.as_millis() as u64,
+        remediation: usbip_driver_timeout_remediation(subcommand, false),
     }))
 }
 
-fn run_usbip_unbind_helper_once(
+fn run_usbip_driver_helper_once(
     usbip_binary: &Path,
+    subcommand: UsbipSubcommand,
     bus_id: &str,
     deadline: Instant,
 ) -> Result<(), ReconcileExecError> {
     let mut child = Command::new(usbip_binary)
-        .arg(UsbipSubcommand::Unbind.as_str())
+        .arg(subcommand.as_str())
         .arg("--busid")
         .arg(bus_id)
         .env_clear()
@@ -1041,14 +1043,14 @@ fn run_usbip_unbind_helper_once(
 
     loop {
         match child.try_wait().map_err(|e| ReconcileExecError::Io {
-            path: "<usbip unbind wait>".to_owned(),
+            path: format!("<usbip {} wait>", subcommand.as_str()),
             detail: e.to_string(),
         })? {
             Some(status) => {
                 let stderr = collect_bounded_child_stderr(stderr_rx);
                 if !status.success() {
                     return Err(ReconcileExecError::NonZeroExit {
-                        which: "usbip unbind".to_owned(),
+                        which: format!("usbip {}", subcommand.as_str()),
                         exit_code: status.code().unwrap_or(-1),
                         stderr,
                     });
@@ -1068,11 +1070,9 @@ fn run_usbip_unbind_helper_once(
                     let _ = child.wait();
                 });
                 return Err(ReconcileExecError::TimedOut {
-                    which: "usbip unbind".to_owned(),
-                    timeout_ms: USBIP_UNBIND_HELPER_TIMEOUT.as_millis() as u64,
-                    remediation:
-                        "driver detach may be stuck in sysfs; the broker kept the USBIP session claim, so verify the device and clear it manually before retrying"
-                            .to_owned(),
+                    which: format!("usbip {}", subcommand.as_str()),
+                    timeout_ms: USBIP_DRIVER_HELPER_TIMEOUT.as_millis() as u64,
+                    remediation: usbip_driver_timeout_remediation(subcommand, true),
                 });
             }
             None => std::thread::sleep(Duration::from_millis(25)),
@@ -1080,16 +1080,33 @@ fn run_usbip_unbind_helper_once(
     }
 }
 
+fn usbip_driver_timeout_remediation(subcommand: UsbipSubcommand, killed: bool) -> String {
+    match subcommand {
+        UsbipSubcommand::Bind if killed => {
+            "driver bind may be stuck in sysfs; verify the device is still present and retry `nixling usb attach <vm> <busid> --apply`".to_owned()
+        }
+        UsbipSubcommand::Bind => {
+            "driver bind did not complete before the retry budget expired; verify the device is present and retry `nixling usb attach <vm> <busid> --apply`".to_owned()
+        }
+        UsbipSubcommand::Unbind if killed => {
+            "driver detach may be stuck in sysfs; the broker kept the USBIP session claim, so verify the device and clear it manually before retrying".to_owned()
+        }
+        UsbipSubcommand::Unbind => {
+            "driver detach did not complete before the retry budget expired; the broker kept the USBIP session claim for manual recovery".to_owned()
+        }
+    }
+}
+
 fn spawn_bounded_stderr_reader(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<String> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut captured = Vec::with_capacity(USBIP_UNBIND_STDERR_LIMIT.min(4096));
+        let mut captured = Vec::with_capacity(USBIP_DRIVER_STDERR_LIMIT.min(4096));
         let mut buf = [0u8; 4096];
         loop {
             match pipe.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    let remaining = USBIP_UNBIND_STDERR_LIMIT.saturating_sub(captured.len());
+                    let remaining = USBIP_DRIVER_STDERR_LIMIT.saturating_sub(captured.len());
                     if remaining > 0 {
                         captured.extend_from_slice(&buf[..n.min(remaining)]);
                     }
@@ -1105,7 +1122,7 @@ fn spawn_bounded_stderr_reader(mut pipe: impl Read + Send + 'static) -> mpsc::Re
 
 fn collect_bounded_child_stderr(stderr_rx: Option<mpsc::Receiver<String>>) -> String {
     stderr_rx
-        .and_then(|rx| rx.recv_timeout(USBIP_UNBIND_STDERR_DRAIN_GRACE).ok())
+        .and_then(|rx| rx.recv_timeout(USBIP_DRIVER_STDERR_DRAIN_GRACE).ok())
         .unwrap_or_default()
 }
 
@@ -1189,7 +1206,7 @@ fn usbip_unbind_error_is_transient(error: &ReconcileExecError) -> bool {
 
 fn usbip_unbind_retry_delay(bus_id: &str, attempt: usize) -> Duration {
     let shift = attempt.min(5) as u32;
-    let base = USBIP_UNBIND_RETRY_BASE
+    let base = USBIP_DRIVER_RETRY_BASE
         .checked_mul(1u32 << shift)
         .unwrap_or(Duration::from_millis(500));
     let jitter_seed = bus_id
@@ -1898,7 +1915,7 @@ mod tests {
         let first = usbip_unbind_retry_delay("1-2", 0);
         let second = usbip_unbind_retry_delay("1-3", 0);
         assert_ne!(first, second, "busid-derived jitter should vary delay");
-        assert!(first >= USBIP_UNBIND_RETRY_BASE);
+        assert!(first >= USBIP_DRIVER_RETRY_BASE);
         assert!(first < Duration::from_millis(100));
     }
 
@@ -1916,9 +1933,13 @@ exit 7
 "#,
         );
 
-        let err =
-            run_usbip_unbind_helper_once(&helper, "1-2", Instant::now() + Duration::from_secs(2))
-                .expect_err("large stderr should drain and preserve helper exit status");
+        let err = run_usbip_driver_helper_once(
+            &helper,
+            UsbipSubcommand::Unbind,
+            "1-2",
+            Instant::now() + Duration::from_secs(2),
+        )
+        .expect_err("large stderr should drain and preserve helper exit status");
         match err {
             ReconcileExecError::NonZeroExit {
                 which,
@@ -1929,13 +1950,38 @@ exit 7
                 assert_eq!(exit_code, 7);
                 assert!(stderr.contains("busy usbip stderr line"));
                 assert!(
-                    stderr.len() <= USBIP_UNBIND_STDERR_LIMIT,
+                    stderr.len() <= USBIP_DRIVER_STDERR_LIMIT,
                     "stderr was not bounded: {} bytes",
                     stderr.len()
                 );
             }
             other => panic!("expected NonZeroExit, got {other:?}"),
         }
+
+        if let Some(root) = helper.parent() {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn usbip_bind_uses_bounded_driver_helper() {
+        let helper = usbip_unbind_helper_script(
+            "bind-ok",
+            r#"#!/bin/sh
+test "$1" = "bind"
+test "$2" = "--busid"
+test "$3" = "1-2"
+exit 0
+"#,
+        );
+
+        run_usbip_driver_helper_once(
+            &helper,
+            UsbipSubcommand::Bind,
+            "1-2",
+            Instant::now() + Duration::from_secs(2),
+        )
+        .expect("bind helper should succeed");
 
         if let Some(root) = helper.parent() {
             let _ = std::fs::remove_dir_all(root);

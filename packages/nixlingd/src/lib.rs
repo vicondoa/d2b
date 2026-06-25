@@ -16,9 +16,13 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
 use nix::cmsg_space;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
@@ -2565,8 +2569,29 @@ fn dispatch_request(
     // held across the whole op (DAG + rollback + cleanup); inner
     // stop/start helpers invoked by restart/rollback do NOT re-acquire it,
     // so there is no nested self-deadlock.
+    let invalidates_status_model = request_invalidates_public_status_model(&request);
     let _op_lock = state.op_locks.acquire(&request.lock_class());
-    dispatch_request_locked(state, peer, request)
+    let result = dispatch_request_locked(state, peer, request);
+    if invalidates_status_model {
+        public_status_read_model().invalidate();
+    }
+    result
+}
+
+fn request_invalidates_public_status_model(request: &wire::Request) -> bool {
+    !matches!(
+        request,
+        wire::Request::List(_)
+            | wire::Request::Status(_)
+            | wire::Request::Audit(_)
+            | wire::Request::HostCheck(_)
+            | wire::Request::AuthStatus
+            | wire::Request::KeysList
+            | wire::Request::KeysShow(_)
+            | wire::Request::Exec(public_wire::ExecOp::List(_))
+            | wire::Request::Exec(public_wire::ExecOp::Logs(_))
+            | wire::Request::Exec(public_wire::ExecOp::Status(_))
+    )
 }
 
 /// Verb dispatch body executed under the op lock already acquired by
@@ -15084,6 +15109,183 @@ struct PublicRequestArtifacts {
     resolver: Option<BundleResolver>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PublicArtifactFingerprint {
+    current_system: Option<String>,
+    pidfd_generation: u64,
+    public_manifest: FileFingerprint,
+    host: FileFingerprint,
+    processes: FileFingerprint,
+    bundle: FileFingerprint,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct FileFingerprint {
+    path: String,
+    len: u64,
+    modified_nanos: Option<u128>,
+    symlink_target: Option<String>,
+}
+
+#[derive(Debug)]
+struct CachedPublicFrame {
+    fingerprint: PublicArtifactFingerprint,
+    value: Value,
+}
+
+#[derive(Debug)]
+struct PublicStatusReadModel {
+    generation: AtomicU64,
+    list: ArcSwapOption<CachedPublicFrame>,
+    status: ArcSwapOption<CachedPublicFrame>,
+}
+
+impl PublicStatusReadModel {
+    fn new() -> Self {
+        Self {
+            generation: AtomicU64::new(0),
+            list: ArcSwapOption::empty(),
+            status: ArcSwapOption::empty(),
+        }
+    }
+
+    fn invalidate(&self) {
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        self.list.store(None);
+        self.status.store(None);
+    }
+
+    fn load_list(&self, state: &ServerState) -> Option<Value> {
+        self.load_if_fresh(state, &self.list)
+    }
+
+    fn load_status(&self, state: &ServerState) -> Option<Value> {
+        self.load_if_fresh(state, &self.status)
+    }
+
+    fn publish_list(&self, state: &ServerState, value: Value) -> Value {
+        self.publish(state, &self.list, value, "list")
+    }
+
+    fn publish_status(&self, state: &ServerState, value: Value) -> Value {
+        self.publish(state, &self.status, value, "status")
+    }
+
+    fn load_if_fresh(
+        &self,
+        state: &ServerState,
+        slot: &ArcSwapOption<CachedPublicFrame>,
+    ) -> Option<Value> {
+        let current = public_artifact_fingerprint(state).ok()?;
+        let cached = slot.load_full()?;
+        (cached.fingerprint == current).then(|| cached.value.clone())
+    }
+
+    fn publish(
+        &self,
+        state: &ServerState,
+        slot: &ArcSwapOption<CachedPublicFrame>,
+        value: Value,
+        kind: &'static str,
+    ) -> Value {
+        let Ok(fingerprint) = public_artifact_fingerprint(state) else {
+            return value;
+        };
+        let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let value = attach_read_model_metadata(value, &fingerprint, generation, kind);
+        slot.store(Some(Arc::new(CachedPublicFrame {
+            fingerprint,
+            value: value.clone(),
+        })));
+        value
+    }
+}
+
+fn public_status_read_model() -> &'static PublicStatusReadModel {
+    static MODEL: OnceLock<PublicStatusReadModel> = OnceLock::new();
+    MODEL.get_or_init(PublicStatusReadModel::new)
+}
+
+fn public_artifact_fingerprint(
+    state: &ServerState,
+) -> Result<PublicArtifactFingerprint, TypedError> {
+    let artifacts = &state.config.artifacts;
+    Ok(PublicArtifactFingerprint {
+        current_system: fs::read_link("/run/current-system")
+            .ok()
+            .map(|path| path.display().to_string()),
+        pidfd_generation: state.pidfd_table.generation(),
+        public_manifest: file_fingerprint(&artifacts.public_manifest_path)?,
+        host: file_fingerprint(&artifacts.host_path)?,
+        processes: file_fingerprint(&artifacts.processes_path)?,
+        bundle: file_fingerprint(&artifacts.bundle_path)?,
+    })
+}
+
+fn file_fingerprint(path: &Path) -> Result<FileFingerprint, TypedError> {
+    let metadata = fs::metadata(path).map_err(|error| TypedError::InternalIo {
+        context: format!("fingerprint {}", path.display()),
+        detail: error.to_string(),
+    })?;
+    Ok(FileFingerprint {
+        path: path.display().to_string(),
+        len: metadata.len(),
+        modified_nanos: metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos()),
+        symlink_target: fs::read_link(path)
+            .ok()
+            .map(|target| target.display().to_string()),
+    })
+}
+
+fn attach_read_model_metadata(
+    mut frame: Value,
+    fingerprint: &PublicArtifactFingerprint,
+    generation: u64,
+    kind: &'static str,
+) -> Value {
+    let metadata = json!({
+        "schemaVersion": 1,
+        "kind": kind,
+        "generation": generation,
+        "sourceFingerprint": public_artifact_fingerprint_hash(fingerprint),
+        "updatedAtUnixMs": system_unix_millis(),
+        "freshness": "fresh",
+        "deepRefresh": "available",
+    });
+    if kind == "status" {
+        if let Some(status) = frame.get_mut("status").and_then(Value::as_object_mut) {
+            status.insert("readModel".to_owned(), metadata);
+            return frame;
+        }
+    }
+    if let Some(object) = frame.as_object_mut() {
+        object.insert("readModel".to_owned(), metadata);
+    }
+    frame
+}
+
+fn public_artifact_fingerprint_hash(fingerprint: &PublicArtifactFingerprint) -> String {
+    let bytes = serde_json::to_vec(fingerprint).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
+fn system_unix_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PublicResolverLoad {
     NotNeeded,
@@ -15135,6 +15337,21 @@ fn load_public_request_artifacts(
 }
 
 fn dispatch_list(
+    state: &ServerState,
+    request: public_wire::ListRequest,
+) -> Result<Value, TypedError> {
+    let cacheable = request.vm.is_none() && request.env.is_none();
+    if cacheable && let Some(cached) = public_status_read_model().load_list(state) {
+        return Ok(cached);
+    }
+    let frame = build_public_list(state, request)?;
+    if cacheable {
+        return Ok(public_status_read_model().publish_list(state, frame));
+    }
+    Ok(frame)
+}
+
+fn build_public_list(
     state: &ServerState,
     request: public_wire::ListRequest,
 ) -> Result<Value, TypedError> {
@@ -15202,6 +15419,21 @@ fn dispatch_list(
 }
 
 fn dispatch_status(
+    state: &ServerState,
+    request: public_wire::StatusRequest,
+) -> Result<Value, TypedError> {
+    let cacheable = request.vm.is_none() && !request.check_bridges;
+    if cacheable && let Some(cached) = public_status_read_model().load_status(state) {
+        return Ok(cached);
+    }
+    let frame = build_public_status(state, request)?;
+    if cacheable {
+        return Ok(public_status_read_model().publish_status(state, frame));
+    }
+    Ok(frame)
+}
+
+fn build_public_status(
     state: &ServerState,
     request: public_wire::StatusRequest,
 ) -> Result<Value, TypedError> {
@@ -17352,6 +17584,64 @@ mod public_status_tests {
         assert!(
             vm.get("readiness").is_none(),
             "public status should not expose raw readiness path strings"
+        );
+    }
+
+    #[test]
+    fn dispatch_status_read_model_is_cached_and_pidfd_invalidated() {
+        let root = tempfile::tempdir().expect("artifact root");
+        let artifacts = write_public_status_artifacts(root.path());
+        let (state, _dir) = test_state_with_config(DaemonConfig {
+            artifacts,
+            ..DaemonConfig::default()
+        });
+        let request = public_wire::StatusRequest {
+            check_bridges: false,
+            vm: None,
+        };
+
+        let first = dispatch_status(&state, request.clone()).expect("first status dispatch");
+        let first_generation = first
+            .pointer("/status/readModel/generation")
+            .and_then(Value::as_u64)
+            .expect("first read-model generation");
+        assert_eq!(
+            first
+                .pointer("/status/entries/0/lifecycle/state")
+                .and_then(Value::as_str),
+            Some("Stopped")
+        );
+
+        let second = dispatch_status(&state, request.clone()).expect("cached status dispatch");
+        assert_eq!(
+            second
+                .pointer("/status/readModel/generation")
+                .and_then(Value::as_u64),
+            Some(first_generation),
+            "unchanged artifacts and runtime generation should reuse the published read model"
+        );
+
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                VM_RUNNER_ROLE_ID.to_owned(),
+                current_process_entry(),
+            )
+            .expect("register ch runner");
+        let refreshed = dispatch_status(&state, request).expect("refreshed status dispatch");
+        assert!(
+            refreshed
+                .pointer("/status/readModel/generation")
+                .and_then(Value::as_u64)
+                .is_some_and(|generation| generation > first_generation),
+            "pidfd generation changes must invalidate the cached read model"
+        );
+        assert_eq!(
+            refreshed
+                .pointer("/status/entries/0/lifecycle/state")
+                .and_then(Value::as_str),
+            Some("Running")
         );
     }
 

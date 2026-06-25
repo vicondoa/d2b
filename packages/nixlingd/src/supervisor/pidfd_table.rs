@@ -31,6 +31,7 @@ pub struct PidfdTable {
     /// "mutate the map, then persist" sequence hold this across BOTH
     /// steps via [`PidfdTable::mutation_guard`].
     mutation_lock: Mutex<()>,
+    generation: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -226,6 +227,7 @@ impl PidfdTable {
             state_path,
             broker_reap_log: OnceLock::new(),
             mutation_lock: Mutex::new(()),
+            generation: AtomicU64::new(0),
         }
     }
 
@@ -253,13 +255,27 @@ impl PidfdTable {
             return Err(PidfdTableError::DuplicateRegistration { vm, role });
         }
         entries.insert(key, entry);
+        self.bump_generation();
         Ok(())
     }
 
     pub fn deregister(&self, vm: &str, role: &str) -> Option<PidfdEntry> {
-        self.entries
+        let removed = self
+            .entries
             .write()
-            .remove(&(vm.to_owned(), role.to_owned()))
+            .remove(&(vm.to_owned(), role.to_owned()));
+        if removed.is_some() {
+            self.bump_generation();
+        }
+        removed
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    fn bump_generation(&self) {
+        self.generation.fetch_add(1, Ordering::AcqRel);
     }
 
     pub fn contains(&self, vm: &str, role: &str) -> bool {
@@ -309,6 +325,7 @@ impl PidfdTable {
                 entries.remove(key);
             }
             drop(entries);
+            self.bump_generation();
             self.snapshot()?;
             for (vm, role) in &to_drop {
                 tracing::warn!(
@@ -423,6 +440,8 @@ impl PidfdTable {
                             if current.pid == pid && current.start_time_ticks == start_time_ticks
                     ) {
                         entries.remove(&key);
+                        drop(entries);
+                        self.bump_generation();
                     }
                     return Ok(WaitTermination::Terminated);
                 }
@@ -439,6 +458,8 @@ impl PidfdTable {
                                     && current.start_time_ticks == start_time_ticks
                         ) {
                             entries.remove(&key);
+                            drop(entries);
+                            self.bump_generation();
                         }
                         return Ok(WaitTermination::TerminatedByBroker {
                             exit_status: notif.exit_status,
@@ -481,6 +502,8 @@ impl PidfdTable {
                             if current.pid == pid && current.start_time_ticks == start_time_ticks
                     ) {
                         entries.remove(&key);
+                        drop(entries);
+                        self.bump_generation();
                     }
                     return Ok(WaitTermination::Terminated);
                 }
@@ -585,6 +608,7 @@ impl PidfdTable {
                 })? {
                     Some(entry) => {
                         entries.insert(key, entry);
+                        table.generation.fetch_add(1, Ordering::AcqRel);
                     }
                     None => dropped_stale = true,
                 }

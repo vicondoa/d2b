@@ -1383,6 +1383,51 @@ Exit criteria:
   and machine-checkable allowlisting;
 - efficiency remains part of architecture review, not a one-time cleanup.
 
+### Wave 15 — Fast async status, exec, and USB operations
+
+Goal: make the visible control-plane operations fast enough for interactive UI
+clients while preserving broker-only host mutation and daemon-only supervision.
+
+Tasks:
+
+1. Add a daemon-maintained public status read model for unfiltered list/status
+   requests. The model carries generation, source-fingerprint, freshness, and
+   deep-diagnostic availability metadata so `nixling-wlcontrol` and other UI
+   clients can render from one fast model instead of recomputing expensive
+   probes on every refresh.
+2. Keep status/read-model paths free of deep USB/guest-control diagnostics and
+   sysfs driver mutation. Deep diagnostics remain explicit and bounded.
+3. Invalidate the model on artifact generation changes, host switch evidence,
+   mutating public operations, and runner pidfd registration/deregistration so
+   cached lifecycle state cannot survive VM start/stop or switch boundaries.
+4. Bound USBIP driver bind and unbind behind the broker's isolated driver helper.
+   Research found no Rust crate with true async USB sysfs bind/unbind semantics,
+   and Tokio file APIs are blocking-pool wrappers, so the fallback is explicitly
+   broker-only and excluded from status/read-model paths.
+5. Keep exec and USB latency work tied to concrete caps, deadlines, cancellation
+   behavior, and operator-visible remediation rather than hiding slow operations
+   behind generic blocking pools.
+
+Validation:
+
+- status/list tests prove read-model metadata is published, repeated unfiltered
+  status uses the model, and pidfd-table generation changes invalidate it;
+- USBIP broker tests prove both bind and unbind use the bounded driver helper
+  and preserve bounded stderr/timeout behavior;
+- local Rust checks cover `nixlingd` and the privileged broker helper paths;
+- implementation review verifies the real `/etc/nixos` host-switch path and
+  latency budgets before PR merge.
+
+Exit criteria:
+
+- `nixling status --json` and `nixling list --json` have a fast daemon-side model
+  path for UI refreshes;
+- USBIP driver mutation cannot indefinitely pin the broker control path;
+- status/read-model clients never trigger sysfs bind/unbind or deep guest USB
+  probes by default;
+- the service remains working after the wave, with a full panel implementation
+  signoff and PR merge.
+
 ## Highest-leverage deletion and consolidation targets
 
 These targets are good first compatibility-removal and consolidation inputs:
