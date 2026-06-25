@@ -183,6 +183,19 @@ in
     expected = "nixlingd";
   };
 
+  "nixlingd-startup-smoke/daemon-prestart-reasserts-run-nixling-acl" = {
+    expr = {
+      asRoot = builtins.all (cmd: lib.hasPrefix "+" cmd) daemonService.serviceConfig.ExecStartPre;
+      chmod = builtins.any (cmd: lib.hasInfix "chmod 1770 /run/nixling" cmd) daemonService.serviceConfig.ExecStartPre;
+      acl = builtins.any (cmd: lib.hasInfix "setfacl -m g::r-x,u:nixlingd:rwx,m::rwx /run/nixling" cmd) daemonService.serviceConfig.ExecStartPre;
+    };
+    expected = {
+      asRoot = true;
+      chmod = true;
+      acl = true;
+    };
+  };
+
   "nixlingd-startup-smoke/daemon-restrict-address-families" = {
     expr = daemonService.serviceConfig.RestrictAddressFamilies;
     expected = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
