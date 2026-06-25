@@ -123,12 +123,10 @@ fn metric_label_violations(rel: &str, content: &str) -> Vec<String> {
         "cmdline",
         "command",
     ];
-
     let mut violations = Vec::new();
-    for (line_index, line) in content.lines().enumerate() {
-        let Some(captures) = labels_re.captures(line) else {
-            continue;
-        };
+    for captures in labels_re.captures_iter(content) {
+        let matched = captures.get(0).expect("labels match");
+        let line_number = content[..matched.start()].lines().count() + 1;
         let labels = captures.name("labels").expect("labels capture").as_str();
         for label in string_re
             .captures_iter(labels)
@@ -137,7 +135,7 @@ fn metric_label_violations(rel: &str, content: &str) -> Vec<String> {
             if forbidden.contains(&label) || label.ends_with("_pid") || label.ends_with("_fd") {
                 violations.push(format!(
                     "{rel}:{}: metric label `{label}` is high-cardinality or sensitive",
-                    line_index + 1
+                    line_number
                 ));
             }
         }
@@ -146,21 +144,62 @@ fn metric_label_violations(rel: &str, content: &str) -> Vec<String> {
 }
 
 fn noisy_pid_log_violations(rel: &str, content: &str) -> Vec<String> {
-    let noisy_pid_log =
-        Regex::new(r#"tracing::(trace|debug|warn)!\([^;\n]*(\bpid\b|pid\s*=|\btid\b|tid\s*=)"#)
-            .expect("valid noisy pid log regex");
-    content
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| noisy_pid_log.is_match(line))
-        .map(|(idx, line)| {
-            format!(
+    let noisy_log_start =
+        Regex::new(r#"tracing::(trace|debug|warn)!\("#).expect("valid noisy tracing macro regex");
+    let pid_or_tid =
+        Regex::new(r#"(?m)(\bpid\b|pid\s*=|\btid\b|tid\s*=)"#).expect("valid pid/tid regex");
+    let quoted_string = Regex::new(r#"(?s)"([^"\\]|\\.)*""#).expect("valid string literal regex");
+    let lifecycle_allowlist = [
+        "startup adoption quarantined runner snapshot",
+        "startup adoption could not reopen pidfd; leaving snapshot on disk",
+        "startup adoption dropped runner snapshot after pidfd reopen race",
+        "startup adoption quarantined runner snapshot with unparseable proc stat",
+        "spawn registration failed; signaled unregistered runner by pidfd",
+        "spawn registration failed; direct pidfd signal failed, falling back to broker",
+        "spawn registration failed; broker signaled unregistered runner",
+        "spawn registration failed; broker cleanup signal returned unexpected response",
+        "spawn registration failed; broker cleanup signal failed",
+        "spawn registration failed; could not duplicate pidfd for cleanup",
+        "spawn registration failed; SIGTERM cleanup did not reap runner, escalating",
+        "spawn registration failed; runner was not observed reaped after SIGKILL, leaving broker pidfd registered",
+    ];
+
+    let mut violations = Vec::new();
+    let lines: Vec<&str> = content.lines().collect();
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index];
+        if !noisy_log_start.is_match(line) {
+            index += 1;
+            continue;
+        }
+
+        let start_index = index;
+        let mut body = String::new();
+        loop {
+            body.push_str(lines[index]);
+            body.push('\n');
+            if lines[index].contains(");") || index + 1 == lines.len() {
+                break;
+            }
+            index += 1;
+        }
+
+        let body_without_strings = quoted_string.replace_all(&body, "\"\"");
+        if pid_or_tid.is_match(&body_without_strings)
+            && !lifecycle_allowlist
+                .iter()
+                .any(|message| body.contains(message))
+        {
+            violations.push(format!(
                 "{rel}:{}: noisy tracing log carries PID/TID data: {}",
-                idx + 1,
+                start_index + 1,
                 line.trim()
-            )
-        })
-        .collect()
+            ));
+        }
+        index += 1;
+    }
+    violations
 }
 
 #[test]
@@ -190,11 +229,34 @@ fn metric_and_log_ratchet_negative_fixtures_fail_closed() {
         metric_label_violations("fixture.rs", metric_fixture).len() >= 2,
         "metric-label negative fixture must reject trace_id and pid labels"
     );
+    let multiline_metric_fixture =
+        "MetricDescriptor {\n    labels: &[\n        \"span_id\",\n        \"vm\",\n    ],\n}";
+    assert!(
+        metric_label_violations("fixture.rs", multiline_metric_fixture)
+            .iter()
+            .any(|violation| violation.contains("span_id")),
+        "metric-label multiline negative fixture must reject span_id labels"
+    );
 
     let log_fixture = r#"tracing::debug!(pid = child_pid, "polling child");"#;
     assert!(
         !noisy_pid_log_violations("fixture.rs", log_fixture).is_empty(),
         "noisy PID log negative fixture must fail closed"
+    );
+    let multiline_log_fixture = "tracing::warn!(\n    pid = child_pid,\n    \"polling child\"\n);";
+    assert!(
+        !noisy_pid_log_violations("fixture.rs", multiline_log_fixture).is_empty(),
+        "noisy PID multiline log negative fixture must fail closed"
+    );
+    let lifecycle_log_fixture = r#"tracing::warn!(
+        vm = %vm,
+        role = %role_id,
+        pid = response.pid,
+        "spawn registration failed; signaled unregistered runner by pidfd"
+    );"#;
+    assert!(
+        noisy_pid_log_violations("fixture.rs", lifecycle_log_fixture).is_empty(),
+        "structured lifecycle PID diagnostic fixture must stay allowed"
     );
 }
 
