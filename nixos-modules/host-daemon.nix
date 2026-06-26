@@ -408,14 +408,6 @@ in
         "dbus.service"
         "nixling.slice"
       ];
-      # Bypass the kernel-module fatal check because this host's kernel
-      # (linux-7.0.5) has the guest-side
-      # virtio modules (virtio_console, virtio_net, virtio_fs,
-      # drm_virtio_gpu) built-in (=y) rather than loadable (=m),
-      # which the daemon's lsmod-based check mis-reads as "missing".
-      # See packages/nixlingd/src/lib.rs for the operator-override
-      # env var.
-      environment.NIXLING_SKIP_KERNEL_MODULE_CHECK = "1";
       serviceConfig = {
         # Type=notify makes systemd hold nixlingd.service in "activating"
         # until the daemon has completed startup/adoption and is about to
@@ -437,6 +429,10 @@ in
         # subtree to the daemon user").
         User = "nixlingd";
         Group = "nixlingd";
+        ExecStartPre = [
+          "+${pkgs.coreutils}/bin/chmod 1770 /run/nixling"
+          "+${pkgs.acl}/bin/setfacl -m g::r-x,u:nixlingd:rwx,m::rwx /run/nixling"
+        ];
         ExecStart = "${nixlingdPackage}/bin/nixlingd serve --config /etc/nixling/daemon-config.json";
         ExecStop = "+${hostShutdownHook}";
         TimeoutStopSec = lib.mkDefault "${toString nixlingdStopTimeoutSeconds}s";

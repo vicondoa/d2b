@@ -1,11 +1,15 @@
 # nix-unit case-presence pins (common — present on every system).
 # Regenerate with: make nix-unit-pin
+activation-runtime-tmpfiles/activation-preserves-run-parent-daemon-mask
 activation-runtime-tmpfiles/audio-state-dirs-no-root-posture
 activation-runtime-tmpfiles/gpu-dir
 activation-runtime-tmpfiles/gpu-parent
 activation-runtime-tmpfiles/net-var-img-broker-owned
+activation-runtime-tmpfiles/qemu-media-runtime-dirs
+activation-runtime-tmpfiles/role-acl-script-grants-run-vms-parent-traversal
 activation-runtime-tmpfiles/role-acl-script-no-raw-runtime-dir-mutation
 activation-runtime-tmpfiles/run-guest-control-dir
+activation-runtime-tmpfiles/run-parent-mask-after-traversal-acls
 activation-runtime-tmpfiles/run-store-sync-dir
 activation-runtime-tmpfiles/runtime-posture-no-store-view-mkdir
 activation-runtime-tmpfiles/run-vm-dir
@@ -16,9 +20,11 @@ activation-runtime-tmpfiles/store-sync-no-run-dir-install
 activation-runtime-tmpfiles/store-view-live-dir
 activation-runtime-tmpfiles/tpm-state-perms-tmpfiles-owned
 activation-runtime-tmpfiles/video-dir
+activation-runtime-tmpfiles/video-parent
 activation-runtime-tmpfiles/vm-state-dir
 activation-runtime-tmpfiles/vm-state-perms-no-raw-root-posture
 activation-runtime-tmpfiles/wlproxy-dir
+activation-runtime-tmpfiles/wlproxy-parent
 assertions/allow-east-west-requires-site-ack
 assertions/audit-without-observability
 assertions/env-name-invalid
@@ -178,6 +184,7 @@ external-vm-kind/qemuMedia-rejects-busid
 external-vm-kind/qemu-media-skips-closures
 external-vm-kind/qemu-media-skips-computed
 external-vm-kind/qemu-media-source-schema
+external-vm-kind/qemu-media-tap-sync-lock-uses-resource-id
 external-vm-kind/rejects-absolute-path-boot-usb-selector
 external-vm-kind/rejects-audio
 external-vm-kind/rejects-audit
@@ -377,9 +384,11 @@ nixlingd-startup-smoke/broker-requires-tmpfiles
 nixlingd-startup-smoke/broker-type
 nixlingd-startup-smoke/broker-user
 nixlingd-startup-smoke/daemon-after-tmpfiles
+nixlingd-startup-smoke/daemon-does-not-skip-kernel-module-check
 nixlingd-startup-smoke/daemon-execstop-hook
 nixlingd-startup-smoke/daemon-killmode-process
 nixlingd-startup-smoke/daemon-notify-access-main
+nixlingd-startup-smoke/daemon-prestart-repairs-run-nixling-acl
 nixlingd-startup-smoke/daemon-restart-if-changed
 nixlingd-startup-smoke/daemon-restrict-address-families
 nixlingd-startup-smoke/daemon-timeout-start
