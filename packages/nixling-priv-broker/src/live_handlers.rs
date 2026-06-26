@@ -2638,33 +2638,150 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
     }
 
     if plan.seccomp_policy_ref.as_deref() == Some("w1-wayland-proxy") {
-        // Wayland-proxy gets ACL on the real host compositor socket only.
+        // Wayland-proxy requires two ACL entries on the host compositor:
+        //   1. Traverse (--x) on the runtime dir so the wlproxy uid can
+        //      reach the socket at all. After reboot `/run/user/<uid>` is
+        //      0700 until the session ACLs are applied; without this
+        //      traverse grant the proxy fails immediately with EACCES.
+        //   2. rwx on the configured Wayland socket.
         // PipeWire and Pulse sockets are explicitly revoked: the proxy
         // has no audio role and must not connect to them.
+        //
+        // All path operations use O_NOFOLLOW / RESOLVE_NO_SYMLINKS (via
+        // open_o_path_metadata inside setfacl_fd_safe_op_classed) so a
+        // symlink planted at the runtime-dir or socket path cannot redirect
+        // the ACL to an unintended inode.
         let runtime_dir = env_value(plan, "XDG_RUNTIME_DIR");
-        if let Some(runtime_dir) = runtime_dir {
-            let runtime = Path::new(runtime_dir);
-            let wayland_display = env_value(plan, "WAYLAND_DISPLAY").unwrap_or("wayland-0");
-            setfacl_fd_safe(
-                &runtime.join(wayland_display),
-                &format!("u:{}:rwx", plan.uid),
-                AclPathKind::Socket,
-            )
-            .map_err(|detail| LiveHandlerError::SpawnFailed {
-                detail: format!(
-                    "refresh host compositor socket ACL for wayland-proxy uid {}: {detail}",
-                    plan.uid
-                ),
-            })?;
-            for socket in ["pipewire-0", "pulse/native"] {
-                let path = runtime.join(socket);
-                setfacl_fd_safe(&path, &format!("u:{}:---", plan.uid), AclPathKind::Socket)
-                    .map_err(|detail| LiveHandlerError::SpawnFailed {
-                        detail: format!(
-                            "revoke audio socket ACL for wayland-proxy uid {}: {detail}",
-                            plan.uid
-                        ),
-                    })?;
+        match runtime_dir {
+            None => {
+                return Err(LiveHandlerError::SpawnFailed {
+                    detail: format!(
+                        "graphical-session-not-active: XDG_RUNTIME_DIR not set for wayland-proxy uid {}; \
+                         is the graphical session running?",
+                        plan.uid
+                    ),
+                });
+            }
+            Some(runtime_dir) => {
+                let runtime = Path::new(runtime_dir);
+                // Derive the expected runtime-dir owner uid from the
+                // declarative path `/run/user/<uid>` (from the bundle's
+                // XDG_RUNTIME_DIR value, which originates in
+                // nixling.site.waylandUser). Do not shell out.
+                let wayland_user_uid = runtime
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .and_then(|s| s.parse::<u32>().ok());
+
+                // Verify the runtime dir exists and is owned by the
+                // expected Wayland user before granting any ACL.
+                match open_o_path_metadata(runtime) {
+                    Err(failure) => {
+                        return Err(LiveHandlerError::SpawnFailed {
+                            detail: format!(
+                                "graphical-session-not-active: cannot open runtime dir for wayland-proxy uid {}: {}",
+                                plan.uid,
+                                failure.legacy_detail
+                            ),
+                        });
+                    }
+                    Ok(None) => {
+                        return Err(LiveHandlerError::SpawnFailed {
+                            detail: format!(
+                                "graphical-session-not-active: runtime dir {} is absent for wayland-proxy uid {}; \
+                                 start the graphical session before starting this VM",
+                                runtime.display(),
+                                plan.uid
+                            ),
+                        });
+                    }
+                    Ok(Some((_, meta))) => {
+                        if let Some(expected_uid) = wayland_user_uid {
+                            if meta.uid() != expected_uid {
+                                return Err(LiveHandlerError::SpawnFailed {
+                                    detail: format!(
+                                        "graphical-session-not-active: runtime dir owner mismatch for wayland-proxy uid {}: \
+                                         expected owner uid {expected_uid}",
+                                        plan.uid,
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // Grant traverse on the runtime dir so the wlproxy uid
+                // can reach the socket beneath it.
+                setfacl_fd_safe(
+                    runtime,
+                    &format!("u:{}:--x", plan.uid),
+                    AclPathKind::Directory,
+                )
+                .map_err(|detail| LiveHandlerError::SpawnFailed {
+                    detail: format!(
+                        "refresh runtime dir traverse ACL for wayland-proxy uid {}: {detail}",
+                        plan.uid
+                    ),
+                })?;
+
+                let wayland_display =
+                    env_value(plan, "WAYLAND_DISPLAY").unwrap_or("wayland-0");
+                let socket_path = runtime.join(wayland_display);
+
+                // Verify socket exists before granting ACL on it.
+                match open_o_path_metadata(&socket_path) {
+                    Err(failure) => {
+                        return Err(LiveHandlerError::SpawnFailed {
+                            detail: format!(
+                                "graphical-session-not-active: cannot open Wayland socket for wayland-proxy uid {}: {}",
+                                plan.uid,
+                                failure.legacy_detail
+                            ),
+                        });
+                    }
+                    Ok(None) => {
+                        return Err(LiveHandlerError::SpawnFailed {
+                            detail: format!(
+                                "graphical-session-not-active: Wayland socket {} is absent for wayland-proxy uid {}; \
+                                 the compositor may not be running",
+                                socket_path.display(),
+                                plan.uid
+                            ),
+                        });
+                    }
+                    Ok(Some((_, meta))) if !meta.file_type().is_socket() => {
+                        return Err(LiveHandlerError::SpawnFailed {
+                            detail: format!(
+                                "graphical-session-not-active: path at Wayland socket location is not a socket \
+                                 for wayland-proxy uid {}",
+                                plan.uid
+                            ),
+                        });
+                    }
+                    Ok(_) => {}
+                }
+
+                setfacl_fd_safe(
+                    &socket_path,
+                    &format!("u:{}:rwx", plan.uid),
+                    AclPathKind::Socket,
+                )
+                .map_err(|detail| LiveHandlerError::SpawnFailed {
+                    detail: format!(
+                        "refresh host compositor socket ACL for wayland-proxy uid {}: {detail}",
+                        plan.uid
+                    ),
+                })?;
+                for socket in ["pipewire-0", "pulse/native"] {
+                    let path = runtime.join(socket);
+                    setfacl_fd_safe(&path, &format!("u:{}:---", plan.uid), AclPathKind::Socket)
+                        .map_err(|detail| LiveHandlerError::SpawnFailed {
+                            detail: format!(
+                                "revoke audio socket ACL for wayland-proxy uid {}: {detail}",
+                                plan.uid
+                            ),
+                        })?;
+                }
             }
         }
     }

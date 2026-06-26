@@ -118,7 +118,8 @@ pub mod typed_error;
 pub mod wire;
 use admission::{
     PeerIdentity, PeerRole, authorize_peer, gateway_display_op_requires_admin,
-    gateway_display_peer_principal, gateway_display_peer_principal_string, verb_requires_admin,
+    gateway_display_peer_principal, gateway_display_peer_principal_string,
+    verb_allowed_for_host_shutdown, verb_requires_admin,
 };
 #[cfg(test)]
 use admission::{PeerOverride, TEST_PEER_OVERRIDE, TEST_PEER_OVERRIDE_LOCK};
@@ -2564,9 +2565,19 @@ fn dispatch_request(
 ) -> Result<Value, TypedError> {
     let verb = request.verb_name();
     if verb_requires_admin(verb) && !matches!(peer.role, PeerRole::Admin) {
-        return Err(TypedError::AuthzNotAdmin {
-            verb: verb.to_owned(),
-        });
+        // HostShutdown is permitted for the vmStop allowlist only; all
+        // other admin-only verbs are denied even from uid 0.
+        if matches!(peer.role, PeerRole::HostShutdown) {
+            if !verb_allowed_for_host_shutdown(verb) {
+                return Err(TypedError::AuthzNotAdmin {
+                    verb: verb.to_owned(),
+                });
+            }
+        } else {
+            return Err(TypedError::AuthzNotAdmin {
+                verb: verb.to_owned(),
+            });
+        }
     }
     match &request {
         wire::Request::VmStop(lifecycle) | wire::Request::VmRestart(lifecycle)
@@ -8382,6 +8393,10 @@ fn broker_caller_role_for_peer(peer: &PeerIdentity) -> BrokerCallerRole {
     match peer.role {
         PeerRole::Admin => BrokerCallerRole::AdminUid { uid: peer.uid },
         PeerRole::Launcher => BrokerCallerRole::LauncherUid { uid: peer.uid },
+        // HostShutdown maps to AdminUid so the broker executes the vmStop
+        // with full lifecycle authority. The authorization gate in
+        // dispatch_request has already ensured only vmStop can reach here.
+        PeerRole::HostShutdown => BrokerCallerRole::AdminUid { uid: peer.uid },
     }
 }
 
@@ -21191,6 +21206,56 @@ mod broker_dispatch_tests {
             assert_eq!(
                 response.get("outcome").and_then(serde_json::Value::as_str),
                 Some("dry-run-planned")
+            );
+        }
+    }
+
+    fn host_shutdown_peer() -> PeerIdentity {
+        PeerIdentity {
+            role: PeerRole::HostShutdown,
+            uid: 0,
+        }
+    }
+
+    #[test]
+    fn host_shutdown_peer_is_allowed_vm_stop_only() {
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("host-shutdown-vmstop"));
+        let peer = host_shutdown_peer();
+        let (_, vm_stop_request) = destructive_mutating_requests()
+            .into_iter()
+            .find(|(verb, _)| *verb == "vmStop")
+            .expect("vmStop must be in destructive_mutating_requests");
+        // vmStop must succeed for HostShutdown.
+        let response = dispatch_request(&state, &peer, vm_stop_request)
+            .unwrap_or_else(|err| panic!("HostShutdown vmStop unexpectedly denied: {err:?}"));
+        assert_eq!(
+            response.get("type").and_then(serde_json::Value::as_str),
+            Some("mutatingVerbResponse"),
+            "HostShutdown vmStop must return mutatingVerbResponse"
+        );
+    }
+
+    #[test]
+    fn host_shutdown_peer_denied_all_non_vmstop_admin_verbs() {
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "host-shutdown-denied",
+        ));
+        let peer = host_shutdown_peer();
+        let denied_verbs: Vec<(&str, super::wire::Request)> = destructive_mutating_requests()
+            .into_iter()
+            .filter(|(verb, _)| *verb != "vmStop")
+            .collect();
+        assert!(
+            !denied_verbs.is_empty(),
+            "at least one non-vmStop admin verb must exist to deny"
+        );
+        for (verb, request) in denied_verbs {
+            let err = dispatch_request(&state, &peer, request)
+                .expect_err(&format!("HostShutdown must not be allowed {verb}"));
+            assert!(
+                matches!(err, super::typed_error::TypedError::AuthzNotAdmin { .. }),
+                "HostShutdown denial of {verb} must be AuthzNotAdmin, got {err:?}"
             );
         }
     }
