@@ -152,6 +152,13 @@ in
     expected = true;
   };
 
+  "activation-runtime-tmpfiles/activation-preserves-run-parent-daemon-mask" = {
+    expr =
+      lib.hasInfix ''setfacl -m "u:nixlingd:rwx,g::r-x,m::rwx" /run/nixling 2>/dev/null || true'' runtimePostureText
+      && !(lib.hasInfix ''setfacl -m "g::r-x,m::r-x" /run/nixling 2>/dev/null || true'' runtimePostureText);
+    expected = true;
+  };
+
   "activation-runtime-tmpfiles/gpu-parent" = {
     expr = lib.all (rule: builtins.elem rule tmpfiles) [
       "d /run/nixling-gpu 0750 root nixling -"
