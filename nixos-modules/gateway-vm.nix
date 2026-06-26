@@ -163,8 +163,8 @@ let
           nixlingGatewayRuntimePackage
         ];
         systemd.tmpfiles.rules = [
-          "d /run/nixling 1770 root nixling -"
-          "z /run/nixling 1770 root nixling -"
+          "d /run/nixling 1750 root nixling -"
+          "z /run/nixling 1750 root nixling -"
           "a+ /run/nixling - - - - g::r-x"
           "a+ /run/nixling - - - - u:nixlingd:rwx"
           "a+ /run/nixling - - - - m::rwx"

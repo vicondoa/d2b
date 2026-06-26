@@ -1515,7 +1515,7 @@ pub struct StatusResponse {
     pub read_model: Option<PublicReadModelMetadata>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PublicReadModelMetadata {
     pub schema_version: u32,

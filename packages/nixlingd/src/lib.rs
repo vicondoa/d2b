@@ -1917,7 +1917,7 @@ fn validate_lock_parent(lock_path: &Path, identity: &RuntimeIdentity) -> Result<
         });
     }
     // The production tmpfile rule installs /run/nixling as
-    // `root:nixling 1770` (sticky bit, world-closed) with explicit POSIX
+    // `root:nixling 1750` (sticky bit, world-closed) with explicit POSIX
     // ACLs (g::r-x, u:nixlingd:rwx, m::rwx) so:
     //   - launcher users (members of `nixling`) traverse via the effective
     //     group ACL entry (g::r-x) to reach `/run/nixling/public.sock`
@@ -1927,8 +1927,8 @@ fn validate_lock_parent(lock_path: &Path, identity: &RuntimeIdentity) -> Result<
     //     do not trigger the systemd-tmpfiles unsafe-path-transition guard;
     //   - the sticky bit prevents nixlingd from unlinking those root-owned
     //     children.
-    // The base mode bits stored in the inode are 0o1770; after masking
-    // with 0o777 the check sees 0o770. The `--allow-unprivileged-runtime-dir`
+    // The base mode bits stored in the inode are 0o1750; after masking
+    // with 0o777 the check sees 0o750. The `--allow-unprivileged-runtime-dir`
     // test flag permits running under the invoking user's uid/gid (and
     // accepts 0755, 0750, or 0770 to accommodate ad-hoc `cargo test` dirs).
     let (expected_uid, expected_gid, mode_acceptable): (u32, u32, fn(u32) -> bool) =
@@ -1936,7 +1936,7 @@ fn validate_lock_parent(lock_path: &Path, identity: &RuntimeIdentity) -> Result<
             (
                 0, // root owns /run/nixling; daemon access via ACL
                 identity.public_socket_gid.as_raw(),
-                |m| m == 0o770,
+                |m| m == 0o750,
             )
         } else {
             (unistd::getuid().as_raw(), unistd::getgid().as_raw(), |m| {
@@ -1948,7 +1948,7 @@ fn validate_lock_parent(lock_path: &Path, identity: &RuntimeIdentity) -> Result<
         return Err(TypedError::InternalLockParentInvalid {
             path: parent.to_path_buf(),
             detail: format!(
-                "expected uid:gid {}:{} mode 0770 (production root:nixling 1770) or 0755/0750/0770 (test), got {}:{} mode {:04o}",
+                "expected uid:gid {}:{} mode 0750 (production root:nixling 1750) or 0755/0750/0770 (test), got {}:{} mode {:04o}",
                 expected_uid,
                 expected_gid,
                 metadata.uid(),
@@ -15167,34 +15167,23 @@ impl PublicStatusReadModel {
         self.load_if_fresh(state, &self.status)
     }
 
-    fn publish_list(&self, state: &ServerState, value: Value) -> Value {
-        self.publish(state, &self.list, value, "list")
-    }
-
-    fn publish_status(&self, state: &ServerState, value: Value) -> Value {
-        self.publish(state, &self.status, value, "status")
-    }
-
     fn load_if_fresh(
         &self,
         state: &ServerState,
         slot: &ArcSwapOption<CachedPublicFrame>,
     ) -> Option<Value> {
-        let current = public_artifact_fingerprint(state).ok()?;
         let cached = slot.load_full()?;
-        (cached.fingerprint == current).then(|| cached.value.clone())
+        (cached.fingerprint.pidfd_generation == state.pidfd_table.generation())
+            .then(|| cached.value.clone())
     }
 
-    fn publish(
+    fn publish_stable(
         &self,
-        state: &ServerState,
         slot: &ArcSwapOption<CachedPublicFrame>,
         value: Value,
+        fingerprint: PublicArtifactFingerprint,
         kind: &'static str,
     ) -> Value {
-        let Ok(fingerprint) = public_artifact_fingerprint(state) else {
-            return value;
-        };
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         let value = attach_read_model_metadata(value, &fingerprint, generation, kind);
         slot.store(Some(Arc::new(CachedPublicFrame {
@@ -15343,9 +15332,18 @@ fn dispatch_list(
     if cacheable && let Some(cached) = state.public_status_read_model.load_list(state) {
         return Ok(cached);
     }
+    let before = cacheable
+        .then(|| public_artifact_fingerprint(state).ok())
+        .flatten();
     let frame = build_public_list(state, request)?;
     if cacheable {
-        return Ok(state.public_status_read_model.publish_list(state, frame));
+        return Ok(publish_public_frame_if_stable(
+            state,
+            &state.public_status_read_model.list,
+            before,
+            frame,
+            "list",
+        ));
     }
     Ok(frame)
 }
@@ -15425,11 +15423,39 @@ fn dispatch_status(
     if cacheable && let Some(cached) = state.public_status_read_model.load_status(state) {
         return Ok(cached);
     }
+    let before = cacheable
+        .then(|| public_artifact_fingerprint(state).ok())
+        .flatten();
     let frame = build_public_status(state, request)?;
     if cacheable {
-        return Ok(state.public_status_read_model.publish_status(state, frame));
+        return Ok(publish_public_frame_if_stable(
+            state,
+            &state.public_status_read_model.status,
+            before,
+            frame,
+            "status",
+        ));
     }
     Ok(frame)
+}
+
+fn publish_public_frame_if_stable(
+    state: &ServerState,
+    slot: &ArcSwapOption<CachedPublicFrame>,
+    before: Option<PublicArtifactFingerprint>,
+    frame: Value,
+    kind: &'static str,
+) -> Value {
+    let Some(fingerprint) = before else {
+        return frame;
+    };
+    if public_artifact_fingerprint(state).ok().as_ref() == Some(&fingerprint) {
+        state
+            .public_status_read_model
+            .publish_stable(slot, frame, fingerprint, kind)
+    } else {
+        frame
+    }
 }
 
 fn build_public_status(
@@ -17646,6 +17672,46 @@ mod public_status_tests {
     }
 
     #[test]
+    fn status_read_model_refuses_to_cache_when_fingerprint_changes_during_build() {
+        let root = tempfile::tempdir().expect("artifact root");
+        let artifacts = write_public_status_artifacts(root.path());
+        let (state, _dir) = test_state_with_config(DaemonConfig {
+            artifacts,
+            ..DaemonConfig::default()
+        });
+        let before = public_artifact_fingerprint(&state).expect("before fingerprint");
+        let stale_frame = wire::status_response(json!({
+            "entries": [{
+                "vm": "vm-a",
+                "name": "vm-a",
+                "lifecycle": { "state": "Stopped" }
+            }]
+        }));
+
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                VM_RUNNER_ROLE_ID.to_owned(),
+                current_process_entry(),
+            )
+            .expect("register ch runner");
+        let returned = publish_public_frame_if_stable(
+            &state,
+            &state.public_status_read_model.status,
+            Some(before),
+            stale_frame.clone(),
+            "status",
+        );
+
+        assert_eq!(returned, stale_frame);
+        assert!(
+            state.public_status_read_model.load_status(&state).is_none(),
+            "stale pre-mutation frame must not be cached under the post-mutation fingerprint"
+        );
+    }
+
+    #[test]
     fn dispatch_list_and_status_without_filters_preserve_all_vm_order() {
         let root = tempfile::tempdir().expect("artifact root");
         let artifacts = write_public_status_artifacts(root.path());
@@ -18320,7 +18386,7 @@ mod runtime_acl_tests {
     //!
     //! Coverage of the production deployment topology
     //! (`User=nixlingd`, `SupplementaryGroups=nixling`,
-    //! tmpfiles `d /run/nixling 1770 root nixling -` +
+    //! tmpfiles `d /run/nixling 1750 root nixling -` +
     //! `a+ /run/nixling - - - - g::r-x` +
     //! `a+ /run/nixling - - - - u:nixlingd:rwx` +
     //! `a+ /run/nixling - - - - m::rwx`,
@@ -18477,19 +18543,19 @@ mod runtime_acl_tests {
 
     #[test]
     fn validate_lock_parent_accepts_production_tmpfile_shape() {
-        // Production posture: `d /run/nixling 1770 root nixling -` with
+        // Production posture: `d /run/nixling 1750 root nixling -` with
         // ACLs (g::r-x, u:nixlingd:rwx, m::rwx). The validator expects
-        // uid=0, gid=public_socket_gid, mode=0o770 (0o1770 & 0o777).
+        // uid=0, gid=public_socket_gid, mode=0o750 (0o1750 & 0o777).
         // Since cargo tests cannot become root, this exercises the
         // equivalent shape via the unprivileged path (expect_root_owned_parent=false)
-        // with mode 0o770, which the test-mode accepts.
+        // with mode 0o750, which test mode accepts.
         let dir = scratch_dir("validate-prod");
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o770))
-            .expect("chmod scratch dir 0770");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o750))
+            .expect("chmod scratch dir 0750");
         let identity = caller_identity(false);
         let lock_path = dir.join("daemon.lock");
         validate_lock_parent(&lock_path, &identity)
-            .expect("validator must accept mode 0770 (root:nixling 1770 equivalent) in test mode");
+            .expect("validator must accept mode 0750 (root:nixling 1750 equivalent) in test mode");
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -18521,7 +18587,7 @@ mod runtime_acl_tests {
         // 0o750, and 0o770 because ad-hoc cargo-test scratch dirs may
         // carry any of these depending on the caller's umask. 0o770 is
         // the cargo-test-accessible equivalent of the production
-        // root:nixling 1770 posture.
+        // root:nixling 1750 posture.
         for mode in [0o755u32, 0o750u32, 0o770u32] {
             let dir = scratch_dir(&format!("validate-test-mode-{mode:o}"));
             fs::set_permissions(&dir, fs::Permissions::from_mode(mode)).expect("chmod scratch dir");

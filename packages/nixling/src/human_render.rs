@@ -226,6 +226,10 @@ pub(crate) fn render_status_inventory_human(
             text.push('\n');
         }
     }
+    if let Some(rm) = output.read_model.as_ref() {
+        let fp = if rm.source_fingerprint.len() > 8 { &rm.source_fingerprint[..8] } else { &rm.source_fingerprint };
+        let _ = writeln!(text, "\n[read-model: {}, gen {}, fingerprint {}]", rm.freshness, rm.generation, fp);
+    }
     text
 }
 

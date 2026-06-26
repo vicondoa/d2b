@@ -1318,6 +1318,8 @@ struct ListResponseFrame {
     #[serde(rename = "type")]
     _type_name: String,
     vms: Vec<IpcListEntry>,
+    #[serde(default)]
+    read_model: Option<nixling_contracts::public_wire::PublicReadModelMetadata>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1332,6 +1334,8 @@ struct StatusResponseFrame {
 #[serde(rename_all = "camelCase")]
 struct StatusResponsePayload {
     entries: Vec<IpcVmStatus>,
+    #[serde(default)]
+    read_model: Option<nixling_contracts::public_wire::PublicReadModelMetadata>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1393,13 +1397,19 @@ enum KeysSocketOutcome {
 #[derive(Debug, Clone)]
 enum ListSocketOutcome {
     Unavailable,
-    Entries(Vec<IpcListEntry>),
+    Entries(
+        Vec<IpcListEntry>,
+        Option<nixling_contracts::public_wire::PublicReadModelMetadata>,
+    ),
 }
 
 #[derive(Debug, Clone)]
 enum StatusSocketOutcome {
     Unavailable,
-    Entries(Vec<IpcVmStatus>),
+    Entries(
+        Vec<IpcVmStatus>,
+        Option<nixling_contracts::public_wire::PublicReadModelMetadata>,
+    ),
 }
 
 #[derive(Debug, Clone)]
@@ -3305,22 +3315,28 @@ fn cmd_config_status(args: &ConfigStatusArgs) -> Result<i32, CliFailure> {
 }
 
 fn cmd_list(context: &Context, args: &ListArgs) -> Result<i32, CliFailure> {
-    let output = match try_list_via_socket(context)? {
-        ListSocketOutcome::Entries(entries) => {
+    let (output, read_model) = match try_list_via_socket(context)? {
+        ListSocketOutcome::Entries(entries, rm) => {
             let bundle = context.load_bundle_context().ok().flatten();
-            list_output_from_public_entries(&entries, bundle.as_ref())
+            (
+                list_output_from_public_entries(&entries, bundle.as_ref()),
+                rm,
+            )
         }
         ListSocketOutcome::Unavailable => {
             let manifest = context.load_manifest()?;
             let bundle = context.load_bundle_context()?;
-            list_output_from_manifest(context, &manifest, bundle.as_ref())
+            (
+                list_output_from_manifest(context, &manifest, bundle.as_ref()),
+                None,
+            )
         }
     };
 
     if args.json {
         print_json(&output)?;
     } else {
-        print_stdout(&render_list_human(&output));
+        print_stdout(&render_list_human(&output, read_model.as_ref()));
     }
     Ok(0)
 }
@@ -3364,7 +3380,7 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
             .ok_or_else(|| CliFailure::new(1, format!("unknown VM '{vm_name}'")))?;
     }
     let socket_status = match try_status_via_socket(context, selected_vm.as_deref())? {
-        StatusSocketOutcome::Entries(entries) => Some(entries),
+        StatusSocketOutcome::Entries(entries, rm) => Some((entries, rm)),
         StatusSocketOutcome::Unavailable => None,
     };
     let bundle = if socket_status.is_some() {
@@ -3379,7 +3395,7 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
             .ok_or_else(|| CliFailure::new(1, format!("unknown VM '{vm_name}'")))?;
         let output = socket_status
             .as_ref()
-            .and_then(|entries| entries.iter().find(|entry| entry.vm == vm.name))
+            .and_then(|(entries, _)| entries.iter().find(|entry| entry.vm == vm.name))
             .map(|entry| build_vm_status_output_from_public(context, vm, bundle.as_ref(), entry))
             .unwrap_or_else(|| build_vm_status_output(context, vm, bundle.as_ref()));
         if args.json {
@@ -3399,12 +3415,13 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
             } else {
                 RUNTIME_UNKNOWN.to_owned()
             },
+            read_model: socket_status.as_ref().and_then(|(_, rm)| rm.clone()),
             vms: manifest
                 .vms()
                 .into_iter()
                 .map(|vm| {
                     socket_status
-                        .and_then(|entries| entries.iter().find(|entry| entry.vm == vm.name))
+                        .and_then(|(entries, _)| entries.iter().find(|entry| entry.vm == vm.name))
                         .map(|entry| {
                             build_vm_status_output_from_public(context, vm, bundle.as_ref(), entry)
                         })
@@ -4813,7 +4830,7 @@ fn gateway_lifecycle_state(
     gateway_vm: &str,
 ) -> Result<Option<IpcVmLifecycleState>, CliFailure> {
     match try_list_via_socket(context)? {
-        ListSocketOutcome::Entries(entries) => Ok(entries
+        ListSocketOutcome::Entries(entries, _) => Ok(entries
             .into_iter()
             .find(|entry| entry.vm == gateway_vm || entry.name == gateway_vm)
             .map(|entry| entry.lifecycle.state)),
@@ -4823,7 +4840,7 @@ fn gateway_lifecycle_state(
 
 fn gateway_lifecycle_states(context: &Context) -> Result<BTreeMap<String, String>, CliFailure> {
     match try_list_via_socket(context)? {
-        ListSocketOutcome::Entries(entries) => {
+        ListSocketOutcome::Entries(entries, _) => {
             let mut states = BTreeMap::new();
             for entry in entries {
                 let label = gateway_state_label(entry.lifecycle.state).to_owned();
@@ -5842,7 +5859,7 @@ fn cmd_vm_list(context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> 
 
 fn cmd_vm_list_all(context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> {
     let local_entries = match try_list_via_socket(context)? {
-        ListSocketOutcome::Entries(entries) => entries,
+        ListSocketOutcome::Entries(entries, _) => entries,
         ListSocketOutcome::Unavailable => Vec::new(),
     };
     let gateway_entries = configured_realm_gateways(args.json)?
@@ -5909,7 +5926,7 @@ fn cmd_vm_list_all(context: &Context, args: &VmListArgs) -> Result<i32, CliFailu
 
 fn cmd_vm_list_local(context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> {
     match try_list_via_socket(context)? {
-        ListSocketOutcome::Entries(entries) => {
+        ListSocketOutcome::Entries(entries, _) => {
             if args.json {
                 let body = serde_json::json!({
                     "command": "vm list",
@@ -8412,7 +8429,10 @@ fn read_live_pool_integrity(
     }
 }
 
-fn render_list_human(output: &ListOutputV2) -> String {
+fn render_list_human(
+    output: &ListOutputV2,
+    read_model: Option<&nixling_contracts::public_wire::PublicReadModelMetadata>,
+) -> String {
     let mut text = String::from(
         "NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS\n",
     );
@@ -8451,6 +8471,18 @@ fn render_list_human(output: &ListOutputV2) -> String {
             item.usbip,
             static_ip,
             status,
+        );
+    }
+    if let Some(rm) = read_model {
+        let fp = if rm.source_fingerprint.len() > 8 {
+            &rm.source_fingerprint[..8]
+        } else {
+            &rm.source_fingerprint
+        };
+        let _ = writeln!(
+            text,
+            "\n[read-model: {}, gen {}, fingerprint {}]",
+            rm.freshness, rm.generation, fp
         );
     }
     text
@@ -8642,6 +8674,18 @@ fn render_status_vm_human(
             row.name, row.state, row.admin, row.expected_carrier, row.result
         );
     }
+    if let Some(rm) = output.read_model.as_ref() {
+        let fp = if rm.source_fingerprint.len() > 8 {
+            &rm.source_fingerprint[..8]
+        } else {
+            &rm.source_fingerprint
+        };
+        let _ = writeln!(
+            text,
+            "\n[read-model: {}, gen {}, fingerprint {}]",
+            rm.freshness, rm.generation, fp
+        );
+    }
     text
 }
 
@@ -8663,6 +8707,18 @@ fn render_status_inventory_human(
             ));
             text.push('\n');
         }
+    }
+    if let Some(rm) = output.read_model.as_ref() {
+        let fp = if rm.source_fingerprint.len() > 8 {
+            &rm.source_fingerprint[..8]
+        } else {
+            &rm.source_fingerprint
+        };
+        let _ = writeln!(
+            text,
+            "\n[read-model: {}, gen {}, fingerprint {}]",
+            rm.freshness, rm.generation, fp
+        );
     }
     text
 }
@@ -9683,7 +9739,7 @@ fn try_list_via_socket(context: &Context) -> Result<ListSocketOutcome, CliFailur
     )?;
     match try_public_socket_request(context, &request, "list")? {
         PublicSocketOutcome::Reply(response) => {
-            parse_list_reply(&response).map(ListSocketOutcome::Entries)
+            parse_list_reply(&response).map(|(entries, rm)| ListSocketOutcome::Entries(entries, rm))
         }
         PublicSocketOutcome::Unavailable | PublicSocketOutcome::Unsupported => {
             Ok(ListSocketOutcome::Unavailable)
@@ -9704,9 +9760,8 @@ fn try_status_via_socket(
         "status request",
     )?;
     match try_public_socket_request(context, &request, "status")? {
-        PublicSocketOutcome::Reply(response) => {
-            parse_status_reply(&response).map(StatusSocketOutcome::Entries)
-        }
+        PublicSocketOutcome::Reply(response) => parse_status_reply(&response)
+            .map(|(entries, rm)| StatusSocketOutcome::Entries(entries, rm)),
         PublicSocketOutcome::Unavailable | PublicSocketOutcome::Unsupported => {
             Ok(StatusSocketOutcome::Unavailable)
         }
@@ -9833,7 +9888,15 @@ fn parse_keys_show_reply(bytes: &[u8]) -> Result<IpcKeysShowResponse, CliFailure
         .map_err(|err| CliFailure::new(1, format!("failed to decode keysShow reply: {err}")))
 }
 
-fn parse_list_reply(bytes: &[u8]) -> Result<Vec<IpcListEntry>, CliFailure> {
+fn parse_list_reply(
+    bytes: &[u8],
+) -> Result<
+    (
+        Vec<IpcListEntry>,
+        Option<nixling_contracts::public_wire::PublicReadModelMetadata>,
+    ),
+    CliFailure,
+> {
     let value: Value = serde_json::from_slice(bytes)
         .map_err(|err| CliFailure::new(1, format!("failed to parse list reply: {err}")))?;
     if value.get("type").and_then(Value::as_str) != Some("listResponse") {
@@ -9843,11 +9906,19 @@ fn parse_list_reply(bytes: &[u8]) -> Result<Vec<IpcListEntry>, CliFailure> {
         ));
     }
     serde_json::from_value::<ListResponseFrame>(value)
-        .map(|frame| frame.vms)
+        .map(|frame| (frame.vms, frame.read_model))
         .map_err(|err| CliFailure::new(1, format!("failed to decode list reply: {err}")))
 }
 
-fn parse_status_reply(bytes: &[u8]) -> Result<Vec<IpcVmStatus>, CliFailure> {
+fn parse_status_reply(
+    bytes: &[u8],
+) -> Result<
+    (
+        Vec<IpcVmStatus>,
+        Option<nixling_contracts::public_wire::PublicReadModelMetadata>,
+    ),
+    CliFailure,
+> {
     let value: Value = serde_json::from_slice(bytes)
         .map_err(|err| CliFailure::new(1, format!("failed to parse status reply: {err}")))?;
     if value.get("type").and_then(Value::as_str) != Some("statusResponse") {
@@ -9857,7 +9928,7 @@ fn parse_status_reply(bytes: &[u8]) -> Result<Vec<IpcVmStatus>, CliFailure> {
         ));
     }
     serde_json::from_value::<StatusResponseFrame>(value)
-        .map(|frame| frame.status.entries)
+        .map(|frame| (frame.status.entries, frame.status.read_model))
         .map_err(|err| CliFailure::new(1, format!("failed to decode status reply: {err}")))
 }
 
@@ -14609,6 +14680,7 @@ mod host_install_dispatch_tests {
             unsupported_capabilities: Vec::new(),
             qemu_media: None,
             usb: None,
+            read_model: None,
             declared_roles: vec!["gpu".to_owned()],
             readiness: Vec::new(),
             api_ready: None,
@@ -14857,7 +14929,7 @@ mod host_install_dispatch_tests {
             runner_parity_ok: None,
         }]);
 
-        let rendered = super::render_list_human(&output);
+        let rendered = super::render_list_human(&output, None);
 
         assert!(rendered.contains("stopped (net-vm)"));
         assert!(!rendered.contains("systemd (net-vm)"));

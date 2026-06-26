@@ -289,6 +289,8 @@ pub enum StatusOutputV2 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StatusInventoryOutputV2 {
     pub runtime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_model: Option<crate::public_wire::PublicReadModelMetadata>,
     pub vms: Vec<StatusVmOutputV2>,
 }
 
@@ -323,6 +325,8 @@ pub struct StatusVmOutputV2 {
     pub booted: Option<String>,
     pub pending_restart: bool,
     pub runtime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_model: Option<crate::public_wire::PublicReadModelMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -77,8 +77,8 @@ in
 {
   "nixlingd-startup-smoke/tmpfiles-run-nixling" = {
     expr = {
-      rootOwnedStickyParent = builtins.elem "d /run/nixling 1770 root nixling -" tmpfiles;
-      rootOwnedStickyParentReset = builtins.elem "z /run/nixling 1770 root nixling -" tmpfiles;
+      rootOwnedStickyParent = builtins.elem "d /run/nixling 1750 root nixling -" tmpfiles;
+      rootOwnedStickyParentReset = builtins.elem "z /run/nixling 1750 root nixling -" tmpfiles;
       launcherTraverseAcl = builtins.elem "a+ /run/nixling - - - - g::r-x" tmpfiles;
       daemonWriteAcl = builtins.elem "a+ /run/nixling - - - - u:nixlingd:rwx" tmpfiles;
       writeCapableMask = builtins.elem "a+ /run/nixling - - - - m::rwx" tmpfiles;
@@ -183,16 +183,17 @@ in
     expected = "nixlingd";
   };
 
-  "nixlingd-startup-smoke/daemon-prestart-reasserts-run-nixling-acl" = {
+  "nixlingd-startup-smoke/daemon-prestart-does-not-repair-run-nixling-acl" =
+    let
+      prestart = daemonService.serviceConfig.ExecStartPre or [];
+    in {
     expr = {
-      asRoot = builtins.all (cmd: lib.hasPrefix "+" cmd) daemonService.serviceConfig.ExecStartPre;
-      chmod = builtins.any (cmd: lib.hasInfix "chmod 1770 /run/nixling" cmd) daemonService.serviceConfig.ExecStartPre;
-      acl = builtins.any (cmd: lib.hasInfix "setfacl -m g::r-x,u:nixlingd:rwx,m::rwx /run/nixling" cmd) daemonService.serviceConfig.ExecStartPre;
+      chmod = builtins.any (cmd: lib.hasInfix "chmod" cmd && lib.hasInfix "/run/nixling" cmd) prestart;
+      acl = builtins.any (cmd: lib.hasInfix "setfacl" cmd && lib.hasInfix "/run/nixling" cmd) prestart;
     };
     expected = {
-      asRoot = true;
-      chmod = true;
-      acl = true;
+      chmod = false;
+      acl = false;
     };
   };
 
