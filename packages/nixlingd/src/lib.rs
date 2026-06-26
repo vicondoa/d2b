@@ -15212,7 +15212,7 @@ impl PublicStatusReadModel {
             latest_generation = observed,
             "skipped stale public read-model publish"
         );
-        return value;
+        value
     }
 }
 
