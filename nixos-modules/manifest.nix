@@ -121,6 +121,9 @@ let
           enable = vm.lifecycle.gracefulShutdown.enable;
           timeoutSeconds = vm.lifecycle.gracefulShutdown.timeoutSeconds;
         };
+        liveActivation = {
+          timeoutSeconds = vm.lifecycle.liveActivation.timeoutSeconds;
+        };
       };
       graphics = isNixosRuntime && vm.graphics.enable;
       tpm = isNixosRuntime && vm.tpm.enable;
@@ -423,6 +426,22 @@ let
       gracefulShutdown = lib.mkOption {
         type = manifestGracefulShutdownType;
         description = "Per-VM graceful guest shutdown policy.";
+      };
+
+      liveActivation = lib.mkOption {
+        type = lib.types.submodule {
+          freeformType = null;
+          options = {
+            timeoutSeconds = lib.mkOption {
+              type = lib.types.nullOr lib.types.int;
+              description = ''
+                Optional per-VM live activation timeout override, in seconds.
+                Null means the daemon default from daemon-config.json applies.
+              '';
+            };
+          };
+        };
+        description = "Per-VM live in-guest activation policy.";
       };
     };
   };

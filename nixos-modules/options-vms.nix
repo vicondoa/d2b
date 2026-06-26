@@ -176,6 +176,21 @@ in
           };
         };
 
+        lifecycle.liveActivation.timeoutSeconds = lib.mkOption {
+          type = lib.types.nullOr lib.types.int;
+          default = null;
+          example = 1800;
+          description = ''
+            Optional per-VM live activation timeout, in seconds, for
+            authenticated in-guest `nixling switch`, `test`, and `rollback`.
+            When null, nixlingd uses
+            `nixling.daemon.lifecycle.liveActivation.timeoutSeconds`.
+            Identity-bound guests whose user-manager activation waits on an
+            operator-mediated provider flow (for example Entra/Himmelblau
+            hello/PIN) may need a larger value.
+          '';
+        };
+
         ui.border = {
           activeColor = lib.mkOption {
             type = lib.types.nullOr (lib.types.strMatching "^#[0-9a-fA-F]{6}$");

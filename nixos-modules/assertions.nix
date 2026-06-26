@@ -605,6 +605,17 @@ let
         '';
       }
       {
+        assertion =
+          let timeout = vm.lifecycle.liveActivation.timeoutSeconds;
+          in !(vm.enable && timeout != null && (timeout < 1 || timeout > 3600));
+        message = ''
+          nixling.vms.${name}.lifecycle.liveActivation.timeoutSeconds must be
+          null or an integer between 1 and 3600 seconds. Use the global
+          nixling.daemon.lifecycle.liveActivation.timeoutSeconds default unless
+          this VM legitimately waits on long in-guest activation flows.
+        '';
+      }
+      {
         # Graphics VMs CANNOT be autostart. The
         # `nixling@<vm>` wrapper template starts `microvm@<vm>`,
         # which is the upstream microvm.nix runner — but graphics

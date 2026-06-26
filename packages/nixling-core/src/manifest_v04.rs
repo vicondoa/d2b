@@ -238,12 +238,20 @@ pub struct VmEntry {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmLifecycle {
     pub graceful_shutdown: VmGracefulShutdown,
+    #[serde(default)]
+    pub live_activation: VmLiveActivation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmGracefulShutdown {
     pub enable: bool,
+    pub timeout_seconds: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmLiveActivation {
     pub timeout_seconds: Option<u32>,
 }
 

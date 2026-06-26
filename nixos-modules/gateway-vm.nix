@@ -84,6 +84,7 @@ let
           gatewayConfigPath = "/etc/nixling/gateway.json";
           autostartParallelism = cfg.daemon.autostart.parallelism;
           gracefulShutdownTimeoutSeconds = cfg.daemon.lifecycle.gracefulShutdown.timeoutSeconds;
+          liveActivationTimeoutSeconds = cfg.daemon.lifecycle.liveActivation.timeoutSeconds;
           artifacts = {
             publicManifestPath = "/etc/nixling/manifest.json";
             bundlePath = "/etc/nixling/bundle.json";

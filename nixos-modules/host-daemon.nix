@@ -191,6 +191,7 @@ EOF
     gatewayConfigPath = "/etc/nixling/gateway.json";
     autostartParallelism = cfg.daemon.autostart.parallelism;
     gracefulShutdownTimeoutSeconds = cfg.daemon.lifecycle.gracefulShutdown.timeoutSeconds;
+    liveActivationTimeoutSeconds = cfg.daemon.lifecycle.liveActivation.timeoutSeconds;
     artifacts = {
       publicManifestPath = "/run/current-system/sw/share/nixling/vms.json";
       bundlePath = "/etc/nixling/bundle.json";

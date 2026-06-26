@@ -498,6 +498,9 @@
             "gracefulShutdown": {
               "enable": true,
               "timeoutSeconds": null
+            },
+            "liveActivation": {
+              "timeoutSeconds": null
             }
           },
           "allOf": [
@@ -630,6 +633,30 @@
       "properties": {
         "gracefulShutdown": {
           "$ref": "#/definitions/VmGracefulShutdown"
+        },
+        "liveActivation": {
+          "default": {
+            "timeoutSeconds": null
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/VmLiveActivation"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmLiveActivation": {
+      "type": "object",
+      "properties": {
+        "timeoutSeconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
         }
       },
       "additionalProperties": false

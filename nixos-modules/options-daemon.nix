@@ -269,6 +269,23 @@ in
     };
   };
 
+  options.nixling.daemon.lifecycle.liveActivation = {
+    timeoutSeconds = lib.mkOption {
+      type = lib.types.int;
+      default = 600;
+      example = 1800;
+      description = ''
+        Default bounded wait, in seconds, for an authenticated in-guest
+        live activation (`nixling switch` / `test` / `rollback`) to
+        finish before nixlingd reports a typed activation timeout.
+        Identity-bound guests may need a larger value when user-manager
+        activation waits for an operator-mediated provider flow such as
+        Entra/Himmelblau hello/PIN. Values must be between 1 and 3600
+        seconds.
+      '';
+    };
+  };
+
   config = {
     assertions =
       (map (
@@ -307,6 +324,17 @@ in
             between 1 and 600 seconds. The upper bound keeps host shutdown
             and reboot bounded; use per-VM timeout overrides only within the
             same range.
+          '';
+        }
+        {
+          assertion =
+            cfg.daemon.lifecycle.liveActivation.timeoutSeconds >= 1
+            && cfg.daemon.lifecycle.liveActivation.timeoutSeconds <= 3600;
+          message = ''
+            nixling.daemon.lifecycle.liveActivation.timeoutSeconds must be
+            between 1 and 3600 seconds. Use per-VM overrides for guests whose
+            user-manager activation may legitimately wait on an operator-mediated
+            identity flow.
           '';
         }
         {
