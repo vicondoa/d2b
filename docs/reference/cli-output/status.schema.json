@@ -288,8 +288,7 @@
             "$ref": "#/definitions/StatusVmOutputV2"
           }
         }
-      },
-      "additionalProperties": false
+      }
     },
     "StatusServicesOutputV2": {
       "type": "object",
@@ -417,16 +416,6 @@
           "anyOf": [
             {
               "$ref": "#/definitions/QemuMediaStatus"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "readModel": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PublicReadModelMetadata"
             },
             {
               "type": "null"

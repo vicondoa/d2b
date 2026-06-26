@@ -1051,7 +1051,7 @@ fn parse_list_response(response: &[u8]) -> ProviderResult<ListResponse> {
     }
     decode_value::<ListResponseFrame>(value).map(|frame| ListResponse {
         vms: frame.vms,
-        read_model: None,
+        read_model: frame.read_model,
     })
 }
 
@@ -1185,6 +1185,8 @@ struct ListResponseFrame {
     #[serde(rename = "type")]
     _type_name: String,
     vms: Vec<ListEntry>,
+    #[serde(default)]
+    read_model: Option<nixling_contracts::public_wire::PublicReadModelMetadata>,
 }
 
 #[cfg(test)]
@@ -1687,6 +1689,32 @@ mod tests {
                 .any(|entry| entry.lifecycle.state == DaemonVmLifecycleState::Unknown)
         );
         assert!(list.vms.iter().any(|entry| entry.lifecycle.pending_restart));
+    }
+
+    #[test]
+    fn list_response_preserves_read_model_metadata() {
+        let value = serde_json::json!({
+            "type": "listResponse",
+            "readModel": {
+                "schemaVersion": 1,
+                "kind": "list",
+                "generation": 7,
+                "sourceFingerprint": "abcdef123456",
+                "updatedAtUnixMs": 42,
+                "freshness": "fresh",
+                "deepRefresh": "available"
+            },
+            "vms": []
+        });
+        let bytes = serde_json::to_vec(&value).expect("response json");
+
+        let parsed = parse_list_response(&bytes).expect("parse list response");
+
+        let model = parsed.read_model.expect("read model metadata");
+        assert_eq!(model.kind, "list");
+        assert_eq!(model.generation, 7);
+        assert_eq!(model.source_fingerprint, "abcdef123456");
+        assert_eq!(model.freshness, "fresh");
     }
 
     #[tokio::test]

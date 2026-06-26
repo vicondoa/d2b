@@ -77,8 +77,8 @@ in
 {
   "nixlingd-startup-smoke/tmpfiles-run-nixling" = {
     expr = {
-      rootOwnedStickyParent = builtins.elem "d /run/nixling 1750 root nixling -" tmpfiles;
-      rootOwnedStickyParentReset = builtins.elem "z /run/nixling 1750 root nixling -" tmpfiles;
+      rootOwnedStickyParent = builtins.elem "d /run/nixling 1770 root nixling -" tmpfiles;
+      rootOwnedStickyParentReset = builtins.elem "z /run/nixling 1770 root nixling -" tmpfiles;
       launcherTraverseAcl = builtins.elem "a+ /run/nixling - - - - g::r-x" tmpfiles;
       daemonWriteAcl = builtins.elem "a+ /run/nixling - - - - u:nixlingd:rwx" tmpfiles;
       writeCapableMask = builtins.elem "a+ /run/nixling - - - - m::rwx" tmpfiles;

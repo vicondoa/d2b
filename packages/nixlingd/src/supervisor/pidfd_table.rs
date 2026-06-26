@@ -260,10 +260,8 @@ impl PidfdTable {
     }
 
     pub fn deregister(&self, vm: &str, role: &str) -> Option<PidfdEntry> {
-        let removed = self
-            .entries
-            .write()
-            .remove(&(vm.to_owned(), role.to_owned()));
+        let mut entries = self.entries.write();
+        let removed = entries.remove(&(vm.to_owned(), role.to_owned()));
         if removed.is_some() {
             self.bump_generation();
         }
@@ -324,8 +322,8 @@ impl PidfdTable {
             for key in &to_drop {
                 entries.remove(key);
             }
-            drop(entries);
             self.bump_generation();
+            drop(entries);
             self.snapshot()?;
             for (vm, role) in &to_drop {
                 tracing::warn!(
@@ -440,7 +438,6 @@ impl PidfdTable {
                             if current.pid == pid && current.start_time_ticks == start_time_ticks
                     ) {
                         entries.remove(&key);
-                        drop(entries);
                         self.bump_generation();
                     }
                     return Ok(WaitTermination::Terminated);
@@ -458,7 +455,6 @@ impl PidfdTable {
                                     && current.start_time_ticks == start_time_ticks
                         ) {
                             entries.remove(&key);
-                            drop(entries);
                             self.bump_generation();
                         }
                         return Ok(WaitTermination::TerminatedByBroker {
@@ -502,7 +498,6 @@ impl PidfdTable {
                             if current.pid == pid && current.start_time_ticks == start_time_ticks
                     ) {
                         entries.remove(&key);
-                        drop(entries);
                         self.bump_generation();
                     }
                     return Ok(WaitTermination::Terminated);

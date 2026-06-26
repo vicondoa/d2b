@@ -64,10 +64,10 @@ deprecations ship one minor release before removal.
   `UsbipUnbind` cleanup path instead of stopping at a hardcoded ambiguous-flow
   refusal, so stale USBIP host claims can be released and subsequent attaches can
   recover without raw `usbip` commands.
-- `nixlingd.service` now reasserts the `/run/nixling` mode and ACL mask in a
-  root `ExecStartPre`, preventing NixOS switch-time restarts from racing
-  `systemd-tmpfiles-resetup` and starting with `nixlingd` write access clipped to
-  effective `r-x`.
+- `nixlingd.service` now relies on declarative tmpfiles ACLs for `/run/nixling`
+  instead of an imperative root `ExecStartPre`; the tmpfiles rules keep the ACL
+  mask writable for the daemon while the `nixling` operator group remains
+  narrowed to traversal by the explicit group ACL.
 - USB probe/status no longer marks a declared USBIP device `degraded` with
   `probe-incomplete` after guest-control confirms that the busid is already
   imported in the guest.

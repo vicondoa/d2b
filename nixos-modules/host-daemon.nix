@@ -358,12 +358,13 @@ in
       #
       # /run/nixling is group-owned by `nixling` so launcher users —
       # members of `nixling` via daemon-config.json's `publicSocketGroup` —
-      # can traverse the directory to reach `public.sock`, but cannot create
-      # or unlink runtime entries. The named nixlingd ACL grants daemon
-      # read/write for bind/remove of the socket. The public socket itself is
-      # mode 0660 group nixling (see bind_public_socket).
-      "d /run/nixling 1750 root nixling -"
-      "z /run/nixling 1750 root nixling -"
+      # can traverse the directory to reach `public.sock`. The owning group
+      # entry below narrows launcher access to r-x; the 1770 base mode keeps
+      # the ACL mask at rwx so the named nixlingd ACL can bind/remove the
+      # public socket. The public socket itself is mode 0660 group nixling
+      # (see bind_public_socket).
+      "d /run/nixling 1770 root nixling -"
+      "z /run/nixling 1770 root nixling -"
       "a+ /run/nixling - - - - g::r-x"
       "a+ /run/nixling - - - - u:nixlingd:rwx"
       "a+ /run/nixling - - - - m::rwx"

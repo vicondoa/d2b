@@ -994,13 +994,35 @@ fn run_usbip_driver_isolated(
     let mut last_error = None;
 
     for attempt in 0..USBIP_DRIVER_MAX_ATTEMPTS {
+        let attempt_started = Instant::now();
         let result = run_usbip_driver_helper_once(usbip_binary, subcommand, bus_id, deadline);
+        let elapsed_ms = attempt_started.elapsed().as_millis() as u64;
+        let remaining_ms = deadline
+            .checked_duration_since(Instant::now())
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or_default();
         match result {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                tracing::debug!(
+                    usbip_subcommand = subcommand.as_str(),
+                    attempt = attempt + 1,
+                    elapsed_ms,
+                    deadline_remaining_ms = remaining_ms,
+                    "usbip driver helper completed"
+                );
+                return Ok(());
+            }
             Err(error)
                 if usbip_unbind_error_is_transient(&error)
                     && attempt + 1 < USBIP_DRIVER_MAX_ATTEMPTS =>
             {
+                tracing::debug!(
+                    usbip_subcommand = subcommand.as_str(),
+                    attempt = attempt + 1,
+                    elapsed_ms,
+                    deadline_remaining_ms = remaining_ms,
+                    "usbip driver helper retrying transient failure"
+                );
                 last_error = Some(error);
                 let delay = usbip_unbind_retry_delay(bus_id, attempt);
                 let now = Instant::now();
@@ -1009,9 +1031,23 @@ fn run_usbip_driver_isolated(
                 }
                 std::thread::sleep(delay);
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                tracing::debug!(
+                    usbip_subcommand = subcommand.as_str(),
+                    attempt = attempt + 1,
+                    elapsed_ms,
+                    deadline_remaining_ms = remaining_ms,
+                    "usbip driver helper failed"
+                );
+                return Err(error);
+            }
         }
     }
+    tracing::debug!(
+        usbip_subcommand = subcommand.as_str(),
+        attempts = USBIP_DRIVER_MAX_ATTEMPTS,
+        "usbip driver helper retry budget exhausted"
+    );
     Err(last_error.unwrap_or_else(|| ReconcileExecError::TimedOut {
         which: format!("usbip {}", subcommand.as_str()),
         timeout_ms: USBIP_DRIVER_HELPER_TIMEOUT.as_millis() as u64,

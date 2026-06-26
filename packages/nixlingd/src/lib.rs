@@ -1917,7 +1917,7 @@ fn validate_lock_parent(lock_path: &Path, identity: &RuntimeIdentity) -> Result<
         });
     }
     // The production tmpfile rule installs /run/nixling as
-    // `root:nixling 1750` (sticky bit, world-closed) with explicit POSIX
+    // `root:nixling 1770` (sticky bit, world-closed) with explicit POSIX
     // ACLs (g::r-x, u:nixlingd:rwx, m::rwx) so:
     //   - launcher users (members of `nixling`) traverse via the effective
     //     group ACL entry (g::r-x) to reach `/run/nixling/public.sock`
@@ -1927,8 +1927,8 @@ fn validate_lock_parent(lock_path: &Path, identity: &RuntimeIdentity) -> Result<
     //     do not trigger the systemd-tmpfiles unsafe-path-transition guard;
     //   - the sticky bit prevents nixlingd from unlinking those root-owned
     //     children.
-    // The base mode bits stored in the inode are 0o1750; after masking
-    // with 0o777 the check sees 0o750. The `--allow-unprivileged-runtime-dir`
+    // The base mode bits stored in the inode are 0o1770; after masking
+    // with 0o777 the check sees 0o770. The `--allow-unprivileged-runtime-dir`
     // test flag permits running under the invoking user's uid/gid (and
     // accepts 0755, 0750, or 0770 to accommodate ad-hoc `cargo test` dirs).
     let (expected_uid, expected_gid, mode_acceptable): (u32, u32, fn(u32) -> bool) =
@@ -1936,7 +1936,7 @@ fn validate_lock_parent(lock_path: &Path, identity: &RuntimeIdentity) -> Result<
             (
                 0, // root owns /run/nixling; daemon access via ACL
                 identity.public_socket_gid.as_raw(),
-                |m| m == 0o750,
+                |m| m == 0o770,
             )
         } else {
             (unistd::getuid().as_raw(), unistd::getgid().as_raw(), |m| {
@@ -1948,7 +1948,7 @@ fn validate_lock_parent(lock_path: &Path, identity: &RuntimeIdentity) -> Result<
         return Err(TypedError::InternalLockParentInvalid {
             path: parent.to_path_buf(),
             detail: format!(
-                "expected uid:gid {}:{} mode 0750 (production root:nixling 1750) or 0755/0750/0770 (test), got {}:{} mode {:04o}",
+                "expected uid:gid {}:{} mode 0770 (production root:nixling 1770) or 0755/0750/0770 (test), got {}:{} mode {:04o}",
                 expected_uid,
                 expected_gid,
                 metadata.uid(),
@@ -15140,6 +15140,7 @@ struct CachedPublicFrame {
 #[derive(Debug)]
 struct PublicStatusReadModel {
     generation: AtomicU64,
+    latest_published_generation: AtomicU64,
     list: ArcSwapOption<CachedPublicFrame>,
     status: ArcSwapOption<CachedPublicFrame>,
 }
@@ -15148,6 +15149,7 @@ impl PublicStatusReadModel {
     fn new() -> Self {
         Self {
             generation: AtomicU64::new(0),
+            latest_published_generation: AtomicU64::new(0),
             list: ArcSwapOption::empty(),
             status: ArcSwapOption::empty(),
         }
@@ -15186,11 +15188,31 @@ impl PublicStatusReadModel {
     ) -> Value {
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         let value = attach_read_model_metadata(value, &fingerprint, generation, kind);
-        slot.store(Some(Arc::new(CachedPublicFrame {
-            fingerprint,
-            value: value.clone(),
-        })));
-        value
+        let mut observed = self.latest_published_generation.load(Ordering::Acquire);
+        while generation > observed {
+            match self.latest_published_generation.compare_exchange_weak(
+                observed,
+                generation,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    slot.store(Some(Arc::new(CachedPublicFrame {
+                        fingerprint,
+                        value: value.clone(),
+                    })));
+                    return value;
+                }
+                Err(next) => observed = next,
+            }
+        }
+        tracing::debug!(
+            read_model_kind = kind,
+            generation,
+            latest_generation = observed,
+            "skipped stale public read-model publish"
+        );
+        return value;
     }
 }
 
@@ -18386,7 +18408,7 @@ mod runtime_acl_tests {
     //!
     //! Coverage of the production deployment topology
     //! (`User=nixlingd`, `SupplementaryGroups=nixling`,
-    //! tmpfiles `d /run/nixling 1750 root nixling -` +
+    //! tmpfiles `d /run/nixling 1770 root nixling -` +
     //! `a+ /run/nixling - - - - g::r-x` +
     //! `a+ /run/nixling - - - - u:nixlingd:rwx` +
     //! `a+ /run/nixling - - - - m::rwx`,
@@ -18543,19 +18565,19 @@ mod runtime_acl_tests {
 
     #[test]
     fn validate_lock_parent_accepts_production_tmpfile_shape() {
-        // Production posture: `d /run/nixling 1750 root nixling -` with
+        // Production posture: `d /run/nixling 1770 root nixling -` with
         // ACLs (g::r-x, u:nixlingd:rwx, m::rwx). The validator expects
-        // uid=0, gid=public_socket_gid, mode=0o750 (0o1750 & 0o777).
+        // uid=0, gid=public_socket_gid, mode=0o770 (0o1770 & 0o777).
         // Since cargo tests cannot become root, this exercises the
         // equivalent shape via the unprivileged path (expect_root_owned_parent=false)
-        // with mode 0o750, which test mode accepts.
+        // with mode 0o770, which test mode accepts.
         let dir = scratch_dir("validate-prod");
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o750))
-            .expect("chmod scratch dir 0750");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o770))
+            .expect("chmod scratch dir 0770");
         let identity = caller_identity(false);
         let lock_path = dir.join("daemon.lock");
         validate_lock_parent(&lock_path, &identity)
-            .expect("validator must accept mode 0750 (root:nixling 1750 equivalent) in test mode");
+            .expect("validator must accept mode 0770 (root:nixling 1770 equivalent) in test mode");
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -18587,7 +18609,7 @@ mod runtime_acl_tests {
         // 0o750, and 0o770 because ad-hoc cargo-test scratch dirs may
         // carry any of these depending on the caller's umask. 0o770 is
         // the cargo-test-accessible equivalent of the production
-        // root:nixling 1750 posture.
+        // root:nixling 1770 posture.
         for mode in [0o755u32, 0o750u32, 0o770u32] {
             let dir = scratch_dir(&format!("validate-test-mode-{mode:o}"));
             fs::set_permissions(&dir, fs::Permissions::from_mode(mode)).expect("chmod scratch dir");

@@ -845,7 +845,7 @@ in
     # activation must not build/sweep/activate per-VM store closures.
     #
     # /run/nixling is created by
-    # host-daemon.nix tmpfiles (root:nixling 1750 with ACLs) under
+    # host-daemon.nix tmpfiles (root:nixling 1770 with ACLs) under
     # daemonExperimental, or host.nix tmpfiles (root:nixling
     # 0775) without it. This activation hook MUST NOT touch the parent
     # `/run/nixling` directory — only per-VM leaves.

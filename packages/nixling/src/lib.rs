@@ -8674,18 +8674,6 @@ fn render_status_vm_human(
             row.name, row.state, row.admin, row.expected_carrier, row.result
         );
     }
-    if let Some(rm) = output.read_model.as_ref() {
-        let fp = if rm.source_fingerprint.len() > 8 {
-            &rm.source_fingerprint[..8]
-        } else {
-            &rm.source_fingerprint
-        };
-        let _ = writeln!(
-            text,
-            "\n[read-model: {}, gen {}, fingerprint {}]",
-            rm.freshness, rm.generation, fp
-        );
-    }
     text
 }
 
@@ -14680,7 +14668,6 @@ mod host_install_dispatch_tests {
             unsupported_capabilities: Vec::new(),
             qemu_media: None,
             usb: None,
-            read_model: None,
             declared_roles: vec!["gpu".to_owned()],
             readiness: Vec::new(),
             api_ready: None,
@@ -14933,6 +14920,77 @@ mod host_install_dispatch_tests {
 
         assert!(rendered.contains("stopped (net-vm)"));
         assert!(!rendered.contains("systemd (net-vm)"));
+    }
+
+    fn read_model_fixture(kind: &str) -> nixling_contracts::public_wire::PublicReadModelMetadata {
+        nixling_contracts::public_wire::PublicReadModelMetadata {
+            schema_version: 1,
+            kind: kind.to_owned(),
+            generation: 7,
+            source_fingerprint: "abcdef123456".to_owned(),
+            updated_at_unix_ms: 42,
+            freshness: "fresh".to_owned(),
+            deep_refresh: "available".to_owned(),
+        }
+    }
+
+    #[test]
+    fn parse_public_replies_preserve_read_model_metadata() {
+        let list = serde_json::to_vec(&json!({
+            "type": "listResponse",
+            "readModel": read_model_fixture("list"),
+            "vms": []
+        }))
+        .expect("list json");
+        let (_entries, list_model) = super::parse_list_reply(&list).expect("parse list");
+        let list_model = list_model.expect("list read model");
+        assert_eq!(list_model.kind, "list");
+        assert_eq!(list_model.generation, 7);
+
+        let status = serde_json::to_vec(&json!({
+            "type": "statusResponse",
+            "status": {
+                "readModel": read_model_fixture("status"),
+                "entries": []
+            }
+        }))
+        .expect("status json");
+        let (_entries, status_model) = super::parse_status_reply(&status).expect("parse status");
+        let status_model = status_model.expect("status read model");
+        assert_eq!(status_model.kind, "status");
+        assert_eq!(status_model.source_fingerprint, "abcdef123456");
+    }
+
+    #[test]
+    fn human_renderers_show_read_model_metadata() {
+        let list = super::ListOutputV2(Vec::new());
+        let rendered = super::render_list_human(&list, Some(&read_model_fixture("list")));
+        assert!(rendered.contains("[read-model: fresh, gen 7, fingerprint abcdef12]"));
+
+        let inventory = super::StatusInventoryOutputV2 {
+            runtime: "daemon-public".to_owned(),
+            read_model: Some(read_model_fixture("status")),
+            vms: Vec::new(),
+        };
+        let manifest = super::ManifestDocument {
+            _manifest: None,
+            _observability: None,
+            entries: Default::default(),
+        };
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: PathBuf::from("/dev/null"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/tmp/nixling-test-daemon-state"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let rendered = super::render_status_inventory_human(&inventory, &manifest, &context, None);
+        assert!(rendered.contains("[read-model: fresh, gen 7, fingerprint abcdef12]"));
     }
 
     #[test]
