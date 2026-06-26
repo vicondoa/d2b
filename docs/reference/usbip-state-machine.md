@@ -223,6 +223,18 @@ manual recovery instead of killing the shared listener.
 VM start treats same-host-session same-VM USBIP session claims as required until an explicit
 optional-device policy exists. Runtime absence, guest-control import failure, or
 per-env proxy/backend unavailability degrades the USB row and lets boot continue
+with a precise remediation command. A same-owner row where the host claim is held,
+the device is already bound to `usbip-host`, and the guest import is detached is
+convergable: the daemon may refresh the firewall/proxy path and ask guestd to
+import the busid again without releasing the host-session claim.
+
+During backend ACL grant the broker treats `/dev/bus/usb/<bus>/<dev>` as a
+volatile device node. It may retry across transient devnum changes or brief
+sysfs `ENOENT` windows only while the busid, VID/PID, bus number, and physical
+port-chain identity remain stable. ACLs granted to any previously observed
+device node are revoked before retry/failure; missing old nodes are benign
+because the kernel removes them during re-enumeration. VID/PID or topology
+changes still fail closed.
 without exposing the device. Required policy failures — missing or mismatched
 vendor/product allowlists, undeclared physical topology, or topology mismatch —
 fail before device exposure and roll back the VM start with remediation to fix

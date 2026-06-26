@@ -87,6 +87,17 @@ are denied (`defaultForUnknown: deny`).
 > workload VM — and its realm credentials, policy, and audit log
 > live entirely inside the guest.
 
+> **Host shutdown exception.** The guarded host-shutdown hook is the only
+> local lifecycle exception to the normal launcher/admin uid lookup. When
+> systemd invokes `nixling host shutdown-hook --apply` from
+> `nixlingd.service` `ExecStop`, the daemon sees `SO_PEERCRED` uid `0` and
+> classifies that connection as `HostShutdown`. That role is not an admin role:
+> it is a narrow stop-only lifecycle authority for host shutdown and may issue
+> only `vmStop`. It is denied for exec, USB attach/detach, host prepare/destroy,
+> audit export, key rotation, config sync, and every other admin-only surface.
+> The existing shutdown guard remains responsible for ensuring the hook exits
+> without mutation during ordinary daemon restarts.
+
 ## Operation catalog (PROTOCOL_VERSION = 2)
 
 The currently implemented broker operation catalog. Every row carries

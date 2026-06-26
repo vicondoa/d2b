@@ -567,6 +567,12 @@ This keeps the read path narrow:
 - the broker remains the only writer because it owns the append-only
   write fd and enforces write serialization internally.
 
+Host shutdown stop requests are distinguishable from ordinary admin stops at
+the daemon authorization layer. The systemd `ExecStop` hook connects as uid `0`
+and receives the narrow `HostShutdown` role; the daemon permits only `vmStop`
+for that role and forwards the request to the broker with the normal lifecycle
+audit path. Other admin-only daemon verbs remain denied for `HostShutdown`.
+
 USBIP bind audit records may include `deviceIdentity` for privileged
 forensics. That projection keeps raw serial descriptors out of the log:
 VID/PID are normalized four-hex strings, `serialObserved` is boolean, and

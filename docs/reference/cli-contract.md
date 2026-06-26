@@ -2614,6 +2614,13 @@ Fail-closed behaviour:
   each map to exit `70` with their slug and never echo guest content,
   paths, or transport detail.
 
+`nixling host shutdown-hook --apply` is intentionally absent from the public
+clap/completion surface and is invoked by `nixlingd.service` only while the host
+manager is stopping. When that hook connects as uid `0`, the daemon assigns the
+narrow `HostShutdown` role. This role can dispatch only `vmStop`; it cannot run
+admin-only operator verbs such as exec, USB attach/detach, host prepare/destroy,
+audit export, key rotation, or config sync.
+
 **Disposition:** `rust-native` — host-initiated typed `readGuestConfig`
 over the daemon public socket; no SSH, no virtiofs, no new privileged
 surface.

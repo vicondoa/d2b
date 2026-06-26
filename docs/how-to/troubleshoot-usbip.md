@@ -125,6 +125,14 @@ nixling usb attach corp-vm 1-2 --apply
 nixling usb probe
 ```
 
+If the row shows the same VM still owns the session claim and the host is already
+bound (`SESSION-CLAIM=held-by-desired-owner`,
+`HOST-BIND=bound-to-usbip-host`) but `GUEST=detached`, this is a convergable
+same-owner state. Re-run the printed `nixling usb attach <vm> <busid> --apply`
+command. The daemon rechecks the per-env firewall/proxy path and asks guestd to
+import the device again; it does not release the claim or require raw host
+`usbip` commands.
+
 If the VM is stopped instead of restarted, start it first:
 
 ```bash
@@ -165,6 +173,7 @@ same-env USB streams is acceptable.
 | --- | --- | --- |
 | `status=unbound` or `SESSION-CLAIM=missing` | No session owner exists for the declared busid. | `nixling usb attach corp-vm 1-2 --apply` |
 | Attach says the VM is stopped or `guest-import-unavailable` | Guest-control cannot import until the VM is running. | `nixling vm start corp-vm --apply`, then `nixling usb attach corp-vm 1-2 --apply` |
+| `SESSION-CLAIM=held-by-desired-owner`, `HOST-BIND=bound-to-usbip-host`, and `GUEST=detached` | The host owns and exports the device for this VM, but guestd has not imported it. | Re-run the row's `nixling usb attach <vm> <busid> --apply` command; it converges guest import without releasing the session claim. |
 | `SESSION-CLAIM=held-by-other-owner` / `lock-held-by-other-owner` | Another VM owns the session claim. | `nixling usb detach <owner> 1-2 --apply`, then `nixling usb attach corp-vm 1-2 --apply` |
 | `SESSION-CLAIM=stale-owner`, `SESSION-CLAIM=corrupt`, or `invalid-persisted-lock-claim` | The session claim cannot be safely trusted as a healthy owner. | Do not edit the lock file. Run the probe's `command:` line if present; otherwise `nixling usb detach corp-vm 1-2 --apply`, then `nixling usb probe`. |
 | `HOST-BIND=bound-to-unexpected-driver` | The device is present but still owned by another host driver or local application. | Close local consumers of the device, then `nixling usb attach corp-vm 1-2 --apply`. |
