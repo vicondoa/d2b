@@ -350,7 +350,7 @@ fn usb_detach_dispatches_host_unbind_instead_of_static_ambiguous_refusal() {
 }
 
 #[test]
-fn usb_probe_does_not_mark_imported_devices_probe_incomplete() {
+fn usb_probe_does_not_mark_resolved_guest_status_probe_incomplete() {
     let lib_rs = read_repo_file("packages/nixlingd/src/lib.rs");
     let probe_start = lib_rs
         .find("fn usbip_probe_entry_from_intent")
@@ -366,8 +366,13 @@ fn usb_probe_does_not_mark_imported_devices_probe_incomplete() {
         "USB probe must inspect whether guest status confirms the busid is imported"
     );
     assert!(
-        probe_body
+        probe_body.contains("public_wire::UsbipGuestImportState::Unknown")
+            && probe_body.contains("public_wire::UsbipGuestImportState::Unavailable"),
+        "USB probe must add probe-incomplete only when guest status was not requested or remained unknown/unavailable, not when it resolved to imported or detached"
+    );
+    assert!(
+        !probe_body
             .contains("!matches!(guest_import, public_wire::UsbipGuestImportState::Imported)"),
-        "USB probe must not add probe-incomplete degradation for devices already imported in the guest"
+        "USB probe must not treat a successfully queried detached guest import as probe-incomplete"
     );
 }

@@ -4983,7 +4983,11 @@ fn usbip_probe_entry_from_intent(
             }
         }
         if !guest_status_requested
-            || !matches!(guest_import, public_wire::UsbipGuestImportState::Imported)
+            || matches!(
+                guest_import,
+                public_wire::UsbipGuestImportState::Unknown
+                    | public_wire::UsbipGuestImportState::Unavailable
+            )
         {
             degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
                 usbip_reconcile_state::UsbipDegradedReason::ProbeIncomplete,
