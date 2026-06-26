@@ -215,6 +215,21 @@ enum BrokerError {
         busid: String,
         reason: &'static str,
     },
+    /// `UsbipBind` refused because the busid lock is already held by a
+    /// different VM. The daemon maps this to `LockConflict` via the
+    /// wire kind `"Broker.UsbipLockConflict"` without string-matching on
+    /// a redacted `LiveHandler` message.
+    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    UsbipLockConflict {
+        busid: String,
+    },
+    /// `UsbipBind` refused because the physical USB device is absent in
+    /// sysfs. The daemon maps this to `RuntimeAbsent` via the wire kind
+    /// `"Broker.UsbipDeviceAbsent"`.
+    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    UsbipDeviceAbsent {
+        busid: String,
+    },
     /// The live executor reported an error (nft/route/sysctl shellout
     /// failed, pidfd open failed, spawn preflight failed, etc).
     #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
@@ -3643,11 +3658,10 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             })?;
             let same_vm_replay = match crate::ops::usbip_lock::peek_owner(&intent.lock_path) {
                 Some(owner) if owner == intent.vm_name => true,
-                Some(owner) => {
-                    return Err(BrokerError::LiveHandler(format!(
-                        "usbip foreign lock refused for opaque intent {}: observed owner {owner}",
-                        intent.intent_id
-                    )));
+                Some(_) => {
+                    return Err(BrokerError::UsbipLockConflict {
+                        busid: intent.bus_id.clone(),
+                    });
                 }
                 None => false,
             };
@@ -3747,11 +3761,10 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             })?;
             let had_matching_lock = match crate::ops::usbip_lock::peek_owner(&intent.lock_path) {
                 Some(owner) if owner == intent.vm_name => true,
-                Some(owner) => {
-                    return Err(BrokerError::LiveHandler(format!(
-                        "usbip unbind refused for opaque intent {}: observed foreign owner {owner}",
-                        intent.intent_id
-                    )));
+                Some(_) => {
+                    return Err(BrokerError::UsbipLockConflict {
+                        busid: intent.bus_id.clone(),
+                    });
                 }
                 None => false,
             };
@@ -7074,6 +7087,11 @@ fn map_usbip_host_inspection_error_for_intent(
                 reason: "observed physical topology does not match the declaration",
             }
         }
+        crate::ops::usbip_host::UsbipHostInspectionError::DeviceMissing { bus_id }
+        | crate::ops::usbip_host::UsbipHostInspectionError::DeviceDepartedDuringInspection {
+            bus_id,
+            ..
+        } => BrokerError::UsbipDeviceAbsent { busid: bus_id },
         other => BrokerError::LiveHandler(other.to_string()),
     }
 }
@@ -8212,6 +8230,26 @@ impl BrokerError {
                     })),
                 )?;
             }
+            Self::UsbipLockConflict { .. } => {
+                audit_log.write_error_entry(
+                    operation,
+                    caller_uid,
+                    "usbip-lock-conflict",
+                    opaque_target_id,
+                    "Broker.UsbipLockConflict",
+                    "UsbipBind refused: busid is already claimed by another VM",
+                )?;
+            }
+            Self::UsbipDeviceAbsent { .. } => {
+                audit_log.write_error_entry(
+                    operation,
+                    caller_uid,
+                    "usbip-device-absent",
+                    opaque_target_id,
+                    "Broker.UsbipDeviceAbsent",
+                    "UsbipBind refused: USB device is not present in sysfs",
+                )?;
+            }
             Self::LiveHandler(message) => {
                 // Surface the operator-facing root cause (errno / path /
                 // stderr) in the broker journal, not just the
@@ -8550,6 +8588,24 @@ impl BrokerError {
                     "UsbipBind refused before device exposure because the required USB policy check failed: {reason}"
                 ),
                 "Fix the USBIP declaration, physical port/topology, and vendor:product allowlist, rebuild the trusted bundle, then retry.",
+            ),
+            Self::UsbipLockConflict { busid } => error_response(
+                "Broker.UsbipLockConflict",
+                "UsbipBind",
+                None,
+                &format!(
+                    "UsbipBind refused: busid {busid} is already claimed by another VM"
+                ),
+                "Stop the VM currently holding this busid or use `nixling usb detach` to release the claim, then retry.",
+            ),
+            Self::UsbipDeviceAbsent { busid } => error_response(
+                "Broker.UsbipDeviceAbsent",
+                "UsbipBind",
+                None,
+                &format!(
+                    "UsbipBind refused: USB device {busid} is not present in sysfs"
+                ),
+                "Confirm the physical device is connected and recognized by the host kernel, then retry.",
             ),
             Self::LiveHandler(message) => error_response(
                 "Broker.LiveHandlerFailed",
