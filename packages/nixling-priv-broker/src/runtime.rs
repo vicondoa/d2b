@@ -3941,9 +3941,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             // grants the per-device ACL to the env's USBIP backend runner.
             let resolver = require_resolver(resolver)?;
             let lock_path = std::path::PathBuf::from(
-                nixling_contracts::usbip::UsbipDaemonClaimRecord::lock_path_for_busid(
-                    &req.bus_id,
-                ),
+                nixling_contracts::usbip::UsbipDaemonClaimRecord::lock_path_for_busid(&req.bus_id),
             );
 
             // Same-VM replay: lock is already held by this VM (e.g. daemon restart).
@@ -3959,17 +3957,16 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             };
 
             // Inspect the device: no allowlist check (explicit path bypasses it).
-            let inspection =
-                crate::ops::usbip_host::inspect_usbip_host_device(
-                    usb_device_sysfs_root(),
-                    &req.bus_id,
-                )
-                .map_err(|err| {
-                    BrokerError::LiveHandler(format!(
-                        "explicit usbip bind sysfs inspection failed for bus_id={}: {err}",
-                        req.bus_id
-                    ))
-                })?;
+            let inspection = crate::ops::usbip_host::inspect_usbip_host_device(
+                usb_device_sysfs_root(),
+                &req.bus_id,
+            )
+            .map_err(|err| {
+                BrokerError::LiveHandler(format!(
+                    "explicit usbip bind sysfs inspection failed for bus_id={}: {err}",
+                    req.bus_id
+                ))
+            })?;
 
             let expected_identity = (inspection.vendor, inspection.product);
             let expected_device_node = inspection.device_node;
@@ -4012,9 +4009,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     OperationFields::UsbSerialCorrelationKeyRotate(rotation_audit),
                     &rotation_audit_context,
                 ) {
-                    unmark_usb_audit_serial_hmac_rotation_audit_logged(
-                        &rotation_audit_dedupe_key,
-                    );
+                    unmark_usb_audit_serial_hmac_rotation_audit_logged(&rotation_audit_dedupe_key);
                     return Err(err);
                 }
             }
@@ -4046,10 +4041,9 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 if !same_vm_replay {
                     match backend.usbip_unbind(&synthetic_intent) {
                         Ok(()) => {
-                            if let Err(lock_error) = crate::ops::usbip_lock::release_lock(
-                                &lock_path,
-                                &req.vm,
-                            ) {
+                            if let Err(lock_error) =
+                                crate::ops::usbip_lock::release_lock(&lock_path, &req.vm)
+                            {
                                 warn!(
                                     bus_id = %req.bus_id,
                                     vm = %req.vm,
@@ -4106,10 +4100,9 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     }
                     match backend.usbip_unbind(&synthetic_intent) {
                         Ok(()) => {
-                            if let Err(lock_error) = crate::ops::usbip_lock::release_lock(
-                                &lock_path,
-                                &req.vm,
-                            ) {
+                            if let Err(lock_error) =
+                                crate::ops::usbip_lock::release_lock(&lock_path, &req.vm)
+                            {
                                 warn!(
                                     bus_id = %req.bus_id,
                                     vm = %req.vm,
@@ -6557,10 +6550,8 @@ fn explicit_usbip_backend_uid(
     resolver: &Arc<BundleResolver>,
     env: &str,
 ) -> Result<u32, BrokerError> {
-    let runner_id = nixling_core::bundle_resolver::intent_id_runner(
-        &format!("sys-{env}-usbipd"),
-        "backend",
-    );
+    let runner_id =
+        nixling_core::bundle_resolver::intent_id_runner(&format!("sys-{env}-usbipd"), "backend");
     resolver
         .find_runner_intent(&runner_id)
         .map(|r| r.uid)
@@ -6582,12 +6573,11 @@ fn build_explicit_usbip_rule_body(
     req_net_uplink_ip: &str,
 ) -> Result<(String, String), BrokerError> {
     use std::net::IpAddr;
-    let env_config =
-        resolver
-            .find_host_env(env)
-            .ok_or_else(|| BrokerError::LiveHandler(format!(
-                "explicit USBIP firewall: env {env:?} not found in host config"
-            )))?;
+    let env_config = resolver.find_host_env(env).ok_or_else(|| {
+        BrokerError::LiveHandler(format!(
+            "explicit USBIP firewall: env {env:?} not found in host config"
+        ))
+    })?;
 
     // Validate anti-spoof bridge port flags (uplink must be isolated+neigh_suppress,
     // no MAC learning, no unknown-unicast flood).
@@ -6595,9 +6585,11 @@ fn build_explicit_usbip_rule_body(
         .bridge_port_flags
         .iter()
         .find(|f| f.role == nixling_core::host::TapRole::Uplink)
-        .ok_or_else(|| BrokerError::LiveHandler(format!(
-            "explicit USBIP firewall: env {env:?} has no uplink bridge port flags"
-        )))?;
+        .ok_or_else(|| {
+            BrokerError::LiveHandler(format!(
+                "explicit USBIP firewall: env {env:?} has no uplink bridge port flags"
+            ))
+        })?;
     if !uplink_flags.isolated
         || !uplink_flags.neigh_suppress
         || uplink_flags.resolved_learning()
@@ -6654,8 +6646,7 @@ fn build_explicit_usbip_rule_body(
 
     let bridge_ifname = env_config.bridge.as_str();
     // Validate the bridge ifname is safe for nft literals.
-    if bridge_ifname.contains('"') || bridge_ifname.contains('\\') || bridge_ifname.contains('\0')
-    {
+    if bridge_ifname.contains('"') || bridge_ifname.contains('\\') || bridge_ifname.contains('\0') {
         return Err(BrokerError::LiveHandler(format!(
             "explicit USBIP firewall: env {env:?} bridge ifname contains unsafe characters"
         )));
@@ -6695,9 +6686,11 @@ fn grant_explicit_usbip_backend_acl(
         let mut last_error = None;
         let mut granted = false;
         for _ in 0..20 {
-            if let Err(error) =
-                verify_explicit_usbip_device_stable(bus_id, expected_identity, &expected_device_node)
-            {
+            if let Err(error) = verify_explicit_usbip_device_stable(
+                bus_id,
+                expected_identity,
+                &expected_device_node,
+            ) {
                 if granted {
                     let _ = crate::live_handlers::live_revoke_verified_device_acl(
                         &expected_device_node,
@@ -6733,10 +6726,9 @@ fn grant_explicit_usbip_backend_acl(
         if granted {
             return Ok(());
         }
-        Err(BrokerError::LiveHandler(
-            last_error
-                .unwrap_or_else(|| "grant explicit USBIP backend device ACL failed".to_owned()),
-        ))
+        Err(BrokerError::LiveHandler(last_error.unwrap_or_else(|| {
+            "grant explicit USBIP backend device ACL failed".to_owned()
+        })))
     }
 }
 
@@ -6921,8 +6913,7 @@ fn build_usbip_explicit_firewall_decision(
         if !inserted.insert(firewall_id.clone()) {
             continue;
         }
-        let Some(active_firewall) =
-            find_usbip_firewall_intent_or_wildcard(resolver, &firewall_id)
+        let Some(active_firewall) = find_usbip_firewall_intent_or_wildcard(resolver, &firewall_id)
         else {
             continue;
         };

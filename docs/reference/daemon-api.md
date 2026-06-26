@@ -106,6 +106,33 @@ flow. **Wheel membership alone never grants access.** The public socket
 is for configured launcher/admin identities only, and `nixlingd` itself
 is not treated as a valid public-socket client.
 
+### Public status read model
+
+Unfiltered `List` and `Status` responses are served from a daemon-maintained
+read model after the first successful build. The model is published as an
+atomic frame snapshot and includes `readModel` metadata with:
+
+- `schemaVersion`;
+- `kind` (`list` or `status`);
+- `generation`;
+- `sourceFingerprint`;
+- `updatedAtUnixMs`;
+- `freshness`;
+- `deepRefresh`.
+
+The source fingerprint covers the current system generation, public manifest,
+host/process/bundle artifacts, and the daemon pidfd-table generation. Mutating
+public operations and runner pidfd registration/deregistration invalidate the
+snapshot before later fast reads may reuse it. Filtered requests, explicit deep
+diagnostics, and bridge-check requests may bypass the read model so they can
+return request-specific data.
+
+USB sysfs driver `bind`/`unbind` has no true async Rust wrapper in the current
+implementation. The broker therefore uses a bounded isolated helper for both
+USBIP bind and unbind rather than performing those writes on daemon status/read
+paths or an async reactor thread. Status/read-model paths never trigger sysfs
+driver mutation.
+
 ## Broker socket
 
 `/run/nixling/priv.sock` is the daemon-to-broker control path.
@@ -252,13 +279,13 @@ host reboot.
 | `MutatingVerbResponse` | struct | [`MutatingVerbResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1459) | struct { `verb`: `String`; `outcome`: `MutatingVerbOutcome`; `target_wave`: `Option<String>`; `summary`: `Option<String>`; `remediation`: `Option<String>`; `api_ready`: `Option<String>` } |
 | `CapabilitiesResponse` | struct | [`CapabilitiesResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1485) | struct { `broker_socket`: `String`; `capabilities`: `Vec<FeatureFlag>`; `public_socket`: `String`; `server_version`: `Version`; `selected_version`: `Version` } |
 | `AuthStatusResponse` | struct | [`AuthStatusResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1495) | struct { `allowed_subcommands`: `Vec<String>`; `denied_subcommands`: `Vec<DeniedCommandHint>`; `role`: `AuthRole`; `sockets`: `Vec<SocketReachability>` } |
-| `ListResponse` | struct | [`ListResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1504) | struct { `vms`: `Vec<ListEntry>` } |
-| `StatusResponse` | struct | [`StatusResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1510) | struct { `entries`: `Vec<VmStatus>` } |
-| `AuditResponse` | struct | [`AuditResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1516) | struct { `entries`: `Vec<AuditEntry>` } |
-| `HostCheckResponse` | struct | [`HostCheckResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1522) | struct { `exit_code`: `u8`; `findings`: `Vec<HostFinding>` } |
-| `KeysListResponse` | struct | [`KeysListResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1540) | struct { `entries`: `Vec<KeyEntry>` } |
-| `KeysShowResponse` | struct | [`KeysShowResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1546) | struct { `vm`: `String`; `env`: `Option<String>`; `managed_key_path`: `String`; `public_key`: `String`; `fingerprint`: `String`; `known_hosts_entry`: `Option<String>` } |
-| `UsbipProbeResponse` | struct | [`UsbipProbeResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1787) | struct { `entries`: `Vec<UsbipProbeEntry>` } |
+| `ListResponse` | struct | [`ListResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1504) | struct { `vms`: `Vec<ListEntry>`; `read_model`: `Option<PublicReadModelMetadata>` } |
+| `StatusResponse` | struct | [`StatusResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1512) | struct { `entries`: `Vec<VmStatus>`; `read_model`: `Option<PublicReadModelMetadata>` } |
+| `AuditResponse` | struct | [`AuditResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1532) | struct { `entries`: `Vec<AuditEntry>` } |
+| `HostCheckResponse` | struct | [`HostCheckResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1538) | struct { `exit_code`: `u8`; `findings`: `Vec<HostFinding>` } |
+| `KeysListResponse` | struct | [`KeysListResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1556) | struct { `entries`: `Vec<KeyEntry>` } |
+| `KeysShowResponse` | struct | [`KeysShowResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1562) | struct { `vm`: `String`; `env`: `Option<String>`; `managed_key_path`: `String`; `public_key`: `String`; `fingerprint`: `String`; `known_hosts_entry`: `Option<String>` } |
+| `UsbipProbeResponse` | struct | [`UsbipProbeResponse`](../../packages/nixling-contracts/src/public_wire.rs#L1803) | struct { `entries`: `Vec<UsbipProbeEntry>` } |
 
 ### Broker socket response types
 
@@ -361,7 +388,7 @@ running live guest activation.
 
 | Type | Kind | Rust definition | Shape |
 | --- | --- | --- | --- |
-| `VmLifecycleState` | enum | [`VmLifecycleState`](../../packages/nixling-contracts/src/public_wire.rs#L1927) | `Stopped`; `Starting`; `Booted`; `Running`; `Stopping`; `Restarting`; `Failed`; `Unknown` |
+| `VmLifecycleState` | enum | [`VmLifecycleState`](../../packages/nixling-contracts/src/public_wire.rs#L1943) | `Stopped`; `Starting`; `Booted`; `Running`; `Stopping`; `Restarting`; `Failed`; `Unknown` |
 
 ### Other documented enums
 
@@ -421,19 +448,19 @@ running live guest activation.
 | `ShellSessionState` | enum | [`ShellSessionState`](../../packages/nixling-contracts/src/public_wire.rs#L1254) | `Attached`; `Detached`; `Killed`; `PoolUnavailable`; `FeatureDisabled`; `OutputGap` |
 | `ShellCloseCause` | enum | [`ShellCloseCause`](../../packages/nixling-contracts/src/public_wire.rs#L1265) | `ClientDetach`; `EvictedByForce`; `EvictedByAdminDetach`; `KilledByAdmin`; `PoolUnavailable`; `OutputGap` |
 | `MutatingVerbOutcome` | enum | [`MutatingVerbOutcome`](../../packages/nixling-contracts/src/public_wire.rs#L1474) | `DryRunPlanned`; `Applied`; `ApiReadyTimeout`; `NotYetImplemented`; `BrokerError`; `InvalidRequest` |
-| `UsbipProbeStatus` | enum | [`UsbipProbeStatus`](../../packages/nixling-contracts/src/public_wire.rs#L1558) | `Bound`; `Unbound`; `Degraded`; `Enrollable`; `Enrolled`; `Stale`; `DirectConfig`; `Unknown` |
-| `UsbipDurableClaimState` | enum | [`UsbipDurableClaimState`](../../packages/nixling-contracts/src/public_wire.rs#L1576) | `Missing`; `HeldByDesiredOwner`; `HeldByOtherOwner`; `StaleOwner`; `Corrupt`; `NotApplicable`; `Unknown` |
-| `UsbipHostBindState` | enum | [`UsbipHostBindState`](../../packages/nixling-contracts/src/public_wire.rs#L1601) | `Unbound`; `BoundToUsbipHost`; `BoundToUnexpectedDriver`; `DeviceMissing`; `NotApplicable`; `Unknown` |
-| `UsbipHostCarrierState` | enum | [`UsbipHostCarrierState`](../../packages/nixling-contracts/src/public_wire.rs#L1614) | `Absent`; `Unavailable`; `WithheldForOwner`; `Ready`; `DepartedDuringProbe`; `NotApplicable`; `Unknown` |
-| `UsbipProxyState` | enum | [`UsbipProxyState`](../../packages/nixling-contracts/src/public_wire.rs#L1628) | `NotDeclared`; `Stopped`; `Starting`; `Listening`; `Stale`; `Failed`; `NotApplicable`; `Unknown` |
-| `UsbipGuestImportState` | enum | [`UsbipGuestImportState`](../../packages/nixling-contracts/src/public_wire.rs#L1651) | `Detached`; `Imported`; `Unavailable`; `NotApplicable`; `Unknown` |
-| `UsbipTopologyState` | enum | [`UsbipTopologyState`](../../packages/nixling-contracts/src/public_wire.rs#L1669) | `Match`; `Mismatch`; `Incomplete`; `NotObserved`; `NotApplicable`; `Unknown` |
-| `UsbipPolicyState` | enum | [`UsbipPolicyState`](../../packages/nixling-contracts/src/public_wire.rs#L1682) | `Allowed`; `Denied`; `Missing`; `NotApplicable`; `Unknown` |
-| `UsbipProbeDegradedReasonCode` | enum | [`UsbipProbeDegradedReasonCode`](../../packages/nixling-contracts/src/public_wire.rs#L1701) | `PolicyFailed`; `DeviceDepartedBeforeClaim`; `DeviceDepartedAfterLock`; `DeviceDepartedDuringMutation`; `DeviceReappearedWithDifferentTopology`; `LockHeldByOtherOwner`; `InvalidPersistedLockClaim`; `CarrierUnavailable`; `HostBindUnavailable`; `ProxyUnavailable`; `GuestImportUnavailable`; `StaleHostState`; `StaleGuestState`; `ProbeIncomplete`; `Unknown` |
-| `UsbProbeEntryKind` | enum | [`UsbProbeEntryKind`](../../packages/nixling-contracts/src/public_wire.rs#L1737) | `Usbip`; `QemuMediaSlot` |
-| `AuditFormat` | enum | [`AuditFormat`](../../packages/nixling-contracts/src/public_wire.rs#L1801) | `Human`; `Json` |
-| `AuthRole` | enum | [`AuthRole`](../../packages/nixling-contracts/src/public_wire.rs#L1809) | `None`; `Launcher`; `Admin` |
-| `HostFindingSeverity` | enum | [`HostFindingSeverity`](../../packages/nixling-contracts/src/public_wire.rs#L2016) | `Pass`; `Warn`; `Fail` |
+| `UsbipProbeStatus` | enum | [`UsbipProbeStatus`](../../packages/nixling-contracts/src/public_wire.rs#L1574) | `Bound`; `Unbound`; `Degraded`; `Enrollable`; `Enrolled`; `Stale`; `DirectConfig`; `Unknown` |
+| `UsbipDurableClaimState` | enum | [`UsbipDurableClaimState`](../../packages/nixling-contracts/src/public_wire.rs#L1592) | `Missing`; `HeldByDesiredOwner`; `HeldByOtherOwner`; `StaleOwner`; `Corrupt`; `NotApplicable`; `Unknown` |
+| `UsbipHostBindState` | enum | [`UsbipHostBindState`](../../packages/nixling-contracts/src/public_wire.rs#L1617) | `Unbound`; `BoundToUsbipHost`; `BoundToUnexpectedDriver`; `DeviceMissing`; `NotApplicable`; `Unknown` |
+| `UsbipHostCarrierState` | enum | [`UsbipHostCarrierState`](../../packages/nixling-contracts/src/public_wire.rs#L1630) | `Absent`; `Unavailable`; `WithheldForOwner`; `Ready`; `DepartedDuringProbe`; `NotApplicable`; `Unknown` |
+| `UsbipProxyState` | enum | [`UsbipProxyState`](../../packages/nixling-contracts/src/public_wire.rs#L1644) | `NotDeclared`; `Stopped`; `Starting`; `Listening`; `Stale`; `Failed`; `NotApplicable`; `Unknown` |
+| `UsbipGuestImportState` | enum | [`UsbipGuestImportState`](../../packages/nixling-contracts/src/public_wire.rs#L1667) | `Detached`; `Imported`; `Unavailable`; `NotApplicable`; `Unknown` |
+| `UsbipTopologyState` | enum | [`UsbipTopologyState`](../../packages/nixling-contracts/src/public_wire.rs#L1685) | `Match`; `Mismatch`; `Incomplete`; `NotObserved`; `NotApplicable`; `Unknown` |
+| `UsbipPolicyState` | enum | [`UsbipPolicyState`](../../packages/nixling-contracts/src/public_wire.rs#L1698) | `Allowed`; `Denied`; `Missing`; `NotApplicable`; `Unknown` |
+| `UsbipProbeDegradedReasonCode` | enum | [`UsbipProbeDegradedReasonCode`](../../packages/nixling-contracts/src/public_wire.rs#L1717) | `PolicyFailed`; `DeviceDepartedBeforeClaim`; `DeviceDepartedAfterLock`; `DeviceDepartedDuringMutation`; `DeviceReappearedWithDifferentTopology`; `LockHeldByOtherOwner`; `InvalidPersistedLockClaim`; `CarrierUnavailable`; `HostBindUnavailable`; `ProxyUnavailable`; `GuestImportUnavailable`; `StaleHostState`; `StaleGuestState`; `ProbeIncomplete`; `Unknown` |
+| `UsbProbeEntryKind` | enum | [`UsbProbeEntryKind`](../../packages/nixling-contracts/src/public_wire.rs#L1753) | `Usbip`; `QemuMediaSlot` |
+| `AuditFormat` | enum | [`AuditFormat`](../../packages/nixling-contracts/src/public_wire.rs#L1817) | `Human`; `Json` |
+| `AuthRole` | enum | [`AuthRole`](../../packages/nixling-contracts/src/public_wire.rs#L1825) | `None`; `Launcher`; `Admin` |
+| `HostFindingSeverity` | enum | [`HostFindingSeverity`](../../packages/nixling-contracts/src/public_wire.rs#L2032) | `Pass`; `Warn`; `Fail` |
 | `TerminalStream` | enum | [`TerminalStream`](../../packages/nixling-contracts/src/terminal_wire.rs#L19) | `Stdout`; `Stderr` |
 | `TerminalStatus` | enum | [`TerminalStatus`](../../packages/nixling-contracts/src/terminal_wire.rs#L197) | `Exited` — struct { `code`: `i32` }; `Signaled` — struct { `signal`: `u32` }; `Error` — struct { `slug`: `String` } |
 | `PathClass` | enum | [`PathClass`](../../packages/nixling-contracts/src/types.rs#L171) | `Vm`; `Runtime` |

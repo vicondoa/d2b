@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- `nixlingd` now publishes a daemon-side public status read model for unfiltered
+  list/status requests, including read-model generation and source-fingerprint
+  metadata for wlcontrol and other fast-refresh clients.
 - **USB explicit attach** (`nixling usb attach <vm> <present-busid> --apply`):
   `nixling usb attach` now supports attaching any physically-present USB device
   to a USB-capable VM without requiring static busid/vendor allowlists in the
@@ -51,14 +54,20 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Public status/list read-model snapshots now invalidate when runner pidfd state
+  changes, preventing cached lifecycle state from surviving VM start/stop
+  transitions.
+- USBIP bind now uses the same bounded isolated driver helper path as unbind, so
+  a slow or stuck kernel driver bind cannot pin the broker control path
+  indefinitely.
 - `nixling usb detach <vm> <busid> --apply` now reaches the broker
   `UsbipUnbind` cleanup path instead of stopping at a hardcoded ambiguous-flow
   refusal, so stale USBIP host claims can be released and subsequent attaches can
   recover without raw `usbip` commands.
-- `nixlingd.service` now reasserts the `/run/nixling` mode and ACL mask in a
-  root `ExecStartPre`, preventing NixOS switch-time restarts from racing
-  `systemd-tmpfiles-resetup` and starting with `nixlingd` write access clipped to
-  effective `r-x`.
+- `nixlingd.service` now relies on declarative tmpfiles ACLs for `/run/nixling`
+  instead of an imperative root `ExecStartPre`; the tmpfiles rules keep the ACL
+  mask writable for the daemon while the `nixling` operator group remains
+  narrowed to traversal by the explicit group ACL.
 - USB probe/status no longer marks a declared USBIP device `degraded` with
   `probe-incomplete` after guest-control confirms that the busid is already
   imported in the guest.

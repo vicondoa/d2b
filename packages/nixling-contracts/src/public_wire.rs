@@ -1503,12 +1503,28 @@ pub struct AuthStatusResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListResponse {
     pub vms: Vec<ListEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_model: Option<PublicReadModelMetadata>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StatusResponse {
     pub entries: Vec<VmStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_model: Option<PublicReadModelMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublicReadModelMetadata {
+    pub schema_version: u32,
+    pub kind: String,
+    pub generation: u64,
+    pub source_fingerprint: String,
+    pub updated_at_unix_ms: u128,
+    pub freshness: String,
+    pub deep_refresh: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]

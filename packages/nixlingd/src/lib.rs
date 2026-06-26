@@ -16,9 +16,14 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
+    mpsc,
+};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
 use nix::cmsg_space;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
@@ -236,6 +241,7 @@ const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS: u64 = 90;
 const PROVIDER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PUBLIC_STATUS_PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 const PUBLIC_STATUS_GUEST_USBIP_TIMEOUT: Duration = Duration::from_millis(250);
+const USBIP_SYSFS_PRESENCE_TIMEOUT: Duration = Duration::from_millis(250);
 const EMPTY_VMM_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 const CGROUP_EMPTY_POST_KILL_WAIT: Duration = Duration::from_secs(5);
 const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
@@ -505,6 +511,9 @@ struct ServerState {
     /// thread inside `dispatch_request` so a mutating lifecycle op cannot
     /// race another op on the same VM (or any per-VM op for a global op).
     op_locks: concurrency::OpLockManager,
+    /// Daemon-owned fast list/status read model. This is per ServerState so
+    /// independent daemon instances/tests never evict each other's snapshots.
+    public_status_read_model: Arc<PublicStatusReadModel>,
 }
 
 struct GatewayDisplayRuntime {
@@ -964,6 +973,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         gateway_display,
         conn_semaphore: concurrency::ConnSemaphore::new(resolve_max_inflight_connections()),
         op_locks: crate::concurrency::OpLockManager::new(),
+        public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
     };
     refresh_activation_marker_metrics_on_startup(&state);
     refresh_broker_reap_log(&state, "startup");
@@ -2565,8 +2575,29 @@ fn dispatch_request(
     // held across the whole op (DAG + rollback + cleanup); inner
     // stop/start helpers invoked by restart/rollback do NOT re-acquire it,
     // so there is no nested self-deadlock.
+    let invalidates_status_model = request_invalidates_public_status_model(&request);
     let _op_lock = state.op_locks.acquire(&request.lock_class());
-    dispatch_request_locked(state, peer, request)
+    let result = dispatch_request_locked(state, peer, request);
+    if invalidates_status_model {
+        state.public_status_read_model.invalidate();
+    }
+    result
+}
+
+fn request_invalidates_public_status_model(request: &wire::Request) -> bool {
+    !matches!(
+        request,
+        wire::Request::List(_)
+            | wire::Request::Status(_)
+            | wire::Request::Audit(_)
+            | wire::Request::HostCheck(_)
+            | wire::Request::AuthStatus
+            | wire::Request::KeysList
+            | wire::Request::KeysShow(_)
+            | wire::Request::Exec(public_wire::ExecOp::List(_))
+            | wire::Request::Exec(public_wire::ExecOp::Logs(_))
+            | wire::Request::Exec(public_wire::ExecOp::Status(_))
+    )
 }
 
 /// Verb dispatch body executed under the op lock already acquired by
@@ -3725,10 +3756,36 @@ fn validate_usbip_bus_id_for_daemon(verb: &str, bus_id: &str) -> Result<(), Valu
 /// This is the fail-closed sysfs presence check for explicit attach:
 /// reject before any broker call or firewall mutation if the device is absent.
 fn check_sysfs_busid_present(busid: &str, verb: &str) -> Result<(), TypedError> {
-    let sysfs_path = format!("/sys/bus/usb/devices/{busid}/idVendor");
-    match std::fs::metadata(&sysfs_path) {
-        Ok(_) => Ok(()),
-        Err(_) => Err(TypedError::UsbipBusidNotPresent {
+    let sysfs_path = PathBuf::from(format!("/sys/bus/usb/devices/{busid}/idVendor"));
+    let (tx, rx) = mpsc::channel();
+    let busid_for_log = busid.to_owned();
+    std::thread::Builder::new()
+        .name("nixling-usb-sysfs-present".to_owned())
+        .spawn(move || {
+            let _ = tx.send(std::fs::metadata(sysfs_path).is_ok());
+        })
+        .map_err(|error| TypedError::InternalIo {
+            context: "spawn USB sysfs presence helper".to_owned(),
+            detail: error.to_string(),
+        })?;
+    match rx.recv_timeout(USBIP_SYSFS_PRESENCE_TIMEOUT) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(TypedError::UsbipBusidNotPresent {
+            busid: busid.to_owned(),
+            verb: verb.to_owned(),
+        }),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            tracing::warn!(
+                busid = %busid_for_log,
+                timeout_ms = USBIP_SYSFS_PRESENCE_TIMEOUT.as_millis() as u64,
+                "USB sysfs presence check timed out"
+            );
+            Err(TypedError::UsbipBusidNotPresent {
+                busid: busid.to_owned(),
+                verb: verb.to_owned(),
+            })
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(TypedError::UsbipBusidNotPresent {
             busid: busid.to_owned(),
             verb: verb.to_owned(),
         }),
@@ -15084,6 +15141,189 @@ struct PublicRequestArtifacts {
     resolver: Option<BundleResolver>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PublicArtifactFingerprint {
+    current_system: Option<String>,
+    pidfd_generation: u64,
+    public_manifest: FileFingerprint,
+    host: FileFingerprint,
+    processes: FileFingerprint,
+    bundle: FileFingerprint,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct FileFingerprint {
+    path: String,
+    len: u64,
+    modified_nanos: Option<u128>,
+    symlink_target: Option<String>,
+}
+
+#[derive(Debug)]
+struct CachedPublicFrame {
+    fingerprint: PublicArtifactFingerprint,
+    value: Value,
+}
+
+#[derive(Debug)]
+struct PublicStatusReadModel {
+    generation: AtomicU64,
+    latest_published_generation: AtomicU64,
+    list: ArcSwapOption<CachedPublicFrame>,
+    status: ArcSwapOption<CachedPublicFrame>,
+}
+
+impl PublicStatusReadModel {
+    fn new() -> Self {
+        Self {
+            generation: AtomicU64::new(0),
+            latest_published_generation: AtomicU64::new(0),
+            list: ArcSwapOption::empty(),
+            status: ArcSwapOption::empty(),
+        }
+    }
+
+    fn invalidate(&self) {
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        self.list.store(None);
+        self.status.store(None);
+    }
+
+    fn load_list(&self, state: &ServerState) -> Option<Value> {
+        self.load_if_fresh(state, &self.list)
+    }
+
+    fn load_status(&self, state: &ServerState) -> Option<Value> {
+        self.load_if_fresh(state, &self.status)
+    }
+
+    fn load_if_fresh(
+        &self,
+        state: &ServerState,
+        slot: &ArcSwapOption<CachedPublicFrame>,
+    ) -> Option<Value> {
+        let cached = slot.load_full()?;
+        (cached.fingerprint.pidfd_generation == state.pidfd_table.generation())
+            .then(|| cached.value.clone())
+    }
+
+    fn publish_stable(
+        &self,
+        slot: &ArcSwapOption<CachedPublicFrame>,
+        value: Value,
+        fingerprint: PublicArtifactFingerprint,
+        kind: &'static str,
+    ) -> Value {
+        let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let value = attach_read_model_metadata(value, &fingerprint, generation, kind);
+        let mut observed = self.latest_published_generation.load(Ordering::Acquire);
+        while generation > observed {
+            match self.latest_published_generation.compare_exchange_weak(
+                observed,
+                generation,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    slot.store(Some(Arc::new(CachedPublicFrame {
+                        fingerprint,
+                        value: value.clone(),
+                    })));
+                    return value;
+                }
+                Err(next) => observed = next,
+            }
+        }
+        tracing::debug!(
+            read_model_kind = kind,
+            generation,
+            latest_generation = observed,
+            "skipped stale public read-model publish"
+        );
+        value
+    }
+}
+
+fn public_artifact_fingerprint(
+    state: &ServerState,
+) -> Result<PublicArtifactFingerprint, TypedError> {
+    let artifacts = &state.config.artifacts;
+    Ok(PublicArtifactFingerprint {
+        current_system: fs::read_link("/run/current-system")
+            .ok()
+            .map(|path| path.display().to_string()),
+        pidfd_generation: state.pidfd_table.generation(),
+        public_manifest: file_fingerprint(&artifacts.public_manifest_path)?,
+        host: file_fingerprint(&artifacts.host_path)?,
+        processes: file_fingerprint(&artifacts.processes_path)?,
+        bundle: file_fingerprint(&artifacts.bundle_path)?,
+    })
+}
+
+fn file_fingerprint(path: &Path) -> Result<FileFingerprint, TypedError> {
+    let metadata = fs::metadata(path).map_err(|error| TypedError::InternalIo {
+        context: format!("fingerprint {}", path.display()),
+        detail: error.to_string(),
+    })?;
+    Ok(FileFingerprint {
+        path: path.display().to_string(),
+        len: metadata.len(),
+        modified_nanos: metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos()),
+        symlink_target: fs::read_link(path)
+            .ok()
+            .map(|target| target.display().to_string()),
+    })
+}
+
+fn attach_read_model_metadata(
+    mut frame: Value,
+    fingerprint: &PublicArtifactFingerprint,
+    generation: u64,
+    kind: &'static str,
+) -> Value {
+    let metadata = json!({
+        "schemaVersion": 1,
+        "kind": kind,
+        "generation": generation,
+        "sourceFingerprint": public_artifact_fingerprint_hash(fingerprint),
+        "updatedAtUnixMs": system_unix_millis(),
+        "freshness": "fresh",
+        "deepRefresh": "available",
+    });
+    if kind == "status"
+        && let Some(status) = frame.get_mut("status").and_then(Value::as_object_mut)
+    {
+        status.insert("readModel".to_owned(), metadata);
+        return frame;
+    }
+    if let Some(object) = frame.as_object_mut() {
+        object.insert("readModel".to_owned(), metadata);
+    }
+    frame
+}
+
+fn public_artifact_fingerprint_hash(fingerprint: &PublicArtifactFingerprint) -> String {
+    let bytes = serde_json::to_vec(fingerprint).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
+fn system_unix_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PublicResolverLoad {
     NotNeeded,
@@ -15135,6 +15375,30 @@ fn load_public_request_artifacts(
 }
 
 fn dispatch_list(
+    state: &ServerState,
+    request: public_wire::ListRequest,
+) -> Result<Value, TypedError> {
+    let cacheable = request.vm.is_none() && request.env.is_none();
+    if cacheable && let Some(cached) = state.public_status_read_model.load_list(state) {
+        return Ok(cached);
+    }
+    let before = cacheable
+        .then(|| public_artifact_fingerprint(state).ok())
+        .flatten();
+    let frame = build_public_list(state, request)?;
+    if cacheable {
+        return Ok(publish_public_frame_if_stable(
+            state,
+            &state.public_status_read_model.list,
+            before,
+            frame,
+            "list",
+        ));
+    }
+    Ok(frame)
+}
+
+fn build_public_list(
     state: &ServerState,
     request: public_wire::ListRequest,
 ) -> Result<Value, TypedError> {
@@ -15202,6 +15466,49 @@ fn dispatch_list(
 }
 
 fn dispatch_status(
+    state: &ServerState,
+    request: public_wire::StatusRequest,
+) -> Result<Value, TypedError> {
+    let cacheable = request.vm.is_none() && !request.check_bridges;
+    if cacheable && let Some(cached) = state.public_status_read_model.load_status(state) {
+        return Ok(cached);
+    }
+    let before = cacheable
+        .then(|| public_artifact_fingerprint(state).ok())
+        .flatten();
+    let frame = build_public_status(state, request)?;
+    if cacheable {
+        return Ok(publish_public_frame_if_stable(
+            state,
+            &state.public_status_read_model.status,
+            before,
+            frame,
+            "status",
+        ));
+    }
+    Ok(frame)
+}
+
+fn publish_public_frame_if_stable(
+    state: &ServerState,
+    slot: &ArcSwapOption<CachedPublicFrame>,
+    before: Option<PublicArtifactFingerprint>,
+    frame: Value,
+    kind: &'static str,
+) -> Value {
+    let Some(fingerprint) = before else {
+        return frame;
+    };
+    if public_artifact_fingerprint(state).ok().as_ref() == Some(&fingerprint) {
+        state
+            .public_status_read_model
+            .publish_stable(slot, frame, fingerprint, kind)
+    } else {
+        frame
+    }
+}
+
+fn build_public_status(
     state: &ServerState,
     request: public_wire::StatusRequest,
 ) -> Result<Value, TypedError> {
@@ -15810,6 +16117,7 @@ mod public_status_tests {
             gateway_display: crate::new_gateway_display_runtime_for_tests(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         };
         (state, dir)
     }
@@ -17356,6 +17664,104 @@ mod public_status_tests {
     }
 
     #[test]
+    fn dispatch_status_read_model_is_cached_and_pidfd_invalidated() {
+        let root = tempfile::tempdir().expect("artifact root");
+        let artifacts = write_public_status_artifacts(root.path());
+        let (state, _dir) = test_state_with_config(DaemonConfig {
+            artifacts,
+            ..DaemonConfig::default()
+        });
+        let request = public_wire::StatusRequest {
+            check_bridges: false,
+            vm: None,
+        };
+
+        let first = dispatch_status(&state, request.clone()).expect("first status dispatch");
+        let first_generation = first
+            .pointer("/status/readModel/generation")
+            .and_then(Value::as_u64)
+            .expect("first read-model generation");
+        assert_eq!(
+            first
+                .pointer("/status/entries/0/lifecycle/state")
+                .and_then(Value::as_str),
+            Some("Stopped")
+        );
+
+        let second = dispatch_status(&state, request.clone()).expect("cached status dispatch");
+        assert_eq!(
+            second
+                .pointer("/status/readModel/generation")
+                .and_then(Value::as_u64),
+            Some(first_generation),
+            "unchanged artifacts and runtime generation should reuse the published read model"
+        );
+
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                VM_RUNNER_ROLE_ID.to_owned(),
+                current_process_entry(),
+            )
+            .expect("register ch runner");
+        let refreshed = dispatch_status(&state, request).expect("refreshed status dispatch");
+        assert!(
+            refreshed
+                .pointer("/status/readModel/generation")
+                .and_then(Value::as_u64)
+                .is_some_and(|generation| generation > first_generation),
+            "pidfd generation changes must invalidate the cached read model"
+        );
+        assert_eq!(
+            refreshed
+                .pointer("/status/entries/0/lifecycle/state")
+                .and_then(Value::as_str),
+            Some("Running")
+        );
+    }
+
+    #[test]
+    fn status_read_model_refuses_to_cache_when_fingerprint_changes_during_build() {
+        let root = tempfile::tempdir().expect("artifact root");
+        let artifacts = write_public_status_artifacts(root.path());
+        let (state, _dir) = test_state_with_config(DaemonConfig {
+            artifacts,
+            ..DaemonConfig::default()
+        });
+        let before = public_artifact_fingerprint(&state).expect("before fingerprint");
+        let stale_frame = wire::status_response(json!({
+            "entries": [{
+                "vm": "vm-a",
+                "name": "vm-a",
+                "lifecycle": { "state": "Stopped" }
+            }]
+        }));
+
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                VM_RUNNER_ROLE_ID.to_owned(),
+                current_process_entry(),
+            )
+            .expect("register ch runner");
+        let returned = publish_public_frame_if_stable(
+            &state,
+            &state.public_status_read_model.status,
+            Some(before),
+            stale_frame.clone(),
+            "status",
+        );
+
+        assert_eq!(returned, stale_frame);
+        assert!(
+            state.public_status_read_model.load_status(&state).is_none(),
+            "stale pre-mutation frame must not be cached under the post-mutation fingerprint"
+        );
+    }
+
+    #[test]
     fn dispatch_list_and_status_without_filters_preserve_all_vm_order() {
         let root = tempfile::tempdir().expect("artifact root");
         let artifacts = write_public_status_artifacts(root.path());
@@ -18192,7 +18598,7 @@ mod runtime_acl_tests {
         // uid=0, gid=public_socket_gid, mode=0o770 (0o1770 & 0o777).
         // Since cargo tests cannot become root, this exercises the
         // equivalent shape via the unprivileged path (expect_root_owned_parent=false)
-        // with mode 0o770, which the test-mode accepts.
+        // with mode 0o770, which test mode accepts.
         let dir = scratch_dir("validate-prod");
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o770))
             .expect("chmod scratch dir 0770");
@@ -18363,6 +18769,7 @@ mod detached_exec_routing_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         }
     }
 
@@ -19029,6 +19436,7 @@ mod accept_loop_concurrency_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         };
         (state, dir)
     }
@@ -19547,6 +19955,7 @@ mod broker_dispatch_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         }
     }
 
@@ -19577,6 +19986,7 @@ mod broker_dispatch_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         }
     }
 
@@ -21443,6 +21853,7 @@ mod broker_dispatch_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -21659,6 +22070,7 @@ mod broker_dispatch_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         };
 
         let listener = socket(
@@ -21904,6 +22316,7 @@ mod broker_dispatch_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
@@ -23707,6 +24120,7 @@ mod broker_dispatch_tests {
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
         };
 
         // Emit the same event that the timeout handler in

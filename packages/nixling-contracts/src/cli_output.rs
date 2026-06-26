@@ -286,9 +286,11 @@ pub enum StatusOutputV2 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct StatusInventoryOutputV2 {
     pub runtime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_model: Option<crate::public_wire::PublicReadModelMetadata>,
     pub vms: Vec<StatusVmOutputV2>,
 }
 

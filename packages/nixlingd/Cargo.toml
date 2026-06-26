@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+arc-swap = "1"
 async-trait = "0.1"
 clap = { version = "4.5", features = ["derive"] }
 getrandom = "0.2"

@@ -2,9 +2,10 @@
 
 Schema: [`status.schema.json`](./status.schema.json)
 
-`nixling status <vm> --json` emits one object per VM. The JSON form is
-intentionally narrower than the human form: it does **not** inline the
-bridge-health table.
+`nixling status <vm> --json` emits one object for the selected VM. Unfiltered
+`nixling status --json` emits an inventory object with `runtime`, optional
+`readModel`, and `vms`. The JSON form is intentionally narrower than the human
+form: it does **not** inline the bridge-health table.
 
 ## Fields
 
@@ -25,6 +26,7 @@ bridge-health table.
 | `declaredRoles` | array of strings | Process-DAG roles declared for the VM in the trusted bundle. Video-enabled VMs include `video`; graphics VMs without `graphics.videoSidecar` omit it. | Stable wire contract. |
 | `readiness` | array of strings | Readiness predicates rendered as strings. Video-enabled VMs include `unix-socket-listening:/run/nixling-video/<vm>/video.sock`; graphics VMs with video disabled omit video readiness because the video sidecar is a default-off capability. | Stable wire contract. |
 | `runtime` | string | Daemon runtime state label. | Stable wire contract. |
+| `readModel` | object or omitted | Present on unfiltered inventory output served from the daemon public read model. Contains `schemaVersion`, `kind`, `generation`, `sourceFingerprint`, `updatedAtUnixMs`, `freshness`, and `deepRefresh` so fast-refresh clients can render and reason about cached/stale model state without triggering deep probes. | Stable additive field. |
 | `usb` | object or omitted | Per-VM USBIP status when the trusted bundle declares USB claims for the VM. Contains `degraded` plus redacted probe entries with the host-session claim, active host bind/carrier/proxy, guest import, topology/policy, degraded reasons, and remediation commands. Uses the same entry contract as [`usb-probe.md`](./usb-probe.md). | Stable additive field. |
 | `livePoolIntegrity` | object or omitted | Host-side integrity state for the ADR 0027 `store-view/live` pool: `status` is `ok`, `suspect`, or `unknown`; `unknownReason`, `auditRef`, `repairAttempted`, and `remediation` provide operator guidance when present. | Stable additive field. |
 
@@ -71,6 +73,54 @@ declared roles: host-reconcile, store-virtiofs-preflight, gpu
 ```
 
 ## JSON example
+
+Unfiltered inventory form:
+
+```json
+{
+  "runtime": "daemon-public",
+  "readModel": {
+    "schemaVersion": 1,
+    "kind": "status",
+    "generation": 7,
+    "sourceFingerprint": "abcdef123456",
+    "updatedAtUnixMs": 42,
+    "freshness": "fresh",
+    "deepRefresh": "available"
+  },
+  "vms": [
+    {
+      "name": "corp-vm",
+      "env": "work",
+      "services": {
+        "nixling": "active",
+        "microvm": "running",
+        "virtiofsd": "running",
+        "gpu": "stopped",
+        "video": null,
+        "snd": null,
+        "swtpm": null
+      },
+      "current": null,
+      "booted": null,
+      "pendingRestart": false,
+      "runtime": "unknown",
+      "declaredRoles": [
+        "host-reconcile",
+        "store-virtiofs-preflight",
+        "gpu"
+      ],
+      "readiness": [],
+      "livePoolIntegrity": {
+        "status": "ok",
+        "repairAttempted": false
+      }
+    }
+  ]
+}
+```
+
+Single-VM form:
 
 ```json
 {

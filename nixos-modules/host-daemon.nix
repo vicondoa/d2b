@@ -356,15 +356,13 @@ in
       # /etc/nixling/ config + bundle/host/processes are root:nixlingd
       # 0640 so the daemon reads without write.
       #
-      # /run/nixling is group-owned by `nixling` (mode 1770) so
-      # launcher users — members of `nixling` via daemon-config.json's
-      # `publicSocketGroup` — can `x` (traverse) the directory to reach
-      # `public.sock`. The explicit group ACL narrows launcher effective
-      # access back to r-x while the named nixlingd ACL grants read/write for
-      # bind/remove of the socket. The sticky bit prevents nixlingd from
-      # unlinking root-owned children such as /run/nixling/vms. The public
-      # socket itself is mode 0660 group nixling
-      # (see packages/nixlingd/src/lib.rs::bind_public_socket).
+      # /run/nixling is group-owned by `nixling` so launcher users —
+      # members of `nixling` via daemon-config.json's `publicSocketGroup` —
+      # can traverse the directory to reach `public.sock`. The owning group
+      # entry below narrows launcher access to r-x; the 1770 base mode keeps
+      # the ACL mask at rwx so the named nixlingd ACL can bind/remove the
+      # public socket. The public socket itself is mode 0660 group nixling
+      # (see bind_public_socket).
       "d /run/nixling 1770 root nixling -"
       "z /run/nixling 1770 root nixling -"
       "a+ /run/nixling - - - - g::r-x"
@@ -438,10 +436,6 @@ in
         # subtree to the daemon user").
         User = "nixlingd";
         Group = "nixlingd";
-        ExecStartPre = [
-          "+${pkgs.coreutils}/bin/chmod 1770 /run/nixling"
-          "+${pkgs.acl}/bin/setfacl -m g::r-x,u:nixlingd:rwx,m::rwx /run/nixling"
-        ];
         ExecStart = "${nixlingdPackage}/bin/nixlingd serve --config /etc/nixling/daemon-config.json";
         ExecStop = "+${hostShutdownHook}";
         TimeoutStopSec = lib.mkDefault "${toString nixlingdStopTimeoutSeconds}s";
