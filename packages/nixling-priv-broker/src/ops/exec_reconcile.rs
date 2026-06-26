@@ -317,17 +317,29 @@ fn materialize_store_view(intent: &ResolvedStoreViewIntent) -> Result<(), Reconc
         u32::try_from(intent.generation).map_err(|_| ReconcileExecError::InvalidInput {
             detail: format!("generation {} exceeds u32", intent.generation),
         })?;
+    let marker = GenerationMarker {
+        closure_hash: intent.closure_identity(),
+        nixling_version: env!("CARGO_PKG_VERSION").to_owned(),
+        activated_at: format!("unix-{}", current_unix_ms()),
+        vm: intent.vm.clone(),
+        generation_number,
+    };
     let generation_dir = crate::ops::store_view_farm::build_farm_cross_mount_safe(
         &intent.hardlink_farm_path,
         intent.generation,
         &intent.closure_paths,
-        &GenerationMarker {
-            closure_hash: intent.closure_identity(),
-            nixling_version: env!("CARGO_PKG_VERSION").to_owned(),
-            activated_at: format!("unix-{}", current_unix_ms()),
-            vm: intent.vm.clone(),
-            generation_number,
-        },
+        &marker,
+    )
+    .map_err(map_hardlink_farm_error)?;
+    let generation_id = hardlink_farm::generation_id(
+        &intent.closure_paths,
+        hardlink_farm::system_store_path(&intent.closure_paths),
+    );
+    crate::ops::store_view_farm::build_store_view_cross_mount_safe(
+        &intent.hardlink_farm_path,
+        &generation_id,
+        &intent.closure_paths,
+        &marker,
     )
     .map_err(map_hardlink_farm_error)?;
     let _ =
@@ -693,23 +705,14 @@ impl ReconcileExecutor for SystemReconcileExecutor {
             u32::try_from(intent.generation).map_err(|_| ReconcileExecError::InvalidInput {
                 detail: format!("generation {} exceeds u32", intent.generation),
             })?;
-        // Publish the freshly-built generation as the active store view
-        // by atomically swapping `store-view/current -> generations/<N>`,
-        // keeping the broker-built store-view farm internally consistent
-        // (it previously accumulated `generations/<N>` dirs but never had
-        // a `current` pointer).
-        //
-        // NOTE: the GUEST-served farm is the legacy
-        // `<stateDir>/<vm>/store` flat farm (see
-        // `nixos-modules/processes-json.nix` virtiofsdRunner ro-store
-        // `--shared-dir`), which is also what the vm-start readiness
-        // marker (`store/.nixling-marker-<vm>`) gates on — served path
-        // and readiness gate are both `store/`. This broker-built
-        // `store-view/` is pre-staged for the daemon-native serving
-        // migration and is NOT yet what virtiofsd serves; do not assume
-        // updating it changes the guest's view. The swap only
-        // manipulates a symlink (no cross-mount `link(2)` hazard) so it
-        // stays in-process.
+        // Publish the freshly-built generation as the legacy activation
+        // pointer by atomically swapping
+        // `store-view/current -> generations/<N>`. Modern guest serving
+        // uses the split layout under `store-view/live`, `state/`, and
+        // `meta/`; live activation commit publishes those split pointers
+        // separately after the guest reports success. Keep this legacy
+        // pointer only while rollback/current compatibility code still
+        // reads it.
         hardlink_farm::swap_current_symlink(&intent.hardlink_farm_path, generation_number)
             .map_err(map_hardlink_farm_error)?;
         Ok(())
@@ -1605,17 +1608,29 @@ mod fake {
                 u32::try_from(intent.generation).map_err(|_| ReconcileExecError::InvalidInput {
                     detail: format!("generation {} exceeds u32", intent.generation),
                 })?;
+            let marker = GenerationMarker {
+                closure_hash: intent.closure_identity(),
+                nixling_version: "fake".to_owned(),
+                activated_at: "fake".to_owned(),
+                vm: intent.vm.clone(),
+                generation_number,
+            };
             hardlink_farm::build_farm(
                 &intent.hardlink_farm_path,
                 intent.generation,
                 &intent.closure_paths,
-                &GenerationMarker {
-                    closure_hash: intent.closure_identity(),
-                    nixling_version: "fake".to_owned(),
-                    activated_at: "fake".to_owned(),
-                    vm: intent.vm.clone(),
-                    generation_number,
-                },
+                &marker,
+            )
+            .map_err(map_hardlink_farm_error)?;
+            let generation_id = hardlink_farm::generation_id(
+                &intent.closure_paths,
+                hardlink_farm::system_store_path(&intent.closure_paths),
+            );
+            hardlink_farm::build_store_view(
+                &intent.hardlink_farm_path,
+                &generation_id,
+                &intent.closure_paths,
+                &marker,
             )
             .map_err(map_hardlink_farm_error)?;
             Ok(())

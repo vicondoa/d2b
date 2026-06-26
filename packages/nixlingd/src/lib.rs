@@ -340,6 +340,9 @@ pub struct DaemonConfig {
     /// Default provider graceful-shutdown wait before forced cleanup.
     #[serde(default = "default_graceful_shutdown_timeout_seconds")]
     pub graceful_shutdown_timeout_seconds: u64,
+    /// Default in-guest live activation wait before timeout.
+    #[serde(default = "default_live_activation_timeout_seconds")]
+    pub live_activation_timeout_seconds: u64,
 }
 
 fn default_autostart_parallelism() -> usize {
@@ -348,6 +351,10 @@ fn default_autostart_parallelism() -> usize {
 
 fn default_graceful_shutdown_timeout_seconds() -> u64 {
     DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
+}
+
+fn default_live_activation_timeout_seconds() -> u64 {
+    GUEST_SYSTEM_ACTIVATION_TIMEOUT.as_secs()
 }
 
 fn default_gateway_config_path() -> PathBuf {
@@ -372,6 +379,7 @@ impl Default for DaemonConfig {
             gateway_config_path: default_gateway_config_path(),
             autostart_parallelism: autostart::DEFAULT_PARALLELISM,
             graceful_shutdown_timeout_seconds: DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
+            live_activation_timeout_seconds: GUEST_SYSTEM_ACTIVATION_TIMEOUT.as_secs(),
         }
     }
 }
@@ -11252,6 +11260,18 @@ fn graceful_shutdown_timeout_for(state: &ServerState, manifest_entry: &Value) ->
     Duration::from_secs(secs)
 }
 
+fn live_activation_timeout_for(state: &ServerState, vm: &str) -> Duration {
+    let secs = manifest_entry_for_vm(state, vm)
+        .and_then(|entry| {
+            entry
+                .pointer("/lifecycle/liveActivation/timeoutSeconds")
+                .and_then(Value::as_u64)
+        })
+        .unwrap_or(state.config.live_activation_timeout_seconds)
+        .clamp(1, 3600);
+    Duration::from_secs(secs)
+}
+
 fn graceful_shutdown_enabled(manifest_entry: &Value) -> bool {
     manifest_entry
         .pointer("/lifecycle/gracefulShutdown/enable")
@@ -13818,7 +13838,7 @@ fn dispatch_broker_run_migrate(
 }
 
 const GUEST_SYSTEM_ACTIVATION_TIMEOUT: Duration = Duration::from_secs(600);
-const GUEST_SYSTEM_ACTIVATION_REJOIN_DEADLINE: Duration = Duration::from_secs(660);
+const GUEST_SYSTEM_ACTIVATION_REJOIN_GRACE: Duration = Duration::from_secs(60);
 const GUEST_SYSTEM_ACTIVATION_START_DEADLINE: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -14257,11 +14277,12 @@ fn run_guest_system_activation(
             remediation: GuestActivationFailureRemediation::UpgradeGuest,
         };
     };
+    let live_timeout = live_activation_timeout_for(state, &plan.vm);
     let start = guest_control_health::GuestSystemActivationStart {
         activation_id: plan.activation_id.clone(),
         switch_script_path: plan.switch_script_path.clone(),
         mode: activation_guest_mode(plan.mode),
-        timeout_ms: u64::try_from(GUEST_SYSTEM_ACTIVATION_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+        timeout_ms: u64::try_from(live_timeout.as_millis()).unwrap_or(u64::MAX),
     };
     let started = match guest_control_bridge::run_activation_start_on_dedicated_thread(
         params.clone(),
@@ -14273,7 +14294,12 @@ fn run_guest_system_activation(
         Err(error) => {
             let summary = guest_activation_error_summary(&error);
             return if guest_activation_error_is_indeterminate(&error) {
-                match rejoin_guest_activation_status(state, params, plan.activation_id.clone()) {
+                match rejoin_guest_activation_status(
+                    state,
+                    params,
+                    plan.activation_id.clone(),
+                    live_timeout + GUEST_SYSTEM_ACTIVATION_REJOIN_GRACE,
+                ) {
                     GuestActivationTerminal::Indeterminate(detail) => {
                         GuestActivationTerminal::Indeterminate(format!("{summary}; {detail}"))
                     }
@@ -14298,15 +14324,21 @@ fn run_guest_system_activation(
         return GuestActivationTerminal::Succeeded;
     }
 
-    rejoin_guest_activation_status(state, params, plan.activation_id)
+    rejoin_guest_activation_status(
+        state,
+        params,
+        plan.activation_id,
+        live_timeout + GUEST_SYSTEM_ACTIVATION_REJOIN_GRACE,
+    )
 }
 
 fn rejoin_guest_activation_status(
     state: &ServerState,
     params: guest_control_bridge::ProbeParams,
     activation_id: String,
+    rejoin_deadline: Duration,
 ) -> GuestActivationTerminal {
-    let deadline = Instant::now() + GUEST_SYSTEM_ACTIVATION_REJOIN_DEADLINE;
+    let deadline = Instant::now() + rejoin_deadline;
     let mut consecutive_not_found = 0_u32;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -14696,8 +14728,8 @@ fn dispatch_live_guest_activation(
             record_activation_degraded_metric(state, &request.vm, false);
             let remediation = match remediation {
                 GuestActivationFailureRemediation::GuestJournal => format!(
-                    "Inspect the guest journal for `nixling-activation-{}` and retry after fixing the guest activation failure.",
-                    activation_id
+                    "Inspect the guest journal for `nixling-activation-{}` and retry after fixing the guest activation failure. If this VM uses Entra/Himmelblau or another identity-bound user service, complete the in-guest provider prompt (for example `aad-tool hello`) and retry, or use `nixling boot {} --apply` followed by a VM restart when live user-session activation is expected to block.",
+                    activation_id, request.vm
                 ),
                 GuestActivationFailureRemediation::UpgradeGuest => format!(
                     "The running guest does not support in-guest activation. Use `nixling boot {} --apply`, then restart the VM with `nixling vm restart {} --apply` to boot the generation that includes the guest activation capability.",
@@ -22510,6 +22542,88 @@ mod broker_dispatch_tests {
         assert_eq!(
             super::graceful_shutdown_timeout_for(&state, &manifest_entry),
             Duration::from_secs(17)
+        );
+    }
+
+    #[test]
+    fn live_activation_timeout_uses_daemon_default_and_manifest_override() {
+        let mut state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "activation-timeout-policy",
+        ));
+        state.config.live_activation_timeout_seconds = 777;
+        assert_eq!(
+            super::live_activation_timeout_for(&state, "missing-vm"),
+            Duration::from_secs(777)
+        );
+
+        let manifest_path = state.daemon_state_dir.join("vms-timeout.json");
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec(&json!({
+                "_manifest": { "manifestVersion": 7 },
+                "_observability": {
+                    "enabled": false,
+                    "obsVsockCid": 1000,
+                    "obsVsockHostSocket": "/tmp/obs.sock",
+                    "signozOtlpGrpcPort": 4317,
+                    "signozOtlpHttpPort": 4318,
+                    "signozUrl": "http://127.0.0.1",
+                    "vmName": "sys-obs"
+                },
+                "work-aad": {
+                    "apiSocket": null,
+                    "audio": false,
+                    "audioService": null,
+                    "audioStateFile": null,
+                    "bridge": null,
+                    "env": "work",
+                    "gpuSocket": null,
+                    "graphics": false,
+                    "isNetVm": false,
+                    "lifecycle": {
+                        "gracefulShutdown": { "enable": true, "timeoutSeconds": null },
+                        "liveActivation": { "timeoutSeconds": 1800 }
+                    },
+                    "name": "work-aad",
+                    "netVm": null,
+                    "observability": {
+                        "enabled": false,
+                        "vsockCid": null,
+                        "vsockHostSocket": null,
+                        "agentSocket": null
+                    },
+                    "runtime": {
+                        "kind": "nixos",
+                        "provider": { "type": "local", "id": "local", "driver": "cloud-hypervisor" },
+                        "capabilities": {},
+                        "operationCapabilities": {
+                            "lifecycle": { "start": true, "stop": true, "restart": true, "switch": true, "hostPrepare": true },
+                            "guest": {},
+                            "storage": {},
+                            "display": {},
+                            "media": {}
+                        },
+                        "autostartPolicy": "manual-only",
+                        "services": []
+                    },
+                    "sshUser": "john",
+                    "stateDir": "/var/lib/nixling/vms/work-aad",
+                    "staticIp": null,
+                    "tap": "work-l10",
+                    "tpm": false,
+                    "tpmSocket": null,
+                    "usbipYubikey": false,
+                    "usbipdHostIp": null
+                }
+            }))
+            .expect("manifest json"),
+        )
+        .expect("write manifest");
+        state.config.artifacts.public_manifest_path = manifest_path;
+
+        assert_eq!(
+            super::live_activation_timeout_for(&state, "work-aad"),
+            Duration::from_secs(1800)
         );
     }
 

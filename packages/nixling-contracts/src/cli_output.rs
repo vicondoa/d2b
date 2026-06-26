@@ -286,7 +286,7 @@ pub enum StatusOutputV2 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StatusInventoryOutputV2 {
     pub runtime: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

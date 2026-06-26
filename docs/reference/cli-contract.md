@@ -1255,6 +1255,15 @@ systemd for the VM, and never falls back to SSH or a host shell. Start
 the VM first with `nixling vm start <vm> --apply`, wait for guest-control
 readiness, then rerun `nixling switch <vm> --apply`.
 
+The live guest activation wait is bounded by
+`nixling.daemon.lifecycle.liveActivation.timeoutSeconds` or the per-VM
+`nixling.vms.<vm>.lifecycle.liveActivation.timeoutSeconds` override. If
+activation times out in an identity-bound guest, the typed error points at
+the guest activation unit. Complete the in-guest provider flow (for example
+an Entra/Himmelblau hello/PIN prompt) and retry, or use `nixling boot <vm>
+--apply` followed by a VM restart when live user-session activation is
+expected to block.
+
 **Human example**
 
 ```text
@@ -1267,7 +1276,9 @@ nixling switch --apply activated in guest via guest-control (vm=corp-vm, mode=sw
 - `--apply`: routes through `nixlingd`, which prepares/publishes the
   closure, opens the authenticated guest-control activation flow, waits
   for guestd status, and only then asks the broker to commit host-side
-  generation metadata. Daemon-unreachable surfaces `daemon-down` exit 1;
+  generation metadata. Successful commits publish both legacy activation
+  metadata and split store-view `state/current` / `meta/current` pointers.
+  Daemon-unreachable surfaces `daemon-down` exit 1;
   guest capability/readiness and broker failures surface typed non-zero
   envelopes. There is no host-side execution of guest activation scripts.
 - The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars

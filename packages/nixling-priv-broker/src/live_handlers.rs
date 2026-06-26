@@ -21,6 +21,7 @@
 //! and broker-spawn-runner-smoke.sh).
 
 use std::fs::{self, File};
+use std::io;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
@@ -32,6 +33,8 @@ use crate::ops::exec_reconcile::{
 use crate::ops::spawn_runner::{
     SpawnRunnerError, SpawnRunnerPlan, SpawnRunnerPlanInput, build_cstring_vectors, preflight,
 };
+use crate::ops::store_sync::generation_id_for_intent;
+use crate::ops::store_view_posture::plant_live_marker_with_matrix_posture;
 use nixling_contracts::broker_wire::{ActivationMode, ActivationPhase};
 use nixling_core::bundle_resolver::{
     HostRuntime, ResolvedActivationIntent, ResolvedStoreViewIntent,
@@ -389,11 +392,7 @@ pub fn live_run_activation(
         phase,
         ActivationPhase::Commit | ActivationPhase::MetadataOnly
     ) {
-        let metadata = commit_activation_metadata(
-            &store_view_intent.hardlink_farm_path,
-            target_generation,
-            mode,
-        )?;
+        let metadata = commit_activation_metadata(store_view_intent, target_generation, mode)?;
         rollback_marker_written = metadata.rollback_marker_written;
         current_generation_updated = metadata.current_generation_updated;
     }
@@ -474,10 +473,11 @@ fn resolve_rollback_target(
 }
 
 fn commit_activation_metadata(
-    hardlink_farm_path: &Path,
+    store_view_intent: &ResolvedStoreViewIntent,
     target_generation: u64,
     mode: ActivationMode,
 ) -> Result<MetadataCommitOutcome, LiveHandlerError> {
+    let hardlink_farm_path = &store_view_intent.hardlink_farm_path;
     verify_generation_ready(hardlink_farm_path, target_generation)?;
     let previous_current = read_current_generation(hardlink_farm_path)?;
     let mut rollback_marker_written = None;
@@ -497,18 +497,107 @@ fn commit_activation_metadata(
                 rollback_marker_written = Some(previous_generation);
             }
             swap_current_generation(hardlink_farm_path, target_generation)?;
+            publish_split_activation_metadata(store_view_intent)?;
             current_generation_updated = Some(target_generation);
         }
         ActivationMode::Rollback => {
             swap_current_generation(hardlink_farm_path, target_generation)?;
+            publish_split_activation_metadata(store_view_intent)?;
             current_generation_updated = Some(target_generation);
             clear_rollback_marker(hardlink_farm_path)?;
         }
+    }
+    if current_generation_updated.is_some() {
+        let mut retain = vec![target_generation];
+        if let Some(rollback) = read_rollback_marker(hardlink_farm_path)? {
+            retain.push(rollback);
+        }
+        if let Err(err) = cleanup_obsolete_legacy_generations(hardlink_farm_path, &retain) {
+            tracing::warn!(
+                store_root = %hardlink_farm_path.display(),
+                error = %err,
+                "activation committed but obsolete legacy store-view generation cleanup failed"
+            );
+        }
+    }
+
+    fn publish_split_activation_metadata(
+        store_view_intent: &ResolvedStoreViewIntent,
+    ) -> Result<(), LiveHandlerError> {
+        let generation_id = generation_id_for_intent(store_view_intent);
+        hardlink_farm::write_meta_db_dump(
+            &store_view_intent.hardlink_farm_path,
+            &generation_id,
+            &store_view_intent.db_dump_path,
+        )
+        .map_err(|err| LiveHandlerError::Activation(err.to_string()))?;
+        hardlink_farm::swap_state_current(&store_view_intent.hardlink_farm_path, &generation_id)
+            .map_err(|err| LiveHandlerError::Activation(err.to_string()))?;
+        hardlink_farm::swap_meta_current(&store_view_intent.hardlink_farm_path, &generation_id)
+            .map_err(|err| LiveHandlerError::Activation(err.to_string()))?;
+        plant_live_marker_with_matrix_posture(
+            &store_view_intent.hardlink_farm_path,
+            &store_view_intent.vm,
+        )
+        .map_err(|err| LiveHandlerError::Activation(err.to_string()))
     }
     Ok(MetadataCommitOutcome {
         rollback_marker_written,
         current_generation_updated,
     })
+}
+
+fn cleanup_obsolete_legacy_generations(
+    hardlink_farm_path: &Path,
+    retained_generations: &[u64],
+) -> Result<usize, LiveHandlerError> {
+    let generations = hardlink_farm_path.join("generations");
+    let entries = match fs::read_dir(&generations) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => {
+            return Err(LiveHandlerError::Activation(format!(
+                "read legacy generations dir {}: {err}",
+                generations.display()
+            )));
+        }
+    };
+    let mut removed = 0;
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            LiveHandlerError::Activation(format!(
+                "read legacy generation entry under {}: {err}",
+                generations.display()
+            ))
+        })?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Ok(generation) = name.parse::<u64>() else {
+            continue;
+        };
+        if retained_generations.contains(&generation) {
+            continue;
+        }
+        let path = entry.path();
+        let marker = path.join("marker.json");
+        if hardlink_farm::read_generation_marker(&path).is_err() || !marker.is_file() {
+            continue;
+        }
+        fs::remove_dir_all(&path).map_err(|err| {
+            LiveHandlerError::Activation(format!(
+                "remove obsolete legacy generation {}: {err}",
+                path.display()
+            ))
+        })?;
+        removed += 1;
+    }
+    if removed > 0
+        && let Ok(dir) = File::open(&generations)
+    {
+        let _ = dir.sync_all();
+    }
+    Ok(removed)
 }
 
 fn verify_generation_ready(
@@ -3496,6 +3585,7 @@ mod tests {
             b"#!/bin/sh\n",
         )
         .unwrap();
+        std::fs::write(root.join("db.dump"), b"valid-path-registration\n").unwrap();
         ResolvedStoreViewIntent {
             intent_id: "store-view:vm:alpha".to_owned(),
             vm: "alpha".to_owned(),
@@ -3707,6 +3797,25 @@ mod tests {
         )
         .unwrap();
         exec.take_log();
+        hardlink_farm::build_farm(
+            &store_view_intent.hardlink_farm_path,
+            7,
+            &store_view_intent.closure_paths,
+            &hardlink_farm::GenerationMarker {
+                closure_hash: store_view_intent.closure_identity(),
+                nixling_version: "test".to_owned(),
+                activated_at: "test".to_owned(),
+                vm: store_view_intent.vm.clone(),
+                generation_number: 7,
+            },
+        )
+        .unwrap();
+        assert!(
+            store_view_intent
+                .hardlink_farm_path
+                .join("generations/7")
+                .exists()
+        );
 
         let outcome = live_run_activation(
             &exec,
@@ -3721,6 +3830,22 @@ mod tests {
         assert_eq!(
             std::fs::read_link(store_view_intent.hardlink_farm_path.join("current")).unwrap(),
             PathBuf::from("generations/42")
+        );
+        assert!(
+            !store_view_intent
+                .hardlink_farm_path
+                .join("generations/7")
+                .exists(),
+            "obsolete legacy generation should be pruned after split commit"
+        );
+        let generation_id = generation_id_for_intent(&store_view_intent);
+        assert_eq!(
+            std::fs::read_link(store_view_intent.hardlink_farm_path.join("state/current")).unwrap(),
+            PathBuf::from("generations").join(&generation_id)
+        );
+        assert_eq!(
+            std::fs::read_link(store_view_intent.hardlink_farm_path.join("meta/current")).unwrap(),
+            PathBuf::from("generations").join(generation_id)
         );
         assert!(
             exec.take_log().is_empty(),

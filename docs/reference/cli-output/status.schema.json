@@ -288,7 +288,8 @@
             "$ref": "#/definitions/StatusVmOutputV2"
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "StatusServicesOutputV2": {
       "type": "object",

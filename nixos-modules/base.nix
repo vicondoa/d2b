@@ -95,9 +95,11 @@ in
   # `registration` output of `pkgs.closureInfo`, which is the format
   # `nix-store --load-db` consumes.
   #
-  # Fires on every boot AND whenever the host bumps `current` (via
-  # the path-trigger below), so `nixling switch <vm>` lands the new
-  # closure live.
+  # Fires on every boot AND whenever the host publishes steady-state
+  # store metadata by bumping `current` (via the path-trigger below).
+  # Live `nixling switch <vm>` additionally runs through authenticated
+  # guest-control activation before the broker commits the host-side
+  # current pointers.
   # ---------------------------------------------------------------------------
   systemd.services.nixling-load-store-db = {
     description = "Load nixling per-VM closure into the guest's local nix DB";

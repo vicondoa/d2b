@@ -12,6 +12,11 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Live guest activation timeouts are now configurable globally via
+  `nixling.daemon.lifecycle.liveActivation.timeoutSeconds` and per VM via
+  `nixling.vms.<vm>.lifecycle.liveActivation.timeoutSeconds`, allowing
+  identity-bound guests to wait longer for operator-mediated user-session flows
+  such as Entra/Himmelblau hello/PIN.
 - `nixlingd` now publishes a daemon-side public status read model for unfiltered
   list/status requests, including read-model generation and source-fingerprint
   metadata for wlcontrol and other fast-refresh clients.
@@ -54,6 +59,12 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- `nixling switch` now threads the configured live activation timeout into
+  guest-control and includes identity-flow recovery guidance when guest
+  activation times out.
+- Successful activation commits now publish split store-view `state/current` and
+  `meta/current` pointers in addition to the legacy activation marker, keeping
+  daemon StoreSync metadata aligned after live switches.
 - Public status/list read-model snapshots now invalidate when runner pidfd state
   changes, preventing cached lifecycle state from surviving VM start/stop
   transitions.

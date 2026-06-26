@@ -97,6 +97,9 @@ inventory. Private bundle artifacts live beside it and are documented in
      "gracefulShutdown": {
        "enable": true,
        "timeoutSeconds": null
+     },
+     "liveActivation": {
+       "timeoutSeconds": null
      }
     },
     "graphics": false,
@@ -148,7 +151,7 @@ Fields are listed in `nixos-modules/manifest.nix` declaration order.
 | --- | --- | --- | --- |
 | `name` | string | yes | VM name; matches the enclosing top-level key. Pattern `^[a-z][a-z0-9-]*$` (enforced by `nixos-modules/assertions.nix`). |
 | `runtime` | object | yes | Runtime/provider metadata and provider support matrix. Shape: `{ kind, provider: { id, type, driver }, capabilities, operationCapabilities, autostartPolicy, services }`. `operationCapabilities` groups positive operation support by lifecycle/media/display/guest/storage axis; `operationCapabilities.guest.shell` records provider support for the staged persistent-shell operation. `services[]` contains bounded provider-neutral service summaries. `qemu-media` uses provider `local-qemu-media`/driver `qemu`; its supported capabilities are lifecycle/display/USB hotplug, while guest-control, exec, shell, config-sync, SSH, store-sync, keys, and in-guest observability are unsupported. |
-| `lifecycle` | object | yes | Per-VM lifecycle policy. Shape: `{ gracefulShutdown: { enable, timeoutSeconds } }`. `enable` tells nixlingd whether to attempt provider-aware guest shutdown before forced VMM cleanup; `timeoutSeconds` is a nullable 1–600 second per-VM override, where `null` means the daemon default from `/etc/nixling/daemon-config.json` applies. |
+| `lifecycle` | object | yes | Per-VM lifecycle policy. Shape: `{ gracefulShutdown: { enable, timeoutSeconds }, liveActivation: { timeoutSeconds } }`. `gracefulShutdown` controls provider-aware guest shutdown before forced VMM cleanup; its timeout is a nullable 1–600 second per-VM override. `liveActivation.timeoutSeconds` is a nullable 1–3600 second per-VM override for in-guest `switch`/`test`/`rollback`; `null` means the daemon default from `/etc/nixling/daemon-config.json` applies. |
 | `graphics` | boolean | yes | Mirror of `nixling.vms.<name>.graphics.enable`. The CLI uses it to pick the launch path. |
 | `tpm` | boolean | yes | Mirror of `nixling.vms.<name>.tpm.enable`. |
 | `usbipYubikey` | boolean | yes | Mirror of `nixling.vms.<name>.usbip.yubikey`. `nixling usb attach\|detach\|probe` refuses to run when false. |
