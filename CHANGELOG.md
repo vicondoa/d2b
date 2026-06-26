@@ -68,6 +68,9 @@ deprecations ship one minor release before removal.
   instead of an imperative root `ExecStartPre`; the tmpfiles rules keep the ACL
   mask writable for the daemon while the `nixling` operator group remains
   narrowed to traversal by the explicit group ACL.
+- Host activation now preserves the `/run/nixling` ACL mask as `rwx` when
+  reasserting runtime directory posture, preventing switch-time activation from
+  clipping the `nixlingd` daemon's write access to `r-x`.
 - USB probe/status no longer marks a declared USBIP device `degraded` with
   `probe-incomplete` after guest-control confirms that the busid is already
   imported in the guest.

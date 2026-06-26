@@ -1058,7 +1058,7 @@ in
         # daemon-created, and inheriting default:g::r-x makes the
         # owning nixling group read-only even after chmod 0660.
         ${pkgs.acl}/bin/setfacl -k /run/nixling 2>/dev/null || true
-        ${pkgs.acl}/bin/setfacl -m "g::r-x,m::r-x" /run/nixling 2>/dev/null || true
+        ${pkgs.acl}/bin/setfacl -m "u:nixlingd:rwx,g::r-x,m::rwx" /run/nixling 2>/dev/null || true
         ${activationHelper} enforce-dir-posture \
           --path /run/nixling/locks \
           --uid "$nixlingd_uid" --gid "$nixlingd_gid" --mode 0700 2>/dev/null || true
