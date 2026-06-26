@@ -2680,8 +2680,7 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
                         return Err(LiveHandlerError::SpawnFailed {
                             detail: format!(
                                 "graphical-session-not-active: cannot open runtime dir for wayland-proxy uid {}: {}",
-                                plan.uid,
-                                failure.legacy_detail
+                                plan.uid, failure.legacy_detail
                             ),
                         });
                     }
@@ -2724,8 +2723,7 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
                     ),
                 })?;
 
-                let wayland_display =
-                    env_value(plan, "WAYLAND_DISPLAY").unwrap_or("wayland-0");
+                let wayland_display = env_value(plan, "WAYLAND_DISPLAY").unwrap_or("wayland-0");
                 let socket_path = runtime.join(wayland_display);
 
                 // Verify socket exists before granting ACL on it.
@@ -2734,8 +2732,7 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
                         return Err(LiveHandlerError::SpawnFailed {
                             detail: format!(
                                 "graphical-session-not-active: cannot open Wayland socket for wayland-proxy uid {}: {}",
-                                plan.uid,
-                                failure.legacy_detail
+                                plan.uid, failure.legacy_detail
                             ),
                         });
                     }

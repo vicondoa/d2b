@@ -21238,9 +21238,8 @@ mod broker_dispatch_tests {
 
     #[test]
     fn host_shutdown_peer_denied_all_non_vmstop_admin_verbs() {
-        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
-            "host-shutdown-denied",
-        ));
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("host-shutdown-denied"));
         let peer = host_shutdown_peer();
         let denied_verbs: Vec<(&str, super::wire::Request)> = destructive_mutating_requests()
             .into_iter()

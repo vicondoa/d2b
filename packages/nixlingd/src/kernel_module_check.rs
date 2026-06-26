@@ -409,8 +409,7 @@ pub const SYS_MODULE_DIR: &str = "/sys/module";
 /// with `NIXLING_SKIP_KERNEL_MODULE_CHECK`.
 pub fn run_kernel_module_check(resolver: &BundleResolver) -> ModuleCheckReport {
     // Step 1+2: /proc/modules union /sys/module.
-    let loaded =
-        read_loaded_modules_at(Path::new(PROC_MODULES_PATH), Path::new(SYS_MODULE_DIR));
+    let loaded = read_loaded_modules_at(Path::new(PROC_MODULES_PATH), Path::new(SYS_MODULE_DIR));
 
     // Step 3: modules.builtin text file (uname handled internally).
     let modules_builtin = read_builtin_modules_with_fallback();
@@ -770,9 +769,7 @@ mod tests {
 
         let base = std::env::var_os("CARGO_TARGET_TMPDIR")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target")
-            });
+            .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
         let test_dir = base.join("kernel-module-check-sysfs-test");
         let proc_modules_path = test_dir.join("proc_modules");
         let sys_module_dir = test_dir.join("sys_module");

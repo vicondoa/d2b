@@ -6736,7 +6736,7 @@ fn grant_explicit_usbip_backend_acl(
 fn verify_explicit_usbip_device_stable(
     bus_id: &str,
     expected_identity: (u16, u16),
-    ) -> Result<PathBuf, BrokerError> {
+) -> Result<PathBuf, BrokerError> {
     let inspection =
         crate::ops::usbip_host::inspect_usbip_host_device(usb_device_sysfs_root(), bus_id)
             .map_err(|err| {
@@ -13208,9 +13208,9 @@ mod tests {
                 let n = *call_count.borrow();
                 *call_count.borrow_mut() += 1;
                 match n {
-                    0 => Ok(node_a.clone()),         // first pre-grant verify → A
-                    1 => Ok(node_b.clone()),         // post-grant verify → B (changed!)
-                    _ => Ok(node_b.clone()),         // subsequent calls → B (stable)
+                    0 => Ok(node_a.clone()), // first pre-grant verify → A
+                    1 => Ok(node_b.clone()), // post-grant verify → B (changed!)
+                    _ => Ok(node_b.clone()), // subsequent calls → B (stable)
                 }
             },
             |path, _uid| {
@@ -13267,15 +13267,13 @@ mod tests {
         assert!(log.grants.is_empty(), "no grants when verify always fails");
         assert!(log.revokes.is_empty(), "no revokes when grant never ran");
         assert_eq!(
-            log.sleeps,
-            USBIP_BACKEND_ACL_GRANT_ATTEMPTS,
+            log.sleeps, USBIP_BACKEND_ACL_GRANT_ATTEMPTS,
             "must sleep once per attempt"
         );
         match result.unwrap_err() {
-            BrokerError::LiveHandler(msg) => assert_eq!(
-                msg, err_msg,
-                "last error from verify must be propagated"
-            ),
+            BrokerError::LiveHandler(msg) => {
+                assert_eq!(msg, err_msg, "last error from verify must be propagated")
+            }
             other => panic!("expected LiveHandler, got {other:?}"),
         }
     }
@@ -13360,7 +13358,9 @@ mod tests {
             |path, _uid| {
                 log.borrow_mut().revokes.push(path.to_owned());
                 // Simulate ENOENT: old node already removed.
-                Err(BrokerError::LiveHandler("No such file or directory".to_owned()))
+                Err(BrokerError::LiveHandler(
+                    "No such file or directory".to_owned(),
+                ))
             },
             || log.borrow_mut().sleeps += 1,
         );
