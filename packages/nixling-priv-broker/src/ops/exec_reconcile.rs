@@ -1094,6 +1094,11 @@ fn run_usbip_driver_helper_once(
                 return Ok(());
             }
             None if Instant::now() >= deadline => {
+                tracing::warn!(
+                    usbip_subcommand = subcommand.as_str(),
+                    timeout_ms = USBIP_DRIVER_HELPER_TIMEOUT.as_millis() as u64,
+                    "usbip driver helper deadline expired"
+                );
                 if let Ok(pid) = i32::try_from(child.id()) {
                     let _ = nix::sys::signal::killpg(
                         nix::unistd::Pid::from_raw(pid),

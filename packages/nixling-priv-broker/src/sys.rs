@@ -1655,7 +1655,16 @@ pub mod pidfd_sys {
             // SAFETY: see clone3 branch above.
             unsafe { libc::_exit(code) };
         }
-        let fd = pidfd_open(pid as i32, 0)?;
+        let fd = match pidfd_open(pid as i32, 0) {
+            Ok(fd) => fd,
+            Err(error) => {
+                // SAFETY: parent owns the freshly-forked child; if pidfd_open
+                // fails, no runtime reaper will receive authority for it.
+                let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
+                let _ = reap_spawn_runner_error_child(pid);
+                return Err(error);
+            }
+        };
         Ok(SpawnOutcome {
             pid,
             pidfd: fd,

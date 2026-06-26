@@ -19,6 +19,7 @@ use std::process::Command;
 use std::sync::{
     Arc, Mutex, OnceLock,
     atomic::{AtomicU64, Ordering},
+    mpsc,
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -240,6 +241,7 @@ const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS: u64 = 90;
 const PROVIDER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PUBLIC_STATUS_PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 const PUBLIC_STATUS_GUEST_USBIP_TIMEOUT: Duration = Duration::from_millis(250);
+const USBIP_SYSFS_PRESENCE_TIMEOUT: Duration = Duration::from_millis(250);
 const EMPTY_VMM_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 const CGROUP_EMPTY_POST_KILL_WAIT: Duration = Duration::from_secs(5);
 const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
@@ -3754,10 +3756,36 @@ fn validate_usbip_bus_id_for_daemon(verb: &str, bus_id: &str) -> Result<(), Valu
 /// This is the fail-closed sysfs presence check for explicit attach:
 /// reject before any broker call or firewall mutation if the device is absent.
 fn check_sysfs_busid_present(busid: &str, verb: &str) -> Result<(), TypedError> {
-    let sysfs_path = format!("/sys/bus/usb/devices/{busid}/idVendor");
-    match std::fs::metadata(&sysfs_path) {
-        Ok(_) => Ok(()),
-        Err(_) => Err(TypedError::UsbipBusidNotPresent {
+    let sysfs_path = PathBuf::from(format!("/sys/bus/usb/devices/{busid}/idVendor"));
+    let (tx, rx) = mpsc::channel();
+    let busid_for_log = busid.to_owned();
+    std::thread::Builder::new()
+        .name("nixling-usb-sysfs-present".to_owned())
+        .spawn(move || {
+            let _ = tx.send(std::fs::metadata(sysfs_path).is_ok());
+        })
+        .map_err(|error| TypedError::InternalIo {
+            context: "spawn USB sysfs presence helper".to_owned(),
+            detail: error.to_string(),
+        })?;
+    match rx.recv_timeout(USBIP_SYSFS_PRESENCE_TIMEOUT) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(TypedError::UsbipBusidNotPresent {
+            busid: busid.to_owned(),
+            verb: verb.to_owned(),
+        }),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            tracing::warn!(
+                busid = %busid_for_log,
+                timeout_ms = USBIP_SYSFS_PRESENCE_TIMEOUT.as_millis() as u64,
+                "USB sysfs presence check timed out"
+            );
+            Err(TypedError::UsbipBusidNotPresent {
+                busid: busid.to_owned(),
+                verb: verb.to_owned(),
+            })
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(TypedError::UsbipBusidNotPresent {
             busid: busid.to_owned(),
             verb: verb.to_owned(),
         }),
