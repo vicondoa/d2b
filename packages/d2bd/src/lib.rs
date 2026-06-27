@@ -105,9 +105,9 @@ use supervisor::pidfd_table::{
 };
 
 mod admission;
+pub mod console_session;
 pub mod exec_detached;
 pub mod exec_session;
-pub mod console_session;
 pub mod exec_session_real;
 pub mod guest_control_bridge;
 pub mod guest_control_health;
@@ -2693,18 +2693,16 @@ fn dispatch_console(
     peer: &PeerIdentity,
     op: public_wire::ConsoleOp,
 ) -> Result<Value, TypedError> {
+    use d2b_contracts::terminal_wire::TerminalStream;
     use public_wire::{
         ConsoleCloseResult, ConsoleControlResult, ConsoleOp, ConsoleOpResponse, ConsoleWaitResult,
     };
-    use d2b_contracts::terminal_wire::TerminalStream;
 
     // Only launcher-or-admin peers may use console.
     match &peer.role {
         PeerRole::Admin | PeerRole::Launcher { .. } => {}
         _ => {
-            return Err(TypedError::AuthzNotALauncher {
-                peer_uid: peer.uid,
-            });
+            return Err(TypedError::AuthzNotALauncher { peer_uid: peer.uid });
         }
     }
 
@@ -2726,11 +2724,7 @@ fn dispatch_console(
             }
 
             // Attach the client.
-            let attach_result = state
-                .console_sessions
-                .lock()
-                .unwrap()
-                .attach(vm);
+            let attach_result = state.console_sessions.lock().unwrap().attach(vm);
             match attach_result {
                 Some((handle, kind, start_offset)) => {
                     let result = public_wire::ConsoleAttachResult {
@@ -2741,9 +2735,7 @@ fn dispatch_console(
                     ConsoleOpResponse::Attach(result)
                 }
                 None => {
-                    return Err(TypedError::ConsoleSessionTableFull {
-                        vm: vm.clone(),
-                    });
+                    return Err(TypedError::ConsoleSessionTableFull { vm: vm.clone() });
                 }
             }
         }
@@ -2766,10 +2758,7 @@ fn dispatch_console(
                     timeout_ms
                 });
                 // Block the thread briefly (dispatch is already on a worker).
-                let _ = block_on_future(tokio::time::timeout(
-                    deadline,
-                    notify.notified(),
-                ));
+                let _ = block_on_future(tokio::time::timeout(deadline, notify.notified()));
                 // Re-read after wait.
                 state
                     .console_sessions
@@ -2788,10 +2777,11 @@ fn dispatch_console(
         }
 
         ConsoleOp::WriteStdin(args) => {
-            let bytes = d2b_core::base64_codec::decode(&args.chunk_base64)
-                .map_err(|_| TypedError::InternalConfig {
+            let bytes = d2b_core::base64_codec::decode(&args.chunk_base64).map_err(|_| {
+                TypedError::InternalConfig {
                     detail: "console: invalid base64 stdin chunk".to_owned(),
-                })?;
+                }
+            })?;
             let accepted = state
                 .console_sessions
                 .lock()
@@ -2825,11 +2815,8 @@ fn dispatch_console(
         ConsoleOp::Wait(args) => {
             // Wait until EOF with optional timeout.
             let timeout_ms = args.timeout_ms.clamp(0, 60_000);
-            let deadline = std::time::Duration::from_millis(if timeout_ms == 0 {
-                60_000
-            } else {
-                timeout_ms
-            });
+            let deadline =
+                std::time::Duration::from_millis(if timeout_ms == 0 { 60_000 } else { timeout_ms });
             let notify = state
                 .console_sessions
                 .lock()
@@ -2858,11 +2845,7 @@ fn dispatch_console(
         }
 
         ConsoleOp::Close(args) => {
-            let closed = state
-                .console_sessions
-                .lock()
-                .unwrap()
-                .close(&args.session);
+            let closed = state.console_sessions.lock().unwrap().close(&args.session);
             ConsoleOpResponse::Close(ConsoleCloseResult {
                 session: args.session,
                 closed,
@@ -2882,8 +2865,8 @@ fn resolve_console_provider_kind(
 ) -> Result<public_wire::ConsoleProviderKind, TypedError> {
     use d2b_core::runtime::RuntimeKind;
 
-    let resolver =
-        load_bundle_resolver(state).map_err(|_| TypedError::ConsoleVmNotFound { vm: vm.to_owned() })?;
+    let resolver = load_bundle_resolver(state)
+        .map_err(|_| TypedError::ConsoleVmNotFound { vm: vm.to_owned() })?;
 
     let entry = resolver
         .find_manifest_vm(vm)
@@ -16832,7 +16815,9 @@ mod public_status_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(crate::console_session::ConsoleSessionTable::new())),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::new(),
+            )),
         };
         (state, dir)
     }
@@ -19725,7 +19710,9 @@ mod detached_exec_routing_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(crate::console_session::ConsoleSessionTable::new())),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::new(),
+            )),
         }
     }
 
@@ -20393,7 +20380,9 @@ mod accept_loop_concurrency_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(crate::console_session::ConsoleSessionTable::new())),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::new(),
+            )),
         };
         (state, dir)
     }
@@ -20916,7 +20905,9 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(crate::console_session::ConsoleSessionTable::new())),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::new(),
+            )),
         }
     }
 
@@ -20948,7 +20939,9 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(crate::console_session::ConsoleSessionTable::new())),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::new(),
+            )),
         }
     }
 
@@ -23034,7 +23027,9 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(crate::console_session::ConsoleSessionTable::new())),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::new(),
+            )),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -23252,7 +23247,9 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(crate::console_session::ConsoleSessionTable::new())),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::new(),
+            )),
         };
 
         let listener = socket(
@@ -23503,7 +23500,9 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(crate::console_session::ConsoleSessionTable::new())),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::new(),
+            )),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
@@ -25390,7 +25389,9 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(crate::console_session::ConsoleSessionTable::new())),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::new(),
+            )),
         };
 
         // Emit the same event that the timeout handler in

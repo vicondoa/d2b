@@ -646,7 +646,10 @@ pub fn shell_response_with_id(op_id: u64, payload: &public_wire::ShellOpResponse
 pub fn console_response(payload: &public_wire::ConsoleOpResponse) -> Value {
     let mut value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
     if let Some(obj) = value.as_object_mut() {
-        obj.insert("type".to_owned(), Value::String("consoleResponse".to_owned()));
+        obj.insert(
+            "type".to_owned(),
+            Value::String("consoleResponse".to_owned()),
+        );
     }
     value
 }

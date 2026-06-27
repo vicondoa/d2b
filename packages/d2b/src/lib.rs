@@ -3479,21 +3479,23 @@ fn cmd_console(
     let vm = &args.vm;
 
     if !context.public_socket.exists() {
-        return Err(CliFailure::new(3, "daemon is not running (socket not found)"));
+        return Err(CliFailure::new(
+            3,
+            "daemon is not running (socket not found)",
+        ));
     }
 
-    let mut socket = SeqpacketUnixSocket::connect(&context.public_socket).map_err(|err| {
-        CliFailure::new(3, format!("failed to connect to daemon: {err}"))
-    })?;
+    let mut socket = SeqpacketUnixSocket::connect(&context.public_socket)
+        .map_err(|err| CliFailure::new(3, format!("failed to connect to daemon: {err}")))?;
 
     // Handshake.
     let hello = daemon_hello_frame("hello")?;
-    socket.send_frame(&hello).map_err(|err| {
-        CliFailure::new(1, format!("failed to send hello: {err}"))
-    })?;
-    let hello_reply = socket.recv_frame().map_err(|err| {
-        CliFailure::new(1, format!("failed to recv hello reply: {err}"))
-    })?;
+    socket
+        .send_frame(&hello)
+        .map_err(|err| CliFailure::new(1, format!("failed to send hello: {err}")))?;
+    let hello_reply = socket
+        .recv_frame()
+        .map_err(|err| CliFailure::new(1, format!("failed to recv hello reply: {err}")))?;
     parse_hello_reply(&hello_reply)?;
 
     // Determine initial terminal size (best-effort; UART ignores it).
@@ -3510,7 +3512,10 @@ fn cmd_console(
         }),
     )?;
     let ConsoleOpResponse::Attach(attach) = attach_response else {
-        return Err(CliFailure::new(1, "console attach: unexpected daemon response"));
+        return Err(CliFailure::new(
+            1,
+            "console attach: unexpected daemon response",
+        ));
     };
 
     let session = attach.session.clone();
@@ -3530,7 +3535,10 @@ fn cmd_console(
     };
 
     let mut signals = exec_client::install_signals().map_err(|err| {
-        CliFailure::new(42, format!("console: failed to install signal handlers: {err}"))
+        CliFailure::new(
+            42,
+            format!("console: failed to install signal handlers: {err}"),
+        )
     })?;
 
     let detach_char = b'\x1d'; // Ctrl-]
@@ -3545,15 +3553,10 @@ fn cmd_console(
                     if let Some((rows, cols)) = host.window_size() {
                         let _ = console_round_trip(
                             &mut socket,
-                            &ConsoleOp::Resize(
-                                d2b_contracts::public_wire::ConsoleResizeArgs {
-                                    session: session.clone(),
-                                    size: d2b_contracts::terminal_wire::TerminalSize {
-                                        rows,
-                                        cols,
-                                    },
-                                },
-                            ),
+                            &ConsoleOp::Resize(d2b_contracts::public_wire::ConsoleResizeArgs {
+                                session: session.clone(),
+                                size: d2b_contracts::terminal_wire::TerminalSize { rows, cols },
+                            }),
                         );
                     }
                 }
@@ -3631,8 +3634,8 @@ fn cmd_console(
                     stdout_offset = out.ring_buffer_start_offset;
                 }
                 if !out.chunk_base64.is_empty() {
-                    let bytes = d2b_core::base64_codec::decode(&out.chunk_base64)
-                        .unwrap_or_default();
+                    let bytes =
+                        d2b_core::base64_codec::decode(&out.chunk_base64).unwrap_or_default();
                     let _ = write_stdout_bytes(&bytes);
                     stdout_offset = out.offset + bytes.len() as u64;
                 }
@@ -3659,7 +3662,9 @@ fn console_round_trip(
 }
 
 /// Encode a [`ConsoleOp`] as a JSON wire frame with `"type": "console"`.
-fn encode_console_op_frame(op: &d2b_contracts::public_wire::ConsoleOp) -> Result<Vec<u8>, CliFailure> {
+fn encode_console_op_frame(
+    op: &d2b_contracts::public_wire::ConsoleOp,
+) -> Result<Vec<u8>, CliFailure> {
     let mut value = serde_json::to_value(op)
         .map_err(|err| CliFailure::new(1, format!("failed to encode console op: {err}")))?;
     let object = value
@@ -3682,8 +3687,9 @@ fn parse_console_reply(
                 obj.remove("opId");
                 obj.remove("type");
             }
-            serde_json::from_value(value)
-                .map_err(|err| CliFailure::new(1, format!("failed to decode consoleResponse: {err}")))
+            serde_json::from_value(value).map_err(|err| {
+                CliFailure::new(1, format!("failed to decode consoleResponse: {err}"))
+            })
         }
         Some("error") => {
             if let Some(obj) = value.as_object_mut() {

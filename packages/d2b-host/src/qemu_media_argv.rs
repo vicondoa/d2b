@@ -52,15 +52,29 @@ pub struct QemuMediaArgvInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum QemuMediaArgvError {
-    InvalidQemuBinaryPath { path: String },
+    InvalidQemuBinaryPath {
+        path: String,
+    },
     EmptyVmName,
-    InvalidQmpSocketPath { path: String },
-    InvalidMacAddress { value: String },
-    InvalidTapFd { fd: i32 },
-    InvalidMemoryMiB { value: u32 },
-    InvalidVcpu { value: u32 },
+    InvalidQmpSocketPath {
+        path: String,
+    },
+    InvalidMacAddress {
+        value: String,
+    },
+    InvalidTapFd {
+        fd: i32,
+    },
+    InvalidMemoryMiB {
+        value: u32,
+    },
+    InvalidVcpu {
+        value: u32,
+    },
     /// `console_fd` must be ≥ 3 to avoid colliding with stdin/stdout/stderr.
-    InvalidConsoleFd { fd: i32 },
+    InvalidConsoleFd {
+        fd: i32,
+    },
 }
 
 /// Render the paused fd-backed qemu-media baseline argv.
@@ -330,8 +344,14 @@ mod tests {
     fn without_console_fd_serial_is_none() {
         let argv = generate_qemu_media_argv(&input()).unwrap();
         let joined = argv.join(" ");
-        assert!(joined.contains("-serial none"), "serial should be none without console_fd");
-        assert!(!joined.contains("-chardev"), "no chardev without console_fd");
+        assert!(
+            joined.contains("-serial none"),
+            "serial should be none without console_fd"
+        );
+        assert!(
+            !joined.contains("-chardev"),
+            "no chardev without console_fd"
+        );
     }
 
     #[test]

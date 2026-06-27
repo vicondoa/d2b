@@ -101,10 +101,7 @@ impl ConsoleClientHandle {
     pub fn new() -> Self {
         let mut raw = [0u8; 16];
         getrandom::getrandom(&mut raw).unwrap_or(());
-        let hex: String = raw
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
         Self(format!("console-{hex}"))
     }
     pub fn as_str(&self) -> &str {
@@ -134,11 +131,7 @@ impl ConsoleSessionTable {
 
     /// Register a new console session for `vm` with an already-running
     /// drainer.  Replaces any existing session (e.g. after a VM restart).
-    pub fn register_session(
-        &mut self,
-        vm: String,
-        session: ConsoleSession,
-    ) {
+    pub fn register_session(&mut self, vm: String, session: ConsoleSession) {
         // Abort any previous drainer for this VM.
         if let Some(old) = self.sessions.remove(&vm) {
             if let Some(task) = old.drainer {
@@ -154,10 +147,7 @@ impl ConsoleSessionTable {
     /// and the ring-buffer start offset at attach time.
     ///
     /// Returns `None` when no session exists for `vm`.
-    pub fn attach(
-        &mut self,
-        vm: &str,
-    ) -> Option<(ConsoleClientHandle, ConsoleProviderKind, u64)> {
+    pub fn attach(&mut self, vm: &str) -> Option<(ConsoleClientHandle, ConsoleProviderKind, u64)> {
         if self.clients.len() >= MAX_SESSIONS {
             return None;
         }
@@ -183,7 +173,9 @@ impl ConsoleSessionTable {
         offset: u64,
         max_len: u64,
     ) -> Option<ConsoleReadOutput> {
-        let vm = self.clients.get(&ConsoleClientHandle(session_handle.to_owned()))?;
+        let vm = self
+            .clients
+            .get(&ConsoleClientHandle(session_handle.to_owned()))?;
         let session = self.sessions.get(vm)?;
         let (result, notify) = {
             let guard = session.ring.lock().unwrap();
@@ -203,12 +195,10 @@ impl ConsoleSessionTable {
     ///
     /// Returns `true` when the write was accepted, `false` when no session
     /// is found, and `Err` when the stdin channel is full or closed.
-    pub fn write_stdin(
-        &self,
-        session_handle: &str,
-        bytes: Vec<u8>,
-    ) -> Option<bool> {
-        let vm = self.clients.get(&ConsoleClientHandle(session_handle.to_owned()))?;
+    pub fn write_stdin(&self, session_handle: &str, bytes: Vec<u8>) -> Option<bool> {
+        let vm = self
+            .clients
+            .get(&ConsoleClientHandle(session_handle.to_owned()))?;
         let session = self.sessions.get(vm)?;
         let Some(ref tx) = session.stdin_tx else {
             return Some(false);
@@ -232,7 +222,9 @@ impl ConsoleSessionTable {
     /// Access the ring [`tokio::sync::Notify`] for a client handle so the
     /// caller can efficiently wait for new data.
     pub fn ring_notify(&self, session_handle: &str) -> Option<Arc<tokio::sync::Notify>> {
-        let vm = self.clients.get(&ConsoleClientHandle(session_handle.to_owned()))?;
+        let vm = self
+            .clients
+            .get(&ConsoleClientHandle(session_handle.to_owned()))?;
         let session = self.sessions.get(vm)?;
         let guard = session.ring.lock().unwrap();
         Some(Arc::clone(&guard.notify))
@@ -331,15 +323,9 @@ pub fn spawn_fd_drainer(
 
 /// Create a new [`ConsoleSession`] for a Cloud Hypervisor VM using its serial
 /// socket path.
-pub fn create_ch_session(
-    socket_path: String,
-) -> ConsoleSession {
+pub fn create_ch_session(socket_path: String) -> ConsoleSession {
     let ring = Arc::new(Mutex::new(ConsoleRing::new()));
-    let drainer = spawn_ch_serial_drainer(
-        "ch-console".to_owned(),
-        socket_path,
-        Arc::clone(&ring),
-    );
+    let drainer = spawn_ch_serial_drainer("ch-console".to_owned(), socket_path, Arc::clone(&ring));
     ConsoleSession::new(
         ConsoleProviderKind::LocalHypervisor,
         ring,
@@ -460,7 +446,10 @@ mod tests {
     #[test]
     fn attach_returns_handle_and_offset() {
         let mut table = ConsoleSessionTable::new();
-        table.register_session("vm-a".into(), make_session(ConsoleProviderKind::LocalHypervisor));
+        table.register_session(
+            "vm-a".into(),
+            make_session(ConsoleProviderKind::LocalHypervisor),
+        );
         let (handle, kind, offset) = table.attach("vm-a").unwrap();
         assert!(!handle.as_str().is_empty());
         assert_eq!(kind, ConsoleProviderKind::LocalHypervisor);
@@ -513,7 +502,10 @@ mod tests {
     #[test]
     fn register_session_replaces_existing() {
         let mut table = ConsoleSessionTable::new();
-        table.register_session("vm-d".into(), make_session(ConsoleProviderKind::LocalHypervisor));
+        table.register_session(
+            "vm-d".into(),
+            make_session(ConsoleProviderKind::LocalHypervisor),
+        );
         let (handle, _, _) = table.attach("vm-d").unwrap();
         // Replace with a fresh session.
         table.register_session("vm-d".into(), make_session(ConsoleProviderKind::QemuMedia));
@@ -543,7 +535,13 @@ mod tests {
         }
         let out = table.read_output(handle.as_str(), 0, 64).unwrap();
         let snap = out.snap.unwrap();
-        assert!(snap.dropped_bytes > 0, "slow client should detect dropped bytes");
-        assert!(snap.actual_offset > 0, "fast-forward should set actual_offset > 0");
+        assert!(
+            snap.dropped_bytes > 0,
+            "slow client should detect dropped bytes"
+        );
+        assert!(
+            snap.actual_offset > 0,
+            "fast-forward should set actual_offset > 0"
+        );
     }
 }

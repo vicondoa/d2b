@@ -2,10 +2,10 @@
 
 pub mod audio_policy;
 pub mod base64_codec;
-pub mod console_ring;
 pub mod bundle;
 pub mod bundle_resolver;
 pub mod closures;
+pub mod console_ring;
 pub mod contract_id;
 pub mod error;
 pub mod host;

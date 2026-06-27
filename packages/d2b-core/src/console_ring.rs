@@ -225,7 +225,7 @@ mod tests {
     fn overflow_drops_oldest_bytes_and_advances_base_offset() {
         let mut r = ring(8);
         r.push_bytes(b"12345678"); // fills buffer exactly
-        r.push_bytes(b"ABCD");     // drops "1234"
+        r.push_bytes(b"ABCD"); // drops "1234"
         assert_eq!(r.base_offset(), 4);
         assert_eq!(r.total_written(), 12);
         assert_eq!(r.dropped_bytes(), 4);
@@ -267,7 +267,9 @@ mod tests {
         assert_eq!(snap1.data, b"12345678");
         // guest writes 16 more bytes; client's last offset (8) is still valid
         r.push_bytes(b"AAAAAAAABBBBBBBB");
-        let snap2 = r.read_at(snap1.actual_offset + snap1.data.len() as u64, 64).unwrap();
+        let snap2 = r
+            .read_at(snap1.actual_offset + snap1.data.len() as u64, 64)
+            .unwrap();
         // base_offset moved to 16; client fast-forwards
         assert_eq!(snap2.actual_offset, 16);
         assert_eq!(snap2.data, b"BBBBBBBB");
