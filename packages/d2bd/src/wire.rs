@@ -130,9 +130,7 @@ impl Request {
             Self::Audio(public_wire::AudioOp::SetVolume(args)) => {
                 OpLockClass::PerVm(args.vm.clone())
             }
-            Self::Audio(public_wire::AudioOp::Mute(args)) => {
-                OpLockClass::PerVm(args.vm.clone())
-            }
+            Self::Audio(public_wire::AudioOp::Mute(args)) => OpLockClass::PerVm(args.vm.clone()),
             // Read-only / status / session-managed verbs: no lock.
             Self::List(_)
             | Self::Status(_)

@@ -143,11 +143,7 @@ impl PipeWireHostController {
     /// The subprocess inherits no environment except `PIPEWIRE_RUNTIME_DIR`
     /// so that `wpctl` can locate the PipeWire socket without needing the
     /// full user session environment.
-    fn run_wpctl_mute(
-        &self,
-        node_name: &str,
-        mute: bool,
-    ) -> HostEnforcementResult {
+    fn run_wpctl_mute(&self, node_name: &str, mute: bool) -> HostEnforcementResult {
         let mute_arg = if mute { "1" } else { "0" };
         run_subprocess(
             &self.wpctl_path,
@@ -157,11 +153,7 @@ impl PipeWireHostController {
     }
 
     /// Run `wpctl set-volume <node> <level>%` as a subprocess.
-    fn run_wpctl_volume(
-        &self,
-        node_name: &str,
-        level: LevelPercent,
-    ) -> HostEnforcementResult {
+    fn run_wpctl_volume(&self, node_name: &str, level: LevelPercent) -> HostEnforcementResult {
         let level_arg = format!("{}%", level.get());
         run_subprocess(
             &self.wpctl_path,
@@ -318,8 +310,7 @@ impl HostAudioController for FakeHostController {
 /// Extract a `KEY=VALUE` pair from an env list, returning the value slice.
 fn extract_env_value<'a>(env: &'a [String], key: &str) -> Option<&'a str> {
     let prefix = format!("{key}=");
-    env.iter()
-        .find_map(|entry| entry.strip_prefix(&prefix))
+    env.iter().find_map(|entry| entry.strip_prefix(&prefix))
 }
 
 /// Spawn a subprocess at `program` with `args`, passing only
@@ -460,9 +451,7 @@ mod tests {
 
     #[test]
     fn pipewire_controller_returns_none_without_wpctl_path() {
-        let node = make_audio_node(vec![
-            "PIPEWIRE_RUNTIME_DIR=/run/user/1000".to_owned(),
-        ]);
+        let node = make_audio_node(vec!["PIPEWIRE_RUNTIME_DIR=/run/user/1000".to_owned()]);
         let ctrl = PipeWireHostController::from_audio_node(&node);
         assert!(ctrl.is_none(), "must require WPCTL_PATH");
     }
@@ -489,8 +478,11 @@ mod tests {
         };
         // Off → boundary must be sealed; if credentials fail, return Failed.
         let result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
-        assert_eq!(result, HostEnforcementResult::Failed,
-            "Off with inaccessible socket must return Failed, not Unsupported");
+        assert_eq!(
+            result,
+            HostEnforcementResult::Failed,
+            "Off with inaccessible socket must return Failed, not Unsupported"
+        );
     }
 
     #[test]

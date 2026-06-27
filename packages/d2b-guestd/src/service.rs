@@ -2100,22 +2100,18 @@ impl GuestControlService {
         &self,
     ) -> Result<(pb::GuestAudioChannelState, pb::GuestAudioChannelState), pb::GuestControlErrorKind>
     {
-        let runtime = self
-            .audio
-            .as_deref()
-            .ok_or(pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE)?;
+        let runtime = self.audio.as_deref().ok_or(
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE,
+        )?;
         let microphone = query_wpctl_channel_state(
             &runtime.wpctl_path,
             "@DEFAULT_SOURCE@",
             runtime.workload_uid,
         )
         .await?;
-        let speaker = query_wpctl_channel_state(
-            &runtime.wpctl_path,
-            "@DEFAULT_SINK@",
-            runtime.workload_uid,
-        )
-        .await?;
+        let speaker =
+            query_wpctl_channel_state(&runtime.wpctl_path, "@DEFAULT_SINK@", runtime.workload_uid)
+                .await?;
         Ok((microphone, speaker))
     }
 
@@ -3569,7 +3565,12 @@ impl GuestControl for GuestControlService {
 
         let mut response = pb::AudioSetResponse::new();
         match self
-            .audio_set_inner(request.channel, request.kind, request.grant_on, request.level)
+            .audio_set_inner(
+                request.channel,
+                request.kind,
+                request.grant_on,
+                request.level,
+            )
             .await
         {
             Ok(state) => {
@@ -3942,8 +3943,7 @@ async fn query_wpctl_channel_state(
     target: &str,
     workload_uid: u32,
 ) -> Result<pb::GuestAudioChannelState, pb::GuestControlErrorKind> {
-    let output =
-        run_wpctl_command(wpctl_path, &["get-volume", target], workload_uid).await?;
+    let output = run_wpctl_command(wpctl_path, &["get-volume", target], workload_uid).await?;
     let stdout = std::str::from_utf8(&output.stdout).map_err(|_| {
         pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE
     })?;
@@ -4773,8 +4773,7 @@ mod tests {
     #[test]
     fn parse_wpctl_volume_malformed_returns_unavailable() {
         use pb::GuestControlErrorKind as K;
-        let err =
-            parse_wpctl_get_volume_output("unexpected output\n").unwrap_err();
+        let err = parse_wpctl_get_volume_output("unexpected output\n").unwrap_err();
         assert_eq!(
             err,
             K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE,

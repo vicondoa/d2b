@@ -13,8 +13,8 @@
 //! public responses. Volume/gain values never appear in audit records,
 //! metric labels, or log messages.
 
-use std::io;
 use std::fs::OpenOptions;
+use std::io;
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::os::unix::io::AsRawFd as _;
 use std::path::Path;
@@ -26,8 +26,9 @@ use d2b_contracts::public_wire::{
     AudioOp, AudioOpResponse, AudioProviderKind, AudioSetApplied, AudioSetResult,
     AudioSetVolumeArgs, AudioStatusArgs, AudioStatusResult, AudioVmError, AudioVmState,
 };
-use d2b_core::audio_policy::{AudioGrant, AudioPolicyError, AudioPolicyState, LevelPercent,
-    parse_audio_state};
+use d2b_core::audio_policy::{
+    AudioGrant, AudioPolicyError, AudioPolicyState, LevelPercent, parse_audio_state,
+};
 use d2b_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use d2b_core::processes::ProcessesJson;
 use d2b_core::provider_capabilities::{
@@ -36,8 +37,8 @@ use d2b_core::provider_capabilities::{
 use d2b_core::runtime::{RuntimeKind, RuntimeProviderDriver};
 use serde_json::Value;
 
-use crate::TypedError;
 use crate::ServerState;
+use crate::TypedError;
 use crate::audio_host_controller::{
     HostAudioController, PipeWireHostController, QemuAudioController,
 };
@@ -201,9 +202,7 @@ pub fn write_audio_state_locked(
     ofd_lock(fd, true).map_err(AudioStateIoError::LockAcquire)?;
     let _guard = OfdLockGuard { fd };
 
-    let bytes = state
-        .to_v2_bytes()
-        .map_err(AudioStateIoError::StateParse)?;
+    let bytes = state.to_v2_bytes().map_err(AudioStateIoError::StateParse)?;
 
     // Place the temp file in the same directory to guarantee same-filesystem
     // rename (hardlinks cannot cross mount points).
@@ -223,9 +222,7 @@ pub fn write_audio_state_locked(
         .map_err(AudioStateIoError::TempWrite)?;
 
     // Ensure the data reaches stable storage before rename.
-    tmp_file
-        .sync_data()
-        .map_err(AudioStateIoError::TempSync)?;
+    tmp_file.sync_data().map_err(AudioStateIoError::TempSync)?;
     drop(tmp_file);
 
     std::fs::rename(&tmp_path, state_path).map_err(AudioStateIoError::AtomicRename)?;
@@ -321,9 +318,7 @@ fn build_host_controller(
             PipeWireHostController::from_audio_node(audio_node)
                 .map(|ctrl| -> Box<dyn HostAudioController> { Box::new(ctrl) })
         }
-        AudioHostEnforcementKind::QemuAudioBackend => {
-            Some(Box::new(QemuAudioController))
-        }
+        AudioHostEnforcementKind::QemuAudioBackend => Some(Box::new(QemuAudioController)),
         AudioHostEnforcementKind::None => {
             // ACA sandboxes: no host enforcement; caller skips the controller.
             None
@@ -428,10 +423,7 @@ pub fn dispatch_audio(state: &ServerState, op: AudioOp) -> Result<Value, TypedEr
 
 // ── Status ─────────────────────────────────────────────────────────────────
 
-fn dispatch_audio_status(
-    state: &ServerState,
-    args: AudioStatusArgs,
-) -> Result<Value, TypedError> {
+fn dispatch_audio_status(state: &ServerState, args: AudioStatusArgs) -> Result<Value, TypedError> {
     let manifest: ManifestV04 = crate::load_json(&state.config.artifacts.public_manifest_path)?;
     let mut entries: Vec<AudioVmState> = Vec::new();
     let mut errors: Vec<AudioVmError> = Vec::new();
@@ -456,7 +448,9 @@ fn dispatch_audio_status(
     }
 
     let result = AudioStatusResult { entries, errors };
-    Ok(crate::wire::audio_response(&AudioOpResponse::Status(result)))
+    Ok(crate::wire::audio_response(&AudioOpResponse::Status(
+        result,
+    )))
 }
 
 fn resolve_vm_audio_status(
@@ -507,10 +501,13 @@ fn dispatch_audio_set_volume(
 
     let manifest: ManifestV04 = crate::load_json(&state.config.artifacts.public_manifest_path)?;
 
-    let vm = manifest.vms.get(vm_name).ok_or_else(|| TypedError::InternalIo {
-        context: format!("audio set-volume {vm_name}"),
-        detail: "VM not present in public manifest".to_owned(),
-    })?;
+    let vm = manifest
+        .vms
+        .get(vm_name)
+        .ok_or_else(|| TypedError::InternalIo {
+            context: format!("audio set-volume {vm_name}"),
+            detail: "VM not present in public manifest".to_owned(),
+        })?;
 
     let cap = audio_capability_for_vm(vm).ok_or_else(|| TypedError::InternalIo {
         context: format!("audio set-volume {vm_name}"),
@@ -522,12 +519,11 @@ fn dispatch_audio_set_volume(
     let state_path = audio_state_path(&state_dir);
 
     // Read-modify-write under exclusive lock.
-    let current = read_audio_state_locked(&lock_path, &state_path).map_err(|e| {
-        TypedError::InternalIo {
+    let current =
+        read_audio_state_locked(&lock_path, &state_path).map_err(|e| TypedError::InternalIo {
             context: "read audio state".to_owned(),
             detail: e.to_string(),
-        }
-    })?;
+        })?;
 
     let new_state = match channel {
         AudioChannel::Speaker => current.with_speaker_level(level),
@@ -566,20 +562,20 @@ fn dispatch_audio_set_volume(
 
 // ── Mute ──────────────────────────────────────────────────────────────────────
 
-fn dispatch_audio_mute(
-    state: &ServerState,
-    args: AudioMuteArgs,
-) -> Result<Value, TypedError> {
+fn dispatch_audio_mute(state: &ServerState, args: AudioMuteArgs) -> Result<Value, TypedError> {
     let vm_name = &args.vm;
     let channel = args.channel;
     let mute = args.mute;
 
     let manifest: ManifestV04 = crate::load_json(&state.config.artifacts.public_manifest_path)?;
 
-    let vm = manifest.vms.get(vm_name).ok_or_else(|| TypedError::InternalIo {
-        context: format!("audio mute {vm_name}"),
-        detail: "VM not present in public manifest".to_owned(),
-    })?;
+    let vm = manifest
+        .vms
+        .get(vm_name)
+        .ok_or_else(|| TypedError::InternalIo {
+            context: format!("audio mute {vm_name}"),
+            detail: "VM not present in public manifest".to_owned(),
+        })?;
 
     let cap = audio_capability_for_vm(vm).ok_or_else(|| TypedError::InternalIo {
         context: format!("audio mute {vm_name}"),
@@ -590,14 +586,17 @@ fn dispatch_audio_mute(
     let lock_path = audio_lock_path(&state.config.locks_dir, vm_name);
     let state_path = audio_state_path(&state_dir);
 
-    let current = read_audio_state_locked(&lock_path, &state_path).map_err(|e| {
-        TypedError::InternalIo {
+    let current =
+        read_audio_state_locked(&lock_path, &state_path).map_err(|e| TypedError::InternalIo {
             context: "read audio state".to_owned(),
             detail: e.to_string(),
-        }
-    })?;
+        })?;
 
-    let grant = if mute { AudioGrant::Off } else { AudioGrant::On };
+    let grant = if mute {
+        AudioGrant::Off
+    } else {
+        AudioGrant::On
+    };
     let new_state = match channel {
         AudioChannel::Speaker => current.with_speaker(grant),
         AudioChannel::Microphone => current.with_mic(grant),
@@ -655,12 +654,10 @@ mod tests {
             .with_mic(AudioGrant::On)
             .with_speaker(AudioGrant::Off)
             .with_speaker_level(LevelPercent::new(75).unwrap());
-        write_audio_state_locked(&lock_path, &state_path, &state)
-            .expect("write state");
+        write_audio_state_locked(&lock_path, &state_path, &state).expect("write state");
 
         // Read it back.
-        let read_back =
-            read_audio_state_locked(&lock_path, &state_path).expect("read state");
+        let read_back = read_audio_state_locked(&lock_path, &state_path).expect("read state");
         assert_eq!(read_back.mic, AudioGrant::On);
         assert_eq!(read_back.speaker, AudioGrant::Off);
         assert_eq!(read_back.speaker_level.map(|l| l.get()), Some(75));
@@ -672,8 +669,7 @@ mod tests {
         let lock_path = dir.path().join("audio-test.lock");
         let state_path = dir.path().join("audio-state.json");
 
-        let state =
-            read_audio_state_locked(&lock_path, &state_path).expect("read missing");
+        let state = read_audio_state_locked(&lock_path, &state_path).expect("read missing");
         assert_eq!(state, AudioPolicyState::default_v2());
     }
 
@@ -705,7 +701,10 @@ mod tests {
             cap.host_enforcement,
             AudioHostEnforcementKind::PipeWireVhostUserSound
         );
-        assert_eq!(cap.guest_enforcement, AudioGuestEnforcementKind::GuestdCapable);
+        assert_eq!(
+            cap.guest_enforcement,
+            AudioGuestEnforcementKind::GuestdCapable
+        );
         assert!(cap.needs_local_state_file);
     }
 
@@ -716,7 +715,10 @@ mod tests {
             cap.host_enforcement,
             AudioHostEnforcementKind::QemuAudioBackend
         );
-        assert_eq!(cap.guest_enforcement, AudioGuestEnforcementKind::Unsupported);
+        assert_eq!(
+            cap.guest_enforcement,
+            AudioGuestEnforcementKind::Unsupported
+        );
         assert!(cap.needs_local_state_file);
     }
 
@@ -724,7 +726,10 @@ mod tests {
     fn aca_cap_is_guest_only_no_local_state() {
         let cap = AudioProviderCapability::aca_sandbox();
         assert_eq!(cap.host_enforcement, AudioHostEnforcementKind::None);
-        assert_eq!(cap.guest_enforcement, AudioGuestEnforcementKind::GuestdCapable);
+        assert_eq!(
+            cap.guest_enforcement,
+            AudioGuestEnforcementKind::GuestdCapable
+        );
         assert!(!cap.needs_local_state_file);
     }
 
@@ -818,7 +823,8 @@ mod tests {
         let ctrl = FakeHostController::success();
         let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Applied);
-        let applied = applied_from_host_result(host_result, AudioGuestEnforcementKind::GuestdCapable);
+        let applied =
+            applied_from_host_result(host_result, AudioGuestEnforcementKind::GuestdCapable);
         assert_eq!(
             applied,
             AudioSetApplied::HostOnly,
@@ -835,7 +841,8 @@ mod tests {
         let ctrl = FakeHostController::failed();
         let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Failed);
-        let applied = applied_from_host_result(host_result, AudioGuestEnforcementKind::GuestdCapable);
+        let applied =
+            applied_from_host_result(host_result, AudioGuestEnforcementKind::GuestdCapable);
         assert_eq!(
             applied,
             AudioSetApplied::Unsupported,
@@ -865,7 +872,8 @@ mod tests {
         let ctrl = FakeHostController::unsupported();
         let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Microphone);
         assert_eq!(host_result, HostEnforcementResult::Unsupported);
-        let applied = applied_from_host_result(host_result, AudioGuestEnforcementKind::GuestdCapable);
+        let applied =
+            applied_from_host_result(host_result, AudioGuestEnforcementKind::GuestdCapable);
         assert_eq!(
             applied,
             AudioSetApplied::Unsupported,
