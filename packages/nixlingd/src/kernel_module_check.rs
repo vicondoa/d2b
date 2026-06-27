@@ -409,6 +409,13 @@ pub const SYS_MODULE_DIR: &str = "/sys/module";
 /// with `NIXLING_SKIP_KERNEL_MODULE_CHECK`.
 pub fn run_kernel_module_check(resolver: &BundleResolver) -> ModuleCheckReport {
     // Step 1+2: /proc/modules union /sys/module.
+    if let Err(error) = std::fs::read_to_string(PROC_MODULES_PATH) {
+        tracing::warn!(
+            path = PROC_MODULES_PATH,
+            error = %error,
+            "kernel-module-check: could not read /proc/modules; falling back to /sys/module and builtin evidence"
+        );
+    }
     let loaded = read_loaded_modules_at(Path::new(PROC_MODULES_PATH), Path::new(SYS_MODULE_DIR));
 
     // Step 3: modules.builtin text file (uname handled internally).
@@ -569,6 +576,16 @@ mod tests {
             "virtio_pci",
             "virtio_console",
         ]
+    }
+
+    #[test]
+    fn production_probe_logs_proc_modules_read_failure() {
+        let source = include_str!("kernel_module_check.rs");
+        assert!(
+            source.contains("std::fs::read_to_string(PROC_MODULES_PATH)")
+                && source.contains("kernel-module-check: could not read /proc/modules"),
+            "run_kernel_module_check must log /proc/modules read failures before falling back"
+        );
     }
 
     #[test]

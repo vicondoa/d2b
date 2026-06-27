@@ -222,6 +222,7 @@ enum BrokerError {
     #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     UsbipLockConflict {
         busid: String,
+        owner: String,
     },
     /// `UsbipBind` refused because the physical USB device is absent in
     /// sysfs. The daemon maps this to `RuntimeAbsent` via the wire kind
@@ -3658,9 +3659,10 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             })?;
             let same_vm_replay = match crate::ops::usbip_lock::peek_owner(&intent.lock_path) {
                 Some(owner) if owner == intent.vm_name => true,
-                Some(_) => {
+                Some(owner) => {
                     return Err(BrokerError::UsbipLockConflict {
                         busid: intent.bus_id.clone(),
+                        owner,
                     });
                 }
                 None => false,
@@ -3761,9 +3763,10 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             })?;
             let had_matching_lock = match crate::ops::usbip_lock::peek_owner(&intent.lock_path) {
                 Some(owner) if owner == intent.vm_name => true,
-                Some(_) => {
+                Some(owner) => {
                     return Err(BrokerError::UsbipLockConflict {
                         busid: intent.bus_id.clone(),
+                        owner,
                     });
                 }
                 None => false,
@@ -3961,10 +3964,10 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             let same_vm_replay = match crate::ops::usbip_lock::peek_owner(&lock_path) {
                 Some(owner) if owner == req.vm => true,
                 Some(owner) => {
-                    return Err(BrokerError::LiveHandler(format!(
-                        "explicit usbip bind refused: bus_id={} lock owned by {owner} but caller is {}",
-                        req.bus_id, req.vm
-                    )));
+                    return Err(BrokerError::UsbipLockConflict {
+                        busid: req.bus_id.clone(),
+                        owner,
+                    });
                 }
                 None => false,
             };
@@ -8230,24 +8233,24 @@ impl BrokerError {
                     })),
                 )?;
             }
-            Self::UsbipLockConflict { .. } => {
+            Self::UsbipLockConflict { busid, owner } => {
                 audit_log.write_error_entry(
                     operation,
                     caller_uid,
                     "usbip-lock-conflict",
-                    opaque_target_id,
+                    busid,
                     "Broker.UsbipLockConflict",
-                    "UsbipBind refused: busid is already claimed by another VM",
+                    &format!("UsbipBind refused: busid {busid} is already claimed by {owner}"),
                 )?;
             }
-            Self::UsbipDeviceAbsent { .. } => {
+            Self::UsbipDeviceAbsent { busid } => {
                 audit_log.write_error_entry(
                     operation,
                     caller_uid,
                     "usbip-device-absent",
-                    opaque_target_id,
+                    busid,
                     "Broker.UsbipDeviceAbsent",
-                    "UsbipBind refused: USB device is not present in sysfs",
+                    &format!("UsbipBind refused: USB device {busid} is not present in sysfs"),
                 )?;
             }
             Self::LiveHandler(message) => {
@@ -8589,7 +8592,7 @@ impl BrokerError {
                 ),
                 "Fix the USBIP declaration, physical port/topology, and vendor:product allowlist, rebuild the trusted bundle, then retry.",
             ),
-            Self::UsbipLockConflict { busid } => error_response(
+            Self::UsbipLockConflict { busid, .. } => error_response(
                 "Broker.UsbipLockConflict",
                 "UsbipBind",
                 None,
@@ -13886,6 +13889,29 @@ mod tests {
                 error_message:
                     "systemctl enable nixlingd failed: Unit nixlingd.service does not exist"
                         .to_owned(),
+            },
+            AuditCase {
+                error: BrokerError::UsbipLockConflict {
+                    busid: "1-2.3".to_owned(),
+                    owner: "other-vm".to_owned(),
+                },
+                operation: "UsbipBind",
+                target_id: "1-2.3".to_owned(),
+                decision: "usbip-lock-conflict",
+                error_kind: "Broker.UsbipLockConflict",
+                error_message: "UsbipBind refused: busid 1-2.3 is already claimed by other-vm"
+                    .to_owned(),
+            },
+            AuditCase {
+                error: BrokerError::UsbipDeviceAbsent {
+                    busid: "1-2.4".to_owned(),
+                },
+                operation: "UsbipBind",
+                target_id: "1-2.4".to_owned(),
+                decision: "usbip-device-absent",
+                error_kind: "Broker.UsbipDeviceAbsent",
+                error_message: "UsbipBind refused: USB device 1-2.4 is not present in sysfs"
+                    .to_owned(),
             },
             AuditCase {
                 error: BrokerError::ValidateBundle("bundle digest mismatch".to_owned()),
