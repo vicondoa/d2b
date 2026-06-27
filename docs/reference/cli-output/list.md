@@ -18,7 +18,7 @@ status.
 | `staticIp` | string or `null` | Declared static IPv4 address. Present and `null` for DHCP-backed shapes. | Stable wire contract. |
 | `status` | string enum | One of `stopped`, `running`, `pending-restart`, `failed`, or `unknown`. | Stable wire contract. |
 | `isNetVm` | boolean | True only for auto-declared per-env net VMs. | Stable wire contract. |
-| `guestClosureOutPath` | string | Absolute Nix store path of the VM's guest system closure. Present when the daemon or local fallback can read the bundle closure metadata. | Additive stable wire contract. |
+| `guestClosureOutPath` | string | Absolute Nix store path of the VM's effective guest system closure. For a running VM with `status = "pending-restart"`, this is the booted closure; otherwise it is the declared bundle closure. Present when the daemon or local fallback can read closure metadata. | Additive stable wire contract. |
 
 ## Ordering and null handling
 

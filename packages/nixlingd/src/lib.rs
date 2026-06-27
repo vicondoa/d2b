@@ -15737,9 +15737,9 @@ fn public_request_resolver_load(
     include_usb_status: bool,
     include_closure_metadata: bool,
 ) -> PublicResolverLoad {
-    if qemu_media_declared || include_closure_metadata {
+    if qemu_media_declared {
         PublicResolverLoad::Required
-    } else if include_usb_status {
+    } else if include_usb_status || include_closure_metadata {
         PublicResolverLoad::Optional
     } else {
         PublicResolverLoad::NotNeeded
@@ -15831,11 +15831,16 @@ fn build_public_list(
             .map(|(name, value)| {
                 let process_vm = processes.vms.iter().find(|entry| entry.vm == *name);
                 let host = host.as_ref();
-                let guest_closure_out_path = closure_resolver
+                let declared_guest_closure_out_path = closure_resolver
                     .and_then(|resolver| resolver.find_guest_closure_out_path(name))
                     .map(str::to_owned);
                 scope.spawn(move || {
                     let lifecycle = public_vm_lifecycle(state, name, value, process_vm);
+                    let guest_closure_out_path = public_guest_closure_out_path(
+                        value,
+                        &lifecycle,
+                        declared_guest_closure_out_path,
+                    );
                     let runtime_kind = public_runtime_kind(value);
                     let services = public_service_states(state, name, value, process_vm);
                     let service_capabilities = public_service_capabilities(&services);
@@ -16122,6 +16127,25 @@ fn public_pending_restart(manifest_entry: &Value) -> bool {
     let current = fs::read_link(state_dir.join("current")).ok();
     let booted = fs::read_link(state_dir.join("booted")).ok();
     matches!((current, booted), (Some(current), Some(booted)) if current != booted)
+}
+
+fn public_guest_closure_out_path(
+    manifest_entry: &Value,
+    lifecycle: &Value,
+    declared: Option<String>,
+) -> Option<String> {
+    let pending_restart = lifecycle
+        .get("pendingRestart")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if pending_restart
+        && let Some(state_dir) = manifest_entry.get("stateDir").and_then(Value::as_str)
+        && let Ok(booted) = fs::read_link(Path::new(state_dir).join("booted"))
+        && booted.is_absolute()
+    {
+        return Some(booted.to_string_lossy().into_owned());
+    }
+    declared
 }
 
 fn public_runtime_summary(lifecycle: &Value, manifest_entry: &Value) -> Value {
@@ -17528,8 +17552,8 @@ mod public_status_tests {
         );
         assert_eq!(
             public_request_resolver_load(false, false, true),
-            PublicResolverLoad::Required,
-            "public VM closure metadata comes from the trusted bundle resolver"
+            PublicResolverLoad::Optional,
+            "public VM closure metadata is additive and must not make list fail when the resolver is unavailable"
         );
     }
 
@@ -18450,6 +18474,48 @@ mod public_status_tests {
                 .pointer("/status/entries/1/lifecycle/state")
                 .and_then(Value::as_str),
             Some("Running")
+        );
+    }
+
+    #[test]
+    fn dispatch_list_uses_booted_closure_when_vm_is_pending_restart() {
+        let root = tempfile::tempdir().expect("artifact root");
+        let old_toplevel = "/nix/store/old-running-vm-a-system";
+        let new_toplevel = "/nix/store/new-declared-vm-a-system";
+        let state_dir = make_generation_links(root.path(), new_toplevel, old_toplevel);
+        let artifacts = write_public_status_artifacts_with_state_dir(root.path(), Some(&state_dir));
+        let (state, _dir) = test_state_with_config(DaemonConfig {
+            artifacts,
+            ..DaemonConfig::default()
+        });
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                VM_RUNNER_ROLE_ID.to_owned(),
+                current_process_entry(),
+            )
+            .expect("register vm-a runner");
+
+        let list = dispatch_list(
+            &state,
+            public_wire::ListRequest {
+                env: Some("work".to_owned()),
+                vm: None,
+            },
+        )
+        .expect("list dispatch");
+
+        assert_eq!(
+            list.pointer("/vms/0/lifecycle/pendingRestart")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            list.pointer("/vms/0/guestClosureOutPath")
+                .and_then(Value::as_str),
+            Some(old_toplevel),
+            "running pending-restart VMs must report the booted closure for vulnerability scanning"
         );
     }
 
