@@ -183,19 +183,17 @@ in
     expected = "nixlingd";
   };
 
-  "nixlingd-startup-smoke/daemon-prestart-repairs-run-nixling-acl" =
+  "nixlingd-startup-smoke/daemon-prestart-does-not-repair-run-nixling-acl" =
     let
       prestart = daemonService.serviceConfig.ExecStartPre or [];
     in {
     expr = {
       chmod = builtins.any (cmd: lib.hasInfix "chmod" cmd && lib.hasInfix "/run/nixling" cmd) prestart;
       acl = builtins.any (cmd: lib.hasInfix "setfacl" cmd && lib.hasInfix "/run/nixling" cmd) prestart;
-      rootPrefixed = builtins.all (cmd: lib.hasPrefix "+" cmd) prestart;
     };
     expected = {
-      chmod = true;
-      acl = true;
-      rootPrefixed = true;
+      chmod = false;
+      acl = false;
     };
   };
 

@@ -388,7 +388,7 @@ nixlingd-startup-smoke/daemon-does-not-skip-kernel-module-check
 nixlingd-startup-smoke/daemon-execstop-hook
 nixlingd-startup-smoke/daemon-killmode-process
 nixlingd-startup-smoke/daemon-notify-access-main
-nixlingd-startup-smoke/daemon-prestart-repairs-run-nixling-acl
+nixlingd-startup-smoke/daemon-prestart-does-not-repair-run-nixling-acl
 nixlingd-startup-smoke/daemon-restart-if-changed
 nixlingd-startup-smoke/daemon-restrict-address-families
 nixlingd-startup-smoke/daemon-timeout-start
