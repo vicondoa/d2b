@@ -4,6 +4,6 @@
   "exit_code": 1,
   "kind": "host-destroy-apply-error",
   "observed_state": "At least one VM is still running (cloud-hypervisor process detected).",
-  "remediation": "Stop the listed VMs with `nixling down <vm>` then retry `host destroy --apply`.",
+  "remediation": "Stop the listed VMs with `d2b down <vm>` then retry `host destroy --apply`.",
   "what_was_checked": "Whether all VMs in the bundle are stopped before `host destroy --apply`."
 }

@@ -2139,10 +2139,10 @@
       "pattern": "^[a-z][a-z0-9-]*$"
     },
     "NodeKind": {
-      "description": "What kind of node this is, and therefore what nixling can own.",
+      "description": "What kind of node this is, and therefore what d2b can own.",
       "oneOf": [
         {
-          "description": "A full nixling host (KVM, broker, vsock, device control).",
+          "description": "A full d2b host (KVM, broker, vsock, device control).",
           "type": "string",
           "enum": [
             "full-host"

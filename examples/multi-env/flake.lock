@@ -3,7 +3,7 @@
     "home-manager": {
       "inputs": {
         "nixpkgs": [
-          "nixling",
+          "d2b",
           "nixpkgs"
         ]
       },
@@ -24,7 +24,7 @@
     "microvm": {
       "inputs": {
         "nixpkgs": [
-          "nixling",
+          "d2b",
           "nixpkgs"
         ],
         "spectrum": "spectrum"
@@ -43,7 +43,7 @@
         "type": "github"
       }
     },
-    "nixling": {
+    "d2b": {
       "inputs": {
         "home-manager": "home-manager",
         "microvm": "microvm",
@@ -77,7 +77,7 @@
     },
     "root": {
       "inputs": {
-        "nixling": "nixling"
+        "d2b": "d2b"
       }
     },
     "spectrum": {

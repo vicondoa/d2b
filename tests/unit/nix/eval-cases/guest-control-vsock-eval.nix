@@ -6,30 +6,30 @@
 
 let
   inherit (pkgs) lib;
-  nl = import ../../../../nixos-modules/lib.nix { inherit lib; };
+  d2bLib = import ../../../../nixos-modules/lib.nix { inherit lib; };
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
 
   scenarioModule =
     if scenario == "user-vsock-cid" then
-      { ... }: { nixling.vms.alpha-vm.config.microvm.vsock.cid = 42; }
+      { ... }: { d2b.vms.alpha-vm.config.microvm.vsock.cid = 42; }
     else if scenario == "user-vsock-socket" then
-      { ... }: { nixling.vms.alpha-vm.config.microvm.vsock.socket = "/tmp/user.sock"; }
+      { ... }: { d2b.vms.alpha-vm.config.microvm.vsock.socket = "/tmp/user.sock"; }
     else if scenario == "user-vsock-extra-split" then
       { ... }: {
-        nixling.vms.alpha-vm.config.microvm.cloud-hypervisor.extraArgs = [
+        d2b.vms.alpha-vm.config.microvm.cloud-hypervisor.extraArgs = [
           "--vsock"
           "socket=/tmp/user.sock"
         ];
       }
     else if scenario == "user-vsock-extra-equals" then
       { ... }: {
-        nixling.vms.alpha-vm.config.microvm.cloud-hypervisor.extraArgs = [
+        d2b.vms.alpha-vm.config.microvm.cloud-hypervisor.extraArgs = [
           "--vsock=cid=42,socket=/tmp/user.sock"
         ];
       }
     else if scenario == "long-socket" then
       { lib, ... }: {
-        nixling.vms."aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" = {
+        d2b.vms."aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" = {
           enable = true;
           env = "alpha";
           index = 12;
@@ -66,25 +66,25 @@ let
           uid = 1000;
         };
 
-        nixling.site = {
-          stateDir = lib.mkForce "/var/lib/nixling";
+        d2b.site = {
+          stateDir = lib.mkForce "/var/lib/d2b";
           waylandUser = "alice";
           launcherUsers = [ "alice" ];
           yubikey.enable = false;
         };
 
-        nixling.observability.enable = true;
+        d2b.observability.enable = true;
 
-        nixling.envs.alpha = {
+        d2b.envs.alpha = {
           lanSubnet = "10.20.0.0/24";
           uplinkSubnet = "192.0.2.0/30";
         };
-        nixling.envs.beta = {
+        d2b.envs.beta = {
           lanSubnet = "10.21.0.0/24";
           uplinkSubnet = "198.51.100.0/30";
         };
 
-        nixling.vms.alpha-vm = {
+        d2b.vms.alpha-vm = {
           enable = true;
           env = "alpha";
           index = 10;
@@ -99,7 +99,7 @@ let
             };
           };
         };
-        nixling.vms.alpha-high = {
+        d2b.vms.alpha-high = {
           enable = true;
           env = "alpha";
           index = 110;
@@ -112,7 +112,7 @@ let
             };
           };
         };
-        nixling.vms.beta-vm = {
+        d2b.vms.beta-vm = {
           enable = true;
           env = "beta";
           index = 10;
@@ -125,14 +125,14 @@ let
             };
           };
         };
-        nixling.vms.legacy-vm = {
+        d2b.vms.legacy-vm = {
           enable = true;
           ssh.user = null;
           config = {
             networking.hostName = lib.mkDefault "legacy-vm";
           };
         };
-        nixling.vms.disabled-vm = {
+        d2b.vms.disabled-vm = {
           enable = false;
           env = "alpha";
           index = 12;
@@ -143,8 +143,8 @@ let
     ];
   };
 
-  manifest = nixos.config.nixling.manifest;
-  processRows = nixos.config.nixling._bundle.processesJson.data.vms;
+  manifest = nixos.config.d2b.manifest;
+  processRows = nixos.config.d2b._bundle.processesJson.data.vms;
   tmpfilesRules = nixos.config.systemd.tmpfiles.rules;
   processVm = name: lib.findFirst (vm: vm.vm == name) null processRows;
   processNode = name: nodeId:
@@ -163,9 +163,9 @@ let
   expectedVsockArg = name:
     "cid=${toString manifest.${name}.observability.vsockCid},socket=${manifest.${name}.observability.vsockHostSocket}";
   assertManifestVsock = name:
-    assert nixos.config.nixling._computed.${name}.config.microvm.vsock.cid
+    assert nixos.config.d2b._computed.${name}.config.microvm.vsock.cid
       == manifest.${name}.observability.vsockCid;
-    assert nixos.config.nixling._computed.${name}.config.microvm.vsock.socket
+    assert nixos.config.d2b._computed.${name}.config.microvm.vsock.socket
       == manifest.${name}.observability.vsockHostSocket;
     true;
   assertChVsock = name:
@@ -173,11 +173,11 @@ let
     assert vsockValues (chArgv name) == [ (expectedVsockArg name) ];
     true;
   assertStateDirTmpfile = name:
-    assert builtins.elem "d /var/lib/nixling/vms/${name} 3770 nixlingd users -" tmpfilesRules;
-    assert builtins.elem "z /var/lib/nixling/vms/${name} 3770 nixlingd users -" tmpfilesRules;
+    assert builtins.elem "d /var/lib/d2b/vms/${name} 3770 d2bd users -" tmpfilesRules;
+    assert builtins.elem "z /var/lib/d2b/vms/${name} 3770 d2bd users -" tmpfilesRules;
     true;
   alphaReadiness = processNode "alpha-vm" "guest-control-health";
-  legacyExpectedCid = nl.guestControlVsockCid {
+  legacyExpectedCid = d2bLib.guestControlVsockCid {
     name = "legacy-vm";
     envIndex = null;
     index = null;
@@ -239,4 +239,4 @@ if scenario == "base" then
 else
   builtins.seq
     (builtins.unsafeDiscardStringContext nixos.config.system.build.toplevel.drvPath)
-    (builtins.unsafeDiscardStringContext nixos.config.nixling._bundle.processesJson.path)
+    (builtins.unsafeDiscardStringContext nixos.config.d2b._bundle.processesJson.path)

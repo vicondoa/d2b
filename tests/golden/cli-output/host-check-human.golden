@@ -4,7 +4,7 @@ summary: pass=53 warn=0 fail=0
 exit-code: 0
 
 PASS
-- kernel-version: kernel 6.8.12-nixling satisfies the >= 6.6 requirement
+- kernel-version: kernel 6.8.12-d2b satisfies the >= 6.6 requirement
   hint: Keep a 6.6+ kernel available for W2 daemon experiments.
 - cgroup-v2: /sys/fs/cgroup/cgroup.controllers is present
   hint: Keep the unified cgroup-v2 hierarchy enabled.
@@ -52,60 +52,60 @@ PASS
   hint: No W2 action required.
 - kernel-module:vhost_vsock: kernel module `vhost_vsock` remains deferred to a later wave
   hint: No W2 action required.
-- nftables-table: `nft list ruleset --json` shows an `inet nixling` table
+- nftables-table: `nft list ruleset --json` shows an `inet d2b` table
   hint: No action required.
 - firewall-coexistence: firewalld and ufw are both inactive
   hint: No action required.
 - ipv6-sysctl:work:br-work-lan.disable_ipv6: IPv6 sysctl `br-work-lan.disable_ipv6` matches the declared value `1`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:br-work-lan.accept_ra: IPv6 sysctl `br-work-lan.accept_ra` matches the declared value `0`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:br-work-lan.autoconf: IPv6 sysctl `br-work-lan.autoconf` matches the declared value `0`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:br-work-lan.addr_gen_mode: IPv6 sysctl `br-work-lan.addr_gen_mode` matches the declared value `1`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:br-work-lan.arp_ignore: IPv6 sysctl `br-work-lan.arp_ignore` matches the declared value `1`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:br-work-up.disable_ipv6: IPv6 sysctl `br-work-up.disable_ipv6` matches the declared value `1`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:br-work-up.accept_ra: IPv6 sysctl `br-work-up.accept_ra` matches the declared value `0`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:br-work-up.autoconf: IPv6 sysctl `br-work-up.autoconf` matches the declared value `0`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:br-work-up.addr_gen_mode: IPv6 sysctl `br-work-up.addr_gen_mode` matches the declared value `1`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:br-work-up.arp_ignore: IPv6 sysctl `br-work-up.arp_ignore` matches the declared value `1`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:work-l1.disable_ipv6: IPv6 sysctl `work-l1.disable_ipv6` matches the declared value `1`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:work-l1.accept_ra: IPv6 sysctl `work-l1.accept_ra` matches the declared value `0`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:work-l1.autoconf: IPv6 sysctl `work-l1.autoconf` matches the declared value `0`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:work-l1.addr_gen_mode: IPv6 sysctl `work-l1.addr_gen_mode` matches the declared value `1`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:work-l1.arp_ignore: IPv6 sysctl `work-l1.arp_ignore` matches the declared value `1`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:work-u2.disable_ipv6: IPv6 sysctl `work-u2.disable_ipv6` matches the declared value `1`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:work-u2.accept_ra: IPv6 sysctl `work-u2.accept_ra` matches the declared value `0`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:work-u2.autoconf: IPv6 sysctl `work-u2.autoconf` matches the declared value `0`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:work-u2.addr_gen_mode: IPv6 sysctl `work-u2.addr_gen_mode` matches the declared value `1`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:work-u2.arp_ignore: IPv6 sysctl `work-u2.arp_ignore` matches the declared value `1`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:work-l10.disable_ipv6: IPv6 sysctl `work-l10.disable_ipv6` matches the declared value `1`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:work-l10.accept_ra: IPv6 sysctl `work-l10.accept_ra` matches the declared value `0`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:work-l10.autoconf: IPv6 sysctl `work-l10.autoconf` matches the declared value `0`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:work-l10.addr_gen_mode: IPv6 sysctl `work-l10.addr_gen_mode` matches the declared value `1`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - ipv6-sysctl:work:work-l10.arp_ignore: IPv6 sysctl `work-l10.arp_ignore` matches the declared value `1`
-  hint: Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.
+  hint: Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.
 - [corp-vm] runner-parity: runner parity matches for `corp-vm`
   hint: Rebuild the VM closure or correct the declared runner path before relying on daemon-experimental mode.
 - [sys-work-net] runner-parity: runner parity matches for `sys-work-net`

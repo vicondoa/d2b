@@ -6,7 +6,7 @@
 { pkgs, self }:
 
 pkgs.testers.runNixOSTest {
-  name = "nixling-bridge-isolation";
+  name = "d2b-bridge-isolation";
 
   nodes.machine = { pkgs, ... }: {
     environment.systemPackages = [

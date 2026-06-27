@@ -19,7 +19,7 @@ preparation immediately before starting a VM:
 
 Together these are the **only** per-VM host-prep work the daemon
 performs before invoking the per-VM process DAG
-(`nixlingd::supervisor::dag`). Everything else (swtpm flush,
+(`d2bd::supervisor::dag`). Everything else (swtpm flush,
 virtiofsd spawn, cloud-hypervisor spawn, …) belongs to the process
 DAG.
 
@@ -73,7 +73,7 @@ ssh-host-key-preflight   ownership-matrix-check   apply-nm-unmanaged
 ```
 
 The DAG is statically derived from each VM's properties in the
-trusted bundle by `nixling_host::host_prep_dag::build_host_prep_dag`.
+trusted bundle by `d2b_host::host_prep_dag::build_host_prep_dag`.
 There is no operator-tunable knob — the step set is a deterministic
 function of the bundle.
 
@@ -84,9 +84,9 @@ never names raw paths/uids/argv on the wire; every step carries an
 opaque `BundleStepRef` that the broker resolves against its own
 copy of the bundle.
 
-| Step                          | Broker op (`nixling_contracts::broker_wire::BrokerRequest::…`) | Implementation status                                                                  |
+| Step                          | Broker op (`d2b_contracts::broker_wire::BrokerRequest::…`) | Implementation status                                                                  |
 | ----------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `ApplyNmUnmanaged`            | `ApplyNmUnmanaged`                                       | Live; runs BEFORE tap creation so NetworkManager does not race the broker's `TUNSETIFF` + `dev set master`, and replaces the `00-nixling-unmanaged.conf` materializer leaf of `microvm-setup@<vm>.service`. |
+| `ApplyNmUnmanaged`            | `ApplyNmUnmanaged`                                       | Live; runs BEFORE tap creation so NetworkManager does not race the broker's `TUNSETIFF` + `dev set master`, and replaces the `00-d2b-unmanaged.conf` materializer leaf of `microvm-setup@<vm>.service`. |
 | `BringUpTapInterface`         | `CreateTapFd` (or `CreatePersistentTap`)                 | Live; the per-VM start path resolves the tap intent row and creates or reuses the tap as needed. |
 | `ApplySysctl`                 | `ApplySysctl`                                            | Live; runs after tap creation so per-tap `/proc/sys/net/ipv4/conf/<ifname>/` entries exist, and replaces the sysctl-apply leaf of `microvm-setup@<vm>.service`. |
 | `SetBridgePortFlags`          | `SetBridgePortFlags`                                     | Live; runs AFTER `ApplySysctl` so `learning off`, `flood off`, and `mcast_to_unicast off` reflect the final per-tap config, replacing the `bridge link set` leaf of `microvm-tap-interfaces@<vm>.service`. |
@@ -94,8 +94,8 @@ copy of the bundle.
 | `SeedDnsmasqLease`            | `SeedDnsmasqLease`                                       | Typed scaffold; the live handler remains deferred. |
 | `BindMountFromHardlinkFarm`   | `BindMountFromHardlinkFarm`                              | Typed scaffold; the live handler remains deferred. |
 | `ApplyNftablesRules`          | `ApplyNftables`                                          | Live; resolves via `BundleResolver::find_nft_intent`. |
-| `OwnershipMatrixCheck`        | `OwnershipMatrixCheck`                                   | Live; typed daemon-side enforcer in `nixlingd::ownership_preflight`. |
-| `SshHostKeyPreflight`         | `SshHostKeyPreflight`                                    | Live; typed daemon-side check in `nixlingd::ssh_host_key_preflight`. |
+| `OwnershipMatrixCheck`        | `OwnershipMatrixCheck`                                   | Live; typed daemon-side enforcer in `d2bd::ownership_preflight`. |
+| `SshHostKeyPreflight`         | `SshHostKeyPreflight`                                    | Live; typed daemon-side check in `d2bd::ssh_host_key_preflight`. |
 
 **Canonical ordering**:
 
@@ -143,7 +143,7 @@ operator sees the typed envelope
 ```
 
 derived from `HostPrepStepFailed { step_id, op_kind, broker_error }`
-in `nixling_host::host_prep_dag`.
+in `d2b_host::host_prep_dag`.
 
 A failed host-prep DAG does **not** poison the daemon: subsequent
 `vm start` attempts re-resolve the DAG from scratch and re-dispatch
@@ -154,7 +154,7 @@ the failed step. There is no daemon-side caching of step success.
 Today the daemon **logs** the planned host-prep DAG on every VM
 start (so the gate set `tests/host-prep-dag-eval.sh` and operators
 can audit the planned step set) but only dispatches the broker ops
-when `NIXLING_HOST_PREP_DAG_EXECUTE=1` is set in the daemon's
+when `D2B_HOST_PREP_DAG_EXECUTE=1` is set in the daemon's
 environment. This gate remains in place while the deferred broker
 handlers listed above still return `Unimplemented`.
 
@@ -163,8 +163,8 @@ handlers listed above still return `Unimplemented`.
 - **Operating manual**: `AGENTS.md` §"Critical subsystems — handle
   with care" row "Control plane" — this DAG lives in the
   control-plane scope and the operator-facing failure envelope is
-  emitted by `nixlingd::dispatch_broker_vm_start`.
-- **Module docs**: `packages/nixling-host/src/host_prep_dag.rs` —
+  emitted by `d2bd::dispatch_broker_vm_start`.
+- **Module docs**: `packages/d2b-host/src/host_prep_dag.rs` —
   authoritative step kind definitions and topo-sort algorithm.
 - [`per-vm-state-ownership.md`](./per-vm-state-ownership.md) — the
   `OwnershipMatrixCheck` preflight contract.

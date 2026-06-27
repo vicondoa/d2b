@@ -8,7 +8,7 @@
 
 ## Context
 
-Nixling's current bundled observability path is a composed
+D2b's current bundled observability path is a composed
 Grafana/Prometheus/Loki/Tempo/Alloy stack in an auto-declared
 observability VM. Host and workload telemetry flows through Alloy
 pipelines and then fans out into Prometheus remote-write, Loki log
@@ -30,13 +30,13 @@ Kubernetes, Helm, or compose.
 
 ## Decision
 
-Move nixling's bundled observability backend to native SigNoz services in
+Move d2b's bundled observability backend to native SigNoz services in
 the auto-declared observability VM.
 
 ### Stack shape
 
 The observability VM is renamed from `sys-obs-stack` to `sys-obs`.
-Nixling will run native systemd services inside that VM:
+D2b will run native systemd services inside that VM:
 
 - ClickHouse for telemetry storage;
 - a ClickHouse coordinator for the single-node SigNoz schema;
@@ -50,7 +50,7 @@ Kubernetes, Helm, or compose into the bundled observability path.
 
 ### Transport and identity
 
-Nixling keeps ownership of the VM telemetry transport:
+D2b keeps ownership of the VM telemetry transport:
 
 - host and workload edge collectors export OTLP to broker-supervised
   relay/bridge processes;
@@ -126,12 +126,12 @@ This is a breaking manifest-shape change and therefore requires a
 
 Keeping the current backend would avoid the UI and data-continuity
 change, but it preserves multiple translation layers and does not align
-with nixling's OTel-native control-plane telemetry.
+with d2b's OTel-native control-plane telemetry.
 
 ### Use the upstream container deployment
 
 SigNoz documents Docker, Kubernetes, and other container-based install
-paths. Nixling's bundled stack instead uses native NixOS services so the
+paths. D2b's bundled stack instead uses native NixOS services so the
 microVM remains declarative and no container runtime becomes part of the
 framework substrate.
 

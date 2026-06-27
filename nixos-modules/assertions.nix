@@ -1,7 +1,7 @@
-# Eval-time validation of the nixling option schema.
+# Eval-time validation of the d2b option schema.
 #
 # All assertions here fire BEFORE any build kicks off, so a typo in
-# `nixling.vms.<name>` or an unsupported env name turns into a clear
+# `d2b.vms.<name>` or an unsupported env name turns into a clear
 # eval error instead of a confusing systemd-escape failure or a
 # 16-char-truncated `ip link` name at runtime.
 #
@@ -13,12 +13,12 @@
 { config, lib, options, pkgs, ... }:
 
 let
-  cfg = config.nixling;
+  cfg = config.d2b;
   obsCfg = cfg.observability;
   obsVsockCid = 1000;
   u32Max = 4294967295;
-  nl = import ./lib.nix { inherit lib; };
-  inherit (nl) parseCidr subnetIp volumeSerialIssues;
+  d2bLib = import ./lib.nix { inherit lib; };
+  inherit (d2bLib) parseCidr subnetIp volumeSerialIssues;
 
   pow2 = n:
     lib.foldl' (acc: _: acc * 2) 1 (lib.genList (i: i) n);
@@ -61,7 +61,7 @@ let
         then builtins.readFile entry
         else if builtins.isString entry
         then entry
-        else throw "nixling: authorized-key entry must be a path or string";
+        else throw "d2b: authorized-key entry must be a path or string";
       lines = lib.splitString "\n" raw;
       # Strip pure-comment and pure-whitespace lines.
       firstReal = lib.findFirst
@@ -174,8 +174,8 @@ let
               && !(lib.hasPrefix "/nix/store/" value)
               && !(secretShaped value);
             message = ''
-              nixling.gateways.${name}.${field} must be an absolute runtime
-              path under nixling.site.stateDir, must not contain `..` path
+              d2b.gateways.${name}.${field} must be an absolute runtime
+              path under d2b.site.stateDir, must not contain `..` path
               components or a trailing slash, and must not contain inline
               secret-shaped material. Put plaintext credentials in the gateway
               guest's sealed runtime state, not in the host Nix configuration.
@@ -191,8 +191,8 @@ let
           (field: {
             assertion = absoluteRuntimePathUnder gw.stateDir gw.${field};
             message = ''
-              nixling.gateways.${name}.${field} must live under
-              nixling.gateways.${name}.stateDir so the gateway credential
+              d2b.gateways.${name}.${field} must live under
+              d2b.gateways.${name}.stateDir so the gateway credential
               store stays inside the gateway runtime-state boundary.
             '';
           })
@@ -204,7 +204,7 @@ let
       (name: gw: {
         assertion = !gw.allowHostRelayCredentials;
         message = ''
-          nixling.gateways.${name}.allowHostRelayCredentials has been retired.
+          d2b.gateways.${name}.allowHostRelayCredentials has been retired.
           Host-side gateway credential reads and Relay Send bearer minting are
           rejected; enroll credentials inside the gateway guest instead.
         '';
@@ -218,8 +218,8 @@ let
           gw.stateDir != toString cfg.store.stateDir
           && !(underStateDir gw.stateDir && lib.hasPrefix "${toString cfg.store.stateDir}/" gw.stateDir);
         message = ''
-          nixling.gateways.${name}.stateDir must not live under
-          nixling.store.stateDir. Gateway credential state is distinct from
+          d2b.gateways.${name}.stateDir must not live under
+          d2b.store.stateDir. Gateway credential state is distinct from
           per-VM runtime state and has different host/guest ownership.
         '';
       })
@@ -248,7 +248,7 @@ let
           (i: value: {
             assertion = !(secretShaped value);
             message = ''
-              nixling.gateways.${name} coordinate #${toString i} looks like
+              d2b.gateways.${name} coordinate #${toString i} looks like
               inline credential material. Gateway options may carry non-secret
               endpoint names only.
             '';
@@ -260,7 +260,7 @@ let
     {
       assertion = !(builtins.elem "local" enabledGatewayRealms);
       message = ''
-        nixling.gateways may not declare realm `local`: the local realm
+        d2b.gateways may not declare realm `local`: the local realm
         entrypoint is always host-resident so the local fast path remains
         unambiguous.
       '';
@@ -268,7 +268,7 @@ let
     {
       assertion = duplicateGatewayRealms == [ ];
       message = ''
-        nixling.gateways must declare at most one gateway-backed realm
+        d2b.gateways must declare at most one gateway-backed realm
         entrypoint per realm path. Duplicate realm path(s): ${
           lib.concatStringsSep ", " duplicateGatewayRealms
         }.
@@ -277,7 +277,7 @@ let
     {
       assertion = duplicateGatewayVmNames == [ ];
       message = ''
-        nixling.gateways must declare a separate gateway guest per
+        d2b.gateways must declare a separate gateway guest per
         gateway-backed realm. Duplicate gateway VM name(s): ${
           lib.concatStringsSep ", " duplicateGatewayVmNames
         }.
@@ -286,8 +286,8 @@ let
     {
       assertion = duplicateGatewayEnvs == [ ];
       message = ''
-        nixling.gateways must not place multiple gateway-backed realms on the
-        same nixling.envs L2 segment. Shared gateway env(s): ${
+        d2b.gateways must not place multiple gateway-backed realms on the
+        same d2b.envs L2 segment. Shared gateway env(s): ${
           lib.concatStringsSep ", " duplicateGatewayEnvs
         }.
       '';
@@ -297,7 +297,7 @@ let
   gatewayDaemonAssertions = lib.optional (enabledGatewayNames != [ ]) {
     assertion = cfg.daemonExperimental.enable;
     message = ''
-      nixling.gateways requires nixling.daemonExperimental.enable = true. The
+      d2b.gateways requires d2b.daemonExperimental.enable = true. The
       gateway guest is supervised by the daemon control-plane package plumbing
       and has no legacy service or bash fallback.
     '';
@@ -314,7 +314,7 @@ let
   #     consistent; lower-case avoids the foot-gun)
   #   * leading `-` (looks like a flag)
   #   * leading digit (a numeric-prefixed VM/env name like `42web`
-  #     produces unit names such as `nixling@42web.service` and tap
+  #     produces unit names such as `d2b@42web.service` and tap
   #     names like `42web-l10` which are technically legal but trip up
   #     tooling that treats the leading digit as a numeric argument —
   #     e.g. `ip link show 42web-l10` resolves to the interface at
@@ -324,8 +324,8 @@ let
     builtins.match "^[a-z][a-z0-9-]*$" name != null;
 
   # Reserved single-name: `launcher` is taken by the polkit-launcher
-  # group (`nixling`) singleton. A VM named `launcher` would
-  # produce `nixling-gpu` etc. users that collide with the
+  # group (`d2b`) singleton. A VM named `launcher` would
+  # produce `d2b-gpu` etc. users that collide with the
   # group's namespace.
   reservedVmName = name: name == "launcher";
 
@@ -351,10 +351,10 @@ let
 
   obsVmDefinitions = lib.filter
     (d: builtins.isAttrs d.value && builtins.hasAttr obsCfg.vmName d.value)
-    options.nixling.vms.definitionsWithLocations;
+    options.d2b.vms.definitionsWithLocations;
 
   # Pre-v0.2.0 the framework rejected ANY consumer definition under
-  # `nixling.vms.<obsCfg.vmName>` to prevent "user-declared VM collides
+  # `d2b.vms.<obsCfg.vmName>` to prevent "user-declared VM collides
   # with auto-declared one" mistakes. In practice that blocked
   # perfectly safe extensions like `ssh.user = "root"` on the obs
   # VM, because the framework's `observability-vm.nix` block already
@@ -370,7 +370,7 @@ let
   vmDefinitionsFor = name:
     lib.filter
       (d: builtins.isAttrs d.value && builtins.hasAttr name d.value)
-      options.nixling.vms.definitionsWithLocations;
+      options.d2b.vms.definitionsWithLocations;
 
   vmSubOptionDefined = name: optionName:
     lib.any
@@ -382,9 +382,9 @@ let
   vmVsockCidPairs = lib.mapAttrsToList
     (name: _vm: {
       inherit name;
-      cid = config.nixling.manifest.${name}.observability.vsockCid;
+      cid = config.d2b.manifest.${name}.observability.vsockCid;
     })
-    (nl.normalNixosVms cfg.vms);
+    (d2bLib.normalNixosVms cfg.vms);
 
   vmVsockCidGroups = lib.groupBy
     (pair: toString pair.cid)
@@ -422,24 +422,24 @@ let
   vmVsockSocketPairs = lib.mapAttrsToList
     (name: _vm: {
       inherit name;
-      socket = config.nixling.manifest.${name}.observability.vsockHostSocket;
+      socket = config.d2b.manifest.${name}.observability.vsockHostSocket;
     })
-    (nl.normalNixosVms cfg.vms);
+    (d2bLib.normalNixosVms cfg.vms);
 
   socketPathTooLong = path: builtins.stringLength path > 107;
 
   tooLongVmVsockSockets = lib.filter
     (pair:
       socketPathTooLong pair.socket
-      || socketPathTooLong "${pair.socket}_${toString nl.observabilityOtlpVsockPort}"
-      || socketPathTooLong "${pair.socket}_${toString nl.guestControlVsockPort}")
+      || socketPathTooLong "${pair.socket}_${toString d2bLib.observabilityOtlpVsockPort}"
+      || socketPathTooLong "${pair.socket}_${toString d2bLib.guestControlVsockPort}")
     vmVsockSocketPairs;
 
   vmAssertions = lib.mapAttrsToList
     (name: vm: [
       {
         assertion = vmNameOk name;
-        message = "nixling.vms.${name}: VM name must match the "
+        message = "d2b.vms.${name}: VM name must match the "
           + "regex ^[a-z][a-z0-9-]*$ (lowercase alnum + '-', "
           + "starting with a LETTER). This guarantees systemd-escape "
           + "round-trips identically, that tap/interface names "
@@ -449,58 +449,58 @@ let
       }
       {
         assertion = !(reservedVmName name);
-        message = "nixling.vms.${name}: 'launcher' is reserved for "
-          + "the polkit-launcher group (nixling); pick "
+        message = "d2b.vms.${name}: 'launcher' is reserved for "
+          + "the polkit-launcher group (d2b); pick "
           + "another name.";
       }
       {
         assertion = !(reservedVmPrefix name);
-        message = "nixling.vms.${name}: names starting with 'sys-' "
-          + "are reserved for nixling's auto-declared system VMs "
+        message = "d2b.vms.${name}: names starting with 'sys-' "
+          + "are reserved for d2b's auto-declared system VMs "
           + "(e.g. sys-<env>-net for each declared env, plus "
-          + "nixling.observability.vmName when observability is "
+          + "d2b.observability.vmName when observability is "
           + "enabled). Rename this VM or — if it's intentionally a "
-          + "system VM — register it via nixling.envs.<env>.netName "
+          + "system VM — register it via d2b.envs.<env>.netName "
           + "instead.";
       }
       {
         assertion = !(vm.enable && vm.observability.enable && !obsCfg.enable);
-        message = "VM ${name} has observability.enable = true but nixling.observability.enable is false. Per-VM observability requires the framework-level toggle (auto-declares the sys-obs telemetry sink).";
+        message = "VM ${name} has observability.enable = true but d2b.observability.enable is false. Per-VM observability requires the framework-level toggle (auto-declares the sys-obs telemetry sink).";
       }
       {
         assertion = !(vm.enable && vm.audit.enable && !vm.observability.enable);
-        message = "nixling.vms.${name}.audit.enable requires observability.enable on the same VM";
+        message = "d2b.vms.${name}.audit.enable requires observability.enable on the same VM";
       }
       {
         assertion = !(vm.enable && vm.graphics.videoSidecar && !vm.graphics.enable);
         message = ''
-          nixling.vms.${name}.graphics.videoSidecar requires graphics.enable = true.
+          d2b.vms.${name}.graphics.videoSidecar requires graphics.enable = true.
           Enable graphics for this VM or disable graphics.videoSidecar.
         '';
       }
       {
         assertion = !(vm.enable && vm.graphics.videoNvidiaDecode && !vm.graphics.videoSidecar);
         message = ''
-          nixling.vms.${name}.graphics.videoNvidiaDecode requires graphics.videoSidecar = true.
+          d2b.vms.${name}.graphics.videoNvidiaDecode requires graphics.videoSidecar = true.
           Enable the video sidecar or disable graphics.videoNvidiaDecode.
         '';
       }
       {
         assertion = !(vm.enable && vm.graphics.virglVideo && !vm.graphics.enable);
         message = ''
-          nixling.vms.${name}.graphics.virglVideo requires graphics.enable = true.
+          d2b.vms.${name}.graphics.virglVideo requires graphics.enable = true.
           Enable graphics for this VM or disable graphics.virglVideo.
         '';
       }
       {
         # Xwayland is intentionally unsupported during the Wayland-only
-        # migration to wl-cross-domain-proxy + nixling-wayland-filter.
+        # migration to wl-cross-domain-proxy + d2b-wayland-filter.
         # wl-cross-domain-proxy is a plain cross-domain transport and
         # carries no Xwayland helper. A standalone host-side Xwayland
         # proxy is tracked as future work.
         assertion = !(vm.enable && vm.graphics.xwayland.enable);
         message = ''
-          nixling.vms.${name}.graphics.xwayland.enable = true is not
+          d2b.vms.${name}.graphics.xwayland.enable = true is not
           supported in this release.
 
           The guest Wayland transport has been replaced with
@@ -520,40 +520,40 @@ let
         # carries a `supervisor` attribute.
         assertion = !(vm.enable && (vm ? supervisor));
         message = ''
-          nixling.vms.${name}.supervisor was removed in v1.1
+          d2b.vms.${name}.supervisor was removed in v1.1
           per ADR 0015 (daemon-only clean break). The v1.0
-          daemon-only end-state makes "nixlingd" the only valid
+          daemon-only end-state makes "d2bd" the only valid
           supervisor; v1.1 completes the migration by deleting
           the option entirely. Remove every "supervisor = ..."
           line from your consumer flake.
 
           The daemon-only path is the default and only path; see
-          docs/how-to/migrate-nixling-v1-0-to-v1-1.md.
+          docs/how-to/migrate-d2b-v1-0-to-v1-1.md.
         '';
       }
       {
-        # `nixling.vms.<name>.entra-id.*` was removed; the
+        # `d2b.vms.<name>.entra-id.*` was removed; the
         # option is a kept-but-internal stub so legacy assignments
         # land here instead of producing a cryptic
         # "option does not exist" error from the module system.
         assertion = vm.entra-id == { };
         message = ''
-          nixling.vms.${name}.entra-id.* was removed.
+          d2b.vms.${name}.entra-id.* was removed.
           Himmelblau / Microsoft Entra ID support has moved out of
-          the nixling framework into the sibling
+          the d2b framework into the sibling
           `vicondoa/entrablau.nix` flake. To migrate:
 
             inputs.entrablau.url =
               "github:vicondoa/entrablau.nix";
 
-            nixling.vms.${name}.config.imports = [
+            d2b.vms.${name}.config.imports = [
               inputs.entrablau.nixosModules.default
             ];
 
-            # Move each `nixling.vms.${name}.entra-id.<key>` setting
+            # Move each `d2b.vms.${name}.entra-id.<key>` setting
             # into the VM's guest config under the sibling module's
             # `entrablau.<key>` option tree.
-            nixling.vms.${name}.config.entrablau = {
+            d2b.vms.${name}.config.entrablau = {
               enable    = true;
               domain    = [ "contoso.com" ];
               # ...
@@ -564,7 +564,7 @@ let
         '';
       }
       {
-        # `nixling.vms.<name>.guest.exec.allowRoot` was removed:
+        # `d2b.vms.<name>.guest.exec.allowRoot` was removed:
         # guest-control exec now ALWAYS runs as the VM's workload
         # user (`ssh.user`) inside a PAM login session, never root.
         # The option is a kept-but-internal stub (options-vms.nix) so
@@ -572,7 +572,7 @@ let
         # a cryptic "option does not exist" module-system error.
         assertion = !(vm.enable && vm.guest.exec.allowRoot);
         message = ''
-          nixling.vms.${name}.guest.exec.allowRoot was removed.
+          d2b.vms.${name}.guest.exec.allowRoot was removed.
           Guest-control exec now always runs as the VM's workload
           user (`ssh.user`) inside a PAM login session — never as
           root. There is no root-exec mode. Remove
@@ -581,12 +581,12 @@ let
         '';
       }
       {
-        # `nixling.vms.<name>.guest.exec.users` was removed: there is
+        # `d2b.vms.<name>.guest.exec.users` was removed: there is
         # no per-VM exec user allowlist; exec always targets the
         # single workload user (`ssh.user`). Kept-but-internal stub.
         assertion = !(vm.enable && vm.guest.exec.users != [ ]);
         message = ''
-          nixling.vms.${name}.guest.exec.users was removed.
+          d2b.vms.${name}.guest.exec.users was removed.
           Guest-control exec now always targets the VM's single
           workload user (`ssh.user`); there is no per-VM exec user
           allowlist. Remove `guest.exec.users = [ ... ];`.
@@ -597,10 +597,10 @@ let
           let timeout = vm.lifecycle.gracefulShutdown.timeoutSeconds;
           in !(vm.enable && timeout != null && (timeout < 1 || timeout > 600));
         message = ''
-          nixling.vms.${name}.lifecycle.gracefulShutdown.timeoutSeconds must be
+          d2b.vms.${name}.lifecycle.gracefulShutdown.timeoutSeconds must be
           null or an integer between 1 and 600 seconds. The upper bound keeps
           host shutdown and reboot bounded; use the global
-          nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds default when
+          d2b.daemon.lifecycle.gracefulShutdown.timeoutSeconds default when
           this VM does not need a different wait.
         '';
       }
@@ -609,36 +609,36 @@ let
           let timeout = vm.lifecycle.liveActivation.timeoutSeconds;
           in !(vm.enable && timeout != null && (timeout < 1 || timeout > 3600));
         message = ''
-          nixling.vms.${name}.lifecycle.liveActivation.timeoutSeconds must be
+          d2b.vms.${name}.lifecycle.liveActivation.timeoutSeconds must be
           null or an integer between 1 and 3600 seconds. Use the global
-          nixling.daemon.lifecycle.liveActivation.timeoutSeconds default unless
+          d2b.daemon.lifecycle.liveActivation.timeoutSeconds default unless
           this VM legitimately waits on long in-guest activation flows.
         '';
       }
       {
         # Graphics VMs CANNOT be autostart. The
-        # `nixling@<vm>` wrapper template starts `microvm@<vm>`,
+        # `d2b@<vm>` wrapper template starts `microvm@<vm>`,
         # which is the upstream microvm.nix runner — but graphics
-        # VMs run cloud-hypervisor via the `nixling-<vm>-gpu`
+        # VMs run cloud-hypervisor via the `d2b-<vm>-gpu`
         # sidecar (which replaces the upstream runner). The sidecar
         # binds to /run/user/<wayland-uid>/wayland-0, which only
         # exists in a live user session, so it MUST be launched
-        # interactively from a Plasma terminal via `nixling up <vm>`.
+        # interactively from a Plasma terminal via `d2b up <vm>`.
         # An autostart=true graphics VM would silently boot through
         # the wrong path and never attach to the host compositor.
         assertion = !(vm.enable && vm.graphics.enable && vm.autostart);
         message = ''
-          nixling.vms.${name}: graphics.enable = true is incompatible
+          d2b.vms.${name}: graphics.enable = true is incompatible
           with autostart = true. Graphics VMs are launched by the
-          nixling CLI through nixling-${name}-gpu.service, which
+          d2b CLI through d2b-${name}-gpu.service, which
           binds to /run/user/<uid>/wayland-0 — that socket only
           exists in a live user session. The systemd boot path
           would start microvm@${name}.service (the upstream runner)
           bypassing the GPU sidecar entirely, and the VM would have
           no display.
 
-          Set `nixling.vms.${name}.autostart = false` and launch
-          the VM interactively via `nixling up ${name}` from a
+          Set `d2b.vms.${name}.autostart = false` and launch
+          the VM interactively via `d2b up ${name}` from a
           Plasma terminal (or wire it to your Plasma session's
           autostart entries).
         '';
@@ -675,7 +675,7 @@ let
           (entry:
             let
               source = entry.source;
-              sourceName = "nixling.vms.${name}.qemuMedia.${if entry.slot == "boot" then "source" else "removableSlots.${entry.slot}.source"}";
+              sourceName = "d2b.vms.${name}.qemuMedia.${if entry.slot == "boot" then "source" else "removableSlots.${entry.slot}.source"}";
               isPhysical = source.kind == "physical-usb";
               isImage = source.kind == "image-file";
             in [
@@ -683,7 +683,7 @@ let
                 assertion = (!isPhysical) || source.ref != null;
                 message = ''
                   ${sourceName}: kind = "physical-usb" requires an opaque `ref`.
-                  Discover live runtime selectors with `nixling usb probe`;
+                  Discover live runtime selectors with `d2b usb probe`;
                   do not place bus IDs or device paths in Nix config.
                 '';
               }
@@ -700,7 +700,7 @@ let
                 message = ''
                   ${sourceName}: kind = "image-file" requires an absolute
                   `path`, for example
-                  `/var/lib/nixling/images/${name}-${entry.slot}.img`.
+                  `/var/lib/d2b/images/${name}-${entry.slot}.img`.
                 '';
               }
               {
@@ -729,7 +729,7 @@ let
         {
           assertion = vm.env != null;
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" requires
+            d2b.vms.${name}: runtime.kind = "qemu-media" requires
             `env` in this foundational implementation so networking can be
             derived without evaluating a guest NixOS configuration.
           '';
@@ -737,7 +737,7 @@ let
         {
           assertion = pkgs.stdenv.hostPlatform.system == "x86_64-linux";
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" is currently
+            d2b.vms.${name}: runtime.kind = "qemu-media" is currently
             supported only on x86_64-linux because its QEMU argv uses the
             q35/virtio-vga device model.
           '';
@@ -745,16 +745,16 @@ let
         {
           assertion = vm.qemuMedia.source != null;
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" requires
+            d2b.vms.${name}: runtime.kind = "qemu-media" requires
             `qemuMedia.source` in this implementation. Declare either a
-            physical-usb opaque ref discovered with `nixling usb probe`, or a
+            physical-usb opaque ref discovered with `d2b usb probe`, or a
             direct image-file source configured in Nix.
           '';
         }
         {
           assertion = bootDriveSource != null;
           message = ''
-            nixling.vms.${name}: qemuMedia.bootDrive.slot =
+            d2b.vms.${name}: qemuMedia.bootDrive.slot =
             "${vm.qemuMedia.bootDrive.slot}" must select `qemuMedia.source` (`boot`)
             or a removable slot with a declared source.
           '';
@@ -765,16 +765,16 @@ let
             || bootDriveSource.kind != "physical-usb"
             || bootDriveSource.usbSelector != null;
           message = ''
-            nixling.vms.${name}: physical USB boot drive
+            d2b.vms.${name}: physical USB boot drive
             `${vm.qemuMedia.bootDrive.slot}` requires
-            `usbSelector.byIdName`. Use `nixling usb probe` to identify the
+            `usbSelector.byIdName`. Use `d2b usb probe` to identify the
             candidate, then configure the stable `/dev/disk/by-id` basename.
           '';
         }
         {
           assertion = !(builtins.hasAttr "boot" vm.qemuMedia.removableSlots);
           message = ''
-            nixling.vms.${name}: qemu-media removable slot name `boot` is
+            d2b.vms.${name}: qemu-media removable slot name `boot` is
             reserved for `qemuMedia.source`. Use a different
             `qemuMedia.removableSlots.<name>` such as `backup`.
           '';
@@ -782,22 +782,22 @@ let
         {
           assertion = duplicateMediaRefs == [ ];
           message = ''
-            nixling.vms.${name}: qemu-media refs must be unique per VM;
+            d2b.vms.${name}: qemu-media refs must be unique per VM;
             duplicate opaque ref(s): ${lib.concatStringsSep ", " duplicateMediaRefs}.
           '';
         }
         {
           assertion = vmSubOptionDefined name "index";
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" requires an
+            d2b.vms.${name}: runtime.kind = "qemu-media" requires an
             explicit `index` in this foundational implementation. Set
-            `nixling.vms.${name}.index` to this VM's env slot.
+            `d2b.vms.${name}.index` to this VM's env slot.
           '';
         }
         {
           assertion = !(vmSubOptionDefined name "config");
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" must not define
+            d2b.vms.${name}: runtime.kind = "qemu-media" must not define
             `config`. qemu-media VMs are external media runtimes and skip the
             per-VM NixOS evaluator.
           '';
@@ -805,8 +805,8 @@ let
         {
           assertion = vm.guestConfigFile == null;
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
-            with guestConfigFile because there is no nixling-managed guest
+            d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with guestConfigFile because there is no d2b-managed guest
             NixOS configuration to sync.
           '';
         }
@@ -822,7 +822,7 @@ let
             && vm.guest.shell.maxSessions == 8
             && vm.guest.shell.maxAttached == 1;
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
             with guest-control, guest exec, and persistent shell options.
             Disable guest.control.*, guest.exec.*, and guest.shell.* for this
             manual-only runtime.
@@ -835,36 +835,36 @@ let
             && vm.userAuthorizedKeys == [ ]
             && !vm.sudo;
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
-            with nixling-managed SSH, sudo, and per-VM authorized-key options.
+            d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with d2b-managed SSH, sudo, and per-VM authorized-key options.
           '';
         }
         {
           assertion = !(vmSubOptionDefined name "homeManager");
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
             with home-manager guest configuration.
           '';
         }
         {
           assertion = !vm.audit.enable;
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
             with guest audit forwarding.
           '';
         }
         {
           assertion = !vm.observability.enable;
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
             with guest observability.
           '';
         }
         {
           assertion = !vm.usbip.yubikey && vm.usbip.busids == [ ];
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
-            with nixling USBIP/YubiKey passthrough declarations.
+            d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with d2b USBIP/YubiKey passthrough declarations.
           '';
         }
         {
@@ -885,15 +885,15 @@ let
             && vm.graphics.waylandFilter.dmabufAllow == [ ]
             && vm.graphics.waylandFilter.dmabufDeny == [ ];
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
-            with nixling graphics options.
+            d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with d2b graphics options.
           '';
         }
         {
           assertion = !vm.tpm.enable;
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
-            with nixling-managed TPM state.
+            d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with d2b-managed TPM state.
           '';
         }
         {
@@ -903,14 +903,14 @@ let
             && !vm.audio.allowSpeakerByDefault
             && vm.audio.users == [ ];
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" is incompatible
-            with nixling audio sidecar options.
+            d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with d2b audio sidecar options.
           '';
         }
         {
           assertion = !vm.autostart;
           message = ''
-            nixling.vms.${name}: runtime.kind = "qemu-media" is manual-only in
+            d2b.vms.${name}: runtime.kind = "qemu-media" is manual-only in
             this foundational implementation; `autostart = true` is not
             supported until unattended QMP continuation is available.
           '';
@@ -927,7 +927,7 @@ let
       in [
         {
           assertion = envNameOk name;
-          message = "nixling.envs.${name}: env name must match the "
+          message = "d2b.envs.${name}: env name must match the "
             + "regex ^[a-z][a-z0-9-]*$ (lowercase alnum + '-', "
             + "starting with a LETTER). This guarantees systemd-escape "
             + "and `br-<env>-lan` / `<env>-l<index>` interface names "
@@ -944,16 +944,16 @@ let
     map
       (collision: {
         assertion = false;
-        message = "Vsock CID collision: VMs ${collision.vm1}, ${collision.vm2} both compute to CID ${toString collision.cid}. Adjust nixling.vms.<vm>.index in the affected env or rename one VM.";
+        message = "Vsock CID collision: VMs ${collision.vm1}, ${collision.vm2} both compute to CID ${toString collision.cid}. Adjust d2b.vms.<vm>.index in the affected env or rename one VM.";
       })
       vmVsockCidCollisions
     ++ map
       (pair: {
         assertion = false;
         message = ''
-          nixling.vms.${pair.name}: derived Cloud Hypervisor vsock CID
+          d2b.vms.${pair.name}: derived Cloud Hypervisor vsock CID
           ${toString pair.cid} is reserved by Linux/AF_VSOCK. Rename the VM or
-          adjust env/index so nixling derives a guest CID outside 0, 1, 2, and
+          adjust env/index so d2b derives a guest CID outside 0, 1, 2, and
           ${toString u32Max}.
         '';
       })
@@ -961,22 +961,22 @@ let
     ++ lib.optional (obsCfg.enable && reservedObsCidUsers != [ ]) {
       assertion = false;
       message = ''
-        Vsock CID 1000 is reserved for nixling.observability.vmName (${obsCfg.vmName}), but VMs ${lib.concatStringsSep ", " reservedObsCidUsers} also compute to CID 1000. Adjust nixling.vms.<vm>.index in the affected env or rename one VM.
+        Vsock CID 1000 is reserved for d2b.observability.vmName (${obsCfg.vmName}), but VMs ${lib.concatStringsSep ", " reservedObsCidUsers} also compute to CID 1000. Adjust d2b.vms.<vm>.index in the affected env or rename one VM.
       '';
     }
     ++ map
       (pair: {
         assertion = false;
         message = ''
-          nixling.vms.${pair.name}: Cloud Hypervisor vsock socket path is too
+          d2b.vms.${pair.name}: Cloud Hypervisor vsock socket path is too
           long for Linux AF_UNIX after port suffixes are considered:
-          ${pair.socket}. Shorten nixling.site.stateDir or the VM name.
+          ${pair.socket}. Shorten d2b.site.stateDir or the VM name.
         '';
       })
       tooLongVmVsockSockets;
 
   # Site-level assertions (host-specific bias was extracted
-  # into `nixling.site.*`; these checks make sure the consumer actually
+  # into `d2b.site.*`; these checks make sure the consumer actually
   # set the options the framework needs for the features it enables).
   needsWaylandUser =
     lib.any
@@ -986,18 +986,18 @@ let
   siteAssertions =
     [
       {
-        assertion = toString cfg.site.stateDir == "/var/lib/nixling";
+        assertion = toString cfg.site.stateDir == "/var/lib/d2b";
         message = ''
-          nixling.site.stateDir is reserved but not fully threaded yet.
-          Leave it at /var/lib/nixling for now; overriding it would
+          d2b.site.stateDir is reserved but not fully threaded yet.
+          Leave it at /var/lib/d2b for now; overriding it would
           split host-side state across inconsistent roots.
         '';
       }
       {
-        assertion = toString cfg.store.stateDir == "/var/lib/nixling/vms";
+        assertion = toString cfg.store.stateDir == "/var/lib/d2b/vms";
         message = ''
-          nixling.store.stateDir is reserved but not fully threaded yet.
-          Leave it at /var/lib/nixling/vms for now; overriding it would
+          d2b.store.stateDir is reserved but not fully threaded yet.
+          Leave it at /var/lib/d2b/vms for now; overriding it would
           desynchronise the manifest, CLI, and per-VM runtime state.
         '';
       }
@@ -1009,17 +1009,17 @@ let
     lib.optional needsWaylandUser {
       assertion = cfg.site.waylandUser != null;
       message = ''
-        nixling: at least one declared VM has graphics.enable = true,
+        d2b: at least one declared VM has graphics.enable = true,
         audio.enable = true, or runtime.kind = "qemu-media", but
-        `nixling.site.waylandUser` is unset (null). The host-side
+        `d2b.site.waylandUser` is unset (null). The host-side
         display/audio processes need a Wayland user so they can find the
         host compositor's pipewire-0 / wayland-0 sockets under
         /run/user/<uid>/.
 
         Set the option to the Plasma / sway / Hyprland user that
-        invokes `nixling up <vm>`:
+        invokes `d2b up <vm>`:
 
-          nixling.site.waylandUser = "alice";
+          d2b.site.waylandUser = "alice";
 
         For headless deployments with no graphics or audio VMs,
         leave the option as null and disable the offending toggles.
@@ -1032,7 +1032,7 @@ let
     ++ lib.optional (cfg.site.waylandUser != null) {
       assertion = config.users.users ? "${cfg.site.waylandUser}";
       message = ''
-        nixling.site.waylandUser = "${cfg.site.waylandUser}" but
+        d2b.site.waylandUser = "${cfg.site.waylandUser}" but
         config.users.users.${cfg.site.waylandUser} is not declared.
 
         Declare the user in your top-level NixOS config:
@@ -1043,7 +1043,7 @@ let
             extraGroups = [ "wheel" "video" "audio" ];
           };
 
-        nixling references this user's UID to locate
+        d2b references this user's UID to locate
         /run/user/<uid>/{wayland-0,pipewire-0} from the GPU and
         audio sidecars.
       '';
@@ -1055,8 +1055,8 @@ let
       (u: {
         assertion = config.users.users ? "${u}";
         message = ''
-          nixling.site.launcherUsers contains "${u}" but no
-          users.users.${u} is declared. The nixling group
+          d2b.site.launcherUsers contains "${u}" but no
+          users.users.${u} is declared. The d2b group
           is added to that user via extraGroups; non-existent users
           silently no-op.
         '';
@@ -1065,27 +1065,27 @@ let
 
   # Validate every authorized-key entry (site-level + per-VM).
   siteAuthorizedKeyAssertions =
-    validateAuthorizedKeys "nixling.site.userAuthorizedKeys"
+    validateAuthorizedKeys "d2b.site.userAuthorizedKeys"
       cfg.site.userAuthorizedKeys;
 
   perVmAuthorizedKeyAssertions = lib.flatten (lib.mapAttrsToList
     (name: vm:
       validateAuthorizedKeys
-        "nixling.vms.${name}.userAuthorizedKeys"
+        "d2b.vms.${name}.userAuthorizedKeys"
         vm.userAuthorizedKeys)
     cfg.vms);
 
   volumeSerialAssertions = lib.flatten (lib.mapAttrsToList
     (name: vm:
       let
-        microvm = nl.vmRunner config name;
+        microvm = d2bLib.vmRunner config name;
         serialIssues = volumeSerialIssues microvm.volumes;
       in
       lib.optionals (vm.enable && microvm.volumes != [ ]) [
         {
           assertion = serialIssues.duplicates == [ ];
           message = ''
-            nixling.vms.${name}.config.microvm.volumes derives duplicate virtio
+            d2b.vms.${name}.config.microvm.volumes derives duplicate virtio
             disk serial(s): ${lib.concatStringsSep ", " serialIssues.duplicates}. Set explicit
             unique `serial` values on the volume entries.
           '';
@@ -1093,7 +1093,7 @@ let
         {
           assertion = serialIssues.reserved == [ ];
           message = ''
-            nixling.vms.${name}.config.microvm.volumes uses reserved virtio disk
+            d2b.vms.${name}.config.microvm.volumes uses reserved virtio disk
             serial `rootfs`, which is owned by writableStoreOverlay. Set an
             explicit non-reserved `serial`.
           '';
@@ -1101,7 +1101,7 @@ let
         {
           assertion = serialIssues.tooLong == [ ];
           message = ''
-            nixling.vms.${name}.config.microvm.volumes has virtio disk serial(s)
+            d2b.vms.${name}.config.microvm.volumes has virtio disk serial(s)
             longer than 20 bytes: ${lib.concatStringsSep ", " serialIssues.tooLong}. Linux
             truncates virtio-blk serials, so guest mounts would not match.
           '';
@@ -1109,17 +1109,17 @@ let
         {
           assertion = serialIssues.unsafe == [ ];
           message = ''
-            nixling.vms.${name}.config.microvm.volumes has unsafe virtio disk
+            d2b.vms.${name}.config.microvm.volumes has unsafe virtio disk
             serial(s): ${lib.concatStringsSep ", " serialIssues.unsafe}. Use
             only [A-Za-z0-9-], start with an alphanumeric character, and avoid
             delimiters such as comma, equals, slash, and control characters.
           '';
         }
       ])
-    (nl.normalNixosVms cfg.vms));
+    (d2bLib.normalNixosVms cfg.vms));
 
   # Containment for the per-VM guest-editable `guestConfigFile`: it may
-  # only set guest OS options, never host-owned microvm.* / nixling.*.
+  # only set guest OS options, never host-owned microvm.* / d2b.*.
   # The namespace-containment check (evalModules over the real nixpkgs
   # NixOS module set, definition-existence; catches imports / generated
   # modules / `_file` spoofing) runs in host.nix's composeVm pass and is
@@ -1136,12 +1136,12 @@ let
       {
         assertion = forbidden == [ ];
         message = ''
-          nixling.vms.${name}.guestConfigFile (${guestFile}) may only set
+          d2b.vms.${name}.guestConfigFile (${guestFile}) may only set
           guest OS options, but it (or a module it imports) sets host-owned
           option(s): ${
             lib.concatStringsSep ", " forbidden
-          }. Host-owned microvm.* / nixling.* settings must live in the
-          host-owned nixling.vms.${name}.config, which the guest cannot
+          }. Host-owned microvm.* / d2b.* settings must live in the
+          host-owned d2b.vms.${name}.config, which the guest cannot
           edit.
         '';
       })

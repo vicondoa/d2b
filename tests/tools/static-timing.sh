@@ -6,11 +6,11 @@ ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 # Default timing log locations to outside $ROOT so the
 # append churn doesn't race builtins.getFlake source captures during
 # flake-eval gates. Operators who need them in-tree can still
-# override NL_STATIC_TIMING_REPORT / NL_STATIC_TIMING_RAW.
-_STATIC_TIMING_TMPDIR=${TMPDIR:-/tmp}/nixling-static-timing-report.$$
+# override D2B_STATIC_TIMING_REPORT / D2B_STATIC_TIMING_RAW.
+_STATIC_TIMING_TMPDIR=${TMPDIR:-/tmp}/d2b-static-timing-report.$$
 mkdir -p "$_STATIC_TIMING_TMPDIR"
-REPORT_LOG=${NL_STATIC_TIMING_REPORT:-$_STATIC_TIMING_TMPDIR/report.log}
-RAW_LOG=${NL_STATIC_TIMING_RAW:-$_STATIC_TIMING_TMPDIR/raw.log}
+REPORT_LOG=${D2B_STATIC_TIMING_REPORT:-$_STATIC_TIMING_TMPDIR/report.log}
+RAW_LOG=${D2B_STATIC_TIMING_RAW:-$_STATIC_TIMING_TMPDIR/raw.log}
 
 render_report() {
   local raw_log="$1" report_log="$2"
@@ -90,7 +90,7 @@ render_report() {
 
 rm -f -- "$RAW_LOG" "$RAW_LOG.lock" "$REPORT_LOG"
 set +e
-env NL_STATIC_TIMING_LOG="$RAW_LOG" ROOT="$ROOT" bash "$ROOT/tests/static.sh" "$@"
+env D2B_STATIC_TIMING_LOG="$RAW_LOG" ROOT="$ROOT" bash "$ROOT/tests/static.sh" "$@"
 rc=$?
 set -e
 render_report "$RAW_LOG" "$REPORT_LOG"

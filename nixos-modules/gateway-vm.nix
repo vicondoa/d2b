@@ -1,8 +1,8 @@
-# Auto-declare realm gateway guests from nixling.gateways.
+# Auto-declare realm gateway guests from d2b.gateways.
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.nixling;
+  cfg = config.d2b;
   gateways = lib.filterAttrs (_: gw: gw.enable) cfg.gateways;
   currentSystem = pkgs.stdenv.hostPlatform.system;
 
@@ -11,7 +11,7 @@ let
     version = "unavailable-for-${currentSystem}";
     dontUnpack = true;
     installPhase = ''
-      echo "nixling gateway VM: ${name} is not available for ${currentSystem}; set nixling.site.usePrebuiltHostTools = false to use source host-tool packages." >&2
+      echo "d2b gateway VM: ${name} is not available for ${currentSystem}; set d2b.site.usePrebuiltHostTools = false to use source host-tool packages." >&2
       exit 1
     '';
   };
@@ -22,9 +22,9 @@ let
     in
     if pkg != null then pkg else unavailableHostToolPackage name;
 
-  nixlingdPackage = hostToolPackage "nixlingd" "nixlingd";
-  nixlingPackage = hostToolPackage "nixling" "nixling";
-  nixlingGatewayRuntimePackage = hostToolPackage "nixlingGatewayRuntime" "nixling-gateway-runtime";
+  d2bdPackage = hostToolPackage "d2bd" "d2bd";
+  d2bPackage = hostToolPackage "d2b" "d2b";
+  d2bGatewayRuntimePackage = hostToolPackage "d2bGatewayRuntime" "d2b-gateway-runtime";
 
   secretShaped = s:
     lib.hasInfix "SharedAccessKey" s
@@ -58,42 +58,42 @@ let
       ssh.user = lib.mkDefault "gateway";
       config = { lib, pkgs, ... }: {
         networking.hostName = lib.mkDefault gw.vmName;
-        users.groups.nixling = { };
-        users.groups.nixlingd = { };
-        users.users.nixlingd = {
+        users.groups.d2b = { };
+        users.groups.d2bd = { };
+        users.users.d2bd = {
           isSystemUser = true;
-          group = "nixlingd";
-          extraGroups = [ "nixling" ];
+          group = "d2bd";
+          extraGroups = [ "d2b" ];
         };
         users.users.gateway = {
           isNormalUser = true;
-          extraGroups = [ "wheel" "nixling" ];
+          extraGroups = [ "wheel" "d2b" ];
         };
-        environment.etc."nixling/daemon-config.json".text = builtins.toJSON {
-          publicSocketPath = "/run/nixling/public.sock";
-          brokerSocketPath = "/run/nixling/priv.sock";
-          stateLockPath = "/run/nixling/daemon.lock";
-          locksDir = "/run/nixling/locks";
-          daemonUser = "nixlingd";
-          daemonGroup = "nixlingd";
-          publicSocketGroup = "nixling";
+        environment.etc."d2b/daemon-config.json".text = builtins.toJSON {
+          publicSocketPath = "/run/d2b/public.sock";
+          brokerSocketPath = "/run/d2b/priv.sock";
+          stateLockPath = "/run/d2b/daemon.lock";
+          locksDir = "/run/d2b/locks";
+          daemonUser = "d2bd";
+          daemonGroup = "d2bd";
+          publicSocketGroup = "d2b";
           launcherUsers = [ "gateway" ];
           adminUsers = [ "gateway" ];
           serverVersion = "0.4.0";
           acceptedClientVersionRange = ">=0.4.0, <0.5.0";
-          gatewayConfigPath = "/etc/nixling/gateway.json";
+          gatewayConfigPath = "/etc/d2b/gateway.json";
           autostartParallelism = cfg.daemon.autostart.parallelism;
           gracefulShutdownTimeoutSeconds = cfg.daemon.lifecycle.gracefulShutdown.timeoutSeconds;
           liveActivationTimeoutSeconds = cfg.daemon.lifecycle.liveActivation.timeoutSeconds;
           artifacts = {
-            publicManifestPath = "/etc/nixling/manifest.json";
-            bundlePath = "/etc/nixling/bundle.json";
-            hostPath = "/etc/nixling/host.json";
-            processesPath = "/etc/nixling/processes.json";
-            closuresDir = "/etc/nixling/closures";
+            publicManifestPath = "/etc/d2b/manifest.json";
+            bundlePath = "/etc/d2b/bundle.json";
+            hostPath = "/etc/d2b/host.json";
+            processesPath = "/etc/d2b/processes.json";
+            closuresDir = "/etc/d2b/closures";
           };
         };
-        environment.etc."nixling/gateway.json".text = builtins.toJSON {
+        environment.etc."d2b/gateway.json".text = builtins.toJSON {
           gateway = name;
           realm = gw.realm;
           stateDir = gw.stateDir;
@@ -124,7 +124,7 @@ let
             inherit (gw.display) vsockPort waypipeCompression;
           };
         };
-        environment.etc."nixling/manifest.json".text = builtins.toJSON {
+        environment.etc."d2b/manifest.json".text = builtins.toJSON {
           _manifest = {
             manifestVersion = cfg._manifestVersion;
           };
@@ -143,51 +143,51 @@ let
             stateDir = "${cfg.site.stateDir}/vms/${gw.vmName}";
             apiSocket = "${cfg.site.stateDir}/vms/${gw.vmName}/${gw.vmName}.sock";
             gpuSocket = "${cfg.site.stateDir}/vms/${gw.vmName}/${gw.vmName}-gpu.sock";
-            tpmSocket = "/run/nixling/vms/${gw.vmName}/tpm.sock";
+            tpmSocket = "/run/d2b/vms/${gw.vmName}/tpm.sock";
             audioStateFile = "${cfg.site.stateDir}/vms/${gw.vmName}/state/audio-state.json";
-            audioService = "nixling-${gw.vmName}-snd.service";
+            audioService = "d2b-${gw.vmName}-snd.service";
             observability = {
               enabled = false;
               vsockCid = 0;
               vsockHostSocket = "";
-              agentSocket = "/run/nixling/otlp.sock";
+              agentSocket = "/run/d2b/otlp.sock";
             };
             staticIp = null;
             sshUser = "gateway";
           };
         };
-        environment.variables.NIXLING_MANIFEST_PATH = "/etc/nixling/manifest.json";
+        environment.variables.D2B_MANIFEST_PATH = "/etc/d2b/manifest.json";
         environment.systemPackages = with pkgs; [
           curl
-          nixlingPackage
-          nixlingdPackage
-          nixlingGatewayRuntimePackage
+          d2bPackage
+          d2bdPackage
+          d2bGatewayRuntimePackage
         ];
         systemd.tmpfiles.rules = [
-          "d /run/nixling 1770 root nixling -"
-          "z /run/nixling 1770 root nixling -"
-          "a+ /run/nixling - - - - g::r-x"
-          "a+ /run/nixling - - - - u:nixlingd:rwx"
-          "a+ /run/nixling - - - - m::rwx"
-          "f /run/nixling/daemon.lock 0640 nixlingd nixlingd -"
-          "d /run/nixling/locks 0700 nixlingd nixlingd -"
-          "d /run/nixling/state 0700 nixlingd nixlingd -"
-          "d /var/lib/nixling 0750 nixlingd nixlingd -"
-          "d /var/lib/nixling/daemon-state 0700 nixlingd nixlingd -"
-          "d /var/cache/nixling 0750 root nixlingd -"
-        ] ++ (map (dir: "d ${dir} 0700 nixlingd nixlingd -") (gatewayStateDirs gw));
-        systemd.services.nixlingd = {
-          description = "nixling realm gateway daemon";
+          "d /run/d2b 1770 root d2b -"
+          "z /run/d2b 1770 root d2b -"
+          "a+ /run/d2b - - - - g::r-x"
+          "a+ /run/d2b - - - - u:d2bd:rwx"
+          "a+ /run/d2b - - - - m::rwx"
+          "f /run/d2b/daemon.lock 0640 d2bd d2bd -"
+          "d /run/d2b/locks 0700 d2bd d2bd -"
+          "d /run/d2b/state 0700 d2bd d2bd -"
+          "d /var/lib/d2b 0750 d2bd d2bd -"
+          "d /var/lib/d2b/daemon-state 0700 d2bd d2bd -"
+          "d /var/cache/d2b 0750 root d2bd -"
+        ] ++ (map (dir: "d ${dir} 0700 d2bd d2bd -") (gatewayStateDirs gw));
+        systemd.services.d2bd = {
+          description = "d2b realm gateway daemon";
           wantedBy = [ "multi-user.target" ];
           after = [ "network-online.target" ];
           wants = [ "network-online.target" ];
           restartIfChanged = false;
           serviceConfig = {
             Type = "simple";
-            User = "nixlingd";
-            Group = "nixlingd";
-            SupplementaryGroups = [ "nixling" ];
-            ExecStart = "${nixlingdPackage}/bin/nixlingd serve --config /etc/nixling/daemon-config.json";
+            User = "d2bd";
+            Group = "d2bd";
+            SupplementaryGroups = [ "d2b" ];
+            ExecStart = "${d2bdPackage}/bin/d2bd serve --config /etc/d2b/daemon-config.json";
             Restart = "on-failure";
             RestartSec = "2s";
             NoNewPrivileges = true;
@@ -204,7 +204,7 @@ let
   };
 in
 {
-  nixling.vms = lib.mkMerge [
+  d2b.vms = lib.mkMerge [
     (lib.listToAttrs (lib.mapAttrsToList gatewayVm gateways))
   ];
 }

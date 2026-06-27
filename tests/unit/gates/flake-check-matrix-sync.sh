@@ -59,11 +59,11 @@ assert_wf "discover enumerates via make test-flake-list" 'make -s test-flake-lis
 # matrix consumes the discovered JSON (not a hardcoded list)
 assert_wf "matrix sourced from discover output" 'fromJSON\(needs\.flake-eval-discover\.outputs\.checks\)'
 # each shard runs the make-routed single-check evaluation
-assert_wf "shard runs NL_FLAKE_CHECK make test-flake" 'NL_FLAKE_CHECK'
+assert_wf "shard runs D2B_FLAKE_CHECK make test-flake" 'D2B_FLAKE_CHECK'
 # the required-context aggregator gates on the full shard matrix result
 assert_wf "aggregator needs the shard matrix" 'needs:\s*\[flake-eval-discover,\s*flake-eval-x86'
 # non-checks x86 outputs are still evaluated (packages, etc.)
-assert_wf "x86 non-checks outputs are evaluated" 'NL_FLAKE_OUTPUTS'
+assert_wf "x86 non-checks outputs are evaluated" 'D2B_FLAKE_OUTPUTS'
 # aarch64 stays a lightweight smoke eval, not a full monolithic flake check.
 assert_wf "aarch64 job uses smoke eval" 'smoke-eval-aarch64\.nix'
 

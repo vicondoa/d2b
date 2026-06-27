@@ -1,5 +1,5 @@
-# nixling.site.* — host-level site knobs that every VM inherits,
-# plus the top-level `nixling.hostLanCidrs` list. Extracted from
+# d2b.site.* — host-level site knobs that every VM inherits,
+# plus the top-level `d2b.hostLanCidrs` list. Extracted from
 # options.nix for reviewability.
 { lib, ... }:
 
@@ -7,24 +7,24 @@
   # Site-specific knobs extracted from previously-hard-
   # coded references to the maintainer's host setup). Every option
   # here is opt-in: leaving the defaults gives you a fully headless
-  # framework with no Wayland integration and no nixling-managed SSH
+  # framework with no Wayland integration and no d2b-managed SSH
   # keys, which is exactly what consumers running headless / CI / pure-
   # net VMs want. Graphics or audio VMs require `waylandUser`.
-  options.nixling.site = {
+  options.d2b.site = {
     stateDir = lib.mkOption {
       type = lib.types.path;
-      default = "/var/lib/nixling";
-      example = "/var/lib/nixling";
+      default = "/var/lib/d2b";
+      example = "/var/lib/d2b";
       description = ''
-        Root of every nixling-managed state file on the host. Per-VM
-        state lives under `${"$"}{stateDir}/vms/<vm>/`; nixling-
+        Root of every d2b-managed state file on the host. Per-VM
+        state lives under `${"$"}{stateDir}/vms/<vm>/`; d2b-
         managed SSH keys under `${"$"}{stateDir}/keys/`. Must be on
         the same filesystem as `/nix/store` for the per-VM hardlink
-        farm to work (see `nixling.store.stateDir`, which defaults to
+        farm to work (see `d2b.store.stateDir`, which defaults to
         `${"$"}{stateDir}/vms`).
 
         **Reserved in v0.4.0.** The framework still hardcodes
-        `/var/lib/nixling` in several host-side paths, so eval now
+        `/var/lib/d2b` in several host-side paths, so eval now
         rejects overrides until full threading lands. Leave this at the
         default for now; the option exists so consumers and future
         migrations have a stable name for the framework's nominal
@@ -34,7 +34,7 @@
 
     tmpDir = lib.mkOption {
       type = lib.types.path;
-      default = "/var/lib/nixling/tmp";
+      default = "/var/lib/d2b/tmp";
       readOnly = true;
       description = ''
         Ephemeral state directory, cleaned on every boot via a host
@@ -49,7 +49,7 @@
       type = lib.types.bool;
       default = false;
       description = ''
-        Acknowledge that `nixling.envs.<env>.lan.allowEastWest = true`
+        Acknowledge that `d2b.envs.<env>.lan.allowEastWest = true`
         is an explicit out-of-threat-model mode. Leave this at `false`
         to preserve the default peer-guest isolation boundary.
       '';
@@ -59,8 +59,8 @@
       type = lib.types.bool;
       default = true;
       description = ''
-        Use release prebuilt host binaries for `nixling`, `nixlingd`,
-        `nixling-priv-broker`, and the activation helper when they are
+        Use release prebuilt host binaries for `d2b`, `d2bd`,
+        `d2b-priv-broker`, and the activation helper when they are
         available. Set to `false` on
         development hosts that intentionally validate the checked-out flake's
         Rust sources before a release artifact exists.
@@ -98,7 +98,7 @@
         example = 30;
         description = ''
           How many days of daily-rotated broker audit log files
-          (`/var/lib/nixling/audit/broker-<utc-date>.jsonl`) to
+          (`/var/lib/d2b/audit/broker-<utc-date>.jsonl`) to
           retain. Files older than this are deleted on every
           day-boundary rotation by the broker (best-effort; failures
           to remove are logged but do not break the audit-write path).
@@ -106,11 +106,11 @@
 
           **Reserved.** The broker accepts
           `--audit-retention-days <N>` and the runtime prune-on-rotate
-          loop is shipping in `packages/nixling-priv-broker/src/audit.rs`,
+          loop is shipping in `packages/d2b-priv-broker/src/audit.rs`,
           but the NixOS module does not yet spawn the broker
-          (`nixlingd` does so at runtime in a future wiring, and
+          (`d2bd` does so at runtime in a future wiring, and
           this option's value will then thread through
-          `daemon-config.json` → `nixlingd` → `nixling-priv-broker
+          `daemon-config.json` → `d2bd` → `d2b-priv-broker
           serve --audit-retention-days <value>`). Until that wiring
           lands, overriding this option is a no-op at runtime — the
           broker defaults to 14 days regardless.
@@ -128,8 +128,8 @@
         type = lib.types.bool;
         default = false;
         description = ''
-          When true, the nixlingGroupMigration helper performs a
-          post-migration scan of `/var/lib/nixling` and `/run/nixling`
+          When true, the d2bGroupMigration helper performs a
+          post-migration scan of `/var/lib/d2b` and `/run/d2b`
           and fails activation if any file still has a legacy lifecycle-group numeric gid. Off by default;
           operators flip this to true after confirming clean migration
           on their host.
@@ -185,7 +185,7 @@
 
         Note: this is a static per-host value. A future enhancement
         (tracked in TODO.md) will source the display from the
-        operator's environment at `nixling vm start` time so a single
+        operator's environment at `d2b vm start` time so a single
         host can serve operators on different compositor sockets.
       '';
     };
@@ -195,8 +195,8 @@
       default = null;
       example = "alsa_input.pci-0000_00_1f.3.analog-stereo";
       description = ''
-        Optional PipeWire node.name to force nixling VM microphone
-        streams to when `nixling.mic = "on"`. Leave at `null` to let
+        Optional PipeWire node.name to force d2b VM microphone
+        streams to when `d2b.mic = "on"`. Leave at `null` to let
         WirePlumber's normal default-source policy choose the host
         input. Set this on hosts whose default-source metadata does not
         auto-link capture clients reliably.
@@ -208,17 +208,17 @@
       default = [ ];
       example = [ "alice" ];
       description = ''
-        Users to add to the `nixling` lifecycle group. Members of that
+        Users to add to the `d2b` lifecycle group. Members of that
         group can connect to the daemon public socket and perform
         lifecycle operations.
 
-        When `nixling.daemonExperimental.enable = true`, the same user
-        list is also added to the canonical `nixling`
+        When `d2b.daemonExperimental.enable = true`, the same user
+        list is also added to the canonical `d2b`
         socket ACL group.
 
         The framework does NOT create the users — declare them in
         your top-level NixOS config with `users.users.<name> = { …
-        };`. nixling only adds the launcher groups to their
+        };`. d2b only adds the launcher groups to their
         `extraGroups`.
 
         Empty list = nobody is a launcher principal. The framework
@@ -233,9 +233,9 @@
       example = [ "alice" ];
       description = ''
         Users allowed to request admin-gated daemon operations. This
-        covers privileged read-only operations such as `nixling audit`
+        covers privileged read-only operations such as `d2b audit`
         AND admin-gated, potentially destructive lifecycle operations
-        such as `nixling vm exec` (which opens
+        such as `d2b vm exec` (which opens
         an authenticated command/console session inside a guest).
         Admin users still need to connect over the daemon public
         socket, so they SHOULD also be present in `launcherUsers`.
@@ -244,12 +244,12 @@
 
     keysDir = lib.mkOption {
       type = lib.types.path;
-      default = "/var/lib/nixling/keys";
-      example = "/var/lib/nixling/keys";
+      default = "/var/lib/d2b/keys";
+      example = "/var/lib/d2b/keys";
       description = ''
         Directory where the framework generates and stores
         per-VM SSH host keys. Mode 0700 owned by root, with a per-
-        key ACL granting read access to the `nixling` group
+        key ACL granting read access to the `d2b` group
         (so the CLI can drive `ssh` to each VM without sudo).
 
         Default tracks `${"$"}{stateDir}/keys`. If you override
@@ -260,7 +260,7 @@
         **ADVISORY ONLY in v0.1.0** (same caveat as `stateDir`).
         host-keys.nix's tmpfiles rules and activation script DO
         thread `cfg.site.keysDir`, but host.nix's tmpfiles rule
-        currently re-declares the literal `/var/lib/nixling/keys`,
+        currently re-declares the literal `/var/lib/d2b/keys`,
         and the migration script under `scripts/` hardcodes the
         same path. Overriding this option in v0.1.0 will leave
         those stale entries on disk; the per-VM key flow itself
@@ -280,12 +280,12 @@
       '';
       description = ''
         Extra SSH public keys to authorize for the SSH user inside
-        every nixling-managed VM. Entries may be either paths to a
+        every d2b-managed VM. Entries may be either paths to a
         `.pub` file or literal pubkey strings.
 
         These are merged with the framework's own per-VM
-        nixling-managed pubkey when the guest-side
-        `nixling-load-host-keys.service` populates the SSH user's
+        d2b-managed pubkey when the guest-side
+        `d2b-load-host-keys.service` populates the SSH user's
         `authorized_keys` file. Empty list = only the framework's
         own pubkey is authorized.
 
@@ -307,7 +307,7 @@
         ID 1050 (so hidraw / raw-USB nodes carry `GROUP="kvm"
         MODE="0660" uaccess`). When at least one enabled VM sets
         `usbip.yubikey = true`, this also loads the host's
-        `usbip-host` kernel module so `nixling usb <vm>` can re-bind
+        `usbip-host` kernel module so `d2b usb <vm>` can re-bind
         the device into a guest via USBIP.
 
         Set to `false` on hosts that do not use Yubikeys. With this
@@ -326,14 +326,14 @@
       default = null;
       example = "/etc/nixos";
       description = ''
-        Default flake path the `nixling` CLI uses for per-VM
+        Default flake path the `d2b` CLI uses for per-VM
         lifecycle subcommands (`build`, `switch`, `boot`, `test`).
         Each invocation resolves a flake reference of the form
-        `<flakePath>#nixling-<vm>` to build the VM's closure.
+        `<flakePath>#d2b-<vm>` to build the VM's closure.
 
-        Leave null for users who always pass `NIXLING_FLAKE` /
+        Leave null for users who always pass `D2B_FLAKE` /
         `--flake` explicitly. Setting it makes
-        `nixling switch <vm>` work without arguments on the
+        `d2b switch <vm>` work without arguments on the
         consumer's primary nixos configuration.
       '';
     };
@@ -351,7 +351,7 @@
         Extra module-arguments merged into every per-VM
         `microvm.vms.<vm>.specialArgs` after the framework's own
         baseline (`{ inherit inputs; }` where `inputs` is the
-        nixling FLAKE's inputs). Consumer keys take precedence on
+        d2b FLAKE's inputs). Consumer keys take precedence on
         collision — set `inputs = consumerInputs;` here if your
         per-VM modules need `inputs.<your-flake>` visibility (e.g.
         `inputs.entrablau`, `inputs.llm-agents`).
@@ -359,7 +359,7 @@
         Use this when:
         - A per-VM module file (e.g. `vms/work.nix`) takes
           `{ inputs, ... }:` and references inputs your consumer
-          flake declares but nixling's flake does not.
+          flake declares but d2b's flake does not.
         - You want to thread a consumer-side overlay set (e.g.
           `{ myOverlay = inputs.something.overlays.default; }`)
           into per-VM evals without re-importing it in each VM.
@@ -371,7 +371,7 @@
   };
 
   # Top-level option: CIDRs of the host's own physical LAN(s). These
-  # get unioned into every `nixling.envs.<env>.hostBlocklist`
+  # get unioned into every `d2b.envs.<env>.hostBlocklist`
   # automatically, so a workload VM cannot reach any host on the
   # wire the host itself sits on — not just the host's own IP.
   #
@@ -379,7 +379,7 @@
   # `ip route` on the host will tell you what to put here, e.g.
   # `192.168.1.0/24` for a typical home LAN with the host at
   # `192.168.1.42/24`.
-  options.nixling.hostLanCidrs = lib.mkOption {
+  options.d2b.hostLanCidrs = lib.mkOption {
     type = lib.types.listOf lib.types.str;
     default = [ ];
     example = [ "192.168.1.0/24" "10.0.0.0/24" ];

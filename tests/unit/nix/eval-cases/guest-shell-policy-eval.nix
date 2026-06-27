@@ -127,53 +127,53 @@ let
           uid = 1000;
         };
 
-        nixling.site = {
-          stateDir = lib.mkForce "/var/lib/nixling";
+        d2b.site = {
+          stateDir = lib.mkForce "/var/lib/d2b";
           waylandUser = "alice";
           launcherUsers = [ "alice" ];
           yubikey.enable = false;
         };
 
-        nixling.envs.work = {
+        d2b.envs.work = {
           lanSubnet = "10.20.0.0/24";
           uplinkSubnet = "192.0.2.0/30";
         };
 
-        nixling.vms.corp-vm = mkCorpVm;
+        d2b.vms.corp-vm = mkCorpVm;
       })
     ];
   };
 
-  corpGuest = nixos.config.nixling._computed.corp-vm.config;
+  corpGuest = nixos.config.d2b._computed.corp-vm.config;
 
-  guestdExecStart = corpGuest.systemd.services.nixling-guestd.serviceConfig.ExecStart or "";
-  shpoolService = corpGuest.systemd.services.nixling-shpool-daemon or null;
+  guestdExecStart = corpGuest.systemd.services.d2b-guestd.serviceConfig.ExecStart or "";
+  shpoolService = corpGuest.systemd.services.d2b-shpool-daemon or null;
   shpoolExecStart =
     if shpoolService == null then "" else shpoolService.serviceConfig.ExecStart or "";
-  shpoolPam = corpGuest.security.pam.services.nixling-shpool-daemon or null;
+  shpoolPam = corpGuest.security.pam.services.d2b-shpool-daemon or null;
   aliceLinger = corpGuest.users.users.alice.linger or false;
-  shellManifest = nixos.config.nixling.manifest.corp-vm.shell;
-  opShell = nixos.config.nixling.manifest.corp-vm.runtime.operationCapabilities.guest.shell;
+  shellManifest = nixos.config.d2b.manifest.corp-vm.shell;
+  opShell = nixos.config.d2b.manifest.corp-vm.runtime.operationCapabilities.guest.shell;
 
   positiveEnabled =
-    assert corpGuest.nixling.guestControl.shell.enable == true;
-    assert corpGuest.nixling.guestControl.shell.defaultName == "default";
-    assert corpGuest.nixling.guestControl.shell.maxSessions == 8;
-    assert corpGuest.nixling.guestControl.shell.maxAttached == 1;
+    assert corpGuest.d2b.guestControl.shell.enable == true;
+    assert corpGuest.d2b.guestControl.shell.defaultName == "default";
+    assert corpGuest.d2b.guestControl.shell.maxSessions == 8;
+    assert corpGuest.d2b.guestControl.shell.maxAttached == 1;
     assert lib.hasInfix "--shell-enable" guestdExecStart;
     assert lib.hasInfix "--shell-default-name default" guestdExecStart;
     assert lib.hasInfix "--shell-max-sessions 8" guestdExecStart;
     assert lib.hasInfix "--shell-max-attached 1" guestdExecStart;
     assert lib.hasInfix "--shell-runner-path /nix/store/" guestdExecStart;
-    assert lib.hasInfix "/bin/nixling-guest-shell-runner" guestdExecStart;
+    assert lib.hasInfix "/bin/d2b-guest-shell-runner" guestdExecStart;
     assert lib.hasInfix "--shell-systemctl-path /nix/store/" guestdExecStart;
     assert lib.hasInfix "/bin/systemctl" guestdExecStart;
     assert shpoolService != null;
     assert shpoolService.serviceConfig.User == "alice";
-    assert shpoolService.serviceConfig.PAMName == "nixling-shpool-daemon";
+    assert shpoolService.serviceConfig.PAMName == "d2b-shpool-daemon";
     assert shpoolService.serviceConfig.Delegate == true;
     assert lib.hasInfix "/nix/store/" shpoolExecStart;
-    assert lib.hasInfix "nixling-shpool-daemon-start" shpoolExecStart;
+    assert lib.hasInfix "d2b-shpool-daemon-start" shpoolExecStart;
     assert !(lib.hasInfix "%U" shpoolExecStart);
     assert !(lib.hasInfix "%h" shpoolExecStart);
     assert (shpoolService.wantedBy or [ ]) == [ ];
@@ -195,7 +195,7 @@ let
     };
 
   positiveDefaults =
-    assert !(builtins.hasAttr "nixling-guestd" corpGuest.systemd.services);
+    assert !(builtins.hasAttr "d2b-guestd" corpGuest.systemd.services);
     assert shpoolService == null;
     assert shpoolPam == null;
     assert shellManifest.enabled == false;
@@ -209,10 +209,10 @@ let
     };
 
   positiveCustom =
-    assert corpGuest.nixling.guestControl.shell.enable == true;
-    assert corpGuest.nixling.guestControl.shell.defaultName == "ops_1";
-    assert corpGuest.nixling.guestControl.shell.maxSessions == 16;
-    assert corpGuest.nixling.guestControl.shell.maxAttached == 2;
+    assert corpGuest.d2b.guestControl.shell.enable == true;
+    assert corpGuest.d2b.guestControl.shell.defaultName == "ops_1";
+    assert corpGuest.d2b.guestControl.shell.maxSessions == 16;
+    assert corpGuest.d2b.guestControl.shell.maxAttached == 2;
     assert lib.hasInfix "--shell-default-name ops_1" guestdExecStart;
     assert lib.hasInfix "--shell-max-sessions 16" guestdExecStart;
     assert lib.hasInfix "--shell-max-attached 2" guestdExecStart;
@@ -221,7 +221,7 @@ let
     assert shpoolService.serviceConfig.User == "alice";
     assert shpoolService.serviceConfig.Delegate == true;
     assert lib.hasInfix "/nix/store/" shpoolExecStart;
-    assert lib.hasInfix "nixling-shpool-daemon-start" shpoolExecStart;
+    assert lib.hasInfix "d2b-shpool-daemon-start" shpoolExecStart;
     assert !(lib.hasInfix "%U" shpoolExecStart);
     assert !(lib.hasInfix "%h" shpoolExecStart);
     assert shpoolPam.startSession == false;

@@ -1,16 +1,20 @@
-# nixling
+# d2b: Double Dutch Bus
 
-**A reasonably isolated NixOS desktop microVM framework: isolated
-networking and stores, mediated TPM/USB/audio/graphics, all on one
-Wayland desktop.**
+**Multiple worlds, one desktop.**
 
-Nixling is for people who want one machine to hold separate workspaces
-— work, personal, risky dev, corporate login — without turning every
-boundary into a hand-built VM project. You declare envs and VMs in
-NixOS; nixling builds the networks, keys, per-VM store views, sidecars,
-and daily CLI around them.
+d2b, short for Double Dutch Bus, is a Wayland-first desktop for people
+who live and work across multiple trust boundaries: work, personal
+life, autonomous agents, experimental development, risky browsing, and
+other separate realms. Instead of mixing everything together or
+carrying separate devices, you get on the bus.
 
-If Qubes OS is about reasonable security through compartments, nixling's
+Each realm runs inside a reasonably isolated microVM with its own
+identity, network policy, files, devices, and risk profile. The
+experience remains seamless: applications from those microVMs appear
+and behave like ordinary applications on one integrated Wayland
+desktop.
+
+If Qubes OS is about reasonable security through compartments, d2b's
 narrower promise is **reasonable isolation for a single-user NixOS
 Wayland desktop**. It is not a new OS and not a Qubes replacement: it
 composes into your existing NixOS host. Workloads run as Linux microVMs
@@ -18,7 +22,7 @@ with their own kernels, accelerated through `/dev/kvm` by
 [Cloud Hypervisor] today. [crosvm] backs GPU/device sidecars today, and
 the runner contract is shaped so additional VMM backends can fit later.
 
-Nixling gives you:
+d2b gives you boundaries without device juggling:
 
 - **Isolated networking:** per-env bridges, firewalling, and an
   auto-declared NAT/DHCP "net VM".
@@ -27,15 +31,17 @@ Nixling gives you:
 - **Mediated I/O:** software TPM, USB passthrough, audio, graphics,
   and virtiofs file sharing are broker-supervised per-VM sidecars
   instead of ad-hoc host services.
-- **One Wayland desktop:** graphical VMs integrate with the host
+- **One Wayland desktop:** graphical realms integrate with the host
   compositor without asking you to live in a separate desktop.
-- **Shared UI colors:** nixling can emit a compositor-agnostic JSON and
+- **Shared UI colors:** d2b can emit a compositor-agnostic JSON and
   GTK-compatible CSS color contract so niri, Waybar, and desktop control
   tools use the same host/env/VM identity colors.
-- **One operator surface:** the Rust `nixling` CLI talks to `nixlingd`
+- **One operator surface:** the Rust `d2b` CLI talks to `d2bd`
   and the privileged broker for lifecycle, keys, USB, and host prep.
-- **Persistent guest shells:** `nixling shell <vm>` can reconnect to
+- **Persistent guest shells:** `d2b shell <vm>` can reconnect to
   named interactive guest shells when `guest.shell` is enabled.
+
+Get on the bus: separate sides, shared experience.
 
 At a high level:
 
@@ -45,15 +51,15 @@ flowchart TB
         direction TB
         subgraph human["human-facing host session"]
             direction LR
-            cli["nixling CLI"]
+            cli["d2b CLI"]
             desktop["Wayland desktop"]
         end
 
         devices["devices<br/>TPM / USB / audio / graphics / files"]
 
-        subgraph nixling_box["nixling"]
+        subgraph d2b_box["d2b"]
             direction TB
-            nixlingd["nixlingd"]
+            d2bd["d2bd"]
             broker["privileged broker"]
             vhost["vhost-user sidecars"]
             wayland["Wayland mediation"]
@@ -66,10 +72,10 @@ flowchart TB
         end
     end
 
-    cli --> nixlingd
+    cli --> d2bd
     desktop --> wayland
     vhost --> devices
-    nixling_box --- vm
+    d2b_box --- vm
 ```
 
 **Quick start** (full walkthroughs under
@@ -78,7 +84,7 @@ flowchart TB
 
 ```bash
 # after switching the host config from examples/personal-dev
-sudo nixling vm start personal-dev --apply
+sudo d2b vm start personal-dev --apply
 ```
 
 Other entry points: see [Where to start](#where-to-start) below for a
@@ -89,7 +95,7 @@ For reconnectable interactive shells, see
 
 ## Who this is for
 
-Nixling targets the **single-user NixOS desktop** where the host is
+D2b targets the **single-user NixOS desktop** where the host is
 trusted, but some workloads are not. It is for people who want to run
 things on their computer that they do not completely trust — AI agents,
 large dependency trees, risky browsing/dev environments, or work-required
@@ -115,26 +121,26 @@ Concretely:
   the host/guest boundary consistent.
 - One human, one host. Multi-tenant trust boundaries are out of scope.
 - Wayland-native. There is no X11 fallback for graphics VMs.
-- Headless workloads also work — the same `nixling.envs.<env>`
-  + `nixling.vms.<vm>` shape covers CI runners or
+- Headless workloads also work — the same `d2b.envs.<env>`
+  + `d2b.vms.<vm>` shape covers CI runners or
   background-service VMs without graphics + audio bits.
 
-## What nixling is NOT
+## What d2b is NOT
 
-- **Not magic security for an insecure host.** Nixling is only as secure
+- **Not magic security for an insecure host.** D2b is only as secure
   as the host OS it composes into. If the host kernel, compositor, user
-  session, or `nixling` launcher account is compromised, the VM boundary
+  session, or `d2b` launcher account is compromised, the VM boundary
   is no longer the main thing protecting you.
-- **Not a multi-tenant trust boundary.** Nixling assumes one human on one
+- **Not a multi-tenant trust boundary.** D2b assumes one human on one
   trusted host. It is not designed to isolate mutually suspicious local
   users from each other.
 - **Not a Qubes replacement.** The "reasonably isolated" framing is a
   nod to Qubes, not an equivalence claim. Qubes is a security-oriented OS
-  with Xen-based virtualization and a much larger security model; nixling
+  with Xen-based virtualization and a much larger security model; d2b
   is a NixOS module for trusted-host desktop compartmentalization.
 - **Not a general VM, container, or app-sandbox manager.** Use
   [microvm.nix], [virt-manager], [GNOME Boxes], [Distrobox], [Flatpak],
-  or NixOS containers when you want those shapes. Nixling is the
+  or NixOS containers when you want those shapes. D2b is the
   opinionated path for desktop workspaces with per-env networking,
   per-VM stores, mediated I/O, and one CLI.
 - **Not officially supported.** Best-effort hobby project, one
@@ -157,11 +163,11 @@ See [CHANGELOG.md](./CHANGELOG.md).
 Pick the entry point that matches your situation. The checked flakes
 and the doc-friendly alias READMEs all live in this repo; the manual
 integration path below ("Manual integration") is for plugging
-nixling into an existing host config.
+d2b into an existing host config.
 
 | Path | Audience | Notes |
 | --- | --- | --- |
-| [`templates/default`](./templates/default) | New host, fastest setup | `nix flake init -t github:vicondoa/nixling` — sentinel TODOs + assertion gates |
+| [`templates/default`](./templates/default) | New host, fastest setup | `nix flake init -t github:vicondoa/d2b` — sentinel TODOs + assertion gates |
 | [`examples/personal-dev`](./examples/personal-dev) | Read-and-copy headless starter | Alias of the checked [`examples/minimal`](./examples/minimal) flake; VM name `personal-dev`. |
 | [`examples/graphics-workstation`](./examples/graphics-workstation) | Desktop VM with Wayland + audio + USBIP | Requires a compositor on the host; `waylandUser` must be non-null. |
 | [`examples/multi-env`](./examples/multi-env) | Two isolated envs (work + personal) | Demonstrates per-env isolation and route preflight. |
@@ -176,7 +182,7 @@ path:
 
 ```bash
 # headless personal workspace (examples/personal-dev → examples/minimal)
-sudo nixling vm start personal-dev --apply
+sudo d2b vm start personal-dev --apply
 ```
 
 The alias directory exists so the README, examples index, and migration
@@ -185,11 +191,11 @@ notes can use a stable VM name while CI keeps the checked flake in
 
 ## Quick start (template path)
 
-The fastest way to a working nixling host:
+The fastest way to a working d2b host:
 
 ```bash
-mkdir my-nixling-host && cd my-nixling-host
-nix flake init -t github:vicondoa/nixling
+mkdir my-d2b-host && cd my-d2b-host
+nix flake init -t github:vicondoa/d2b
 # Edit configuration.nix — fill in the 7 numbered TODOs.
 # TODOs 2-3 are eval-enforced via assertions (hostname, user,
 # SSH key). TODOs 1, 5-7 (hardware, network CIDRs) ship with
@@ -197,12 +203,12 @@ nix flake init -t github:vicondoa/nixling
 # see templates/default/README.md for the full table.
 sudo nixos-rebuild build  --flake .#desktop
 sudo nixos-rebuild switch --flake .#desktop
-nixling list                          # corp-vm + sys-work-net
+d2b list                          # corp-vm + sys-work-net
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # corp-vm            work      false     false false   10.20.0.10      stopped
 # sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
-nixling status                        # same table + bridge-health footer
-nixling vm start corp-vm --apply
+d2b status                        # same table + bridge-health footer
+d2b vm start corp-vm --apply
 ```
 
 The scaffold is ~150 lines and is documented inline. See
@@ -211,7 +217,7 @@ the full TODO walk-through.
 
 ## Manual integration (without the template)
 
-If you're plugging nixling into an existing NixOS host config
+If you're plugging d2b into an existing NixOS host config
 rather than starting fresh, this is the minimum surface area.
 
 **1. Add the flake input.** In your `flake.nix`:
@@ -220,15 +226,15 @@ rather than starting fresh, this is the minimum surface area.
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    nixling.url = "github:vicondoa/nixling";
-    nixling.inputs.nixpkgs.follows = "nixpkgs";
+    d2b.url = "github:vicondoa/d2b";
+    d2b.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, nixling, ... }: {
+  outputs = { self, nixpkgs, d2b, ... }: {
     nixosConfigurations.desktop = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
-        nixling.nixosModules.default
+        d2b.nixosModules.default
         ./configuration.nix
       ];
     };
@@ -237,7 +243,7 @@ rather than starting fresh, this is the minimum surface area.
 ```
 
 **2. Drop in a `configuration.nix` block.** This is the minimum
-nixling needs from you — pick a Wayland user (alice here) plus
+d2b needs from you — pick a Wayland user (alice here) plus
 one env + one VM. Everything else (sidecar users, SSH-key
 generation, dnsmasq, NAT, firewall, the auto-declared
 net VM) is materialised by the framework.
@@ -252,12 +258,12 @@ net VM) is materialised by the framework.
     extraGroups = [ "wheel" "video" "audio" ];
   };
 
-  # Tell nixling about Alice + add her to the nixling
+  # Tell d2b about Alice + add her to the d2b
   # system group. The broker uses SO_PEERCRED at accept time to
   # classify peers; nothing else (no polkit, no setuid).
-  # 'nixling vm start <vm> --apply' works without sudo for
-  # users in the nixling group.
-  nixling.site = {
+  # 'd2b vm start <vm> --apply' works without sudo for
+  # users in the d2b group.
+  d2b.site = {
     waylandUser = "alice";
     launcherUsers = [ "alice" ];
     # Set true if you have a Yubikey and want USBIP passthrough.
@@ -268,14 +274,14 @@ net VM) is materialised by the framework.
   # a /24 for workload VMs on the LAN. RFC 5737 documentation
   # ranges are safe defaults for the uplink; pick whatever
   # 10.x or 192.168.x LAN you want for the workloads.
-  nixling.envs.work = {
+  d2b.envs.work = {
     lanSubnet    = "10.20.0.0/24";
     uplinkSubnet = "192.0.2.0/30";
   };
 
   # One workload VM in the env. ssh.keyPath is left null, so the
-  # framework-managed key under nixling.site.keysDir is used.
-  nixling.vms.corp-vm = {
+  # framework-managed key under d2b.site.keysDir is used.
+  d2b.vms.corp-vm = {
     enable = true;
     env = "work";
     index = 10;                    # workload IP = 10.20.0.10
@@ -291,9 +297,9 @@ net VM) is materialised by the framework.
     };
   };
 
-  # Optional: declare your host's primary LAN so nixling's CIDR-
+  # Optional: declare your host's primary LAN so d2b's CIDR-
   # overlap assertion catches collisions at eval time.
-  nixling.hostLanCidrs = [ "192.168.1.0/24" ];
+  d2b.hostLanCidrs = [ "192.168.1.0/24" ];
 
   system.stateVersion = "25.11";
 }
@@ -306,35 +312,35 @@ sudo nixos-rebuild build --flake .#desktop
 sudo nixos-rebuild switch --flake .#desktop
 ```
 
-The activation creates `/var/lib/nixling/keys/corp-vm_ed25519`
+The activation creates `/var/lib/d2b/keys/corp-vm_ed25519`
 (the framework-managed SSH key), spawns the `sys-work-net` net
 VM, materialises `br-work-up` + `br-work-lan` bridges, and
-installs the `nixling` CLI on your `$PATH`.
+installs the `d2b` CLI on your `$PATH`.
 
 Guest configuration is still built on the host, but guest activation
 stays inside the guest. The host build produces the VM's NixOS
-`system.build.toplevel`; nixling's broker/store-view path publishes
+`system.build.toplevel`; d2b's broker/store-view path publishes
 that closure into the per-VM live store pool; virtiofs serves that pool
 as the guest's `/nix/store`; and guestd activates the prepared toplevel
 inside the running VM for `switch`, `test`, and live `rollback`.
-Stopped VMs do not run live activation from the host: use `nixling boot
+Stopped VMs do not run live activation from the host: use `d2b boot
 <vm> --apply` to stage the declared toplevel for the next start.
 
 **4. Verify and use.**
 
 ```bash
-nixling list                          # expect 'corp-vm' + 'sys-work-net'
+d2b list                          # expect 'corp-vm' + 'sys-work-net'
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # corp-vm            work      false     false false   10.20.0.10      stopped
 # sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
-nixling status                        # same table + "=== Bridge health ===" footer
-nixling vm start corp-vm --apply      # preferred Rust CLI path
-ssh -i /var/lib/nixling/keys/corp-vm_ed25519 alice@10.20.0.10 hostname
-nixling vm stop corp-vm --apply       # clean shutdown
+d2b status                        # same table + "=== Bridge health ===" footer
+d2b vm start corp-vm --apply      # preferred Rust CLI path
+ssh -i /var/lib/d2b/keys/corp-vm_ed25519 alice@10.20.0.10 hostname
+d2b vm stop corp-vm --apply       # clean shutdown
 ```
 
 That's it. Add a second env or a second VM by repeating the
-`nixling.envs.<env>` / `nixling.vms.<name>` blocks; the framework
+`d2b.envs.<env>` / `d2b.vms.<name>` blocks; the framework
 deals with bridges, broker-spawned sidecars, SSH-key generation,
 and dnsmasq in lockstep.
 
@@ -342,18 +348,18 @@ and dnsmasq in lockstep.
 
 A handful of things consistently bite first-time users.
 
-- **Same filesystem.** `/var/lib/nixling` must live on the same
+- **Same filesystem.** `/var/lib/d2b` must live on the same
   filesystem as `/nix/store`. The per-VM `/nix/store` hardlink
   farm refuses to start otherwise and there is no graceful
   fallback.
-- **Wayland-only.** A graphics VM with `nixling.site.waylandUser
+- **Wayland-only.** A graphics VM with `d2b.site.waylandUser
   = null` is an eval error. There is no X11 path; the GPU
   sidecar binds the host compositor's `/run/user/<uid>/wayland-0`
   socket directly.
 - **`ssh.keyPath` default.** Leave it null and the framework-
   managed key under `${cfg.site.keysDir}/<vm>_ed25519` is used.
   Override only if you supply your own per-VM key. The CLI's
-  `nixling keys rotate <vm>` only rotates the framework-managed
+  `d2b keys rotate <vm>` only rotates the framework-managed
   key; consumer-supplied keys are untouched.
 - **CIDR overlap is detected.** Two envs whose `lanSubnet` or
   `uplinkSubnet` overlap (including containment like
@@ -362,18 +368,18 @@ A handful of things consistently bite first-time users.
 - **No autostart for graphics VMs.** `autostart = true` on a
   graphics VM is rejected — there is no Wayland session
   available at multi-user.target. Use `autostart = false` (the
-  default) and `nixling vm start <vm> --apply` from a Plasma
+  default) and `d2b vm start <vm> --apply` from a Plasma
   terminal.
-- **Nixling state is secret material.** `/var/lib/nixling/`
+- **D2b state is secret material.** `/var/lib/d2b/`
   contains per-VM SSH private keys and (for TPM-enabled VMs)
-  swtpm state. Treat nixling state directories as secret
+  swtpm state. Treat d2b state directories as secret
   material; back them up only to encrypted, access-controlled
   media.
 
 ## CLI overview
 
-The Rust `nixling` CLI is the only operator surface. Run
-`nixling --help` for the full command list and `nixling <COMMAND>
+The Rust `d2b` CLI is the only operator surface. Run
+`d2b --help` for the full command list and `d2b <COMMAND>
 --help` for per-verb usage. Highlights:
 
 - **Lifecycle**: `vm start`, `vm stop`, `vm restart`, `vm list`,
@@ -391,16 +397,16 @@ The Rust `nixling` CLI is the only operator surface. Run
   ships. Argument parsing and shell completions still work.
 - **Guest control** (admin-only): `vm exec` runs a command inside a
   VM over the authenticated guest-control vsock — no SSH —
-  (`nixling vm exec <vm> -- <cmd…>`, or `nixling vm exec -it <vm> --
+  (`d2b vm exec <vm> -- <cmd…>`, or `d2b vm exec -it <vm> --
   bash -l` for an interactive PTY). It is restricted
-  to callers in `nixling.site.adminUsers`, the role gate enforced via
+  to callers in `d2b.site.adminUsers`, the role gate enforced via
   `SO_PEERCRED` at the daemon socket.
 
-To enable guest exec on a VM: set `nixling.vms.<vm>.guest.control.enable
+To enable guest exec on a VM: set `d2b.vms.<vm>.guest.control.enable
 = true` and `guest.exec.enable = true` (the VM must have a workload user
-via `ssh.user`); add your operator account to `nixling.site.adminUsers`;
+via `ssh.user`); add your operator account to `d2b.site.adminUsers`;
 rebuild and let the notify-ready daemon restart into the new generation
-(or run `sudo systemctl restart nixlingd` explicitly);
+(or run `sudo systemctl restart d2bd` explicitly);
 then start the VM on the guest-control generation and run the verbs.
 Every exec runs the requested command as the VM's workload user
 (`ssh.user`) — **never root** — inside a real PAM login session, so
@@ -408,9 +414,9 @@ graphical and login-shell workflows see the same environment an SSH
 login would (`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, the login-shell
 profile). Operators elevate with `sudo` inside the session.
 
-Run-state ships in `/var/lib/nixling/`; per-host config emitted by
-the NixOS module ships in `/etc/nixling/` (bundle + privileges +
-processes JSON files consumed by `nixlingd` / `nixling-priv-broker`).
+Run-state ships in `/var/lib/d2b/`; per-host config emitted by
+the NixOS module ships in `/etc/d2b/` (bundle + privileges +
+processes JSON files consumed by `d2bd` / `d2b-priv-broker`).
 
 For typed exit codes and JSON envelopes, see
 [`docs/reference/cli-contract.md`](docs/reference/cli-contract.md).
@@ -452,7 +458,7 @@ For security disclosure, see [`SECURITY.md`](SECURITY.md).
 
 ## Acknowledgements
 
-Nixling's desktop-compartmentalization framing owes a debt to
+D2b's desktop-compartmentalization framing owes a debt to
 [Spectrum OS], and to its lead Alyssa Ross, @alyssais.
 
 ## License

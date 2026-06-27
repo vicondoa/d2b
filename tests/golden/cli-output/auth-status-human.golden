@@ -5,4 +5,4 @@ sockets:
 - broker: unreachable
 allowed subcommands: audio, auth status, boot, build, console, down, gc, generations, host check, keys list, list, op inspect, realm enter, realm inspect, realm list, realm run, restart, rollback, rotate-known-host, status, switch, test, trust, up, usb
 denied subcommands:
-- audit: audit requires admin role in `nixling.site.adminUsers`.
+- audit: audit requires admin role in `d2b.site.adminUsers`.

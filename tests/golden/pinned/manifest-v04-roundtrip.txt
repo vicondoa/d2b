@@ -1,4 +1,4 @@
-# manifest-v04-roundtrip — nixling-core ManifestV04 golden round-trip
+# manifest-v04-roundtrip — d2b-core ManifestV04 golden round-trip
 # #[test] successor of tests/manifest-v04-roundtrip.sh, which built xtask
 # manifest_v04_check and ran tests/golden/manifest_v04/assert-roundtrip.sh
 # against tests/golden/manifest_v04/baseline-vms.json.

@@ -5,13 +5,13 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.nixling.observability;
+  cfg = config.d2b.observability;
 
   signoz = import ../../../pkgs/signoz { inherit pkgs; };
   signozOtelCollector = import ../../../pkgs/signoz-otel-collector { inherit pkgs; };
   signozSchemaMigrator = import ../../../pkgs/signoz-schema-migrator { inherit pkgs; };
 
-  hostSecretsGuestDir = "/run/nixling-obs-secrets";
+  hostSecretsGuestDir = "/run/d2b-obs-secrets";
   clickhousePort = 9000;
   clickhouseHttpPort = 8123;
   clickhouseInterserverPort = 9009;
@@ -31,7 +31,7 @@ let
       # Standalone-only fallback (used when cfg.ingress.sources == {}).
       # The bundled path always sets ingress.sources via
       # observability-vm.nix's obsIngressSources, which threads the host's
-      # nixling.observability.host.identityName here instead. Do NOT derive
+      # d2b.observability.host.identityName here instead. Do NOT derive
       # this from config.networking.hostName: in stack.nix that is the
       # obs-VM's own hostname, not the physical host (ADR 0033).
       vmName = "host";
@@ -131,7 +131,7 @@ let
     };
   };
   vsockIngressServices = lib.mapAttrs' (sourceName: source:
-    lib.nameValuePair "nixling-otel-vsock-in-${sourceName}" {
+    lib.nameValuePair "d2b-otel-vsock-in-${sourceName}" {
       description = "Receive OTLP from ${sourceName} and forward to the SigNoz collector";
       wantedBy = [ "multi-user.target" ];
       wants = [ "signoz-otel-collector.service" ];
@@ -165,7 +165,7 @@ let
     }
   ) ingressSources;
 
-  signozConfig = pkgs.writeText "nixling-signoz.yaml" (
+  signozConfig = pkgs.writeText "d2b-signoz.yaml" (
     lib.generators.toYAML { } {
       global = {
         external_url = "http://${cfg.signoz.listenAddress}:${toString signozPort}";
@@ -233,7 +233,7 @@ let
     }
   );
 
-  collectorConfig = pkgs.writeText "nixling-signoz-otel-collector.yaml" (
+  collectorConfig = pkgs.writeText "d2b-signoz-otel-collector.yaml" (
     lib.generators.toYAML { } {
       receivers = sourceReceivers // selfMetricsReceiver;
       processors = {
@@ -306,13 +306,13 @@ let
     }
   );
 
-  clickhouseStart = pkgs.writeShellScript "nixling-clickhouse-start" ''
+  clickhouseStart = pkgs.writeShellScript "d2b-clickhouse-start" ''
     set -eu
     export SIGNOZ_CLICKHOUSE_PASSWORD="$(cat "$CREDENTIALS_DIRECTORY/${clickhousePasswordCredential}")"
     exec ${pkgs.clickhouse}/bin/clickhouse-server --config=/etc/clickhouse-server/config.xml
   '';
 
-  keeperConfig = pkgs.writeText "nixling-clickhouse-keeper.xml" ''
+  keeperConfig = pkgs.writeText "d2b-clickhouse-keeper.xml" ''
     <clickhouse>
       <logger>
         <level>information</level>
@@ -340,12 +340,12 @@ let
     </clickhouse>
   '';
 
-  keeperStart = pkgs.writeShellScript "nixling-clickhouse-keeper-start" ''
+  keeperStart = pkgs.writeShellScript "d2b-clickhouse-keeper-start" ''
     set -eu
     exec ${pkgs.clickhouse}/bin/clickhouse-keeper --config-file=${keeperConfig}
   '';
 
-  signozStart = pkgs.writeShellScript "nixling-signoz-start" ''
+  signozStart = pkgs.writeShellScript "d2b-signoz-start" ''
     set -eu
     export SIGNOZ_ANALYTICS_ENABLED=false
     export TELEMETRY_ENABLED=false
@@ -361,7 +361,7 @@ let
     exec ${signoz}/bin/signoz server --config ${signozConfig}
   '';
 
-  collectorStart = pkgs.writeShellScript "nixling-signoz-otel-collector-start" ''
+  collectorStart = pkgs.writeShellScript "d2b-signoz-otel-collector-start" ''
     set -eu
     pw="$(cat "$CREDENTIALS_DIRECTORY/${clickhousePasswordCredential}")"
     pw_uri="$(${pkgs.jq}/bin/jq -nr --arg v "$pw" '$v|@uri')"
@@ -372,7 +372,7 @@ let
     exec ${signozOtelCollector}/bin/signoz-otel-collector --config ${collectorConfig}
   '';
 
-  migrateSync = pkgs.writeShellScript "nixling-signoz-migrate-sync" ''
+  migrateSync = pkgs.writeShellScript "d2b-signoz-migrate-sync" ''
     set -eu
     pw="$(cat "$CREDENTIALS_DIRECTORY/${clickhousePasswordCredential}")"
     pw_uri="$(${pkgs.jq}/bin/jq -nr --arg v "$pw" '$v|@uri')"
@@ -392,7 +392,7 @@ let
     ${signozSchemaMigrator}/bin/signoz-schema-migrator sync --dsn "$dsn" --replication --cluster-name cluster
   '';
 
-  migrateAsync = pkgs.writeShellScript "nixling-signoz-migrate-async" ''
+  migrateAsync = pkgs.writeShellScript "d2b-signoz-migrate-async" ''
     set -eu
     pw="$(cat "$CREDENTIALS_DIRECTORY/${clickhousePasswordCredential}")"
     pw_uri="$(${pkgs.jq}/bin/jq -nr --arg v "$pw" '$v|@uri')"
@@ -401,7 +401,7 @@ let
   '';
 in
 {
-  options.nixling.observability = {
+  options.d2b.observability = {
     enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -419,7 +419,7 @@ in
 
     hostName = lib.mkOption {
       type = lib.types.str;
-      default = "nixling-host";
+      default = "d2b-host";
       description = ''
         Name of the physical host the guests run on. Stamped as the
         `deployment.environment` resource attribute on all ingested
@@ -473,7 +473,7 @@ in
 
       adminEmail = lib.mkOption {
         type = lib.types.str;
-        default = "admin@nixling.local";
+        default = "admin@d2b.local";
         description = "Root SigNoz admin email for first-run bootstrap.";
       };
 

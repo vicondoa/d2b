@@ -1,0 +1,26 @@
+[package]
+name = "d2b-exec-runner"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lib]
+name = "d2b_exec_runner"
+path = "src/lib.rs"
+
+[[bin]]
+name = "d2b-exec-runner"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+# The library half stays dependency-pure (std only) so guestd can depend on
+# it as the FileRing/SpecCodec/record contract oracle without dragging in any
+# native-link dependency. `rustix` is consumed by the binary half only (slot
+# dir-fd openat, process-group signalling) and is already proven static in the
+# guest dependency-policy gate.
+[dependencies]
+rustix = { workspace = true }
+

@@ -1,4 +1,4 @@
-// Sandbox module for the nixling ACA + Wayland POC (ADR 0032, Wave P0).
+// Sandbox module for the d2b ACA + Wayland POC (ADR 0032, Wave P0).
 //
 // Azure Container Apps **Sandboxes** (Microsoft.App/sandboxGroups) are the
 // isolation boundary for the POC: ephemeral, strongly-isolated compute

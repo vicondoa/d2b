@@ -1,21 +1,21 @@
-# Type-G runNixOSTest: nixling state-dir traversal ACL.
+# Type-G runNixOSTest: d2b state-dir traversal ACL.
 #
 # Boots the shared daemon node and asserts the live activation posture for
-# /var/lib/nixling: launcher-group members get traverse-only access to the
+# /var/lib/d2b: launcher-group members get traverse-only access to the
 # state-dir parent, can reach/read their known per-VM key, and outsiders cannot
 # traverse or list the protected key tree.
 { pkgs, self }:
 
 let
-  nixlingLib = import ./lib.nix {
+  d2bLib = import ./lib.nix {
     inherit self;
     inherit (pkgs) lib;
   };
 in
 pkgs.testers.runNixOSTest {
-  name = "nixling-state-dir-acl";
+  name = "d2b-state-dir-acl";
 
-  nodes.machine = nixlingLib.nixlingDaemonNode {
+  nodes.machine = d2bLib.d2bDaemonNode {
     extra = {
       users.users.mallory = {
         isNormalUser = true;
@@ -28,7 +28,7 @@ pkgs.testers.runNixOSTest {
     start_all()
     machine.wait_for_unit("multi-user.target")
 
-    state_dir = "/var/lib/nixling"
+    state_dir = "/var/lib/d2b"
     keys_dir = f"{state_dir}/keys"
     key_path = f"{keys_dir}/corp-vm_ed25519"
 
@@ -38,17 +38,17 @@ pkgs.testers.runNixOSTest {
 
     state_acl = machine.succeed(f"getfacl -p {state_dir}")
     print("state-dir ACL:\n" + state_acl)
-    assert "group:nixling:--x" in state_acl, (
-        "expected g:nixling:--x traversal ACL on /var/lib/nixling"
+    assert "group:d2b:--x" in state_acl, (
+        "expected g:d2b:--x traversal ACL on /var/lib/d2b"
     )
 
     keys_posture = machine.succeed(f"stat -c '%a %U %G' {keys_dir}").strip()
-    assert keys_posture == "710 root nixling", (
-        f"expected /var/lib/nixling/keys to be 0710 root:nixling, got {keys_posture}"
+    assert keys_posture == "710 root d2b", (
+        f"expected /var/lib/d2b/keys to be 0710 root:d2b, got {keys_posture}"
     )
 
-    machine.succeed("id -nG alice | grep -qw nixling")
-    machine.fail("id -nG mallory | grep -qw nixling")
+    machine.succeed("id -nG alice | grep -qw d2b")
+    machine.fail("id -nG mallory | grep -qw d2b")
 
     # 1. Launcher member CAN stat a known per-VM key (state-dir traversal works).
     machine.succeed(f"sudo -u alice stat {key_path}")
@@ -62,7 +62,7 @@ pkgs.testers.runNixOSTest {
     # 4. Non-launcher CANNOT list the keys directory.
     machine.fail(f"sudo -u mallory ls {keys_dir}")
 
-    # 5. Launcher member CANNOT list the state-dir contents; g:nixling is --x only.
+    # 5. Launcher member CANNOT list the state-dir contents; g:d2b is --x only.
     machine.fail(f"sudo -u alice ls {state_dir}")
   '';
 }

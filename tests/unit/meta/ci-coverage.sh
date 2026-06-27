@@ -23,7 +23,7 @@ EXCLUDE_FROM_CI=(
   # lib.sh: shared helper library sourced by other tests; not a standalone test.
   "lib.sh"
 
-  # runner.sh: high-level aggregator that invokes static.sh + nixling-store.sh +
+  # runner.sh: high-level aggregator that invokes static.sh + d2b-store.sh +
   # audio.sh + security tests; it IS a test runner, not an individual test.
   # Not wired into PR CI by design (full suite; takes 10-30 min).
   "runner.sh"
@@ -46,28 +46,28 @@ EXCLUDE_FROM_CI=(
   "static.sh"
 
   # audit-forwarding.sh: Layer-2 optional live test for auditd → journald →
-  # Alloy → Loki forwarding. Requires nixling installed + live auditd stack.
+  # Alloy → Loki forwarding. Requires d2b installed + live auditd stack.
   # Skips cleanly when manifest absent; deliberately not a PR gate.
   "audit-forwarding.sh"
 
   # network-isolation.sh: Layer-2 optional live test for host datapath
-  # isolation. Requires nixling installed + live networking stack.
+  # isolation. Requires d2b installed + live networking stack.
   # Skips cleanly when manifest absent; deliberately not a PR gate.
   "network-isolation.sh"
 
-  # nixling-store.sh: Layer-2 integration tests for the per-VM /nix/store
-  # hardlink farm + lifecycle CLI. Requires a live host with nixlingd +
-  # nixling-priv-broker active. Documented in tests/README.md and AGENTS.md.
-  "nixling-store.sh"
+  # d2b-store.sh: Layer-2 integration tests for the per-VM /nix/store
+  # hardlink farm + lifecycle CLI. Requires a live host with d2bd +
+  # d2b-priv-broker active. Documented in tests/README.md and AGENTS.md.
+  "d2b-store.sh"
 
   # swtpm-persistence-smoke.sh: Layer-2 persistence regression. Requires
-  # NL_LIVE=1, a running nixlingd, and a restartable swtpm. Not runnable in
+  # D2B_LIVE=1, a running d2bd, and a restartable swtpm. Not runnable in
   # ephemeral CI.
   "swtpm-persistence-smoke.sh"
 
   # live-vm-smoke.sh: maintainer-side pre-tag live-VM smoke gate.
-  # Requires: KVM (/dev/kvm present), systemd-activated nixling-priv-broker,
-  # nixling on PATH, and declared VMs (personal-dev + work-aad for --full).
+  # Requires: KVM (/dev/kvm present), systemd-activated d2b-priv-broker,
+  # d2b on PATH, and declared VMs (personal-dev + work-aad for --full).
   # Exits 77 (SKIP) cleanly when any prerequisite is absent; never runnable in
   # ephemeral CI. Invoked via `make pre-tag` (--full) or `make smoke-lite` (--lite).
   "live-vm-smoke.sh"

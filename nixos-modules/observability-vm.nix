@@ -1,18 +1,18 @@
 # Auto-declared observability stack VM.
 #
 # TODO: `auto-obs-vm`.
-# When `nixling.observability.enable = true`, materialise the reserved
+# When `d2b.observability.enable = true`, materialise the reserved
 # observability env and the headless stack VM that will later host the
 # single-host Grafana/Prometheus/Loki/Tempo sink.
 { config, lib, ... }:
 
 let
-  cfg = config.nixling.observability;
-  obsIngressSources = config.nixling._index.observability.sources;
+  cfg = config.d2b.observability;
+  obsIngressSources = config.d2b._index.observability.sources;
 in
 {
   config = lib.mkIf cfg.enable {
-    nixling.envs.${cfg.env} = {
+    d2b.envs.${cfg.env} = {
       lanSubnet = lib.mkDefault cfg.lanSubnet;
       uplinkSubnet = lib.mkDefault cfg.uplinkSubnet;
     };
@@ -22,7 +22,7 @@ in
     # reserved-prefix exemption in assertions.nix only whitelists the per-env
     # net VMs; the matching carve-out for this observability VM belongs with
     # the transport-vsock assertions work, not in this module.
-    nixling.vms.${cfg.vmName} = {
+    d2b.vms.${cfg.vmName} = {
       env = lib.mkDefault cfg.env;
       index = lib.mkDefault cfg.index;
       autostart = lib.mkDefault true;
@@ -37,7 +37,7 @@ in
         imports = [
           ./components/observability/stack.nix
         ];
-        nixling.observability = {
+        d2b.observability = {
           retention = lib.mkDefault cfg.retention;
           grafana = lib.mkDefault cfg.grafana;
           signoz = lib.mkDefault cfg.signoz;

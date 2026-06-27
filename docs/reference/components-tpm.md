@@ -1,4 +1,4 @@
-# `nixling.vms.<vm>.tpm.*`
+# `d2b.vms.<vm>.tpm.*`
 
 > Reference for the `tpm` component module.
 > Source: [`nixos-modules/components/tpm.nix`](../../nixos-modules/components/tpm.nix)
@@ -7,9 +7,9 @@
 ## What this component does
 
 Attaches a software-emulated TPM 2.0 device to the guest. Per-VM
-`swtpm socket` runs on the host as a dedicated `nixling-<vm>-swtpm`
+`swtpm socket` runs on the host as a dedicated `d2b-<vm>-swtpm`
 system user; cloud-hypervisor connects to it via
-`--tpm socket=/run/nixling/vms/<vm>/tpm.sock`. The guest kernel sees a normal
+`--tpm socket=/run/d2b/vms/<vm>/tpm.sock`. The guest kernel sees a normal
 TPM CRB device, exposes `/dev/tpm0` + `/dev/tpmrm0`, and an in-guest
 oneshot provisions the TPM2 Storage Root Key at the standard
 persistent handle `0x81000001` (ECC P-256 preferred, RSA-2048
@@ -18,13 +18,13 @@ consumers) can bind keys without bootstrapping themselves.
 
 TPM state — including the SRK and any keys bound to it by services
 running inside the VM — is **persisted on the host** at
-`/var/lib/nixling/vms/<vm>/swtpm/`.
+`/var/lib/d2b/vms/<vm>/swtpm/`.
 
 ## Options (host-side)
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `nixling.vms.<vm>.tpm.enable` | bool | `false` | Attach an swtpm 2.0 device to this VM as TPM CRB. Implies `hypervisor = cloud-hypervisor` (the only one microvm.nix can wire swtpm to). |
+| `d2b.vms.<vm>.tpm.enable` | bool | `false` | Attach an swtpm 2.0 device to this VM as TPM CRB. Implies `hypervisor = cloud-hypervisor` (the only one microvm.nix can wire swtpm to). |
 
 ## Options (guest-side propagation)
 
@@ -34,21 +34,21 @@ all guest-side wiring is unconditional within the module.
 
 ## Host-side resources created
 
-- **`nixling-<vm>-swtpm` system user + group**
+- **`d2b-<vm>-swtpm` system user + group**
   ([`host-users.nix`](../../nixos-modules/host-users.nix)). Static
   per-VM user — `DynamicUser = false` so state under
-  `/var/lib/nixling/vms/<vm>/swtpm/` has a stable owner.
-- **`nixling-<vm>-swtpm.service`**
+  `/var/lib/d2b/vms/<vm>/swtpm/` has a stable owner.
+- **`d2b-<vm>-swtpm.service`**
   ([`host-sidecars.nix`](../../nixos-modules/host-sidecars.nix)).
-  - Runs as `nixling-<vm>-swtpm:nixling-<vm>-swtpm`.
-  - `StateDirectory = "nixling/vms/<vm>/swtpm"`, `StateDirectoryMode = 0700`.
+  - Runs as `d2b-<vm>-swtpm:d2b-<vm>-swtpm`.
+  - `StateDirectory = "d2b/vms/<vm>/swtpm"`, `StateDirectoryMode = 0700`.
   - `RuntimeDirectory = "swtpm/<vm>"`, `RuntimeDirectoryMode = 0711`.
   - `ExecStart`:
-    `swtpm socket --tpmstate dir=/var/lib/nixling/vms/<vm>/swtpm
-    --ctrl type=unixio,path=/run/nixling/vms/<vm>/tpm.sock,mode=0660 --tpm2
+    `swtpm socket --tpmstate dir=/var/lib/d2b/vms/<vm>/swtpm
+    --ctrl type=unixio,path=/run/d2b/vms/<vm>/tpm.sock,mode=0660 --tpm2
     --flags startup-clear`.
-  - `ExecStartPost`: `setfacl -m u:nixling-<vm>-gpu:rw /run/nixling/vms/<vm>/tpm.sock`
-    so cloud-hypervisor (running as `nixling-<vm>-gpu` when graphics
+  - `ExecStartPost`: `setfacl -m u:d2b-<vm>-gpu:rw /run/d2b/vms/<vm>/tpm.sock`
+    so cloud-hypervisor (running as `d2b-<vm>-gpu` when graphics
     is also enabled) can connect. Failures are tolerated for non-
     graphics VMs.
   - `partOf = [ "microvms.target" ]` so a system-wide microvm
@@ -58,16 +58,16 @@ all guest-side wiring is unconditional within the module.
     cycle the running swtpm. Killing swtpm under a live VM means
     the guest loses its TPM socket and Entra/Intune device-bound
     credentials become unreachable; the framework refuses to do
-    this silently. Use `nixling vm restart <vm> --apply` to apply pending
+    this silently. Use `d2b vm restart <vm> --apply` to apply pending
     changes. (Pre-v0.1.7 this was the broken
     `unitConfig.X-RestartIfChanged = false` form; see v0.1.7
     CHANGELOG.)
-- **State directory** `/var/lib/nixling/vms/<vm>/swtpm/`, mode 0700
-  owned by `nixling-<vm>-swtpm`. Contents are swtpm NVRAM + state
+- **State directory** `/var/lib/d2b/vms/<vm>/swtpm/`, mode 0700
+  owned by `d2b-<vm>-swtpm`. Contents are swtpm NVRAM + state
   blobs — not human-readable, not portable across VMs. In the
   daemon/broker model the privileged broker **provisions this
   directory on first VM start** (fd-safe create, owner
-  `nixling-<vm>-swtpm`, mode 0700, inherited ACLs cleared); an
+  `d2b-<vm>-swtpm`, mode 0700, inherited ACLs cleared); an
   existing directory with the correct owner is reconciled in place
   (never wiped). If a previously-provisioned directory is missing or
   replaced, the broker **fails the start closed**
@@ -75,11 +75,11 @@ all guest-side wiring is unconditional within the module.
   re-creating an empty TPM — see
   [components-tpm recovery](#) and the v1.2→v1.3 migration guide.
 - **Parent-dir posture.** The VM's state root at
-  `/var/lib/nixling/vms/<vm>/` is `nixlingd:users 3770` — `setgid`
+  `/var/lib/d2b/vms/<vm>/` is `d2bd:users 3770` — `setgid`
   so role users inherit the group, and **sticky (`+t`)** so a
   per-VM role UID (which holds rwx via POSIX ACL) cannot rename or
   unlink the principal-owned `swtpm/` directory it does not own. The
-  `nixling-<vm>-swtpm` principal additionally gets a `--x` traverse
+  `d2b-<vm>-swtpm` principal additionally gets a `--x` traverse
   ACL on the parent (gated on `tpm.enable`) so swtpm can reach its
   state directory. Without the traverse grant swtpm starts but
   EACCES'es on `tpm2-00.permall` → libtpms enters failure mode →
@@ -89,15 +89,15 @@ all guest-side wiring is unconditional within the module.
 
 ## Lifecycle (v0.1.5+)
 
-`nixling-<vm>-swtpm.service` carries `restartIfChanged = false`
+`d2b-<vm>-swtpm.service` carries `restartIfChanged = false`
 (matches the [graphics sidecar lifecycle policy](./components-graphics.md#lifecycle-v015)).
 A `nixos-rebuild switch` updates the unit file but does NOT cycle
 the running swtpm — killing swtpm under a live VM tears down the
 CH TPM socket, the guest's libtpms enters failure mode, and
 Entra/Intune device-bound creds become unreachable. After a
-rebuild, `nixling list` flags the VM with `[pending restart]` if
+rebuild, `d2b list` flags the VM with `[pending restart]` if
 its `current` closure has drifted from `booted`; apply with
-`nixling vm restart <vm> --apply` (clean down+up cycles swtpm and CH
+`d2b vm restart <vm> --apply` (clean down+up cycles swtpm and CH
 together so the TPM socket survives the round-trip). See
 [`docs/reference/cli-contract.md` — Pending-restart signal](./cli-contract.md#pending-restart-signal-v015).
 
@@ -105,7 +105,7 @@ together so the TPM socket survives the round-trip). See
 
 - `microvm.hypervisor = "cloud-hypervisor"` (via `mkDefault`).
 - `microvm.cloud-hypervisor.extraArgs =
-  [ "--tpm" "socket=/run/nixling/vms/<hostname>/tpm.sock" ]`.
+  [ "--tpm" "socket=/run/d2b/vms/<hostname>/tpm.sock" ]`.
 - `security.tpm2.enable = true`.
 - `boot.kernelModules = [ "tpm" "tpm_crb" ]` — belt-and-suspenders;
   the kernel normally auto-probes when it sees the CH TPM CRB at
@@ -126,12 +126,12 @@ together so the TPM socket survives the round-trip). See
 
 ## Runtime invariants
 
-- Each TPM-enabled VM has exactly one `nixling-<vm>-swtpm.service`
-  on the host. The socket at `/run/nixling/vms/<vm>/tpm.sock` is mode 0660,
-  owned by `nixling-<vm>-swtpm`. ACLs grant `nixling-<vm>-gpu` rw;
+- Each TPM-enabled VM has exactly one `d2b-<vm>-swtpm.service`
+  on the host. The socket at `/run/d2b/vms/<vm>/tpm.sock` is mode 0660,
+  owned by `d2b-<vm>-swtpm`. ACLs grant `d2b-<vm>-gpu` rw;
   no other user (including the kvm group) can reach the control
   protocol out-of-band.
-- swtpm NVRAM persists across `nixling vm start`/`nixling vm stop` cycles
+- swtpm NVRAM persists across `d2b vm start`/`d2b vm stop` cycles
   and across host reboots — by design. Anything the guest binds to
   the TPM (LUKS keys, Himmelblau device key, sbctl PCR policies)
   survives a VM restart.
@@ -141,7 +141,7 @@ together so the TPM socket survives the round-trip). See
 
 ## Hardening notes
 
-`nixling-<vm>-swtpm.service`:
+`d2b-<vm>-swtpm.service`:
 
 - Dedicated static system user per VM. Earlier revisions ran swtpm
   under `DynamicUser` in the `kvm` group; this was tightened so a
@@ -159,13 +159,13 @@ together so the TPM socket survives the round-trip). See
   mode 0660.
 - The control socket is mode `0660` (v1.1.2-final, was `0600`); only
   per-VM ephemeral UIDs that have a default-ACL named-user grant on
-  `/run/nixling/vms/<vm>/` (cloud-hypervisor's UID + the swtpm UID
+  `/run/d2b/vms/<vm>/` (cloud-hypervisor's UID + the swtpm UID
   itself) can open it. Cross-VM UIDs do NOT have access because the
   per-VM runtime dir's default ACL only enumerates that VM's roles.
 
 ## Common gotchas / failure modes
 
-- **DO NOT WIPE `/var/lib/nixling/vms/<vm>/swtpm/`.** Removing or
+- **DO NOT WIPE `/var/lib/d2b/vms/<vm>/swtpm/`.** Removing or
   replacing this directory regenerates a fresh, empty TPM with a
   new endorsement key. To remote IdPs (Entra ID via Himmelblau,
   any TPM-bound enrolment) this looks like device tampering and
@@ -175,7 +175,7 @@ together so the TPM socket survives the round-trip). See
 - **Backups: encrypted, access-controlled media only.** swtpm state
   contains key material; a backup that leaks the state files leaks
   every key the VM bound to its TPM. If you back up
-  `/var/lib/nixling/vms/<vm>/swtpm/`, do it to a LUKS volume (or
+  `/var/lib/d2b/vms/<vm>/swtpm/`, do it to a LUKS volume (or
   equivalent) and limit who can mount it.
 - **No swtpm without cloud-hypervisor.** `tpm.enable = true` pins
   `microvm.hypervisor` to `cloud-hypervisor` via `mkDefault`. The

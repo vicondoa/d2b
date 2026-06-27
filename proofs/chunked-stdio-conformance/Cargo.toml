@@ -1,5 +1,5 @@
 [package]
-name = "nixling-chunked-stdio-conformance"
+name = "d2b-chunked-stdio-conformance"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"

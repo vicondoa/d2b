@@ -2,7 +2,7 @@
 #
 # Point sshd at the keys provisioned on the host by
 # `nixos-modules/host-ssh-host-keys.nix` and shared in via the
-# `nl-ssh-host` virtiofs tag from `nixos-modules/store.nix`. Disable
+# `d2b-ssh-host` virtiofs tag from `nixos-modules/store.nix`. Disable
 # the NixOS default `ssh-keygen -A` activation hook so sshd does not
 # try to generate keys into the read-only nix store at boot.
 #
@@ -19,7 +19,7 @@
     # ignores. (sshd itself respects `hostKeys` and only uses ours.)
     hostKeys = lib.mkForce [{
       type = "ed25519";
-      path = "/run/nixling-sshd-host-keys/ssh_host_ed25519_key";
+      path = "/run/d2b-sshd-host-keys/ssh_host_ed25519_key";
     }];
   };
 
@@ -33,6 +33,6 @@
     # works the same way it always has, but the file is a symlink
     # into the virtiofs share. This is purely cosmetic; sshd reads
     # the canonical path above.
-    "L+ /etc/ssh/ssh_host_ed25519_key.pub - - - - /run/nixling-sshd-host-keys/ssh_host_ed25519_key.pub"
+    "L+ /etc/ssh/ssh_host_ed25519_key.pub - - - - /run/d2b-sshd-host-keys/ssh_host_ed25519_key.pub"
   ];
 }

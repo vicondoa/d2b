@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vicondoa.github.io/nixling/schemas/ui-colors-v1.json",
-  "title": "nixling UI colors",
+  "$id": "https://vicondoa.github.io/d2b/schemas/ui-colors-v1.json",
+  "title": "d2b UI colors",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "host", "states", "envs", "vms"],

@@ -1,6 +1,6 @@
 # nixos-modules/vm-evaluator.nix
 #
-# Nixling-owned per-VM NixOS evaluator. Replaces the upstream
+# D2b-owned per-VM NixOS evaluator. Replaces the upstream
 # `inputs.microvm.nixosModules.host` per-VM evaluation
 # pipeline (which used `microvm.vms = lib.mapAttrs ...` + the
 # microvm.nix host module's `lib.evalModules` invocation).
@@ -9,11 +9,11 @@
 #
 #   composeVm = (import ./vm-evaluator.nix { inherit inputs; })
 #     { inherit config lib pkgs; };
-#   nixling.vms = lib.mapAttrs (name: vm: vm // {
+#   d2b.vms = lib.mapAttrs (name: vm: vm // {
 #     computed = composeVm name vm;
 #   }) cfg.vms;
 #
-# The resulting `nixling.vms.<name>.computed.config` is a fully-
+# The resulting `d2b.vms.<name>.computed.config` is a fully-
 # evaluated NixOS config attrset containing:
 #   - `config.system.build.toplevel` (the per-VM closure)
 #   - `config.microvm.*` (the runner options from vm-options.nix
@@ -25,12 +25,12 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.nixling;
+  cfg = config.d2b;
 
   # Build a per-VM NixOS evaluation using the host's nixpkgs path.
   # `nixos/lib/eval-config.nix` is the standard NixOS eval entrypoint —
   # it sets up `pkgs`, the module system, and the standard NixOS
-  # module set. We layer our nixling-owned vm-options.nix on top so
+  # module set. We layer our d2b-owned vm-options.nix on top so
   # the per-VM config can set `microvm.mem`, etc.
   #
   # The caller (host.nix's composeVm wrapper) already merges
@@ -61,7 +61,7 @@ let
       specialArgs =
         { inherit inputs; }
         // cfg.site.extraSpecialArgs
-        // { nixlingInputs = inputs; };
+        // { d2bInputs = inputs; };
       inherit (pkgs.stdenv.hostPlatform) system;
     };
 

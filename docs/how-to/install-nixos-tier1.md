@@ -1,4 +1,4 @@
-# Install nixling on NixOS (Tier 1)
+# Install d2b on NixOS (Tier 1)
 
 This is the module-first Tier-1 path for hosts that already run
 NixOS. Prefer it over the generic host-install scaffold whenever you
@@ -6,13 +6,13 @@ control the host configuration directly.
 
 ## 1. Import the module
 
-Add the nixling flake input, follow its pinned `nixpkgs`, and import
-`nixling.nixosModules.default` in your host's `nixosSystem`.
+Add the d2b flake input, follow its pinned `nixpkgs`, and import
+`d2b.nixosModules.default` in your host's `nixosSystem`.
 
 The fastest scaffold is still:
 
 ```bash
-nix flake init -t github:vicondoa/nixling
+nix flake init -t github:vicondoa/d2b
 ```
 
 If you already own the host flake, follow the manual-integration
@@ -33,9 +33,9 @@ sidecars, bundles, and CLI all land through the host generation.
 Run at least:
 
 ```bash
-nixling auth status --json
-nixling host check --strict
-nixling host doctor --read-only --json
+d2b auth status --json
+d2b host check --strict
+d2b host doctor --read-only --json
 ```
 
 If you are onboarding a non-trivial host or importing pre-existing
@@ -46,16 +46,16 @@ lifecycle for more VMs.
 ## 4. Start the first VM with the Rust CLI
 
 ```bash
-sudo nixling vm start personal-dev --apply
+sudo d2b vm start personal-dev --apply
 ```
 
-Drop `NIXLING_NATIVE_ONLY=1` if you still want the default
-v1.0 daemon-only behavior (per ADR 0015; NIXLING_NATIVE_ONLY is a no-op for lifecycle verbs).
+Drop `D2B_NATIVE_ONLY=1` if you still want the default
+v1.0 daemon-only behavior (per ADR 0015; D2B_NATIVE_ONLY is a no-op for lifecycle verbs).
 
 For the Entra showcase, the matching command is:
 
 ```bash
-sudo nixling vm start work-entra --apply
+sudo d2b vm start work-entra --apply
 ```
 
 ## 5. Migrating an existing bash-era host
@@ -67,7 +67,7 @@ host onto daemon-owned lifecycle with
 
 Roll back by rebuilding to the prior host generation (the v1.0
 daemon-only contract per ADR 0015 has no env-var escape hatch;
-`NIXLING_LEGACY_BASH_OPT_IN=1` was retired in v1.0 along with the
+`D2B_LEGACY_BASH_OPT_IN=1` was retired in v1.0 along with the
 bash CLI).
 
 ## See also
@@ -76,6 +76,6 @@ bash CLI).
   onboarding and prerequisite reconciliation.
 - [`migrate-nixos-to-daemon.md`](./migrate-nixos-to-daemon.md) —
   move an existing NixOS host from legacy systemd-owned VMs to
-  `nixlingd`.
+  `d2bd`.
 - [`install-ubuntu-2404.md`](./install-ubuntu-2404.md)
 - [`install-fedora.md`](./install-fedora.md)

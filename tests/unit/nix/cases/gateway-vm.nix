@@ -10,27 +10,27 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
 
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.44.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
   };
 
   base = lib.recursiveUpdate hostBase {
-    nixling.gateways.work = {
+    d2b.gateways.work = {
       env = "work";
       index = 20;
       relay.namespace = "relns-example.servicebus.windows.net";
-      relay.entity = "hc-nixling-display";
+      relay.entity = "hc-d2b-display";
       aca = {
         endpoint = "https://example.azurecontainerapps.io";
         subscription = "00000000-0000-0000-0000-000000000000";
-        resourceGroup = "rg-nixling-centralus";
-        sandboxGroup = "casbx-nixling-demo";
+        resourceGroup = "rg-d2b-centralus";
+        sandboxGroup = "casbx-d2b-demo";
         region = "centralus";
-        image = "registry.example.azurecr.io/nixling-wayland:mi";
-        diskName = "nixling-wayland-mi";
-        managedIdentityResourceId = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/nixling";
+        image = "registry.example.azurecr.io/d2b-wayland:mi";
+        diskName = "d2b-wayland-mi";
+        managedIdentityResourceId = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/d2b";
         managedIdentityClientId = "11111111-1111-1111-1111-111111111111";
       };
       display.waypipeSocket = "/run/user/1000/wpc.sock";
@@ -41,21 +41,21 @@ let
   noGatewayCfg = (mkEval [ hostBase ]).config;
   noRelayGatewayCfg = (mkEval [
     (lib.recursiveUpdate hostBase {
-      nixling.gateways.work = {
+      d2b.gateways.work = {
         env = "work";
         index = 20;
       };
     })
   ]).config;
-  gatewayGuestCfg = goodCfg.nixling._computed."sys-work-gateway".config;
-  gatewayGuestService = gatewayGuestCfg.systemd.services.nixlingd.serviceConfig;
+  gatewayGuestCfg = goodCfg.d2b._computed."sys-work-gateway".config;
+  gatewayGuestService = gatewayGuestCfg.systemd.services.d2bd.serviceConfig;
   gatewayGuestTmpfiles = gatewayGuestCfg.systemd.tmpfiles.rules;
   hostTmpfiles = goodCfg.systemd.tmpfiles.rules;
-  gatewayJson = builtins.fromJSON gatewayGuestCfg.environment.etc."nixling/gateway.json".text;
-  hostDaemonJson = builtins.fromJSON goodCfg.environment.etc."nixling/daemon-config.json".text;
-  hostGatewayJsonPresent = builtins.hasAttr "nixling/gateway.json" goodCfg.environment.etc;
-  hostRealmEntrypoints = goodCfg.nixling._computed.realmEntrypoints;
-  hostRealmRelayEgressPolicy = goodCfg.nixling._computed.hostRealmRelayEgressPolicy;
+  gatewayJson = builtins.fromJSON gatewayGuestCfg.environment.etc."d2b/gateway.json".text;
+  hostDaemonJson = builtins.fromJSON goodCfg.environment.etc."d2b/daemon-config.json".text;
+  hostGatewayJsonPresent = builtins.hasAttr "d2b/gateway.json" goodCfg.environment.etc;
+  hostRealmEntrypoints = goodCfg.d2b._computed.realmEntrypoints;
+  hostRealmRelayEgressPolicy = goodCfg.d2b._computed.hostRealmRelayEgressPolicy;
   renderText = value:
     if builtins.isString value then value
     else if builtins.isList value then lib.concatStringsSep "\n" (map renderText value)
@@ -82,24 +82,24 @@ let
     "Endpoint=sb://"
     "AccountKey"
     "relns-example.servicebus.windows.net"
-    "hc-nixling-display"
+    "hc-d2b-display"
     "https://example.azurecontainerapps.io"
     "00000000-0000-0000-0000-000000000000"
-    "rg-nixling-centralus"
-    "casbx-nixling-demo"
+    "rg-d2b-centralus"
+    "casbx-d2b-demo"
     "centralus"
-    "registry.example.azurecr.io/nixling-wayland:mi"
-    "nixling-wayland-mi"
-    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/nixling"
+    "registry.example.azurecr.io/d2b-wayland:mi"
+    "d2b-wayland-mi"
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/d2b"
     "11111111-1111-1111-1111-111111111111"
-    "/var/lib/nixling/gateways/work/credential.sealed.json"
-    "/var/lib/nixling/gateways/work/seal.key"
-    "NIXLING_RELAY_NAMESPACE"
-    "NIXLING_RELAY_ENTITY"
-    "NIXLING_RELAY_SAS_TOKEN"
-    "NIXLING_RELAY_ENTRA_TOKEN"
-    "NIXLING_RELAY_KEY_NAME"
-    "NIXLING_RELAY_KEY"
+    "/var/lib/d2b/gateways/work/credential.sealed.json"
+    "/var/lib/d2b/gateways/work/seal.key"
+    "D2B_RELAY_NAMESPACE"
+    "D2B_RELAY_ENTITY"
+    "D2B_RELAY_SAS_TOKEN"
+    "D2B_RELAY_ENTRA_TOKEN"
+    "D2B_RELAY_KEY_NAME"
+    "D2B_RELAY_KEY"
   ];
   forbiddenRemoteRegistryMarkers = [
     "\"remoteNodes\""
@@ -115,36 +115,36 @@ let
   containsForbiddenRealmMaterial = jsonContainsAny forbiddenHostRealmMaterial;
   containsRemoteRegistryMarker = jsonContainsAny forbiddenRemoteRegistryMarkers;
   localFastPathSnapshot = cfg:
-    let daemonJson = builtins.fromJSON cfg.environment.etc."nixling/daemon-config.json".text;
+    let daemonJson = builtins.fromJSON cfg.environment.etc."d2b/daemon-config.json".text;
     in {
-      daemonConfigPresent = builtins.hasAttr "nixling/daemon-config.json" cfg.environment.etc;
+      daemonConfigPresent = builtins.hasAttr "d2b/daemon-config.json" cfg.environment.etc;
       publicSocketPath = daemonJson.publicSocketPath;
       publicSocketGroup = daemonJson.publicSocketGroup;
       brokerSocketPath = daemonJson.brokerSocketPath;
-      nixlingdServicePresent = builtins.hasAttr "nixlingd" cfg.systemd.services;
-      nixlingdSupplementaryGroups = cfg.systemd.services.nixlingd.serviceConfig.SupplementaryGroups;
+      d2bdServicePresent = builtins.hasAttr "d2bd" cfg.systemd.services;
+      d2bdSupplementaryGroups = cfg.systemd.services.d2bd.serviceConfig.SupplementaryGroups;
       runDirAllowsLocalLaunchers =
-        builtins.elem "d /run/nixling 1770 root nixling -" cfg.systemd.tmpfiles.rules
-        && builtins.elem "z /run/nixling 1770 root nixling -" cfg.systemd.tmpfiles.rules
-        && builtins.elem "a+ /run/nixling - - - - g::r-x" cfg.systemd.tmpfiles.rules
-        && builtins.elem "a+ /run/nixling - - - - u:nixlingd:rwx" cfg.systemd.tmpfiles.rules
-        && builtins.elem "a+ /run/nixling - - - - m::rwx" cfg.systemd.tmpfiles.rules;
-      realmEntries = lib.sort lib.lessThan (builtins.attrNames cfg.nixling._computed.realmEntrypoints.entries);
-      localEntrypoint = cfg.nixling._computed.realmEntrypoints.entries.local;
-      hostGatewayJsonPresent = builtins.hasAttr "nixling/gateway.json" cfg.environment.etc;
+        builtins.elem "d /run/d2b 1770 root d2b -" cfg.systemd.tmpfiles.rules
+        && builtins.elem "z /run/d2b 1770 root d2b -" cfg.systemd.tmpfiles.rules
+        && builtins.elem "a+ /run/d2b - - - - g::r-x" cfg.systemd.tmpfiles.rules
+        && builtins.elem "a+ /run/d2b - - - - u:d2bd:rwx" cfg.systemd.tmpfiles.rules
+        && builtins.elem "a+ /run/d2b - - - - m::rwx" cfg.systemd.tmpfiles.rules;
+      realmEntries = lib.sort lib.lessThan (builtins.attrNames cfg.d2b._computed.realmEntrypoints.entries);
+      localEntrypoint = cfg.d2b._computed.realmEntrypoints.entries.local;
+      hostGatewayJsonPresent = builtins.hasAttr "d2b/gateway.json" cfg.environment.etc;
     };
   gatewayProc = lib.findFirst (vm: vm.vm == "sys-work-gateway") null
-    goodCfg.nixling._bundle.processesJson.data.vms;
+    goodCfg.d2b._bundle.processesJson.data.vms;
   badCfg = (mkEval [
     (lib.recursiveUpdate base {
-      nixling.gateways.work.credentialPath = "SharedAccessKey=bad";
+      d2b.gateways.work.credentialPath = "SharedAccessKey=bad";
     })
   ]).config;
   failureMessages = cfg: map (a: a.message) (lib.filter (a: !a.assertion) cfg.assertions);
   badMessages = failureMessages badCfg;
   badStateOutsideMessages = failureMessages ((mkEval [
     (lib.recursiveUpdate base {
-      nixling.gateways.work = {
+      d2b.gateways.work = {
         stateDir = "/var/lib/other/work";
         credentialPath = "/var/lib/other/work/credential.json";
       };
@@ -152,113 +152,113 @@ let
   ]).config);
   badCredentialOutsideStateMessages = failureMessages ((mkEval [
     (lib.recursiveUpdate base {
-      nixling.gateways.work.credentialPath = "/var/lib/nixling/other/credential.json";
+      d2b.gateways.work.credentialPath = "/var/lib/d2b/other/credential.json";
     })
   ]).config);
   badSealKeyOutsideStateMessages = failureMessages ((mkEval [
     (lib.recursiveUpdate base {
-      nixling.gateways.work.sealKeyPath = "/var/lib/nixling/other/seal.key";
+      d2b.gateways.work.sealKeyPath = "/var/lib/d2b/other/seal.key";
     })
   ]).config);
   badTraversalMessages = failureMessages ((mkEval [
     (lib.recursiveUpdate base {
-      nixling.gateways.work = {
-        stateDir = "/var/lib/nixling/gateways/../work";
-        credentialPath = "/var/lib/nixling/gateways/../work/credential.json";
+      d2b.gateways.work = {
+        stateDir = "/var/lib/d2b/gateways/../work";
+        credentialPath = "/var/lib/d2b/gateways/../work/credential.json";
       };
     })
   ]).config);
   badPerVmStateMessages = failureMessages ((mkEval [
     (lib.recursiveUpdate base {
-      nixling.gateways.work = {
-        stateDir = "/var/lib/nixling/vms/sys-work-gateway";
-        credentialPath = "/var/lib/nixling/vms/sys-work-gateway/credential.json";
+      d2b.gateways.work = {
+        stateDir = "/var/lib/d2b/vms/sys-work-gateway";
+        credentialPath = "/var/lib/d2b/vms/sys-work-gateway/credential.json";
       };
     })
   ]).config);
   badDaemonDisabledMessages = failureMessages ((mkEval [
     (lib.recursiveUpdate base {
-      nixling.daemonExperimental.enable = false;
+      d2b.daemonExperimental.enable = false;
     })
   ]).config);
   multiGatewayCfg = (mkEval [
     (lib.recursiveUpdate base {
-      nixling.envs.personal = {
+      d2b.envs.personal = {
         lanSubnet = "10.45.0.0/24";
         uplinkSubnet = "198.51.100.0/30";
       };
-      nixling.gateways.personal = {
+      d2b.gateways.personal = {
         env = "personal";
         index = 21;
         relay.namespace = "relns-personal.servicebus.windows.net";
-        relay.entity = "hc-nixling-display";
+        relay.entity = "hc-d2b-display";
       };
     })
   ]).config;
   multiGatewayMessages = map (a: a.message) (lib.filter (a: !a.assertion) multiGatewayCfg.assertions);
-  multiGatewayRealmEntrypoints = multiGatewayCfg.nixling._computed.realmEntrypoints;
+  multiGatewayRealmEntrypoints = multiGatewayCfg.d2b._computed.realmEntrypoints;
   customGatewayNameCfg = (mkEval [
     (lib.recursiveUpdate base {
-      nixling.gateways.work.vmName = "corp-gateway";
+      d2b.gateways.work.vmName = "corp-gateway";
     })
   ]).config;
-  customGatewayNameEntrypoints = customGatewayNameCfg.nixling._computed.realmEntrypoints;
+  customGatewayNameEntrypoints = customGatewayNameCfg.d2b._computed.realmEntrypoints;
   duplicateGatewayRealmMessages = failureMessages ((mkEval [
     (lib.recursiveUpdate base {
-      nixling.envs.personal = {
+      d2b.envs.personal = {
         lanSubnet = "10.45.0.0/24";
         uplinkSubnet = "198.51.100.0/30";
       };
-      nixling.gateways.personal = {
+      d2b.gateways.personal = {
         realm = "work";
         env = "personal";
         index = 21;
         relay.namespace = "relns-personal.servicebus.windows.net";
-        relay.entity = "hc-nixling-display";
+        relay.entity = "hc-d2b-display";
       };
     })
   ]).config);
   sharedGatewayEnvMessages = failureMessages ((mkEval [
     (lib.recursiveUpdate base {
-      nixling.gateways.personal = {
+      d2b.gateways.personal = {
         realm = "personal";
         env = "work";
         index = 21;
         relay.namespace = "relns-personal.servicebus.windows.net";
-        relay.entity = "hc-nixling-display";
+        relay.entity = "hc-d2b-display";
       };
     })
   ]).config);
   localRealmGatewayMessages = failureMessages ((mkEval [
     (lib.recursiveUpdate base {
-      nixling.gateways.work.realm = "local";
+      d2b.gateways.work.realm = "local";
     })
   ]).config);
   retiredHostRelayCredentialMessages = failureMessages ((mkEval [
     (lib.recursiveUpdate base {
-      nixling.gateways.work.allowHostRelayCredentials = true;
+      d2b.gateways.work.allowHostRelayCredentials = true;
     })
   ]).config);
   sourceToolsCfg = (mkEval [
     (lib.recursiveUpdate base {
-      nixling.site.usePrebuiltHostTools = false;
+      d2b.site.usePrebuiltHostTools = false;
     })
   ]).config;
-  sourceGatewayGuestCfg = sourceToolsCfg.nixling._computed."sys-work-gateway".config;
+  sourceGatewayGuestCfg = sourceToolsCfg.d2b._computed."sys-work-gateway".config;
   gatewayModuleSource = builtins.readFile (flakeRoot + "/nixos-modules/gateway-vm.nix");
   packageNames = map (pkg: pkg.pname or (lib.getName pkg)) gatewayGuestCfg.environment.systemPackages;
 in
 {
   "gateway-vm/auto-declared-name" = {
-    expr = builtins.elem "sys-work-gateway" (builtins.attrNames goodCfg.nixling.vms);
+    expr = builtins.elem "sys-work-gateway" (builtins.attrNames goodCfg.d2b.vms);
     expected = true;
   };
 
   "gateway-vm/auto-declared-env-index" = {
     expr = {
-      env = goodCfg.nixling.vms."sys-work-gateway".env;
-      index = goodCfg.nixling.vms."sys-work-gateway".index;
-      sshUser = goodCfg.nixling.vms."sys-work-gateway".ssh.user;
+      env = goodCfg.d2b.vms."sys-work-gateway".env;
+      index = goodCfg.d2b.vms."sys-work-gateway".index;
+      sshUser = goodCfg.d2b.vms."sys-work-gateway".ssh.user;
     };
     expected = {
       env = "work";
@@ -275,28 +275,28 @@ in
 
   "gateway-vm/rejects-secret-shaped-credential-path" = {
     expr = lib.any
-      (m: lib.hasInfix "nixling.gateways.work.credentialPath must be an absolute runtime" m)
+      (m: lib.hasInfix "d2b.gateways.work.credentialPath must be an absolute runtime" m)
       badMessages;
     expected = true;
   };
 
   "gateway-vm/rejects-state-dir-outside-site-state" = {
     expr = lib.any
-      (m: lib.hasInfix "nixling.gateways.work.stateDir must be an absolute runtime" m)
+      (m: lib.hasInfix "d2b.gateways.work.stateDir must be an absolute runtime" m)
       badStateOutsideMessages;
     expected = true;
   };
 
   "gateway-vm/rejects-credential-path-outside-gateway-state" = {
     expr = lib.any
-      (m: lib.hasInfix "nixling.gateways.work.credentialPath must live under" m)
+      (m: lib.hasInfix "d2b.gateways.work.credentialPath must live under" m)
       badCredentialOutsideStateMessages;
     expected = true;
   };
 
   "gateway-vm/rejects-seal-key-path-outside-gateway-state" = {
     expr = lib.any
-      (m: lib.hasInfix "nixling.gateways.work.sealKeyPath must live under" m)
+      (m: lib.hasInfix "d2b.gateways.work.sealKeyPath must live under" m)
       badSealKeyOutsideStateMessages;
     expected = true;
   };
@@ -310,14 +310,14 @@ in
 
   "gateway-vm/rejects-per-vm-state-root-for-gateway-secrets" = {
     expr = lib.any
-      (m: lib.hasInfix "stateDir must not live under" m && lib.hasInfix "nixling.store.stateDir" m)
+      (m: lib.hasInfix "stateDir must not live under" m && lib.hasInfix "d2b.store.stateDir" m)
       badPerVmStateMessages;
     expected = true;
   };
 
   "gateway-vm/requires-daemon-control-plane" = {
     expr = lib.any
-      (m: lib.hasInfix "nixling.gateways requires nixling.daemonExperimental.enable = true" m)
+      (m: lib.hasInfix "d2b.gateways requires d2b.daemonExperimental.enable = true" m)
       badDaemonDisabledMessages;
     expected = true;
   };
@@ -330,9 +330,9 @@ in
 
   "gateway-vm/guest-services-installed-without-static-waypipe" = {
     expr = {
-      hasNixlingd = builtins.hasAttr "nixlingd" gatewayGuestCfg.systemd.services;
-      gatewayJson = builtins.hasAttr "nixling/gateway.json" gatewayGuestCfg.environment.etc;
-      daemonJson = builtins.hasAttr "nixling/daemon-config.json" gatewayGuestCfg.environment.etc;
+      hasD2bd = builtins.hasAttr "d2bd" gatewayGuestCfg.systemd.services;
+      gatewayJson = builtins.hasAttr "d2b/gateway.json" gatewayGuestCfg.environment.etc;
+      daemonJson = builtins.hasAttr "d2b/daemon-config.json" gatewayGuestCfg.environment.etc;
       gatewayAca = {
         subscription = gatewayJson.aca.subscription;
         resourceGroup = gatewayJson.aca.resourceGroup;
@@ -349,28 +349,28 @@ in
       hasWaypipeSocket = gatewayJson.display ? waypipeSocket;
       sealKeyPath = gatewayJson.sealKeyPath;
       credentialPath = gatewayJson.credentialPath;
-      hasEnrollmentHelper = builtins.elem "nixling-gateway-runtime" packageNames;
-      hasWaypipeClient = builtins.hasAttr "nixling-gateway-waypipe-client" gatewayGuestCfg.systemd.services;
-      hasWaypipeServer = builtins.hasAttr "nixling-gateway-waypipe-server" gatewayGuestCfg.systemd.services;
+      hasEnrollmentHelper = builtins.elem "d2b-gateway-runtime" packageNames;
+      hasWaypipeClient = builtins.hasAttr "d2b-gateway-waypipe-client" gatewayGuestCfg.systemd.services;
+      hasWaypipeServer = builtins.hasAttr "d2b-gateway-waypipe-server" gatewayGuestCfg.systemd.services;
     };
     expected = {
-      hasNixlingd = true;
+      hasD2bd = true;
       gatewayJson = true;
       daemonJson = true;
       gatewayAca = {
         subscription = "00000000-0000-0000-0000-000000000000";
-        resourceGroup = "rg-nixling-centralus";
-        sandboxGroup = "casbx-nixling-demo";
+        resourceGroup = "rg-d2b-centralus";
+        sandboxGroup = "casbx-d2b-demo";
         region = "centralus";
-        image = "registry.example.azurecr.io/nixling-wayland:mi";
-        diskName = "nixling-wayland-mi";
+        image = "registry.example.azurecr.io/d2b-wayland:mi";
+        diskName = "d2b-wayland-mi";
         managedIdentityClientId = "11111111-1111-1111-1111-111111111111";
         cpu = "1000m";
         memory = "2048Mi";
         autoSuspendIntervalSecs = 600;
       };
-      sealKeyPath = "/var/lib/nixling/gateways/work/seal.key";
-      credentialPath = "/var/lib/nixling/gateways/work/credential.sealed.json";
+      sealKeyPath = "/var/lib/d2b/gateways/work/seal.key";
+      credentialPath = "/var/lib/d2b/gateways/work/credential.sealed.json";
       hasEnrollmentHelper = true;
       hasWaypipeSocket = false;
       hasWaypipeClient = false;
@@ -380,7 +380,7 @@ in
 
   "gateway-vm/gateway-guest-json-retains-realm-provider-material" = {
     expr = {
-      guestGatewayJsonPresent = builtins.hasAttr "nixling/gateway.json" gatewayGuestCfg.environment.etc;
+      guestGatewayJsonPresent = builtins.hasAttr "d2b/gateway.json" gatewayGuestCfg.environment.etc;
       guestCarriesGatewayProviderMaterial = containsForbiddenRealmMaterial gatewayJson;
       inherit hostGatewayJsonPresent;
     };
@@ -391,7 +391,7 @@ in
     };
   };
 
-  "gateway-vm/guest-daemon-runs-as-nixlingd-without-no-drop-flag" = {
+  "gateway-vm/guest-daemon-runs-as-d2bd-without-no-drop-flag" = {
     expr = {
       user = gatewayGuestService.User;
       group = gatewayGuestService.Group;
@@ -400,12 +400,12 @@ in
       noNewPrivileges = gatewayGuestService.NoNewPrivileges;
       capabilityBoundingSet = gatewayGuestService.CapabilityBoundingSet;
       ambientCapabilities = gatewayGuestService.AmbientCapabilities;
-      restartIfChanged = gatewayGuestCfg.systemd.services.nixlingd.restartIfChanged;
+      restartIfChanged = gatewayGuestCfg.systemd.services.d2bd.restartIfChanged;
     };
     expected = {
-      user = "nixlingd";
-      group = "nixlingd";
-      supplementaryGroups = [ "nixling" ];
+      user = "d2bd";
+      group = "d2bd";
+      supplementaryGroups = [ "d2b" ];
       execStartHasNoDropFlag = false;
       noNewPrivileges = true;
       capabilityBoundingSet = [ "" ];
@@ -416,12 +416,12 @@ in
 
   "gateway-vm/host-guest-state-ownership-boundary" = {
     expr = {
-      hostStateDir = builtins.elem "d /var/lib/nixling/gateways/work 0750 root nixlingd -" hostTmpfiles;
-      guestStateDir = builtins.elem "d /var/lib/nixling/gateways/work 0700 nixlingd nixlingd -" gatewayGuestTmpfiles;
-      guestDaemonStateDir = builtins.elem "d /var/lib/nixling/daemon-state 0700 nixlingd nixlingd -" gatewayGuestTmpfiles;
-      guestCacheDir = builtins.elem "d /var/cache/nixling 0750 root nixlingd -" gatewayGuestTmpfiles;
-      guestLockFile = builtins.elem "f /run/nixling/daemon.lock 0640 nixlingd nixlingd -" gatewayGuestTmpfiles;
-      gatewayUserCanReachPublicSocket = builtins.elem "nixling" gatewayGuestCfg.users.users.gateway.extraGroups;
+      hostStateDir = builtins.elem "d /var/lib/d2b/gateways/work 0750 root d2bd -" hostTmpfiles;
+      guestStateDir = builtins.elem "d /var/lib/d2b/gateways/work 0700 d2bd d2bd -" gatewayGuestTmpfiles;
+      guestDaemonStateDir = builtins.elem "d /var/lib/d2b/daemon-state 0700 d2bd d2bd -" gatewayGuestTmpfiles;
+      guestCacheDir = builtins.elem "d /var/cache/d2b 0750 root d2bd -" gatewayGuestTmpfiles;
+      guestLockFile = builtins.elem "f /run/d2b/daemon.lock 0640 d2bd d2bd -" gatewayGuestTmpfiles;
+      gatewayUserCanReachPublicSocket = builtins.elem "d2b" gatewayGuestCfg.users.users.gateway.extraGroups;
     };
     expected = {
       hostStateDir = false;
@@ -437,8 +437,8 @@ in
     expr = {
       activationCarriesRelayOrAcaMaterial = containsForbiddenRealmMaterial hostActivationText;
       servicesCarryRelayOrAcaMaterial = containsForbiddenRealmMaterial hostServiceText;
-      servicesCarryGatewayRuntime = lib.hasInfix "nixling-gateway-relay" hostServiceText
-        || lib.hasInfix "nixling-gateway-enroll" hostServiceText;
+      servicesCarryGatewayRuntime = lib.hasInfix "d2b-gateway-relay" hostServiceText
+        || lib.hasInfix "d2b-gateway-enroll" hostServiceText;
     };
     expected = {
       activationCarriesRelayOrAcaMaterial = false;
@@ -469,7 +469,7 @@ in
       daemonConfigCarriesGateway = false;
       carriesRelayOrAcaMaterial = false;
       carriesRemoteNodeRegistry = false;
-      gatewayConfigPath = "/etc/nixling/gateway.json";
+      gatewayConfigPath = "/etc/d2b/gateway.json";
     };
   };
 
@@ -478,10 +478,10 @@ in
       carriesRelayOrAcaMaterial = containsForbiddenRealmMaterial hostPackageRefs;
       carriesRemoteNodeRegistry = containsRemoteRegistryMarker hostPackageRefs;
       hasGatewayRelayPackage = lib.any
-        (pkg: lib.hasInfix "nixling-gateway-relay" pkg.name || lib.hasInfix "nixling-gateway-relay" pkg.path)
+        (pkg: lib.hasInfix "d2b-gateway-relay" pkg.name || lib.hasInfix "d2b-gateway-relay" pkg.path)
         hostPackageRefs;
       hasGatewayRuntimePackage = lib.any
-        (pkg: lib.hasInfix "nixling-gateway-runtime" pkg.name || lib.hasInfix "nixling-gateway-runtime" pkg.path)
+        (pkg: lib.hasInfix "d2b-gateway-runtime" pkg.name || lib.hasInfix "d2b-gateway-runtime" pkg.path)
         hostPackageRefs;
     };
     expected = {
@@ -503,10 +503,10 @@ in
         containsForbiddenRealmMaterial (removeAttrs hostRealmRelayEgressPolicy [ "forbiddenHostEnvPrefixes" ]);
     };
     expected = {
-      path = "/etc/nixling/host-realm-relay-egress-policy.json";
+      path = "/etc/d2b/host-realm-relay-egress-policy.json";
       mode = "host-realm-relay-deny";
       gatewayInterfaces = [ "work-l20" ];
-      forbiddenHostEnvPrefixes = [ "NIXLING_RELAY_" ];
+      forbiddenHostEnvPrefixes = [ "D2B_RELAY_" ];
       diagnostics = {
         redacted = true;
         rateLimited = true;
@@ -521,14 +521,14 @@ in
     expr = {
       gatewayVmProcessPresent = gatewayProc != null;
       realmMaterial = {
-        bundle = containsForbiddenRealmMaterial goodCfg.nixling._bundle.bundle.data;
-        host = containsForbiddenRealmMaterial goodCfg.nixling._bundle.hostJson.data;
-        processes = containsForbiddenRealmMaterial goodCfg.nixling._bundle.processesJson.data;
+        bundle = containsForbiddenRealmMaterial goodCfg.d2b._bundle.bundle.data;
+        host = containsForbiddenRealmMaterial goodCfg.d2b._bundle.hostJson.data;
+        processes = containsForbiddenRealmMaterial goodCfg.d2b._bundle.processesJson.data;
       };
       remoteNodeRegistry = {
-        bundle = containsRemoteRegistryMarker goodCfg.nixling._bundle.bundle.data;
-        host = containsRemoteRegistryMarker goodCfg.nixling._bundle.hostJson.data;
-        processes = containsRemoteRegistryMarker goodCfg.nixling._bundle.processesJson.data;
+        bundle = containsRemoteRegistryMarker goodCfg.d2b._bundle.bundle.data;
+        host = containsRemoteRegistryMarker goodCfg.d2b._bundle.hostJson.data;
+        processes = containsRemoteRegistryMarker goodCfg.d2b._bundle.processesJson.data;
       };
     };
     expected = {
@@ -557,14 +557,14 @@ in
         || (hostRealmEntrypoints.entries.work ? aca);
     };
     expected = {
-      path = "/run/current-system/sw/share/nixling/realm-entrypoints.json";
+      path = "/run/current-system/sw/share/d2b/realm-entrypoints.json";
       local = {
         mode = "host-resident";
         gateway = null;
       };
       work = {
         mode = "gateway-backed";
-        gateway = "sys-work-gateway.nixling";
+        gateway = "sys-work-gateway.d2b";
       };
       workCarriesProviderConfig = false;
     };
@@ -591,7 +591,7 @@ in
         };
         work = {
           mode = "gateway-backed";
-          gateway = "sys-work-gateway.nixling";
+          gateway = "sys-work-gateway.d2b";
         };
       };
       carriesRelayOrAcaMaterial = false;
@@ -608,11 +608,11 @@ in
     expected = {
       noGateway = {
         daemonConfigPresent = true;
-        publicSocketPath = "/run/nixling/public.sock";
-        publicSocketGroup = "nixling";
-        brokerSocketPath = "/run/nixling/priv.sock";
-        nixlingdServicePresent = true;
-        nixlingdSupplementaryGroups = [ "nixling" ];
+        publicSocketPath = "/run/d2b/public.sock";
+        publicSocketGroup = "d2b";
+        brokerSocketPath = "/run/d2b/priv.sock";
+        d2bdServicePresent = true;
+        d2bdSupplementaryGroups = [ "d2b" ];
         runDirAllowsLocalLaunchers = true;
         realmEntries = [ "local" ];
         localEntrypoint = {
@@ -623,11 +623,11 @@ in
       };
       gatewayWithoutRelay = {
         daemonConfigPresent = true;
-        publicSocketPath = "/run/nixling/public.sock";
-        publicSocketGroup = "nixling";
-        brokerSocketPath = "/run/nixling/priv.sock";
-        nixlingdServicePresent = true;
-        nixlingdSupplementaryGroups = [ "nixling" ];
+        publicSocketPath = "/run/d2b/public.sock";
+        publicSocketGroup = "d2b";
+        brokerSocketPath = "/run/d2b/priv.sock";
+        d2bdServicePresent = true;
+        d2bdSupplementaryGroups = [ "d2b" ];
         runDirAllowsLocalLaunchers = true;
         realmEntries = [ "local" "work" ];
         localEntrypoint = {
@@ -641,14 +641,14 @@ in
 
   "gateway-vm/realm-entrypoint-table-uses-custom-gateway-vm-name" = {
     expr = {
-      declared = builtins.elem "corp-gateway" (builtins.attrNames customGatewayNameCfg.nixling.vms);
+      declared = builtins.elem "corp-gateway" (builtins.attrNames customGatewayNameCfg.d2b.vms);
       work = customGatewayNameEntrypoints.entries.work;
     };
     expected = {
       declared = true;
       work = {
         mode = "gateway-backed";
-        gateway = "corp-gateway.nixling";
+        gateway = "corp-gateway.d2b";
       };
     };
   };
@@ -676,9 +676,9 @@ in
       noAtMostOneFailure = !(lib.any
         (m: lib.hasInfix "at most one enabled gateway" m)
         multiGatewayMessages);
-      workGatewayEnv = multiGatewayCfg.nixling.vms."sys-work-gateway".env;
-      personalGatewayEnv = multiGatewayCfg.nixling.vms."sys-personal-gateway".env;
-      legacySingleGatewayJson = builtins.hasAttr "nixling/gateway.json" multiGatewayCfg.environment.etc;
+      workGatewayEnv = multiGatewayCfg.d2b.vms."sys-work-gateway".env;
+      personalGatewayEnv = multiGatewayCfg.d2b.vms."sys-personal-gateway".env;
+      legacySingleGatewayJson = builtins.hasAttr "d2b/gateway.json" multiGatewayCfg.environment.etc;
       entries = multiGatewayRealmEntrypoints.entries;
     };
     expected = {
@@ -693,11 +693,11 @@ in
         };
         work = {
           mode = "gateway-backed";
-          gateway = "sys-work-gateway.nixling";
+          gateway = "sys-work-gateway.d2b";
         };
         personal = {
           mode = "gateway-backed";
-          gateway = "sys-personal-gateway.nixling";
+          gateway = "sys-personal-gateway.d2b";
         };
       };
     };
@@ -727,8 +727,8 @@ in
   };
 
   "gateway-vm/source-host-tools-opt-out-selects-source-daemon" = {
-    expr = lib.hasInfix "nixlingd-0.0.0-bootstrap"
-      (toString sourceGatewayGuestCfg.systemd.services.nixlingd.serviceConfig.ExecStart);
+    expr = lib.hasInfix "d2bd-0.0.0-bootstrap"
+      (toString sourceGatewayGuestCfg.systemd.services.d2bd.serviceConfig.ExecStart);
     expected = true;
   };
 
@@ -737,16 +737,16 @@ in
       noInlineBuildRustPackage = !(lib.hasInfix "buildRustPackage" gatewayModuleSource);
       noInlineBuildRustBin = !(lib.hasInfix "buildRustBin" gatewayModuleSource);
       noSystemPackagesScan = !(lib.hasInfix "config.environment.systemPackages" gatewayModuleSource);
-      hasNixling = builtins.elem "nixling" packageNames;
-      hasNixlingd = builtins.elem "nixlingd" packageNames;
-      hasGatewayRuntime = builtins.elem "nixling-gateway-runtime" packageNames;
+      hasD2b = builtins.elem "d2b" packageNames;
+      hasD2bd = builtins.elem "d2bd" packageNames;
+      hasGatewayRuntime = builtins.elem "d2b-gateway-runtime" packageNames;
     };
     expected = {
       noInlineBuildRustPackage = true;
       noInlineBuildRustBin = true;
       noSystemPackagesScan = true;
-      hasNixling = true;
-      hasNixlingd = true;
+      hasD2b = true;
+      hasD2bd = true;
       hasGatewayRuntime = true;
     };
   };

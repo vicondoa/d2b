@@ -1,4 +1,4 @@
-# nixling JSON manifest schema
+# d2b JSON manifest schema
 
 **Status:** current public manifest version is `manifestVersion = 7`.
 **Source of truth:** [`manifest-schema.json`](./manifest-schema.json)
@@ -7,14 +7,14 @@ disagree, the JSON Schema wins.
 
 ## What this is
 
-`nixling` evaluates a typed per-VM manifest at Nix-evaluation time and
+`d2b` evaluates a typed per-VM manifest at Nix-evaluation time and
 ships it as:
 
 ```text
-/run/current-system/sw/share/nixling/vms.json
+/run/current-system/sw/share/d2b/vms.json
 ```
 
-The Rust CLI, `nixlingd`, and `nixling-priv-broker` consume this public
+The Rust CLI, `d2bd`, and `d2b-priv-broker` consume this public
 inventory. Private bundle artifacts live beside it and are documented in
 [`manifest-bundle.md`](./manifest-bundle.md).
 
@@ -27,7 +27,7 @@ inventory. Private bundle artifacts live beside it and are documented in
     "enabled": true,
     "vmName": "sys-obs",
     "obsVsockCid": 1000,
-    "obsVsockHostSocket": "/var/lib/nixling/vms/sys-obs/vsock.sock",
+    "obsVsockHostSocket": "/var/lib/d2b/vms/sys-obs/vsock.sock",
     "signozUrl": "http://10.40.0.10:8080",
     "signozOtlpGrpcPort": 4317,
     "signozOtlpHttpPort": 4318
@@ -106,23 +106,23 @@ inventory. Private bundle artifacts live beside it and are documented in
     "tpm": false,
     "usbipYubikey": false,
     "audio": false,
-    "tap": "nl-work",
-    "bridge": "nl-work" | null,
+    "tap": "d2b-work",
+    "bridge": "d2b-work" | null,
     "env": "work" | null,
     "isNetVm": false,
     "netVm": "sys-work-net" | null,
     "usbipdHostIp": "10.50.0.1" | null,
-    "stateDir": "/var/lib/nixling/vms/work",
-    "apiSocket": "/var/lib/nixling/vms/work/work.sock",
-    "gpuSocket": "/var/lib/nixling/vms/work/work-gpu.sock",
-    "tpmSocket": "/run/nixling/vms/work/tpm.sock",
-    "audioStateFile": "/var/lib/nixling/vms/work/state/audio-state.json",
-    "audioService": "nixling-work-snd.service",
+    "stateDir": "/var/lib/d2b/vms/work",
+    "apiSocket": "/var/lib/d2b/vms/work/work.sock",
+    "gpuSocket": "/var/lib/d2b/vms/work/work-gpu.sock",
+    "tpmSocket": "/run/d2b/vms/work/tpm.sock",
+    "audioStateFile": "/var/lib/d2b/vms/work/state/audio-state.json",
+    "audioService": "d2b-work-snd.service",
     "observability": {
       "enabled": true,
       "vsockCid": 110,
-      "vsockHostSocket": "/var/lib/nixling/vms/work/vsock.sock",
-      "agentSocket": "/run/nixling/otlp.sock"
+      "vsockHostSocket": "/var/lib/d2b/vms/work/vsock.sock",
+      "agentSocket": "/run/d2b/otlp.sock"
     },
     "shell": {
       "enabled": true,
@@ -151,11 +151,11 @@ Fields are listed in `nixos-modules/manifest.nix` declaration order.
 | --- | --- | --- | --- |
 | `name` | string | yes | VM name; matches the enclosing top-level key. Pattern `^[a-z][a-z0-9-]*$` (enforced by `nixos-modules/assertions.nix`). |
 | `runtime` | object | yes | Runtime/provider metadata and provider support matrix. Shape: `{ kind, provider: { id, type, driver }, capabilities, operationCapabilities, autostartPolicy, services }`. `operationCapabilities` groups positive operation support by lifecycle/media/display/guest/storage axis; `operationCapabilities.guest.shell` records provider support for the staged persistent-shell operation. `services[]` contains bounded provider-neutral service summaries. `qemu-media` uses provider `local-qemu-media`/driver `qemu`; its supported capabilities are lifecycle/display/USB hotplug, while guest-control, exec, shell, config-sync, SSH, store-sync, keys, and in-guest observability are unsupported. |
-| `lifecycle` | object | yes | Per-VM lifecycle policy. Shape: `{ gracefulShutdown: { enable, timeoutSeconds }, liveActivation: { timeoutSeconds } }`. `gracefulShutdown` controls provider-aware guest shutdown before forced VMM cleanup; its timeout is a nullable 1–600 second per-VM override. `liveActivation.timeoutSeconds` is a nullable 1–3600 second per-VM override for in-guest `switch`/`test`/`rollback`; `null` means the daemon default from `/etc/nixling/daemon-config.json` applies. |
-| `graphics` | boolean | yes | Mirror of `nixling.vms.<name>.graphics.enable`. The CLI uses it to pick the launch path. |
-| `tpm` | boolean | yes | Mirror of `nixling.vms.<name>.tpm.enable`. |
-| `usbipYubikey` | boolean | yes | Mirror of `nixling.vms.<name>.usbip.yubikey`. `nixling usb attach\|detach\|probe` refuses to run when false. |
-| `audio` | boolean | yes | Mirror of `nixling.vms.<name>.audio.enable` (the capability bit). Live grant state lives in `audioStateFile`. |
+| `lifecycle` | object | yes | Per-VM lifecycle policy. Shape: `{ gracefulShutdown: { enable, timeoutSeconds }, liveActivation: { timeoutSeconds } }`. `gracefulShutdown` controls provider-aware guest shutdown before forced VMM cleanup; its timeout is a nullable 1–600 second per-VM override. `liveActivation.timeoutSeconds` is a nullable 1–3600 second per-VM override for in-guest `switch`/`test`/`rollback`; `null` means the daemon default from `/etc/d2b/daemon-config.json` applies. |
+| `graphics` | boolean | yes | Mirror of `d2b.vms.<name>.graphics.enable`. The CLI uses it to pick the launch path. |
+| `tpm` | boolean | yes | Mirror of `d2b.vms.<name>.tpm.enable`. |
+| `usbipYubikey` | boolean | yes | Mirror of `d2b.vms.<name>.usbip.yubikey`. `d2b usb attach\|detach\|probe` refuses to run when false. |
+| `audio` | boolean | yes | Mirror of `d2b.vms.<name>.audio.enable` (the capability bit). Live grant state lives in `audioStateFile`. |
 | `tap` | string | yes | Host-side tap-device name. Derived: `<env>-l<index>` (workload), `<env>-u2` (net VM), or `vm-<name>` (legacy). |
 | `bridge` | string \| null | yes | Linux bridge the tap attaches to. Workload: `br-<env>-lan`. Net VM: `br-<env>-up`. Legacy hand-rolled VM: `null`. |
 | `env` | string \| null | yes | Env this VM belongs to (workload) or serves (net VM). Null for legacy hand-rolled VMs. |
@@ -165,16 +165,16 @@ Fields are listed in `nixos-modules/manifest.nix` declaration order.
 | `isNetVm` | boolean | yes | True iff this VM is the auto-generated `sys-<env>-net`. Used for bring-up ordering. |
 | `netVm` | string \| null | yes | For workload VMs: name of the net VM serving this VM's env. Null for net VMs and legacy VMs. |
 | `usbipdHostIp` | string \| null | yes | Host IP of the per-env usbipd proxy, passed to `usbip attach -r` via the broker. Null for net VMs and legacy. |
-| `stateDir` | string | yes | Per-VM state dir. Currently `/var/lib/nixling/vms/<name>`. |
+| `stateDir` | string | yes | Per-VM state dir. Currently `/var/lib/d2b/vms/<name>`. |
 | `apiSocket` | string \| null | yes | Cloud Hypervisor runner API socket path (`<stateDir>/<name>.sock`). Null for providers without a CH API socket. |
-| `gpuSocket` | string \| null | yes | GPU sidecar control socket (`<stateDir>/<name>-gpu.sock`). Null for providers without the nixling GPU sidecar socket. |
-| `tpmSocket` | string \| null | yes | swtpm vTPM socket (`/run/nixling/vms/<name>/tpm.sock`). Null for providers without nixling-managed TPM state. |
-| `audioStateFile` | string \| null | yes | Live audio-grant state file (`<stateDir>/state/audio-state.json`). Null for providers without the nixling audio sidecar. |
-| `audioService` | string \| null | yes | Host-side audio sidecar identifier (`nixling-<name>-snd.service`). Null for providers without the nixling audio sidecar. |
+| `gpuSocket` | string \| null | yes | GPU sidecar control socket (`<stateDir>/<name>-gpu.sock`). Null for providers without the d2b GPU sidecar socket. |
+| `tpmSocket` | string \| null | yes | swtpm vTPM socket (`/run/d2b/vms/<name>/tpm.sock`). Null for providers without d2b-managed TPM state. |
+| `audioStateFile` | string \| null | yes | Live audio-grant state file (`<stateDir>/state/audio-state.json`). Null for providers without the d2b audio sidecar. |
+| `audioService` | string \| null | yes | Host-side audio sidecar identifier (`d2b-<name>-snd.service`). Null for providers without the d2b audio sidecar. |
 | `observability` | object | yes | Per-VM observability transport metadata (`enabled`, base `vsockCid`/`vsockHostSocket`, guest `agentSocket`). See [Per-VM observability block](#per-vm-observability-block). |
-| `shell` | object \| null | yes | Persistent guest shell policy metadata for providers that support the authenticated guest-control terminal substrate. Null for providers without nixling guest-control. Shape: `{ enabled, defaultName, maxSessions, maxAttached }`; `defaultName` matches `^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$`, `maxSessions` is 1–256, and `maxAttached` is 1–64. This is policy/capability metadata only; runtime helper sockets, shpool state, terminal handles, and session names beyond the configured default are never included in the world-readable manifest. |
+| `shell` | object \| null | yes | Persistent guest shell policy metadata for providers that support the authenticated guest-control terminal substrate. Null for providers without d2b guest-control. Shape: `{ enabled, defaultName, maxSessions, maxAttached }`; `defaultName` matches `^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$`, `maxSessions` is 1–256, and `maxAttached` is 1–64. This is policy/capability metadata only; runtime helper sockets, shpool state, terminal handles, and session names beyond the configured default are never included in the world-readable manifest. |
 | `staticIp` | string \| null | yes | The VM's static LAN IP. Derived for env-attached VMs; null when no IP source applies. |
-| `sshUser` | string \| null | yes | Username for `nixling`-driven SSH. Mirrors `nixling.vms.<name>.ssh.user`. Null for headless net VMs. |
+| `sshUser` | string \| null | yes | Username for `d2b`-driven SSH. Mirrors `d2b.vms.<name>.ssh.user`. Null for headless net VMs. |
 
 ## Reserved keys
 
@@ -232,8 +232,8 @@ about the vsock path without knowing SigNoz internals.
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `enabled` | boolean | yes | Whether telemetry collection is enabled for this VM. |
-| `vsockCid` | unsigned integer \| null | yes | Deterministic base Cloud Hypervisor vsock CID for nixos/Cloud Hypervisor VMs. Null for providers without nixling guest-control or in-guest observability. |
-| `vsockHostSocket` | string \| null | yes | Host-side Cloud Hypervisor vsock socket for this VM. Null for providers without nixling guest-control or in-guest observability. |
+| `vsockCid` | unsigned integer \| null | yes | Deterministic base Cloud Hypervisor vsock CID for nixos/Cloud Hypervisor VMs. Null for providers without d2b guest-control or in-guest observability. |
+| `vsockHostSocket` | string \| null | yes | Host-side Cloud Hypervisor vsock socket for this VM. Null for providers without d2b guest-control or in-guest observability. |
 | `agentSocket` | string \| null | yes | Guest-local OTLP socket path used by the guest collector. Null for providers without in-guest observability. |
 
 The per-VM block is emitted for every VM so clients do not need to infer

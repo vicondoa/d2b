@@ -5,29 +5,29 @@ set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
-NL_LOG=${NL_LOG:-/dev/null}
+D2B_LOG=${D2B_LOG:-/dev/null}
 
 # shellcheck disable=SC1091
 . "$ROOT/tests/lib.sh"
 
-nl_activate_rust_toolchain_path || true
+d2b_activate_rust_toolchain_path || true
 export NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}"
 
 cd "$ROOT"
 
-if [ -z "${NIXLING_DRIFT_CHECK_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
+if [ -z "${D2B_DRIFT_CHECK_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
     fail "drift-check: neither cargo nor nix is on PATH"
     exit 1
   fi
   log "  cargo not on PATH; re-entering via nix shell to acquire toolchain"
-  export NIXLING_DRIFT_CHECK_IN_NIX_SHELL=1
+  export D2B_DRIFT_CHECK_IN_NIX_SHELL=1
   exec nix shell --quiet --inputs-from "$ROOT" \
     nixpkgs#cargo nixpkgs#rustc nixpkgs#rustfmt nixpkgs#clippy nixpkgs#gcc nixpkgs#sccache \
     --command bash "$0" "$@"
 fi
 
-workspace_target_dir="${CARGO_TARGET_DIR:-$(nl_cargo_target_dir workspace)}"
+workspace_target_dir="${CARGO_TARGET_DIR:-$(d2b_cargo_target_dir workspace)}"
 xtask_bin="$workspace_target_dir/debug/xtask"
 (
   cd "$ROOT/packages"
@@ -63,8 +63,8 @@ drift_paths=(
   docs/manpages/
   docs/completions/
   docs/reference/cli-output/
-  packages/nixling-contracts/src/generated
-  packages/nixling-guestd/src/generated
+  packages/d2b-contracts/src/generated
+  packages/d2b-guestd/src/generated
 )
 
 if git -C "$ROOT" --no-pager diff --exit-code -- "${drift_paths[@]}" >/dev/null; then

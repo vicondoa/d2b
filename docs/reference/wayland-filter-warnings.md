@@ -1,14 +1,14 @@
 # `graphics.waylandFilter` warning catalog
 
-> **Reference** for the advisory runtime diagnostics the nixling
+> **Reference** for the advisory runtime diagnostics the d2b
 > Wayland filter proxy emits when operator configuration deviates from
-> the secure baseline or touches a rule nixling classifies as required
+> the secure baseline or touches a rule d2b classifies as required
 > or high-risk.
 
 > **Status:** live for
-> `nixling.vms.<vm>.graphics.waylandFilter.{enable,denyGlobals,allowGlobals,maxVersions,dmabufAllow,dmabufDeny,debugLogging,byteLogging}`.
+> `d2b.vms.<vm>.graphics.waylandFilter.{enable,denyGlobals,allowGlobals,maxVersions,dmabufAllow,dmabufDeny,debugLogging,byteLogging}`.
 > The proxy emits these diagnostics at runtime in the
-> `nixling-wayland-filter` journal stream. They are not NixOS eval-time
+> `d2b-wayland-filter` journal stream. They are not NixOS eval-time
 > `config.warnings`.
 
 Warnings are **advisory**: the NixOS configuration still evaluates and
@@ -25,7 +25,7 @@ currently emits human-readable `PolicyWarning` messages.
 
 ### W-DENY-BASELINE
 
-**Trigger:** `denyGlobals` explicitly denies a global that nixling
+**Trigger:** `denyGlobals` explicitly denies a global that d2b
 classifies as a required application-baseline global.
 
 **Required baseline globals:** `wl_compositor`, `wl_shm`, `xdg_wm_base`,
@@ -34,7 +34,7 @@ classifies as a required application-baseline global.
 **Example:**
 
 ```nix
-nixling.vms.work.graphics.waylandFilter.denyGlobals = [
+d2b.vms.work.graphics.waylandFilter.denyGlobals = [
   "wl_compositor"
 ];
 ```
@@ -52,7 +52,7 @@ apps on this VM may not render or receive input.
 ### W-DENY-ACCEL
 
 **Trigger:** `denyGlobals` disables a dmabuf or rendering global that
-nixling expects for GPU-accelerated graphics.
+d2b expects for GPU-accelerated graphics.
 
 **Affected globals:** `zwp_linux_dmabuf_v1`,
 `wp_linux_drm_syncobj_manager_v1`, `wl_eglstream_display`, and
@@ -70,7 +70,7 @@ expected.
 
 ### W-ALLOW-HIGH-RISK
 
-**Trigger:** `allowGlobals` includes a global that nixling classifies as
+**Trigger:** `allowGlobals` includes a global that d2b classifies as
 high risk and denies by default.
 
 **High-risk categories:**
@@ -98,18 +98,18 @@ globals enabled as a higher-trust guest and review its isolation
 
 ### W-ALLOW-UNCLASSIFIED
 
-**Trigger:** `allowGlobals` includes a global that nixling has not yet
+**Trigger:** `allowGlobals` includes a global that d2b has not yet
 classified as either a known-safe application protocol or a known-high
 risk protocol.
 
 **Why it exists:** Unclassified globals may be safe or may expose
-host-side privilege. Nixling defaults to denying them until classified.
+host-side privilege. D2b defaults to denying them until classified.
 This warning signals that the operator is taking responsibility for the
 security posture of an unreviewed protocol.
 
 **How to override intentionally:** Add the global to `allowGlobals` and
 document in the host configuration why the global is safe for this VM.
-Consider filing an issue or PR to have nixling classify the global so the
+Consider filing an issue or PR to have d2b classify the global so the
 warning is resolved upstream.
 
 ## Warning vs. hard assertion
@@ -118,7 +118,7 @@ Warnings never become hard assertions. Every warning condition still
 produces a valid, buildable NixOS configuration. The distinction from a
 hard assertion (`lib.mkAssert` or `config.assertions`) is intentional:
 operators may have valid workload-specific reasons to deviate from
-nixling's baseline, and nixling should facilitate informed, documented
+d2b's baseline, and d2b should facilitate informed, documented
 exceptions rather than blocking them.
 
 The non-overridable invariants are the **enforcement mechanics** of the

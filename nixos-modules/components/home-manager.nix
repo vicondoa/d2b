@@ -1,7 +1,7 @@
-# Home Manager support for nixling VMs. Imported by host.nix when a
-# VM sets `nixling.vms.<name>.homeManager.enable = true`. The
+# Home Manager support for d2b VMs. Imported by host.nix when a
+# VM sets `d2b.vms.<name>.homeManager.enable = true`. The
 # per-VM `homeManager.users` attrset declared host-side is
-# propagated into this guest module's `nixling.homeManager.users`,
+# propagated into this guest module's `d2b.homeManager.users`,
 # and from there into the upstream `home-manager.users` option.
 #
 # Default HM wiring matches the host's setup (useGlobalPkgs +
@@ -11,18 +11,18 @@
 { lib, inputs, config, ... }:
 
 let
-  cfg = config.nixling.homeManager;
+  cfg = config.d2b.homeManager;
 in
 
 {
   imports = [ inputs.home-manager.nixosModules.home-manager ];
 
-  options.nixling.homeManager.users = lib.mkOption {
+  options.d2b.homeManager.users = lib.mkOption {
     type = lib.types.attrsOf lib.types.unspecified;
     default = { };
     description = ''
       Per-user Home Manager config attrsets. Populated by host.nix
-      from the host-side `nixling.vms.<name>.homeManager.users`
+      from the host-side `d2b.vms.<name>.homeManager.users`
       option. Each value is a NixOS HM module:
 
         { alice = {

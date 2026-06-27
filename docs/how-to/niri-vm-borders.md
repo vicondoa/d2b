@@ -1,6 +1,6 @@
-# Set up niri window borders for nixling VMs
+# Set up niri window borders for d2b VMs
 
-This guide covers enabling nixling's opt-in niri KDL window-rule
+This guide covers enabling d2b's opt-in niri KDL window-rule
 generator so each graphics VM and qemu-media host window gets a
 distinct border color and the crosvm GPU sidecar's scanout window is
 hidden on the host compositor.
@@ -8,9 +8,9 @@ hidden on the host compositor.
 ## Prerequisites
 
 - niri ≥ 0.1.9 (for `include` directive support)
-- At least one VM with `nixling.vms.<vm>.graphics.enable = true` or
-  `nixling.vms.<vm>.runtime.kind = "qemu-media"`
-- `nixling.vms.<vm>.graphics.crossDomainTrusted = true` on VMs that
+- At least one VM with `d2b.vms.<vm>.graphics.enable = true` or
+  `d2b.vms.<vm>.runtime.kind = "qemu-media"`
+- `d2b.vms.<vm>.graphics.crossDomainTrusted = true` on VMs that
   use the Wayland filter proxy (required for app-id rewriting)
 
 ## Enabling the generated include
@@ -18,12 +18,12 @@ hidden on the host compositor.
 Add the following to your NixOS host configuration:
 
 ```nix
-nixling.site.ui.compositors.niri.enable = true;
+d2b.site.ui.compositors.niri.enable = true;
 ```
 
-After `nixos-rebuild switch`, nixling installs a KDL file at
-`/etc/nixling/niri-vm-borders.kdl` and the shared UI color artifacts at
-`/etc/nixling/ui-colors.json` and `/etc/nixling/ui-colors.css`.
+After `nixos-rebuild switch`, d2b installs a KDL file at
+`/etc/d2b/niri-vm-borders.kdl` and the shared UI color artifacts at
+`/etc/d2b/ui-colors.json` and `/etc/d2b/ui-colors.css`.
 
 ## Sourcing the file from niri
 
@@ -31,7 +31,7 @@ Add the `include` line to your `config.kdl` (typically
 `~/.config/niri/config.kdl`):
 
 ```kdl
-include "/etc/nixling/niri-vm-borders.kdl"
+include "/etc/d2b/niri-vm-borders.kdl"
 ```
 
 The include line can go anywhere in `config.kdl`; placing it near
@@ -65,12 +65,12 @@ window-rule {
 
 Each enabled graphics VM gets a `window-rule` block that matches its
 app-id prefix.  The host-side Wayland filter proxy rewrites guest
-app-ids to `nixling.<vm>.<original-app-id>`, so the regex
-`^nixling\.<vm>\.` reliably selects only windows from that VM:
+app-ids to `d2b.<vm>.<original-app-id>`, so the regex
+`^d2b\.<vm>\.` reliably selects only windows from that VM:
 
 ```kdl
 window-rule {
-    match app-id=r#"^nixling\.work\."#
+    match app-id=r#"^d2b\.work\."#
     border {
         on
         active-color "#7fc8ff"
@@ -83,18 +83,18 @@ window-rule {
 The border color is derived deterministically from the VM name when no
 override is set, so the same VM always gets the same color across
 rebuilds. Inactive and urgent colors default to the active identity
-color; set them in nixling if you prefer a neutral inactive color.
+color; set them in d2b if you prefer a neutral inactive color.
 
 ### qemu-media host-window rules
 
 Each enabled qemu-media VM routes the host QEMU window through the
-nixling Wayland filter proxy. The generated `window-rule` block matches
-the proxy-rewritten app-id prefix `nixling.<vm>.`, just like graphics VM
+d2b Wayland filter proxy. The generated `window-rule` block matches
+the proxy-rewritten app-id prefix `d2b.<vm>.`, just like graphics VM
 windows:
 
 ```kdl
 window-rule {
-    match app-id=r#"^nixling\.media\."#
+    match app-id=r#"^d2b\.media\."#
     border {
         on
         active-color "#800080"
@@ -110,13 +110,13 @@ To choose a specific border color for a VM, set the compositor-agnostic
 UI color option:
 
 ```nix
-nixling.vms.work.ui.border.activeColor = "#ff8c00";
+d2b.vms.work.ui.border.activeColor = "#ff8c00";
 ```
 
 For a qemu-media host window, use the same VM-level option:
 
 ```nix
-nixling.vms.media.ui.border.activeColor = "#800080";
+d2b.vms.media.ui.border.activeColor = "#800080";
 ```
 
 The value must be a six-digit hex color (e.g. `#rrggbb`).
@@ -124,21 +124,21 @@ The value must be a six-digit hex color (e.g. `#rrggbb`).
 To use a different inactive or urgent color, set:
 
 ```nix
-nixling.vms.work.ui.border.inactiveColor = "#505050";
-nixling.vms.work.ui.border.urgentColor = "#ff8c00";
+d2b.vms.work.ui.border.inactiveColor = "#505050";
+d2b.vms.work.ui.border.urgentColor = "#ff8c00";
 ```
 
 Do not add supplemental niri rules just to keep inactive VM borders in
-the VM identity color; nixling renders that state from the same source
+the VM identity color; d2b renders that state from the same source
 model.
 
 ## Changing the output path
 
-The default install path is `/etc/nixling/niri-vm-borders.kdl`.  To
+The default install path is `/etc/d2b/niri-vm-borders.kdl`.  To
 use a different location under `/etc/`:
 
 ```nix
-nixling.site.ui.compositors.niri.outputPath = "/etc/nixling/custom-borders.kdl";
+d2b.site.ui.compositors.niri.outputPath = "/etc/d2b/custom-borders.kdl";
 ```
 
 Then update the `include` line in `config.kdl` accordingly.
@@ -149,14 +149,14 @@ Then update the `include` line in `config.kdl` accordingly.
    your VM names:
 
    ```bash
-   cat /etc/nixling/niri-vm-borders.kdl
+   cat /etc/d2b/niri-vm-borders.kdl
    ```
 
    The shared JSON/GTK CSS artifacts are available at:
 
    ```bash
-   cat /etc/nixling/ui-colors.json
-   cat /etc/nixling/ui-colors.css
+   cat /etc/d2b/ui-colors.json
+   cat /etc/d2b/ui-colors.css
    ```
 
 2. Check that niri loaded the config without errors:
@@ -172,7 +172,7 @@ Then update the `include` line in `config.kdl` accordingly.
    niri msg windows
    ```
 
-   The `app_id` field should start with `nixling.<vm>.`.  For graphics
+   The `app_id` field should start with `d2b.<vm>.`.  For graphics
    VMs, if it shows the original app-id without the prefix, the VM's
    `crossDomainTrusted` may be false or the Wayland filter proxy may
    not be running. For qemu-media VMs, qemu-media itself should start
@@ -186,7 +186,7 @@ Then update the `include` line in `config.kdl` accordingly.
 App-id rewriting is performed by the host-side Wayland filter proxy,
 which runs only when `graphics.crossDomainTrusted = true`.  With the
 proxy absent, guest windows retain their original app-ids and the
-`nixling.<vm>.` prefix is never written, so the generated niri rules
+`d2b.<vm>.` prefix is never written, so the generated niri rules
 cannot match.
 
 If you enable the niri backend for a VM whose `crossDomainTrusted` is
@@ -196,12 +196,12 @@ that VM.
 
 ## Legacy options
 
-The legacy `nixling.site.niriVmBorders.*`,
-`nixling.vms.<vm>.graphics.niriBorderColor`, and
-`nixling.vms.<vm>.qemuMedia.window.niriBorderColor` options remain as
+The legacy `d2b.site.niriVmBorders.*`,
+`d2b.vms.<vm>.graphics.niriBorderColor`, and
+`d2b.vms.<vm>.qemuMedia.window.niriBorderColor` options remain as
 compatibility inputs for one release. New configurations should use
-`nixling.site.ui.compositors.niri.*` and
-`nixling.vms.<vm>.ui.border.*`.
+`d2b.site.ui.compositors.niri.*` and
+`d2b.vms.<vm>.ui.border.*`.
 
 ## Minimum niri version
 

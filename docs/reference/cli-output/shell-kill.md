@@ -1,4 +1,4 @@
-# `nixling shell <target> kill --name <name> --json`
+# `d2b shell <target> kill --name <name> --json`
 
 > Diataxis: reference. JSON output contract for persistent shell kill.
 

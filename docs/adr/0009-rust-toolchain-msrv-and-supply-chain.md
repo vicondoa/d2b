@@ -8,7 +8,7 @@
 
 ## Context
 
-Nixling is moving from a NixOS-only bash and systemd orchestration model
+D2b is moving from a NixOS-only bash and systemd orchestration model
 toward a Rust control plane with a CLI, daemon, and eventually a
 privileged broker. That control plane will become load-bearing for
 lifecycle, authorization, manifests, and host reconciliation, so W0a

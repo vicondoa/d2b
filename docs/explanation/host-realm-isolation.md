@@ -19,4 +19,4 @@ host-side realm relay exception.
 
 The host is not a global realm-policy singleton. Gateway guests own
 remote/provider realm policy evaluation, while local host authorization remains
-`SO_PEERCRED` plus the canonical `nixling` lifecycle group.
+`SO_PEERCRED` plus the canonical `d2b` lifecycle group.

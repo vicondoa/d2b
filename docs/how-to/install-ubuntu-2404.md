@@ -1,4 +1,4 @@
-# How to install nixling on Ubuntu 24.04
+# How to install d2b on Ubuntu 24.04
 
 This is the current Ubuntu 24.04 Tier-1 **manual/scaffold** path.
 
@@ -6,7 +6,7 @@ It gets you to the point where:
 
 - the distro prerequisites are present;
 - Nix is installed in multi-user mode;
-- the `nixling` CLI is installed;
+- the `d2b` CLI is installed;
 - the host-install scaffold has laid down its expected artifact paths; and
 - you can dry-run the first VM lifecycle through the daemon-facing CLI.
 
@@ -43,11 +43,11 @@ Confirm the daemon install succeeded:
 nix --version
 ```
 
-## 3. Install the nixling CLI
+## 3. Install the d2b CLI
 
 ```bash
-nix profile install github:vicondoa/nixling#nixling
-nixling --help >/dev/null
+nix profile install github:vicondoa/d2b#d2b
+d2b --help >/dev/null
 ```
 
 ## 4. Lay down the host-install scaffold
@@ -55,22 +55,22 @@ nixling --help >/dev/null
 Plan first, then apply:
 
 ```bash
-sudo nixling host install --dry-run --enable --start
-sudo nixling host install --apply --enable --start
+sudo d2b host install --dry-run --enable --start
+sudo d2b host install --apply --enable --start
 ```
 
 Today's scaffold writes the expected host artifact paths and exercises the
 broker install path, but you should still inspect what landed under:
 
-- `/etc/systemd/system/nixlingd.service`
-- `/etc/nixling/daemon-config.json`
-- `/var/lib/nixling/runtime/host-runtime.json`
+- `/etc/systemd/system/d2bd.service`
+- `/etc/d2b/daemon-config.json`
+- `/var/lib/d2b/runtime/host-runtime.json`
 
 ## 5. Check the host before touching a VM
 
 ```bash
-nixling host check --strict
-nixling host prepare --dry-run --json
+d2b host check --strict
+d2b host prepare --dry-run --json
 ```
 
 On Ubuntu, the usual first-boot path is `vm start --apply`; the standalone
@@ -84,7 +84,7 @@ The daemon/broker path needs a trusted bundle before a live `--apply` can do
 anything useful. On the current host-install path, the default bundle root is:
 
 ```text
-/var/lib/nixling/current-bundle/manifest.json
+/var/lib/d2b/current-bundle/manifest.json
 ```
 
 Copy the full bundle described in
@@ -96,21 +96,21 @@ then restart the daemon if you changed the bundle after install.
 With the bundle in place, dry-run the first VM before applying:
 
 ```bash
-nixling vm start work-vm --dry-run --json
+d2b vm start work-vm --dry-run --json
 ```
 
 If the dry-run looks correct and the host checks are clean, attempt the real
 start:
 
 ```bash
-sudo nixling vm start work-vm --apply
+sudo d2b vm start work-vm --apply
 ```
 
 After the guest is reachable, finish the SSH trust step:
 
 ```bash
-nixling trust work-vm
-nixling status work-vm
+d2b trust work-vm
+d2b status work-vm
 ```
 
 ## 8. Troubleshoot the common failures
@@ -123,7 +123,7 @@ with the real generated unit/config artifacts for your deployment.
 
 ### `vm start --apply` says the bundle is missing
 
-Land the trusted bundle at `/var/lib/nixling/current-bundle/manifest.json`
+Land the trusted bundle at `/var/lib/d2b/current-bundle/manifest.json`
 (and its sibling artifacts), then restart the daemon.
 
 ### `host check --strict` complains about KVM, `tun`, `fuse`, or `vhost_net`

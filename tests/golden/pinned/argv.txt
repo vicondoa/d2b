@@ -165,7 +165,7 @@ video_argv::tests::wire_contract_constants_pin_kernel8_values
 video_argv::tests::wire_contract_snapshot_is_deterministic
 virtiofsd_argv::tests::all_four_audit_shares_render_independently
 virtiofsd_argv::tests::argv_is_round_trip_serializable
-virtiofsd_argv::tests::audit_nl_meta_omits_readonly
+virtiofsd_argv::tests::audit_d2b_meta_omits_readonly
 virtiofsd_argv::tests::audit_ro_store_parity
 virtiofsd_argv::tests::audit_ro_store_snapshot_line
 virtiofsd_argv::tests::cache_mode_string_round_trip

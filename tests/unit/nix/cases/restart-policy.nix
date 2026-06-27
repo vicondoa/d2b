@@ -4,7 +4,7 @@
 # lifecycle services must remain absent (or, if reintroduced, carry
 # top-level `restartIfChanged = false`). The daemon itself is allowed to
 # restart on switch/update; VM runner survival is guarded by
-# nixlingd.service KillMode=process plus daemon adoption/reconciliation.
+# d2bd.service KillMode=process plus daemon adoption/reconciliation.
 #
 # Synthesizes one workload VM with graphics + audio + TPM + observability
 # all enabled so EVERY per-VM lifecycle service would materialise in a
@@ -20,7 +20,7 @@
 # invariant below: it passes while the unit is absent and would fail only
 # if such a unit were RE-INTRODUCED with a missing/true restart policy —
 # exactly the regression the bash retained these checks to guard against.
-# nixlingd is a strict value case too, but with the opposite policy: it may
+# d2bd is a strict value case too, but with the opposite policy: it may
 # restart on update and must use KillMode=process so VM runners survive.
 { mkEval, ... }:
 
@@ -33,20 +33,20 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
   };
 
   fullVm = { lib, ... }: {
-    nixling.observability.enable = true;
-    nixling.vms.full-vm = {
+    d2b.observability.enable = true;
+    d2b.vms.full-vm = {
       enable = true;
       env = "work";
       index = 10;
@@ -83,36 +83,36 @@ let
   guestOk = key: { expr = ricOkOrAbsent guestSvcs key; expected = true; };
   obsOk = key: { expr = ricOkOrAbsent obsGuestSvcs key; expected = true; };
 
-  # nixlingd daemon eval: forced on so the unit materialises regardless of
+  # d2bd daemon eval: forced on so the unit materialises regardless of
   # any allReady gate. The daemon may restart on switch/update; systemd only
   # terminates the main daemon process and the restarted daemon re-adopts
   # surviving runners.
-  dCfg = (mkEval [ base ({ ... }: { nixling.daemonExperimental.enable = true; }) ]).config;
-  dSvc = dCfg.systemd.services.nixlingd or null;
+  dCfg = (mkEval [ base ({ ... }: { d2b.daemonExperimental.enable = true; }) ]).config;
+  dSvc = dCfg.systemd.services.d2bd or null;
 in
 {
-  "restart-policy/nixling-template" = hostOk "nixling@";
+  "restart-policy/d2b-template" = hostOk "d2b@";
   "restart-policy/microvm-template" = hostOk "microvm@";
   "restart-policy/microvm-virtiofsd-full-vm" = hostOk "microvm-virtiofsd@full-vm";
-  "restart-policy/swtpm" = hostOk "nixling-full-vm-swtpm";
-  "restart-policy/snd" = hostOk "nixling-full-vm-snd";
-  "restart-policy/video" = hostOk "nixling-full-vm-video";
-  "restart-policy/gpu" = hostOk "nixling-full-vm-gpu";
-  "restart-policy/otel-relay-template" = hostOk "nixling-otel-relay@";
-  "restart-policy/otel-host-bridge" = hostOk "nixling-otel-host-bridge";
-  "restart-policy/ch-exporter" = hostOk "nixling-ch-exporter";
-  "restart-policy/guest-otel-vsock-out" = guestOk "nixling-otel-vsock-out";
-  "restart-policy/obs-otel-vsock-in-host" = obsOk "nixling-otel-vsock-in-host";
+  "restart-policy/swtpm" = hostOk "d2b-full-vm-swtpm";
+  "restart-policy/snd" = hostOk "d2b-full-vm-snd";
+  "restart-policy/video" = hostOk "d2b-full-vm-video";
+  "restart-policy/gpu" = hostOk "d2b-full-vm-gpu";
+  "restart-policy/otel-relay-template" = hostOk "d2b-otel-relay@";
+  "restart-policy/otel-host-bridge" = hostOk "d2b-otel-host-bridge";
+  "restart-policy/ch-exporter" = hostOk "d2b-ch-exporter";
+  "restart-policy/guest-otel-vsock-out" = guestOk "d2b-otel-vsock-out";
+  "restart-policy/obs-otel-vsock-in-host" = obsOk "d2b-otel-vsock-in-host";
 
-  "restart-policy/nixlingd-present" = {
+  "restart-policy/d2bd-present" = {
     expr = dSvc != null;
     expected = true;
   };
-  "restart-policy/nixlingd-restarts-on-update" = {
+  "restart-policy/d2bd-restarts-on-update" = {
     expr = if dSvc != null then (dSvc.restartIfChanged or null) else null;
     expected = true;
   };
-  "restart-policy/nixlingd-killmode-process" = {
+  "restart-policy/d2bd-killmode-process" = {
     expr = if dSvc != null then (dSvc.serviceConfig.KillMode or null) else null;
     expected = "process";
   };

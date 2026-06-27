@@ -1,7 +1,7 @@
 {
   "uid": "lifecycle-traces",
   "title": "Lifecycle Traces",
-  "tags": ["nixling", "v0.2.0"],
+  "tags": ["d2b", "v0.2.0"],
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",
@@ -13,8 +13,8 @@
         "label": "VM",
         "type": "query",
         "datasource": {"type": "prometheus", "uid": "prometheus"},
-        "query": "label_values(nixling_vm_ch_api_up, vm)",
-        "definition": "label_values(nixling_vm_ch_api_up, vm)",
+        "query": "label_values(d2b_vm_ch_api_up, vm)",
+        "definition": "label_values(d2b_vm_ch_api_up, vm)",
         "includeAll": true,
         "allValue": ".+",
         "multi": true,
@@ -37,7 +37,7 @@
         {
           "refId": "A",
           "queryType": "search",
-          "query": "{ resource.service.name = \"nixling\" && span.\"vm.name\" =~ \"${vm:regex}\" }"
+          "query": "{ resource.service.name = \"d2b\" && span.\"vm.name\" =~ \"${vm:regex}\" }"
         }
       ],
       "transformations": [
@@ -49,7 +49,7 @@
       "id": 2,
       "type": "heatmap",
       "title": "Failures by step",
-      "description": "Assumes structured nixling-event JSON lines reach Loki so step/result can be parsed at query time.",
+      "description": "Assumes structured d2b-event JSON lines reach Loki so step/result can be parsed at query time.",
       "gridPos": {"h": 9, "w": 12, "x": 12, "y": 0},
       "datasource": {"type": "loki", "uid": "loki"},
       "fieldConfig": {"defaults": {}, "overrides": []},
@@ -75,7 +75,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{ resource.service.name = \"nixling\" && span.\"vm.name\" =~ \"${vm:regex}\" } | histogram_over_time(span:duration) by (span.\"nixling.subcommand\")"
+          "query": "{ resource.service.name = \"d2b\" && span.\"vm.name\" =~ \"${vm:regex}\" } | histogram_over_time(span:duration) by (span.\"d2b.subcommand\")"
         }
       ]
     },
@@ -83,7 +83,7 @@
       "id": 4,
       "type": "logs",
       "title": "Lifecycle event stream",
-      "description": "Pairs with Tempo trace-to-logs settings. Direct links depend on nixling-event JSON carrying a trace_id field.",
+      "description": "Pairs with Tempo trace-to-logs settings. Direct links depend on d2b-event JSON carrying a trace_id field.",
       "gridPos": {"h": 9, "w": 12, "x": 12, "y": 9},
       "datasource": {"type": "loki", "uid": "loki"},
       "fieldConfig": {"defaults": {}, "overrides": []},
@@ -108,7 +108,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (vm, outcome) (rate(nixling_daemon_vm_shutdown_total{vm=~\"${vm:regex}\"}[5m]))",
+          "expr": "sum by (vm, outcome) (rate(d2b_daemon_vm_shutdown_total{vm=~\"${vm:regex}\"}[5m]))",
           "legendFormat": "{{vm}} {{outcome}}"
         }
       ]
@@ -117,7 +117,7 @@
       "id": 6,
       "type": "timeseries",
       "title": "Graceful shutdown wait duration",
-      "description": "Observed provider graceful-shutdown wait duration, in seconds. Use this to tune nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds and per-VM overrides.",
+      "description": "Observed provider graceful-shutdown wait duration, in seconds. Use this to tune d2b.daemon.lifecycle.gracefulShutdown.timeoutSeconds and per-VM overrides.",
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 18},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
@@ -125,7 +125,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (vm, le) (rate(nixling_daemon_vm_shutdown_duration_seconds_bucket{vm=~\"${vm:regex}\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (vm, le) (rate(d2b_daemon_vm_shutdown_duration_seconds_bucket{vm=~\"${vm:regex}\"}[5m])))",
           "legendFormat": "{{vm}} p95"
         }
       ]

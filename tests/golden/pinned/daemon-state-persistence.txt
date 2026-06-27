@@ -1,4 +1,4 @@
-# daemon-state-persistence — nixlingd daemon-spawn #[test]. Successor of
+# daemon-state-persistence — d2bd daemon-spawn #[test]. Successor of
 # tests/daemon-state-persistence.sh, which exercised daemon restart state
 # reconciliation, restored pidfd-table stop behavior, and state-file clearing.
 # This integration test runs in the default cargo test --workspace pass gated

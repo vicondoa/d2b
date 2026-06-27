@@ -1,13 +1,13 @@
-# nixling.observability.* — host-wide observability surface. Split into
+# d2b.observability.* — host-wide observability surface. Split into
 # its own file for the v0.2.0 observability track so future PRs can
 # extend the feature without reopening the baseline option schema.
 { config, lib, pkgs, ... }:
 
 let
-  nl = import ./lib.nix { inherit lib; };
-  inherit (nl) subnetIp;
+  d2bLib = import ./lib.nix { inherit lib; };
+  inherit (d2bLib) subnetIp;
   defaultGrafanaListenAddress =
-    subnetIp config.nixling.observability.lanSubnet config.nixling.observability.index;
+    subnetIp config.d2b.observability.lanSubnet config.d2b.observability.index;
   defaultRetention = {
     metrics = "30d";
     logs = "14d";
@@ -19,13 +19,13 @@ let
     criticalValue = "critical";
     criticalRatio = 1.0;
     defaultRatio = 0.1;
-    criticalTenant = "nixling-critical";
-    defaultTenant = "nixling-default";
+    criticalTenant = "d2b-critical";
+    defaultTenant = "d2b-default";
   };
-  cfg = config.nixling.observability;
+  cfg = config.d2b.observability;
 in
 {
-  options.nixling.observability = {
+  options.d2b.observability = {
     enable = lib.mkEnableOption ''
       auto-declared observability VM, host forwarders/exporters, and
       per-VM guest telemetry sidecars
@@ -36,9 +36,9 @@ in
       default = "obs";
       description = ''
         Name of the auto-declared observability env. When
-        `nixling.observability.enable = true`, the future
+        `d2b.observability.enable = true`, the future
         `observability-vm.nix` module materialises
-        `nixling.envs.<env>` from this value.
+        `d2b.envs.<env>` from this value.
       '';
     };
 
@@ -203,8 +203,8 @@ in
         description = ''
           Retired Grafana stack compatibility option. It no longer
           affects native SigNoz authentication. Use
-          `nixling.observability.signoz.jwtSecretFile` and
-          `nixling.observability.signoz.rootPasswordFile` for native
+          `d2b.observability.signoz.jwtSecretFile` and
+          `d2b.observability.signoz.rootPasswordFile` for native
           SigNoz credentials.
         '';
       };
@@ -215,7 +215,7 @@ in
         description = ''
           Retired Grafana stack compatibility option. It no longer
           affects native SigNoz authentication. Use
-          `nixling.observability.signoz.rootPasswordFile` for the
+          `d2b.observability.signoz.rootPasswordFile` for the
           native SigNoz root password.
         '';
       };
@@ -270,7 +270,7 @@ in
 
       adminEmail = lib.mkOption {
         type = lib.types.str;
-        default = "admin@nixling.local";
+        default = "admin@d2b.local";
         description = ''
           Root SigNoz admin email used for first-run bootstrap.
         '';
@@ -281,8 +281,8 @@ in
         default = null;
         description = ''
           Optional host path containing SigNoz's JWT/tokenizer secret.
-          When null, nixling generates
-          `${"$"}{nixling.site.stateDir}/observability/signoz-jwt-secret`
+          When null, d2b generates
+          `${"$"}{d2b.site.stateDir}/observability/signoz-jwt-secret`
           at activation. When set, activation copies this file into that
           host-secret path with `0444 root:root` under a `0700`
           root-owned directory before sharing it read-only into `sys-obs`.
@@ -294,8 +294,8 @@ in
         default = null;
         description = ''
           Optional host path containing the SigNoz root user's password.
-          When null, nixling generates
-          `${"$"}{nixling.site.stateDir}/observability/signoz-root-password`
+          When null, d2b generates
+          `${"$"}{d2b.site.stateDir}/observability/signoz-root-password`
           at activation. When set, activation copies this file into that
           host-secret path with `0444 root:root` under a `0700`
           root-owned directory before sharing it read-only into `sys-obs`.
@@ -307,8 +307,8 @@ in
         default = null;
         description = ''
           Optional host path containing the ClickHouse password used by
-          SigNoz services. When null, nixling generates
-          `${"$"}{nixling.site.stateDir}/observability/clickhouse-password`
+          SigNoz services. When null, d2b generates
+          `${"$"}{d2b.site.stateDir}/observability/clickhouse-password`
           at activation. When set, activation copies this file into that
           host-secret path with `0444 root:root` under a `0700`
           root-owned directory before sharing it read-only into `sys-obs`.
@@ -350,7 +350,7 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        Include OpenTelemetry trace helpers in the `nixling` CLI.
+        Include OpenTelemetry trace helpers in the `d2b` CLI.
       '';
     };
 
@@ -363,7 +363,7 @@ in
       description = ''
         Package providing the observability byte-relay binary. Defaults
         to `pkgs.socat` today and stays swappable for a future
-        dedicated `nixling-otel-relay` implementation.
+        dedicated `d2b-otel-relay` implementation.
 
         Current contract: this package MUST provide a
         `bin/socat`-compatible CLI.
@@ -401,7 +401,7 @@ in
           PRIORITY->severity parser runs), at parity with the guest
           journal. Enable only when the `sys-obs` VM is a trusted operator
           sink. Retention of these logs is governed by SigNoz/ClickHouse
-          TTL inside `sys-obs`, not `nixling.observability.retention.*`.
+          TTL inside `sys-obs`, not `d2b.observability.retention.*`.
         '';
       };
 
@@ -414,7 +414,7 @@ in
             instrumentation can push traces/logs/metrics through the same
             host -> `sys-obs` bridge as host metrics. The endpoint is a
             Unix-domain socket only (no TCP listener), isolated in its own
-            directory at `/run/nixling/otel/ingest/host-otlp.sock` so the
+            directory at `/run/d2b/otel/ingest/host-otlp.sock` so the
             collector cannot reach `host-egress.sock`.
           '';
         };
@@ -450,9 +450,9 @@ in
     {
       assertion = (!cfg.host.scrapeJournal && !cfg.host.otlpIngest.enable) || cfg.enable;
       message = ''
-        nixling.observability.host.scrapeJournal and
-        nixling.observability.host.otlpIngest.enable require
-        nixling.observability.enable = true: the host OTel collector only
+        d2b.observability.host.scrapeJournal and
+        d2b.observability.host.otlpIngest.enable require
+        d2b.observability.enable = true: the host OTel collector only
         exists when the observability stack is enabled. Enable the stack or
         unset the host flags.
       '';
@@ -461,21 +461,21 @@ in
 
   config.warnings = lib.mkIf cfg.enable (
     lib.optional (cfg.retention != defaultRetention) ''
-      nixling.observability.retention.* is a compatibility surface for
+      d2b.observability.retention.* is a compatibility surface for
       the retired Tempo/Loki stack. Native SigNoz/ClickHouse retention is
       not configured from these options yet; use SigNoz/ClickHouse
       retention controls and size `sys-obs` volumes explicitly.
     ''
     ++ lib.optional (cfg.sampling != defaultSampling) ''
-      nixling.observability.sampling.* is a compatibility surface for
+      d2b.observability.sampling.* is a compatibility surface for
       the retired Tempo stack. Native SigNoz sampling is not configured
       from these options yet.
     ''
     ++ lib.optional (cfg.grafana.secretKeyFile != null || cfg.grafana.adminPasswordFile != null) ''
-      nixling.observability.grafana.{secretKeyFile,adminPasswordFile}
+      d2b.observability.grafana.{secretKeyFile,adminPasswordFile}
       are retired Grafana-stack compatibility options and do not affect
       native SigNoz authentication. Use
-      nixling.observability.signoz.{jwtSecretFile,rootPasswordFile}
+      d2b.observability.signoz.{jwtSecretFile,rootPasswordFile}
       instead.
     ''
   );

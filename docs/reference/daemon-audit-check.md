@@ -1,10 +1,10 @@
 # Daemon audit-check
 
 Operator reference for the in-daemon replacement for the retired
-`nixling-audit-check.{service,timer}` host singleton + timer that
+`d2b-audit-check.{service,timer}` host singleton + timer that
 previously validated broker audit log shape on a 24h cadence.
 
-Source of truth: `packages/nixlingd/src/audit_check.rs`.
+Source of truth: `packages/d2bd/src/audit_check.rs`.
 
 This folds the host singleton into the unprivileged daemon's health
 surface.
@@ -13,8 +13,8 @@ surface.
 
 | Legacy host singleton                          | Replacement                                             |
 | ---------------------------------------------- | ------------------------------------------------------- |
-| `nixling-audit-check.service` (oneshot)        | `GET /health/audit-check` on the daemon's HTTP surface  |
-| `nixling-audit-check.timer` (`OnCalendar=daily`) | Supervisor event-loop sweep every 5 minutes (default) |
+| `d2b-audit-check.service` (oneshot)        | `GET /health/audit-check` on the daemon's HTTP surface  |
+| `d2b-audit-check.timer` (`OnCalendar=daily`) | Supervisor event-loop sweep every 5 minutes (default) |
 
 Both legacy units were declared in `nixos-modules/host-audit.nix`
 with scheduled-removal markers in their `description` so operators saw
@@ -68,7 +68,7 @@ never touches the cgroup tree, and never opens a socket.
   `DEFAULT_SWEEP_INTERVAL_SECS` (5 minutes). Operators can override
   this in a later phase if hosts with very large audit volume need a
   lower cadence; the constant lives in
-  `nixlingd::audit_check::DEFAULT_SWEEP_INTERVAL_SECS`.
+  `d2bd::audit_check::DEFAULT_SWEEP_INTERVAL_SECS`.
 
 ## HTTP contract
 
@@ -90,7 +90,7 @@ Response: `200 OK`, `Content-Type: application/json`, body is the
 When defects are present the response is still `200 OK` — the sweep
 ran to completion, so the request itself succeeded; the report's
 `defects` array tells the operator which lines tripped which
-assertion. `nixling host doctor` consumes the same JSON and
+assertion. `d2b host doctor` consumes the same JSON and
 surfaces non-empty `defects` as a host-doctor finding.
 
 `5xx` is reserved for sweep failure (e.g., audit directory exists
@@ -126,16 +126,16 @@ Other methods return `405 Method Not Allowed`; other paths return
 
 ## Migration notes for operators
 
-* **No more `systemctl start nixling-audit-check.service`.** Use
+* **No more `systemctl start d2b-audit-check.service`.** Use
   `curl --unix-socket … http://localhost/health/audit-check` (or
-  `nixling host doctor`, which polls the daemon for you).
+  `d2b host doctor`, which polls the daemon for you).
 * **No more daily timer wait.** The 5-minute sweep catches malformed
   records within minutes instead of within a day.
-* **No `nixling audit --strict` reuse.** The retired oneshot invoked
-  `nixling audit --strict` to validate broker audit log shape. The
+* **No `d2b audit --strict` reuse.** The retired oneshot invoked
+  `d2b audit --strict` to validate broker audit log shape. The
   shape check is now narrower and faster: it does not re-run the
   full security audit, only the broker audit-log invariants. Use
-  `nixling audit` directly if you want the broader scan (it's
+  `d2b audit` directly if you want the broader scan (it's
   daemon-mediated via `ExportBrokerAudit`).
 
 See also: `docs/reference/daemon-api.md` §"Audit",
@@ -144,7 +144,7 @@ See also: `docs/reference/daemon-api.md` §"Audit",
 
 > **Local scope of this check.** The audit check described in this
 > document covers only the local broker audit log
-> (`/var/lib/nixling/audit/broker-<utc-date>.jsonl`). Any future
+> (`/var/lib/d2b/audit/broker-<utc-date>.jsonl`). Any future
 > gateway or realm audit (realm access events, provider operation
 > records) is separate and resides inside the gateway guest VM.
 > Relay or realm identity never enters the local broker audit or

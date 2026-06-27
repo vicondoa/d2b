@@ -39,7 +39,7 @@
           }
         },
         "delegated": {
-          "description": "Whether the broker must delegate ownership to nixlingd.",
+          "description": "Whether the broker must delegate ownership to d2bd.",
           "type": "boolean"
         },
         "subtree": {

@@ -1,7 +1,7 @@
 # Default switch and deprecation — historical record
 
 > **Status: historical record.** The daemon-experimental rollout this
-> page describes is closed. `nixling.daemonExperimental.enable` now
+> page describes is closed. `d2b.daemonExperimental.enable` now
 > defaults `true` and no longer flips through an evidence gate, but it
 > still functionally gates the daemon control plane (setting it `false`
 > reverts the host to the unsupported pre-daemon legacy state). The
@@ -13,9 +13,9 @@
 >
 > This page is preserved because (a) historical CHANGELOG entries
 > link to it, (b) the per-wave evidence-gate semantics it documents
-> still gate the `nixling.defaultSwitchReadiness.<wave>.validated`
+> still gate the `d2b.defaultSwitchReadiness.<wave>.validated`
 > assertion (even though they no longer drive
-> `nixling.daemonExperimental.enable`), and (c) the "why we did NOT
+> `d2b.daemonExperimental.enable`), and (c) the "why we did NOT
 > keep a bash coexistence path" framing is easier to read against the
 > rollout shape that came before it.
 >
@@ -29,12 +29,12 @@
 
 | Concept (historical) | Replaced by (current behavior) |
 | --- | --- |
-| `nixling.daemonExperimental.enable = false` as the shipped default | Now `default = true`. It is no longer computed from wave readiness (no longer evidence-auto-flipped), but it still functionally gates the daemon control plane — setting it `false` reverts the host to the unsupported pre-daemon legacy state. The per-wave evidence files instead gate the `nixling.defaultSwitchReadiness.<wave>.validated` assertion (see below). |
-| The three-mode bridge (`default` daemon-first-with-bash-fallback / `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1`) | Single daemon-native path. Both environment variables are unrecognised after the clean break. |
-| The bash CLI (`scripts/nixling`, `nixos-modules/cli.nix`) shipped alongside the Rust CLI as a fallback runtime | Bash CLI deleted in the daemon-only clean break. Rust CLI is the only CLI. |
-| Per-VM `nixling@<vm>.service` and `microvm@<vm>.service` templates as the lifecycle substrate | Daemon-supervised lifecycle (`nixlingd::supervisor` + per-VM DAG executor). The per-VM systemd templates are deleted in the clean break. |
+| `d2b.daemonExperimental.enable = false` as the shipped default | Now `default = true`. It is no longer computed from wave readiness (no longer evidence-auto-flipped), but it still functionally gates the daemon control plane — setting it `false` reverts the host to the unsupported pre-daemon legacy state. The per-wave evidence files instead gate the `d2b.defaultSwitchReadiness.<wave>.validated` assertion (see below). |
+| The three-mode bridge (`default` daemon-first-with-bash-fallback / `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1`) | Single daemon-native path. Both environment variables are unrecognised after the clean break. |
+| The bash CLI (`scripts/d2b`, `nixos-modules/cli.nix`) shipped alongside the Rust CLI as a fallback runtime | Bash CLI deleted in the daemon-only clean break. Rust CLI is the only CLI. |
+| Per-VM `d2b@<vm>.service` and `microvm@<vm>.service` templates as the lifecycle substrate | Daemon-supervised lifecycle (`d2bd::supervisor` + per-VM DAG executor). The per-VM systemd templates are deleted in the clean break. |
 | The original 30/60/90/180-day bash deprecation calendar (warning → fail-loud → binary removed) | Clean break. The clean-break framing is the deprecation: there is no warn-then-remove cadence because there is no coexistence period. |
-| `nixling.vms.<vm>.supervisor` option (per-VM choice between systemd backend and daemon backend) | Removed. The option no longer exists; setting it fails eval with a typed message (`nixos-modules/assertions.nix`). Every enabled VM is daemon-supervised (see ADR 0015 § Decision). |
+| `d2b.vms.<vm>.supervisor` option (per-VM choice between systemd backend and daemon backend) | Removed. The option no longer exists; setting it fails eval with a typed message (`nixos-modules/assertions.nix`). Every enabled VM is daemon-supervised (see ADR 0015 § Decision). |
 | ADR 0007 (bash coexistence + migration plan) | Superseded by ADR 0015. ADR 0007 remains in the tree as historical context. |
 
 ## Why a clean break instead of the original deprecation cycle
@@ -63,7 +63,7 @@ The trade-off explicitly accepted by ADR 0015:
 
 - **Lost:** the ability for an operator to roll back to a known-good
   bash CLI on the same host after the clean break lands. The remediation path is
-  to pin to the last pre-clean-break nixling tag (the bash runtime is still
+  to pin to the last pre-clean-break d2b tag (the bash runtime is still
   in that revision's tree) rather than mix bash and daemon paths
   on the same host.
 - **Lost:** the `+30 / +90 / +180 day` cadence that gave external
@@ -73,7 +73,7 @@ The trade-off explicitly accepted by ADR 0015:
   deprecation warning, because there is no in-CLI legacy code path
   to warn from.
 - **Kept:** every operator config knob that selects daemon vs not
-  (`nixling.daemonExperimental.enable` itself, the flip gate, the
+  (`d2b.daemonExperimental.enable` itself, the flip gate, the
   `validated` evidence machinery). What changed is what the "off"
   side of that knob means: before the clean break it selected the bash runtime;
   after it disables the daemon-managed lifecycle bits and leaves
@@ -83,18 +83,18 @@ The trade-off explicitly accepted by ADR 0015:
 ## Flip-gate subset and per-wave evidence (evidence gate still live)
 
 The daemon-experimental flip originally turned
-`nixling.daemonExperimental.enable` into a
+`d2b.daemonExperimental.enable` into a
 computed default that evaluated to `true` only when every wave in the
 **flip-gate subset** had both readiness bits green AND a matching
 evidence file on disk. That coupling is **no longer wired**:
-`nixling.daemonExperimental.enable` now defaults `true` and is no
+`d2b.daemonExperimental.enable` now defaults `true` and is no
 longer evidence-auto-flipped, but it still functionally gates the
 daemon control plane (setting it `false` reverts the host to the
 unsupported pre-daemon legacy state). The flip-gate subset is still
 computed in
 `nixos-modules/options-daemon.nix`, and the per-wave evidence files
 are still live — but what they gate today is the per-wave
-`nixling.defaultSwitchReadiness.<wave>.validated = true` eval
+`d2b.defaultSwitchReadiness.<wave>.validated = true` eval
 assertion (fail-closed without the evidence file), not the
 `daemonExperimental.enable` default. The subset and evidence schema
 below remain accurate for that assertion.
@@ -116,7 +116,7 @@ them would deadlock the auto-flip.
 | `w7Fu` | store-lifecycle verbs + admin auth | `<defaultFlipEvidenceDir>/w7Fu.json` |
 | `w8Fu` | keys / trust / rotate-known-host live wiring | `<defaultFlipEvidenceDir>/w8Fu.json` |
 | `w9Fu` | host install + migrate live broker ops | `<defaultFlipEvidenceDir>/w9Fu.json` |
-| `p0` | daemon-only foundation (socket-activated broker, bundle hash verify, canonical `/run/nixling`) | `<defaultFlipEvidenceDir>/p0.json` |
+| `p0` | daemon-only foundation (socket-activated broker, bundle hash verify, canonical `/run/d2b`) | `<defaultFlipEvidenceDir>/p0.json` |
 | `p0Fu` | cgroup delegation sequence + per-artifact hash verification (foundation follow-up) | `<defaultFlipEvidenceDir>/p0Fu.json` |
 | `p1` | per-role minijail profiles + byte-parity argv generators | `<defaultFlipEvidenceDir>/p1.json` |
 | `p2` | daemon-side host-prep + ownership matrix + manifest version bump + daemon autostart | `<defaultFlipEvidenceDir>/p2.json` |
@@ -124,8 +124,8 @@ them would deadlock the auto-flip.
 | `p4` | `vm start/stop/restart/list` daemon-native end-to-end + desktop wrapper | `<defaultFlipEvidenceDir>/p4.json` |
 
 `defaultFlipEvidenceDir` is the
-`nixling.daemonExperimental.defaultFlipEvidenceDir` option; its
-default is `/var/lib/nixling/validated`. The option is overridable
+`d2b.daemonExperimental.defaultFlipEvidenceDir` option; its
+default is `/var/lib/d2b/validated`. The option is overridable
 mainly for the regression test
 (`tests/daemon-default-compat-eval.sh`); operator hosts should leave it
 at the default.
@@ -135,9 +135,9 @@ at the default.
 For each wave `W` in the flip-gate subset, the gate is green iff
 ALL three of:
 
-1. `nixling.defaultSwitchReadiness.<W>.implemented = true` (the
+1. `d2b.defaultSwitchReadiness.<W>.implemented = true` (the
    code has shipped in-tree);
-2. `nixling.defaultSwitchReadiness.<W>.validated = true` (the
+2. `d2b.defaultSwitchReadiness.<W>.validated = true` (the
    operator has recorded host-local evidence that the wave was
    exercised successfully); and
 3. `<defaultFlipEvidenceDir>/<W>.json` exists on disk and parses
@@ -155,10 +155,10 @@ eval failure.
 
 Operator overrides still win in both directions:
 
-- `nixling.daemonExperimental.enable = lib.mkForce true` — opt
+- `d2b.daemonExperimental.enable = lib.mkForce true` — opt
   into daemon mode before the flip gate is fully green. Same
   semantics as before.
-- `nixling.daemonExperimental.enable = lib.mkForce false` — opt
+- `d2b.daemonExperimental.enable = lib.mkForce false` — opt
   out. **Semantics changed at the clean break.** Before it, this selected the
   legacy bash/systemd runtime. After it, the legacy runtime no
   longer exists; setting this to `false` simply disables the
@@ -232,6 +232,6 @@ across every row.
 - [`../reference/wave-evidence-schema.md`](../reference/wave-evidence-schema.md)
   — JSON schema for the per-wave evidence files.
 - [`../reference/host-validate.md`](../reference/host-validate.md)
-  — the `nixling host validate` verb that writes those files.
+  — the `d2b host validate` verb that writes those files.
 - [Daemon experimental mode](daemon-experimental.md)
 - [Daemon lifecycle](daemon-lifecycle.md)

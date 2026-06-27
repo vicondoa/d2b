@@ -1,1 +1,1 @@
-nixling usb detach --dry-run: would ask guestd to detach busid '1-2' for vm 'corp-vm', unbind it on the host, and reconcile the USBIP proxy
+d2b usb detach --dry-run: would ask guestd to detach busid '1-2' for vm 'corp-vm', unbind it on the host, and reconcile the USBIP proxy

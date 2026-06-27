@@ -3,18 +3,18 @@
 - Status: Accepted
 - Date: 2026-06-20
 - Related: ADR 0006 (manifest bundle versioning), ADR 0015 (daemon-only clean
-  break), ADR 0025 (host-jailed Wayland filter proxy role), ADR 0032 (nixling
+  break), ADR 0025 (host-jailed Wayland filter proxy role), ADR 0032 (d2b
   v2 constellation control plane), ADR 0034 (storage lifecycle, restart
   adoption, and synchronization), ADR 0035 (efficiency and simplification
   roadmap), ADR 0036 (qemu-media runtime)
 
 ## Context
 
-Nixling now has more than one local hypervisor shape. The NixOS workload path
+D2b now has more than one local hypervisor shape. The NixOS workload path
 uses Cloud Hypervisor/crosvm plus supporting services such as virtiofsd,
 swtpm, USBIP attach runners, audio, video, and the Wayland proxy. The
 qemu-media path uses QEMU, QMP, a host graphics window, and broker-opened media
-fds. Both are VM runtimes supervised by `nixlingd`, yet their public status,
+fds. Both are VM runtimes supervised by `d2bd`, yet their public status,
 capability reporting, denial paths, stopped-state handling, and service
 bookkeeping have grown independently.
 
@@ -156,7 +156,7 @@ public contract allows it.
 
 ### qemu-media USB cleanup
 
-The public `nixling usb enroll` surface will be removed. Enrollment is a
+The public `d2b usb enroll` surface will be removed. Enrollment is a
 current qemu-media compatibility mechanism, not the long-term runtime seam.
 
 For qemu-media boot media, physical USB resolution moves to VM start. The

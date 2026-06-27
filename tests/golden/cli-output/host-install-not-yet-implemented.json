@@ -4,6 +4,6 @@
   "exit_code": 70,
   "kind": "host-install-error",
   "observed_state": "host install is a W4 deliverable; W3 ships the schema + CLI surface only.",
-  "remediation": "Use `nixling switch` or the NixOS module integration path until W4 ships.",
-  "what_was_checked": "Whether `host install` is implemented in this nixling release."
+  "remediation": "Use `d2b switch` or the NixOS module integration path until W4 ships.",
+  "what_was_checked": "Whether `host install` is implemented in this d2b release."
 }

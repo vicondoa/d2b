@@ -3,7 +3,7 @@
   "docs_anchor": "docs/reference/error-codes.md#route-preflight-no-default-route",
   "exit_code": 1,
   "kind": "host-prepare-apply-error",
-  "observed_state": "ip route show default returned empty; nixling refuses to add routes without an upstream.",
+  "observed_state": "ip route show default returned empty; d2b refuses to add routes without an upstream.",
   "remediation": "Configure a default route on the host upstream before running `host prepare --apply`.",
-  "what_was_checked": "Whether the host has a default route before nixling adds NAT routes."
+  "what_was_checked": "Whether the host has a default route before d2b adds NAT routes."
 }

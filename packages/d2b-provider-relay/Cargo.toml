@@ -1,0 +1,39 @@
+[package]
+name = "d2b-provider-relay"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+# Azure Relay transport (ADR 0032): the credential model + connect
+# contract + the WebSocket transport for the realm gateway. The gateway holds
+# the Listen credential; the container receives a gateway-minted short-lived
+# Send bearer (not the SAS rule key) because ACA Entra Relay substreams are not
+# reliable enough for Waypipe. All secret material has a redacted Debug.
+[dependencies]
+d2b-constellation-core = { path = "../d2b-constellation-core", version = "0.0.0-bootstrap" }
+d2b-constellation-provider = { path = "../d2b-constellation-provider", version = "0.0.0-bootstrap" }
+async-trait = "0.1"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+urlencoding = "2"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", features = ["ring"] }
+futures-util = "0.3"
+serde_json = { workspace = true }
+rustls-pki-types = "1"
+webpki-roots = "0.26"
+tracing = "0.1"
+libc = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tempfile = "3"

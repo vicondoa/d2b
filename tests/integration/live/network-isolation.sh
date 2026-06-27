@@ -8,12 +8,12 @@ ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
-MANIFEST=/run/current-system/sw/share/nixling/vms.json
+MANIFEST=/run/current-system/sw/share/d2b/vms.json
 
 skip() { log "  SKIP: $*"; exit 0; }
 fail_now() { fail "$*"; exit 1; }
 
-[ -r "$MANIFEST" ] || skip "manifest missing; nixling not installed on this host"
+[ -r "$MANIFEST" ] || skip "manifest missing; d2b not installed on this host"
 command -v bridge >/dev/null 2>&1 || skip "bridge(8) not available"
 
 bridge_tap_isolated() {
@@ -100,7 +100,7 @@ same_env_allowed_done=0
 cross_env_done=0
 host_lan_done=0
 probe_port=40223
-allow_pair="${NL_ALLOW_EASTWEST_PAIR:-}"
+allow_pair="${D2B_ALLOW_EASTWEST_PAIR:-}"
 allow_a="${allow_pair%%:*}"
 allow_b="${allow_pair#*:}"
 host_lan_ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '/ src / { for (i = 1; i <= NF; i++) if ($i == "src") { print $(i+1); exit } }')
@@ -156,7 +156,7 @@ for ((i=0; i<${#READY[@]}; i++)); do
           fi
           same_env_allowed_done=1
         else
-          fail_now "same-env pair $a/$b is non-isolated without being named in NL_ALLOW_EASTWEST_PAIR"
+          fail_now "same-env pair $a/$b is non-isolated without being named in D2B_ALLOW_EASTWEST_PAIR"
         fi
       fi
     elif [ "$cross_env_done" -eq 0 ]; then

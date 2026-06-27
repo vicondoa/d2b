@@ -1,6 +1,6 @@
 USB attach / detach / probe
 
-Usage: nixling usb <COMMAND>
+Usage: d2b usb <COMMAND>
 
 Commands:
   attach  Bind a host USB busid to a VM via the native daemon path

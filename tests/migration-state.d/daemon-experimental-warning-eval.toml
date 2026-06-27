@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["packages/nixling-contract-tests/tests/policy_lints.rs (gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/tools/rust-workspace-checks.sh -> static.sh) — daemon_experimental_option_documents_default_with_migration (options-daemon.nix + v1.0->v1.1 migration guide literal-string lints)"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_lints.rs (gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh -> static.sh) — daemon_experimental_option_documents_default_with_migration (options-daemon.nix + v1.0->v1.1 migration guide literal-string lints)"]

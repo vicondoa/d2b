@@ -1,0 +1,8 @@
+# Sibling-workspace cargo config for d2b-priv-broker.
+# See packages/.cargo/config.toml for the rationale: per-worktree
+# target/, shared compiled-output dedup via sccache. Route through a
+# repo-local shim so focused `nix shell ... cargo test` commands still
+# work when the shell omits `nixpkgs#sccache`.
+
+[build]
+rustc-wrapper = ".cargo/rustc-wrapper.sh"

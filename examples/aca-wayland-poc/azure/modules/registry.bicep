@@ -1,4 +1,4 @@
-// Registry module for the nixling ACA + Wayland POC (ADR 0032).
+// Registry module for the d2b ACA + Wayland POC (ADR 0032).
 //
 // The container registry and the user-assigned managed identity are
 // regional resources (each has a location), so they are deployed into the

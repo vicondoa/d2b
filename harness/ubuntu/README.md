@@ -2,9 +2,9 @@
 
 ## What this is
 
-This directory is the W0b non-NixOS Ubuntu harness skeleton for the nixling portability plan. It is hermetic: Nix materializes the layout and smoke-tests the stub JSON, but does not build or boot a live Ubuntu VM image.
+This directory is the W0b non-NixOS Ubuntu harness skeleton for the d2b portability plan. It is hermetic: Nix materializes the layout and smoke-tests the stub JSON, but does not build or boot a live Ubuntu VM image.
 
-W3 lifts this into a real `nixling host check` / host-prepare runner, W4 uses it for the Tier-1 alpha walkthrough, and W9 folds it into onboarding/install flow.
+W3 lifts this into a real `d2b host check` / host-prepare runner, W4 uses it for the Tier-1 alpha walkthrough, and W9 folds it into onboarding/install flow.
 
 ## Inventory
 

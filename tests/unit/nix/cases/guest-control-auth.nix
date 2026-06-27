@@ -1,9 +1,9 @@
 # nix-unit cases migrated from tests/guest-control-auth-eval.sh.
 #
-# Guest-control auth token delivery invariants: the read-only `nl-gctl`
+# Guest-control auth token delivery invariants: the read-only `d2b-gctl`
 # virtiofs token share (source / mountPoint / readOnly), the
 # `guest_control_token:` LoadCredential and RequiresMountsFor wiring on the
-# COMPUTED GUEST `nixling-guestd` service (never a host service, and the
+# COMPUTED GUEST `d2b-guestd` service (never a host service, and the
 # token path must never leak into the serialized unit), the guestd
 # ExecStart shape, the dedicated token-virtiofsd runner (distinct uid from
 # cloud-hypervisor, read-only, scoped socket path, write-policy excluding
@@ -15,7 +15,7 @@
 # Reuses the existing evidence module tests/unit/nix/eval-cases/guest-control-auth-eval.nix by
 # importing it with a synthetic `flake` shim whose
 # `inputs.nixpkgs.lib.nixosSystem` routes through the harness `mkEval`
-# (== nixosSystem with the nixling module set). This keeps the eval 100%
+# (== nixosSystem with the d2b module set). This keeps the eval 100%
 # faithful to the retired bash gate's `nix eval` of each parameterization
 # while staying hermetic (no `builtins.getFlake`). The default
 # parameterization asserts the exact evidence JSON; each rejection case
@@ -43,7 +43,7 @@ in
   # --- default parameterization: token share + LoadCredential -------
   "guest-control-auth/positive" = {
     expr = auth { };
-    expected = "{\"loadCredential\":[\"guest_control_token:/run/nixling-guest-control-host/token\"],\"mountPoint\":\"/run/nixling-guest-control-host\",\"readOnly\":true,\"source\":\"/var/lib/nixling/guest-control-corp-vm\"}";
+    expected = "{\"loadCredential\":[\"guest_control_token:/run/d2b-guest-control-host/token\"],\"mountPoint\":\"/run/d2b-guest-control-host\",\"readOnly\":true,\"source\":\"/var/lib/d2b/guest-control-corp-vm\"}";
   };
 
   # --- rejection cases: each must reject at eval time ----------------

@@ -22,7 +22,7 @@
     ],
     "serviceCapabilities": [
       "microvm",
-      "nixling",
+      "d2b",
       "virtiofsd"
     ],
     "runnerParityOk": true
@@ -50,7 +50,7 @@
     ],
     "serviceCapabilities": [
       "microvm",
-      "nixling",
+      "d2b",
       "virtiofsd"
     ],
     "runnerParityOk": true

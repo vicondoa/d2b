@@ -1,6 +1,6 @@
 # nixos-modules/vm-options.nix
 #
-# Nixling-owned per-VM runner options module. Replaces the upstream
+# D2b-owned per-VM runner options module. Replaces the upstream
 # microvm.nix `microvm.*` per-VM option set.
 #
 # This module is added to each per-VM NixOS evaluation by
@@ -12,10 +12,10 @@
 #
 # The fields enumerated here are the subset consumed by
 # `nixos-modules/processes-json.nix` (via the
-# `nl.vmRunner config name` helper in lib.nix). Anything not
+# `d2bLib.vmRunner config name` helper in lib.nix). Anything not
 # listed is intentionally left out — the broker SpawnRunner
 # pipeline generates runner argv in Rust
-# (`packages/nixling-host/src/ch_argv.rs` + sibling
+# (`packages/d2b-host/src/ch_argv.rs` + sibling
 # `*_argv.rs` modules), so the Nix side only needs to surface
 # the option values, not build runner derivations.
 { config, lib, pkgs, ... }:
@@ -236,7 +236,7 @@ in
       };
       socket = mkOption {
         type = types.str;
-        default = "/run/nixling/vms/${config._module.args.name or "unknown"}/gpu.sock";
+        default = "/run/d2b/vms/${config._module.args.name or "unknown"}/gpu.sock";
         description = "GPU device socket path.";
       };
     };
@@ -262,16 +262,16 @@ in
       '';
     };
 
-    # declaredRunner is NOT emitted by the nixling-owned evaluator.
+    # declaredRunner is NOT emitted by the d2b-owned evaluator.
     # The broker spawns the hypervisor directly via the
-    # Rust argv generators in `packages/nixling-host/src/*_argv.rs`;
+    # Rust argv generators in `packages/d2b-host/src/*_argv.rs`;
     # no Nix-side runner derivation is needed in v1.1+.
     declaredRunner = mkOption {
       type = types.nullOr types.package;
       default = null;
       internal = true;
       description = ''
-        Always null in v1.1+ (nixling owns the substrate; the broker
+        Always null in v1.1+ (d2b owns the substrate; the broker
         Rust argv generators replace microvm.nix's runner derivation).
         Preserved as a typed `null` for backward-compat with consumers
         that touch the path.

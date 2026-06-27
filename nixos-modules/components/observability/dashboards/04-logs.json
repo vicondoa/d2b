@@ -1,7 +1,7 @@
 {
   "uid": "logs",
   "title": "Logs",
-  "tags": ["nixling", "v0.2.0"],
+  "tags": ["d2b", "v0.2.0"],
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",

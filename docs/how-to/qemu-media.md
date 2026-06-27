@@ -16,7 +16,7 @@ policy.
 For a direct raw image file:
 
 ```nix
-nixling.vms.dark-live = {
+d2b.vms.dark-live = {
   enable = true;
   runtime.kind = "qemu-media";
   env = "dark";
@@ -35,7 +35,7 @@ nixling.vms.dark-live = {
 
     source = {
       kind = "image-file";
-      path = "/var/lib/nixling/images/dark-live.raw";
+      path = "/var/lib/d2b/images/dark-live.raw";
       format = "raw";
       readOnly = true;
     };
@@ -49,7 +49,7 @@ nixling.vms.dark-live = {
 For physical USB media, keep only opaque refs in Nix:
 
 ```nix
-nixling.vms.dark-live.qemuMedia = {
+d2b.vms.dark-live.qemuMedia = {
   resources = {
     memoryMiB = 4096;
     vcpu = 2;
@@ -74,7 +74,7 @@ nixling.vms.dark-live.qemuMedia = {
 };
 ```
 
-Rebuild the host and restart `nixlingd` so it reloads the updated
+Rebuild the host and restart `d2bd` so it reloads the updated
 bundle.
 
 The `usbSelector.byIdName` value is the basename of a stable
@@ -90,41 +90,41 @@ examples or issue text.
 Skip this section for `image-file` sources.
 
 ```bash
-nixling usb probe
+d2b usb probe
 ```
 
 Probe output is redacted: it shows the transient busid selector without
 by-id names, serials, block paths, or registry paths. If the boot-drive
 slot shows `enrollable` rather than `enrolled`, verify that the
 qemu-media source has the intended `usbSelector.byIdName` and re-run
-`nixling usb probe`; `nixling status <vm>` shows the registry state when
+`d2b usb probe`; `d2b status <vm>` shows the registry state when
 you need to distinguish `missing`, `present`, and `stale`. There is no
 public enrollment verb.
 
 ## 3. Start and inspect
 
 ```bash
-nixling vm start dark-live --dry-run
-nixling vm start dark-live --apply
-nixling list
-nixling status dark-live
+d2b vm start dark-live --dry-run
+d2b vm start dark-live --apply
+d2b list
+d2b status dark-live
 ```
 
 The dry-run should show `host-reconcile → qemu-media`. After start,
 status should show the qemu-media runner, QMP readiness, source refs,
 source kind/format/read-only policy, and registry state. The host QEMU
-window is routed through the nixling Wayland filter proxy, so the niri
+window is routed through the d2b Wayland filter proxy, so the niri
 border rule matches the proxy-rewritten app-id prefix
-`nixling.dark-live.`.
+`d2b.dark-live.`.
 
 ## 4. Hotplug configured media
 
 For physical USB removable slots:
 
 ```bash
-nixling usb attach dark-live 1-2.3 --dry-run
-nixling usb attach dark-live 1-2.3 --apply
-nixling usb detach dark-live 1-2.3 --apply
+d2b usb attach dark-live 1-2.3 --dry-run
+d2b usb attach dark-live 1-2.3 --apply
+d2b usb detach dark-live 1-2.3 --apply
 ```
 
 For qemu-media VMs these commands do not start USBIP runners and do not
@@ -135,10 +135,10 @@ redact the runtime selector from success output.
 
 Record:
 
-- `nixling vm start dark-live --dry-run`
-- `nixling vm start dark-live --apply`
-- `nixling status dark-live`
-- `nixling usb probe`
+- `d2b vm start dark-live --dry-run`
+- `d2b vm start dark-live --apply`
+- `d2b status dark-live`
+- `d2b usb probe`
 - any `usb attach` and `usb detach` dry-run/apply output
 - broker audit rows for `QemuMediaBoot`, `QemuMediaAttach`, and
   `QemuMediaDetach`
@@ -149,7 +149,7 @@ Use the redacted CLI summaries and audit fields.
 ## 6. Stop
 
 ```bash
-nixling vm stop dark-live --apply
+d2b vm stop dark-live --apply
 ```
 
 See [the qemu-media reference](../reference/qemu-media.md) for the full

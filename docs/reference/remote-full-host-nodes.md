@@ -10,7 +10,7 @@ prepare) are not yet supported. Do not depend on this interface for
 production workloads.
 
 This page documents the committed adapter model for gateway-managed
-remote nixling hosts: registration, heartbeat/liveness, capability
+remote d2b hosts: registration, heartbeat/liveness, capability
 gating, operation routing, remote-side deduplication and idempotency,
 disconnect/reconnect, authentication/principal binding, audit shape, and
 the non-tunneling boundary. For the constellation core model (frame
@@ -21,17 +21,17 @@ schema, operation kinds, idempotency, stream authz) see
 [transport support policy](./transport-support-policy.md). For host
 substrate capabilities see [host substrate providers](./host-substrate-providers.md).
 The architectural rationale is in
-[ADR 0032](../adr/0032-nixling-v2-constellation-control-plane.md).
+[ADR 0032](../adr/0032-d2b-v2-constellation-control-plane.md).
 For provider-managed sandboxes — nodes whose lifecycle is owned by a
-cloud provider API rather than by a locally managed `nixling-priv-broker`
+cloud provider API rather than by a locally managed `d2b-priv-broker`
 — see [provider-managed sandboxes](./provider-managed-sandboxes.md).
 
 ---
 
 ## What a remote full-host node is
 
-A remote full-host node is a host running its own `nixlingd`,
-`nixling-priv-broker`, and guest-control stack that a gateway guest
+A remote full-host node is a host running its own `d2bd`,
+`d2b-priv-broker`, and guest-control stack that a gateway guest
 can reach through a transport peer session. From the gateway's point
 of view, the remote host appears as a named `NodeId` in a realm with
 a declared capability set. All lifecycle, broker, and guest-control
@@ -150,7 +150,7 @@ established transport session. Routing proceeds as follows:
    idempotency key for mutating operations.
 4. The gateway sends the semantic `OperationRequest` to the remote peer
    client. The adapter never exposes a raw byte/frame tunnel to callers.
-5. The remote node's local `nixlingd` receives the operation request,
+5. The remote node's local `d2bd` receives the operation request,
    enforces its own realm/capability policy, and invokes the local
    broker or guest-control path.
 6. The remote node returns a semantic response to the gateway.
@@ -170,7 +170,7 @@ The gateway never forwards:
   authz envelope.
 
 The remote host re-originates all side effects through its own
-`nixlingd`/broker/guest-control stack. The gateway is a routing
+`d2bd`/broker/guest-control stack. The gateway is a routing
 intermediary, not an execution proxy.
 
 ---
@@ -235,7 +235,7 @@ Key invariants:
 
 - **Relay identity is reachability only.** A relay-authenticated peer is
   a transport endpoint. Relay credentials never map to a constellation
-  principal and never authorize nixling lifecycle or broker operations.
+  principal and never authorize d2b lifecycle or broker operations.
   Relay transport grants only the ability to reach the gateway's relay
   rendezvous point; all operation authorization is based on the
   `OperationRequest`'s authenticated principal and realm policy.
@@ -248,8 +248,8 @@ Key invariants:
   decisions.
 - **No local `Admin` promotion.** A relay-authenticated or
   constellation-authenticated principal is never mapped to the local
-  `nixling` group or to the broker's `Admin` peer credential. Local
-  lifecycle authorization remains `SO_PEERCRED` + `nixling` group
+  `d2b` group or to the broker's `Admin` peer credential. Local
+  lifecycle authorization remains `SO_PEERCRED` + `d2b` group
   membership on `public.sock`. Remote principals may hold constellation
   enrollment, lifecycle, exec, logs, or other realm-scoped authorization;
   they do not inherit host-local privileges.
@@ -310,7 +310,7 @@ Errors from the remote full-host node adapter use the standard
 | Adapter reason | `ErrorKind` | Meaning | Remediation hint |
 | --- | --- | --- |
 | `wrong-realm` / `wrong-node` | `InvalidTarget` | Request targets a node outside the registered realm/node. | Check the target realm and node enrollment. |
-| `not-full-host` | `InvalidTarget` | Registration used a gateway or provider-managed node kind. | Register only full nixling hosts through this adapter. |
+| `not-full-host` | `InvalidTarget` | Registration used a gateway or provider-managed node kind. | Register only full d2b hosts through this adapter. |
 | `unauthorized-gateway` | `Unauthorized` or `InvalidTarget` | Peer/session principal is not authorized for the realm/node. | Enroll the gateway principal for this realm and node. |
 | `duplicate-registration` | `InvalidTarget` | Same node/generation conflicts with existing metadata. | Re-register with the current generation or remove the conflicting node. |
 | `stale-node-generation` | `InvalidTarget` | Operation or heartbeat targets an old generation. | Refresh remote node registration before retrying. |
@@ -337,12 +337,12 @@ does not implement fallbacks or workarounds.
 
 | Surface | Boundary |
 | --- | --- |
-| Raw broker operation forwarding | The gateway never forwards raw `nixling-priv-broker` frames. All broker work stays on the remote host. |
-| Guest-control frame tunneling | Guest-control (vsock) frames are not proxied through the gateway. Persistent shell routes as [ADR 0039](../adr/0039-constellation-persistent-shell-routing.md) semantic `Shell*` operations; the remote `nixlingd` opens its own guest-control sessions near the guest. |
+| Raw broker operation forwarding | The gateway never forwards raw `d2b-priv-broker` frames. All broker work stays on the remote host. |
+| Guest-control frame tunneling | Guest-control (vsock) frames are not proxied through the gateway. Persistent shell routes as [ADR 0039](../adr/0039-constellation-persistent-shell-routing.md) semantic `Shell*` operations; the remote `d2bd` opens its own guest-control sessions near the guest. |
 | Pidfd / fd forwarding | File descriptors, pidfds, and socket handles are never sent across the transport session. |
 | Host path and endpoint exposure | Host-local paths, socket addresses, runner argv, and endpoint strings are not visible in the operation envelope or in gateway audit records. |
 | Provider/relay credential forwarding | Transport and realm credentials remain in the layer that owns them and are never placed in operation payloads. |
-| Remote host install / host prepare | Registration assumes the remote host is already running a compatible `nixlingd`/`nixling-priv-broker` stack. Host installation and host preparation are out of scope for this adapter. |
+| Remote host install / host prepare | Registration assumes the remote host is already running a compatible `d2bd`/`d2b-priv-broker` stack. Host installation and host preparation are out of scope for this adapter. |
 | Production WAN transports | The preview is validated with mock and loopback peer clients only. Azure Relay over a live WAN, QUIC, and SSH are not yet connected. See [transport support policy](./transport-support-policy.md). |
 | Network mutation | The adapter does not configure routing, firewall rules, or overlays on the remote host or on the gateway network. |
 | SSH fallback | There is no implicit SSH fallback when the peer session transport is unavailable. Callers receive a typed `GatewayUnavailable` / transport-layer refusal. |
@@ -357,7 +357,7 @@ only. The following items are deferred to later work:
 - Production transport connectors (Azure Relay rendezvous, QUIC, SSH
   bootstrap).
 - Live Internet reachability and WAN NAT traversal.
-- Remote host installation and remote `nixling host prepare`.
+- Remote host installation and remote `d2b host prepare`.
 - Remote display, audio, USB, and device streams to/from the remote host.
 - Provider-provisioned remote hosts (see the
   [provider-managed sandbox](./provider-managed-sandboxes.md)

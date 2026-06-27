@@ -21,17 +21,17 @@ let
       system.stateVersion = "25.11";
       users.users.alice = { isNormalUser = true; uid = 1000; };
 
-      nixling.site = {
+      d2b.site = {
         waylandUser = "alice";
         launcherUsers = [ "alice" ];
         yubikey.enable = false;
       };
-      nixling.envs.work = {
+      d2b.envs.work = {
         lanSubnet = "10.20.0.0/24";
         uplinkSubnet = "192.0.2.0/30";
       };
 
-      nixling.vms.media = {
+      d2b.vms.media = {
         runtime.kind = "qemu-media";
         env = "work";
         qemuMedia = {
@@ -53,10 +53,10 @@ let
 
   positive = mkEval [ (mkHost { }) ];
   positiveCfg = positive.config;
-  positiveVm = positiveCfg.nixling.vms.media;
-  positiveManifest = positiveCfg.nixling.manifest.media;
-  positiveHostJson = positiveCfg.nixling._bundle.hostJson.data;
-  positiveProcesses = positiveCfg.nixling._bundle.processesJson.data.vms;
+  positiveVm = positiveCfg.d2b.vms.media;
+  positiveManifest = positiveCfg.d2b.manifest.media;
+  positiveHostJson = positiveCfg.d2b._bundle.hostJson.data;
+  positiveProcesses = positiveCfg.d2b._bundle.processesJson.data.vms;
   positiveQemuProcess = lib.findFirst (vm: vm.vm == "media") null positiveProcesses;
   positiveQemuNodeIds =
     if positiveQemuProcess == null then [ ] else map (node: node.id) positiveQemuProcess.nodes;
@@ -67,8 +67,8 @@ let
   positiveQemuWaylandProxy =
     if positiveQemuProcess == null then null else lib.findFirst (node: node.id == "wayland-proxy") null positiveQemuProcess.nodes;
   positiveQemuTapLock =
-    lib.findFirst (lock: lock.id == "lock:qemu-media-tap:media") null positiveCfg.nixling._bundle.syncJson.data.locks;
-  positiveProfileNames = lib.attrNames positiveCfg.nixling._bundle.minijailProfiles;
+    lib.findFirst (lock: lock.id == "lock:qemu-media-tap:media") null positiveCfg.d2b._bundle.syncJson.data.locks;
+  positiveProfileNames = lib.attrNames positiveCfg.d2b._bundle.minijailProfiles;
   expectedNixosRuntime = {
     kind = "nixos";
     provider = {
@@ -201,15 +201,15 @@ let
     vmAttrs.qemuMedia = {
       source = {
         kind = "image-file";
-        path = "/var/lib/nixling/images/installer.img";
+        path = "/var/lib/d2b/images/installer.img";
         format = "raw";
         readOnly = false;
       };
       removableSlots = { };
     };
   }) ];
-  imageDirectVm = imageDirect.config.nixling.vms.media;
-  imageDirectHostJson = imageDirect.config.nixling._bundle.hostJson.data;
+  imageDirectVm = imageDirect.config.d2b.vms.media;
+  imageDirectHostJson = imageDirect.config.d2b._bundle.hostJson.data;
   imageDirectSource = lib.findFirst
     (source: source.vm == "media" && source.slot == "boot")
     null
@@ -236,13 +236,13 @@ let
   imageMissingPathHostSource = lib.findFirst
     (source: source.vm == "media" && source.slot == "boot")
     null
-    imageMissingPathEval.config.nixling._bundle.hostJson.data.qemuMedia.sources;
+    imageMissingPathEval.config.d2b._bundle.hostJson.data.qemuMedia.sources;
 
   imageQcow2Messages = failingMessages {
     vmAttrs.qemuMedia = {
       source = {
         kind = "image-file";
-        path = "/var/lib/nixling/images/installer.qcow2";
+        path = "/var/lib/d2b/images/installer.qcow2";
         format = "qcow2";
       };
       removableSlots = { };
@@ -253,7 +253,7 @@ let
     vmAttrs.qemuMedia.source = {
       kind = "physical-usb";
       ref = "installer-usb";
-      path = "/var/lib/nixling/images/not-usb.img";
+      path = "/var/lib/d2b/images/not-usb.img";
     };
   };
 
@@ -281,7 +281,7 @@ let
   physicalMissingRefHostSource = lib.findFirst
     (source: source.vm == "media" && source.slot == "boot")
     null
-    physicalMissingRefCfg.nixling._bundle.hostJson.data.qemuMedia.sources;
+    physicalMissingRefCfg.d2b._bundle.hostJson.data.qemuMedia.sources;
 
   badBootUsbSelector = mkEval [ (mkHost {
     vmAttrs.qemuMedia = {
@@ -318,7 +318,7 @@ let
 in
 {
   "external-vm-kind/default-runtime-kind" = {
-    expr = positiveCfg.nixling.vms."sys-work-net".runtime.kind;
+    expr = positiveCfg.d2b.vms."sys-work-net".runtime.kind;
     expected = "nixos";
   };
 
@@ -360,7 +360,7 @@ in
     expected = {
       kind = "image-file";
       ref = null;
-      path = "/var/lib/nixling/images/installer.img";
+      path = "/var/lib/d2b/images/installer.img";
       format = "raw";
       readOnly = false;
       host = {
@@ -369,7 +369,7 @@ in
         sourceKind = "image-file";
         format = "raw";
         readOnly = false;
-        imagePath = "/var/lib/nixling/images/installer.img";
+        imagePath = "/var/lib/d2b/images/installer.img";
         registryScope = "direct-config-path";
         mediaRefIsGenerated = true;
       };
@@ -395,7 +395,7 @@ in
     };
     expected = {
       env = "work";
-      stateDir = "/var/lib/nixling/vms/media";
+      stateDir = "/var/lib/d2b/vms/media";
       tap = "work-l42";
       bridge = "br-work-lan";
       staticIp = "10.20.0.42";
@@ -445,7 +445,7 @@ in
       vm = "media";
       runtime = positiveManifest.runtime;
       env = "work";
-      stateDir = "/var/lib/nixling/vms/media";
+      stateDir = "/var/lib/d2b/vms/media";
       tap = "work-l42";
       bridge = "br-work-lan";
       staticIp = "10.20.0.42";
@@ -456,8 +456,8 @@ in
   "external-vm-kind/host-json-qemu-media-opaque-refs" = {
     expr = positiveHostJson.qemuMedia;
     expected = {
-      registryDir = "/var/lib/nixling/media-registry";
-      runtimeRulesPath = "/run/udev/rules.d/99-nixling-media-ignore.rules";
+      registryDir = "/var/lib/d2b/media-registry";
+      runtimeRulesPath = "/run/udev/rules.d/99-d2b-media-ignore.rules";
       reloadBehavior = "Broker writes root-only runtime udev rules with UDISKS_IGNORE=1 and reloads udev rules after physical USB resolution; direct image-file paths do not use runtime USB rules.";
       sources = [
         {
@@ -487,8 +487,8 @@ in
 
   "external-vm-kind/no-raw-media-identities-in-store-artifacts" = {
     expr =
-      !(lib.hasInfix "/var/lib/nixling/media/install.iso" rawArtifactText)
-      && !(lib.hasInfix "/var/lib/nixling/media/tools.iso" rawArtifactText)
+      !(lib.hasInfix "/var/lib/d2b/media/install.iso" rawArtifactText)
+      && !(lib.hasInfix "/var/lib/d2b/media/tools.iso" rawArtifactText)
       && !(lib.hasInfix "/dev/disk/by-id" rawArtifactText)
       && !(lib.hasInfix "usb-Vendor_SecretSerial" rawArtifactText)
       && !(lib.hasInfix "SecretSerial" rawArtifactText)
@@ -508,33 +508,33 @@ in
   };
 
   "external-vm-kind/qemu-media-skips-computed" = {
-    expr = positiveCfg.nixling._computed ? media;
+    expr = positiveCfg.d2b._computed ? media;
     expected = false;
   };
 
   "external-vm-kind/qemu-media-skips-closures" = {
-    expr = positiveCfg.nixling._bundle.closures ? media;
+    expr = positiveCfg.d2b._bundle.closures ? media;
     expected = false;
   };
 
   "external-vm-kind/qemu-media-dedicated-principal" = {
     expr = {
       user = {
-        inherit (positiveCfg.users.users."nixling-media-qemu-media") isSystemUser uid group description;
+        inherit (positiveCfg.users.users."d2b-media-qemu-media") isSystemUser uid group description;
       };
       group = {
-        inherit (positiveCfg.users.groups."nixling-media-qemu-media") gid;
+        inherit (positiveCfg.users.groups."d2b-media-qemu-media") gid;
       };
     };
     expected = {
       user = {
         isSystemUser = true;
-        uid = positiveCfg.users.groups."nixling-media-qemu-media".gid;
-        group = "nixling-media-qemu-media";
-        description = "nixling QEMU media runner for VM media";
+        uid = positiveCfg.users.groups."d2b-media-qemu-media".gid;
+        group = "d2b-media-qemu-media";
+        description = "d2b QEMU media runner for VM media";
       };
       group = {
-        gid = positiveCfg.users.users."nixling-media-qemu-media".uid;
+        gid = positiveCfg.users.users."d2b-media-qemu-media".uid;
       };
     };
   };
@@ -561,16 +561,16 @@ in
       nodeIds = [ "host-reconcile" "wayland-proxy" "qemu-media" ];
       runnerRole = "qemu-media-runner";
       runnerReadiness = [
-        { kind = "unix-socket-listening"; value = "/run/nixling/vms/media/qmp.sock"; }
+        { kind = "unix-socket-listening"; value = "/run/d2b/vms/media/qmp.sock"; }
       ];
       runnerProfileRole = "vm-media-qemu-media";
       runnerEnv = [
         "GDK_BACKEND=wayland"
         "WAYLAND_DISPLAY=wayland-0"
-        "XDG_RUNTIME_DIR=/run/nixling-wlproxy/media"
+        "XDG_RUNTIME_DIR=/run/d2b-wlproxy/media"
       ];
       runnerArgv = [
-        "nixling-qemu-media@media"
+        "d2b-qemu-media@media"
         "-nodefaults"
         "-no-user-config"
         "-S"
@@ -597,7 +597,7 @@ in
         "-device"
         "virtio-net-pci,netdev=nl0,mac=02:76:53:AE:57:2A"
         "-qmp"
-        "unix:/run/nixling/vms/media/qmp.sock,server=on,wait=off"
+        "unix:/run/d2b/vms/media/qmp.sock,server=on,wait=off"
         "-monitor"
         "none"
         "-serial"
@@ -605,7 +605,7 @@ in
         "-parallel"
         "none"
         "-name"
-        "nixling-media-qemu-media"
+        "d2b-media-qemu-media"
       ];
       waylandProxy = {
         role = "wayland-proxy";
@@ -615,18 +615,18 @@ in
           "WAYLAND_DISPLAY=wayland-0"
         ];
         readiness = [
-          { kind = "unix-socket-listening"; value = "/run/nixling-wlproxy/media/wayland-0"; }
+          { kind = "unix-socket-listening"; value = "/run/d2b-wlproxy/media/wayland-0"; }
         ];
         argv = [
-          "nixling-media-wlproxy"
+          "d2b-media-wlproxy"
           "--listen"
-          "/run/nixling-wlproxy/media/wayland-0"
+          "/run/d2b-wlproxy/media/wayland-0"
           "--connect"
           "/run/user/1000/wayland-0"
           "--vm-name"
           "media"
           "--app-id-prefix"
-          "nixling.media."
+          "d2b.media."
           "--title-prefix"
           "[media] "
         ];
@@ -643,7 +643,7 @@ in
       noGuestControl = !(lib.elem "guest-control-health" positiveQemuNodeIds)
         && !(lib.elem "guest-control-health" positiveQemuRoles);
       noMediaPathInArgv =
-        !(lib.any (arg: lib.hasInfix "/var/lib/nixling/media" arg) positiveQemuRunner.argv);
+        !(lib.any (arg: lib.hasInfix "/var/lib/d2b/media" arg) positiveQemuRunner.argv);
       noVhostNetPathInArgv =
         !(lib.any (arg: lib.hasInfix "/dev/vhost-net" arg || lib.hasInfix "vhostfd=" arg) positiveQemuRunner.argv);
     };
@@ -679,36 +679,36 @@ in
       hasQemuMedia = lib.elem "vm-media-qemu-media" positiveProfileNames;
       hasWaylandProxy = lib.elem "vm-media-wayland-proxy" positiveProfileNames;
       waylandProxyProfile = {
-        role = positiveCfg.nixling._bundle.minijailProfiles."vm-media-wayland-proxy".data.role;
-        principal = positiveCfg.nixling._bundle.minijailProfiles."vm-media-wayland-proxy".data.principal;
-        capabilities = positiveCfg.nixling._bundle.minijailProfiles."vm-media-wayland-proxy".data.capabilities;
-        seccompPolicyRef = positiveCfg.nixling._bundle.minijailProfiles."vm-media-wayland-proxy".data.seccompPolicyRef;
-        writablePaths = map (p: p.path) positiveCfg.nixling._bundle.minijailProfiles."vm-media-wayland-proxy".data.mountPolicy.writablePaths;
-        inherit (positiveCfg.nixling._bundle.minijailProfiles."vm-media-wayland-proxy".data.mountPolicy)
+        role = positiveCfg.d2b._bundle.minijailProfiles."vm-media-wayland-proxy".data.role;
+        principal = positiveCfg.d2b._bundle.minijailProfiles."vm-media-wayland-proxy".data.principal;
+        capabilities = positiveCfg.d2b._bundle.minijailProfiles."vm-media-wayland-proxy".data.capabilities;
+        seccompPolicyRef = positiveCfg.d2b._bundle.minijailProfiles."vm-media-wayland-proxy".data.seccompPolicyRef;
+        writablePaths = map (p: p.path) positiveCfg.d2b._bundle.minijailProfiles."vm-media-wayland-proxy".data.mountPolicy.writablePaths;
+        inherit (positiveCfg.d2b._bundle.minijailProfiles."vm-media-wayland-proxy".data.mountPolicy)
           deviceBinds bindMounts;
       };
-      role = positiveCfg.nixling._bundle.minijailProfiles."vm-media-qemu-media".data.role;
-      principal = positiveCfg.nixling._bundle.minijailProfiles."vm-media-qemu-media".data.principal;
-      capabilities = positiveCfg.nixling._bundle.minijailProfiles."vm-media-qemu-media".data.capabilities;
-      namespaces = positiveCfg.nixling._bundle.minijailProfiles."vm-media-qemu-media".data.namespaces;
-      seccompPolicyRef = positiveCfg.nixling._bundle.minijailProfiles."vm-media-qemu-media".data.seccompPolicyRef;
+      role = positiveCfg.d2b._bundle.minijailProfiles."vm-media-qemu-media".data.role;
+      principal = positiveCfg.d2b._bundle.minijailProfiles."vm-media-qemu-media".data.principal;
+      capabilities = positiveCfg.d2b._bundle.minijailProfiles."vm-media-qemu-media".data.capabilities;
+      namespaces = positiveCfg.d2b._bundle.minijailProfiles."vm-media-qemu-media".data.namespaces;
+      seccompPolicyRef = positiveCfg.d2b._bundle.minijailProfiles."vm-media-qemu-media".data.seccompPolicyRef;
       mountPolicy = {
-        readOnlyPaths = positiveCfg.nixling._bundle.minijailProfiles."vm-media-qemu-media".data.mountPolicy.readOnlyPaths;
-        writablePaths = map (p: p.path) positiveCfg.nixling._bundle.minijailProfiles."vm-media-qemu-media".data.mountPolicy.writablePaths;
-        inherit (positiveCfg.nixling._bundle.minijailProfiles."vm-media-qemu-media".data.mountPolicy)
+        readOnlyPaths = positiveCfg.d2b._bundle.minijailProfiles."vm-media-qemu-media".data.mountPolicy.readOnlyPaths;
+        writablePaths = map (p: p.path) positiveCfg.d2b._bundle.minijailProfiles."vm-media-qemu-media".data.mountPolicy.writablePaths;
+        inherit (positiveCfg.d2b._bundle.minijailProfiles."vm-media-qemu-media".data.mountPolicy)
           nixStoreReadOnly hideDeviceNodesByDefault deviceBinds bindMounts;
       };
       forbiddenCaps =
-        lib.any (cap: lib.elem cap positiveCfg.nixling._bundle.minijailProfiles."vm-media-qemu-media".data.capabilities)
+        lib.any (cap: lib.elem cap positiveCfg.d2b._bundle.minijailProfiles."vm-media-qemu-media".data.capabilities)
           [ "CAP_SYS_ADMIN" "CAP_SYS_RAWIO" "CAP_DAC_OVERRIDE" "CAP_NET_ADMIN" ];
       forbiddenDeviceBinds =
-        lib.any (dev: lib.elem dev positiveCfg.nixling._bundle.minijailProfiles."vm-media-qemu-media".data.mountPolicy.deviceBinds)
+        lib.any (dev: lib.elem dev positiveCfg.d2b._bundle.minijailProfiles."vm-media-qemu-media".data.mountPolicy.deviceBinds)
           [ "/dev/bus/usb" "/dev/net/tun" "/dev/vhost-net" ];
       mediaPathBinds =
         lib.any (bm:
-          lib.hasPrefix "/var/lib/nixling/media" bm.src
-          || lib.hasPrefix "/var/lib/nixling/media" bm.dst)
-          positiveCfg.nixling._bundle.minijailProfiles."vm-media-qemu-media".data.mountPolicy.bindMounts;
+          lib.hasPrefix "/var/lib/d2b/media" bm.src
+          || lib.hasPrefix "/var/lib/d2b/media" bm.dst)
+          positiveCfg.d2b._bundle.minijailProfiles."vm-media-qemu-media".data.mountPolicy.bindMounts;
     };
     expected = {
       hasHostReconcile = true;
@@ -716,17 +716,17 @@ in
       hasWaylandProxy = true;
       waylandProxyProfile = {
         role = "wayland-proxy";
-        principal = "nixling-media-wlproxy";
+        principal = "d2b-media-wlproxy";
         capabilities = [ ];
         seccompPolicyRef = "w1-wayland-proxy";
         writablePaths = [
-          "/run/nixling-wlproxy/media"
+          "/run/d2b-wlproxy/media"
         ];
         deviceBinds = [ ];
         bindMounts = [ ];
       };
       role = "qemu-media-runner";
-      principal = "nixling-media-qemu-media";
+      principal = "d2b-media-qemu-media";
       capabilities = [ ];
       namespaces = {
         ipc = true;
@@ -740,9 +740,9 @@ in
       mountPolicy = {
         readOnlyPaths = [ "/" ];
         writablePaths = [
-          "/run/nixling/vms/media"
-          "/run/nixling-wlproxy/media"
-          "/var/lib/nixling/vms/media"
+          "/run/d2b/vms/media"
+          "/run/d2b-wlproxy/media"
+          "/var/lib/d2b/vms/media"
         ];
         nixStoreReadOnly = true;
         hideDeviceNodesByDefault = true;
@@ -756,27 +756,27 @@ in
   };
 
   "external-vm-kind/source-rejects-busid" = {
-    expr = badSource.config.nixling.vms.media.qemuMedia.source.ref;
+    expr = badSource.config.d2b.vms.media.qemuMedia.source.ref;
     expectedError = { };
   };
 
   "external-vm-kind/slot-rejects-busIds" = {
-    expr = badSlot.config.nixling.vms.media.qemuMedia.removableSlots.cdrom.source.ref;
+    expr = badSlot.config.d2b.vms.media.qemuMedia.removableSlots.cdrom.source.ref;
     expectedError = { };
   };
 
   "external-vm-kind/slot-source-rejects-busId" = {
-    expr = badSlotSource.config.nixling.vms.media.qemuMedia.removableSlots.cdrom.source.ref;
+    expr = badSlotSource.config.d2b.vms.media.qemuMedia.removableSlots.cdrom.source.ref;
     expectedError = { };
   };
 
   "external-vm-kind/source-rejects-busids" = {
-    expr = badSourceBusids.config.nixling.vms.media.qemuMedia.source.ref;
+    expr = badSourceBusids.config.d2b.vms.media.qemuMedia.source.ref;
     expectedError = { };
   };
 
   "external-vm-kind/qemuMedia-rejects-busid" = {
-    expr = badQemuMediaBusid.config.nixling.vms.media.qemuMedia.source.ref;
+    expr = badQemuMediaBusid.config.d2b.vms.media.qemuMedia.source.ref;
     expectedError = { };
   };
 
@@ -842,12 +842,12 @@ in
   };
 
   "external-vm-kind/rejects-absolute-path-boot-usb-selector" = {
-    expr = badBootUsbSelector.config.nixling.vms.media.qemuMedia.source.usbSelector.byIdName;
+    expr = badBootUsbSelector.config.d2b.vms.media.qemuMedia.source.usbSelector.byIdName;
     expectedError = { };
   };
 
   "external-vm-kind/source-rejects-relative-image-path" = {
-    expr = badImageRelativePath.config.nixling.vms.media.qemuMedia.source.path;
+    expr = badImageRelativePath.config.d2b.vms.media.qemuMedia.source.path;
     expectedError = { };
   };
 
@@ -883,7 +883,7 @@ in
         sudo = true;
         userAuthorizedKeys = [ "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForEvalOnly" ];
       };
-    } "nixling-managed SSH";
+    } "d2b-managed SSH";
     expected = true;
   };
 
@@ -908,7 +908,7 @@ in
   };
 
   "external-vm-kind/rejects-graphics" = {
-    expr = hasFailure { vmAttrs.graphics.enable = true; } "nixling graphics";
+    expr = hasFailure { vmAttrs.graphics.enable = true; } "d2b graphics";
     expected = true;
   };
 
@@ -930,7 +930,7 @@ in
   "external-vm-kind/accepts-unset-or-false-autostart" = {
     expr = {
       unset = positiveVm.autostart;
-      explicitFalse = explicitManualOnly.config.nixling.vms.media.autostart;
+      explicitFalse = explicitManualOnly.config.d2b.vms.media.autostart;
       unsetAssertionsGreen = lib.all (a: a.assertion) positiveCfg.assertions;
       falseAssertionsGreen = lib.all (a: a.assertion) explicitManualOnly.config.assertions;
     };

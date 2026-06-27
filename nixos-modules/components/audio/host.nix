@@ -1,22 +1,22 @@
-# Host-side wiring for nixling VM audio support. Imported once at the
-# top level via modules/nixling/default.nix. Materialises
+# Host-side wiring for d2b VM audio support. Imported once at the
+# top level via modules/d2b/default.nix. Materialises
 #
-#   - A per-VM SYSTEM service `nixling-<vm>-snd.service` that runs
-#     vhost-device-sound as the per-VM nixling-<vm>-snd system user.
-#     Socket at /run/nixling/vms/<vm>/snd.sock, accessible to
-#     nixling-<vm>-gpu (cloud-hypervisor) via ACL on ExecStartPost.
+#   - A per-VM SYSTEM service `d2b-<vm>-snd.service` that runs
+#     vhost-device-sound as the per-VM d2b-<vm>-snd system user.
+#     Socket at /run/d2b/vms/<vm>/snd.sock, accessible to
+#     d2b-<vm>-gpu (cloud-hypervisor) via ACL on ExecStartPost.
 #
 #
 #   - An eval-time assertion that audio.enable = true requires
 #     autostart = false. autostart VMs are managed by the `microvm@`
-#     system service which doesn't start nixling-<vm>-gpu.service;
+#     system service which doesn't start d2b-<vm>-gpu.service;
 #     there's no CH to connect to the audio socket.
 #
 #   - `systemd.tmpfiles` rules that create
-#     /var/lib/nixling/vms/<vm>/state/audio-state.json for every VM with
+#     /var/lib/d2b/vms/<vm>/state/audio-state.json for every VM with
 #     `audio.enable = true`, populated with
 #     `{"mic":<allowMicByDefault>,"speaker":<allowSpeakerByDefault>}`
-#     on first creation. Subsequent edits via `nixling audio …` are
+#     on first creation. Subsequent edits via `d2b audio …` are
 #     preserved (the tmpfiles 'f' type does NOT overwrite existing
 #     files).
 #
@@ -29,11 +29,11 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.nixling;
-  nl = import ../../lib.nix { inherit lib; };
+  cfg = config.d2b;
+  d2bLib = import ../../lib.nix { inherit lib; };
   enabledVms = lib.filterAttrs
     (_: vm: vm.audio.enable)
-    (nl.normalNixosVms cfg.vms);
+    (d2bLib.normalNixosVms cfg.vms);
 
   anyAudio = enabledVms != { };
 
@@ -58,8 +58,8 @@ let
   # NOTE on WirePlumber split-direction enforcement
   #
   # An earlier iteration installed a WirePlumber config drop-in at
-  # /etc/wireplumber/wireplumber.conf.d/90-nixling.conf that used
-  # `monitor.rules` to match `application.name = "~nixling-*"` and
+  # /etc/wireplumber/wireplumber.conf.d/90-d2b.conf that used
+  # `monitor.rules` to match `application.name = "~d2b-*"` and
   # apply per-stream restrictions. `monitor.rules` is the WRONG
   # section — it filters discovered ALSA HARDWARE monitors, not
   # client streams. The rule put WirePlumber into a state where the
@@ -71,7 +71,7 @@ let
   #                no soundcard
   #   any on    -> sidecar runs, guest sees a normal soundcard with
   #                both directions live; user can still mute either
-  #                direction in plasma-pa per running nixling-<vm>
+  #                direction in plasma-pa per running d2b-<vm>
   #                stream.
   #
   # A correct stream-rule would live under `node.rules` with
@@ -86,9 +86,9 @@ in
     # ---------------------------------------------------------------
     # Assertion: audio VMs must be interactively launched (not
     # autostart). autostart VMs run via `microvm@<vm>.service` which
-    # doesn't start nixling-<vm>-gpu.service — there's no CH to
+    # doesn't start d2b-<vm>-gpu.service — there's no CH to
     # connect to the audio socket. (: sidecar now runs as system
-    # service nixling-<vm>-snd, not in a host user's manager.)
+    # service d2b-<vm>-snd, not in a host user's manager.)
     # ---------------------------------------------------------------
     {
       assertions =
@@ -96,23 +96,23 @@ in
           (name: vm: {
             assertion = !(vm.audio.enable && vm.autostart);
             message = ''
-              nixling.vms.${name}: audio.enable = true is incompatible
-              with autostart = true. The audio sidecar (nixling-${name}-snd)
-              is started on demand by `nixling up ${name}`, which also
-              starts nixling-${name}-gpu (CH + crosvm-gpu). With
+              d2b.vms.${name}: audio.enable = true is incompatible
+              with autostart = true. The audio sidecar (d2b-${name}-snd)
+              is started on demand by `d2b up ${name}`, which also
+              starts d2b-${name}-gpu (CH + crosvm-gpu). With
               autostart = true the microvm@ system service would boot
-              the VM without a running nixling-<vm>-gpu service — the
+              the VM without a running d2b-<vm>-gpu service — the
               vhost-device-sound socket wouldn't be ready and CH would
               fail to attach a virtio-snd device. Set autostart = false
               and launch interactively, or set audio.enable = false.
             '';
           })
-          config.nixling.vms;
+          config.d2b.vms;
     }
 
     # ---------------------------------------------------------------
     # the per-VM
-    # `nixling-<vm>-snd.service` system service template was deleted.
+    # `d2b-<vm>-snd.service` system service template was deleted.
     # The vhost-user-sound sidecar now runs as a broker-spawned runner
     # via `SpawnRunner{role: Audio, vm_id: <vm>}` per the  Audio
     # role matrix in `docs/reference/privileges.md`. The PipeWire
@@ -134,9 +134,9 @@ in
       # WHY: vhost-device-sound v0.2.0 always exposes both directions
       # (it has no `--no-input` flag). On the host, that means it
       # creates two streams per running VM
-      #   - Stream/Output/Audio "nixling-<vm>"  (guest plays here ->
+      #   - Stream/Output/Audio "d2b-<vm>"  (guest plays here ->
       #                                          mixed into host sink)
-      #   - Stream/Input/Audio  "nixling-<vm>"  (sucks host mic ->
+      #   - Stream/Input/Audio  "d2b-<vm>"  (sucks host mic ->
       #                                          delivered to guest)
       # The default linking policy auto-routes the second stream to
       # whatever the default audio source is. For most users that's
@@ -173,13 +173,13 @@ in
       #    short-circuited correctly.
       #
       # 2. Match keys must be `node.name = "vhost-device-sound"` or
-      #    `application.name = "~nixling-.*"`. Do NOT use
+      #    `application.name = "~d2b-.*"`. Do NOT use
       #    `application.process.binary = "vhost-device-sound"` —
       #    that key is absent on the sidecar's streams (process
       #    metadata isn't propagated through libpipewire's client
       #    socket). The actual properties on the live node are
       #    `node.name = vhost-device-sound` and `application.name =
-      #    nixling-<vm>` (which we set explicitly via PIPEWIRE_PROPS
+      #    d2b-<vm>` (which we set explicitly via PIPEWIRE_PROPS
       #    in the systemd-user service template above).
       #
       # 3. Only the INPUT direction is null-targeted. The output
@@ -231,13 +231,13 @@ in
       # effect, dont-reconnect prevents WP's automatic reconnection
       # logic from re-establishing the link on metadata changes.
       # security-r8-audio-6: per-direction routing rules driven by the
-      # custom `nixling.mic` / `nixling.speaker` PipeWire properties
-      # set by the sidecar's ExecStartPre from /var/lib/nixling/vms/<vm>/
+      # custom `d2b.mic` / `d2b.speaker` PipeWire properties
+      # set by the sidecar's ExecStartPre from /var/lib/d2b/vms/<vm>/
       # state/audio-state.json. application.name stays cleanly per-VM
-      # ("nixling-<vm>") for human-readable wpctl/pavucontrol output.
+      # ("d2b-<vm>") for human-readable wpctl/pavucontrol output.
       #
-      # Capture stream blocked iff nixling.mic = "off".
-      # Playback stream blocked iff nixling.speaker = "off".
+      # Capture stream blocked iff d2b.mic = "off".
+      # Playback stream blocked iff d2b.speaker = "off".
       #
       # When both are off the audioArgsScript in audio.nix already
       # short-circuits and does NOT emit --generic-vhost-user, so the
@@ -252,14 +252,14 @@ in
       # direction is ON we WANT the auto-route, so we MUST NOT set
       # any of these props — leave WirePlumber's normal default-
       # target hook do its job.
-      services.pipewire.extraConfig.client."90-nixling" = {
+      services.pipewire.extraConfig.client."90-d2b" = {
         "stream.rules" = (lib.optional (cfg.site.audio.inputTargetNode != null) {
           # Capture allow: on hosts where WirePlumber does not auto-link
-          # capture clients to the configured default source, force nixling
+          # capture clients to the configured default source, force d2b
           # mic-enabled streams to the operator-declared source node.
           matches = [
             {
-              "nixling.mic" = "on";
+              "d2b.mic" = "on";
               "media.class" = "Stream/Input/Audio";
             }
           ];
@@ -270,10 +270,10 @@ in
           };
         }) ++ [
           {
-            # Capture block: only when the sidecar advertises nixling.mic=off.
+            # Capture block: only when the sidecar advertises d2b.mic=off.
             matches = [
               {
-                "nixling.mic" = "off";
+                "d2b.mic" = "off";
                 "media.class" = "Stream/Input/Audio";
               }
             ];
@@ -287,10 +287,10 @@ in
             };
           }
           {
-            # Playback block: only when the sidecar advertises nixling.speaker=off.
+            # Playback block: only when the sidecar advertises d2b.speaker=off.
             matches = [
               {
-                "nixling.speaker" = "off";
+                "d2b.speaker" = "off";
                 "media.class" = "Stream/Output/Audio";
               }
             ];
@@ -316,9 +316,9 @@ in
       # the initial contents (single-line JSON).
       #
       # The state file is now under a root-owned non-group-writable
-      # subdir /var/lib/nixling/vms/<vm>/state/ (root:root 0750).
+      # subdir /var/lib/d2b/vms/<vm>/state/ (root:root 0750).
       # This prevents any kvm-group process from unlinking/replacing the file.
-      # The parent /var/lib/nixling/vms/<vm>/ remains microvm:kvm 2775 so the CLI
+      # The parent /var/lib/d2b/vms/<vm>/ remains microvm:kvm 2775 so the CLI
       # can still acquire the per-VM audio.lock and write temp files there.
       systemd.tmpfiles.rules =
         let
@@ -329,42 +329,42 @@ in
               initial = ''{"mic":"${mic}","speaker":"${spk}"}'';
             in
             # 'd' = create directory if missing (won't change mode of existing).
-            # state/: nixlingd:nixling 0750 — daemon owns it,
+            # state/: d2bd:d2b 0750 — daemon owns it,
             # launcher-group traverses. v1.1.1 matches the ownership-
-            # matrix declaration (previously root:nixling
+            # matrix declaration (previously root:d2b
             # which failed ownership-matrix preflight).
-            [''d /var/lib/nixling/vms/${name}/state 0750 nixlingd nixling -''
-             ''f /var/lib/nixling/vms/${name}/state/audio-state.json 0640 nixlingd nixling - ${initial}''
-             # audio lock in /run/nixling/ (nixling 0660) so
-             # nixling members can open it without kvm-group membership.
-             ''f /run/nixling/audio-${name}.lock 0660 root nixling -''];
+            [''d /var/lib/d2b/vms/${name}/state 0750 d2bd d2b -''
+             ''f /var/lib/d2b/vms/${name}/state/audio-state.json 0640 d2bd d2b - ${initial}''
+             # audio lock in /run/d2b/ (d2b 0660) so
+             # d2b members can open it without kvm-group membership.
+             ''f /run/d2b/audio-${name}.lock 0660 root d2b -''];
         in
         lib.concatLists (lib.mapAttrsToList mk enabledVms);
 
       # Migration-only: if the old audio-state path exists and the new path does
       # not, move it. Directory creation/posture is tmpfiles-owned above and the
       # VM root itself is postured by host-activation.nix tmpfiles.
-      system.activationScripts.nixlingAudioStateDirs =
+      system.activationScripts.d2bAudioStateDirs =
         lib.stringAfter [ "users" ] (lib.concatStringsSep "\n" (lib.mapAttrsToList
           (name: _: ''
             # One-time migration: move old audio-state.json to new path.
-            old_f="/var/lib/nixling/vms/${name}/audio-state.json"
-            new_f="/var/lib/nixling/vms/${name}/state/audio-state.json"
+            old_f="/var/lib/d2b/vms/${name}/audio-state.json"
+            new_f="/var/lib/d2b/vms/${name}/state/audio-state.json"
             if [ -f "$old_f" ] && [ ! -f "$new_f" ]; then
-              install -m 0640 -o nixlingd -g nixling "$old_f" "$new_f" && rm -f "$old_f" || true
+              install -m 0640 -o d2bd -g d2b "$old_f" "$new_f" && rm -f "$old_f" || true
             fi
-            # software-r2-1: grant nixling group x-only traversal on the VM
-            # dir so nixling members (not kvm members) can reach state/.
+            # software-r2-1: grant d2b group x-only traversal on the VM
+            # dir so d2b members (not kvm members) can reach state/.
             # Combined with the existing mask:rwx the effective permission is --x.
-            ${pkgs.acl}/bin/setfacl -m "g:nixling:x" /var/lib/nixling/vms/${name} || true
-            # software-r2-1: grant nixling-<vm>-gpu rx on state/ and r on the
+            ${pkgs.acl}/bin/setfacl -m "g:d2b:x" /var/lib/d2b/vms/${name} || true
+            # software-r2-1: grant d2b-<vm>-gpu rx on state/ and r on the
             # audio-state.json file so the GPU sidecar can read audio state without
-            # joining nixling (which would grant polkit launcher rights).
-            if [ -d "/var/lib/nixling/vms/${name}/state" ]; then
-              ${pkgs.acl}/bin/setfacl -m "u:nixling-${name}-gpu:rx" /var/lib/nixling/vms/${name}/state || true
+            # joining d2b (which would grant polkit launcher rights).
+            if [ -d "/var/lib/d2b/vms/${name}/state" ]; then
+              ${pkgs.acl}/bin/setfacl -m "u:d2b-${name}-gpu:rx" /var/lib/d2b/vms/${name}/state || true
             fi
-            if [ -f "/var/lib/nixling/vms/${name}/state/audio-state.json" ]; then
-              ${pkgs.acl}/bin/setfacl -m "u:nixling-${name}-gpu:r" /var/lib/nixling/vms/${name}/state/audio-state.json || true
+            if [ -f "/var/lib/d2b/vms/${name}/state/audio-state.json" ]; then
+              ${pkgs.acl}/bin/setfacl -m "u:d2b-${name}-gpu:r" /var/lib/d2b/vms/${name}/state/audio-state.json || true
             fi
           '')
           enabledVms));

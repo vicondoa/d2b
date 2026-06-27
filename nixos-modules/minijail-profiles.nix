@@ -1,11 +1,11 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.nixling;
-  # nixling-owned access helpers (see lib.nix).
-  nl = import ./lib.nix { inherit lib pkgs; };
-  normalNixosVms = nl.normalNixosVms cfg.vms;
-  qemuMediaVms = nl.qemuMediaVms cfg.vms;
+  cfg = config.d2b;
+  # d2b-owned access helpers (see lib.nix).
+  d2bLib = import ./lib.nix { inherit lib pkgs; };
+  normalNixosVms = d2bLib.normalNixosVms cfg.vms;
+  qemuMediaVms = d2bLib.qemuMediaVms cfg.vms;
   usbipEnvNames = lib.sort lib.lessThan (lib.unique (lib.concatMap
     (vm: lib.optional (cfg.site.yubikey.enable && vm.enable && vm.usbip.yubikey && vm.env != null) vm.env)
     (lib.attrValues cfg.vms)));
@@ -16,24 +16,24 @@ let
     inherit source;
     mode = "0640";
     user = "root";
-    group = if cfg.daemonExperimental.enable then "nixlingd" else "root";
+    group = if cfg.daemonExperimental.enable then "d2bd" else "root";
   };
 
   # (Option B from live-deploy 010 checkpoint)
   # Hash-derived ephemeral UID per principal. The matching
-  # named system users (`nixling-<vm>-{gpu,snd,swtpm,runner}`)
+  # named system users (`d2b-<vm>-{gpu,snd,swtpm,runner}`)
   # are declared in `nixos-modules/host-users.nix` with the
   # SAME hash via the shared helper, so when the broker
   # `setuid`s the spawned role to this UID, NSS resolves it
   # back to the named user with its supplementary groups
-  # (audio, kvm, nixling-<vm>-runner) and the per-VM ACL
+  # (audio, kvm, d2b-<vm>-runner) and the per-VM ACL
   # grants the audio/graphics host modules install on
   # PipeWire / Wayland / `/dev/kvm` sockets all apply
   # transparently.
   #
   # Pure-ephemeral principals (no corresponding system user)
   # still get a unique UID — they're served by the
-  # `nixlingRoleUidAcls` activation script in
+  # `d2bRoleUidAcls` activation script in
   # `host-activation.nix` that walks the bundle and grants
   # per-VM-dir traversal for every distinct role UID.
   #
@@ -41,7 +41,7 @@ let
   # definition. This
   # file imports it here to keep call-site readability;
   # changing the algorithm now happens in ONE place.
-  inherit (nl) stablePrincipalId;
+  inherit (d2bLib) stablePrincipalId;
 
   defaultNamespaces = {
     ipc = true;
@@ -154,14 +154,14 @@ let
 
   profileIdFor = name: nodeId: "vm-${name}-${nodeId}";
   stateDirOf = name: "${toString cfg.store.stateDir}/${name}";
-  runtimeDirOf = name: "/run/nixling/${name}";
-  audioRuntimeDirOf = name: "/run/nixling/vms/${name}";
-  videoRuntimeDirOf = name: "/run/nixling-video/${name}";
-  gpuRuntimeDirOf = name: "/run/nixling-gpu/${name}";
-  # TPM socket consolidated under /run/nixling/vms/<vm>/
+  runtimeDirOf = name: "/run/d2b/${name}";
+  audioRuntimeDirOf = name: "/run/d2b/vms/${name}";
+  videoRuntimeDirOf = name: "/run/d2b-video/${name}";
+  gpuRuntimeDirOf = name: "/run/d2b-gpu/${name}";
+  # TPM socket consolidated under /run/d2b/vms/<vm>/
   # (alongside snd.sock, gpu.sock). No separate /run/swtpm/ dir.
   # Reuses the per-VM default ACL machinery in host-activation.nix.
-  swtpmRuntimeDirOf = name: "/run/nixling/vms/${name}";
+  swtpmRuntimeDirOf = name: "/run/d2b/vms/${name}";
   vsockSocketForPort = socketPath: port: "${socketPath}_${toString port}";
 
   # The Gpu profile cross-domain Wayland
@@ -175,7 +175,7 @@ let
   # Host primary compositor socket basename (e.g. wayland-0, or
   # wayland-1 under niri). The bind-mount src below is the host path
   # the broker grants the sidecar uid an ACL on; it MUST point at the
-  # operator's real socket. See nixling.site.waylandDisplay.
+  # operator's real socket. See d2b.site.waylandDisplay.
   waylandHostSock = "/run/user/${waylandUid}/${cfg.site.waylandDisplay}";
 
   vmProfiles = name: vm:
@@ -184,15 +184,15 @@ let
       virtiofsdRootException = "ADR 0021 v1.1.1fu14 virtiofsd fake-root via broker pre-established user NS";
       virtiofsShares = lib.filter
         (share: (share.proto or "virtiofs") == "virtiofs")
-        (nl.vmRunner config name).shares;
+        (d2bLib.vmRunner config name).shares;
       virtiofsProfiles = lib.listToAttrs (lib.forEach virtiofsShares (share:
         let
           shareTag = builtins.unsafeDiscardStringContext share.tag;
           shareNodeId = "virtiofsd-${shareTag}";
           principal =
-            if shareTag == "nl-gctl"
-            then "nixling-${name}-gctlfs"
-            else "nixling-${name}-runner";
+            if shareTag == "d2b-gctl"
+            then "d2b-${name}-gctlfs"
+            else "d2b-${name}-runner";
         in {
           name = profileIdFor name shareNodeId;
           value = mkProfile {
@@ -208,15 +208,15 @@ let
             capabilities = [ ];
             seccompPolicyRef = "w1-virtiofsd";
             readOnlyPaths = [ "/nix/store" ]
-              ++ lib.optional (shareTag == "nl-gctl") share.source;
+              ++ lib.optional (shareTag == "d2b-gctl") share.source;
             writablePaths =
-              if shareTag == "nl-gctl" then [
+              if shareTag == "d2b-gctl" then [
                 (mkWritablePath "${audioRuntimeDirOf name}/guest-control" "Expose the guest-control token virtiofs socket.")
               ] else [
                 (mkWritablePath (stateDirOf name) "Materialize virtiofs sockets and VM-local store state.")
                 (mkWritablePath (runtimeDirOf name) "Expose broker-prepared virtiofs runtime sockets.")
               ];
-            cgroupSubtree = "nixling.slice/${name}/${shareNodeId}";
+            cgroupSubtree = "d2b.slice/${name}/${shareNodeId}";
             controllers = serviceControllers;
             # (ADR 0021): broker pre-creates a user NS
             # mapping in-NS UID 0 → the principal's stable
@@ -237,19 +237,19 @@ let
       "${profileIdFor name "host-reconcile"}" = mkProfile {
         profileId = profileIdFor name "host-reconcile";
         role = "host-reconcile";
-        principal = "nixlingd";
+        principal = "d2bd";
         seccompPolicyRef = "w1-host-reconcile";
         writablePaths = [
           (mkWritablePath (stateDirOf name) "Prepare the VM state directory before process startup.")
-          (mkWritablePath "/run/nixling" "Prepare daemon-owned runtime sockets and transient state.")
+          (mkWritablePath "/run/d2b" "Prepare daemon-owned runtime sockets and transient state.")
         ];
-        cgroupSubtree = "nixling.slice/${name}/host-reconcile";
+        cgroupSubtree = "d2b.slice/${name}/host-reconcile";
       };
 
       "${profileIdFor name "store-virtiofs-preflight"}" = mkProfile {
         profileId = profileIdFor name "store-virtiofs-preflight";
         role = "store-virtiofs-preflight";
-        principal = "nixlingd";
+        principal = "d2bd";
         seccompPolicyRef = "w1-store-virtiofs-preflight";
         readOnlyPaths = [
           (stateDirOf name)
@@ -258,7 +258,7 @@ let
           "${stateDirOf name}/store-meta"
           "/nix/store"
         ];
-        cgroupSubtree = "nixling.slice/${name}/store-virtiofs-preflight";
+        cgroupSubtree = "d2b.slice/${name}/store-virtiofs-preflight";
       };
     }
     // virtiofsProfiles
@@ -266,7 +266,7 @@ let
       "${profileIdFor name "cloud-hypervisor"}" = mkProfile {
         profileId = profileIdFor name "cloud-hypervisor";
         role = "cloud-hypervisor-runner";
-        principal = "nixling-${name}-runner";
+        principal = "d2b-${name}-runner";
         # D4a (bounding-set drop): CAP_NET_ADMIN is
         # only required when CH opens /dev/net/tun itself and
         # calls TUNSETIFF to attach to the persistent TAP
@@ -310,13 +310,13 @@ let
         #     the host-prep DAG so the named TAP always exists by
         #     the time CH attaches.
         # (b) the declarative `DeviceClass::NetTun` ioctl allowlist
-        #     (packages/nixling-host/src/ioctl_policy.rs) is
+        #     (packages/d2b-host/src/ioctl_policy.rs) is
         #     tightened to [TUNSETIFF, TUNSETGROUP] — the broker is
         #     the only legitimate caller of TUNSETPERSIST/TUNSETOWNER
         #     and bypasses the per-role policy via raw libc::ioctl.
         # (c) seccomp BPF compilation from the
         #     declarative ioctl matrix is wired. load_runner_seccomp
-        #     compiles BPF from packages/nixling-host/src/seccomp.rs
+        #     compiles BPF from packages/d2b-host/src/seccomp.rs
         #     for every internal seccomp_policy_ref (including
         #     "w1-cloud-hypervisor-runner") at spawn time and the
         #     broker child closure installs it via
@@ -333,16 +333,16 @@ let
         ] ++ lib.optional
           (cfg.site.ch.netHandoffMode == "persistent-tap")
           "/dev/net/tun";
-        cgroupSubtree = "nixling.slice/${name}/cloud-hypervisor";
+        cgroupSubtree = "d2b.slice/${name}/cloud-hypervisor";
         controllers = serviceControllers;
       };
 
       "${profileIdFor name "guest-control-health"}" = mkProfile {
         profileId = profileIdFor name "guest-control-health";
         role = "guest-control-health";
-        principal = "nixlingd";
+        principal = "d2bd";
         seccompPolicyRef = "w1-guest-control-health";
-        cgroupSubtree = "nixling.slice/${name}/guest-control-health";
+        cgroupSubtree = "d2b.slice/${name}/guest-control-health";
       };
     }
     // lib.optionalAttrs vm.tpm.enable {
@@ -352,7 +352,7 @@ let
       # defaults `capabilities = [ ]`; do NOT add a `capabilities`
       # override below. CRITICAL SUBSYSTEM (AGENTS.md): the writable
       # paths declared here are a stable RW bind of
-      # /var/lib/nixling/vms/<vm>/swtpm into the jail (NOT tmpfs),
+      # /var/lib/d2b/vms/<vm>/swtpm into the jail (NOT tmpfs),
       # preserving TPM 2.0 NVRAM + EK seed across daemon restarts.
       # Regression guards: tests/minijail-validator-swtpm.sh and
       # tests/integration/live/swtpm-persistence-smoke.sh. Breaking this contract
@@ -361,26 +361,26 @@ let
       "${profileIdFor name "swtpm-flush"}" = mkProfile {
         profileId = profileIdFor name "swtpm-flush";
         role = "swtpm-pre-start-flush";
-        principal = "nixling-${name}-swtpm";
+        principal = "d2b-${name}-swtpm";
         seccompPolicyRef = "w1-swtpm";
         writablePaths = [
           (mkWritablePath "${stateDirOf name}/swtpm" "Persist swtpm state and flush stale volatile sessions before boot.")
           (mkWritablePath (swtpmRuntimeDirOf name) "Reach the swtpm control socket during the pre-start flush.")
         ];
-        cgroupSubtree = "nixling.slice/${name}/swtpm-flush";
+        cgroupSubtree = "d2b.slice/${name}/swtpm-flush";
         controllers = serviceControllers;
       };
 
       "${profileIdFor name "swtpm"}" = mkProfile {
         profileId = profileIdFor name "swtpm";
         role = "swtpm";
-        principal = "nixling-${name}-swtpm";
+        principal = "d2b-${name}-swtpm";
         seccompPolicyRef = "w1-swtpm";
         writablePaths = [
           (mkWritablePath "${stateDirOf name}/swtpm" "Persist swtpm state for the long-lived TPM sidecar.")
           (mkWritablePath (swtpmRuntimeDirOf name) "Create the swtpm control socket for the VM.")
         ];
-        cgroupSubtree = "nixling.slice/${name}/swtpm";
+        cgroupSubtree = "d2b.slice/${name}/swtpm";
         controllers = serviceControllers;
         # bind swtpm control socket with mode 0660 (via
         # explicit --ctrl mode= in argv) AND umask 0o007 here so any
@@ -398,8 +398,8 @@ let
         # swtpm has zero device binds + zero host caps + Unix socket
         # only — the smallest surface of all sidecars.
         userNamespace = {
-          hostUidForZero = stablePrincipalId "nixling-${name}-swtpm";
-          hostGidForZero = stablePrincipalId "nixling-${name}-swtpm";
+          hostUidForZero = stablePrincipalId "d2b-${name}-swtpm";
+          hostGidForZero = stablePrincipalId "d2b-${name}-swtpm";
         };
       };
     }
@@ -407,7 +407,7 @@ let
       "${profileIdFor name "gpu"}" = mkProfile {
         profileId = profileIdFor name "gpu";
         role = "gpu";
-        principal = "nixling-${name}-gpu";
+        principal = "d2b-${name}-gpu";
         # Caps stay EMPTY (the original
         # matrix carried CAP_SYS_NICE; the per-role smoke proves no
         # NICE is needed at runtime — virgl/venus/cross-domain run
@@ -415,7 +415,7 @@ let
         capabilities = [ ];
         seccompPolicyRef = "w1-gpu";
         # crosvm gpu sidecar binds the vhost-user socket
-        # at /run/nixling/vms/<vm>/gpu.sock. umask 0o007 makes the
+        # at /run/d2b/vms/<vm>/gpu.sock. umask 0o007 makes the
         # socket mode 0660; the per-VM runtime dir default ACL then
         # grants cloud-hypervisor rw on it via the named-user entry.
         umask = 7;
@@ -425,7 +425,7 @@ let
         ];
         # Closed-set device bind set the
         # broker opens on behalf of the Gpu runner. Matches the
-        # nixling_host::devices::DeviceClass taxonomy (Kvm, Dri,
+        # d2b_host::devices::DeviceClass taxonomy (Kvm, Dri,
         # NvidiaCtl, NvidiaRender → /dev/nvidia0 [corrected from the
         # bogus /dev/nvidia-render path], NvidiaUvm, Udmabuf).
         deviceBinds = [
@@ -437,14 +437,14 @@ let
           "/dev/udmabuf"
         ];
         bindMounts = [ ];
-        cgroupSubtree = "nixling.slice/${name}/gpu";
+        cgroupSubtree = "d2b.slice/${name}/gpu";
         controllers = serviceControllers;
       };
 
       "${profileIdFor name "video"}" = mkProfile {
         profileId = profileIdFor name "video";
         role = "video";
-        principal = "nixling-${name}-video";
+        principal = "d2b-${name}-video";
         # Video runs with an EMPTY capability bounding set
         # (mkProfile default; listed explicitly here so future readers don't
         # have to chase the helper).
@@ -467,7 +467,7 @@ let
           (mkWritablePath (videoRuntimeDirOf name) "Create the vhost-user video decoder socket.")
         ];
         umask = 7;
-        cgroupSubtree = "nixling.slice/${name}/video";
+        cgroupSubtree = "d2b.slice/${name}/video";
         controllers = serviceControllers;
       };
     }
@@ -497,7 +497,7 @@ let
       "${profileIdFor name "gpu-render-node"}" = mkProfile {
         profileId = profileIdFor name "gpu-render-node";
         role = "gpu-render-node";
-        principal = "nixling-${name}-gpu";
+        principal = "d2b-${name}-gpu";
         # Zero host caps: the user-NS provides in-NS CAP_* without host exposure.
         capabilities = [ ];
         seccompPolicyRef = "w1-gpu-render-node";
@@ -512,21 +512,21 @@ let
         # deviceBinds is intentionally empty: /dev/dri/renderD128 is
         # pre-opened by the broker parent and passed to the user-NS child
         # via fd inheritance (RENDER_NODE_INHERITED_FD = 10 protocol
-        # constant in nixling-priv-broker/src/sys.rs). No bind-mount.
+        # constant in d2b-priv-broker/src/sys.rs). No bind-mount.
         deviceBinds = [ ];
         # No real host compositor bind-mount: the GPU runner connects to
-        # the per-VM filter socket at /run/nixling-wlproxy/<vm>/wayland-0.
+        # the per-VM filter socket at /run/d2b-wlproxy/<vm>/wayland-0.
         # The wayland-proxy profile holds the real compositor bind-mount.
         bindMounts = [ ];
-        cgroupSubtree = "nixling.slice/${name}/gpu";
+        cgroupSubtree = "d2b.slice/${name}/gpu";
         controllers = serviceControllers;
         # (ADR 0021) Broker pre-creates a user NS mapping
         # in-NS UID/GID 0 → the gpu principal's stable ephemeral UID.
         # crosvm device gpu then runs fake-root inside the NS with zero
         # host capabilities and a pre-opened render node fd.
         userNamespace = {
-          hostUidForZero = stablePrincipalId "nixling-${name}-gpu";
-          hostGidForZero = stablePrincipalId "nixling-${name}-gpu";
+          hostUidForZero = stablePrincipalId "d2b-${name}-gpu";
+          hostGidForZero = stablePrincipalId "d2b-${name}-gpu";
         };
       };
     }
@@ -535,16 +535,16 @@ let
       #
       # Per ADR 0025: the host-jailed filter proxy sits between the crosvm
       # GPU sidecar and the real host compositor socket. It runs as a
-      # dedicated `nixling-<vm>-wlproxy` principal with:
+      # dedicated `d2b-<vm>-wlproxy` principal with:
       #   - empty host capabilities (mandatory);
       #   - mandatory seccompPolicyRef (w1-wayland-proxy) — the proxy
       #     parses untrusted guest Wayland bytes while holding the host
       #     compositor socket so a null seccomp policy is rejected fail-closed
       #     in the broker SpawnRunner handler;
       #   - no PipeWire/Pulse socket access;
-      #   - dedicated per-VM runtime dir /run/nixling-wlproxy/<vm>;
+      #   - dedicated per-VM runtime dir /run/d2b-wlproxy/<vm>;
       #   - host compositor socket bind-mounted read/write at a fixed
-      #     in-jail upstream path (/run/nixling-wlproxy/<vm>/upstream);
+      #     in-jail upstream path (/run/d2b-wlproxy/<vm>/upstream);
       #   - no device binds (pure AF_UNIX proxy);
       #   - explicit RLIMIT_NOFILE headroom for many guest clients and
       #     fd-bearing Wayland messages (set in argv by Wave 2/Lane A).
@@ -557,11 +557,11 @@ let
       "${profileIdFor name "wayland-proxy"}" = mkProfile {
         profileId = profileIdFor name "wayland-proxy";
         role = "wayland-proxy";
-        principal = "nixling-${name}-wlproxy";
+        principal = "d2b-${name}-wlproxy";
         capabilities = [ ];
         seccompPolicyRef = "w1-wayland-proxy";
         writablePaths = [
-          (mkWritablePath "/run/nixling-wlproxy/${name}"
+          (mkWritablePath "/run/d2b-wlproxy/${name}"
             "Create the per-VM filter listen socket and write runtime state.")
         ];
         # The proxy connects directly to the real host compositor socket path.
@@ -569,7 +569,7 @@ let
         # do not bind-mount a second socket path here.
         bindMounts = [ ];
         deviceBinds = [ ];
-        cgroupSubtree = "nixling.slice/${name}/wayland-proxy";
+        cgroupSubtree = "d2b.slice/${name}/wayland-proxy";
         controllers = serviceControllers;
         # umask 0o007 so the filter listen socket has mode 0660;
         # the per-VM runtime dir default ACL then grants crosvm's
@@ -581,7 +581,7 @@ let
       "${profileIdFor name "audio"}" = mkProfile {
         profileId = profileIdFor name "audio";
         role = "audio";
-        principal = "nixling-${name}-snd";
+        principal = "d2b-${name}-snd";
         # vhost-device-sound's libpipewire client opens
         # AF_NETLINK(NETLINK_KOBJECT_UEVENT) during pw_context_new
         # (spa-alsa-monitor) for backend probe. In a user-NS-only spawn,
@@ -615,18 +615,18 @@ let
         # /run/user/<waylandUid> writable so connect succeeds.
         # The PipeWire socket file is still ACL-grant'd
         # individually by host-activation.nix's
-        # nixlingRoleUidAcls script — this writablePaths just
+        # d2bRoleUidAcls script — this writablePaths just
         # ensures the mount-namespace doesn't drop it to RO.
         readOnlyPaths = [ ];
         writablePaths = [
           (mkWritablePath "${stateDirOf name}/state" "Read and persist the VM audio grant state.")
-          (mkWritablePath (audioRuntimeDirOf name) "Create the PipeWire-backed vhost-user audio socket at /run/nixling/vms/<vm>/snd.sock.")
+          (mkWritablePath (audioRuntimeDirOf name) "Create the PipeWire-backed vhost-user audio socket at /run/d2b/vms/<vm>/snd.sock.")
           (mkWritablePath "/run/user/${waylandUid}" "Connect to the Wayland user's PipeWire socket.")
         ];
-        cgroupSubtree = "nixling.slice/${name}/audio";
+        cgroupSubtree = "d2b.slice/${name}/audio";
         controllers = serviceControllers;
         # vhost-device-sound binds the socket at
-        # /run/nixling/vms/<vm>/snd.sock. umask 0o007 makes it
+        # /run/d2b/vms/<vm>/snd.sock. umask 0o007 makes it
         # mode 0660; the per-VM runtime dir default ACL then
         # makes cloud-hypervisor's named-user entry effective.
         umask = 7;
@@ -637,8 +637,8 @@ let
         # with zero host capabilities. Direct translation of the
         # virtiofsd/swtpm/gpu-render-node ADR 0021 broker-pre-NS model.
         userNamespace = {
-          hostUidForZero = stablePrincipalId "nixling-${name}-snd";
-          hostGidForZero = stablePrincipalId "nixling-${name}-snd";
+          hostUidForZero = stablePrincipalId "d2b-${name}-snd";
+          hostGidForZero = stablePrincipalId "d2b-${name}-snd";
         };
       };
     }
@@ -658,14 +658,14 @@ let
       "${profileIdFor name "vsock-relay"}" = mkProfile {
         profileId = profileIdFor name "vsock-relay";
         role = "vsock-relay";
-        principal = "nixling-otel-relay-${name}";
+        principal = "d2b-otel-relay-${name}";
         capabilities = [ ];
         seccompPolicyRef = "w1-vsock-relay";
         writablePaths = [
           (mkWritablePath (stateDirOf name) "Create the per-VM OTLP relay socket under the workload state dir.")
           (mkWritablePath "${toString cfg.store.stateDir}/${cfg.observability.vmName}" "Reach the observability VM vsock endpoint for relay forwarding.")
         ];
-        cgroupSubtree = "nixling.slice/${name}/vsock-relay";
+        cgroupSubtree = "d2b.slice/${name}/vsock-relay";
         controllers = serviceControllers;
       };
     }
@@ -673,7 +673,7 @@ let
       "${profileIdFor name "usbip"}" = mkProfile {
         profileId = profileIdFor name "usbip";
         role = "usbip";
-        principal = "nixlingd";
+        principal = "d2bd";
         # kernel-r2-4 corrected per-role cap matrix: Usbip = CAP_NET_RAW
         # only (raw socket needed by the usbipd proxy bind on the host
         # side; the per-busid sysfs bind/unbind is sysfs-write only and
@@ -681,7 +681,7 @@ let
         # profile).
         capabilities = [ "CAP_NET_RAW" ];
         seccompPolicyRef = "w1-usbip";
-        cgroupSubtree = "nixling.slice/${name}/usbip";
+        cgroupSubtree = "d2b.slice/${name}/usbip";
         controllers = serviceControllers;
       };
     };
@@ -692,28 +692,28 @@ let
     "${profileIdFor name "host-reconcile"}" = mkProfile {
       profileId = profileIdFor name "host-reconcile";
       role = "host-reconcile";
-      principal = "nixlingd";
+      principal = "d2bd";
       seccompPolicyRef = "w1-host-reconcile";
       writablePaths = [
         (mkWritablePath (stateDirOf name) "Prepare the qemu-media state directory before process startup.")
-        (mkWritablePath "/run/nixling" "Prepare daemon-owned runtime sockets and transient state.")
+        (mkWritablePath "/run/d2b" "Prepare daemon-owned runtime sockets and transient state.")
       ];
-      cgroupSubtree = "nixling.slice/${name}/host-reconcile";
+      cgroupSubtree = "d2b.slice/${name}/host-reconcile";
     };
 
     "${profileIdFor name "wayland-proxy"}" = mkProfile {
       profileId = profileIdFor name "wayland-proxy";
       role = "wayland-proxy";
-      principal = "nixling-${name}-wlproxy";
+      principal = "d2b-${name}-wlproxy";
       capabilities = [ ];
       seccompPolicyRef = "w1-wayland-proxy";
       writablePaths = [
-        (mkWritablePath "/run/nixling-wlproxy/${name}"
+        (mkWritablePath "/run/d2b-wlproxy/${name}"
           "Create the per-VM qemu-media Wayland filter listen socket.")
       ];
       bindMounts = [ ];
       deviceBinds = [ ];
-      cgroupSubtree = "nixling.slice/${name}/wayland-proxy";
+      cgroupSubtree = "d2b.slice/${name}/wayland-proxy";
       controllers = serviceControllers;
       umask = 7;
     };
@@ -721,19 +721,19 @@ let
     "${profileIdFor name "qemu-media"}" = mkProfile {
       profileId = profileIdFor name "qemu-media";
       role = "qemu-media-runner";
-      principal = "nixling-${name}-qemu-media";
+      principal = "d2b-${name}-qemu-media";
       capabilities = [ ];
       namespaces = defaultNamespaces // { pid = true; };
       seccompPolicyRef = "w1-qemu-media";
       readOnlyPaths = [ "/" ];
       writablePaths = [
-        (mkWritablePath "/run/nixling/vms/${name}" "Create the QMP control socket without exposing media paths.")
-        (mkWritablePath "/run/nixling-wlproxy/${name}" "Connect to the per-VM Wayland filter proxy socket.")
+        (mkWritablePath "/run/d2b/vms/${name}" "Create the QMP control socket without exposing media paths.")
+        (mkWritablePath "/run/d2b-wlproxy/${name}" "Connect to the per-VM Wayland filter proxy socket.")
         (mkWritablePath (stateDirOf name) "Write only qemu-media runner state under this VM's state directory.")
       ];
       deviceBinds = [ "/dev/kvm" ];
       bindMounts = [ ];
-      cgroupSubtree = "nixling.slice/${name}/qemu-media";
+      cgroupSubtree = "d2b.slice/${name}/qemu-media";
       controllers = serviceControllers;
     };
   };
@@ -755,16 +755,16 @@ let
         capabilities = [ "CAP_NET_RAW" ];
         namespaces = defaultNamespaces // { pid = true; };
         seccompPolicyRef = "w1-usbip";
-        cgroupSubtree = "nixling.slice/${vmId}/backend";
+        cgroupSubtree = "d2b.slice/${vmId}/backend";
         controllers = serviceControllers;
       };
       "${profileIdFor vmId "proxy"}" = mkProfile {
         profileId = profileIdFor vmId "proxy";
         role = "usbip";
-        principal = "nixling-${vmId}-proxy";
+        principal = "d2b-${vmId}-proxy";
         capabilities = [ ];
         seccompPolicyRef = "w1-usbip-proxy";
-        cgroupSubtree = "nixling.slice/${vmId}/proxy";
+        cgroupSubtree = "d2b.slice/${vmId}/proxy";
         controllers = serviceControllers;
       };
     };
@@ -774,29 +774,29 @@ let
 
   # Host-scoped OTel host-bridge
   # profile. Replaces the singleton
-  # `nixling-otel-host-bridge.service` (singleton scheduled for
+  # `d2b-otel-host-bridge.service` (singleton scheduled for
   # removal in `nixos-modules/components/observability/host.nix`).
   # The role runs under `RunnerRole::OtelHostBridge` and receives
   # pre-opened vsock fds from the broker via SCM_RIGHTS; the
   # in-jail profile MUST NOT permit AF_VSOCK / AF_UNIX socket
   # creation (kernel-r2-4 closed-set + seccomp policy
   # `w1-otel-host-bridge`). Caps: empty per plan kernel-r2-4
-  # matrix. Bind set: nixling OTel runtime dir (RW for host-egress.sock
+  # matrix. Bind set: d2b OTel runtime dir (RW for host-egress.sock
   # listen), the obs VM's CH vsock UDS dir (RW for the textual
   # CONNECT handshake). No `/dev` binds.
-  obsCfg = config.nixling.observability;
+  obsCfg = config.d2b.observability;
   otelHostBridgeProfile = lib.optionalAttrs (cfg.observability.enable or false) {
     "host-otel-host-bridge" = mkProfile {
       profileId = "host-otel-host-bridge";
       role = "otel-host-bridge";
-      principal = "nixling-otel-bridge";
+      principal = "d2b-otel-bridge";
       capabilities = [ ];
       seccompPolicyRef = "w1-otel-host-bridge";
       writablePaths = [
-        (mkWritablePath "/run/nixling/otel" "Host OTel runtime dir; the bridge binds host-egress.sock here for host → vsock OTLP forwarding.")
+        (mkWritablePath "/run/d2b/otel" "Host OTel runtime dir; the bridge binds host-egress.sock here for host → vsock OTLP forwarding.")
         (mkWritablePath "${toString cfg.store.stateDir}/${obsCfg.vmName}" "Reach the obs VM base CH vsock UDS for the textual CONNECT handshake into the obs VM's OTLP listener.")
       ];
-      cgroupSubtree = "nixling.slice/host/otel-host-bridge";
+      cgroupSubtree = "d2b.slice/host/otel-host-bridge";
       controllers = serviceControllers;
     };
   };
@@ -808,7 +808,7 @@ let
   renderedProfiles = lib.mapAttrs
     (profileId: data:
       let
-        file = pkgs.writeText "nixling-${profileId}.json" (builtins.toJSON data);
+        file = pkgs.writeText "d2b-${profileId}.json" (builtins.toJSON data);
       in {
         inherit data;
         path = file;
@@ -854,9 +854,9 @@ let
 in
 {
   config = {
-    nixling._bundle.minijailProfiles = renderedProfiles;
+    d2b._bundle.minijailProfiles = renderedProfiles;
     environment.etc = lib.mapAttrs'
-      (_: profile: lib.nameValuePair "nixling/${profile.relativePath}" (privateEtc profile.path))
+      (_: profile: lib.nameValuePair "d2b/${profile.relativePath}" (privateEtc profile.path))
       renderedProfiles;
 
     assertions = map
@@ -877,19 +877,19 @@ in
           Mitigation options (choose ONE; both require a coordinated
           rebuild + restart):
 
-          1. Rename a colliding VM in `nixling.vms.<name>`. The
+          1. Rename a colliding VM in `d2b.vms.<name>`. The
              generated principal names embed the VM name (e.g.
-             `nixling-<name>-runner`, `nixling-<name>-gpu`), so
+             `d2b-<name>-runner`, `d2b-<name>-gpu`), so
              changing the VM name moves its principal off the
              colliding hash. **THIS DOES CHANGE THE VM'S ON-DISK
-             STATE PATHS** (`/var/lib/nixling/vms/<name>/` and
+             STATE PATHS** (`/var/lib/d2b/vms/<name>/` and
              every per-role subdir). Operators MUST drain the VM,
              rename the state dir to the new name, and let the
              daemon re-link the hardlink farm on next start. This
              is bigger than a config rename — plan accordingly.
 
           2. Rename a colliding host-singleton principal (e.g.
-             `nixling-otel-bridge`). These principals live only in
+             `d2b-otel-bridge`). These principals live only in
              `nixos-modules/minijail-profiles.nix` and do NOT have
              on-disk state paths keyed on the principal name; the
              rename is purely an in-source rebuild. PREFERRED if a

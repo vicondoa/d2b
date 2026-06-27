@@ -3,7 +3,7 @@
 - Status: Accepted; virtiofsd `requiresStartRoot` carve-out SUPERSEDED by [ADR 0021](0021-broker-user-namespace-for-virtiofsd.md) in v1.1.2 (the broker-pre-established user namespace replaces the `--sandbox=namespace + requiresStartRoot=true` carve-out)
 - Date: 2026-05-25
 - Wave: W0b
-- Plan slice: "Minijail is not assumed to come from a distro package. Nixling will ship a pinned, Nix-built minijail in its closure and CVE-track it like other bundled virtualization dependencies."
+- Plan slice: "Minijail is not assumed to come from a distro package. D2b will ship a pinned, Nix-built minijail in its closure and CVE-track it like other bundled virtualization dependencies."
 - Companion ADRs: [ADR 0002](0002-non-root-daemon-and-privileged-broker.md), [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md), ADR 0004
 
 ## Context
@@ -15,14 +15,14 @@ service directives such as `NoNewPrivileges`, `ProtectSystem`,
 `restartIfChanged = false` behavior as load-bearing policy for sidecars
 and per-VM lifecycle services.
 
-Moving orchestration into `nixlingd` removes per-VM systemd as the
+Moving orchestration into `d2bd` removes per-VM systemd as the
 primary sandbox constructor for daemon-owned VMs. The same hardening
 intent therefore has to be represented as typed role profiles that the
 Rust control plane and privileged broker can apply consistently on NixOS
 and non-NixOS hosts.
 
 The plan chooses minijail as the portable sandboxing substrate, but it
-also requires minijail to be part of the Nixling closure instead of an
+also requires minijail to be part of the D2b closure instead of an
 ambient distro dependency. This keeps sandbox behavior, versioning, and
 CVE response under the same supply-chain rules established by ADR 0009
 for the Rust workspace.
@@ -35,8 +35,8 @@ that introduces the actual crates.
 
 ## Decision
 
-1. Minijail is Nix-built, pinned in the nixling closure, and CVE-tracked like other bundled virtualization dependencies, so distro minijail packages are not relied upon.
-2. The preferred integration is libminijail FFI through a thin `libminijail-sys` crate wrapped by a safe `nixling-sandbox` crate, while generated `.conf` files are debugging and audit artifacts only because the daemon constructs jails programmatically from typed profiles.
+1. Minijail is Nix-built, pinned in the d2b closure, and CVE-tracked like other bundled virtualization dependencies, so distro minijail packages are not relied upon.
+2. The preferred integration is libminijail FFI through a thin `libminijail-sys` crate wrapped by a safe `d2b-sandbox` crate, while generated `.conf` files are debugging and audit artifacts only because the daemon constructs jails programmatically from typed profiles.
 3. Every role profile declares uid, gid, supplementary groups, capabilities and ambient-capability policy, bind mounts and writable paths, device nodes, namespaces, seccomp policy, environment allowlist, rlimits, cgroup path, log handling, expected sockets, and expected pidfile.
 4. `requiresStartRoot` is allowed only for explicitly named roles such as virtiofsd with `--sandbox=namespace`, and each exception documents the setup capability set, syscalls, reason, drop point, and steady-state uid, gid, and capability assertions.
 
@@ -49,7 +49,7 @@ that introduces the actual crates.
    > (`capabilities = []`), and a `userNamespace` block mapping in-NS
    > UID/GID 0 to a per-share principal. Normal VM shares use the
    > per-VM runner principal; the guest-control token share uses
-   > `nixling-<vm>-gctlfs` for narrower token access. virtiofsd runs fake-root
+   > `d2b-<vm>-gctlfs` for narrower token access. virtiofsd runs fake-root
    > only inside the namespace. virtiofsd is the only role currently
    > moved to this model; future roles (gpu/audio/swtpm) may follow
    > pending device-bind compatibility analysis.
@@ -68,7 +68,7 @@ that introduces the actual crates.
    > calls unshare(CLONE_NEWNET) inside the user NS so CAP_NET_RAW is
    > effective in the user-NS-owned net NS — resolves the AF_NETLINK
    > dependency without any host caps.
-5. The Cargo workspace keeps `unsafe_code = "forbid"` at workspace scope, and future `nixling-sandbox` or `libminijail-sys` exceptions require per-crate overrides approved by a follow-up ADR.
+5. The Cargo workspace keeps `unsafe_code = "forbid"` at workspace scope, and future `d2b-sandbox` or `libminijail-sys` exceptions require per-crate overrides approved by a follow-up ADR.
 6. Seccomp and ioctl policies are per-role and derived from typed device and resource requirements, and no profile may use an `ioctl: 1` catch-all.
 
 ## Consequences
@@ -90,7 +90,7 @@ that introduces the actual crates.
 
 **D4/P2.1 — seccomp BPF compilation wired** (closes the v1.1.2-final deferral):
 
-`load_runner_seccomp` in `packages/nixling-priv-broker/src/live_handlers.rs`
+`load_runner_seccomp` in `packages/d2b-priv-broker/src/live_handlers.rs`
 previously returned `Ok(None)` for non-absolute policy refs (e.g.
 `w1-cloud-hypervisor-runner`), silently skipping seccomp installation.
 
@@ -100,7 +100,7 @@ As of v1.2fu15, the function:
    `nixos-modules/minijail-profiles.nix` to a `&[DeviceClass]` slice via
    `policy_ref_device_classes()`.
 2. Compiles that slice to a BPF program using
-   `nixling_host::seccomp::compile_ioctl_policy_to_bpf`, which derives
+   `d2b_host::seccomp::compile_ioctl_policy_to_bpf`, which derives
    the ioctl allowlist from the `ioctl_policy.rs` matrix (Decision §6).
 3. Returns `Ok(Some(program))` for known refs; returns
    `Err(SpawnFailed { detail: "InvalidSeccompPolicy: unknown …" })` for
@@ -111,7 +111,7 @@ The broker child closure is reordered: capset → umask → seccomp → execve
 a restrictive BPF before the final stage [panel-kernel R0 #1].
 
 Behavioral regression tests (fork + waitpid) in
-`packages/nixling-priv-broker/src/seccomp_compile_tests.rs` verify that
+`packages/d2b-priv-broker/src/seccomp_compile_tests.rs` verify that
 a BPF compiled for `[DeviceClass::Kvm]` allows `KVM_GET_API_VERSION` and
 kills with `SIGSYS` on an undeclared ioctl [panel-security R0 #3, #4].
 

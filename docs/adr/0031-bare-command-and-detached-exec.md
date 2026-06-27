@@ -9,7 +9,7 @@
 ## Context
 
 ADR 0030 moved generic guest exec to the VM's configured workload user
-inside a real PAM login session. That made `nixling vm exec -it <vm> --
+inside a real PAM login session. That made `d2b vm exec -it <vm> --
 <shell>` the replacement for the retired SSH-backed console surface, but
 operators still had two mismatches with normal login-shell workflows:
 
@@ -21,8 +21,8 @@ operators still had two mismatches with normal login-shell workflows:
    allowing a long-running command to outlive the owner connection before
    the workload-user, quota, and orphan-cleanup model was complete.
 
-The intended operator model is simpler: `nixling vm exec -it <vm> -- bash`
-should open a workload-user login shell, `nixling vm exec <vm> -- id`
+The intended operator model is simpler: `d2b vm exec -it <vm> -- bash`
+should open a workload-user login shell, `d2b vm exec <vm> -- id`
 should resolve `id` through the workload user's login `PATH`, and
 long-running non-interactive commands should be startable and manageable
 without weakening the never-root guarantee.
@@ -34,7 +34,7 @@ without weakening the never-root guarantee.
    Bare names and relative paths are passed positionally to the
    workload user's login shell, whose `exec "$@"` wrapper resolves them
    using the login `PATH`. The command separator remains mandatory in the
-   CLI: operators run commands with `nixling vm exec <vm> -- <cmd>
+   CLI: operators run commands with `d2b vm exec <vm> -- <cmd>
    [args…]`, not by relying on positional guessing.
 
 2. **Invalid program names are a distinct typed error.** Empty
@@ -44,7 +44,7 @@ without weakening the never-root guarantee.
    mistakes and tells the operator to pass a non-empty command after `--`.
 
 3. **Detached exec is enabled for non-interactive workload-user jobs.**
-   `nixling vm exec -d <vm> -- <cmd> [args…]` creates a detached
+   `d2b vm exec -d <vm> -- <cmd> [args…]` creates a detached
    guest-control exec and returns an opaque `exec_id` plus its initial
    state. Detached jobs are never TTY or stdin-forwarding sessions:
    `-d` is mutually exclusive with `-i` and `-t`. The workload child runs
@@ -58,11 +58,11 @@ without weakening the never-root guarantee.
    than falling back to a direct root command.
 
 5. **Detached management uses a VM-first grammar.** Management verbs live
-   after the VM name: `nixling vm exec <vm> list`, `logs <exec_id>`,
+   after the VM name: `d2b vm exec <vm> list`, `logs <exec_id>`,
    `status <exec_id>`, and `kill <exec_id>`. Management words remain
    valid VM names: because every command form requires `--`, a VM
-   literally named `list` still works (`nixling vm exec list -- bash`
-   runs a command in that VM; `nixling vm exec list status <id>` asks for
+   literally named `list` still works (`d2b vm exec list -- bash`
+   runs a command in that VM; `d2b vm exec list status <id>` asks for
    a detached status in that VM).
 
 6. **Detached state is reconciled and bounded.** Guestd reconciles the
@@ -79,7 +79,7 @@ without weakening the never-root guarantee.
    rather than inventing an error.
 
 8. **Audit stays redacted and daemon-local.** Detached create and kill are
-   guest-control operations handled by guestd through `nixlingd`; they add
+   guest-control operations handled by guestd through `d2bd`; they add
    no privileged broker operation. The daemon writes bounded audit events
    containing only `vm`, `peer_uid`, closed action/result enums, and the
    opaque `exec_id`. argv, env, cwd, retained output, and raw logs never
@@ -87,9 +87,9 @@ without weakening the never-root guarantee.
 
 ## Consequences
 
-- The canonical console replacement is `nixling vm exec -it <vm> -- bash`.
-  Scripts can use ordinary commands such as `nixling vm exec <vm> -- id`
-  or `nixling vm exec -d <vm> -- long-task` without spelling a store path.
+- The canonical console replacement is `d2b vm exec -it <vm> -- bash`.
+  Scripts can use ordinary commands such as `d2b vm exec <vm> -- id`
+  or `d2b vm exec -d <vm> -- long-task` without spelling a store path.
 - Detached exec survives host client disconnect and can be inspected,
   logged, or cancelled later through the VM-first management verbs.
 - The never-root exec guarantee from ADR 0030 remains intact for both

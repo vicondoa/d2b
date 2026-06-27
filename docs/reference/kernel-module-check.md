@@ -4,11 +4,11 @@ Operator reference for the daemon-startup self-check that verifies the
 kernel-module matrix the running bundle requires is loaded into the
 live kernel.
 
-Source of truth: `packages/nixlingd/src/kernel_module_check.rs`.
+Source of truth: `packages/d2bd/src/kernel_module_check.rs`.
 
 ## When it runs
 
-`nixlingd serve` runs the check exactly once on startup, after the
+`d2bd serve` runs the check exactly once on startup, after the
 state lock is acquired and after the pidfd table is restored, but
 *before* the autostart pass dispatches any VM. Sequence:
 
@@ -23,14 +23,14 @@ state lock is acquired and after the pidfd table is restored, but
 ## What it reads
 
 * `/proc/modules` — currently-loaded modules. Parsed via
-  `nixling_host::modules::LoadedModuleSet::parse_proc_modules`.
+  `d2b_host::modules::LoadedModuleSet::parse_proc_modules`.
 * The trusted bundle (already loaded by the resolver) — used to
   decide which conditional modules are in scope (virtiofs / graphics
   / usbip / tpm).
 
 The check does **not** invoke `modprobe`, `modinfo`, or any
 side-effecting helper. Mutating module load remains the broker's
-responsibility (`nixling-priv-broker::ops::modprobe`).
+responsibility (`d2b-priv-broker::ops::modprobe`).
 
 If `/proc/modules` cannot be read, the check treats *every* module as
 absent — required modules then read as missing and the daemon
@@ -84,7 +84,7 @@ by the autostart pass with `Outcome::Degraded` and a stable
 kind: host-kernel-modules-missing
 exitCode: 64
 message: "daemon refused to start: required kernel modules not loaded: kvm_intel|kvm_amd, vhost_net"
-remediation: "load the listed kernel modules with `modprobe <name>` (or via `boot.kernelModules` in the NixOS host config) and restart nixlingd. ..."
+remediation: "load the listed kernel modules with `modprobe <name>` (or via `boot.kernelModules` in the NixOS host config) and restart d2bd. ..."
 ```
 
 ## Remediation
@@ -94,7 +94,7 @@ For a missing REQUIRED module:
 ```bash
 sudo modprobe kvm_intel     # or kvm_amd on AMD CPUs
 sudo modprobe vhost_net tun virtio_net virtio_blk virtio_pci virtio_console
-sudo systemctl restart nixlingd
+sudo systemctl restart d2bd
 ```
 
 For NixOS hosts, pin the modules via:
@@ -122,7 +122,7 @@ on the next SIGHUP / reconnect) to pick up the change.
 
 `tests/kernel-module-matrix-eval.sh` asserts that the
 `REQUIRED_*` / `OPTIONAL_*` constants in
-`packages/nixlingd/src/kernel_module_check.rs` stay in sync with
+`packages/d2bd/src/kernel_module_check.rs` stay in sync with
 the table above. Run it after editing either side.
 
 ## Related
@@ -132,6 +132,6 @@ the table above. Run it after editing either side.
   loadable).
 * `docs/reference/host-prep-dag.md` — the broker-side module
   matrix (mutating side: `modprobe` allow/deny).
-* `packages/nixling-host/src/modules.rs` — the four-step host probe
+* `packages/d2b-host/src/modules.rs` — the four-step host probe
   (`/proc/modules` + builtin + `/boot/config-*`) the broker uses;
   the daemon check is a *consumer* of `LoadedModuleSet`.

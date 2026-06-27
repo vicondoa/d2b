@@ -1,6 +1,6 @@
-# host-validate-verb-eval — `nixling host validate` CLI-contract integration tests
-# (packages/nixling/tests/host_validate_verb.rs). Successor of the retired
-# tests/host-validate-verb-eval.sh gate: drive the real `nixling host validate`
+# host-validate-verb-eval — `d2b host validate` CLI-contract integration tests
+# (packages/d2b/tests/host_validate_verb.rs). Successor of the retired
+# tests/host-validate-verb-eval.sh gate: drive the real `d2b host validate`
 # binary with validator/evidence dirs redirected to per-test scratch state,
 # assert readiness-wave catalog parity, explicit mutation-mode refusal,
 # dry-run no-write inventory, apply evidence writes, missing-validator refusal,

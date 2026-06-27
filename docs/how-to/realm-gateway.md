@@ -3,53 +3,53 @@
 **Diataxis category:** how-to.
 
 Realm gateways are the local entrypoint for gateway-backed realms. The
-host starts and enters the gateway VM as a normal nixling workload, while
+host starts and enters the gateway VM as a normal d2b workload, while
 realm relay credentials, provider configuration, remote registries, and
 realm audit live inside the gateway guest.
 
 ## Declare a gateway-backed realm
 
 Add one gateway per trust-boundary realm and keep each gateway in a
-separate nixling environment:
+separate d2b environment:
 
 ```nix
-nixling.envs.work = {
+d2b.envs.work = {
   lanSubnet = "10.44.0.0/24";
   uplinkSubnet = "192.0.2.0/30";
 };
 
-nixling.gateways.work = {
+d2b.gateways.work = {
   realm = "work";
   env = "work";
   index = 20;
   relay.namespace = "relns-example.servicebus.windows.net";
-  relay.entity = "hc-nixling-display";
+  relay.entity = "hc-d2b-display";
 };
 ```
 
 The module auto-declares the gateway VM, publishes a
 `realm-entrypoints.json` table, and keeps the local realm host-resident.
 Multiple gateways are allowed only when they use distinct realm paths,
-gateway VM names, and nixling env/L2 segments.
+gateway VM names, and d2b env/L2 segments.
 
 ## Start and enter the gateway
 
 Start the gateway like any other VM:
 
 ```bash
-nixling vm start sys-work-gateway --apply
+d2b vm start sys-work-gateway --apply
 ```
 
 Then enter the realm trust boundary:
 
 ```bash
-nixling realm enter work
+d2b realm enter work
 ```
 
 For scripts, run a one-shot command inside the gateway:
 
 ```bash
-nixling realm run work -- nixling vm list
+d2b realm run work -- d2b vm list
 ```
 
 ## Route a realm target
@@ -57,20 +57,20 @@ nixling realm run work -- nixling vm list
 Local VM names still use the host fast path:
 
 ```bash
-nixling vm start personal-dev --apply
+d2b vm start personal-dev --apply
 ```
 
 Gateway-backed targets use DNS-shaped names:
 
 ```bash
-nixling vm exec demo.aca.work.nixling -- foot
+d2b vm exec demo.aca.work.d2b -- foot
 ```
 
 If the gateway is missing, stopped, or not reported by the daemon, the
 CLI fails closed with a typed remediation instead of falling back to host
 credentials or SSH.
 
-Use `nixling realm list` and `nixling realm inspect <realm>` to inspect the
+Use `d2b realm list` and `d2b realm inspect <realm>` to inspect the
 rendered host-resident vs gateway-backed policy and the gateway's local
 lifecycle state.
 
@@ -90,9 +90,9 @@ The helper reads the plaintext enrollment JSON from stdin so long-lived
 keys never appear in argv:
 
 ```bash
-nixling realm enter work
-sudo -u nixlingd NIXLING_GATEWAY_STATE_DIR=<gateway-state-dir> \
-  nixling-gateway-enroll enroll \
+d2b realm enter work
+sudo -u d2bd D2B_GATEWAY_STATE_DIR=<gateway-state-dir> \
+  d2b-gateway-enroll enroll \
   <gateway-state-dir>/credential.sealed.json \
   <gateway-state-dir>/seal.key <<'JSON'
 {
@@ -112,9 +112,9 @@ plaintext.
 Rotate by passing the replacement JSON through the same in-guest helper:
 
 ```bash
-nixling realm enter work
-sudo -u nixlingd NIXLING_GATEWAY_STATE_DIR=<gateway-state-dir> \
-  nixling-gateway-enroll rotate \
+d2b realm enter work
+sudo -u d2bd D2B_GATEWAY_STATE_DIR=<gateway-state-dir> \
+  d2b-gateway-enroll rotate \
   <gateway-state-dir>/credential.sealed.json \
   <gateway-state-dir>/seal.key <<'JSON'
 {

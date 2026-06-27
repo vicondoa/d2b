@@ -2,6 +2,6 @@ error: host-prepare-apply-error
   code: legacy-no-prepare-apply
   exit_code: 78
   what_was_checked: Whether the legacy bash dispatch attempted a mutating prepare apply.
-  observed_state: Legacy bash `nixling host prepare --apply` invoked; refused by design.
-  remediation: Re-run via the Rust path: `nixling host prepare --apply` (no legacy shim).
+  observed_state: Legacy bash `d2b host prepare --apply` invoked; refused by design.
+  remediation: Re-run via the Rust path: `d2b host prepare --apply` (no legacy shim).
   docs_anchor: docs/reference/error-codes.md#legacy-no-prepare-apply

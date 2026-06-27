@@ -1,4 +1,4 @@
-# guest-control-token-materializer — nixling-host Rust integration tests
+# guest-control-token-materializer — d2b-host Rust integration tests
 # replacing tests/guest-control-token-materializer.sh.
 guest_control_token_materializer_rejects_missing_source_without_path_leak
 guest_control_token_materializer_rejects_relative_source_without_path_leak

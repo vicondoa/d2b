@@ -5,15 +5,15 @@
 # Plan:.
 #
 # This is the END-TO-END regression for the AGENTS.md "Critical
-# subsystems" guard on /var/lib/nixling/vms/<vm>/swtpm. The narrower
+# subsystems" guard on /var/lib/d2b/vms/<vm>/swtpm. The narrower
 # tests/minijail-validator-swtpm.sh exercises a tempdir under the same
 # minijail profile, but this script drives a real per-VM swtpm sidecar
 # through the daemon, restarts the daemon (not just the VM, not just
 # the sidecar), restarts the VM, and reads the TPM NVRAM index back.
 #
-# It MUST be run NL_LIVE=1 on a host with nixling activated and at
+# It MUST be run D2B_LIVE=1 on a host with d2b activated and at
 # least one TPM-enabled VM declared. Default target VM is "corp-vm";
-# override with NL_VM=<name>.
+# override with D2B_VM=<name>.
 #
 # !!! WARNING !!!
 # Failure of this test means the swtpm state bind regressed (most
@@ -23,7 +23,7 @@
 # fresh EK seed and a wiped NVRAM and refuse the device. Do NOT mark
 # this test "expected to fail" — fix the bind contract instead.
 #
-# Layer 2; opt-in via NL_LIVE=1. Cleanup trap restores all changes
+# Layer 2; opt-in via D2B_LIVE=1. Cleanup trap restores all changes
 # (best-effort, since the destructive step is the daemon restart).
 
 set -euo pipefail
@@ -34,9 +34,9 @@ ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
-VM="${NL_VM:-corp-vm}"
-NV_INDEX="${NL_NV_INDEX:-0x1500017}"
-NV_PAYLOAD="${NL_NV_PAYLOAD:-nixling-persistence-smoke}"
+VM="${D2B_VM:-corp-vm}"
+NV_INDEX="${D2B_NV_INDEX:-0x1500017}"
+NV_PAYLOAD="${D2B_NV_PAYLOAD:-d2b-persistence-smoke}"
 
 PASS=0
 FAIL=0
@@ -45,16 +45,16 @@ fail_check() { log "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 cleanup() {
   local rc=$?
-  log "  cleanup: best-effort restore of nixlingd"
-  sudo systemctl start nixlingd.service 2>/dev/null || true
+  log "  cleanup: best-effort restore of d2bd"
+  sudo systemctl start d2bd.service 2>/dev/null || true
   exit "$rc"
 }
 trap cleanup EXIT
 
 log "==> tests/integration/live/swtpm-persistence-smoke.sh"
 
-if [ "${NL_LIVE:-0}" != "1" ]; then
-  log "==> SKIP: set NL_LIVE=1 to run this Layer-2 persistence regression"
+if [ "${D2B_LIVE:-0}" != "1" ]; then
+  log "==> SKIP: set D2B_LIVE=1 to run this Layer-2 persistence regression"
   exit 0
 fi
 
@@ -62,8 +62,8 @@ log "==> WARNING: This test exercises the TPM NVRAM persistence contract."
 log "==> WARNING: Failure here forces Entra/Intune re-enrollment for work-aad"
 log "==> WARNING: and any other TPM-bound IdP joins on the target host."
 
-# Sanity: required tools + nixling on PATH.
-for tool in nixling jq systemctl tpm2_nvdefine tpm2_nvwrite tpm2_nvread tpm2_startup; do
+# Sanity: required tools + d2b on PATH.
+for tool in d2b jq systemctl tpm2_nvdefine tpm2_nvwrite tpm2_nvread tpm2_startup; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     fail_check "required tool '$tool' not on PATH"
   fi
@@ -72,15 +72,15 @@ done
 
 # Start the VM (idempotent).
 log "==> Step 1: start VM $VM"
-if ! sudo nixling vm start "$VM" >/dev/null 2>&1; then
-  fail_check "nixling vm start $VM failed"
+if ! sudo d2b vm start "$VM" >/dev/null 2>&1; then
+  fail_check "d2b vm start $VM failed"
   exit 1
 fi
 pass_check "VM $VM running"
 
 # Resolve TCTI for the running VM's swtpm server socket. Path follows
-# the swtpm_argv generator: /run/nixling/vms/<vm>/swtpm.sock.
-SRV_SOCK="/run/nixling/vms/${VM}/swtpm.sock"
+# the swtpm_argv generator: /run/d2b/vms/<vm>/swtpm.sock.
+SRV_SOCK="/run/d2b/vms/${VM}/swtpm.sock"
 for _ in $(seq 1 100); do
   [ -S "$SRV_SOCK" ] && break
   sleep 0.2
@@ -114,25 +114,25 @@ fi
 
 # Stop the VM.
 log "==> Step 3: stop VM $VM"
-sudo nixling vm stop "$VM" >/dev/null 2>&1 || true
-pass_check "nixling vm stop $VM returned"
+sudo d2b vm stop "$VM" >/dev/null 2>&1 || true
+pass_check "d2b vm stop $VM returned"
 
 # Restart the daemon — the load-bearing step. swtpm state must survive
 # a daemon restart, not merely a sidecar restart.
-log "==> Step 4: restart nixlingd.service (daemon-level restart)"
-sudo systemctl restart nixlingd.service
+log "==> Step 4: restart d2bd.service (daemon-level restart)"
+sudo systemctl restart d2bd.service
 sleep 2
-if systemctl is-active --quiet nixlingd.service; then
-  pass_check "nixlingd restarted cleanly"
+if systemctl is-active --quiet d2bd.service; then
+  pass_check "d2bd restarted cleanly"
 else
-  fail_check "nixlingd failed to come back up after restart"
+  fail_check "d2bd failed to come back up after restart"
   exit 1
 fi
 
 # Start the VM again, on the same per-VM state dir.
 log "==> Step 5: start VM $VM again"
-if ! sudo nixling vm start "$VM" >/dev/null 2>&1; then
-  fail_check "nixling vm start $VM (post-restart) failed"
+if ! sudo d2b vm start "$VM" >/dev/null 2>&1; then
+  fail_check "d2b vm start $VM (post-restart) failed"
   exit 1
 fi
 for _ in $(seq 1 100); do
@@ -153,7 +153,7 @@ if [ "$READBACK" = "$NV_PAYLOAD" ]; then
   pass_check "NVRAM survived daemon restart — critical-subsystem invariant honoured"
 else
   log "  observed = '$READBACK' expected = '$NV_PAYLOAD'"
-  fail_check "WARNING: this failure forces Entra/Intune re-enrollment for work-aad and similar TPM-bound IdP joins. NVRAM did NOT survive the daemon restart — the /var/lib/nixling/vms/${VM}/swtpm bind is not preserving state across daemon restarts."
+  fail_check "WARNING: this failure forces Entra/Intune re-enrollment for work-aad and similar TPM-bound IdP joins. NVRAM did NOT survive the daemon restart — the /var/lib/d2b/vms/${VM}/swtpm bind is not preserving state across daemon restarts."
 fi
 
 if [ "$FAIL" -gt 0 ]; then

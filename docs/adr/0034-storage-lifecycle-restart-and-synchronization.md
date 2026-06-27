@@ -6,11 +6,11 @@
   (cgroup v2 delegation and pidfd handoff), ADR 0015 (daemon-only clean
   break), ADR 0021 (broker user namespace for virtiofsd), ADR 0023
   (runner-role lifecycle matrix), ADR 0027 (hardlink-backed store-view
-  live pool), ADR 0032 (nixling v2 constellation control plane)
+  live pool), ADR 0032 (d2b v2 constellation control plane)
 
 ## Context
 
-Nixling's daemon-only architecture intentionally lets `nixlingd` restart
+D2b's daemon-only architecture intentionally lets `d2bd` restart
 without tearing down every running VM. The daemon restores durable state,
 re-adopts live runner processes when it can prove identity, quarantines
 ambiguous state, and reports degraded status when recovery is not safe.
@@ -19,12 +19,12 @@ That lifecycle depends on host files and directories that are currently
 spread across several ownership models:
 
 - NixOS tmpfiles and `environment.etc` create base directories and bundle
-  artifacts under `/etc/nixling`, `/var/lib/nixling`, and `/run/nixling`.
+  artifacts under `/etc/d2b`, `/var/lib/d2b`, and `/run/d2b`.
 - NixOS activation scripts perform many root-owned `mkdir`, `chown`,
   `chmod`, and `setfacl` repairs, including per-role ACL grants.
-- `nixlingd` binds public sockets, manages daemon locks, writes daemon
+- `d2bd` binds public sockets, manages daemon locks, writes daemon
   reports, persists adoption metadata, and drives lifecycle DAGs.
-- `nixling-priv-broker` performs privileged host mutations, spawns runners,
+- `d2b-priv-broker` performs privileged host mutations, spawns runners,
   prepares state such as swtpm and store-view directories, and writes audit
   records.
 - Broker-spawned runners create or consume role sockets, vsock paths, disk
@@ -40,17 +40,17 @@ fd or appears to own the protected resource, leaving restart recovery
 ambiguous.
 
 The existing per-VM ownership matrix is useful but too narrow. It covers
-selected `/var/lib/nixling/vms/<vm>/` entries, while many root-visible
+selected `/var/lib/d2b/vms/<vm>/` entries, while many root-visible
 artifacts, runtime sockets, lock files, degraded-state records, external
 ACL grants, and future realm scopes remain outside one contract.
 
 ## Decision
 
-Nixling will introduce a versioned storage lifecycle contract that covers
+D2b will introduce a versioned storage lifecycle contract that covers
 managed host paths, process restart/adoption behavior, synchronization
 resources, and degraded-state reporting. The contract is generated from
-Nix, consumed by Rust DTOs in `nixling-core`, resolved by the privileged
-broker from trusted bundle data, and enforced by `nixlingd` lifecycle DAGs.
+Nix, consumed by Rust DTOs in `d2b-core`, resolved by the privileged
+broker from trusted bundle data, and enforced by `d2bd` lifecycle DAGs.
 
 The implementation may use a one-time planned-downtime cutover to move
 existing hosts into the new layout. After that cutover, daemon and process
@@ -60,7 +60,7 @@ runtime state just because a daemon process restarted.
 ### Storage contract
 
 A generated artifact, tentatively `storage.json`, is the canonical
-inventory of nixling-managed paths. Each entry includes at least:
+inventory of d2b-managed paths. Each entry includes at least:
 
 - stable storage id and scope;
 - path template plus typed variables;
@@ -78,14 +78,14 @@ The layout is stratified by lifecycle:
 
 | Root | Meaning |
 | --- | --- |
-| `/etc/nixling` | NixOS-generated configuration and bundle artifacts. Root-owned, read-only to `nixlingd`, never runtime state. |
-| `/var/lib/nixling` | Persistent framework state: daemon metadata, broker audit/degraded ledgers, per-VM persistent state, store-view metadata, swtpm markers, host-runtime metadata, disk images. |
-| `/run/nixling` | Boot-scoped runtime: public/broker sockets, role sockets, locks, leases, and process runtime files. Preserved across normal daemon restarts when a live owner is proven; cleaned on boot or on VM/process lifecycle only when stale-owner proof exists. |
-| `/var/cache/nixling` | Regenerable cache and intermediate data. Never authority-bearing state. |
-| External roots (`/run/user/<uid>`, `/dev/*`, `/sys/fs/cgroup/*`) | Observe/grant-only or kernel-owned surfaces. Nixling may grant/revoke access or validate posture; it does not own these roots. |
+| `/etc/d2b` | NixOS-generated configuration and bundle artifacts. Root-owned, read-only to `d2bd`, never runtime state. |
+| `/var/lib/d2b` | Persistent framework state: daemon metadata, broker audit/degraded ledgers, per-VM persistent state, store-view metadata, swtpm markers, host-runtime metadata, disk images. |
+| `/run/d2b` | Boot-scoped runtime: public/broker sockets, role sockets, locks, leases, and process runtime files. Preserved across normal daemon restarts when a live owner is proven; cleaned on boot or on VM/process lifecycle only when stale-owner proof exists. |
+| `/var/cache/d2b` | Regenerable cache and intermediate data. Never authority-bearing state. |
+| External roots (`/run/user/<uid>`, `/dev/*`, `/sys/fs/cgroup/*`) | Observe/grant-only or kernel-owned surfaces. D2b may grant/revoke access or validate posture; it does not own these roots. |
 
 Per-role runtime sockets move toward role-specific directories under
-`/run/nixling/vms/<vm>/roles/<role>/...`. Shared default ACLs on broad
+`/run/d2b/vms/<vm>/roles/<role>/...`. Shared default ACLs on broad
 per-VM runtime directories are not the primary authorization mechanism.
 Every cross-role socket consumer is explicit in the storage contract.
 
@@ -110,34 +110,34 @@ Restart classes are closed:
 
 | Class | Meaning |
 | --- | --- |
-| `adoptable` | The live process may survive daemon restart. Nixling re-discovers it, opens a fresh pidfd, verifies identity, and re-registers it. |
+| `adoptable` | The live process may survive daemon restart. D2b re-discovers it, opens a fresh pidfd, verifies identity, and re-registers it. |
 | `recreatable` | The process can be stopped/restarted from persistent state without data loss. |
-| `stateful-quarantine` | Nixling cannot prove safety. Leave the state/process alone, mark degraded, and require operator action. |
+| `stateful-quarantine` | D2b cannot prove safety. Leave the state/process alone, mark degraded, and require operator action. |
 | `non-resumable` | The process cannot be resumed across the relevant owner restart. Mark degraded until explicit restart/remediation succeeds. |
-| `external-observed` | Nixling does not own the process or resource but can report health and degraded state. |
+| `external-observed` | D2b does not own the process or resource but can report health and degraded state. |
 
 Pidfds are not persisted. A pidfd is process-local fd authority and cannot
-be serialized. On disk, nixling may persist logical adoption metadata:
+be serialized. On disk, d2b may persist logical adoption metadata:
 VM, role, declared cgroup leaf, expected executable/profile identity, and
 last observed PID/start-time for diagnostics. Persisted PID or fd values
 are never authority.
 
 Adoptable runner discovery is cgroup-backed. Each adoptable runner has a
-declared cgroup leaf under `nixling.slice`. On restart, nixling reads the
+declared cgroup leaf under `d2b.slice`. On restart, d2b reads the
 leaf's `cgroup.procs`, immediately opens pidfds for candidates, and then
 verifies cgroup membership plus executable/profile/cmdline/start-time
 shape against the bundle. Ambiguous, multiple, or mismatched candidates
 quarantine the role and mark the narrowest affected VM/component degraded.
 
 Adoptable runners live in dedicated delegated scopes/slices under
-`nixling.slice`; they are not children whose lifetime is tied to
-`nixlingd.service` or `nixling-priv-broker.service`. The design must not
+`d2b.slice`; they are not children whose lifetime is tied to
+`d2bd.service` or `d2b-priv-broker.service`. The design must not
 rely on deprecated `KillMode=none`.
 
 Degraded state is a typed daemon-owned ledger. It records scope, closed
 reason slug, affected storage/lock ids, adoption/restart attempt, live
-owner evidence when relevant, and a static remediation id. `nixling vm
-list`, `nixling vm status`, and `nixling host doctor` read this ledger
+owner evidence when relevant, and a static remediation id. `d2b vm
+list`, `d2b vm status`, and `d2b host doctor` read this ledger
 and surface inline remediation commands. Privileged broker repairs never
 trust paths, owners, modes, ACLs, or commands from the ledger; repair
 resolves only trusted storage/sync ids from the bundle.
@@ -181,7 +181,7 @@ normalized relative path, lock id)`. Ad hoc nested locking is a
 test-failing policy violation.
 
 Lease liveness is pidfd-backed where possible. The daemon or broker polls
-pidfds; a readable pidfd (`POLLIN`) means the owner exited. If nixling is
+pidfds; a readable pidfd (`POLLIN`) means the owner exited. If d2b is
 the parent or responsible reaper, the event loop follows with
 `waitid(P_PIDFD, ...)` or the existing reap path before clearing owner
 leases. Ambiguous lock ownership quarantines the protected scope rather
@@ -214,7 +214,7 @@ documented safety preconditions.
 ### NixOS and systemd handoff
 
 NixOS tmpfiles may create only base roots with non-recursive,
-non-ACL-clobbering rules. Nested `/run/nixling/vms/**` runtime
+non-ACL-clobbering rules. Nested `/run/d2b/vms/**` runtime
 directories, per-role socket directories, and dynamic ACLs are
 broker-owned.
 
@@ -254,7 +254,7 @@ diagnostics may be plain bounded files.
 Undeclared, malicious, or dynamic path violations use a separate quota and
 rate-limit lane from normal audit/degraded history. Repeated violations are
 deduplicated by `(scope, reason, pathHash, actorClass)` over a bounded
-window. If the violation lane saturates, nixling records one
+window. If the violation lane saturates, d2b records one
 `violation-audit-throttled` sealed summary instead of allowing violation
 events to evict normal history.
 
@@ -272,9 +272,9 @@ read or audit realm provider credentials directly.
 ## Migration decision
 
 The storage lifecycle cutover may be breaking and may require planned VM
-downtime. During that cutover only, nixling may clear old boot-scoped
+downtime. During that cutover only, d2b may clear old boot-scoped
 runtime sockets and old lock/lease files after proving that VMs,
-`nixlingd`, broker-spawned runners, and relevant helpers are quiesced.
+`d2bd`, broker-spawned runners, and relevant helpers are quiesced.
 
 The cutover preserves critical persistent data:
 
@@ -292,7 +292,7 @@ operator receives a typed failure plus the rollback command; broad chmod,
 chown, or setfacl instructions are not an acceptable recovery path.
 
 Repository landing remains separate from host adoption. Framework changes
-land through a PR. `/etc/nixos` consumes the merged nixling result only at
+land through a PR. `/etc/nixos` consumes the merged d2b result only at
 the end. If `/etc/nixos` changed while the PR was open, the host update
 preserves those edits and stops for operator review if they conflict with
 the new migration procedure.
@@ -303,7 +303,7 @@ the new migration procedure.
 
 - File ownership, ACL, cleanup, restart adoption, and lock behavior become
   explicit contracts rather than scattered side effects.
-- `nixlingd` restart recovery can preserve live VMs without unsafe broad
+- `d2bd` restart recovery can preserve live VMs without unsafe broad
   `/run` cleanup.
 - Broker repairs are less vulnerable to confused-deputy path attacks
   because raw paths are not authority.
@@ -333,7 +333,7 @@ Rejected. Activation scripts run at rebuild time, cannot reason about live
 pidfd/cgroup ownership, and have already accumulated overlapping ACL
 repair logic. They are the wrong owner for runtime state.
 
-### Clear `/run/nixling` on daemon restart
+### Clear `/run/d2b` on daemon restart
 
 Rejected. A daemon restart is a continuation event. Broad runtime cleanup
 would destroy the evidence and sockets needed to adopt live runners and

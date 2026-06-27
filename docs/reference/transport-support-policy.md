@@ -16,4 +16,4 @@ streams; peer-session and stream-mux layers own those contracts.
 
 Transport selection must be explicit. If the requested transport cannot
 connect, listen, or authenticate at its own layer, callers receive a typed
-transport error; nixling does not silently downgrade to another transport.
+transport error; d2b does not silently downgrade to another transport.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Layer-1 static checks for the nixling framework.
+# Layer-1 static checks for the d2b framework.
 #
 # Runs in seconds; catches:
-#   - syntax errors in any nixling .nix file
+#   - syntax errors in any d2b .nix file
 #   - missing imports / option-type mismatches (via dry-build)
 #   - `flake check` failures (eval of every package output)
 #   - per-VM closure attributes failing to evaluate
@@ -23,7 +23,7 @@ export ROOT
 export FLAKE=${FLAKE:-$ROOT}
 # Set a placeholder before sourcing lib.sh so it does not eagerly create
 # a fallback smoke cache that would then be mistaken for an orphan.
-export NL_STATIC_CACHE="$ROOT/.static-cache.bootstrap"
+export D2B_STATIC_CACHE="$ROOT/.static-cache.bootstrap"
 
 # shellcheck source=tests/lib.sh
 . "$HERE/lib.sh"
@@ -53,9 +53,9 @@ export NL_STATIC_CACHE="$ROOT/.static-cache.bootstrap"
 # recurring multi-minute deadlocks when an orphaned parallel-gate test
 # (or test broker daemon) outlived its spawning shell.
 #
-# Bypass the lock with NL_STATIC_NO_LOCK=1 when known-safe (e.g. CI
+# Bypass the lock with D2B_STATIC_NO_LOCK=1 when known-safe (e.g. CI
 # already isolates the worktree).
-if [ -z "${NL_STATIC_NO_LOCK:-}" ] \
+if [ -z "${D2B_STATIC_NO_LOCK:-}" ] \
    && [ "${1:-}" != "--internal-locked" ] \
    && command -v flock >/dev/null 2>&1; then
   _STATIC_LOCK="$ROOT/.static-sh.lock"
@@ -97,7 +97,7 @@ if [ -z "${NL_STATIC_NO_LOCK:-}" ] \
   fi
   exec flock -o -x "$_STATIC_LOCK" "$0" --internal-locked "$@"
 fi
-# When we reach here we are either NL_STATIC_NO_LOCK=1 or we are the
+# When we reach here we are either D2B_STATIC_NO_LOCK=1 or we are the
 # inner locked re-entry. In the latter case, strip the sentinel arg.
 if [ "${1:-}" = "--internal-locked" ]; then
   shift
@@ -117,10 +117,10 @@ reap_known_static_orphans() {
     '.daemon-*'
     '.host-check.*'
     '.manifest-gate.*'
-    '.nl-smoke-cache.*'
-    '.nixling-rust-gate.*'
-    '.nixling-stub-smoke.*'
-    '.nixling-test.log'
+    '.d2b-smoke-cache.*'
+    '.d2b-rust-gate.*'
+    '.d2b-stub-smoke.*'
+    '.d2b-test.log'
     '.opaque-key-ids.*'
     '.privileges-matrix.*'
     '.static-cache.*'
@@ -132,14 +132,14 @@ reap_known_static_orphans() {
     '.writable-paths-invariant.*'
   )
   shopt -s nullglob
-  # Skip the current bash's own bookkeeping (NL_CLEANUPS_FILE = .nl-cleanups.<PID>)
+  # Skip the current bash's own bookkeeping (D2B_CLEANUPS_FILE = .d2b-cleanups.<PID>)
   # and the immediate parent's (flock-wrap chain). Earlier behaviour reaped both
-  # because the pattern `.nl-cleanups.*` matched globally; that emptied this
+  # because the pattern `.d2b-cleanups.*` matched globally; that emptied this
   # run's cleanups file mid-run and meant subsequent `add_cleanup` calls only
   # showed up in the freshly-recreated file, dropping any cleanups registered
   # between lib.sh source and the reaper. Observed in the run where the
-  # current re-entry's own .nl-cleanups.<bashpid> was reaped at startup.
-  local _self_cleanups_file="${NL_CLEANUPS_FILE:-}"
+  # current re-entry's own .d2b-cleanups.<bashpid> was reaped at startup.
+  local _self_cleanups_file="${D2B_CLEANUPS_FILE:-}"
   local _self_cleanups_basename=""
   [ -n "$_self_cleanups_file" ] && _self_cleanups_basename=$(basename "$_self_cleanups_file")
   for pattern in "${patterns[@]}"; do
@@ -157,26 +157,26 @@ reap_known_static_orphans() {
   shopt -u nullglob
 }
 
-NL_STATIC_JOBS=${NL_STATIC_JOBS:-4}
-export NL_STATIC_JOBS
-NL_STATIC_PARALLEL_ACTIVE=0
+D2B_STATIC_JOBS=${D2B_STATIC_JOBS:-4}
+export D2B_STATIC_JOBS
+D2B_STATIC_PARALLEL_ACTIVE=0
 
-declare -A NL_STATIC_PARALLEL_LABEL=()
-declare -A NL_STATIC_PARALLEL_LOG=()
-declare -A NL_STATIC_PARALLEL_STATUS=()
-declare -A NL_STATIC_PARALLEL_DONE=()
+declare -A D2B_STATIC_PARALLEL_LABEL=()
+declare -A D2B_STATIC_PARALLEL_LOG=()
+declare -A D2B_STATIC_PARALLEL_STATUS=()
+declare -A D2B_STATIC_PARALLEL_DONE=()
 
-nl_static_gate_begin() {
+d2b_static_gate_begin() {
   local label="$1" message="$2"
-  nl_time_begin "$label"
+  d2b_time_begin "$label"
   log "--> $message"
 }
 
-nl_static_gate_end() {
-  nl_time_end "$1"
+d2b_static_gate_end() {
+  d2b_time_end "$1"
 }
 
-nl_static_path_prefix() {
+d2b_static_path_prefix() {
   local shell_path="$1" base_path="$2"
   case "$shell_path" in
     "$base_path") printf '%s\n' "" ;;
@@ -185,7 +185,7 @@ nl_static_path_prefix() {
   esac
 }
 
-nl_static_parallel_key() {
+d2b_static_parallel_key() {
   printf '%s\n' "$1" | tr -cs 'A-Za-z0-9._-' '-'
 }
 
@@ -198,72 +198,72 @@ nl_static_parallel_key() {
 #   not exist
 # (observed in cli-legacy-bash-dispatch / cli-json timing runs).
 # Putting these under
-# ${TMPDIR:-/tmp}/nixling-static-timing.$$/ keeps them per-static.sh
+# ${TMPDIR:-/tmp}/d2b-static-timing.$$/ keeps them per-static.sh
 # run, cleaned up by run_cleanups on EXIT, and invisible to flake
 # source capture.
-_NL_STATIC_TIMING_DIR="${TMPDIR:-/tmp}/nixling-static-timing.$$"
-mkdir -p "$_NL_STATIC_TIMING_DIR"
-add_cleanup "rm -rf -- $(printf '%q' "$_NL_STATIC_TIMING_DIR")"
+_D2B_STATIC_TIMING_DIR="${TMPDIR:-/tmp}/d2b-static-timing.$$"
+mkdir -p "$_D2B_STATIC_TIMING_DIR"
+add_cleanup "rm -rf -- $(printf '%q' "$_D2B_STATIC_TIMING_DIR")"
 
-nl_static_parallel_log_path() {
+d2b_static_parallel_log_path() {
   local key
-  key=$(nl_static_parallel_key "$1")
-  printf '%s\n' "$_NL_STATIC_TIMING_DIR/log.$key"
+  key=$(d2b_static_parallel_key "$1")
+  printf '%s\n' "$_D2B_STATIC_TIMING_DIR/log.$key"
 }
 
-nl_static_parallel_status_path() {
+d2b_static_parallel_status_path() {
   local key
-  key=$(nl_static_parallel_key "$1")
-  printf '%s\n' "$_NL_STATIC_TIMING_DIR/status.$key"
+  key=$(d2b_static_parallel_key "$1")
+  printf '%s\n' "$_D2B_STATIC_TIMING_DIR/status.$key"
 }
 
-nl_static_parallel_abort() {
+d2b_static_parallel_abort() {
   local pid
-  for pid in "${!NL_STATIC_PARALLEL_LABEL[@]}"; do
-    [ -n "${NL_STATIC_PARALLEL_DONE[$pid]:-}" ] && continue
+  for pid in "${!D2B_STATIC_PARALLEL_LABEL[@]}"; do
+    [ -n "${D2B_STATIC_PARALLEL_DONE[$pid]:-}" ] && continue
     if kill -0 "$pid" 2>/dev/null; then
       kill "$pid" >/dev/null 2>&1 || true
     fi
   done
-  for pid in "${!NL_STATIC_PARALLEL_LABEL[@]}"; do
-    [ -n "${NL_STATIC_PARALLEL_DONE[$pid]:-}" ] && continue
+  for pid in "${!D2B_STATIC_PARALLEL_LABEL[@]}"; do
+    [ -n "${D2B_STATIC_PARALLEL_DONE[$pid]:-}" ] && continue
     wait "$pid" >/dev/null 2>&1 || true
   done
 }
 
-nl_static_parallel_harvest() {
+d2b_static_parallel_harvest() {
   local pid rc label log_path status_path
-  for pid in "${!NL_STATIC_PARALLEL_LABEL[@]}"; do
-    [ -n "${NL_STATIC_PARALLEL_DONE[$pid]:-}" ] && continue
-    status_path=${NL_STATIC_PARALLEL_STATUS[$pid]}
+  for pid in "${!D2B_STATIC_PARALLEL_LABEL[@]}"; do
+    [ -n "${D2B_STATIC_PARALLEL_DONE[$pid]:-}" ] && continue
+    status_path=${D2B_STATIC_PARALLEL_STATUS[$pid]}
     [ -f "$status_path" ] || continue
     rc=$(cat "$status_path")
     rm -f -- "$status_path"
-    NL_STATIC_PARALLEL_DONE[$pid]=1
-    NL_STATIC_PARALLEL_ACTIVE=$((NL_STATIC_PARALLEL_ACTIVE - 1))
-    label=${NL_STATIC_PARALLEL_LABEL[$pid]}
-    log_path=${NL_STATIC_PARALLEL_LOG[$pid]}
+    D2B_STATIC_PARALLEL_DONE[$pid]=1
+    D2B_STATIC_PARALLEL_ACTIVE=$((D2B_STATIC_PARALLEL_ACTIVE - 1))
+    label=${D2B_STATIC_PARALLEL_LABEL[$pid]}
+    log_path=${D2B_STATIC_PARALLEL_LOG[$pid]}
     if [ "$rc" -ne 0 ]; then
       [ -f "$log_path" ] && cat "$log_path" >&2 || true
-      nl_static_parallel_abort
+      d2b_static_parallel_abort
       fail "$label"
     fi
     ok "$label"
   done
 }
 
-nl_static_parallel_wait_one() {
+d2b_static_parallel_wait_one() {
   wait -n || true
-  nl_static_parallel_harvest
+  d2b_static_parallel_harvest
 }
 
-nl_static_parallel_wait_all() {
-  while [ "$NL_STATIC_PARALLEL_ACTIVE" -gt 0 ]; do
-    nl_static_parallel_wait_one
+d2b_static_parallel_wait_all() {
+  while [ "$D2B_STATIC_PARALLEL_ACTIVE" -gt 0 ]; do
+    d2b_static_parallel_wait_one
   done
 }
 
-nl_static_parallel_spawn() {
+d2b_static_parallel_spawn() {
   local timer_begun=0 label log_path status_path pid
   if [ "${1:-}" = "--timer-begun" ]; then
     timer_begun=1
@@ -271,14 +271,14 @@ nl_static_parallel_spawn() {
   fi
   label="$1"
   shift
-  while [ "$NL_STATIC_PARALLEL_ACTIVE" -ge "$NL_STATIC_JOBS" ]; do
-    nl_static_parallel_wait_one
+  while [ "$D2B_STATIC_PARALLEL_ACTIVE" -ge "$D2B_STATIC_JOBS" ]; do
+    d2b_static_parallel_wait_one
   done
-  log_path=$(nl_static_parallel_log_path "$label")
-  status_path=$(nl_static_parallel_status_path "$label")
+  log_path=$(d2b_static_parallel_log_path "$label")
+  status_path=$(d2b_static_parallel_status_path "$label")
   rm -f -- "$log_path" "$status_path"
   if [ "$timer_begun" -eq 0 ]; then
-    nl_time_begin "$label"
+    d2b_time_begin "$label"
   fi
   (
     local rc=0
@@ -286,29 +286,29 @@ nl_static_parallel_spawn() {
     "$@" >"$log_path" 2>&1
     rc=$?
     set -e
-    nl_time_end "$label"
+    d2b_time_end "$label"
     printf '%s\n' "$rc" > "$status_path"
     exit 0
   ) &
   pid=$!
-  NL_STATIC_PARALLEL_LABEL[$pid]="$label"
-  NL_STATIC_PARALLEL_LOG[$pid]="$log_path"
-  NL_STATIC_PARALLEL_STATUS[$pid]="$status_path"
-  NL_STATIC_PARALLEL_ACTIVE=$((NL_STATIC_PARALLEL_ACTIVE + 1))
+  D2B_STATIC_PARALLEL_LABEL[$pid]="$label"
+  D2B_STATIC_PARALLEL_LOG[$pid]="$log_path"
+  D2B_STATIC_PARALLEL_STATUS[$pid]="$status_path"
+  D2B_STATIC_PARALLEL_ACTIVE=$((D2B_STATIC_PARALLEL_ACTIVE + 1))
 }
 
-nl_static_parallel_script() {
+d2b_static_parallel_script() {
   local label="$1" path="$2"
-  nl_static_parallel_spawn "$label" bash "$path"
+  d2b_static_parallel_spawn "$label" bash "$path"
 }
 
-nl_static_parallel_script_gate() {
+d2b_static_parallel_script_gate() {
   local label="$1" path="$2"
-  nl_static_gate_begin "$label" "$label"
-  nl_static_parallel_spawn --timer-begun "$label" bash "$path"
+  d2b_static_gate_begin "$label" "$label"
+  d2b_static_parallel_spawn --timer-begun "$label" bash "$path"
 }
 
-# Dedicated "long pole" background job, distinct from the NL_STATIC_JOBS
+# Dedicated "long pole" background job, distinct from the D2B_STATIC_JOBS
 # semaphore pool above. The Layer-1 nix eval region (flake check + smoke
 # evals + eval gates + mid-tier + per-example checks) is single-core
 # evaluator-bound, while the Rust workspace gate is multi-core cargo-bound;
@@ -316,54 +316,54 @@ nl_static_parallel_script_gate() {
 # concurrently with the entire nix eval region hides whichever is shorter
 # (profiled: cold `nix flake check` ~120s single-core vs the Rust gate's
 # cargo compile across all cores). The job's $ROOT footprint (cargo
-# `target/`, `nl_mktemp` scratch dirs) is entirely gitignored, so the
+# `target/`, `d2b_mktemp` scratch dirs) is entirely gitignored, so the
 # concurrent git-fetcher flake evals never stat it — no source-capture race.
-# Unlike the pool, this job is NOT harvested by `nl_static_parallel_wait_all`,
+# Unlike the pool, this job is NOT harvested by `d2b_static_parallel_wait_all`,
 # so intermediate barriers don't block on it; it is joined explicitly.
-# Set NL_STATIC_SERIAL_RUST=1 to disable the overlap (run the gate inline).
-NL_STATIC_LONGPOLE_PID=""
-NL_STATIC_LONGPOLE_LABEL=""
-NL_STATIC_LONGPOLE_LOG=""
-NL_STATIC_LONGPOLE_STATUS=""
+# Set D2B_STATIC_SERIAL_RUST=1 to disable the overlap (run the gate inline).
+D2B_STATIC_LONGPOLE_PID=""
+D2B_STATIC_LONGPOLE_LABEL=""
+D2B_STATIC_LONGPOLE_LOG=""
+D2B_STATIC_LONGPOLE_STATUS=""
 
-nl_static_longpole_spawn() {
+d2b_static_longpole_spawn() {
   local label="$1"
   shift
-  NL_STATIC_LONGPOLE_LABEL="$label"
-  NL_STATIC_LONGPOLE_LOG=$(nl_static_parallel_log_path "longpole.$label")
-  NL_STATIC_LONGPOLE_STATUS=$(nl_static_parallel_status_path "longpole.$label")
-  rm -f -- "$NL_STATIC_LONGPOLE_LOG" "$NL_STATIC_LONGPOLE_STATUS"
-  nl_static_gate_begin "$label" "$label"
+  D2B_STATIC_LONGPOLE_LABEL="$label"
+  D2B_STATIC_LONGPOLE_LOG=$(d2b_static_parallel_log_path "longpole.$label")
+  D2B_STATIC_LONGPOLE_STATUS=$(d2b_static_parallel_status_path "longpole.$label")
+  rm -f -- "$D2B_STATIC_LONGPOLE_LOG" "$D2B_STATIC_LONGPOLE_STATUS"
+  d2b_static_gate_begin "$label" "$label"
   (
     local rc=0
     set +e
-    "$@" >"$NL_STATIC_LONGPOLE_LOG" 2>&1
+    "$@" >"$D2B_STATIC_LONGPOLE_LOG" 2>&1
     rc=$?
     set -e
-    nl_time_end "$label"
-    printf '%s\n' "$rc" > "$NL_STATIC_LONGPOLE_STATUS"
+    d2b_time_end "$label"
+    printf '%s\n' "$rc" > "$D2B_STATIC_LONGPOLE_STATUS"
     exit 0
   ) &
-  NL_STATIC_LONGPOLE_PID=$!
+  D2B_STATIC_LONGPOLE_PID=$!
 }
 
-nl_static_longpole_join() {
-  [ -n "$NL_STATIC_LONGPOLE_PID" ] || return 0
+d2b_static_longpole_join() {
+  [ -n "$D2B_STATIC_LONGPOLE_PID" ] || return 0
   local rc=1
-  wait "$NL_STATIC_LONGPOLE_PID" >/dev/null 2>&1 || true
-  if [ -f "$NL_STATIC_LONGPOLE_STATUS" ]; then
-    rc=$(cat "$NL_STATIC_LONGPOLE_STATUS")
-    rm -f -- "$NL_STATIC_LONGPOLE_STATUS"
+  wait "$D2B_STATIC_LONGPOLE_PID" >/dev/null 2>&1 || true
+  if [ -f "$D2B_STATIC_LONGPOLE_STATUS" ]; then
+    rc=$(cat "$D2B_STATIC_LONGPOLE_STATUS")
+    rm -f -- "$D2B_STATIC_LONGPOLE_STATUS"
   fi
-  NL_STATIC_LONGPOLE_PID=""
+  D2B_STATIC_LONGPOLE_PID=""
   if [ "$rc" -ne 0 ]; then
-    [ -f "$NL_STATIC_LONGPOLE_LOG" ] && tail -120 "$NL_STATIC_LONGPOLE_LOG" >&2 || true
-    fail "$NL_STATIC_LONGPOLE_LABEL"
+    [ -f "$D2B_STATIC_LONGPOLE_LOG" ] && tail -120 "$D2B_STATIC_LONGPOLE_LOG" >&2 || true
+    fail "$D2B_STATIC_LONGPOLE_LABEL"
   fi
-  ok "$NL_STATIC_LONGPOLE_LABEL"
+  ok "$D2B_STATIC_LONGPOLE_LABEL"
 }
 
-nl_static_run_smoke_eval() {
+d2b_static_run_smoke_eval() {
   local path="$1" expr="$2" ok_label="$3" tail_lines="${4:-20}"
   [ -f "$path" ] || return 0
   if nix-instantiate --eval --strict --expr "$expr" >/dev/null 2>&1; then
@@ -374,53 +374,53 @@ nl_static_run_smoke_eval() {
   fi
 }
 
-nl_static_parallel_smoke_eval_gate() {
+d2b_static_parallel_smoke_eval_gate() {
   local label="$1" path="$2" expr="$3" ok_label="$4" tail_lines="${5:-20}"
-  nl_static_gate_begin "$label" "$label"
-  nl_static_parallel_spawn --timer-begun "$label" nl_static_run_smoke_eval "$path" "$expr" "$ok_label" "$tail_lines"
+  d2b_static_gate_begin "$label" "$label"
+  d2b_static_parallel_spawn --timer-begun "$label" d2b_static_run_smoke_eval "$path" "$expr" "$ok_label" "$tail_lines"
 }
 
-nl_reap_scratch_orphans
+d2b_reap_scratch_orphans
 reap_known_static_orphans
 
 # Preflight: fail-closed before any disk-consuming setup (rust toolchain
 # bootstrap below pulls multi-GiB into /nix/store via nix shell). Runs
 # AFTER the orphan reapers above so a recoverable-by-reap situation
 # isn't flagged spuriously, but BEFORE any nix-store realisation work.
-nl_static_gate_begin "tests/tools/preflight-disk-space.sh" "tests/tools/preflight-disk-space.sh"
+d2b_static_gate_begin "tests/tools/preflight-disk-space.sh" "tests/tools/preflight-disk-space.sh"
 if [ -x "$ROOT/tests/tools/preflight-disk-space.sh" ]; then
   bash "$ROOT/tests/tools/preflight-disk-space.sh"
   ok "preflight-disk-space"
 else
   log "  SKIP: tests/tools/preflight-disk-space.sh (not present)"
 fi
-nl_static_gate_end "tests/tools/preflight-disk-space.sh"
+d2b_static_gate_end "tests/tools/preflight-disk-space.sh"
 
 if [ -d "$ROOT/packages" ] && [ -f "$ROOT/packages/rust-toolchain.toml" ]; then
-  nl_time_begin "shared rust toolchain bootstrap"
+  d2b_time_begin "shared rust toolchain bootstrap"
   _STATIC_RUST_SHELL_PATH=$(nix shell --quiet --inputs-from "$ROOT" \
     nixpkgs#rustup nixpkgs#cargo nixpkgs#rustc nixpkgs#rustfmt nixpkgs#clippy \
     nixpkgs#gcc nixpkgs#sccache nixpkgs#cargo-deny nixpkgs#cargo-audit \
     --command bash -lc "printf %s \"\$PATH\"")
-  NL_RUST_TOOLCHAIN_PATH=$(nl_static_path_prefix "$_STATIC_RUST_SHELL_PATH" "$PATH")
-  export NL_RUST_TOOLCHAIN_PATH
+  D2B_RUST_TOOLCHAIN_PATH=$(d2b_static_path_prefix "$_STATIC_RUST_SHELL_PATH" "$PATH")
+  export D2B_RUST_TOOLCHAIN_PATH
   _STATIC_PINNED_RUST_CHANNEL=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]\+\)".*/\1/p' "$ROOT/packages/rust-toolchain.toml" | head -1)
   if [ -n "$_STATIC_PINNED_RUST_CHANNEL" ]; then
     export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$_STATIC_PINNED_RUST_CHANNEL}"
-    nl_activate_rust_toolchain_path || true
+    d2b_activate_rust_toolchain_path || true
     if command -v rustup >/dev/null 2>&1; then
       rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt --component clippy >/dev/null 2>&1 || true
     fi
   fi
-  nl_time_end "shared rust toolchain bootstrap"
+  d2b_time_end "shared rust toolchain bootstrap"
 fi
 
 # Scope a safe.directory entry for $ROOT to libgit2 (used by
 # `nix flake check` and `nix eval`) without mutating the caller's git
-# config. Pattern is the same as security-baseline.sh::nl_eval_attr.
+# config. Pattern is the same as security-baseline.sh::d2b_eval_attr.
 # Required when running inside a sandbox where $ROOT is owned by a
 # different uid than the caller.
-_STATIC_GITCFG=$(nl_mktemp .static-gitcfg.XXXXXX)
+_STATIC_GITCFG=$(d2b_mktemp .static-gitcfg.XXXXXX)
 install -d -m 0700 "$_STATIC_GITCFG/git"
 printf "[safe]\n\tdirectory = %s\n" "$ROOT" > "$_STATIC_GITCFG/git/config"
 export XDG_CONFIG_HOME="$_STATIC_GITCFG"
@@ -430,16 +430,16 @@ export GIT_CONFIG_VALUE_0="$ROOT"
 
 # Shared cache for smoke flake-eval artifacts. Each Layer-1 gate that
 # needs the rendered smoke `vms.json` or smoke `bundle.privilegesJson`
-# pulls from this cache via lib.sh `nl_smoke_*` helpers; the cache is
+# pulls from this cache via lib.sh `d2b_smoke_*` helpers; the cache is
 # populated lazily by the first caller and reused by the rest.
-NL_STATIC_CACHE=$(nl_mktemp .static-cache.XXXXXX)
-export NL_STATIC_CACHE
+D2B_STATIC_CACHE=$(d2b_mktemp .static-cache.XXXXXX)
+export D2B_STATIC_CACHE
 
 # shellcheck source=tests/cli-rust-native-common.sh
 . "$HERE/cli-rust-native-common.sh"
 
 # -----------------------------------------------------------------------------
-# Optional Rust ‖ Nix overlap. When NL_STATIC_PARALLEL_RUST=1, launch the Rust
+# Optional Rust ‖ Nix overlap. When D2B_STATIC_PARALLEL_RUST=1, launch the Rust
 # workspace gate as a background long pole so its multi-core cargo
 # compile/clippy overlaps the SINGLE-CORE, lighter nix eval region that
 # immediately follows (parse+eval, the 120s flake check, and the smoke evals).
@@ -453,15 +453,15 @@ export NL_STATIC_CACHE
 # subprocesses (the PTY hangup test fails even with a 120s watchdog) — a
 # resource-contention flake, not a test bug. cargo test --workspace is reliable
 # when the Rust gate runs serially (the default). Opt into the overlap with
-# NL_STATIC_PARALLEL_RUST=1 only where the wall-clock win outweighs the
+# D2B_STATIC_PARALLEL_RUST=1 only where the wall-clock win outweighs the
 # timing-test flake risk. Nothing between here and the join touches the shared
 # cargo target dir; the gate's entire $ROOT footprint is gitignored, so
 # concurrent git-fetcher flake evals never stat it.
 _STATIC_RUST_GATE_OVERLAP=0
-if [ -n "${NL_STATIC_PARALLEL_RUST:-}" ] && [ -d "$ROOT/packages" ] && [ -x "$ROOT/tests/test-rust.sh" ]; then
+if [ -n "${D2B_STATIC_PARALLEL_RUST:-}" ] && [ -d "$ROOT/packages" ] && [ -x "$ROOT/tests/test-rust.sh" ]; then
   _STATIC_RUST_GATE_OVERLAP=1
-  log "==> launching test-rust.sh as background long pole (NL_STATIC_PARALLEL_RUST=1; overlaps flake check + smoke evals)"
-  nl_static_longpole_spawn "tests/test-rust.sh" bash "$ROOT/tests/test-rust.sh"
+  log "==> launching test-rust.sh as background long pole (D2B_STATIC_PARALLEL_RUST=1; overlaps flake check + smoke evals)"
+  d2b_static_longpole_spawn "tests/test-rust.sh" bash "$ROOT/tests/test-rust.sh"
 fi
 
 log "==> Layer 1: parse + eval"
@@ -469,19 +469,19 @@ log "==> Layer 1: parse + eval"
 cd "$ROOT"
 
 # Layout: nixos-modules/ + components/. Old paths
-# (modules/nixling/router.nix, modules/nixling/vms.nix,
-# modules/nixling/audio.nix, modules/nixling/audio-host.nix,
-# modules/nixling/entra-id.nix) are gone:
+# (modules/d2b/router.nix, modules/d2b/vms.nix,
+# modules/d2b/audio.nix, modules/d2b/audio-host.nix,
+# modules/d2b/entra-id.nix) are gone:
 #   * router.nix renamed to net.nix.
 #   * vms.nix is NOT lifted into the public flake (consumers declare
-#     their own nixling.vms.<name> bindings).
+#     their own d2b.vms.<name> bindings).
 #   * audio.nix split into components/audio/{guest,host}.nix.
 #   * entra-id.nix moved to the sibling entrablau flake.
 # Consumer-specific `vms/<name>.nix` paths are excluded — they only
 # exist on the maintainer's host. The loop below skips any entry that
 # isn't present on disk so the gate stays useful for the public flake
 # AND for consumer trees that still carry workload VM definitions.
-NL_FILES=(
+D2B_FILES=(
   nixos-modules/default.nix
   nixos-modules/options.nix
   nixos-modules/options-observability.nix
@@ -493,12 +493,12 @@ NL_FILES=(
   nixos-modules/host-polkit.nix
   nixos-modules/host-activation.nix
   # Removed by +:
-  #   nixos-modules/host-wrapper.nix     (nixling@<vm> template)
-  #   nixos-modules/host-sidecars.nix    (nixling-<vm>-{gpu,swtpm})
-  #   nixos-modules/host-known-hosts.nix (nixling-known-hosts-refresh@)
-  #   nixos-modules/host-audit.nix       (nixling-audit-check.{service,timer})
-  #   nixos-modules/host-ch-exporter.nix (nixling-ch-exporter.service)
-  #   nixos-modules/components/video/host.nix (nixling-<vm>-video)
+  #   nixos-modules/host-wrapper.nix     (d2b@<vm> template)
+  #   nixos-modules/host-sidecars.nix    (d2b-<vm>-{gpu,swtpm})
+  #   nixos-modules/host-known-hosts.nix (d2b-known-hosts-refresh@)
+  #   nixos-modules/host-audit.nix       (d2b-audit-check.{service,timer})
+  #   nixos-modules/host-ch-exporter.nix (d2b-ch-exporter.service)
+  #   nixos-modules/components/video/host.nix (d2b-<vm>-video)
   nixos-modules/network.nix
   nixos-modules/net.nix
   nixos-modules/observability-vm.nix
@@ -521,8 +521,8 @@ NL_FILES=(
   tests/unit/smoke/smoke-eval-tpm.nix
   flake.nix
 )
-nl_static_gate_begin "nix-instantiate --parse" "nix-instantiate --parse"
-for f in "${NL_FILES[@]}"; do
+d2b_static_gate_begin "nix-instantiate --parse" "nix-instantiate --parse"
+for f in "${D2B_FILES[@]}"; do
   if [ ! -f "$ROOT/$f" ]; then
     log "  skip (not present): $f"
     continue
@@ -533,9 +533,9 @@ for f in "${NL_FILES[@]}"; do
     fail "parse: $f"
   fi
 done
-nl_static_gate_end "nix-instantiate --parse"
+d2b_static_gate_end "nix-instantiate --parse"
 
-nl_static_gate_begin "shellcheck --severity=warning on all nixling shell scripts" "shellcheck --severity=warning on all nixling shell scripts"
+d2b_static_gate_begin "shellcheck --severity=warning on all d2b shell scripts" "shellcheck --severity=warning on all d2b shell scripts"
 mapfile -t SH_FILES < <(
   find "$ROOT/tests" "$ROOT/scripts" "$ROOT/harness/ubuntu" \
     -maxdepth 1 -name '*.sh' -type f 2>/dev/null | sort
@@ -543,11 +543,11 @@ mapfile -t SH_FILES < <(
 if [ "${#SH_FILES[@]}" -eq 0 ]; then
   fail "shellcheck: no .sh files found under tests/ or scripts/"
 fi
-shellcheck_output_dir=$(nl_mktemp .shellcheck.XXXXXX)
+shellcheck_output_dir=$(d2b_mktemp .shellcheck.XXXXXX)
 shellcheck_output="$shellcheck_output_dir/output"
 if ! command -v shellcheck >/dev/null 2>&1; then
   _STATIC_SHELLCHECK_PATH=$(nix shell --quiet --inputs-from "$ROOT" nixpkgs#shellcheck --command bash -lc "printf %s \"\$PATH\"")
-  _STATIC_SHELLCHECK_PREFIX=$(nl_static_path_prefix "$_STATIC_SHELLCHECK_PATH" "$PATH")
+  _STATIC_SHELLCHECK_PREFIX=$(d2b_static_path_prefix "$_STATIC_SHELLCHECK_PATH" "$PATH")
   if [ -n "$_STATIC_SHELLCHECK_PREFIX" ]; then
     PATH="$_STATIC_SHELLCHECK_PREFIX:$PATH"
     export PATH
@@ -557,13 +557,13 @@ if shellcheck --severity=warning -x "${SH_FILES[@]}" >"$shellcheck_output" 2>&1;
   ok "shellcheck: ${#SH_FILES[@]} files"
 else
   head -20 "$shellcheck_output" >&2 || true
-  fail "shellcheck: nixling shell scripts"
+  fail "shellcheck: d2b shell scripts"
 fi
-nl_static_gate_end "shellcheck --severity=warning on all nixling shell scripts"
+d2b_static_gate_end "shellcheck --severity=warning on all d2b shell scripts"
 
 # v0.2.0 issue #6 — heuristic lint for the NixOS module-system trap
 # where one module both declares `mkOption { default = ...; readOnly =
-# true; }` and assigns the same `nixling.*` option under `config`. A
+# true; }` and assigns the same `d2b.*` option under `config`. A
 # perfect check would need Nix eval introspection; this brace-depth awk
 # pass is the pragmatic static gate. It is intentionally heuristic
 # (comments / strings can still fool it), but it now keeps `default`
@@ -572,26 +572,26 @@ nl_static_gate_end "shellcheck --severity=warning on all nixling shell scripts"
 # grep catches one-line `mkOption { default = ...; readOnly = true; }`
 # forms that the line-anchored awk attribute checks miss.
 #
-# store.nix previously declared `nixling.store.package` and
-# `nixling.store.generations` as `readOnly + default` internal
+# store.nix previously declared `d2b.store.package` and
+# `d2b.store.generations` as `readOnly + default` internal
 # options (the issue-#6 trap pattern). Both were retired in
 #  together with the bash CLI. The lint
 # below still fails the gate if a future commit re-introduces
 # either option on store.nix's `config` surface.
-nl_static_gate_begin "readOnly + default + config trio lint" "readOnly + default + config trio lint"
+d2b_static_gate_begin "readOnly + default + config trio lint" "readOnly + default + config trio lint"
 # Heuristic shell-based lint (issue #6). Detects mkOption blocks
 # carrying both `readOnly = true` and `default` where the same file
-# also assigns `config.nixling.<path>`. Known limitations:
-#   - Nested config attribute sets (e.g. `config = { nixling = { ... }; };`)
-#     are not detected; only flat `config.nixling.x = ...` assignments.
+# also assigns `config.d2b.<path>`. Known limitations:
+#   - Nested config attribute sets (e.g. `config = { d2b = { ... }; };`)
+#     are not detected; only flat `config.d2b.x = ...` assignments.
 #   - A Nix-eval-based introspection would be more precise but is
 #     deferred until the pattern recurs outside the current allowlist.
 TRIO_FAILED=0
-TRIO_CONFIG_ASSIGN_RE='^[[:space:]]*(config\.)?nixling\.[A-Za-z0-9_.-]+[[:space:]]*='
-STORE_TRIO_ASSIGN_RE='^[[:space:]]*(config\.)?nixling\.store\.(package|generations)[[:space:]]*='
+TRIO_CONFIG_ASSIGN_RE='^[[:space:]]*(config\.)?d2b\.[A-Za-z0-9_.-]+[[:space:]]*='
+STORE_TRIO_ASSIGN_RE='^[[:space:]]*(config\.)?d2b\.store\.(package|generations)[[:space:]]*='
 if grep -qE "$STORE_TRIO_ASSIGN_RE" "$ROOT/nixos-modules/store.nix"; then
   grep -nE "$STORE_TRIO_ASSIGN_RE" "$ROOT/nixos-modules/store.nix" >&2 || true
-  log "  FAIL: store.nix assigns readOnly+default nixling.store.package/generations"
+  log "  FAIL: store.nix assigns readOnly+default d2b.store.package/generations"
   TRIO_FAILED=1
 fi
 while IFS= read -r -d '' nix_file; do
@@ -642,7 +642,7 @@ while IFS= read -r -d '' nix_file; do
       END { exit(found ? 0 : 1) }
     ' "$nix_file" && grep -qE "$TRIO_CONFIG_ASSIGN_RE" "$nix_file"
   } || [ "$inline_trio" -eq 1 ]; then
-    grep -nE 'mkOption.*default.*readOnly|mkOption.*readOnly.*default|^[[:space:]]*readOnly[[:space:]]*=|^[[:space:]]*default[[:space:]]*=|^[[:space:]]*(config\.)?nixling\.[A-Za-z0-9_.-]+[[:space:]]*=' "$nix_file" >&2 || true
+    grep -nE 'mkOption.*default.*readOnly|mkOption.*readOnly.*default|^[[:space:]]*readOnly[[:space:]]*=|^[[:space:]]*default[[:space:]]*=|^[[:space:]]*(config\.)?d2b\.[A-Za-z0-9_.-]+[[:space:]]*=' "$nix_file" >&2 || true
     log "  FAIL: readOnly+default+config trio detected in $nix_file (issue #6)"
     TRIO_FAILED=1
   fi
@@ -652,65 +652,65 @@ if [ "$TRIO_FAILED" -eq 0 ]; then
 else
   fail "readOnly + default + config trio lint"
 fi
-nl_static_gate_end "readOnly + default + config trio lint"
+d2b_static_gate_end "readOnly + default + config trio lint"
 
-nl_static_gate_begin "nix flake check --no-build --all-systems" "nix flake check --no-build --all-systems"
+d2b_static_gate_begin "nix flake check --no-build --all-systems" "nix flake check --no-build --all-systems"
 # Use the git+file:// ref (not a bare path) so the eval is source-captured
 # from the git tree only. This honours .gitignore, so the concurrently-running
-# background Rust gate's untracked $ROOT scratch (cargo target/, nl_mktemp
+# background Rust gate's untracked $ROOT scratch (cargo target/, d2b_mktemp
 # dirs) is invisible to the source capture and cannot race it.
-if nix flake check "git+file://$ROOT" --no-build --all-systems 2>&1 | tail -20 >> "$NL_LOG"; then
+if nix flake check "git+file://$ROOT" --no-build --all-systems 2>&1 | tail -20 >> "$D2B_LOG"; then
   ok "flake check"
 else
   fail "flake check"
 fi
-nl_static_gate_end "nix flake check --no-build --all-systems"
+d2b_static_gate_end "nix flake check --no-build --all-systems"
 
 # Smoke-eval gate. Forces a full module-system evaluation of
-# a minimal consumer-style nixosSystem importing nixling.nixosModules.default.
+# a minimal consumer-style nixosSystem importing d2b.nixosModules.default.
 # This catches regressions the bare `flake check` misses, e.g. lazy
 # strings inside writeShellApplication that don't fire until the
 # module is instantiated against a real config.
 #
 # These eval-only smoke checks are independent, so run them behind the
-# shared NL_STATIC_JOBS semaphore.
-nl_static_parallel_smoke_eval_gate \
+# shared D2B_STATIC_JOBS semaphore.
+d2b_static_parallel_smoke_eval_gate \
   "tests/unit/smoke/smoke-eval.nix" \
   "$ROOT/tests/unit/smoke/smoke-eval.nix" \
   "let f = import $ROOT/tests/unit/smoke/smoke-eval.nix; r = f {}; in r.drvPath" \
   "smoke-eval" \
   20
-nl_static_parallel_smoke_eval_gate \
+d2b_static_parallel_smoke_eval_gate \
   "tests/unit/smoke/smoke-eval-graphics.nix" \
   "$ROOT/tests/unit/smoke/smoke-eval-graphics.nix" \
   "let f = import $ROOT/tests/unit/smoke/smoke-eval-graphics.nix; r = f {}; in r.drvPath" \
   "smoke-eval-graphics" \
   20
-nl_static_parallel_smoke_eval_gate \
+d2b_static_parallel_smoke_eval_gate \
   "tests/unit/smoke/smoke-eval-home-manager.nix" \
   "$ROOT/tests/unit/smoke/smoke-eval-home-manager.nix" \
   "let f = import $ROOT/tests/unit/smoke/smoke-eval-home-manager.nix; r = f {}; in r.drvPath" \
   "smoke-eval-home-manager" \
   20
-nl_static_parallel_smoke_eval_gate \
+d2b_static_parallel_smoke_eval_gate \
   "tests/unit/smoke/smoke-eval-extraspecialargs.nix" \
   "$ROOT/tests/unit/smoke/smoke-eval-extraspecialargs.nix" \
   "let f = import $ROOT/tests/unit/smoke/smoke-eval-extraspecialargs.nix; r = f {}; in r.drvPath" \
   "smoke-eval-extraspecialargs" \
   20
-nl_static_parallel_smoke_eval_gate \
+d2b_static_parallel_smoke_eval_gate \
   "tests/unit/smoke/smoke-eval-tpm.nix" \
   "$ROOT/tests/unit/smoke/smoke-eval-tpm.nix" \
   "let f = import $ROOT/tests/unit/smoke/smoke-eval-tpm.nix; r = f {}; in r.drvPath" \
   "smoke-eval-tpm" \
   20
-nl_static_parallel_smoke_eval_gate \
+d2b_static_parallel_smoke_eval_gate \
   "tests/unit/smoke/smoke-eval-aarch64.nix" \
   "$ROOT/tests/unit/smoke/smoke-eval-aarch64.nix" \
   "let f = import $ROOT/tests/unit/smoke/smoke-eval-aarch64.nix; r = f {}; in r.drvPath" \
   "smoke-eval-aarch64" \
   20
-nl_static_parallel_wait_all
+d2b_static_parallel_wait_all
 
 # Join the background Rust workspace gate HERE — after the lighter flake-check +
 # smoke-eval region it was overlapping, but BEFORE the memory-heavy mid-tier
@@ -723,7 +723,7 @@ nl_static_parallel_wait_all
 # without Rust contention.
 if [ "${_STATIC_RUST_GATE_OVERLAP:-0}" -eq 1 ]; then
   log "==> joining background test-rust.sh long pole (before heavy mid-tier evals)"
-  nl_static_longpole_join
+  d2b_static_longpole_join
   _STATIC_RUST_GATE_OVERLAP=2
 fi
 
@@ -731,77 +731,77 @@ fi
 # assertion/observability matrices saturate the nix daemon when overlapped.
 # Keep those two serial after the lighter fan-out drains.
 if [ -x "$ROOT/tests/usbip-gating-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/usbip-gating-eval.sh" "$ROOT/tests/usbip-gating-eval.sh"
+  d2b_static_parallel_script_gate "tests/usbip-gating-eval.sh" "$ROOT/tests/usbip-gating-eval.sh"
 fi
 if [ -x "$ROOT/tests/guest-config-containment-eval.sh" ]; then
   # Asserts the per-VM guest-editable `guestConfigFile` may only set
-  # guest OS options, never host-owned microvm.* / nixling.* options.
-  nl_static_parallel_script_gate "tests/guest-config-containment-eval.sh" "$ROOT/tests/guest-config-containment-eval.sh"
+  # guest OS options, never host-owned microvm.* / d2b.* options.
+  d2b_static_parallel_script_gate "tests/guest-config-containment-eval.sh" "$ROOT/tests/guest-config-containment-eval.sh"
 fi
 if [ -x "$ROOT/tests/bridge-ipv6-boot-sysctl-eval.sh" ]; then
   # Asserts every declared bridge has a boot.kernel.sysctl entry that
   # suppresses IPv6 at NixOS activation, closing the boot-time window.
-  nl_static_parallel_script_gate "tests/bridge-ipv6-boot-sysctl-eval.sh" "$ROOT/tests/bridge-ipv6-boot-sysctl-eval.sh"
+  d2b_static_parallel_script_gate "tests/bridge-ipv6-boot-sysctl-eval.sh" "$ROOT/tests/bridge-ipv6-boot-sysctl-eval.sh"
 fi
 if [ -x "$ROOT/tests/autostart-wiring-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/autostart-wiring-eval.sh" "$ROOT/tests/autostart-wiring-eval.sh"
+  d2b_static_parallel_script_gate "tests/autostart-wiring-eval.sh" "$ROOT/tests/autostart-wiring-eval.sh"
 fi
 if [ -x "$ROOT/tests/restart-policy-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/restart-policy-eval.sh" "$ROOT/tests/restart-policy-eval.sh"
+  d2b_static_parallel_script_gate "tests/restart-policy-eval.sh" "$ROOT/tests/restart-policy-eval.sh"
 fi
 if [ -x "$ROOT/tests/video-contract-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/video-contract-eval.sh" "$ROOT/tests/video-contract-eval.sh"
+  d2b_static_parallel_script_gate "tests/video-contract-eval.sh" "$ROOT/tests/video-contract-eval.sh"
 fi
 if [ -x "$ROOT/tests/broker-caps-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/broker-caps-eval.sh" "$ROOT/tests/broker-caps-eval.sh"
+  d2b_static_parallel_script_gate "tests/broker-caps-eval.sh" "$ROOT/tests/broker-caps-eval.sh"
 fi
 if [ -x "$ROOT/tests/broker-bundle-path-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/broker-bundle-path-eval.sh" "$ROOT/tests/broker-bundle-path-eval.sh"
+  d2b_static_parallel_script_gate "tests/broker-bundle-path-eval.sh" "$ROOT/tests/broker-bundle-path-eval.sh"
 fi
 if [ -x "$ROOT/tests/principal-uid-collision-eval.sh" ]; then
   # v1.2— stablePrincipalId UID-collision eval: asserts
   # every declared principal maps to a unique UID and every UID falls in
   # [50000, 16827215]. Evaluated against examples/multi-env consumer flake.
-  nl_static_parallel_script_gate "tests/principal-uid-collision-eval.sh" "$ROOT/tests/principal-uid-collision-eval.sh"
+  d2b_static_parallel_script_gate "tests/principal-uid-collision-eval.sh" "$ROOT/tests/principal-uid-collision-eval.sh"
 fi
 if [ -x "$ROOT/tests/umask-roundtrip-eval.sh" ]; then
   # v1.2— umask end-to-end eval round-trip: asserts
   # swtpm/gpu/audio umask=7 (0o007) propagates from minijail-profiles.nix
   # through processesJson.data without silent pipeline drop.
-  nl_static_parallel_script_gate "tests/umask-roundtrip-eval.sh" "$ROOT/tests/umask-roundtrip-eval.sh"
+  d2b_static_parallel_script_gate "tests/umask-roundtrip-eval.sh" "$ROOT/tests/umask-roundtrip-eval.sh"
 fi
 if [ -x "$ROOT/tests/store-overlay-emit-eval.sh" ]; then
   # v1.2— assert DiskInit plan-op emitted in processes.json
   # CH node when writableStoreOverlay is set.
-  nl_static_parallel_script_gate "tests/store-overlay-emit-eval.sh" "$ROOT/tests/store-overlay-emit-eval.sh"
+  d2b_static_parallel_script_gate "tests/store-overlay-emit-eval.sh" "$ROOT/tests/store-overlay-emit-eval.sh"
 fi
 if [ -x "$ROOT/tests/volume-mounts-eval.sh" ]; then
   # Declared microvm.volumes must emit stable CH disk serials and matching
   # guest fileSystems entries. Without this, /var stays on tmpfs and
   # identity-bearing services regenerate state on every VM restart.
-  nl_static_parallel_script_gate "tests/volume-mounts-eval.sh" "$ROOT/tests/volume-mounts-eval.sh"
+  d2b_static_parallel_script_gate "tests/volume-mounts-eval.sh" "$ROOT/tests/volume-mounts-eval.sh"
 fi
 if [ -x "$ROOT/tests/daemon-default-compat-eval.sh" ]; then
   # Assert daemonExperimental.enable default
   # flip gate honors readiness + evidence + override semantics.
-  nl_static_parallel_script_gate "tests/daemon-default-compat-eval.sh" "$ROOT/tests/daemon-default-compat-eval.sh"
+  d2b_static_parallel_script_gate "tests/daemon-default-compat-eval.sh" "$ROOT/tests/daemon-default-compat-eval.sh"
 fi
 # ADR index coverage guard (/ -class doc-drift).
 if [ -x "$ROOT/tests/unit/meta/adr-index-coverage.sh" ]; then
-  nl_static_parallel_script_gate "tests/unit/meta/adr-index-coverage.sh" "$ROOT/tests/unit/meta/adr-index-coverage.sh"
+  d2b_static_parallel_script_gate "tests/unit/meta/adr-index-coverage.sh" "$ROOT/tests/unit/meta/adr-index-coverage.sh"
 fi
 # ADR 0032 crate-granular dependency-direction + lint-inheritance gate.
 if [ -x "$ROOT/tests/unit/meta/w0-dep-direction.sh" ]; then
-  nl_static_parallel_script_gate "tests/unit/meta/w0-dep-direction.sh" "$ROOT/tests/unit/meta/w0-dep-direction.sh"
+  d2b_static_parallel_script_gate "tests/unit/meta/w0-dep-direction.sh" "$ROOT/tests/unit/meta/w0-dep-direction.sh"
 fi
 # I3 invariant enforcement (ADR 0022): no new v1.3 deferrals authored
 # during v1.2 stabilization. ADR 0022 documents this gate, so it must
 # stay wired.
 if [ -x "$ROOT/tests/unit/meta/no-new-deferral.sh" ]; then
-  nl_static_parallel_script_gate "tests/unit/meta/no-new-deferral.sh" "$ROOT/tests/unit/meta/no-new-deferral.sh"
+  d2b_static_parallel_script_gate "tests/unit/meta/no-new-deferral.sh" "$ROOT/tests/unit/meta/no-new-deferral.sh"
 fi
 if [ -x "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/privileges-json-rust-vs-nix-eval.sh" "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh"
+  d2b_static_parallel_script_gate "tests/privileges-json-rust-vs-nix-eval.sh" "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh"
 fi
 # Wire orphaned static-eval gates. These were previously not referenced
 # in any CI workflow or aggregator;
@@ -813,7 +813,7 @@ for _gate in \
   niri-vm-borders-eval \
   readiness-waves-eval; do
   if [ -x "$ROOT/tests/${_gate}.sh" ]; then
-    nl_static_parallel_script_gate "tests/${_gate}.sh" "$ROOT/tests/${_gate}.sh"
+    d2b_static_parallel_script_gate "tests/${_gate}.sh" "$ROOT/tests/${_gate}.sh"
   fi
 done
 unset _gate
@@ -821,17 +821,17 @@ unset _gate
 # the loop above) so tests/unit/meta/layer1-self-inventory.sh's invocation grep resolves
 # them.
 if [ -x "$ROOT/tests/unit/meta/deliverable-gate-inventory.sh" ]; then
-  nl_static_parallel_script_gate "tests/unit/meta/deliverable-gate-inventory.sh" "$ROOT/tests/unit/meta/deliverable-gate-inventory.sh"
+  d2b_static_parallel_script_gate "tests/unit/meta/deliverable-gate-inventory.sh" "$ROOT/tests/unit/meta/deliverable-gate-inventory.sh"
 fi
 if [ -x "$ROOT/tests/unit/meta/pr-checklist-gate.sh" ]; then
-  nl_static_parallel_script_gate "tests/unit/meta/pr-checklist-gate.sh" "$ROOT/tests/unit/meta/pr-checklist-gate.sh"
+  d2b_static_parallel_script_gate "tests/unit/meta/pr-checklist-gate.sh" "$ROOT/tests/unit/meta/pr-checklist-gate.sh"
 fi
 # ci-coverage.sh structural guard (must run after all other tests
 # are registered above so it can attest the full set is wired).
 if [ -x "$ROOT/tests/unit/meta/ci-coverage.sh" ]; then
-  nl_static_parallel_script_gate "tests/unit/meta/ci-coverage.sh" "$ROOT/tests/unit/meta/ci-coverage.sh"
+  d2b_static_parallel_script_gate "tests/unit/meta/ci-coverage.sh" "$ROOT/tests/unit/meta/ci-coverage.sh"
 fi
-nl_static_parallel_wait_all
+d2b_static_parallel_wait_all
 
 # Gc after smoke-eval + mid-tier eval pool. These two
 # clusters together materialize 5+ consumer-config toplevels +
@@ -839,10 +839,10 @@ nl_static_parallel_wait_all
 # /nix/var/nix/gcroots/auto/. The next phase (assertions +
 # observability) builds many more under tryEval; gc'ing first
 # keeps the peak well below the watchdog cap.
-nl_phase_gc "post-mid-tier-evals"
-nl_check_disk_budget "post-mid-tier-evals" || fail "disk budget exhausted after mid-tier eval pool"
+d2b_phase_gc "post-mid-tier-evals"
+d2b_check_disk_budget "post-mid-tier-evals" || fail "disk budget exhausted after mid-tier eval pool"
 
-nl_static_gate_begin "tests/assertions-eval.sh" "tests/assertions-eval.sh"
+d2b_static_gate_begin "tests/assertions-eval.sh" "tests/assertions-eval.sh"
 if [ -x "$ROOT/tests/assertions-eval.sh" ]; then
   if bash "$ROOT/tests/assertions-eval.sh" >/dev/null 2>&1; then
     ok "assertions-eval"
@@ -851,7 +851,7 @@ if [ -x "$ROOT/tests/assertions-eval.sh" ]; then
     fail "assertions-eval"
   fi
 fi
-nl_static_gate_end "tests/assertions-eval.sh"
+d2b_static_gate_end "tests/assertions-eval.sh"
 
 # Release auto-gcroots accumulated by the smoke-eval pool +
 # the two big eval gates (assertions/observability). Without this
@@ -859,8 +859,8 @@ nl_static_gate_end "tests/assertions-eval.sh"
 # flake-check) stacks its own derivations on top of the ones the
 # eval gates pinned, peaking /nix/store growth at ~1.2 TiB. The gc
 # costs ~30 s and caps the run-time peak at ~250-400 G.
-nl_phase_gc "post-eval-gates"
-nl_check_disk_budget "post-eval-gates" || fail "disk budget exhausted after eval gates"
+d2b_phase_gc "post-eval-gates"
+d2b_check_disk_budget "post-eval-gates" || fail "disk budget exhausted after eval gates"
 
 # JSON manifest contract gate. Renders the manifest
 # from the same smoke-eval consumer config and validates it against
@@ -874,9 +874,9 @@ nl_check_disk_budget "post-eval-gates" || fail "disk budget exhausted after eval
 # Validation runs under nix-shell with python3 + jsonschema; nothing
 # else in the test harness depends on Python today, but the jsonschema
 # package is small (~50KB) and pulled lazily on first run.
-nl_static_gate_begin "manifest JSON contract (docs/reference/manifest-schema.json)" "manifest JSON contract (docs/reference/manifest-schema.json)"
+d2b_static_gate_begin "manifest JSON contract (docs/reference/manifest-schema.json)" "manifest JSON contract (docs/reference/manifest-schema.json)"
 if [ -f "$ROOT/docs/reference/manifest-schema.json" ] && [ -f "$ROOT/tests/unit/smoke/smoke-eval.nix" ]; then
-  _MANIFEST_DIR=$(nl_mktemp .manifest-gate.XXXXXX)
+  _MANIFEST_DIR=$(d2b_mktemp .manifest-gate.XXXXXX)
   _MANIFEST_JSON="$_MANIFEST_DIR/manifest.json"
 
   # Render the manifest's JSON text via the smoke-eval consumer config.
@@ -900,9 +900,9 @@ if [ -f "$ROOT/docs/reference/manifest-schema.json" ] && [ -f "$ROOT/tests/unit/
             environment.etc.\"machine-id\".text = \"00000000000000000000000000000000\";
             system.stateVersion = \"25.11\";
             users.users.alice = { isNormalUser = true; uid = 1000; };
-            nixling.site = { waylandUser = \"alice\"; launcherUsers = [ \"alice\" ]; yubikey.enable = false; };
-            nixling.envs.work = { lanSubnet = \"10.20.0.0/24\"; uplinkSubnet = \"192.0.2.0/30\"; };
-            nixling.vms.corp-vm = {
+            d2b.site = { waylandUser = \"alice\"; launcherUsers = [ \"alice\" ]; yubikey.enable = false; };
+            d2b.envs.work = { lanSubnet = \"10.20.0.0/24\"; uplinkSubnet = \"192.0.2.0/30\"; };
+            d2b.vms.corp-vm = {
               enable = true; env = \"work\"; index = 10; ssh.user = \"alice\";
               config = {
                 networking.hostName = lib.mkDefault \"corp-vm\";
@@ -912,7 +912,7 @@ if [ -f "$ROOT/docs/reference/manifest-schema.json" ] && [ -f "$ROOT/tests/unit/
           })
         ];
       };
-    in nixos.config.nixling._manifestPkg.text
+    in nixos.config.d2b._manifestPkg.text
   " 2>/dev/null | jq -r . > "$_MANIFEST_JSON"; then
     _RENDER_OK=1
     ok "manifest-contract: rendered smoke manifest"
@@ -1023,50 +1023,50 @@ PYEOF
 
   rm -rf -- "$_MANIFEST_DIR"
 fi
-nl_static_gate_end "manifest JSON contract (docs/reference/manifest-schema.json)"
+d2b_static_gate_end "manifest JSON contract (docs/reference/manifest-schema.json)"
 
 # The remaining gates evaluate a concrete consumer flake's
-# `nixosConfigurations.<NL_HOST_CONFIG>` (default: `desktop`). On a fresh
+# `nixosConfigurations.<D2B_HOST_CONFIG>` (default: `desktop`). On a fresh
 # clone of the public framework flake, there is no host config — those
 # gates simply skip with a SKIP line. On the maintainer's host (or any
-# consumer who passes `NL_HOST_CONFIG=<their-host>`), they run as before.
-NL_HOST_CONFIG=${NL_HOST_CONFIG:-desktop}
-if nix eval --raw "$ROOT#nixosConfigurations.$NL_HOST_CONFIG.config.system.build.toplevel" >/dev/null 2>&1; then
+# consumer who passes `D2B_HOST_CONFIG=<their-host>`), they run as before.
+D2B_HOST_CONFIG=${D2B_HOST_CONFIG:-desktop}
+if nix eval --raw "$ROOT#nixosConfigurations.$D2B_HOST_CONFIG.config.system.build.toplevel" >/dev/null 2>&1; then
   _HAS_HOST_CONFIG=1
 else
   _HAS_HOST_CONFIG=0
-  log "  SKIP: per-VM closure eval / dry-build / audio host-flake checks (no nixosConfigurations.$NL_HOST_CONFIG in $ROOT)"
+  log "  SKIP: per-VM closure eval / dry-build / audio host-flake checks (no nixosConfigurations.$D2B_HOST_CONFIG in $ROOT)"
 fi
 
 if [ "$_HAS_HOST_CONFIG" = "1" ]; then
-  nl_static_gate_begin "per-VM closure eval (.#nixling-<vm>)" "per-VM closure eval (.#nixling-<vm>)"
+  d2b_static_gate_begin "per-VM closure eval (.#d2b-<vm>)" "per-VM closure eval (.#d2b-<vm>)"
   # Enumerate VM names from the manifest baked into the CLI. The manifest
-  # is exposed via `nixling status` (one VM per line under "vms:"), but
+  # is exposed via `d2b status` (one VM per line under "vms:"), but
   # the cheapest source is direct nix eval.
   mapfile -t VMS < <(
     nix eval --json \
-      "$ROOT#nixosConfigurations.$NL_HOST_CONFIG.config.nixling.vms" 2>/dev/null \
+      "$ROOT#nixosConfigurations.$D2B_HOST_CONFIG.config.d2b.vms" 2>/dev/null \
       | jq -r 'keys[]'
   )
   if [ "${#VMS[@]}" -eq 0 ]; then
     fail "no VMs declared (manifest empty?)"
   fi
   for vm in "${VMS[@]}"; do
-    if nix eval --raw "$ROOT#nixling-$vm.outPath" >/dev/null 2>&1; then
-      ok "eval: nixling-$vm"
+    if nix eval --raw "$ROOT#d2b-$vm.outPath" >/dev/null 2>&1; then
+      ok "eval: d2b-$vm"
     else
-      fail "eval: nixling-$vm"
+      fail "eval: d2b-$vm"
     fi
   done
-  nl_static_gate_end "per-VM closure eval (.#nixling-<vm>)"
+  d2b_static_gate_end "per-VM closure eval (.#d2b-<vm>)"
 
-  nl_static_gate_begin "nixos-rebuild dry-build" "nixos-rebuild dry-build"
-  if sudo -A nixos-rebuild dry-build --flake "$ROOT#$NL_HOST_CONFIG" >/dev/null 2>&1; then
+  d2b_static_gate_begin "nixos-rebuild dry-build" "nixos-rebuild dry-build"
+  if sudo -A nixos-rebuild dry-build --flake "$ROOT#$D2B_HOST_CONFIG" >/dev/null 2>&1; then
     ok "dry-build"
   else
     fail "dry-build"
   fi
-  nl_static_gate_end "nixos-rebuild dry-build"
+  d2b_static_gate_end "nixos-rebuild dry-build"
 fi
 
 # -----------------------------------------------------------------------------
@@ -1075,70 +1075,70 @@ fi
 # of these are presence-of-option checks; for an end-to-end run flip a
 # VM's audio.enable = true and re-run.
 # -----------------------------------------------------------------------------
-nl_static_gate_begin "audio component" "audio component"
+d2b_static_gate_begin "audio component" "audio component"
 
 if [ "$_HAS_HOST_CONFIG" = "1" ]; then
 
 # 1. The shared systemd-user template unit must be present in the
 #    rendered system.
-if sudo -A nixos-rebuild build --flake "$ROOT#$NL_HOST_CONFIG" --no-link 2>/dev/null \
+if sudo -A nixos-rebuild build --flake "$ROOT#$D2B_HOST_CONFIG" --no-link 2>/dev/null \
      | head -1 >/dev/null; then
   : # nothing — just trigger the build cache
 fi
 
 # 2. The audio.enable option must exist on every VM submodule.
-if nix eval --raw "$ROOT#nixosConfigurations.$NL_HOST_CONFIG.options.nixling.vms.type.getSubOptions.x.audio.enable.declarations" \
+if nix eval --raw "$ROOT#nixosConfigurations.$D2B_HOST_CONFIG.options.d2b.vms.type.getSubOptions.x.audio.enable.declarations" \
      >/dev/null 2>&1 \
-   || nix eval --json "$ROOT#nixosConfigurations.$NL_HOST_CONFIG.config.nixling.vms" 2>/dev/null \
+   || nix eval --json "$ROOT#nixosConfigurations.$D2B_HOST_CONFIG.config.d2b.vms" 2>/dev/null \
      | jq -e '.[] | has("audio")' >/dev/null 2>&1; then
-  ok "audio.enable option declared on nixling.vms.<name>"
+  ok "audio.enable option declared on d2b.vms.<name>"
 else
-  fail "audio.enable option missing on nixling.vms.<name>"
+  fail "audio.enable option missing on d2b.vms.<name>"
 fi
 
-SYS=$(nix eval --raw "$ROOT#nixosConfigurations.$NL_HOST_CONFIG.config.system.build.toplevel" 2>/dev/null) || SYS=""
+SYS=$(nix eval --raw "$ROOT#nixosConfigurations.$D2B_HOST_CONFIG.config.system.build.toplevel" 2>/dev/null) || SYS=""
 if [ -n "$SYS" ]; then
   # v1 ships a host-side PipeWire client.conf.d stream rule that
-  # null-targets vhost-device-sound's INPUT direction when nixling.mic
-  # is "off" (and OUTPUT when nixling.speaker is "off") so it doesn't
+  # null-targets vhost-device-sound's INPUT direction when d2b.mic
+  # is "off" (and OUTPUT when d2b.speaker is "off") so it doesn't
   # auto-link to host devices uninvited. Note: this is a PipeWire
   # client.conf.d file, NOT a WirePlumber rule — see the placement-
   # notes block in audio-host.nix.
   #
   # security-r8-audio-6: the match key shifted from broad
-  # `node.name=vhost-device-sound` + `application.name=~nixling-.*` to
-  # per-direction custom props (`nixling.mic`, `nixling.speaker`) so
+  # `node.name=vhost-device-sound` + `application.name=~d2b-.*` to
+  # per-direction custom props (`d2b.mic`, `d2b.speaker`) so
   # the rule fires ONLY when the corresponding direction is OFF. When
   # mic=on we WANT auto-routing; the old broad rule blocked it
   # forever regardless of audio-state.json.
-  PW_RULE="$SYS/etc/pipewire/client.conf.d/90-nixling.conf"
+  PW_RULE="$SYS/etc/pipewire/client.conf.d/90-d2b.conf"
   if [ -e "$PW_RULE" ] \
-     && grep -q '"nixling.mic":[[:space:]]*"off"' "$PW_RULE" \
-     && grep -q '"nixling.speaker":[[:space:]]*"off"' "$PW_RULE" \
+     && grep -q '"d2b.mic":[[:space:]]*"off"' "$PW_RULE" \
+     && grep -q '"d2b.speaker":[[:space:]]*"off"' "$PW_RULE" \
      && grep -q '"target.object":[[:space:]]*"-1"' "$PW_RULE" \
      && grep -q 'stream.rules' "$PW_RULE" \
      && grep -q '"node.dont-fallback":[[:space:]]*true' "$PW_RULE" \
      && grep -q '"node.linger":[[:space:]]*true' "$PW_RULE"; then
-    ok "pipewire client stream-rule installed: per-direction nixling.{mic,speaker}=off → target=-1 + dont-fallback + linger"
+    ok "pipewire client stream-rule installed: per-direction d2b.{mic,speaker}=off → target=-1 + dont-fallback + linger"
   else
-    fail "pipewire client stream-rule missing or malformed at /etc/pipewire/client.conf.d/90-nixling.conf"
+    fail "pipewire client stream-rule missing or malformed at /etc/pipewire/client.conf.d/90-d2b.conf"
   fi
-  if [ -e "$SYS/etc/wireplumber/wireplumber.conf.d/90-nixling.conf" ]; then
+  if [ -e "$SYS/etc/wireplumber/wireplumber.conf.d/90-d2b.conf" ]; then
     fail "stale wireplumber rule present — should have moved to pipewire client.conf.d"
   else
-    ok "no stale wireplumber.conf.d/90-nixling.conf (moved to pipewire client.conf.d)"
+    ok "no stale wireplumber.conf.d/90-d2b.conf (moved to pipewire client.conf.d)"
   fi
-  # nixling-<vm>-snd.service is now a per-VM system service (not user).
-  SYS_UNITS=$(find -L "$SYS" -path '*systemd/system*' -name 'nixling-*-snd.service' -print -quit 2>/dev/null || true)
+  # d2b-<vm>-snd.service is now a per-VM system service (not user).
+  SYS_UNITS=$(find -L "$SYS" -path '*systemd/system*' -name 'd2b-*-snd.service' -print -quit 2>/dev/null || true)
   if [ -n "$SYS_UNITS" ]; then
-    ok "nixling-<vm>-snd.service unit(s) present in system closure (system service)"
+    ok "d2b-<vm>-snd.service unit(s) present in system closure (system service)"
   else
-    fail "no nixling-<vm>-snd.service unit in system closure"
+    fail "no d2b-<vm>-snd.service unit in system closure"
   fi
 fi
 
 fi  # end: _HAS_HOST_CONFIG
-nl_static_gate_end "audio component"
+d2b_static_gate_end "audio component"
 
 log "Layer 1 core gates OK"
 
@@ -1147,7 +1147,7 @@ log "Layer 1 core gates OK"
 # flake checks so adding a new executable Layer-1 tests/*.sh script without
 # wiring it into static.sh fails closed.
 # -----------------------------------------------------------------------------
-nl_static_gate_begin "tests/unit/meta/layer1-self-inventory.sh" "tests/unit/meta/layer1-self-inventory.sh"
+d2b_static_gate_begin "tests/unit/meta/layer1-self-inventory.sh" "tests/unit/meta/layer1-self-inventory.sh"
 if [ -x "$ROOT/tests/unit/meta/layer1-self-inventory.sh" ]; then
   if bash "$ROOT/tests/unit/meta/layer1-self-inventory.sh" >/dev/null 2>&1; then
     ok "layer1-self-inventory"
@@ -1156,11 +1156,11 @@ if [ -x "$ROOT/tests/unit/meta/layer1-self-inventory.sh" ]; then
     fail "layer1-self-inventory"
   fi
 fi
-nl_static_gate_end "tests/unit/meta/layer1-self-inventory.sh"
+d2b_static_gate_end "tests/unit/meta/layer1-self-inventory.sh"
 
 # -----------------------------------------------------------------------------
 # Rust workspace gate. By default (serial) this runs inline here. When the
-# optional NL_STATIC_PARALLEL_RUST overlap launched the background long pole, it
+# optional D2B_STATIC_PARALLEL_RUST overlap launched the background long pole, it
 # was already joined above (after the smoke-eval region, before the heavy
 # evals), so this is a no-op in that case. tests/tools/stub-no-socket.sh is invoked by
 # test-rust.sh after the cargo gates.
@@ -1171,9 +1171,9 @@ elif [ "$_STATIC_RUST_GATE_OVERLAP" -eq 1 ]; then
   # Defensive: overlap spawned but not yet joined (e.g. smoke-eval region
   # skipped). Join now.
   log "==> joining background test-rust.sh long pole"
-  nl_static_longpole_join
+  d2b_static_longpole_join
 else
-  nl_static_gate_begin "tests/test-rust.sh" "tests/test-rust.sh"
+  d2b_static_gate_begin "tests/test-rust.sh" "tests/test-rust.sh"
   if [ -d "$ROOT/packages" ] && [ -x "$ROOT/tests/test-rust.sh" ]; then
     if bash "$ROOT/tests/test-rust.sh" >/dev/null 2>&1; then
       ok "rust-workspace-checks"
@@ -1186,7 +1186,7 @@ else
   else
     log "  no packages/ — skipping rust workspace checks (W0a unstaged)"
   fi
-  nl_static_gate_end "tests/test-rust.sh"
+  d2b_static_gate_end "tests/test-rust.sh"
 fi
 
 # -----------------------------------------------------------------------------
@@ -1195,63 +1195,63 @@ fi
 # before the DTO/emitter/docs artifacts land, and become hard gates after the
 # Integration merge.
 # -----------------------------------------------------------------------------
-nl_static_gate_begin "W1 bundle/schema static gates" "W1 bundle/schema static gates"
-nl_time_begin "W1 smoke cache prewarm"
-nl_smoke_vms_json >/dev/null
-nl_smoke_bundle_privileges_json >/dev/null
+d2b_static_gate_begin "W1 bundle/schema static gates" "W1 bundle/schema static gates"
+d2b_time_begin "W1 smoke cache prewarm"
+d2b_smoke_vms_json >/dev/null
+d2b_smoke_bundle_privileges_json >/dev/null
 # Prewarm the host.json cache before the parallel bundle/schema gates so
 # each worker avoids forcing a fresh `getFlake` against $ROOT while sibling
 # gates still hold per-test scratch files inside the checkout.
-nl_smoke_bundle_host_json >/dev/null
-nl_time_end "W1 smoke cache prewarm"
-if [ -x "$ROOT/tests/unit/gates/drift-check.sh" ]; then nl_static_parallel_script "tests/unit/gates/drift-check.sh" "$ROOT/tests/unit/gates/drift-check.sh"; fi
+d2b_smoke_bundle_host_json >/dev/null
+d2b_time_end "W1 smoke cache prewarm"
+if [ -x "$ROOT/tests/unit/gates/drift-check.sh" ]; then d2b_static_parallel_script "tests/unit/gates/drift-check.sh" "$ROOT/tests/unit/gates/drift-check.sh"; fi
 # host.json per-field schema gold-file drift gate (integrator-wired).
-if [ -x "$ROOT/tests/unit/gates/vms-json-parity.sh" ]; then nl_static_parallel_script "tests/unit/gates/vms-json-parity.sh" "$ROOT/tests/unit/gates/vms-json-parity.sh"; fi
-if [ -x "$HERE/guest-control-vsock-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-eval.sh" "$HERE/guest-control-vsock-eval.sh"; fi
-if [ -x "$HERE/guest-control-auth-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-auth-eval.sh" "$HERE/guest-control-auth-eval.sh"; fi
-if [ -x "$HERE/static-invariant-uid0.sh" ]; then nl_static_parallel_script "tests/static-invariant-uid0.sh" "$HERE/static-invariant-uid0.sh"; fi
+if [ -x "$ROOT/tests/unit/gates/vms-json-parity.sh" ]; then d2b_static_parallel_script "tests/unit/gates/vms-json-parity.sh" "$ROOT/tests/unit/gates/vms-json-parity.sh"; fi
+if [ -x "$HERE/guest-control-vsock-eval.sh" ]; then d2b_static_parallel_script "tests/guest-control-vsock-eval.sh" "$HERE/guest-control-vsock-eval.sh"; fi
+if [ -x "$HERE/guest-control-auth-eval.sh" ]; then d2b_static_parallel_script "tests/guest-control-auth-eval.sh" "$HERE/guest-control-auth-eval.sh"; fi
+if [ -x "$HERE/static-invariant-uid0.sh" ]; then d2b_static_parallel_script "tests/static-invariant-uid0.sh" "$HERE/static-invariant-uid0.sh"; fi
 # -DTO deny_unknown_fields static invariant (integrator-wired).
-nl_static_parallel_wait_all
-nl_static_gate_end "W1 bundle/schema static gates"
+d2b_static_parallel_wait_all
+d2b_static_gate_end "W1 bundle/schema static gates"
 
 # -----------------------------------------------------------------------------
 # Control-plane skeleton gates (per the plan-of-record, plan.md §
-# "###: Rust workspace and API skeleton"). These cover the nixling-contracts
-# wire types, nixling-priv-broker dispatch, nixlingd socket auth + state
+# "###: Rust workspace and API skeleton"). These cover the d2b-contracts
+# wire types, d2b-priv-broker dispatch, d2bd socket auth + state
 # lock + version negotiation, the Rust-native CLI shim, generated docs +
 # error-codes, and bounded fuzz of the manifest_v04 / bundle parsers.
 # -----------------------------------------------------------------------------
-nl_static_gate_begin "W2 control-plane skeleton gates" "W2 control-plane skeleton gates"
-nl_time_begin "W2 cargo prebuild"
+d2b_static_gate_begin "W2 control-plane skeleton gates" "W2 control-plane skeleton gates"
+d2b_time_begin "W2 cargo prebuild"
 if [ -d "$ROOT/packages" ]; then
-  nl_activate_rust_toolchain_path || true
-  _W2_WORKSPACE_TARGET=$(nl_cargo_target_dir workspace)
-  _W2_BROKER_TARGET=$(nl_cargo_target_dir broker)
-  CARGO_TARGET_DIR="$_W2_WORKSPACE_TARGET" cargo build --manifest-path "$ROOT/packages/Cargo.toml" --quiet -p nixling -p nixlingd -p xtask --bins
-  CARGO_TARGET_DIR="$_W2_BROKER_TARGET" cargo build --manifest-path "$ROOT/packages/nixling-priv-broker/Cargo.toml" --quiet -p nixling-priv-broker --features layer1-bootstrap
+  d2b_activate_rust_toolchain_path || true
+  _W2_WORKSPACE_TARGET=$(d2b_cargo_target_dir workspace)
+  _W2_BROKER_TARGET=$(d2b_cargo_target_dir broker)
+  CARGO_TARGET_DIR="$_W2_WORKSPACE_TARGET" cargo build --manifest-path "$ROOT/packages/Cargo.toml" --quiet -p d2b -p d2bd -p xtask --bins
+  CARGO_TARGET_DIR="$_W2_BROKER_TARGET" cargo build --manifest-path "$ROOT/packages/d2b-priv-broker/Cargo.toml" --quiet -p d2b-priv-broker --features layer1-bootstrap
 fi
-nl_time_end "W2 cargo prebuild"
-nl_time_begin "W2 CLI smoke prewarm"
-nl_cli_smoke_bundle_tree >/dev/null
-nl_cli_smoke_bundle_tree_runner_drift >/dev/null
-nl_legacy_cli_bin >/dev/null
-nl_time_end "W2 CLI smoke prewarm"
+d2b_time_end "W2 cargo prebuild"
+d2b_time_begin "W2 CLI smoke prewarm"
+d2b_cli_smoke_bundle_tree >/dev/null
+d2b_cli_smoke_bundle_tree_runner_drift >/dev/null
+d2b_legacy_cli_bin >/dev/null
+d2b_time_end "W2 CLI smoke prewarm"
 # Group 1: pure/read-only gates that rely on getFlake or generated docs.
 # Keep them away from the runtime socket gates below because dirty-tree
 # snapshots fail closed on in-repo AF_UNIX socket paths.
 # Pin layer1-bootstrap as the default broker feature
 # until lands the production-shaped runtime.
-if [ -x "$HERE/broker-default-features-build.sh" ]; then nl_static_parallel_script "tests/broker-default-features-build.sh" "$HERE/broker-default-features-build.sh"; fi
-if [ -x "$HERE/cli-legacy-bash-dispatch.sh" ]; then nl_static_parallel_script "tests/cli-legacy-bash-dispatch.sh" "$HERE/cli-legacy-bash-dispatch.sh"; fi
+if [ -x "$HERE/broker-default-features-build.sh" ]; then d2b_static_parallel_script "tests/broker-default-features-build.sh" "$HERE/broker-default-features-build.sh"; fi
+if [ -x "$HERE/cli-legacy-bash-dispatch.sh" ]; then d2b_static_parallel_script "tests/cli-legacy-bash-dispatch.sh" "$HERE/cli-legacy-bash-dispatch.sh"; fi
 # Closure: wire the remaining gates.
-nl_static_parallel_wait_all
+d2b_static_parallel_wait_all
 
 # Group 2: runtime/socket gates. Their repo-local AF_UNIX sockets make
 # getFlake choke on dirty-tree snapshots, so run them only after the
 # read-only group has drained.
-if [ -x "$HERE/broker-scm-rights-fd-lifecycle.sh" ]; then nl_static_parallel_script "tests/broker-scm-rights-fd-lifecycle.sh" "$HERE/broker-scm-rights-fd-lifecycle.sh"; fi
-nl_static_parallel_wait_all
-nl_static_gate_end "W2 control-plane skeleton gates"
+if [ -x "$HERE/broker-scm-rights-fd-lifecycle.sh" ]; then d2b_static_parallel_script "tests/broker-scm-rights-fd-lifecycle.sh" "$HERE/broker-scm-rights-fd-lifecycle.sh"; fi
+d2b_static_parallel_wait_all
+d2b_static_gate_end "W2 control-plane skeleton gates"
 
 # -----------------------------------------------------------------------------
 # Host-prepare static gates. Standalone test scripts live under tests/;
@@ -1263,48 +1263,48 @@ nl_static_gate_end "W2 control-plane skeleton gates"
 # Carve-out: the `with-entra-id` example-flake check can fail with a
 # transient/external crates.io 403 against a `libhimmelblau`-/`kanidm-hsm-
 # crypto`-pinned vicondoa/entrablau.nix revision. Set
-# `NL_SKIP_WITH_ENTRA_ID=1` to skip the per-example check for that one
+# `D2B_SKIP_WITH_ENTRA_ID=1` to skip the per-example check for that one
 # example (the per-example loop honors the knob in the per-example block
 # below). Use only after one in-band retry; this is an explicit carve-out
 # for an external dependency outage.
 # -----------------------------------------------------------------------------
-nl_static_gate_begin "W3 host-prepare gates" "W3 host-prepare gates"
+d2b_static_gate_begin "W3 host-prepare gates" "W3 host-prepare gates"
 # Group 1: pure / read-only gates (cgroup oracle, ifname collision, ioctl
 # negatives, kernel-module + device-node matrix, runner-shape preflight,
 # minijail version check, ipv6 sysctl readback). Safe to run in parallel
 # alongside the fake-backend network gates.
-if [ -x "$HERE/ifname-collision.sh" ]; then nl_static_parallel_script "tests/ifname-collision.sh" "$HERE/ifname-collision.sh"; fi
+if [ -x "$HERE/ifname-collision.sh" ]; then d2b_static_parallel_script "tests/ifname-collision.sh" "$HERE/ifname-collision.sh"; fi
 # L3 distro-matrix pin parser/drift gate (integrator-wired).
 # Host-prepare idempotency no-op invariant (integrator-wired).
 # Ch-net-handoff executable canary (replaces prior doc-grep) (integrator-wired).
-if [ -x "$HERE/kernel-module-matrix.sh" ]; then nl_static_parallel_script "tests/kernel-module-matrix.sh" "$HERE/kernel-module-matrix.sh"; fi
-if [ -x "$HERE/device-node-matrix.sh" ]; then nl_static_parallel_script "tests/device-node-matrix.sh" "$HERE/device-node-matrix.sh"; fi
-if [ -x "$HERE/ioctl-negative.sh" ]; then nl_static_parallel_script "tests/ioctl-negative.sh" "$HERE/ioctl-negative.sh"; fi
+if [ -x "$HERE/kernel-module-matrix.sh" ]; then d2b_static_parallel_script "tests/kernel-module-matrix.sh" "$HERE/kernel-module-matrix.sh"; fi
+if [ -x "$HERE/device-node-matrix.sh" ]; then d2b_static_parallel_script "tests/device-node-matrix.sh" "$HERE/device-node-matrix.sh"; fi
+if [ -x "$HERE/ioctl-negative.sh" ]; then d2b_static_parallel_script "tests/ioctl-negative.sh" "$HERE/ioctl-negative.sh"; fi
 # Gates: DAG executor + daemon state-persistence + [pending restart] machinery.
-# Layer-1 smoke for the nixling-activation-helper binary (fd-safe
+# Layer-1 smoke for the d2b-activation-helper binary (fd-safe
 # activation primitives per ADR 0021 + TOCTOU closures).
-if [ -x "$HERE/dag-topo.sh" ]; then nl_static_parallel_script "tests/dag-topo.sh" "$HERE/dag-topo.sh"; fi
-nl_static_parallel_wait_all
-nl_static_gate_end "W3 host-prepare gates"
+if [ -x "$HERE/dag-topo.sh" ]; then d2b_static_parallel_script "tests/dag-topo.sh" "$HERE/dag-topo.sh"; fi
+d2b_static_parallel_wait_all
+d2b_static_gate_end "W3 host-prepare gates"
 
-nl_static_gate_begin "L1c and performance canaries" "L1c and performance canaries"
+d2b_static_gate_begin "L1c and performance canaries" "L1c and performance canaries"
 if [ -x "$ROOT/tests/unit/gates/performance-budgets.sh" ]; then bash "$ROOT/tests/unit/gates/performance-budgets.sh" || fail "performance-budgets"; fi
-nl_static_gate_end "L1c and performance canaries"
+d2b_static_gate_end "L1c and performance canaries"
 
 # Gc before per-example flake-check, which is the heaviest
 # disk-grower in the gate (each example materializes a full microvm
 # toplevel: kernel + initrd + systemd + qemu wrapper, ~150 G across
 # 5 examples).
-nl_phase_gc "post-w3-gates"
-nl_check_disk_budget "post-w3-gates" || fail "disk budget exhausted after W3 host-prepare gates"
+d2b_phase_gc "post-w3-gates"
+d2b_check_disk_budget "post-w3-gates" || fail "disk budget exhausted after W3 host-prepare gates"
 
 #  Runner-shape snapshot regression guards
 # (CH variadic argv, absolute vsock paths, /dev/net/tun deviceBind)
-# migrated to packages/nixling-contract-tests/tests/runner_shape_contract.rs.
+# migrated to packages/d2b-contract-tests/tests/runner_shape_contract.rs.
 
 # -----------------------------------------------------------------------------
 # 7b /— per-example/template flake check. Each `examples/<name>/flake.nix`
-# pins `nixling.url = "path:../.."`, but we `--override-input nixling`
+# pins `d2b.url = "path:../.."`, but we `--override-input d2b`
 # to `git+file://$ROOT` so the check runs the in-tree framework WITHOUT
 # copying the whole working tree (incl. the multi-GiB cargo `target/`)
 # into the store on every run — `git+file://` only ships git-tracked
@@ -1312,39 +1312,39 @@ nl_check_disk_budget "post-w3-gates" || fail "disk budget exhausted after W3 hos
 # already lives in the root flake's `checks.<system>.*` (also 7b).
 # `--no-write-lock-file` keeps the gate read-only so validation never
 # rewrites an example's pinned lock. Some historical example locks carry a
-# mutable `path:../..` nixling node; Lix rejects that when the example itself is
+# mutable `path:../..` d2b node; Lix rejects that when the example itself is
 # reached through the root git+file fetcher. The gate therefore evaluates a
-# scratch copy whose `nixling` lock node target is rewritten to the current
+# scratch copy whose `d2b` lock node target is rewritten to the current
 # git+file checkout while preserving the example's lock graph and any external
 # sibling-flake pins. Adds
 # templates/default/ to the same check surface. Skips gracefully if examples/ or
 # templates/default/ don't exist (some downstream consumers may strip them).
 # -----------------------------------------------------------------------------
-nl_static_gate_begin "per-example/template flake check" "per-example/template flake check"
-example_nixling_lock_dir=$(mktemp -d "${TMPDIR:-/tmp}/nixling-example-lock.XXXXXX") \
-  || fail "example flake check: could not create temporary nixling lock directory"
-add_cleanup "rm -rf -- $(printf '%q' "$example_nixling_lock_dir")"
-cat > "$example_nixling_lock_dir/flake.nix" <<'NIX' || fail "example flake check: could not write temporary nixling lock flake"
+d2b_static_gate_begin "per-example/template flake check" "per-example/template flake check"
+example_d2b_lock_dir=$(mktemp -d "${TMPDIR:-/tmp}/d2b-example-lock.XXXXXX") \
+  || fail "example flake check: could not create temporary d2b lock directory"
+add_cleanup "rm -rf -- $(printf '%q' "$example_d2b_lock_dir")"
+cat > "$example_d2b_lock_dir/flake.nix" <<'NIX' || fail "example flake check: could not write temporary d2b lock flake"
 {
-  inputs.nixling.url = "path:../..";
+  inputs.d2b.url = "path:../..";
   outputs = { ... }: { };
 }
 NIX
 (
-  cd "$example_nixling_lock_dir" || exit 1
-  nix flake lock --override-input nixling "git+file://$ROOT" >/dev/null
-) || fail "example flake check: could not prepare temporary nixling git+file lock"
+  cd "$example_d2b_lock_dir" || exit 1
+  nix flake lock --override-input d2b "git+file://$ROOT" >/dev/null
+) || fail "example flake check: could not prepare temporary d2b git+file lock"
 
-nl_static_check_example_flake() {
+d2b_static_check_example_flake() {
   local src="$1" name="$2" scratch rc
-  scratch=$(mktemp -d "${TMPDIR:-/tmp}/nixling-example-${name}.XXXXXX") || return 1
+  scratch=$(mktemp -d "${TMPDIR:-/tmp}/d2b-example-${name}.XXXXXX") || return 1
   cp -a "$src"/. "$scratch"/ || {
     log "  example flake check: $name  preserving scratch after copy failure: $scratch"
     return 1
   }
   if [ -f "$scratch/flake.lock" ]; then
-    jq --slurpfile node "$example_nixling_lock_dir/flake.lock" \
-      '.nodes.nixling.locked = $node[0].nodes.nixling.locked | .nodes.nixling.original = $node[0].nodes.nixling.original' \
+    jq --slurpfile node "$example_d2b_lock_dir/flake.lock" \
+      '.nodes.d2b.locked = $node[0].nodes.d2b.locked | .nodes.d2b.original = $node[0].nodes.d2b.original' \
       "$scratch/flake.lock" > "$scratch/flake.lock.tmp" || {
         log "  example flake check: $name  preserving scratch after lock rewrite failure: $scratch"
         return 1
@@ -1357,7 +1357,7 @@ nl_static_check_example_flake() {
   (
     cd "$scratch" || exit 1
     nix flake check --no-build --all-systems --no-write-lock-file \
-      --override-input nixling "git+file://$ROOT"
+      --override-input d2b "git+file://$ROOT"
   )
   rc=$?
   if [ "$rc" -eq 0 ]; then
@@ -1368,11 +1368,11 @@ nl_static_check_example_flake() {
   return "$rc"
 }
 
-if [ -d "$ROOT/examples/with-entra-id" ] && [ -f "$ROOT/examples/with-entra-id/flake.lock" ] && [ -z "${NL_SKIP_WITH_ENTRA_ID:-}" ]; then
-  nl_time_begin "with-entra-id input prewarm"
+if [ -d "$ROOT/examples/with-entra-id" ] && [ -f "$ROOT/examples/with-entra-id/flake.lock" ] && [ -z "${D2B_SKIP_WITH_ENTRA_ID:-}" ]; then
+  d2b_time_begin "with-entra-id input prewarm"
   _WITH_ENTRA_ID_REF=$(jq -er '.nodes["entrablau"].locked | "github:\(.owner)/\(.repo)/\(.rev)"' "$ROOT/examples/with-entra-id/flake.lock")
   nix build --no-link "$_WITH_ENTRA_ID_REF#checks.x86_64-linux.himmelblau-tpm-drv" >/dev/null
-  nl_time_end "with-entra-id input prewarm"
+  d2b_time_end "with-entra-id input prewarm"
 fi
 if [ -d "$ROOT/examples" ]; then
   shopt -s nullglob
@@ -1382,46 +1382,46 @@ if [ -d "$ROOT/examples" ]; then
     if [ "$name" = "with-entra-id" ]; then
       continue
     fi
-    nl_static_parallel_spawn "example flake check: $name" nl_static_check_example_flake "$ex" "$name"
+    d2b_static_parallel_spawn "example flake check: $name" d2b_static_check_example_flake "$ex" "$name"
   done
   shopt -u nullglob
 else
   log "  (no examples/ directory — skipping)"
 fi
-nl_static_parallel_wait_all
+d2b_static_parallel_wait_all
 if [ -f "$ROOT/examples/with-entra-id/flake.nix" ]; then
-  if [ -n "${NL_SKIP_WITH_ENTRA_ID:-}" ]; then
+  if [ -n "${D2B_SKIP_WITH_ENTRA_ID:-}" ]; then
     # Carve-out: explicit operator opt-in to skip the with-entra-id
     # per-example check when its pinned vicondoa/entrablau.nix input
     # fails the cargo fetch with a crates.io 403 against the
     # `libhimmelblau` / `kanidm-hsm-crypto` versions in its lockfile.
     # Used only after the in-band retry below failed.
-    log "  example flake check: with-entra-id  skipped via NL_SKIP_WITH_ENTRA_ID=1 (external dependency outage carve-out)"
+    log "  example flake check: with-entra-id  skipped via D2B_SKIP_WITH_ENTRA_ID=1 (external dependency outage carve-out)"
   else
-    nl_time_begin "example flake check: with-entra-id"
-    if nl_static_check_example_flake "$ROOT/examples/with-entra-id" "with-entra-id" >/dev/null 2>&1; then
+    d2b_time_begin "example flake check: with-entra-id"
+    if d2b_static_check_example_flake "$ROOT/examples/with-entra-id" "with-entra-id" >/dev/null 2>&1; then
       ok "example flake check: with-entra-id"
     else
       # One in-band retry for the documented transient crates.io 403
       # on libhimmelblau-0.8.18 / kanidm-hsm-crypto-0.3.6 before failing
-      # the gate. Set NL_SKIP_WITH_ENTRA_ID=1 to bypass after retries.
+      # the gate. Set D2B_SKIP_WITH_ENTRA_ID=1 to bypass after retries.
       log "  example flake check: with-entra-id  first attempt failed; retrying once (W3 carve-out)"
-      if nl_static_check_example_flake "$ROOT/examples/with-entra-id" "with-entra-id" >/dev/null 2>&1; then
+      if d2b_static_check_example_flake "$ROOT/examples/with-entra-id" "with-entra-id" >/dev/null 2>&1; then
         ok "example flake check: with-entra-id (retry)"
       else
-        nl_static_check_example_flake "$ROOT/examples/with-entra-id" "with-entra-id" 2>&1 | tail -20 >&2 || true
+        d2b_static_check_example_flake "$ROOT/examples/with-entra-id" "with-entra-id" 2>&1 | tail -20 >&2 || true
         fail "example flake check: with-entra-id"
       fi
     fi
-    nl_time_end "example flake check: with-entra-id"
+    d2b_time_end "example flake check: with-entra-id"
   fi
 fi
 if [ -f "$ROOT/templates/default/flake.nix" ]; then
-  template_check_dir=$(nl_mktemp .template-flake-check.XXXXXX)
+  template_check_dir=$(d2b_mktemp .template-flake-check.XXXXXX)
   cp "$ROOT/templates/default/configuration.nix" "$template_check_dir/configuration.nix"
-  sed 's#          ./configuration.nix#          ./configuration.nix\n          ./nixling-static-overrides.nix#' \
+  sed 's#          ./configuration.nix#          ./configuration.nix\n          ./d2b-static-overrides.nix#' \
     "$ROOT/templates/default/flake.nix" > "$template_check_dir/flake.nix"
-  cat > "$template_check_dir/nixling-static-overrides.nix" <<'NIX'
+  cat > "$template_check_dir/d2b-static-overrides.nix" <<'NIX'
 { lib, ... }:
 {
   boot.loader.systemd-boot.enable = lib.mkForce false;
@@ -1434,8 +1434,8 @@ if [ -f "$ROOT/templates/default/flake.nix" ]; then
   environment.etc."machine-id".text = "00000000000000000000000000000000";
 
   networking.hostName = lib.mkForce "check-template";
-  nixling.site.launcherUsers = lib.mkForce [ "check-user" ];
-  nixling.site.userAuthorizedKeys = lib.mkForce [
+  d2b.site.launcherUsers = lib.mkForce [ "check-user" ];
+  d2b.site.userAuthorizedKeys = lib.mkForce [
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBcheckcheckcheckcheckcheckcheckcheckchecky check@template-check"
   ];
 
@@ -1445,17 +1445,17 @@ if [ -f "$ROOT/templates/default/flake.nix" ]; then
   };
 }
 NIX
-  (cd "$template_check_dir" && git init -q && git add flake.nix configuration.nix nixling-static-overrides.nix)
+  (cd "$template_check_dir" && git init -q && git add flake.nix configuration.nix d2b-static-overrides.nix)
   # Run the template flake's own nixosConfigurations
   # wiring, not only the root eval-template check. The copied scratch
   # flake differs only by adding a test-only module that neutralizes
-  # intentional TODO sentinels and by overriding nixling to this tree.
-  nl_static_parallel_spawn "template flake check: default" bash -lc "cd '$template_check_dir' && nix flake check --no-build --all-systems --no-write-lock-file --override-input nixling 'git+file://$ROOT'"
+  # intentional TODO sentinels and by overriding d2b to this tree.
+  d2b_static_parallel_spawn "template flake check: default" bash -lc "cd '$template_check_dir' && nix flake check --no-build --all-systems --no-write-lock-file --override-input d2b 'git+file://$ROOT'"
 else
   log "  (no templates/default/flake.nix — skipping)"
 fi
-nl_static_parallel_wait_all
-nl_static_gate_end "per-example/template flake check"
+d2b_static_parallel_wait_all
+d2b_static_gate_end "per-example/template flake check"
 
 log "Layer 1 examples/templates OK"
 log "Static checks OK"
@@ -1473,9 +1473,9 @@ log "Static checks OK"
 # fill the volume after a few iterations (observed at the
 # integration boundary today).
 #
-# Bypass with NL_POST_GATE_GC=0 if you're debugging a gate failure and
+# Bypass with D2B_POST_GATE_GC=0 if you're debugging a gate failure and
 # want to inspect the realised paths it left behind.
-if [ "${NL_POST_GATE_GC:-1}" != "0" ] && command -v nix-store >/dev/null 2>&1; then
+if [ "${D2B_POST_GATE_GC:-1}" != "0" ] && command -v nix-store >/dev/null 2>&1; then
   log "--> nix store gc (release auto-gcroots accumulated by this gate run)"
   # `nix store gc` is the nix-3 spelling; nix-store --gc is the legacy
   # form. Try the new spelling first, fall back to legacy.
@@ -1495,9 +1495,9 @@ fi
 # pruning 245 stale generations from 2026-05-14..2026-05-24). Operators
 # who own the host can enable this:
 #
-#   NL_POST_GATE_DEEP_GC=1         # user-level generations only (no sudo)
-#   NL_POST_GATE_DEEP_GC=1 \
-#   NL_POST_GATE_DEEP_GC_SUDO=1    # also prune system generations
+#   D2B_POST_GATE_DEEP_GC=1         # user-level generations only (no sudo)
+#   D2B_POST_GATE_DEEP_GC=1 \
+#   D2B_POST_GATE_DEEP_GC_SUDO=1    # also prune system generations
 #                                  # (requires passwordless sudo for
 #                                  # nix-collect-garbage; uses `sudo -n`
 #                                  # and skips with a clear log if it
@@ -1507,16 +1507,16 @@ fi
 # NEVER delete system generations on a developer's host without an
 # explicit opt-in. The default `nix store gc` above is enough for CI.
 #
-# Threshold defaults to 7 days; override with NL_POST_GATE_DEEP_GC_DAYS=N.
-if [ "${NL_POST_GATE_DEEP_GC:-0}" = "1" ] && command -v nix-collect-garbage >/dev/null 2>&1; then
-  _STATIC_DEEP_GC_DAYS=${NL_POST_GATE_DEEP_GC_DAYS:-7}
+# Threshold defaults to 7 days; override with D2B_POST_GATE_DEEP_GC_DAYS=N.
+if [ "${D2B_POST_GATE_DEEP_GC:-0}" = "1" ] && command -v nix-collect-garbage >/dev/null 2>&1; then
+  _STATIC_DEEP_GC_DAYS=${D2B_POST_GATE_DEEP_GC_DAYS:-7}
   log "--> deep-gc: nix-collect-garbage --delete-older-than ${_STATIC_DEEP_GC_DAYS}d (user profiles)"
   if nix-collect-garbage --delete-older-than "${_STATIC_DEEP_GC_DAYS}d" >/dev/null 2>&1; then
     log "  ok: user-profile deep gc completed"
   else
     log "  WARN: user-profile deep gc failed (continuing)"
   fi
-  if [ "${NL_POST_GATE_DEEP_GC_SUDO:-0}" = "1" ]; then
+  if [ "${D2B_POST_GATE_DEEP_GC_SUDO:-0}" = "1" ]; then
     if sudo -n true 2>/dev/null; then
       log "--> deep-gc: sudo nix-collect-garbage --delete-older-than ${_STATIC_DEEP_GC_DAYS}d (system profile + root channels)"
       if sudo -n nix-collect-garbage --delete-older-than "${_STATIC_DEEP_GC_DAYS}d" >/dev/null 2>&1; then
@@ -1525,7 +1525,7 @@ if [ "${NL_POST_GATE_DEEP_GC:-0}" = "1" ] && command -v nix-collect-garbage >/de
         log "  WARN: system-profile deep gc failed (continuing)"
       fi
     else
-      log "  SKIP: NL_POST_GATE_DEEP_GC_SUDO=1 set but passwordless sudo unavailable; run manually:"
+      log "  SKIP: D2B_POST_GATE_DEEP_GC_SUDO=1 set but passwordless sudo unavailable; run manually:"
       log "    sudo nix-collect-garbage --delete-older-than ${_STATIC_DEEP_GC_DAYS}d"
     fi
   fi
@@ -1538,14 +1538,14 @@ fi
 # into bash). Sccache daemonises itself and stays alive past the
 # gate, holding the lock fd open. Subsequent `bash tests/static.sh`
 # invocations then block indefinitely on flock even though no
-# nixling process is running.
+# d2b process is running.
 #
 # Stop the server explicitly here so its fds close. The server
 # will be re-spawned (fresh) on the next gate's first cargo call.
-# Bypass with NL_POST_GATE_STOP_SCCACHE=0 if you want to keep the
+# Bypass with D2B_POST_GATE_STOP_SCCACHE=0 if you want to keep the
 # in-memory cache warm at the cost of needing to manually kill
 # the sccache process before the next run.
-if [ "${NL_POST_GATE_STOP_SCCACHE:-1}" != "0" ] && command -v sccache >/dev/null 2>&1; then
+if [ "${D2B_POST_GATE_STOP_SCCACHE:-1}" != "0" ] && command -v sccache >/dev/null 2>&1; then
   log "--> stop sccache server (close any lock-fd it inherited from cargo)"
   if sccache --stop-server >/dev/null 2>&1; then
     log "  ok: sccache server stopped"

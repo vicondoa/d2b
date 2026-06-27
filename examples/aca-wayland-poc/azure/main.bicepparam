@@ -1,10 +1,10 @@
-// Customizable parameters for the nixling ACA + Wayland POC deployment.
+// Customizable parameters for the d2b ACA + Wayland POC deployment.
 //
 // This is the file you edit. The templates under modules/ and main.bicep
 // stay untouched. Deploy with:
 //
 //   az deployment sub create \
-//     --name nixling-aca-wayland \
+//     --name d2b-aca-wayland \
 //     --location centralus \
 //     --template-file main.bicep \
 //     --parameters main.bicepparam
@@ -20,10 +20,10 @@ param location = 'centralus'
 
 // Token embedded in every resource name (rg-<workload>-<region>,
 // casbx-<workload>-<suffix>, ...).
-param workload = 'nixling'
+param workload = 'd2b'
 
 // House-style override for resource-type prefixes. Leave commented to use
-// the CAF-aligned defaults (rg/cr/id + nixling-defined casbx/relns/hc).
+// the CAF-aligned defaults (rg/cr/id + d2b-defined casbx/relns/hc).
 // param prefixes = {
 //   resourceGroup: 'rg'
 //   registry: 'cr'
@@ -35,7 +35,7 @@ param workload = 'nixling'
 
 // Container image (built + pushed to the generated registry separately,
 // then registered as a sandbox disk image via the data plane).
-param imageRepository = 'nixling-wayland'
+param imageRepository = 'd2b-wayland'
 param imageTag = 'latest'
 
 // Optionally grant a human operator the SandboxGroup Data Owner role so
@@ -46,7 +46,7 @@ param operatorPrincipalType = 'User'
 
 // Tags. Set values meaningful for your subscription.
 param tags = {
-  workload: 'nixling'
-  component: 'nixling-aca-wayland-poc'
+  workload: 'd2b'
+  component: 'd2b-aca-wayland-poc'
   managedBy: 'bicep'
 }

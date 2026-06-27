@@ -9,7 +9,7 @@ use clap_complete::{
     shells::{Bash, Fish, Zsh},
 };
 use clap_mangen::Man;
-use nixling_constellation_core::{
+use d2b_constellation_core::{
     AdmissionAuditRecord, AuditEnvelope, Capability, CapabilityNegotiation, CapabilitySet,
     ConstellationError, ConstellationFrame, ExecAttachMode, ExecAttachRequest, ExecCancelRequest,
     ExecLogsRequest, ExecStartRequest, ExecutionGeneration, ExecutionId, ExecutionSummary,
@@ -26,8 +26,8 @@ use nixling_constellation_core::{
         AuditSinkHealthReason, AuditStreamKind,
     },
 };
-use nixling_contracts::guest_wire::GuestControlSchema;
-use nixling_contracts::{
+use d2b_contracts::guest_wire::GuestControlSchema;
+use d2b_contracts::{
     WireProtocolSchema,
     cli_output::{
         AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, ListOutputV2, OpInspectOutputV1,
@@ -37,7 +37,7 @@ use nixling_contracts::{
         VmExecListOutputV1, VmExecLogsOutputV1, VmExecStatusOutputV1,
     },
 };
-use nixling_core::{
+use d2b_core::{
     bundle::Bundle, closures::ClosureMetadata, error::Error, host::HostJson,
     manifest_v04::ManifestV04, minijail_profile::MinijailProfile, privileges::PrivilegesJson,
     processes::ProcessesJson, storage::StorageJson, storage_lifecycle::StorageLifecycleReport,
@@ -190,9 +190,9 @@ fn run_inventory(output_path: Option<PathBuf>) -> std::process::ExitCode {
 
 fn gen_guest_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
-    let proto_dir = repo_root.join("packages/nixling-contracts/proto");
+    let proto_dir = repo_root.join("packages/d2b-contracts/proto");
     let proto = proto_dir.join("guest_control.proto");
-    let out_dir = repo_root.join("packages/nixling-guestd/src/generated");
+    let out_dir = repo_root.join("packages/d2b-guestd/src/generated");
     fs::create_dir_all(&out_dir)?;
 
     ttrpc_codegen::Codegen::new()
@@ -212,12 +212,12 @@ fn gen_guest_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
 
 fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
-    let proto_dir = repo_root.join("packages/nixling-contracts/proto");
+    let proto_dir = repo_root.join("packages/d2b-contracts/proto");
     let proto = proto_dir.join("guest_control.proto");
-    let out_dir = repo_root.join("packages/nixling-contracts/src/generated");
+    let out_dir = repo_root.join("packages/d2b-contracts/src/generated");
     fs::create_dir_all(&out_dir)?;
     let out_file = out_dir.join("guest_control.rs");
-    let temp_proto_dir = create_exclusive_temp_dir("nixling-guest-proto")?;
+    let temp_proto_dir = create_exclusive_temp_dir("d2b-guest-proto")?;
     let temp_proto = temp_proto_dir.join("guest_control.proto");
     fs::write(
         &temp_proto,
@@ -484,70 +484,70 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
     fs::create_dir_all(&man_dir)?;
     fs::create_dir_all(&comp_dir)?;
 
-    let mut man_command = nixling::cli_command();
+    let mut man_command = d2b::cli_command();
     man_command.build();
     let source = man_command
         .get_version()
-        .map(|version| format!("nixling {version}"))
-        .unwrap_or_else(|| "nixling".to_owned());
-    let man_path = man_dir.join("nixling.1");
+        .map(|version| format!("d2b {version}"))
+        .unwrap_or_else(|| "d2b".to_owned());
+    let man_path = man_dir.join("d2b.1");
     let mut man_buffer = Vec::new();
     Man::new(man_command)
-        .title("nixling")
+        .title("d2b")
         .section("1")
         .date("1970-01-01")
         .source(source)
-        .manual("nixling CLI")
+        .manual("d2b CLI")
         .render(&mut man_buffer)?;
     fs::write(&man_path, man_buffer)?;
-    let mut host_command = nixling::cli_command()
+    let mut host_command = d2b::cli_command()
         .find_subcommand_mut("host")
         .expect("host subcommand exists")
         .clone();
     host_command.build();
-    let host_man_path = man_dir.join("nixling-host.1");
+    let host_man_path = man_dir.join("d2b-host.1");
     let mut host_man_buffer = Vec::new();
     Man::new(host_command)
-        .title("nixling-host")
+        .title("d2b-host")
         .section("1")
         .date("1970-01-01")
-        .source("nixling".to_owned())
-        .manual("nixling CLI")
+        .source("d2b".to_owned())
+        .manual("d2b CLI")
         .render(&mut host_man_buffer)?;
     fs::write(&host_man_path, host_man_buffer)?;
-    let mut shell_command = nixling::cli_command()
+    let mut shell_command = d2b::cli_command()
         .find_subcommand_mut("shell")
         .expect("shell subcommand exists")
         .clone();
     shell_command.build();
-    let shell_man_path = man_dir.join("nixling-shell.1");
+    let shell_man_path = man_dir.join("d2b-shell.1");
     let mut shell_man_buffer = Vec::new();
     Man::new(shell_command)
-        .title("nixling-shell")
+        .title("d2b-shell")
         .section("1")
         .date("1970-01-01")
-        .source("nixling".to_owned())
-        .manual("nixling CLI")
+        .source("d2b".to_owned())
+        .manual("d2b CLI")
         .render(&mut shell_man_buffer)?;
     fs::write(&shell_man_path, shell_man_buffer)?;
 
-    let bash_path = comp_dir.join("nixling.bash");
-    let mut bash_command = nixling::cli_command();
+    let bash_path = comp_dir.join("d2b.bash");
+    let mut bash_command = d2b::cli_command();
     let mut bash_buffer = Vec::new();
-    generate(Bash, &mut bash_command, "nixling", &mut bash_buffer);
+    generate(Bash, &mut bash_command, "d2b", &mut bash_buffer);
     let bash_buffer = patch_vm_exec_logs_bash_completion(String::from_utf8(bash_buffer)?)?;
     fs::write(&bash_path, bash_buffer)?;
 
-    let zsh_path = comp_dir.join("nixling.zsh");
-    let mut zsh_command = nixling::cli_command();
+    let zsh_path = comp_dir.join("d2b.zsh");
+    let mut zsh_command = d2b::cli_command();
     let mut zsh_buffer = Vec::new();
-    generate(Zsh, &mut zsh_command, "nixling", &mut zsh_buffer);
+    generate(Zsh, &mut zsh_command, "d2b", &mut zsh_buffer);
     fs::write(&zsh_path, zsh_buffer)?;
 
-    let fish_path = comp_dir.join("nixling.fish");
-    let mut fish_command = nixling::cli_command();
+    let fish_path = comp_dir.join("d2b.fish");
+    let mut fish_command = d2b::cli_command();
     let mut fish_buffer = Vec::new();
-    generate(Fish, &mut fish_command, "nixling", &mut fish_buffer);
+    generate(Fish, &mut fish_command, "d2b", &mut fish_buffer);
     let fish_buffer = patch_vm_exec_logs_fish_completion(String::from_utf8(fish_buffer)?)?;
     fs::write(&fish_path, fish_buffer)?;
 
@@ -600,8 +600,8 @@ fn patch_vm_exec_logs_fish_completion(
 ) -> Result<String, Box<dyn std::error::Error>> {
     replace_once(
         generated,
-        "complete -c nixling -n \"__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\n",
-        "complete -c nixling -n \"__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\ncomplete -c nixling -n \"__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stdout-offset -d 'Resume stdout from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c nixling -n \"__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stderr-offset -d 'Resume stderr from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c nixling -n \"__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l max-len -d 'Maximum retained bytes to request per stream' -r\n",
+        "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\n",
+        "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stdout-offset -d 'Resume stdout from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stderr-offset -d 'Resume stderr from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l max-len -d 'Maximum retained bytes to request per stream' -r\n",
         "fish vm exec logs flags",
     )
 }
@@ -652,7 +652,7 @@ fn gen_daemon_api() -> Result<PathBuf, Box<dyn std::error::Error>> {
 }
 
 fn parse_ipc_items(repo_root: &Path) -> Result<Vec<RustItem>, Box<dyn std::error::Error>> {
-    let ipc_dir = repo_root.join("packages/nixling-contracts/src");
+    let ipc_dir = repo_root.join("packages/d2b-contracts/src");
     let mut files = fs::read_dir(&ipc_dir)?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
@@ -1009,7 +1009,7 @@ fn render_request_section(items: &[RustItem]) -> String {
             ("Public socket request types", public),
             ("Broker socket request types", broker),
         ],
-        "No request types were found under `packages/nixling-contracts/src/` yet.",
+        "No request types were found under `packages/d2b-contracts/src/` yet.",
     )
 }
 
@@ -1032,7 +1032,7 @@ fn render_response_section(items: &[RustItem]) -> String {
             ("Public socket response types", public),
             ("Broker socket response types", broker),
         ],
-        "No response types were found under `packages/nixling-contracts/src/` yet.",
+        "No response types were found under `packages/d2b-contracts/src/` yet.",
     )
 }
 
@@ -1060,7 +1060,7 @@ fn render_enum_section(items: &[RustItem]) -> String {
             ("Lifecycle enum", lifecycle),
             ("Other documented enums", other),
         ],
-        "No documented enums were found under `packages/nixling-contracts/src/` yet.",
+        "No documented enums were found under `packages/d2b-contracts/src/` yet.",
     )
 }
 

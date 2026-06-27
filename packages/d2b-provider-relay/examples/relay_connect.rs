@@ -1,0 +1,38 @@
+//! Live relay connect probe. Verifies the relay accepts the credential by
+//! completing (or rejecting) the WebSocket handshake.
+//!
+//! Env: D2B_RELAY_NAMESPACE, D2B_RELAY_ENTITY, role via D2B_RELAY_ROLE
+//! (listen|connect), and EITHER D2B_RELAY_ENTRA_TOKEN OR
+//! D2B_RELAY_KEY_NAME + D2B_RELAY_KEY.
+use d2b_provider_relay::{RelayCredential, RelayEndpoint, RelayRole, connect};
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let endpoint = RelayEndpoint {
+        namespace: std::env::var("D2B_RELAY_NAMESPACE")?,
+        entity: std::env::var("D2B_RELAY_ENTITY")?,
+    };
+    let role = match std::env::var("D2B_RELAY_ROLE").as_deref() {
+        Ok("listen") => RelayRole::Listener,
+        _ => RelayRole::Sender,
+    };
+    let credential = if let Ok(token) = std::env::var("D2B_RELAY_ENTRA_TOKEN") {
+        RelayCredential::EntraBearer(token)
+    } else {
+        RelayCredential::Sas {
+            key_name: std::env::var("D2B_RELAY_KEY_NAME")?,
+            key: std::env::var("D2B_RELAY_KEY")?,
+        }
+    };
+    eprintln!("[probe] connecting role={:?} cred={:?}", role, credential);
+    match connect(&endpoint, role, &credential, 600).await {
+        Ok(_ws) => {
+            println!("[probe] HANDSHAKE OK — relay accepted the credential");
+            Ok(())
+        }
+        Err(e) => {
+            println!("[probe] HANDSHAKE FAILED — {e}");
+            std::process::exit(1);
+        }
+    }
+}

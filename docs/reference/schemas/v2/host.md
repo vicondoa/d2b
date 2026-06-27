@@ -22,7 +22,7 @@ and daemon/broker execution.
 - `hostsFile` — marked-block ownership rule for `/etc/hosts`.
 - `kernelModules` — allowed kernel module matrix and load policy.
 - `networkManager` — unmanaged-file materialization rules.
-- `nftables` — exact `inet nixling` table declaration.
+- `nftables` — exact `inet d2b` table declaration.
 - `ifNameMappings` — derived bridge/TAP name exposure.
 - `ch` — Cloud Hypervisor handoff probe result.
 - `firewallCoexistencePolicy` — host firewall coexistence contract.

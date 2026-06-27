@@ -1,4 +1,4 @@
-# daemon-socket-acl — nixlingd daemon-spawn #[test]s. Successor of
+# daemon-socket-acl — d2bd daemon-spawn #[test]s. Successor of
 # tests/daemon-socket-acl.sh, which exercised the SO_PEERCRED launcher
 # authorization matrix through serve --once plus test-client frames. These
 # integration tests run in the default cargo test --workspace pass gated by

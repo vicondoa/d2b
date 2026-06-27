@@ -1,4 +1,4 @@
-# `nixling host doctor --read-only` output
+# `d2b host doctor --read-only` output
 
 Schema: [`host-doctor.schema.json`](./host-doctor.schema.json)
 
@@ -26,8 +26,8 @@ Every entry in `checks[]` has `name`, `status` (`pass`/`warn`/`fail`),
 
 | `name`                    | What it probes                                                                                            | `status` policy                                                                            | `data` keys                                                  |
 | ------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
-| `broker-ready`            | Connects to the broker `SOCK_SEQPACKET` socket (default `/run/nixling/broker.sock`).                       | `pass` on accept, or when an existing bound private socket correctly denies direct unprivileged access; `fail` when absent/unbound/unreachable. | `socket`                                                     |
-| `daemon-ready`            | Connects to the public daemon socket (default `/run/nixling/public.sock`).                                 | `pass` on accept; `warn` on connect error (degraded but doctor is best-effort).             | `socket`                                                     |
+| `broker-ready`            | Connects to the broker `SOCK_SEQPACKET` socket (default `/run/d2b/broker.sock`).                       | `pass` on accept, or when an existing bound private socket correctly denies direct unprivileged access; `fail` when absent/unbound/unreachable. | `socket`                                                     |
+| `daemon-ready`            | Connects to the public daemon socket (default `/run/d2b/public.sock`).                                 | `pass` on accept; `warn` on connect error (degraded but doctor is best-effort).             | `socket`                                                     |
 | `metrics-endpoint`        | Loopback HTTP GET against the optional Prometheus scrape URL (default `http://127.0.0.1:9101/metrics`).    | `pass` on `200` or connection failure; `warn` on non-200 HTTP response from a reachable metrics server. | `url`, `status` (optional)                                   |
 | `signoz-ui-endpoint`      | When observability is enabled, reads `_observability.signozUrl` from `vms.json` and probes `/api/v1/health`. | `pass` on `200`; `warn` when manifest/URL/probe is unavailable. Observability remains optional. | `url`, `status` (optional)                                   |
 | `otel-host-bridge-runner` | Looks for a `role: "otel-host-bridge"` entry in `pidfd-table.json`.                                        | `pass` when ≥1 entry; `warn` when absent (observability is optional).                       | `count`, `entries[]`                                         |
@@ -37,7 +37,7 @@ Every entry in `checks[]` has `name`, `status` (`pass`/`warn`/`fail`),
 | `storage-lifecycle-report` | Reads `storage-lifecycle-report.json` written by daemon startup.                                         | `pass` clean; `warn` if report absent/unreadable/unparseable or legacy bundle contracts unavailable; `fail` if current-bundle storage/restart/sync contract checks are degraded. | `schemaVersion`, `storageContractPresent`, `syncContractPresent`, `pathCount`, `restartPolicyCount`, `lockCount`, `issueCount`, `issueKinds`, `issues[]`, `remediation` on non-pass |
 
 The daemon persists these report files under
-`$NIXLING_DAEMON_STATE_DIR` (default `/var/lib/nixling/daemon-state`)
+`$D2B_DAEMON_STATE_DIR` (default `/var/lib/d2b/daemon-state`)
 during startup. Missing files are treated as "daemon hasn't run / has
 been skipped" and surface as warnings rather than failures so the doctor
 remains usable on fresh hosts.
@@ -46,10 +46,10 @@ remains usable on fresh hosts.
 
 | Variable                  | Default                                  | Purpose                                                      |
 | ------------------------- | ---------------------------------------- | ------------------------------------------------------------ |
-| `NIXLING_BROKER_SOCKET`   | `/run/nixling/broker.sock`               | Probe target for `broker-ready`.                             |
-| `NIXLING_PUBLIC_SOCKET`   | `/run/nixling/public.sock`               | Probe target for `daemon-ready`.                             |
-| `NIXLING_DAEMON_STATE_DIR` | `/var/lib/nixling/daemon-state`         | Directory the daemon writes pidfd/module/autostart/storage-lifecycle reports to. |
-| `NIXLING_METRICS_URL`     | `http://127.0.0.1:9101/metrics`          | URL probed by `metrics-endpoint`.                            |
+| `D2B_BROKER_SOCKET`   | `/run/d2b/broker.sock`               | Probe target for `broker-ready`.                             |
+| `D2B_PUBLIC_SOCKET`   | `/run/d2b/public.sock`               | Probe target for `daemon-ready`.                             |
+| `D2B_DAEMON_STATE_DIR` | `/var/lib/d2b/daemon-state`         | Directory the daemon writes pidfd/module/autostart/storage-lifecycle reports to. |
+| `D2B_METRICS_URL`     | `http://127.0.0.1:9101/metrics`          | URL probed by `metrics-endpoint`.                            |
 
 ## Exit-code semantics
 
@@ -75,8 +75,8 @@ remains usable on fresh hosts.
   "summary": { "pass": 5, "warn": 3, "fail": 0 },
   "exitCode": 1,
   "checks": [
-    { "name": "broker-ready",            "status": "pass", "detail": "broker socket accepted connection", "data": { "socket": "/run/nixling/broker.sock" } },
-    { "name": "daemon-ready",            "status": "pass", "detail": "daemon public socket accepted connection", "data": { "socket": "/run/nixling/public.sock" } },
+    { "name": "broker-ready",            "status": "pass", "detail": "broker socket accepted connection", "data": { "socket": "/run/d2b/broker.sock" } },
+    { "name": "daemon-ready",            "status": "pass", "detail": "daemon public socket accepted connection", "data": { "socket": "/run/d2b/public.sock" } },
     { "name": "metrics-endpoint",        "status": "warn", "detail": "unreachable: http://127.0.0.1:9101/metrics", "data": { "url": "http://127.0.0.1:9101/metrics" } },
     { "name": "signoz-ui-endpoint",      "status": "warn", "detail": "SigNoz health endpoint at http://10.40.0.10:8080/api/v1/health unreachable: connect: timed out", "data": { "url": "http://10.40.0.10:8080/api/v1/health" } },
     { "name": "otel-host-bridge-runner", "status": "pass", "detail": "1 OtelHostBridge runner registered", "data": { "count": 1, "entries": [{ "vm": "obs-net", "pid": 1001, "startTimeTicks": 5 }] } },

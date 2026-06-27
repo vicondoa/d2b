@@ -1,9 +1,9 @@
-# 0002. Non-root nixlingd plus minimal privileged broker
+# 0002. Non-root d2bd plus minimal privileged broker
 
 - Status: Accepted
 - Date: 2026-05-25
 - Wave: W0b
-- Plan slice: "`nixlingd` is not a broad root daemon. Long-lived VM/sidecar/helper payloads must execute as declared non-root role users under minijail."
+- Plan slice: "`d2bd` is not a broad root daemon. Long-lived VM/sidecar/helper payloads must execute as declared non-root role users under minijail."
 - Companion ADRs: [ADR 0001](0001-systemd-free-vm-orchestration.md), [ADR 0003](0003-minijail-provisioning-and-sandbox-interface.md), [ADR 0005](0005-network-firewall-and-tap-model.md), ADR 0007
 
 ## Context
@@ -15,13 +15,13 @@ authorization to root systemd services rather than to a portable control
 plane.
 
 The portability plan splits the Rust control plane into a caller-owned
-CLI, a dedicated non-root `nixlingd`, and a minimal
-`nixling-priv-broker` that performs only non-delegable host mutations.
+CLI, a dedicated non-root `d2bd`, and a minimal
+`d2b-priv-broker` that performs only non-delegable host mutations.
 The daemon owns orchestration state and public API policy, while the
 broker is intentionally not a root shell and must validate every request
 against its own trusted bundle.
 
-AGENTS.md identifies polkit and the `nixling` group as the
+AGENTS.md identifies polkit and the `d2b` group as the
 current privilege boundary, and it warns that mistakes in launcher policy
 can either lock everyone out or authorize too much. W0b keeps the group
 concept but moves authorization to filesystem Unix sockets, peer
@@ -35,14 +35,14 @@ non-root daemon is compromised.
 
 ## Decision
 
-1. `nixlingd` runs as a dedicated non-root system user and is itself confined by a minijail role profile.
-2. `nixling-priv-broker` is the only long-lived root process, listens only on AF_UNIX `SOCK_SEQPACKET` at `/run/nixling/priv.sock`, is reachable only by the `nixlingd` uid, and exposes a closed Rust operation enum with no command strings.
+1. `d2bd` runs as a dedicated non-root system user and is itself confined by a minijail role profile.
+2. `d2b-priv-broker` is the only long-lived root process, listens only on AF_UNIX `SOCK_SEQPACKET` at `/run/d2b/priv.sock`, is reachable only by the `d2bd` uid, and exposes a closed Rust operation enum with no command strings.
 3. The broker independently opens its trusted root-owned manifest bundle, verifies owner, mode, version, and hash, and re-derives paths, uids, gids, capabilities, and resource identifiers from its own copy.
 4. Privileged resources including TAP fds, `/dev/kvm`, `/dev/vhost-*`, cgroup dirfds, and pre-bound Unix sockets are returned to the daemon with `SCM_RIGHTS` rather than as path strings.
 5. Broker filesystem access uses `openat2`, `O_NOFOLLOW`, and `RESOLVE_BENEATH` style resolution, and ownership or mode changes use fd-based `fchown` and `fchmod` only.
-6. Public authorization uses `nixling-launcher` for daily lifecycle operations and `nixling-admin` for destructive, host-prepare, manifest-activation, and key-rotation operations. **The classification chain** (resolves R18 kernel-r18-1): the daemon's public socket (`/run/nixling/public.sock`, owned `nixlingd:nixling` mode `0660`) is connect-gated at the filesystem layer to members of the Linux SYSTEM GROUP `nixling` (distinct from the stable `nixling-launcher` authz class output below). At `accept(2)` time, `nixlingd` reads the peer's pid/uid/gid via `SO_PEERCRED` (`man 7 unix`: SO_PEERCRED returns ONLY pid+uid+gid, NOT supplementary groups), then classifies the peer's uid via lookup against the `launcherUsers` / `adminUsers` arrays in `/etc/nixling/daemon-config.json` (NOT via `getgrouplist()` against supplementary groups — that primitive was incorrectly cited in earlier drafts of this ADR; the v1.0 daemon-only implementation uses the explicit per-array config-lookup pattern instead). The classification produces one of three authz-class outcomes — `nixling-launcher` (stable AUTHZ CLASS, distinct from the Linux system group), `nixling-admin`, or `deny` — and the daemon forwards the result to the broker over its private `nixlingd→broker` connection on `/run/nixling/priv.sock` (`root:nixlingd` 0660). The broker trusts the daemon's upstream classification (the broker's own SO_PEERCRED check on priv.sock only validates that the peer's uid is `nixlingd`'s); per-op deny decisions use the forwarded authz-class. See [`docs/reference/privileges.md`](../reference/privileges.md) § "Authz-class vs system-group naming note" for the full classification-chain spec.
+6. Public authorization uses `d2b-launcher` for daily lifecycle operations and `d2b-admin` for destructive, host-prepare, manifest-activation, and key-rotation operations. **The classification chain** (resolves R18 kernel-r18-1): the daemon's public socket (`/run/d2b/public.sock`, owned `d2bd:d2b` mode `0660`) is connect-gated at the filesystem layer to members of the Linux SYSTEM GROUP `d2b` (distinct from the stable `d2b-launcher` authz class output below). At `accept(2)` time, `d2bd` reads the peer's pid/uid/gid via `SO_PEERCRED` (`man 7 unix`: SO_PEERCRED returns ONLY pid+uid+gid, NOT supplementary groups), then classifies the peer's uid via lookup against the `launcherUsers` / `adminUsers` arrays in `/etc/d2b/daemon-config.json` (NOT via `getgrouplist()` against supplementary groups — that primitive was incorrectly cited in earlier drafts of this ADR; the v1.0 daemon-only implementation uses the explicit per-array config-lookup pattern instead). The classification produces one of three authz-class outcomes — `d2b-launcher` (stable AUTHZ CLASS, distinct from the Linux system group), `d2b-admin`, or `deny` — and the daemon forwards the result to the broker over its private `d2bd→broker` connection on `/run/d2b/priv.sock` (`root:d2bd` 0660). The broker trusts the daemon's upstream classification (the broker's own SO_PEERCRED check on priv.sock only validates that the peer's uid is `d2bd`'s); per-op deny decisions use the forwarded authz-class. See [`docs/reference/privileges.md`](../reference/privileges.md) § "Authz-class vs system-group naming note" for the full classification-chain spec.
 7. The broker writes an allow-and-deny audit log that is root-owned and append-only where practical, and it exposes admin-only pause and resume or kill-switch RPCs for post-compromise recovery.
-8. Cgroup v2 delegation is pinned to a broker-created `/sys/fs/cgroup/nixling.slice`. The broker prepares `cgroup.subtree_control` on every ancestor needed to delegate that subtree, validates that `nixlingd` receives only the non-root delegation it needs, and fails closed during host check when the delegation cannot be made safe. W3 host-check implementation is the gate that turns this ADR pin into enforced startup behavior.
+8. Cgroup v2 delegation is pinned to a broker-created `/sys/fs/cgroup/d2b.slice`. The broker prepares `cgroup.subtree_control` on every ancestor needed to delegate that subtree, validates that `d2bd` receives only the non-root delegation it needs, and fails closed during host check when the delegation cannot be made safe. W3 host-check implementation is the gate that turns this ADR pin into enforced startup behavior.
 
 ## Consequences
 
@@ -54,22 +54,22 @@ non-root daemon is compromised.
 
 ## Alternatives considered
 
-- Run `nixlingd` as root: rejected because it would concentrate orchestration, parsing, sockets, and host mutation in one broad root daemon.
+- Run `d2bd` as root: rejected because it would concentrate orchestration, parsing, sockets, and host mutation in one broad root daemon.
 - Keep using polkit for every lifecycle mutation: rejected because it remains systemd/NixOS-centric and does not cover the private broker contract.
 - Let the daemon pass paths and command fragments to a helper: rejected because that recreates a root shell boundary and makes path validation unenforceable.
-- Use abstract Unix sockets: rejected because filesystem sockets provide inspectable ownership, modes, and cleanup semantics under `/run/nixling`.
+- Use abstract Unix sockets: rejected because filesystem sockets provide inspectable ownership, modes, and cleanup semantics under `/run/d2b`.
 
 ## Kernel resource pins
 
-- The broker owns creation and preparation of `/sys/fs/cgroup/nixling.slice`.
+- The broker owns creation and preparation of `/sys/fs/cgroup/d2b.slice`.
 - The broker enables the required controllers through ancestor
   `cgroup.subtree_control` files before handing the delegated subtree to
-  `nixlingd`.
+  `d2bd`.
 - The daemon and long-lived payloads do not create root-owned cgroup
-  hierarchy outside the delegated nixling slice.
-- Host check fails closed if `/sys/fs/cgroup/nixling.slice` cannot be
+  hierarchy outside the delegated d2b slice.
+- Host check fails closed if `/sys/fs/cgroup/d2b.slice` cannot be
   created, if any ancestor `cgroup.subtree_control` write fails, or if
-  the resulting delegation would require `nixlingd` to retain root.
+  the resulting delegation would require `d2bd` to retain root.
 - W3 host-check implementation is the required enforcement gate for
   this cgroup v2 delegation contract.
 

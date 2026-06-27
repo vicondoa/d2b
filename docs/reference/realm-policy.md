@@ -4,7 +4,7 @@
 
 Realm policy is fail-closed and local by default. The host keeps the local
 fast path for bare VM names and the reserved `local` realm. Gateway-backed
-realms are fronted by a dedicated gateway guest in a separate nixling env/L2
+realms are fronted by a dedicated gateway guest in a separate d2b env/L2
 segment.
 
 ## Policy modes
@@ -38,7 +38,7 @@ policy storage and evaluation live in the owning gateway guest.
 
 ## Authorization and audit
 
-Local host authorization remains `SO_PEERCRED` plus the canonical `nixling`
+Local host authorization remains `SO_PEERCRED` plus the canonical `d2b`
 lifecycle group. Relay, gateway, and cross-realm identities never map to local
 lifecycle roles.
 

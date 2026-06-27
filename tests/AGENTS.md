@@ -1,4 +1,4 @@
-# AGENTS.md — the nixling test model (read before adding a test)
+# AGENTS.md — the d2b test model (read before adding a test)
 
 This file is the contract for **where a new test goes and how it runs**. It
 exists to stop the failure mode that motivated the test rearchitecture: agents
@@ -27,8 +27,8 @@ When in doubt, push the test *down* the tiers (toward type 1), not up.
 | 1 | **eval case** | declarative pure-Nix assertion (`{ expr; expected; }` / `{ expr; expectedError; }`) over module-config values + eval-rejection | `tests/unit/nix/cases/*.nix` (auto-discovered; pins in `tests/unit/nix/pinned/`) |
 | 2 | **unit test** | `#[test]` over one crate's pure logic | `packages/<crate>/src/**` `#[cfg(test)]` |
 | 3 | **integration test** | spawns the real binary (`CARGO_BIN_EXE_*`) over AF_UNIX/fd-passing; no host mutation | `packages/<crate>/tests/*.rs` |
-| 4 | **contract test** | Rust assertion over a **rendered** Nix artifact (bundle / host-json / processes.json) — the Nix↔Rust + doc↔impl boundary | `packages/nixling-contract-tests/tests/*.rs` (`NL_FIXTURES`) |
-| 5 | **policy lint** | Rust scan of source/docs asserting a tree-wide invariant | `packages/nixling-contract-tests/tests/policy_*.rs` |
+| 4 | **contract test** | Rust assertion over a **rendered** Nix artifact (bundle / host-json / processes.json) — the Nix↔Rust + doc↔impl boundary | `packages/d2b-contract-tests/tests/*.rs` (`D2B_FIXTURES`) |
+| 5 | **policy lint** | Rust scan of source/docs asserting a tree-wide invariant | `packages/d2b-contract-tests/tests/policy_*.rs` |
 | 6 | **flake check** | realized example-config eval / supply-chain (`eval-*`, `rust-deny/audit`) | `flake.checks.<sys>.*`; smoke/check defs in `tests/unit/smoke/`, eval-case libs in `tests/unit/nix/eval-cases/` |
 
 The remaining Layer-1 surface is a **closed set** you should not grow with new
@@ -41,7 +41,7 @@ files: **drift gates** (`tests/unit/gates/` — `xtask gen-* + git diff`) and
 |---|------|------------|----------|----------------|
 | 9 | **container** | Nix-OCI image under rootless podman; proves a static binary runs on a foreign non-Nix userland | `tests/integration/containers/*.sh` + `containerImages.<sys>.*` | `make test-integration` — **local host/manual pre-PR; not the PR pipeline** |
 | 10 | **VM (runNixOSTest)** | boots a real NixOS VM; asserts live daemon/broker/socket-activation/host-posture/kernel behaviour | `tests/host-integration/*.nix` + `vmChecks.<sys>.*` | `make test-host-integration` — **local NixOS host w/ KVM, manual pre-PR; not the PR pipeline** |
-| 11 | **live-host** | runs against a **real deployed** nixling host; destructive/stateful | `tests/integration/live/*.sh` | `NL_LIVE=1` / sudo — **manual, never CI** |
+| 11 | **live-host** | runs against a **real deployed** d2b host; destructive/stateful | `tests/integration/live/*.sh` | `D2B_LIVE=1` / sudo — **manual, never CI** |
 | 12 | **hardware** | real GPU / YubiKey / hardware-TPM passthrough | `tests/host-integration/hardware/*.sh` | **manual on a host with the devices** |
 
 ## How to add a test (decision rule)
@@ -55,12 +55,12 @@ files: **drift gates** (`tests/unit/gates/` — `xtask gen-* + git diff`) and
 2. **Asserting Rust logic?** → type 2, a `#[test]` in that crate's `src`.
 3. **Asserting the real binary's wire/CLI behaviour?** → type 3, a test in
    `packages/<crate>/tests/*.rs` against `CARGO_BIN_EXE_*`. Spawn hermetically —
-   point `NIXLING_PUBLIC_SOCKET` / `NIXLING_BROKER_SOCKET` / `NIXLING_*_PATH` at
+   point `D2B_PUBLIC_SOCKET` / `D2B_BROKER_SOCKET` / `D2B_*_PATH` at
    fixtures or missing paths so the test never touches the operator's live
    daemon.
 4. **Asserting that a *rendered* Nix artifact matches a Rust DTO / doc?** →
-   type 4, a contract test in `packages/nixling-contract-tests/` (driven by
-   `NL_FIXTURES`).
+   type 4, a contract test in `packages/d2b-contract-tests/` (driven by
+   `D2B_FIXTURES`).
 5. **Asserting a generated artifact is up to date (docs/schemas/CLI)?** → it is
    already covered by a **drift gate**; regenerate with the matching
    `cargo run -p xtask -- gen-*` and commit — do **not** add a new gate.
@@ -99,7 +99,7 @@ tests/
 ├── integration/
 │   ├── containers/                                                 type 9 podman (make test-integration; host/manual pre-PR)
 │   ├── distro-matrix/                                              distro pins/fixtures
-│   └── live/                                                        type 11 NL_LIVE (manual)
+│   └── live/                                                        type 11 D2B_LIVE (manual)
 └── host-integration/
     ├── *.nix                                                       type 10 runNixOSTest (make test-host-integration; host/manual pre-PR)
     └── hardware/                                                   type 12 device tests (manual)
@@ -126,9 +126,9 @@ them preserved.
 
 Most Rust crates are members of `packages/Cargo.toml`, but some crates are
 intentionally excluded because they require a distinct safety or dependency
-policy. The privileged broker lives at `packages/nixling-priv-broker/`; the
+policy. The privileged broker lives at `packages/d2b-priv-broker/`; the
 persistent-shell feasibility helper lives at
-`packages/nixling-guest-shell-runner/`.
+`packages/d2b-guest-shell-runner/`.
 
 Tests for those excluded workspaces still follow the same taxonomy: Type 2 unit
 tests live under `src/**`, Type 3 binary/integration tests live under

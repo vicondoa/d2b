@@ -1,6 +1,6 @@
 # nix-unit cases migrated from tests/broker-caps-eval.sh.
 #
-# Asserts that systemd.services.nixling-priv-broker.serviceConfig
+# Asserts that systemd.services.d2b-priv-broker.serviceConfig
 # .CapabilityBoundingSet matches the canonical broker bounding set EXACTLY
 # (no additions, no omissions) and that AmbientCapabilities carries the
 # sentinel empty-string entry that drops all ambient caps.
@@ -50,19 +50,19 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
-    nixling.daemonExperimental.enable = true;
+    d2b.daemonExperimental.enable = true;
   };
 
-  brokerService = (mkEval [ base ]).config.systemd.services.nixling-priv-broker;
+  brokerService = (mkEval [ base ]).config.systemd.services.d2b-priv-broker;
   svc = brokerService.serviceConfig;
   env = brokerService.environment;
   cbs = svc.CapabilityBoundingSet or null;

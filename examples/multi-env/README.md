@@ -1,6 +1,6 @@
 # examples/multi-env — two isolated envs
 
-Two `nixling.envs.<env>` instances side-by-side. Each env gets its
+Two `d2b.envs.<env>` instances side-by-side. Each env gets its
 own bridges, its own auto-declared net VM, its own dnsmasq pool, its
 own nftables ruleset, and its own usbipd-proxy backend port. VMs in
 different envs cannot reach each other at the network layer; the
@@ -79,8 +79,8 @@ Three things worth noticing on the diagram:
 Two-line env declarations:
 
 ```nix
-nixling.envs.work     = { lanSubnet = "10.20.0.0/24"; uplinkSubnet = "192.0.2.0/30"; };
-nixling.envs.personal = { lanSubnet = "10.30.0.0/24"; uplinkSubnet = "192.0.2.4/30"; };
+d2b.envs.work     = { lanSubnet = "10.20.0.0/24"; uplinkSubnet = "192.0.2.0/30"; };
+d2b.envs.personal = { lanSubnet = "10.30.0.0/24"; uplinkSubnet = "192.0.2.4/30"; };
 ```
 
 …produce, per env, with zero further config:
@@ -90,20 +90,20 @@ nixling.envs.personal = { lanSubnet = "10.30.0.0/24"; uplinkSubnet = "192.0.2.4/
 | Uplink bridge                      | `br-work-up`                            | `br-personal-up`                        |
 | LAN bridge                         | `br-work-lan`                           | `br-personal-lan`                       |
 | Host uplink IP                     | `192.0.2.1`                             | `192.0.2.5`                             |
-| Net VM (auto, `autostart = true`)  | `nixling.vms.sys-work-net`              | `nixling.vms.sys-personal-net`          |
+| Net VM (auto, `autostart = true`)  | `d2b.vms.sys-work-net`              | `d2b.vms.sys-personal-net`          |
 | Net VM uplink IP                   | `192.0.2.2`                             | `192.0.2.6`                             |
 | Net VM LAN IP (= gateway, dnsmasq) | `10.20.0.1`                             | `10.30.0.1`                             |
 | DHCP overflow pool                 | `10.20.0.251–254`                       | `10.30.0.251–254`                       |
-| usbipd proxy unit                  | `nixling-sys-work-usbipd-proxy`         | `nixling-sys-personal-usbipd-proxy`     |
+| usbipd proxy unit                  | `d2b-sys-work-usbipd-proxy`         | `d2b-sys-personal-usbipd-proxy`     |
 | usbipd proxy bind                  | `192.0.2.1:3240`                        | `192.0.2.5:3240`                        |
 | usbipd backend port (loopback)     | `3242`                                  | `3241`                                  |
 | Host static route                  | `10.20.0.0/24 via 192.0.2.2`            | `10.30.0.0/24 via 192.0.2.6`            |
-| Net VM state dir                   | `/var/lib/nixling/sys/work-net/`        | `/var/lib/nixling/sys/personal-net/`    |
+| Net VM state dir                   | `/var/lib/d2b/sys/work-net/`        | `/var/lib/d2b/sys/personal-net/`    |
 
 The two `sys-*-net` VMs are real microVMs, just declared by the
-framework instead of the user. They show up in `nixling list` like
-any other VM and can be inspected with `nixling console sys-work-net`.
-They are autostarted at host boot — see `nixling.vms.<name>.autostart`,
+framework instead of the user. They show up in `d2b list` like
+any other VM and can be inspected with `d2b console sys-work-net`.
+They are autostarted at host boot — see `d2b.vms.<name>.autostart`,
 defaulted to `true` for net VMs by `network.nix`.
 
 ### Backend port allocation
@@ -128,8 +128,8 @@ any env that sorts after it. The uplink-side proxy bind
 Workload VMs reference an env via `env` + `index`:
 
 ```nix
-nixling.vms.work-app     = { env = "work";     index = 10; };  # → 10.20.0.10
-nixling.vms.personal-app = { env = "personal"; index = 10; };  # → 10.30.0.10
+d2b.vms.work-app     = { env = "work";     index = 10; };  # → 10.20.0.10
+d2b.vms.personal-app = { env = "personal"; index = 10; };  # → 10.30.0.10
 ```
 
 From `(env, index)`, the framework deterministically derives:
@@ -146,7 +146,7 @@ From `(env, index)`, the framework deterministically derives:
 - **Per-VM firewall policy** in the net VM's nftables ruleset:
   - LAN ↔ LAN ACCEPT (intra-env east-west).
   - LAN → `192.0.2.1:3240` ACCEPT (USBIP carve-out to host uplink).
-  - LAN → `nixling.hostLanCidrs` DROP (host's primary LAN blocked).
+  - LAN → `d2b.hostLanCidrs` DROP (host's primary LAN blocked).
   - LAN → all other destinations: ACCEPT (masqueraded via the net
     VM's uplink → host → physical NIC).
 
@@ -155,10 +155,10 @@ Index uniqueness is scoped **per-env** — `work-app.index = 10` and
 MACs and IPs because the env name is part of the MAC seed and
 the LAN subnet differs.
 
-## `nixling.hostLanCidrs`: block host neighbours
+## `d2b.hostLanCidrs`: block host neighbours
 
 ```nix
-nixling.hostLanCidrs = [ "192.168.1.0/24" ];
+d2b.hostLanCidrs = [ "192.168.1.0/24" ];
 ```
 
 Unioned into every env's `hostBlocklist`, so a workload VM in
@@ -191,7 +191,7 @@ the reservation guarantees they always get the framework-derived IP.
 
 ## `extraNetConfig`: when and when not
 
-`nixling.envs.<env>.extraNetConfig` is an arbitrary NixOS module
+`d2b.envs.<env>.extraNetConfig` is an arbitrary NixOS module
 merged into the env's auto-declared net VM. It exists for things the
 framework deliberately doesn't have first-class options for:
 
@@ -240,7 +240,7 @@ Each env's USBIP path is fully isolated:
    VM's default route goes via the host's `192.0.2.1` and the host
    has no route from `work-lan` to the `personal-up` bridge.
 
-`nixling usb <vm>` reads the VM's env from the manifest and
+`d2b usb <vm>` reads the VM's env from the manifest and
 addresses the correct uplink IP automatically.
 
 ## Try it
@@ -263,14 +263,14 @@ construction in `network.nix`), and both workload VMs **down**.
 Concretely:
 
 ```bash
-nixling list
+d2b list
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # personal-app       personal  false     false false   10.30.0.10      stopped
 # sys-personal-net   personal  false     false false   192.0.2.6       running (net-vm)
 # sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
 # work-app           work      false     false false   10.20.0.10      stopped
 
-nixling status
+d2b status
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # personal-app       personal  false     false false   10.30.0.10      stopped
 # sys-personal-net   personal  false     false false   192.0.2.6       running (net-vm)
@@ -287,15 +287,15 @@ nixling status
 # Net VMs (`sys-<env>-net`) show STATUS=`running (net-vm)` after
 # activation. They are framework-managed and `autostart = true` by
 # construction in `nixos-modules/network.nix`. Workload VMs default to `stopped`
-# until you `nixling vm start <vm> --apply` (or set `autostart = true` per-VM).
+# until you `d2b vm start <vm> --apply` (or set `autostart = true` per-VM).
 
-nixling vm start work-app --apply
-nixling vm start personal-app --apply
-ssh -i /var/lib/nixling/keys/work-app_ed25519     alice@10.20.0.10 hostname
-ssh -i /var/lib/nixling/keys/personal-app_ed25519 alice@10.30.0.10 hostname
+d2b vm start work-app --apply
+d2b vm start personal-app --apply
+ssh -i /var/lib/d2b/keys/work-app_ed25519     alice@10.20.0.10 hostname
+ssh -i /var/lib/d2b/keys/personal-app_ed25519 alice@10.30.0.10 hostname
 
 # Prove the isolation invariant: work-app cannot reach personal-app.
-ssh -i /var/lib/nixling/keys/work-app_ed25519 alice@10.20.0.10 \
+ssh -i /var/lib/d2b/keys/work-app_ed25519 alice@10.20.0.10 \
   -- 'ping -c1 -W2 10.30.0.10'
 # (expect timeout: net VMs do not bridge between envs)
 ```
@@ -304,7 +304,7 @@ ssh -i /var/lib/nixling/keys/work-app_ed25519 alice@10.20.0.10 \
 
 ### A VM start reports host route or CIDR drift
 
-`nixlingd` owns the per-VM lifecycle DAG, and the broker owns host
+`d2bd` owns the per-VM lifecycle DAG, and the broker owns host
 network mutations. There is no per-VM systemd template or route-preflight
 singleton to restart. If a start/status/host-check path reports that an
 env workload route resolves through the wrong device (instead of the
@@ -314,19 +314,19 @@ expected `br-<env>-up` uplink bridge), common causes are:
   with the env's uplink. Inspect with
   `ip route show table all | grep -E '10\.(20|30)\.'`. Delete
   stragglers with `sudo ip route del <route>`, then re-run
-  `nixling host check` or the VM start command.
+  `d2b host check` or the VM start command.
 - **Chosen env CIDR overlaps a route the host already owns**
   (Tailscale subnet, WireGuard, VPN-pushed route). Pick a disjoint
   CIDR or unset the conflicting route source.
 - **Bridge `br-<env>-up` not present** — typically a botched
-  rebuild. Re-run `sudo nixos-rebuild switch`, restart `nixlingd` if the
+  rebuild. Re-run `sudo nixos-rebuild switch`, restart `d2bd` if the
   switch replaced it, and inspect `systemd-networkd` logs for the bridge.
 
 ## Common gotchas
 
 - **CIDR overlap is fatal at eval time.** Both envs share the host
   but their `lanSubnet`s and `uplinkSubnet`s MUST be disjoint from
-  each other AND from every entry in `nixling.hostLanCidrs`.
+  each other AND from every entry in `d2b.hostLanCidrs`.
   `assertions.nix` enforces this with `cidrOverlaps`; the route
   preflight above is the runtime backstop.
 - **Workload VMs in env A cannot reach VMs in env B by design.**
@@ -355,11 +355,11 @@ expected `br-<env>-up` uplink bridge), common causes are:
 
 ## After subsequent rebuilds
 
-`nixos-rebuild switch` updates the declared nixling bundle and may
-restart `nixlingd`, but daemon restarts are continuation events:
+`nixos-rebuild switch` updates the declared d2b bundle and may
+restart `d2bd`, but daemon restarts are continuation events:
 running VM runners are re-adopted rather than cycled. After rebuilding,
-`nixling list` flags any VM whose declared closure has drifted from the
-running one as `[pending restart]`; apply with `nixling vm restart
+`d2b list` flags any VM whose declared closure has drifted from the
+running one as `[pending restart]`; apply with `d2b vm restart
 <vm> --apply`. See
 [`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
@@ -383,8 +383,8 @@ plain `nixosConfigurations.demo` variant is unchanged.
 
 In v1.1 the framework is daemon-only (per
 [ADR 0015](../../docs/adr/0015-daemon-only-clean-break.md)): every
-enabled VM is supervised by `nixlingd`. The historical
-`nixling.vms.<vm>.supervisor` option (and the legacy systemd-template
+enabled VM is supervised by `d2bd`. The historical
+`d2b.vms.<vm>.supervisor` option (and the legacy systemd-template
 path it selected) was removed, so this variant no longer demonstrates
 mixed legacy/daemon supervision — it is retained only for the
 network-knob coverage.
@@ -393,17 +393,17 @@ What the variant changes on top of `configuration.nix`:
 
 | Key                                         | Value                | Why                                                          |
 |---------------------------------------------|----------------------|--------------------------------------------------------------|
-| `nixling.site.allowUnsafeEastWest`          | `true`               | Site-level acknowledgement: this host accepts relaxed east-west isolation for envs that opt in. |
-| `nixling.envs.work.mtu`                     | `1400`               | Reference for a tunneled uplink. Propagates to host bridges, TAPs, the workload guest NIC, and the net VM's NICs (see `net.nix`). |
-| `nixling.envs.work.mssClamp`                | `true`               | Adds the TCP MSS clamp rule on the net VM's nftables forward chain; the emitted `host.json` records the resolved MSS value (`mtu - 40` = `1360` here). |
-| `nixling.envs.work.lan.allowEastWest`       | `true`               | First half of the east-west double opt-in. By itself does nothing; pairs with `site.allowUnsafeEastWest`. |
+| `d2b.site.allowUnsafeEastWest`          | `true`               | Site-level acknowledgement: this host accepts relaxed east-west isolation for envs that opt in. |
+| `d2b.envs.work.mtu`                     | `1400`               | Reference for a tunneled uplink. Propagates to host bridges, TAPs, the workload guest NIC, and the net VM's NICs (see `net.nix`). |
+| `d2b.envs.work.mssClamp`                | `true`               | Adds the TCP MSS clamp rule on the net VM's nftables forward chain; the emitted `host.json` records the resolved MSS value (`mtu - 40` = `1360` here). |
+| `d2b.envs.work.lan.allowEastWest`       | `true`               | First half of the east-west double opt-in. By itself does nothing; pairs with `site.allowUnsafeEastWest`. |
 
 ### East-west double opt-in
 
-`nixling.envs.<env>.lan.allowEastWest = true` is one half of the
+`d2b.envs.<env>.lan.allowEastWest = true` is one half of the
 double opt-in for relaxed isolation between workload LAN TAPs in
 the same env. The other half is the site-level acknowledgement
-`nixling.site.allowUnsafeEastWest = true`. **Both must be true**
+`d2b.site.allowUnsafeEastWest = true`. **Both must be true**
 for the per-tap `bridgePortFlags.isolated` flag to flip to `false`
 on workload LAN ports — anything less leaves the default isolation
 in place. The emitted `host.json` records the resolved state as
@@ -418,7 +418,7 @@ no peers to reach.
 
 ### MTU and MSS clamp
 
-`nixling.envs.<env>.mtu` propagates to:
+`d2b.envs.<env>.mtu` propagates to:
 
 - the env's LAN bridge (`br-<env>-lan`);
 - the env's uplink bridge (`br-<env>-up`);
@@ -428,7 +428,7 @@ no peers to reach.
 - the workload guest's primary NIC (the guest-side
   `10-eth-dhcp` networkd entry).
 
-`nixling.envs.<env>.mssClamp = true` adds the net VM's TCP MSS
+`d2b.envs.<env>.mssClamp = true` adds the net VM's TCP MSS
 clamp rule (`tcp flags syn tcp option maxseg size set rt mtu`)
 to the nftables forward chain. The emitted `host.json` records
 the resolved MSS as `environments[].mssClamp` (integer, equal to
@@ -436,11 +436,11 @@ the env MTU minus 40 bytes; `null` when `mssClamp` is unset).
 
 ### VM supervision (daemon-only)
 
-In v1.1 there is no `nixling.vms.<vm>.supervisor` option — it was
+In v1.1 there is no `d2b.vms.<vm>.supervisor` option — it was
 removed when the framework went daemon-only (per
 [ADR 0015](../../docs/adr/0015-daemon-only-clean-break.md)). Setting it
 now fails eval with a typed message. Every enabled VM is supervised by
-`nixlingd`; there is no per-VM choice to make.
+`d2bd`; there is no per-VM choice to make.
 
 Daemon-supervised VMs:
 
@@ -463,7 +463,7 @@ systemd-template path was retired in v1.1.
 [`docs/how-to/host-prepare.md`](../../docs/how-to/host-prepare.md))
 documents the verb that materialises the daemon-owned host state:
 bridges, TAPs, nftables, sysctls, NetworkManager unmanaged
-config, `/etc/hosts`. It reconciles the nixling-owned resources for
+config, `/etc/hosts`. It reconciles the d2b-owned resources for
 the declared envs and reports `nothing-to-do` when the host already
 matches the bundle. See the host-prepare guide for details.
 
@@ -488,8 +488,8 @@ per-VM systemd unit references in the emitted `vms.json` /
 `processes.json`.
 
 > **Note on the in-tree path** — the version of `flake.nix` checked
-> into this directory uses `nixling.url = "path:../..";` so the
+> into this directory uses `d2b.url = "path:../..";` so the
 > example can be evaluated against the in-tree framework without a
 > network. When you copy this layout into your own repo, swap it
-> for a real flake ref (`github:vicondoa/nixling/v0.1.0` or a
+> for a real flake ref (`github:vicondoa/d2b/v0.1.0` or a
 > pinned revision).

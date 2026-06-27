@@ -1,4 +1,4 @@
-# `nixling shell <target> detach --json`
+# `d2b shell <target> detach --json`
 
 > Diataxis: reference. JSON output contract for persistent shell detach.
 

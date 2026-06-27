@@ -1,6 +1,6 @@
-# ipv6-off-readback — nixling-host netlink IPv6-off five-step sequence
+# ipv6-off-readback — d2b-host netlink IPv6-off five-step sequence
 # #[test]s. Successor of tests/ipv6-off-readback.sh, which only ran these
-# #[test]s via substring filters (`cargo test -p nixling-host --all-features
+# #[test]s via substring filters (`cargo test -p d2b-host --all-features
 # -- <name>`); each name resolves to exactly one netlink::tests test, and
 # they already run in the gated `cargo test --workspace` pass in
 # tests/tools/rust-workspace-checks.sh. Pinned fail-closed via

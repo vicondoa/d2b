@@ -1,5 +1,5 @@
 {
-  # Build the nixling Wayland sandbox image (ADR 0032).
+  # Build the d2b Wayland sandbox image (ADR 0032).
   #
   #   nix-build image.nix            # -> ./result (an OCI image tar.gz)
   #   ./build-and-push.sh            # build + push to the deployed ACR
@@ -24,12 +24,12 @@ let
   '';
 
   # The handshake-gated relay endpoint binary, built from the main workspace.
-  # The gateway-generated in-sandbox command runs `nixling-gateway-relay
+  # The gateway-generated in-sandbox command runs `d2b-gateway-relay
   # sender` with relay auth supplied by the gateway (P0: a short-lived Send
-  # bearer, never the rule key) and sends the nixling per-session display
+  # bearer, never the rule key) and sends the d2b per-session display
   # credential as the relay prologue before any Waypipe byte flows.
-  nixlingRelaySrc = builtins.path {
-    name = "nixling-packages-src";
+  d2bRelaySrc = builtins.path {
+    name = "d2b-packages-src";
     path = ../../../packages;
     filter =
       path: _type:
@@ -38,34 +38,34 @@ let
       in
       base != "target" && base != ".cargo";
   };
-  nixlingGatewayRelay = pkgs.rustPlatform.buildRustPackage {
-    pname = "nixling-gateway-relay";
+  d2bGatewayRelay = pkgs.rustPlatform.buildRustPackage {
+    pname = "d2b-gateway-relay";
     version = "0.0.0-bootstrap";
-    src = nixlingRelaySrc;
+    src = d2bRelaySrc;
     cargoLock = {
       lockFile = ../../../packages/Cargo.lock;
       outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
     };
     cargoBuildFlags = [
       "-p"
-      "nixling-gateway-runtime"
+      "d2b-gateway-runtime"
       "--bin"
-      "nixling-gateway-relay"
+      "d2b-gateway-relay"
     ];
     env.CARGO_BUILD_RUSTC_WRAPPER = "";
     doCheck = false;
   };
 
   msiTokenHelper = pkgs.writeShellApplication {
-    name = "nl-msi-token";
+    name = "d2b-msi-token";
     runtimeInputs = [
       pkgs.bashInteractive
       pkgs.coreutils
     ];
     text = ''
       set -euo pipefail
-      resource="''${1:?usage: nl-msi-token <resource> [client-id]}"
-      client_id="''${2:-''${NIXLING_MI_CLIENT_ID:-}}"
+      resource="''${1:?usage: d2b-msi-token <resource> [client-id]}"
+      client_id="''${2:-''${D2B_MI_CLIENT_ID:-}}"
       ep="''${IDENTITY_ENDPOINT:?IDENTITY_ENDPOINT not injected}"
       rest="''${ep#http://}"
       hostport="''${rest%%/*}"
@@ -92,22 +92,22 @@ let
   };
 
   # The in-sandbox legacy entrypoint remains available for manual probes; the
-  # gateway-generated command uses `nixling-gateway-relay` and `nl-msi-token`
+  # gateway-generated command uses `d2b-gateway-relay` and `d2b-msi-token`
   # directly.
   agent = pkgs.writeShellApplication {
-    name = "nixling-sandbox-agent";
+    name = "d2b-sandbox-agent";
     runtimeInputs = [
       pkgs.waypipe
       pkgs.foot
       pkgs.coreutils
-      nixlingGatewayRelay
+      d2bGatewayRelay
       msiTokenHelper
     ];
-    text = builtins.readFile ./bridge/nixling-sandbox-agent.sh;
+    text = builtins.readFile ./bridge/d2b-sandbox-agent.sh;
   };
 in
 pkgs.dockerTools.buildLayeredImage {
-  name = "nixling-wayland";
+  name = "d2b-wayland";
   tag = "latest";
 
   contents = [
@@ -119,7 +119,7 @@ pkgs.dockerTools.buildLayeredImage {
     pkgs.fontconfig
     pkgs.cacert
     agent
-    nixlingGatewayRelay
+    d2bGatewayRelay
     msiTokenHelper
     footConfig
     pkgs.dockerTools.fakeNss # minimal /etc/passwd + /etc/group + nobody
@@ -127,26 +127,26 @@ pkgs.dockerTools.buildLayeredImage {
 
   # World-writable /tmp + the runtime dir the agent uses.
   extraCommands = ''
-    mkdir -p tmp run/nixling
+    mkdir -p tmp run/d2b
     chmod 1777 tmp
-    chmod 0700 run/nixling
+    chmod 0700 run/d2b
   '';
 
   config = {
-    Entrypoint = [ "${agent}/bin/nixling-sandbox-agent" ];
+    Entrypoint = [ "${agent}/bin/d2b-sandbox-agent" ];
     Env = [
-      "XDG_RUNTIME_DIR=/run/nixling"
+      "XDG_RUNTIME_DIR=/run/d2b"
       "XDG_CONFIG_DIRS=/etc/xdg"
       "FONTCONFIG_FILE=${fontsConf}"
       "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
       "LC_ALL=C.UTF-8"
-      "NIXLING_APP=foot"
-      "NIXLING_WP_COMPRESS=zstd"
+      "D2B_APP=foot"
+      "D2B_WP_COMPRESS=zstd"
       "TERM=xterm-256color"
     ];
     Labels = {
-      "org.nixling.component" = "aca-wayland-poc";
-      "org.nixling.adr" = "0032";
+      "org.d2b.component" = "aca-wayland-poc";
+      "org.d2b.adr" = "0032";
     };
   };
 }

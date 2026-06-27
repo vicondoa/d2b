@@ -27,28 +27,28 @@ This fragment covers the network reconcile deliverables:
 ```bash
 # Read-only inventory: lists derived ifnames, declared bridges,
 # detected NM version + state, host LAN CIDRs, route preflight result.
-nixling host check --json
+d2b host check --json
 
 # Plan-only: emits the reconcile diff without mutating host state.
-sudo nixling host prepare --dry-run
+sudo d2b host prepare --dry-run
 
 # `--apply` is NOT yet wired: the daemon-side typed-intent dispatch
 # and bundle resolver are pending, so this returns `daemon-down`
 # (exit 1) today. Use `--dry-run` for now. Once wired it will take
 # the per-VM lock, apply the diff, and run the IPv6-off readback
 # gate, failing closed on drift.
-sudo nixling host prepare --apply
+sudo d2b host prepare --apply
 
 # Same pending disposition for destroy (`daemon-down`, exit 1, today).
 # Once wired it will reverse the host-prepare mutations only (bridges,
 # TAPs, NM drop-in, /etc/hosts managed block, IPv6 sysctls). Foreign
 # state untouched.
-sudo nixling host destroy --apply
+sudo d2b host destroy --apply
 ```
 
 `host prepare --apply` is refused on a Tier 0 NixOS-legacy host —
-one where nixling resolves no daemon-owned bundle to reconcile. The
-per-VM `nixling.vms.<vm>.supervisor` option was removed in v1.1 (per
+one where d2b resolves no daemon-owned bundle to reconcile. The
+per-VM `d2b.vms.<vm>.supervisor` option was removed in v1.1 (per
 ADR 0015); every enabled VM is now daemon-supervised, so a normal v1.1
 host resolves to the daemon path.
 
@@ -59,10 +59,10 @@ grep for and refuse to modify:
 
 | File                                                | Begin marker                    | End marker                    |
 | --------------------------------------------------- | ------------------------------- | ----------------------------- |
-| `/etc/hosts`                                        | `# nixling-managed begin`       | `# nixling-managed end`       |
-| `/etc/NetworkManager/conf.d/00-nixling-unmanaged.conf` | `# nixling-managed begin`    | `# nixling-managed end`       |
-| `/proc/sys/net/ipv6/conf/<nixling-ifname>/*`        | per-link only (no marker file)  | n/a                           |
-| `/proc/sys/net/ipv4/conf/<nixling-ifname>/*`        | per-link only                   | n/a                           |
+| `/etc/hosts`                                        | `# d2b-managed begin`       | `# d2b-managed end`       |
+| `/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf` | `# d2b-managed begin`    | `# d2b-managed end`       |
+| `/proc/sys/net/ipv6/conf/<d2b-ifname>/*`        | per-link only (no marker file)  | n/a                           |
+| `/proc/sys/net/ipv4/conf/<d2b-ifname>/*`        | per-link only                   | n/a                           |
 | `/proc/sys/net/bridge/bridge-nf-call-*`             | global; only written when `br_netfilter` is loaded | n/a |
 
 Foreign lines outside the marker block are preserved byte-for-byte.
@@ -71,7 +71,7 @@ hardlink, rename-race, and world-writable-parent on every marked file.
 
 ## IPv6-off 5-step ordering (per link)
 
-Each nixling-owned bridge or TAP follows the same sequence. Any drift
+Each d2b-owned bridge or TAP follows the same sequence. Any drift
 between the step-3 write and the step-5 readback is the
 `ipv6-sysctl-drift` canary and fails closed.
 
@@ -103,7 +103,7 @@ between the step-3 write and the step-5 readback is the
 - NM 1.46. `nmcli general reload conf` is the correct command.
 - `/proc/modules` typically contains `br_netfilter`; the bridge-nf
   sysctls are written.
-- If `nmcli -t -f DEVICE,STATE device status` reports the nixling
+- If `nmcli -t -f DEVICE,STATE device status` reports the d2b
   ifname as `connected` after the reload, the failure mode is
   `nm-managed-foreign-conflict`. Audit log lists the foreign profile
   ID; remove or rename it and, once `host prepare --apply` is wired,
@@ -114,7 +114,7 @@ between the step-3 write and the step-5 readback is the
 
 - NM 1.48. Same reload command as Ubuntu.
 - `firewalld` is active by default. Host prepare detects `firewalld`
-  and refuses to apply the `inet nixling` table unless an explicit
+  and refuses to apply the `inet d2b` table unless an explicit
   coexistence policy is declared in the bundle (`refuse` is the
   default).
 
@@ -127,7 +127,7 @@ between the step-3 write and the step-5 readback is the
 ### NixOS (Tier 0)
 
 - `host prepare --apply` is refused on the legacy path. Tier-0
-  consumers use the NixOS module: every nixling-owned bridge, TAP,
+  consumers use the NixOS module: every d2b-owned bridge, TAP,
   sysctl, NM unmanaged entry, and `/etc/hosts` block is materialised
   declaratively via `nixos-modules/`. The `host doctor --read-only`
   command still runs and reports drift between the module-emitted
@@ -153,18 +153,18 @@ mode in `host.json` under `host.ch.netHandoffMode`:
 
 ## Host LAN CIDR derivation
 
-`nixling host check` reports the detected host LAN CIDRs and any
+`d2b host check` reports the detected host LAN CIDRs and any
 `ambiguous-host-lan` finding (point-to-point / VPN-like links). The
 derivation rule:
 
-- skip nixling-owned links (by prefix);
+- skip d2b-owned links (by prefix);
 - skip loopback (`lo`);
 - skip Docker/libvirt-known prefixes (`docker*`, `virbr*`, `lxcbr*`);
 - skip DOWN-state links;
 - collect remaining IPv4 `RT_TABLE_MAIN scope LINK` destinations;
 - flag VPN-like routes (point-to-point, no broadcast) as ambiguous —
   do not include automatically. Operator overrides via
-  `nixling.site.hostLanCidrs`.
+  `d2b.site.hostLanCidrs`.
 
 ## Failure modes operators will see
 
@@ -174,7 +174,7 @@ derivation rule:
 | `ifname-collision`                  | Two `(env, vm, role)` keys derived the same ifname.      |
 | `ipv6-sysctl-drift`                 | Per-link IPv6 sysctl readback diverged from step-3 write.|
 | `bridge-port-flag-drift`            | Post-`SetBridgePortFlags` readback diverged.             |
-| `nm-managed-foreign-conflict`       | NM still claims a nixling-declared ifname.               |
+| `nm-managed-foreign-conflict`       | NM still claims a d2b-declared ifname.               |
 | `nm-reload-required`                | NM reload command failed; broker rolled back.            |
 | `route-preflight-no-default-route`  | Declared uplink has no matching default route.           |
 | `route-preflight-foreign-default-route` | Default route exists but `via` differs from `host.json`. |

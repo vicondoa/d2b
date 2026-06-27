@@ -16,9 +16,9 @@ bootstraps it via `nix shell nixpkgs#podman`.
 that cannot be proven by a native Rust test or a nix eval. Today that is one
 case:
 
-- `ubuntu-host-check` — proves a statically-linked nixling binary
-  (`nixling-guestd-static`) runs on a stock `ubuntu:24.04` userland, i.e. the
-  guest-side binary is portable to the distros nixling targets.
+- `ubuntu-host-check` — proves a statically-linked d2b binary
+  (`d2b-guestd-static`) runs on a stock `ubuntu:24.04` userland, i.e. the
+  guest-side binary is portable to the distros d2b targets.
 
 ## What this tier is deliberately NOT for
 
@@ -27,13 +27,13 @@ already exists, far more cheaply and without containers:
 
 | What | Where | Cost |
 | --- | --- | --- |
-| Broker adopts the socket-activated fd (`LISTEN_FDS` fd-3 handoff) + serves a Hello round-trip | `packages/nixling-priv-broker/tests/socket_activation.rs` | ~0.4 s, unprivileged |
-| Daemon binds `public.sock`, serves Hello/vmStart, `SO_PEERCRED` authz, writes the version file | `packages/nixlingd/tests/daemon_*.rs` | native, hermetic |
-| Unit shape + `Wants=`/ordering, broker capability set, tmpfiles, evidence-record shape | `tests/unit/nix/cases/{broker-socket-activation,nixlingd-startup-smoke}.nix` | nix eval, fail-closed |
+| Broker adopts the socket-activated fd (`LISTEN_FDS` fd-3 handoff) + serves a Hello round-trip | `packages/d2b-priv-broker/tests/socket_activation.rs` | ~0.4 s, unprivileged |
+| Daemon binds `public.sock`, serves Hello/vmStart, `SO_PEERCRED` authz, writes the version file | `packages/d2bd/tests/daemon_*.rs` | native, hermetic |
+| Unit shape + `Wants=`/ordering, broker capability set, tmpfiles, evidence-record shape | `tests/unit/nix/cases/{broker-socket-activation,d2bd-startup-smoke}.nix` | nix eval, fail-closed |
 
 A faithful systemd-boot container was built and **measured**: even forcing
 `pkgs.systemdMinimal`, the image stays **~1.4 G** to ship. The bulk is not
-systemd — it is the nixling bundle under test, whose process descriptors
+systemd — it is the d2b bundle under test, whose process descriptors
 transitively reference the full per-VM runtime substrate (swtpm → tpm2-tss,
 the hypervisor, virtiofsd, store-overlay → cryptsetup, full systemd). On an
 Ubuntu CI runner with no `/nix/store`, that 1.4 G must be built-or-fetched

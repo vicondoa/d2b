@@ -1,2 +1,2 @@
 # ifname-nix-rust-parity — rendered host.json ifname contract test.
-nixling-contract-tests::ifname_parity rendered_host_json_ifname_mappings_pass_looks_nixling_owned
+d2b-contract-tests::ifname_parity rendered_host_json_ifname_mappings_pass_looks_d2b_owned

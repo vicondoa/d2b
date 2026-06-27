@@ -1,7 +1,7 @@
 error: host-prepare-apply-error
   code: route-preflight-foreign-default-route
   exit_code: 1
-  what_was_checked: Whether the host's default route is on a nixling-owned interface.
-  observed_state: Default route observed via a nixling-owned bridge; nixling refuses to claim it.
+  what_was_checked: Whether the host's default route is on a d2b-owned interface.
+  observed_state: Default route observed via a d2b-owned bridge; d2b refuses to claim it.
   remediation: Move the default route to the upstream uplink before running `host prepare --apply`.
   docs_anchor: docs/reference/error-codes.md#route-preflight-foreign-default-route

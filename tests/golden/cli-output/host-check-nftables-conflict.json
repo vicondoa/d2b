@@ -3,7 +3,7 @@
   "docs_anchor": "docs/reference/error-codes.md#nftables-conflict",
   "exit_code": 1,
   "kind": "host-check-error",
-  "observed_state": "Probe detected an unmanaged nft framework conflicting with nixling's policy.",
+  "observed_state": "Probe detected an unmanaged nft framework conflicting with d2b's policy.",
   "remediation": "Configure firewallCoexistence to declare the running manager, or stop the conflicting service.",
   "what_was_checked": "Whether a conflicting nft framework (firewalld/ufw raw) is active."
 }

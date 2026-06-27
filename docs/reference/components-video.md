@@ -25,8 +25,8 @@ access is still masked.
 Video is an explicit graphics opt-in:
 
 ```nix
-nixling.vms.<vm>.graphics.enable = true;
-nixling.vms.<vm>.graphics.videoSidecar = true;
+d2b.vms.<vm>.graphics.enable = true;
+d2b.vms.<vm>.graphics.videoSidecar = true;
 ```
 
 `graphics.videoSidecar = true` without `graphics.enable = true` fails eval.
@@ -35,7 +35,7 @@ On NVIDIA hosts using the proprietary VA-API/NVDEC backend, explicitly opt in
 to the additional closed device set:
 
 ```nix
-nixling.vms.<vm>.graphics.videoNvidiaDecode = true;
+d2b.vms.<vm>.graphics.videoNvidiaDecode = true;
 ```
 
 This requires `graphics.videoSidecar = true`.
@@ -44,7 +44,7 @@ or start the media backend.
 
 Firefox does not consume this `/dev/video*` V4L2 M2M path directly. Firefox's
 Linux hardware decode path is VA-API; the experimental switch for that is
-`nixling.vms.<vm>.graphics.virglVideo`, documented in
+`d2b.vms.<vm>.graphics.virglVideo`, documented in
 [`components-graphics.md`](./components-graphics.md). Keep the distinction
 clear: `videoSidecar` is the daemon-spawned vhost-user media device, while
 `virglVideo` advertises VA-API video through the GPU/virglrenderer path.
@@ -54,26 +54,26 @@ Video decode is distinct from display streaming and GPU acceleration; see
 ## Host-side resources
 
 When enabled, the daemon-owned process DAG adds a `video` node. There is no
-per-VM systemd unit; `nixlingd` asks `nixling-priv-broker` to spawn the runner
+per-VM systemd unit; `d2bd` asks `d2b-priv-broker` to spawn the runner
 with `SpawnRunner { role: Video }` and tracks it by pidfd.
 
 | Resource | Shape |
 | --- | --- |
-| Supervisor | `nixlingd` DAG executor |
+| Supervisor | `d2bd` DAG executor |
 | Runner role | `RunnerRole::Video` |
 | Minijail profile | `vm-<vm>-video` |
-| Principal | `nixling-<vm>-video` |
-| Runtime directory | `/run/nixling-video/<vm>/` |
-| vhost-user socket | `/run/nixling-video/<vm>/video.sock` |
+| Principal | `d2b-<vm>-video` |
+| Runtime directory | `/run/d2b-video/<vm>/` |
+| vhost-user socket | `/run/d2b-video/<vm>/video.sock` |
 | Binary | patched crosvm video build from `nixos-modules/processes-json.nix` |
-| argv | `crosvm device video-decoder --socket-path /run/nixling-video/<vm>/video.sock --backend vaapi` |
+| argv | `crosvm device video-decoder --socket-path /run/d2b-video/<vm>/video.sock --backend vaapi` |
 | Device allowlist | default: `/dev/dri/renderD128`; with `graphics.videoNvidiaDecode = true`: also `/dev/nvidiactl`, `/dev/nvidia0`, `/dev/nvidia-uvm` |
 
 Cloud Hypervisor must be the vendored patched `pkgs/spectrum-ch` build and its
 final argv must contain exactly one:
 
 ```text
---vhost-user-media socket=/run/nixling-video/<vm>/video.sock
+--vhost-user-media socket=/run/d2b-video/<vm>/video.sock
 ```
 
 `tests/video-contract-eval.sh` asserts this final evaluated shape, including
@@ -84,7 +84,7 @@ differs.
 
 The guest module adds:
 
-- `microvm.cloud-hypervisor.extraArgs = [ "--vhost-user-media" "socket=/run/nixling-video/<vm>/video.sock" ]`
+- `microvm.cloud-hypervisor.extraArgs = [ "--vhost-user-media" "socket=/run/d2b-video/<vm>/video.sock" ]`
 - `boot.extraModulePackages = [ virtio-media-driver ]`
 - `boot.kernelModules = [ "virtio_media" ]`
 
@@ -117,7 +117,7 @@ The guest module adds:
 
 `pkgs/spectrum-ch/cloud-hypervisor/0003-vhost-user-media-device.patch`
 hard-codes the virtio-media wire shape. The Rust constants in
-`nixling_host::video_argv` and
+`d2b_host::video_argv` and
 `tests/golden/runner-shape/video-argv-minimal.txt` mirror these values:
 
 | Pin | Value |

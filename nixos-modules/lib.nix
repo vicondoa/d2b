@@ -1,9 +1,9 @@
-# Shared pure helpers for the nixling framework. Imported as a
+# Shared pure helpers for the d2b framework. Imported as a
 # function (`import ./lib.nix { inherit lib; }`) by network.nix and
 # host.nix so they share the same MAC/IP derivation rules.
 #
 # Pass `pkgs` as well (`import ./lib.nix { inherit lib pkgs; }`) to
-# get `nixlingReadAudioState`, a Nix-store shell fragment that both
+# get `d2bReadAudioState`, a Nix-store shell fragment that both
 # audio.nix and cli.nix source for fail-closed audio-state reads.
 { lib, pkgs ? null }:
 
@@ -12,11 +12,11 @@ let
     let s = lib.toHexString i;
     in if lib.stringLength s == 1 then "0${s}" else s;
 
-  # nixling_read_audio_state <vm>
+  # d2b_read_audio_state <vm>
   # ------------------------------------------------------------
-  # Fail-closed reader for /var/lib/nixling/<vm>/audio-state.json.
+  # Fail-closed reader for /var/lib/d2b/<vm>/audio-state.json.
   # Output (one line on stdout): "mic=<on|off> speaker=<on|off>".
-  # NEVER exits non-zero — callers (extraArgsScript, nixling CLI)
+  # NEVER exits non-zero — callers (extraArgsScript, d2b CLI)
   # cannot handle a non-zero exit mid-flow.
   #
   # Returns "mic=off speaker=off" for EVERY error case
@@ -30,28 +30,28 @@ let
   #
   # The jq path is baked in at Nix eval time so the function works
   # in both audio.nix's extraArgsScript (minimal $PATH) and the
-  # nixling shell application (jq also in runtimeInputs, harmless).
-  nixlingReadAudioState =
+  # d2b shell application (jq also in runtimeInputs, harmless).
+  d2bReadAudioState =
     if pkgs == null then null
     else
-      pkgs.writeText "nixling-read-audio-state.sh" ''
-        nixling_read_audio_state() {
+      pkgs.writeText "d2b-read-audio-state.sh" ''
+        d2b_read_audio_state() {
           local _nas_vm="$1" _nas_f _nas_mic=off _nas_spk=off _nas_raw
           local _nas_canonical _nas_expected _nas_stat
           # State file lives under the root-owned state/ subdir.
           # VM state dir moved under vms/<vm>/.
-          _nas_f="/var/lib/nixling/vms/$_nas_vm/state/audio-state.json"
-          _nas_expected="/var/lib/nixling/vms/$_nas_vm/state/audio-state.json"
+          _nas_f="/var/lib/d2b/vms/$_nas_vm/state/audio-state.json"
+          _nas_expected="/var/lib/d2b/vms/$_nas_vm/state/audio-state.json"
           # Canonicalize: fail closed if path doesn't resolve or is a symlink
           # pointing outside the expected location.
           _nas_canonical=$(realpath -e "$_nas_f" 2>/dev/null) \
             || { printf 'mic=off speaker=off\n'; return 0; }
           [ "$_nas_canonical" = "$_nas_expected" ] \
             || { printf 'mic=off speaker=off\n'; return 0; }
-          # Verify ownership and mode: must be root:nixling 640.
+          # Verify ownership and mode: must be root:d2b 640.
           _nas_stat=$(stat -c '%U %G %a' "$_nas_canonical" 2>/dev/null) \
             || { printf 'mic=off speaker=off\n'; return 0; }
-          [ "$_nas_stat" = "root nixling 640" ] \
+          [ "$_nas_stat" = "root d2b 640" ] \
             || { printf 'mic=off speaker=off\n'; return 0; }
           if [ -r "$_nas_canonical" ]; then
             if _nas_raw=$(${pkgs.jq}/bin/jq -re '.mic' "$_nas_canonical" 2>/dev/null) \
@@ -64,10 +64,10 @@ let
             fi
           else
             # software-r2-1: file exists but is unreadable by the calling user
-            # (e.g. an interactive operator or nixling-gpu-<vm> before ACLs are
+            # (e.g. an interactive operator or d2b-gpu-<vm> before ACLs are
             # applied). Fail closed so the sidecar never gets audio access on
             # a permission error.
-            printf 'nixling: audio-state unreadable for %s (permission denied) — failing closed\n' "$_nas_vm" >&2
+            printf 'd2b: audio-state unreadable for %s (permission denied) — failing closed\n' "$_nas_vm" >&2
           fi
           printf 'mic=%s speaker=%s\n' "$_nas_mic" "$_nas_spk"
         }
@@ -75,7 +75,7 @@ let
 in
 rec {
   inherit hex2;
-  inherit nixlingReadAudioState;
+  inherit d2bReadAudioState;
 
   cleanRustPackagesSource = packagesPath:
     lib.cleanSourceWith {
@@ -261,7 +261,7 @@ rec {
   };
 
   runtimeHypervisorService = kind: (runtimeProviderCatalog.${kind}
-    or (throw "nixling: unsupported runtime kind '${kind}'"))._hypervisorService;
+    or (throw "d2b: unsupported runtime kind '${kind}'"))._hypervisorService;
 
   runtimeProviderCatalog = {
     nixos = {
@@ -303,7 +303,7 @@ rec {
     let
       kind = vmRuntimeKind vm;
       runtime = runtimeProviderCatalog.${kind}
-        or (throw "nixling: unsupported runtime kind '${kind}'");
+        or (throw "d2b: unsupported runtime kind '${kind}'");
     in builtins.removeAttrs runtime [ "_hypervisorService" ];
 
   # Shared helper extracted from minijail-profiles.nix and
@@ -312,7 +312,7 @@ rec {
   # algorithm or offset changes here, both consumers see the same UID,
   # preventing the ownership-matrix bug from silently returning.
   #
-  # Maps a principal name (e.g. "nixling-work-aad-swtpm") to a
+  # Maps a principal name (e.g. "d2b-work-aad-swtpm") to a
   # stable deterministic 24-bit UID in the range 50000..16827215.
   # `principal == "root"` short-circuits to UID 0 for the broker's
   # root-carve-out paths (ADR 0003).
@@ -363,7 +363,7 @@ rec {
   observabilityStackVsockCid = 1000;
 
   # Deterministic per-VM Cloud Hypervisor vsock CID. Env-backed VMs
-  # reserve slot 1 for the env net VM and use nixling.vms.<vm>.index
+  # reserve slot 1 for the env net VM and use d2b.vms.<vm>.index
   # for workloads (10..250). The stride intentionally exceeds the
   # maximum workload index so adjacent envs cannot collide.
   guestControlVsockCid = { name, envIndex ? null, index ? null, isNetVm ? false, isObservabilityVm ? false }:
@@ -483,24 +483,24 @@ rec {
   # vmRunner — single access point for per-VM runner config that
   # processes-json.nix / closures-json.nix /
   # minijail-profiles.nix / store.nix consume. Reads from
-  # `config.nixling._computed.vms.<name>.config.microvm.*` — the
-  # nixling-owned per-VM evaluator output (see
+  # `config.d2b._computed.vms.<name>.config.microvm.*` — the
+  # d2b-owned per-VM evaluator output (see
   # `nixos-modules/vm-evaluator.nix`). The
-  # `nixling._computed.vms.<name>` storage location is a SIBLING
-  # to `nixling.vms.<name>` to avoid module-system infinite
+  # `d2b._computed.vms.<name>` storage location is a SIBLING
+  # to `d2b.vms.<name>` to avoid module-system infinite
   # recursion (host.nix's composeVm pass cannot map over cfg.vms
-  # and write back to nixling.vms.<name>.computed without
+  # and write back to d2b.vms.<name>.computed without
   # cycling). NO upstream microvm.nix dependency.
   vmRunner = config: name:
-    config.nixling._computed.${name}.config.microvm or { };
+    config.d2b._computed.${name}.config.microvm or { };
 
   # Sibling helper for the per-VM toplevel build.
   vmToplevel = config: name:
-    config.nixling._computed.${name}.config.system.build.toplevel;
+    config.d2b._computed.${name}.config.system.build.toplevel;
 
   # Sibling helper for the per-VM declared runner derivation.
   # In v1.1+ this is always null (the broker generates runner
-  # argv in Rust via `packages/nixling-host/src/*_argv.rs`); the
+  # argv in Rust via `packages/d2b-host/src/*_argv.rs`); the
   # helper returns null for backward compat with consumers that
   # touch the path.
   vmDeclaredRunner = _config: _name: null;
@@ -509,7 +509,7 @@ rec {
   # for the per-VM guest-editable `guestConfigFile`.
   #
   # Returns the host-owned option path(s) (under `microvm.*` /
-  # `nixling.*`) that the guest file — OR ANY MODULE IT IMPORTS /
+  # `d2b.*`) that the guest file — OR ANY MODULE IT IMPORTS /
   # GENERATES — defined. An empty list means the guest file touched only
   # guest-OS options.
   #
@@ -517,7 +517,7 @@ rec {
   # `lib.evalModules` over the REAL nixpkgs NixOS module set, so a guest
   # module that READS a standard option (e.g.
   # `config.networking.hostName` in a `mkIf` guard) resolves instead of
-  # crashing the host eval. `microvm` and `nixling` are redeclared as
+  # crashing the host eval. `microvm` and `d2b` are redeclared as
   # detector options that nothing else defines, and a namespace is
   # reported iff `options.<ns>.isDefined` — i.e. the guest contributed a
   # real definition. Detection is by definition-EXISTENCE, so a guest's
@@ -539,12 +539,12 @@ rec {
   #      set, NOT the full per-VM module stack (`vm.config`, components,
   #      framework). So the `config.*` context can differ from the real
   #      eval, which has two consequences:
-  #      (a) a forbidden `microvm.*`/`nixling.*` definition gated on
+  #      (a) a forbidden `microvm.*`/`d2b.*` definition gated on
   #          `lib.mkIf <cond>` where `<cond>` depends on a value the real
   #          eval sets but this context does not can evaluate false here
   #          and true in the real eval, escaping the lint (false NEGATIVE);
   #      (b) a contained guest file that READS a framework-declared option
-  #          (e.g. `config.nixling.sshUser`, declared by the framework but
+  #          (e.g. `config.d2b.sshUser`, declared by the framework but
   #          here only an undefined `anything` detector root) fails the
   #          sandbox eval and is reported fail-closed (false POSITIVE).
   #      Sound attribution of a guest's contribution in the FULL context
@@ -556,7 +556,7 @@ rec {
   # sets, and conditional ones whose guard resolves the same here as in
   # the real eval — from any source (`imports`, `builtins.toFile`,
   # `_file` spoofing), since detection is by definition-existence. Guest
-  # files that read framework-declared `nixling.*`/`microvm.*` options
+  # files that read framework-declared `d2b.*`/`microvm.*` options
   # are not supported (they read host-owned state the guest layer should
   # not depend on).
   #
@@ -582,7 +582,7 @@ rec {
           }
           {
             options.microvm = lib.mkOption { type = lib.types.anything; };
-            options.nixling = lib.mkOption { type = lib.types.anything; };
+            options.d2b = lib.mkOption { type = lib.types.anything; };
           }
           guestFile
         ];
@@ -592,7 +592,7 @@ rec {
           (lib.concatMap
             (def: map (k: "${ns}.${k}") (lib.attrNames def))
             ev.options.${ns}.definitions);
-      probe = builtins.tryEval (namesIn "microvm" ++ namesIn "nixling");
+      probe = builtins.tryEval (namesIn "microvm" ++ namesIn "d2b");
     in
     if probe.success then probe.value
     else [ "<guestConfigFile failed to evaluate in the containment check>" ];

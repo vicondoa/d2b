@@ -1,7 +1,7 @@
-# Shared node configuration for nixling runNixOSTest (type-G) integration
+# Shared node configuration for d2b runNixOSTest (type-G) integration
 # tests. These are the additive, real-kernel coverage layer: a runNixOSTest VM
-# boots a real NixOS system with the nixling daemon surface
-# (`nixling.daemonExperimental.enable`) and the test script asserts live broker
+# boots a real NixOS system with the d2b daemon surface
+# (`d2b.daemonExperimental.enable`) and the test script asserts live broker
 # / daemon behaviour (socket activation, SO_PEERCRED, the public.sock wire
 # surface, audited host mutations) that the PR-tier fake-backed Rust canaries
 # and pure-eval gates cannot exercise.
@@ -12,22 +12,22 @@
 { self, lib }:
 
 let
-  # The minimal, hermetic nixling site/env/VM declaration every daemon-host
+  # The minimal, hermetic d2b site/env/VM declaration every daemon-host
   # node shares. Mirrors the consumer-style config the smoke evals use: one
   # isolated env with RFC1918 / RFC5737 ranges and a single headless workload
   # VM. No graphics / TPM / USBIP (those are device-bearing G-hw concerns).
-  baseNixlingConfig = {
-    nixling.site = {
+  baseD2bConfig = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
       usePrebuiltHostTools = false;
     };
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
-    nixling.vms.corp-vm = {
+    d2b.vms.corp-vm = {
       enable = true;
       env = "work";
       index = 10;
@@ -41,11 +41,11 @@ let
       };
     };
     # The full daemon + broker systemd surface under test.
-    nixling.daemonExperimental.enable = true;
+    d2b.daemonExperimental.enable = true;
   };
 in
 {
-  # A NixOS module for a runNixOSTest node that boots the nixling daemon host.
+  # A NixOS module for a runNixOSTest node that boots the d2b daemon host.
   # `extra` is merged as an additional module so individual tests can add
   # per-test config (extra VMs, tampering helpers, a larger disk, etc.). The
   # node provisions the `alice` workload user the base config references.
@@ -54,13 +54,13 @@ in
   # a valid module): `imports` must be top-level, NOT wrapped in `lib.mkMerge`,
   # or the module system rejects it ("option nodes.machine.imports does not
   # exist").
-  nixlingDaemonNode =
+  d2bDaemonNode =
     { extra ? { }, writableStore ? false }:
     { config, ... }:
     {
       imports = [
         self.nixosModules.default
-        baseNixlingConfig
+        baseD2bConfig
         extra
         {
           # Headroom for building/activating the bundle + daemon closure inside
@@ -74,30 +74,30 @@ in
             uid = 1000;
           };
 
-          environment.variables.NIXLING_MANIFEST_PATH = config.nixling._manifestJsonPath;
+          environment.variables.D2B_MANIFEST_PATH = config.d2b._manifestJsonPath;
 
           # runNixOSTest runs first-boot activation before systemd-tmpfiles has
-          # materialized the nixling state tree. Pre-create the key directory so
-          # nixlingGenerateKeys can open its flock during the initrd activation
+          # materialized the d2b state tree. Pre-create the key directory so
+          # d2bGenerateKeys can open its flock during the initrd activation
           # path without relying on tmpfiles ordering.
-          system.activationScripts.nixlingTestStateDirs = {
+          system.activationScripts.d2bTestStateDirs = {
             deps = [ "users" ];
             text = ''
-              install -d -m 0750 -o root -g nixlingd /var/lib/nixling
-              install -d -m 0710 -o root -g nixling /var/lib/nixling/keys
-              : > /var/lib/nixling/keys/.lock
-              chown root:root /var/lib/nixling/keys/.lock
-              chmod 0600 /var/lib/nixling/keys/.lock
+              install -d -m 0750 -o root -g d2bd /var/lib/d2b
+              install -d -m 0710 -o root -g d2b /var/lib/d2b/keys
+              : > /var/lib/d2b/keys/.lock
+              chown root:root /var/lib/d2b/keys/.lock
+              chmod 0600 /var/lib/d2b/keys/.lock
             '';
           };
-          system.activationScripts.nixlingGenerateKeys.deps = [
-            "nixlingTestStateDirs"
+          system.activationScripts.d2bGenerateKeys.deps = [
+            "d2bTestStateDirs"
           ];
 
           system.stateVersion = "25.11";
         }
         # Opt-in writable same-fs store. ONLY needed by tests that drive the
-        # per-VM /nix/store hardlink farm (which requires /var/lib/nixling and
+        # per-VM /nix/store hardlink farm (which requires /var/lib/d2b and
         # /nix/store on the SAME filesystem — hardlinks can't cross FS — and the
         # default runNixOSTest read-only store image splits them). It is OFF by
         # default: `virtualisation.writableStore = true` copies the entire guest
@@ -113,5 +113,5 @@ in
     };
 
   # Re-exported so tests can assert against the shared declaration.
-  inherit baseNixlingConfig;
+  inherit baseD2bConfig;
 }

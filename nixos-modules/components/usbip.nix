@@ -1,5 +1,5 @@
-# USBIP YubiKey passthrough for nixling VMs. Imported by host.nix
-# whenever a VM sets `nixling.vms.<name>.usbip.yubikey = true`.
+# USBIP YubiKey passthrough for d2b VMs. Imported by host.nix
+# whenever a VM sets `d2b.vms.<name>.usbip.yubikey = true`.
 #
 # This file holds only the GUEST-side wiring:
 #   - vhci_hcd kernel module so `usbip attach` can materialise the
@@ -13,7 +13,7 @@
 # because they're shared across VMs and depend on the host bridge
 # being up.
 #
-# The hot-plug ceremony is daemon-owned: nixlingd drives broker host
+# The hot-plug ceremony is daemon-owned: d2bd drives broker host
 # bind/unbind and asks guestd to reconcile guest-side USBIP imports over
 # authenticated guest-control. The CLI never SSHes into the guest for USBIP.
 { pkgs, ... }:
@@ -23,5 +23,5 @@
 
   environment.systemPackages = [ pkgs.linuxPackages.usbip ];
 
-  nixling.guestControl.usbipPath = "${pkgs.linuxPackages.usbip}/bin/usbip";
+  d2b.guestControl.usbipPath = "${pkgs.linuxPackages.usbip}/bin/usbip";
 }

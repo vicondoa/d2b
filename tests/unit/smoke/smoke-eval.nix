@@ -1,13 +1,13 @@
-# tests/unit/smoke/smoke-eval.nix — Layer-1 smoke evaluation for nixling.
+# tests/unit/smoke/smoke-eval.nix — Layer-1 smoke evaluation for d2b.
 #
 # Minimal consumer-style `nixosSystem` that imports
-# `nixling.nixosModules.default` and exercises the parts of the eval
+# `d2b.nixosModules.default` and exercises the parts of the eval
 # graph that are touched by every consumer:
 #
-#   - nixling.site.* defaults flow through.
-#   - At least one nixling.envs.<env> materialises (network.nix
+#   - d2b.site.* defaults flow through.
+#   - At least one d2b.envs.<env> materialises (network.nix
 #     allMeta non-empty → route-preflight unit + assertion block).
-#   - At least one nixling.vms.<name> with an env reference round-trips
+#   - At least one d2b.vms.<name> with an env reference round-trips
 #     through host.nix's microvm.vms translation.
 #   - All component toggles default off (graphics/audio/tpm/usbip),
 #     so the heavyweight component imports (graphics.nix, etc.) stay
@@ -50,7 +50,7 @@ let
       flake.nixosModules.default
       ({ lib, ... }: {
         # Minimal NixOS baseline so the eval graph can resolve. None
-        # of these knobs is exercised by nixling itself; they exist to
+        # of these knobs is exercised by d2b itself; they exist to
         # make `system.build.toplevel` reachable without a real disk
         # or bootloader.
         boot.loader.grub.enable = false;
@@ -76,7 +76,7 @@ let
         # Site-level: minimum surface to satisfy graphics/audio
         # assertions if those toggles ever flip in this smoke
         # config. Both stay off by default below.
-        nixling.site = {
+        d2b.site = {
           waylandUser = "alice";
           launcherUsers = [ "alice" ];
           # Toggle off the host-side Yubico bits — smoke config
@@ -88,7 +88,7 @@ let
 
         # One env — exercises network.nix materialisation, the
         # route preflight unit, and the CIDR validation chain.
-        nixling.envs.work = {
+        d2b.envs.work = {
           lanSubnet    = "10.20.0.0/24";
           uplinkSubnet = "192.0.2.0/30";
         };
@@ -96,7 +96,7 @@ let
         # One workload VM — exercises host.nix's microvm.vms
         # translation, the framework-managed SSH key activation,
         # and the cli.nix manifest builder.
-        nixling.vms.corp-vm = {
+        d2b.vms.corp-vm = {
           enable = true;
           env = "work";
           index = 10;

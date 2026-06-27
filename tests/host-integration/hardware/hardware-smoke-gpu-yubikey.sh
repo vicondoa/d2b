@@ -9,13 +9,13 @@
 #   1. preflight: confirm /dev/dri/renderD128 + /dev/bus/usb present
 #      + this is a NixOS host with the required nix shell tools.
 #   2. workspace build: cargo build the rollup workspace
-#      (nixling + nixlingd + nixling-priv-broker) so the validation
+#      (d2b + d2bd + d2b-priv-broker) so the validation
 #      tests can drive the released binaries.
 #   3. minijail profile validator: run the
 #      `BundleResolver::validate_minijail_profiles()` invariant gate
 #      against a synthesized resolver fixture so any regression in
 #      the per-role profile shape (uid=0 without carve-out,
-#      writable /nix/store, cgroup outside nixling/) fails the wave.
+#      writable /nix/store, cgroup outside d2b/) fails the wave.
 #   4. bundle drift: cargo xtask gen-schemas + gen-daemon-api
 #      verifies the bundle + wire artifacts match committed
 #      docs/reference state.
@@ -29,22 +29,22 @@
 #      automated — running it spawns real VMs that disrupt the
 #      operator's active Wayland session.
 #
-# Set NIXLING_HARDWARE_SMOKE_STRICT=1 to fail closed on the cargo
+# Set D2B_HARDWARE_SMOKE_STRICT=1 to fail closed on the cargo
 # build / minijail / bundle-drift / example-eval phases instead of
 # logging an explicit SKIP reason and continuing.
 #
 # After the manual live smoke passes, set
-# NIXLING_HARDWARE_SMOKE_RECORD_EVIDENCE_ONLY=1,
-# NIXLING_HARDWARE_SMOKE_LIVE_GREEN=1, and
-# NIXLING_HARDWARE_SMOKE_OPERATOR_SIGNATURE=<opaque-signer-id> to
-# write `/var/lib/nixling/validated/{w5Fu,w6Fu}.json`.
+# D2B_HARDWARE_SMOKE_RECORD_EVIDENCE_ONLY=1,
+# D2B_HARDWARE_SMOKE_LIVE_GREEN=1, and
+# D2B_HARDWARE_SMOKE_OPERATOR_SIGNATURE=<opaque-signer-id> to
+# write `/var/lib/d2b/validated/{w5Fu,w6Fu}.json`.
 
 set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
-NL_LOG=${NL_LOG:-"$ROOT/.nixling-hardware-smoke.log"}
-export NL_LOG
+D2B_LOG=${D2B_LOG:-"$ROOT/.d2b-hardware-smoke.log"}
+export D2B_LOG
 
 log() {
     printf '[hardware-smoke] %s\n' "$*" >&2
@@ -66,10 +66,10 @@ ok() {
 
 soft_fail_or_skip() {
     local reason=$1
-    if [ "${NIXLING_HARDWARE_SMOKE_STRICT:-0}" = "1" ]; then
+    if [ "${D2B_HARDWARE_SMOKE_STRICT:-0}" = "1" ]; then
         fail "$reason"
     fi
-    log "SKIP REASON: $reason (NIXLING_HARDWARE_SMOKE_STRICT unset)"
+    log "SKIP REASON: $reason (D2B_HARDWARE_SMOKE_STRICT unset)"
 }
 
 json_escape() {
@@ -77,15 +77,15 @@ json_escape() {
 }
 
 record_validation_evidence() {
-    local operator_signature="${NIXLING_HARDWARE_SMOKE_OPERATOR_SIGNATURE:-}"
+    local operator_signature="${D2B_HARDWARE_SMOKE_OPERATOR_SIGNATURE:-}"
     local timestamp host dir path wave json
     local -a sudo_cmd=()
 
-    if [ "${NIXLING_HARDWARE_SMOKE_LIVE_GREEN:-0}" != "1" ]; then
-        fail "refusing to record validation evidence unless NIXLING_HARDWARE_SMOKE_LIVE_GREEN=1 confirms the manual live smoke passed"
+    if [ "${D2B_HARDWARE_SMOKE_LIVE_GREEN:-0}" != "1" ]; then
+        fail "refusing to record validation evidence unless D2B_HARDWARE_SMOKE_LIVE_GREEN=1 confirms the manual live smoke passed"
     fi
     if [ -z "$operator_signature" ]; then
-        fail "set NIXLING_HARDWARE_SMOKE_OPERATOR_SIGNATURE before recording validation evidence"
+        fail "set D2B_HARDWARE_SMOKE_OPERATOR_SIGNATURE before recording validation evidence"
     fi
     if [ "$EUID" -ne 0 ]; then
         if ! command -v sudo >/dev/null 2>&1 || ! sudo -n true 2>/dev/null; then
@@ -96,7 +96,7 @@ record_validation_evidence() {
 
     timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     host=$(hostname -f 2>/dev/null || hostname)
-    dir=/var/lib/nixling/validated
+    dir=/var/lib/d2b/validated
     "${sudo_cmd[@]}" install -d -m 0750 "$dir"
 
     for wave in w5Fu w6Fu; do
@@ -139,7 +139,7 @@ phase_yubikey_optional() {
     fi
     if lsusb 2>/dev/null | grep -qi "yubico"; then
         ok "YubiKey detected on host USB bus"
-        export NIXLING_HARDWARE_YUBIKEY=1
+        export D2B_HARDWARE_YUBIKEY=1
     else
         log "no YubiKey plugged in; W6-fu live bind path will skip"
     fi
@@ -153,10 +153,10 @@ phase_cargo_build() {
         soft_fail_or_skip "cargo build --workspace failed; rerun via tests/test-rust.sh for full diagnostic"
         return 0
     fi
-    if ! (cd "$ROOT/packages/nixling-priv-broker" && \
+    if ! (cd "$ROOT/packages/d2b-priv-broker" && \
         env -u RUSTC_WRAPPER nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc nixpkgs#rustfmt nixpkgs#clippy \
         -c cargo build 2>&1 | tail -3); then
-        soft_fail_or_skip "cargo build nixling-priv-broker failed"
+        soft_fail_or_skip "cargo build d2b-priv-broker failed"
         return 0
     fi
     ok "phase cargo build"
@@ -166,7 +166,7 @@ phase_minijail_invariants() {
     log "phase minijail invariants: validate every shipped profile"
     if ! (cd "$ROOT/packages" && \
         env -u RUSTC_WRAPPER nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc nixpkgs#rustfmt nixpkgs#clippy \
-        -c cargo test -p nixling-core --test nixling-core-smoke \
+        -c cargo test -p d2b-core --test d2b-core-smoke \
             bundle_resolver_minijail_profile_validator 2>&1 | tail -10); then
         soft_fail_or_skip "minijail profile validator failed to run"
         return 0
@@ -213,24 +213,24 @@ phase_live_smoke_documentation() {
 [hardware-smoke] because it spawns real VMs that disrupt the active
 [hardware-smoke] Wayland session. Run by hand when the host is idle:
 [hardware-smoke]
-[hardware-smoke] 1. Start nixlingd:
-[hardware-smoke]      sudo NIXLING_BROKER_NFT_BINARY=$(which nft) \
-[hardware-smoke]           NIXLING_BROKER_IP_BINARY=$(which ip) \
-[hardware-smoke]           NIXLING_BROKER_USBIP_BINARY=$(which usbip) \
-[hardware-smoke]           packages/target/debug/nixlingd serve &
+[hardware-smoke] 1. Start d2bd:
+[hardware-smoke]      sudo D2B_BROKER_NFT_BINARY=$(which nft) \
+[hardware-smoke]           D2B_BROKER_IP_BINARY=$(which ip) \
+[hardware-smoke]           D2B_BROKER_USBIP_BINARY=$(which usbip) \
+[hardware-smoke]           packages/target/debug/d2bd serve &
 [hardware-smoke]
 [hardware-smoke] 2. Run host install:
-[hardware-smoke]      sudo NIXLING_NATIVE_ONLY=1 \
-[hardware-smoke]           packages/target/debug/nixling host install --apply
+[hardware-smoke]      sudo D2B_NATIVE_ONLY=1 \
+[hardware-smoke]           packages/target/debug/d2b host install --apply
 [hardware-smoke]
 [hardware-smoke] 3. Bring up the work-vm with GPU:
-[hardware-smoke]      sudo NIXLING_NATIVE_ONLY=1 \
-[hardware-smoke]           packages/target/debug/nixling vm start work-vm --apply
+[hardware-smoke]      sudo D2B_NATIVE_ONLY=1 \
+[hardware-smoke]           packages/target/debug/d2b vm start work-vm --apply
 [hardware-smoke]
 [hardware-smoke] 4. Once the VM is up, plug in the YubiKey and attach it:
-[hardware-smoke]      sudo nixling usb probe
-[hardware-smoke]      sudo NIXLING_NATIVE_ONLY=1 \
-[hardware-smoke]           packages/target/debug/nixling usb attach work-vm <busid> --apply
+[hardware-smoke]      sudo d2b usb probe
+[hardware-smoke]      sudo D2B_NATIVE_ONLY=1 \
+[hardware-smoke]           packages/target/debug/d2b usb attach work-vm <busid> --apply
 [hardware-smoke]      # `usb probe` lists the daemon-declared busids and
 [hardware-smoke]      # current lock owners; replace <busid> with the host
 [hardware-smoke]      # busid you want to bind to work-vm.
@@ -241,16 +241,16 @@ phase_live_smoke_documentation() {
 [hardware-smoke]
 [hardware-smoke] 6. Once the manual live smoke is green, record the
 [hardware-smoke]      W20 validation evidence:
-[hardware-smoke]      NIXLING_HARDWARE_SMOKE_RECORD_EVIDENCE_ONLY=1 \
-[hardware-smoke]      NIXLING_HARDWARE_SMOKE_LIVE_GREEN=1 \
-[hardware-smoke]      NIXLING_HARDWARE_SMOKE_OPERATOR_SIGNATURE='alice@example' \
+[hardware-smoke]      D2B_HARDWARE_SMOKE_RECORD_EVIDENCE_ONLY=1 \
+[hardware-smoke]      D2B_HARDWARE_SMOKE_LIVE_GREEN=1 \
+[hardware-smoke]      D2B_HARDWARE_SMOKE_OPERATOR_SIGNATURE='alice@example' \
 [hardware-smoke]      bash tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh
-[hardware-smoke]      # writes /var/lib/nixling/validated/{w5Fu,w6Fu}.json
+[hardware-smoke]      # writes /var/lib/d2b/validated/{w5Fu,w6Fu}.json
 [hardware-smoke]
 [hardware-smoke] 7. Then set only the matching validated bits in host
 [hardware-smoke]      config:
-[hardware-smoke]      nixling.defaultSwitchReadiness.w5Fu.validated = true;
-[hardware-smoke]      nixling.defaultSwitchReadiness.w6Fu.validated = true;
+[hardware-smoke]      d2b.defaultSwitchReadiness.w5Fu.validated = true;
+[hardware-smoke]      d2b.defaultSwitchReadiness.w6Fu.validated = true;
 [hardware-smoke]      # other waves need their own evidence files before
 [hardware-smoke]      # daemonExperimental.enable can auto-default true.
 GUIDE
@@ -258,7 +258,7 @@ GUIDE
 }
 
 main() {
-    if [ "${NIXLING_HARDWARE_SMOKE_RECORD_EVIDENCE_ONLY:-0}" = "1" ]; then
+    if [ "${D2B_HARDWARE_SMOKE_RECORD_EVIDENCE_ONLY:-0}" = "1" ]; then
         log "phase record evidence: writing W20 validation files"
         record_validation_evidence
         log "W20 validation evidence recorded"

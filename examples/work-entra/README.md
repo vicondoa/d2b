@@ -6,7 +6,7 @@ This is the doc-friendly alias for the checked
 Use it when you want the Rust-first command names from the README:
 
 ```bash
-sudo NIXLING_NATIVE_ONLY=1 nixling vm start work-entra --apply
+sudo D2B_NATIVE_ONLY=1 d2b vm start work-entra --apply
 ```
 
 The actual flake, lockfile, and full composition walkthrough still

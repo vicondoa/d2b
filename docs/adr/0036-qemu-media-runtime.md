@@ -8,9 +8,9 @@
 
 ## Context
 
-`qemu-media` exists to run external media in a local QEMU VM under nixling's
+`qemu-media` exists to run external media in a local QEMU VM under d2b's
 normal daemon and broker authority. It is intentionally narrower than the
-NixOS workload runtime: the guest is not evaluated from nixling modules, does
+NixOS workload runtime: the guest is not evaluated from d2b modules, does
 not receive the framework store view, and does not run the guest-control or
 observability stack.
 
@@ -98,10 +98,10 @@ and failure modes surprising.
 ### Unsupported guest features
 
 qemu-media guests do not support the NixOS workload features that require
-nixling's in-guest stack or Cloud Hypervisor/crosvm runtime wiring:
+d2b's in-guest stack or Cloud Hypervisor/crosvm runtime wiring:
 
 - guest-control health, exec, detached exec, and config sync;
-- SSH framework operations and nixling-managed SSH keys;
+- SSH framework operations and d2b-managed SSH keys;
 - per-VM store sync, virtiofs shares, and guest NixOS activation;
 - in-guest observability collectors;
 - USBIP guest-side import/export;
@@ -142,5 +142,5 @@ This ADR freezes the current qemu-media behavior so cleanup can distinguish
 between compatibility with existing users and the desired shared runtime seam.
 Future work may replace the public enrollment UX and share more lifecycle code
 with other local hypervisors, but it must preserve the core authority split:
-`nixlingd` orchestrates lifecycle, the broker performs privileged media/QMP
+`d2bd` orchestrates lifecycle, the broker performs privileged media/QMP
 mutations, and public output stays redacted.

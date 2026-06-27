@@ -4,7 +4,7 @@ Status: canonical.
 
 ## What this gate is
 
-The legacy `nixling-otel-host-bridge.service` host singleton has
+The legacy `d2b-otel-host-bridge.service` host singleton has
 been replaced by a broker-`SpawnRunner` lifecycle under
 `RunnerRole::OtelHostBridge`. The broker can spawn the forwarder
 per the trusted bundle's intent, and `pidfd_table` tracks its
@@ -62,7 +62,7 @@ positive.
 ## Timeout + degraded-mode contract
 
 Default timeout: **30 000 ms** (configurable via the
-`NIXLING_OTEL_BRIDGE_READINESS_TIMEOUT_MS` env var, parsed as
+`D2B_OTEL_BRIDGE_READINESS_TIMEOUT_MS` env var, parsed as
 unsigned milliseconds).
 
 Polling cadence: **100 ms** between samples.
@@ -79,7 +79,7 @@ On timeout the daemon falls back to **degraded mode**:
 - The typed error
   [`TypedError::OtelHostBridgeReadinessTimeout { vm, elapsed_ms }`](./error-codes.md#otel-host-bridge-readiness-timeout)
   (exit code **65**) is the canonical kind operators can
-  reference from metrics, audit, and `nixling host doctor`.
+  reference from metrics, audit, and `d2b host doctor`.
 
 If the runner exit marker indicates the broker-spawned runner
 died before readiness, the gate short-circuits the deadline and
@@ -91,7 +91,7 @@ exited before readiness signal"`.
 Operators who want a hard refusal instead of degrading can set:
 
 ```
-NIXLING_OTEL_BRIDGE_READINESS_STRICT=1
+D2B_OTEL_BRIDGE_READINESS_STRICT=1
 ```
 
 In strict mode the timeout (or runner-exit) outcome is returned
@@ -104,7 +104,7 @@ start.
 
 ## Remediation
 
-- Inspect `nixling host doctor` for the OtelHostBridge runner's
+- Inspect `d2b host doctor` for the OtelHostBridge runner's
   pidfd liveness + last-relay-flush timestamp.
 - If the runner is missing entirely, the broker `SpawnRunner` for
   `RunnerRole::OtelHostBridge` failed — inspect the broker audit
@@ -113,13 +113,13 @@ start.
   accepting OTLP from workload VMs; restarting the obs VM
   usually clears the condition.
 - To raise the deadline, set
-  `NIXLING_OTEL_BRIDGE_READINESS_TIMEOUT_MS=<ms>`.
+  `D2B_OTEL_BRIDGE_READINESS_TIMEOUT_MS=<ms>`.
 - To fail-closed instead of degrading, set
-  `NIXLING_OTEL_BRIDGE_READINESS_STRICT=1`.
+  `D2B_OTEL_BRIDGE_READINESS_STRICT=1`.
 
 ## Module layout
 
-The gate ships in `packages/nixlingd/src/otel_host_bridge_readiness.rs`:
+The gate ships in `packages/d2bd/src/otel_host_bridge_readiness.rs`:
 
 - `enum OtelHostBridgeReadiness` — pure verdict
   (`Ready` / `Pending { elapsed_ms }` / `Failed { reason }`).

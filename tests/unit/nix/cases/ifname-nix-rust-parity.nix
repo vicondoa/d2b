@@ -1,6 +1,6 @@
 # Host ifname pure-eval checks retained alongside the rendered-artifact Rust
 # contract test: the smoke bundle must emit at least one ifNameMappings row,
-# every derivedIfname must keep the exact `^nl-[bt][0-9A-F]{8}$` shape, and
+# every derivedIfname must keep the exact `^d2b-[bt][0-9A-F]{8}$` shape, and
 # bridge/TAP rows must carry the role tag that the Rust predicate accepts.
 { mkEval, lib, flakeRoot, ... }:
 
@@ -14,16 +14,16 @@ let
       "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
-    nixling.vms.corp-vm = {
+    d2b.vms.corp-vm = {
       enable = true;
       env = "work";
       index = 10;
@@ -36,11 +36,11 @@ let
   };
 
   cfg = (mkEval [ smokeConfig ]).config;
-  hostJson = builtins.fromJSON cfg.nixling._bundle.hostJson.jsonText;
+  hostJson = builtins.fromJSON cfg.d2b._bundle.hostJson.jsonText;
   mappings = hostJson.ifNameMappings or [ ];
-  regex = "^nl-[bt][0-9A-F]{8}$";
+  regex = "^d2b-[bt][0-9A-F]{8}$";
   matchesShape = name: builtins.match regex name != null;
-  tagFor = row: builtins.substring 3 1 row.derivedIfname;
+  tagFor = row: builtins.substring 4 1 row.derivedIfname;
   expectedRoleTags = [
     { role = "net-vm-lan"; tag = "b"; }
     { role = "uplink"; tag = "b"; }
@@ -84,7 +84,7 @@ in
 
   "ifname-rendered-host-json/host-runtime-override-source-hook-present" = {
     expr =
-      lib.hasInfix ''builtins.getEnv "NIXLING_HOST_RUNTIME_PATH"'' hostJsonSource
+      lib.hasInfix ''builtins.getEnv "D2B_HOST_RUNTIME_PATH"'' hostJsonSource
       && lib.hasInfix "runtimeRow.derivedIfname" hostJsonSource;
     expected = true;
   };

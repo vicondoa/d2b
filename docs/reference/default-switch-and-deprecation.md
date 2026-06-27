@@ -1,9 +1,9 @@
 # Default switch and deprecation (post-clean-break)
 
 > **Status: historical landing page.** The rollout this file used to
-> describe is closed. `nixling.daemonExperimental.enable` now
+> describe is closed. `d2b.daemonExperimental.enable` now
 > defaults to `true`, the legacy bash CLI is gone, and there are no
-> framework-declared per-VM `nixling@<vm>.service` or
+> framework-declared per-VM `d2b@<vm>.service` or
 > `microvm@<vm>.service` templates. There is no longer a "default
 > mode" vs "native-only mode" axis, and there is no multi-step
 > deprecation timeline to track. See
@@ -13,7 +13,7 @@
 > This page is kept at its original URL so that historical
 > CHANGELOG entries, AGENTS.md references, and code comments
 > (`nixos-modules/options-daemon.nix`,
-> `packages/nixling/src/host_validate.rs`,
+> `packages/d2b/src/host_validate.rs`,
 > `docs/reference/wave-evidence-schema.md`,
 > `docs/reference/host-validate.md`) continue to resolve. Active
 > CLI surface lives in [`cli-contract.md`](./cli-contract.md).
@@ -26,9 +26,9 @@ After the clean break, the only contract worth recording here is:
    exactly one path (daemon-native or pure Rust). The "legacy bash
    path" column collapses to a single `no` cell.
 2. The **per-wave evidence gate** — the mechanism that now gates the
-   per-wave `nixling.defaultSwitchReadiness.<wave>.validated = true`
-   eval assertion (and that `nixling host validate` materialises). It
-   no longer decides whether `nixling.daemonExperimental.enable`
+   per-wave `d2b.defaultSwitchReadiness.<wave>.validated = true`
+   eval assertion (and that `d2b host validate` materialises). It
+   no longer decides whether `d2b.daemonExperimental.enable`
    evaluates to `true`: that option now defaults `true` and is no longer
    evidence-auto-flipped, but it still functionally gates the daemon
    control plane (setting it `false` reverts the host to the
@@ -40,8 +40,8 @@ After the clean break, the only contract worth recording here is:
    `host-validate.md`).
 
 Anything else that used to live on this page — the three-mode
-bridge, the `NIXLING_NATIVE_ONLY` /
-`NIXLING_LEGACY_BASH_OPT_IN` escape hatches, and the staged bash
+bridge, the `D2B_NATIVE_ONLY` /
+`D2B_LEGACY_BASH_OPT_IN` escape hatches, and the staged bash
 warning / fail-loud / removal calendar — is gone with the clean
 break.
 
@@ -52,9 +52,9 @@ exists only so that downstream readers cross-referencing older
 prose can see at a glance that the answer is now uniformly
 **no**[^bash-rm].
 
-[^bash-rm]: The bash CLI binary (`scripts/nixling`,
+[^bash-rm]: The bash CLI binary (`scripts/d2b`,
     `nixos-modules/cli.nix`) and the per-VM
-    `nixling@<vm>.service` / `microvm@<vm>.service` templates are
+    `d2b@<vm>.service` / `microvm@<vm>.service` templates are
     gone; see [ADR 0015 § Scope](../adr/0015-daemon-only-clean-break.md).
     `vm start/stop/restart/list` now use only the daemon-native
     path, and there is no bash dispatcher fallback.
@@ -76,7 +76,7 @@ prose can see at a glance that the answer is now uniformly
 | `console`, `audio status`, `audio mic`, `audio speaker`, `audio off` | daemon-native | no | Rust CLI owns the surface; there is no bash helper fallback. |
 | `debug bundle` | daemon-native | no | — |
 
-There is no `NIXLING_NATIVE_ONLY` and no `NIXLING_LEGACY_BASH_OPT_IN`.
+There is no `D2B_NATIVE_ONLY` and no `D2B_LEGACY_BASH_OPT_IN`.
 Both environment variables are unrecognised; setting them has no
 current effect.
 
@@ -87,7 +87,7 @@ the typed envelope catalog, see
 
 ## Per-wave evidence gate (still live)
 
-`nixling.daemonExperimental.enable` is no longer computed from wave
+`d2b.daemonExperimental.enable` is no longer computed from wave
 readiness (no longer evidence-auto-flipped). It now defaults `true`,
 but it still functionally gates the daemon control plane — setting it
 `false` reverts the host to the unsupported pre-daemon legacy state, so
@@ -98,22 +98,22 @@ readers, but it does not drive that default.
 
 What the evidence files **do** still gate is the per-wave readiness
 assertion. For each wave, an operator may set
-`nixling.defaultSwitchReadiness.<wave>.validated = true` only when an
+`d2b.defaultSwitchReadiness.<wave>.validated = true` only when an
 evidence file `<defaultFlipEvidenceDir>/<wave>.json` exists carrying
 the canonical `{wave, timestamp, operatorSignature}` schema — see
 [`wave-evidence-schema.md`](./wave-evidence-schema.md) for the full
 schema and validator. The eval-time assertion is fail-closed:
 asserting `validated = true` without the evidence file is rejected.
 
-`defaultFlipEvidenceDir` defaults to `/var/lib/nixling/validated`
+`defaultFlipEvidenceDir` defaults to `/var/lib/d2b/validated`
 and is overridable via
-`nixling.daemonExperimental.defaultFlipEvidenceDir` for tests.
+`d2b.daemonExperimental.defaultFlipEvidenceDir` for tests.
 Waves outside the flip-gate subset (e.g. `p5`, `p6`, `p7`) still carry
 their own `defaultSwitchReadiness.<wave>` keys and evidence-gated
 `validated` assertion.
 
 The operator-facing one-command preflight that materialises the
-evidence files is `nixling host validate --apply`; see
+evidence files is `d2b host validate --apply`; see
 [`host-validate.md`](./host-validate.md).
 
 ## Cross-references

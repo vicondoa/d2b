@@ -2,7 +2,7 @@
   "$comment": "W3fu1 H4 malicious fixture — bridgePortFlags carries an undeclared field `disablePortIsolation` that the schema's `deny_unknown_fields` MUST refuse with `wire-unknown-field`.",
   "schemaVersion": "v2",
   "bundleVersion": "0.4.0",
-  "site": {"hostLanCidr": "192.0.2.0/24", "stateDir": "/var/lib/nixling", "runtimeDir": "/run/nixling"},
+  "site": {"hostLanCidr": "192.0.2.0/24", "stateDir": "/var/lib/d2b", "runtimeDir": "/run/d2b"},
   "bridgePortFlags": {
     "learning": true,
     "flooding": false,

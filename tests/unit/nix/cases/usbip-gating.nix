@@ -9,7 +9,7 @@
 # boot-time `usbip-host` kernel-module load, which appears iff host-side
 # YubiKey support is enabled AND some enabled VM opts into `usbip.yubikey`.
 #
-# Uses `mkEval` (== nixosSystem with the nixling module set) to render the
+# Uses `mkEval` (== nixosSystem with the d2b module set) to render the
 # real host-level systemd / firewall / boot config, then asserts presence
 # with `builtins.hasAttr` / `builtins.elem` and firewall-substring presence
 # with `lib.hasInfix` (substring; robust across the multi-line
@@ -26,16 +26,16 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
-    nixling.vms.corp-vm = {
+    d2b.vms.corp-vm = {
       enable = true;
       env = "work";
       index = 10;
@@ -57,20 +57,20 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = true;
     };
-    nixling.envs.dev = {
+    d2b.envs.dev = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.21.0.0/24";
       uplinkSubnet = "198.51.100.0/30";
     };
-    nixling.vms.dev-vm = {
+    d2b.vms.dev-vm = {
       enable = true;
       env = "dev";
       index = 10;
@@ -82,7 +82,7 @@ let
         users.users.alice = { isNormalUser = true; uid = 1000; };
       };
     };
-    nixling.vms.work-vm = {
+    d2b.vms.work-vm = {
       enable = true;
       env = "work";
       index = 11;
@@ -101,34 +101,34 @@ let
   hasKmod = sys: builtins.elem "usbip-host" sys.config.boot.kernelModules;
   fwOf = sys: sys.config.networking.firewall.extraCommands;
 
-  backendName = "nixling-sys-work-usbipd-backend";
-  proxyName = "nixling-sys-work-usbipd-proxy";
+  backendName = "d2b-sys-work-usbipd-backend";
+  proxyName = "d2b-sys-work-usbipd-proxy";
 
   disabled = evalSingle [ ];
   siteEnabledNoVm = evalSingle [
     ({ lib, ... }: {
-      nixling.site.yubikey.enable = lib.mkForce true;
+      d2b.site.yubikey.enable = lib.mkForce true;
     })
   ];
   siteEnabledDisabledVm = evalSingle [
     ({ lib, ... }: {
-      nixling.site.yubikey.enable = lib.mkForce true;
-      nixling.vms.corp-vm.enable = lib.mkForce false;
-      nixling.vms.corp-vm.usbip.yubikey = true;
+      d2b.site.yubikey.enable = lib.mkForce true;
+      d2b.vms.corp-vm.enable = lib.mkForce false;
+      d2b.vms.corp-vm.usbip.yubikey = true;
     })
   ];
   vmEnabledSiteDisabled = evalSingle [
     ({ lib, ... }: {
-      nixling.site.yubikey.enable = lib.mkForce false;
-      nixling.vms.corp-vm.usbip.yubikey = true;
-      nixling.vms.corp-vm.guest.control.enable = true;
+      d2b.site.yubikey.enable = lib.mkForce false;
+      d2b.vms.corp-vm.usbip.yubikey = true;
+      d2b.vms.corp-vm.guest.control.enable = true;
     })
   ];
   enabled = evalSingle [
     ({ lib, ... }: {
-      nixling.site.yubikey.enable = lib.mkForce true;
-      nixling.vms.corp-vm.usbip.yubikey = true;
-      nixling.vms.corp-vm.guest.control.enable = true;
+      d2b.site.yubikey.enable = lib.mkForce true;
+      d2b.vms.corp-vm.usbip.yubikey = true;
+      d2b.vms.corp-vm.guest.control.enable = true;
     })
   ];
 
@@ -273,27 +273,27 @@ in
   # does not. All per-env units / sockets / firewall carve-outs are
   # absent (daemon-only — broker SpawnRunner / UsbipBindFirewallRule).
   "usbip-gating/multi-env-dev-backend-absent" = {
-    expr = hasService multiEnv "nixling-sys-dev-usbipd-backend";
+    expr = hasService multiEnv "d2b-sys-dev-usbipd-backend";
     expected = false;
   };
   "usbip-gating/multi-env-dev-proxy-absent" = {
-    expr = hasService multiEnv "nixling-sys-dev-usbipd-proxy";
+    expr = hasService multiEnv "d2b-sys-dev-usbipd-proxy";
     expected = false;
   };
   "usbip-gating/multi-env-dev-socket-absent" = {
-    expr = hasSocket multiEnv "nixling-sys-dev-usbipd-proxy";
+    expr = hasSocket multiEnv "d2b-sys-dev-usbipd-proxy";
     expected = false;
   };
   "usbip-gating/multi-env-work-backend-absent" = {
-    expr = hasService multiEnv "nixling-sys-work-usbipd-backend";
+    expr = hasService multiEnv "d2b-sys-work-usbipd-backend";
     expected = false;
   };
   "usbip-gating/multi-env-work-proxy-absent" = {
-    expr = hasService multiEnv "nixling-sys-work-usbipd-proxy";
+    expr = hasService multiEnv "d2b-sys-work-usbipd-proxy";
     expected = false;
   };
   "usbip-gating/multi-env-work-socket-absent" = {
-    expr = hasSocket multiEnv "nixling-sys-work-usbipd-proxy";
+    expr = hasSocket multiEnv "d2b-sys-work-usbipd-proxy";
     expected = false;
   };
   "usbip-gating/multi-env-dev-proxy-firewall-rule-absent" = {

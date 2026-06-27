@@ -1,6 +1,6 @@
-# P1 audio argv snapshot from nixling_host::audio_argv::generate_audio_argv(audit_input())
-# Per-VM copy at /run/nixling/vms/<vm>/nixling-<vm> so libpipewire's init_prgname()
-# derives application.name = "nixling-<vm>" from /proc/self/exe (W5-H6 panel finding #2
+# P1 audio argv snapshot from d2b_host::audio_argv::generate_audio_argv(audit_input())
+# Per-VM copy at /run/d2b/vms/<vm>/d2b-<vm> so libpipewire's init_prgname()
+# derives application.name = "d2b-<vm>" from /proc/self/exe (W5-H6 panel finding #2
 # + W5 GPT-5.5 panel notable #1); --socket pins the per-VM PipeWire-backed vhost-user
 # socket; --backend pipewire is today's only supported backend.
-/run/nixling/vms/corp-desktop/nixling-corp-desktop --socket /run/nixling/vms/corp-desktop/snd.sock --backend pipewire
+/run/d2b/vms/corp-desktop/d2b-corp-desktop --socket /run/d2b/vms/corp-desktop/snd.sock --backend pipewire

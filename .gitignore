@@ -34,7 +34,7 @@ result-*
 
 # Test artifacts
 tests/smoke-run-log.txt
-/tmp/nixling-*.log
+/tmp/d2b-*.log
 
 # W2 transient test caches + logs (smoke/cache scratch, daemon test agent-tmp,
 # repo-local scratch registries, static.sh flock)
@@ -61,13 +61,13 @@ tests/smoke-run-log.txt
 .manifest-fuzz-bounded.*/
 .manifest-gate.*/
 .manifest-v04-roundtrip.*/
-.nl-cleanups.*
-.nl-scratch-registry
-.nl-smoke-cache.*/
-.nixling-broker-layer1-target.*/
-.nixling-rust-gate.*/
-.nixling-stub-smoke.*/
-.nixling-test.log
+.d2b-cleanups.*
+.d2b-scratch-registry
+.d2b-smoke-cache.*/
+.d2b-broker-layer1-target.*/
+.d2b-rust-gate.*/
+.d2b-stub-smoke.*/
+.d2b-test.log
 .observability-eval.*/
 .opaque-key-ids.*/
 .privileges-matrix.*/
@@ -95,8 +95,8 @@ packages/*/t/
 
 # Broker feature-pass target dirs (deterministic siblings of the broker target
 # dir, kept stable so sccache cache keys don't churn — see tests/test-rust.sh).
-packages/nixling-priv-broker/target-layer1/
-packages/nixling-priv-broker/target-fakebackends/
+packages/d2b-priv-broker/target-layer1/
+packages/d2b-priv-broker/target-fakebackends/
 
 # Panel-review output must never be committed — it belongs in the
 # session workspace, not the repo. (Removed a stray panel-w-fu-fu-rollup/

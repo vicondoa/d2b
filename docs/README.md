@@ -1,4 +1,4 @@
-# nixling documentation
+# d2b documentation
 
 Organised as a [Diataxis] structure with four quadrants — tutorials,
 how-to, reference, explanation. Today: **reference**, **how-to**, and
@@ -33,16 +33,16 @@ The contracts. Stable interfaces a consumer can depend on.
 
 - [`reference/manifest-schema.md`](./reference/manifest-schema.md) —
   the per-VM JSON manifest the framework emits at
-  `/run/current-system/sw/share/nixling/vms.json`. Field-by-field
+  `/run/current-system/sw/share/d2b/vms.json`. Field-by-field
   prose walkthrough + compatibility policy + example payloads.
 - [`reference/manifest-schema.json`](./reference/manifest-schema.json) —
   the same contract as a JSON Schema (Draft 2020-12). The canonical
   type spec when the prose and the schema disagree.
 - [`reference/compatibility.md`](./reference/compatibility.md) —
-  release-by-release mapping of nixling tags to the bundled `nixpkgs`
+  release-by-release mapping of d2b tags to the bundled `nixpkgs`
   and `microvm.nix` pins, plus the support policy for downstreams.
 - [`reference/cli-contract.md`](./reference/cli-contract.md) —
-  the behavioural contract for any `nixling` CLI implementation
+  the behavioural contract for any `d2b` CLI implementation
   (lifecycle FSM, signal semantics, exit codes, JSON vs human output).
 - [`reference/error-codes.md`](./reference/error-codes.md) — the
   stable public error/refusal catalog for daemon, broker, and CLI
@@ -75,35 +75,35 @@ The contracts. Stable interfaces a consumer can depend on.
   host-resident vs gateway-backed realm policy, default-deny cross-realm
   behavior, authorization, audit, and network isolation boundaries.
 - [`reference/constellation-observability.md`](./reference/constellation-observability.md) —
-  bounded `nixling op inspect`, TraceContext propagation, degraded partial
+  bounded `d2b op inspect`, TraceContext propagation, degraded partial
   results, and telemetry redaction/cardinality constraints.
 - [`reference/guest-control-persistent-shell.md`](./reference/guest-control-persistent-shell.md) —
   guest-control shell RPCs, terminal-generic streaming, shell states,
   close causes, and redaction contracts.
 - [`reference/remote-full-host-nodes.md`](./reference/remote-full-host-nodes.md) —
-  gateway-managed remote nixling hosts: registration, capability gating,
+  gateway-managed remote d2b hosts: registration, capability gating,
   operation routing, idempotency, and the non-tunneling boundary.
 - **Per-component references** — one file per
   `nixos-modules/components/*.nix` toggle. Options, host-side
   resources created, runtime invariants, hardening notes, and the
   failure modes worth knowing about.
   - [`reference/components-graphics.md`](./reference/components-graphics.md) —
-    `nixling.vms.<vm>.graphics.*` (virtio-gpu + Wayland cross-domain).
+    `d2b.vms.<vm>.graphics.*` (virtio-gpu + Wayland cross-domain).
   - [`reference/components-video.md`](./reference/components-video.md) —
     optional graphics VM H264 decode via patched CH `--vhost-user-media`
     and patched crosvm `device video-decoder`.
   - [`reference/components-tpm.md`](./reference/components-tpm.md) —
-    `nixling.vms.<vm>.tpm.*` (per-VM swtpm 2.0).
+    `d2b.vms.<vm>.tpm.*` (per-VM swtpm 2.0).
   - [`reference/components-usbip.md`](./reference/components-usbip.md) —
-    `nixling.vms.<vm>.usbip.*` (YubiKey USBIP passthrough) plus the
+    `d2b.vms.<vm>.usbip.*` (YubiKey USBIP passthrough) plus the
     per-env host-side backend/proxy runners.
   - [`reference/components-audio.md`](./reference/components-audio.md) —
-    `nixling.vms.<vm>.audio.*` (vhost-user-sound + PipeWire) plus
-    the `nixling audio` CLI surface.
+    `d2b.vms.<vm>.audio.*` (vhost-user-sound + PipeWire) plus
+    the `d2b audio` CLI surface.
   - [`reference/components-shell.md`](./reference/components-shell.md) —
-    `nixling.vms.<vm>.guest.shell.*` (persistent named guest shells).
+    `d2b.vms.<vm>.guest.shell.*` (persistent named guest shells).
   - [`reference/components-home-manager.md`](./reference/components-home-manager.md) —
-    `nixling.vms.<vm>.homeManager.*` (Home Manager as a NixOS
+    `d2b.vms.<vm>.homeManager.*` (Home Manager as a NixOS
     module inside the VM).
 
 ## How-to
@@ -121,14 +121,14 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
   before daemon-managed VM lifecycle.
 - [`how-to/migrate-nixos-to-daemon.md`](./how-to/migrate-nixos-to-daemon.md) —
   move a NixOS host from legacy systemd-owned VM lifecycle to
-  `nixlingd`-owned lifecycle.
-- [`how-to/migrate-nixling-v0-to-v1.md`](./how-to/migrate-nixling-v0-to-v1.md) —
+  `d2bd`-owned lifecycle.
+- [`how-to/migrate-d2b-v0-to-v1.md`](./how-to/migrate-d2b-v0-to-v1.md) —
   **primary v0.x → v1.0 operator runbook**. Manifest schema bump,
   bash CLI removal, per-VM systemd template retirement, host singleton
   retirement, polkit allowlist removal, default-switch auto-flip,
   whole-migration rollback. Also documents v1.1 deferred verbs and daemon-down
   rendering pointers (`audit` / `console` / `audio` / `keys`).
-- [`how-to/uninstall-nixling.md`](./how-to/uninstall-nixling.md) —
+- [`how-to/uninstall-d2b.md`](./how-to/uninstall-d2b.md) —
   rollback and uninstall runbook for both NixOS and host-install
   scaffold paths.
 - [`how-to/hardware-smoke-walkthrough.md`](./how-to/hardware-smoke-walkthrough.md) —
@@ -139,10 +139,10 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
   configure USBIP prerequisites, interpret degraded probe/status rows, and
   recover claimed YubiKeys after VM restart.
 - [`how-to/migrating-from-microvm.md`](./how-to/migrating-from-microvm.md) —
-  port an existing `microvm.nix` deployment onto `nixling`: option
+  port an existing `microvm.nix` deployment onto `d2b`: option
   mapping, step-by-step procedure, troubleshooting.
-- [`how-to/write-a-nixling-addon.md`](./how-to/write-a-nixling-addon.md) —
-  write a sibling flake that composes with `nixling` per VM, including
+- [`how-to/write-a-d2b-addon.md`](./how-to/write-a-d2b-addon.md) —
+  write a sibling flake that composes with `d2b` per VM, including
   the `nixpkgs` follow policy and eval-only test pattern.
 - [`how-to/configure-work-gateway.md`](./how-to/configure-work-gateway.md) —
   declare a work/provider realm gateway and verify default-deny isolation.
@@ -150,7 +150,7 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
   configure, enter, and recover realm gateway guests.
 - [`how-to/use-persistent-shells.md`](./how-to/use-persistent-shells.md) —
   enable, attach, detach, reattach, list, and kill persistent named guest shells.
-- [`how-to/migrate-nixling-v1-2-to-v2.md`](./how-to/migrate-nixling-v1-2-to-v2.md) —
+- [`how-to/migrate-d2b-v1-2-to-v2.md`](./how-to/migrate-d2b-v1-2-to-v2.md) —
   migrate from local-only or implicit realm metadata to explicit gateway-backed
   realm policy.
 
@@ -164,7 +164,7 @@ Understanding-oriented prose. The "why" behind the design choices.
   Read this before opening a security-sensitive issue or
   proposing a structural refactor.
 - [`explanation/storage-lifecycle.md`](./explanation/storage-lifecycle.md) —
-  why nixling treats host paths, restart adoption, locks, cleanup, and
+  why d2b treats host paths, restart adoption, locks, cleanup, and
   degraded-state reporting as explicit control-plane contracts.
 - [`explanation/persistent-shells.md`](./explanation/persistent-shells.md) —
   persistence boundary, local IPC model, same-UID AF_UNIX trust boundary, and

@@ -13,7 +13,7 @@
 
 ## Context
 
-`nixling vm exec -it <vm> -- <cmd>` gives operators a workload-user terminal
+`d2b vm exec -it <vm> -- <cmd>` gives operators a workload-user terminal
 inside a VM, but the terminal is intentionally connection-owned. If the local
 client disappears, the command and its terminal lifetime end according to the
 exec contract. That is correct for ephemeral commands, but it is a poor fit for
@@ -32,9 +32,9 @@ detach/reattach, force attach, and bounded redraw/spool semantics. Its Rust
 library, `libshpool`, is CLI-shaped and process-global: `libshpool::run` is
 `unsafe`, can initialize global tracing, can daemonize, and exits the process for
 normal CLI-like control flow. Its socket trust model is same-UID: clients are
-expected to run as the same workload user as the daemon. Nixling should reuse
+expected to run as the same workload user as the daemon. D2b should reuse
 shpool's persistence model without turning shpool's internal protocol or process
-behavior into nixling's public contract.
+behavior into d2b's public contract.
 
 Existing exec already spent design and implementation effort on terminal
 streaming: stdin chunk offsets, output cursors and long-polling, resize control,
@@ -44,23 +44,23 @@ exec's already-validated terminal semantics.
 
 ## Decision
 
-Nixling will add default-off persistent named guest shell sessions exposed as the
-top-level command `nixling shell`.
+D2b will add default-off persistent named guest shell sessions exposed as the
+top-level command `d2b shell`.
 
 ### Public UX
 
 The public command family is:
 
 ```text
-nixling shell <vm> [--name NAME] [--force]
-nixling shell <vm> attach [--name NAME] [--force]
-nixling shell <vm> list [--json]
-nixling shell <vm> detach [--name NAME] [--json]
-nixling shell <vm> kill --name NAME [--json]
+d2b shell <vm> [--name NAME] [--force]
+d2b shell <vm> attach [--name NAME] [--force]
+d2b shell <vm> list [--json]
+d2b shell <vm> detach [--name NAME] [--json]
+d2b shell <vm> kill --name NAME [--json]
 ```
 
 `guest.shell.defaultName` defaults to `default`. When the CLI omits `--name`,
-nixlingd resolves the configured default name from the host manifest for
+d2bd resolves the configured default name from the host manifest for
 admission and force-slot decisions, and guestd resolves it again
 authoritatively before starting work. `list` includes the default name and marks
 it in human output. `detach` may omit `--name` because it is non-destructive and
@@ -81,7 +81,7 @@ generic public connection admission budget.
 Session names are plain bounded identifiers, not shpool templates. The accepted
 validator is non-empty, at most 64 bytes, first byte `[A-Za-z0-9_]`, remaining
 bytes `[A-Za-z0-9._-]`, not `.` or `..`, no whitespace, no `/`, no leading `-`,
-and no shpool template markers such as `{` or `}`. CLI, nixlingd, and guestd
+and no shpool template markers such as `{` or `}`. CLI, d2bd, and guestd
 validate independently.
 
 `--force` is a same-session slot swap: it may evict the currently attached
@@ -91,14 +91,14 @@ forcing an already-attached session reuses the victim's slot. Victims of force
 attach, admin detach, and kill receive distinct terminal results and human
 messages.
 
-`nixling shell` is top-level because persistent interactive shells are an
+`d2b shell` is top-level because persistent interactive shells are an
 operator-entry command rather than a one-off process execution submode. Its
 grammar keeps the VM target first, matching the detached-management pattern used
-by `nixling vm exec`: `nixling shell <vm>` implicitly attaches, and management
+by `d2b vm exec`: `d2b shell <vm>` implicitly attaches, and management
 verbs are subcommands after the VM. A VM named `list`, `detach`, or `kill` is not
 ambiguous because the first positional is always the VM. Trailing command-like
 arguments after the VM are rejected with guidance to use
-`nixling vm exec <vm> -- <cmd>`.
+`d2b vm exec <vm> -- <cmd>`.
 
 ### Shared terminal-v1 substrate
 
@@ -112,7 +112,7 @@ The implementation will extract terminal-v1 from current exec machinery:
 - daemon owner-worker admission and teardown;
 - guest PTY I/O primitives and bounded buffering.
 
-Exec remains an adapter over this substrate. `nixling vm exec -it` does not
+Exec remains an adapter over this substrate. `d2b vm exec -it` does not
 silently become shpool-backed, because exec has a different public contract:
 explicit argv, connection-owned lifetime, command exit status, and current
 signal behavior. Reconnectable command sessions require a separate future
@@ -127,7 +127,7 @@ result so the user can reconnect and let shpool redraw a clean terminal state.
 ### Guest-side helper and shpool daemon
 
 `libshpool` is isolated behind a new guest helper crate and binary named
-`nixling-guest-shell-runner`. The crate is intentionally excluded from the main
+`d2b-guest-shell-runner`. The crate is intentionally excluded from the main
 workspace because the main workspace forbids unsafe code and because
 `libshpool::run` is `unsafe` and process-global. The helper has its own
 standalone `[workspace]`, direct lint declarations, lockfile, `deny.toml`, and
@@ -147,7 +147,7 @@ If libshpool's `libproc` dependency pulls in procps, the static package uses a
 procps build without systemd support so libsystemd and dlopen paths cannot enter
 the static helper closure.
 
-The helper modes are shpool-shaped but nixling-owned:
+The helper modes are shpool-shaped but d2b-owned:
 
 - `daemon --socket <path> --home <path>`;
 - `attach --socket <path> --name <name> [--force]`;
@@ -155,8 +155,8 @@ The helper modes are shpool-shaped but nixling-owned:
 - `detach --socket <path> --name <name>`;
 - `kill --socket <path> --name <name>`.
 
-The helper translates shpool output and errors into nixling-owned JSON for
-guestd. It does not expose shpool's CLI output or internal protocol as a nixling
+The helper translates shpool output and errors into d2b-owned JSON for
+guestd. It does not expose shpool's CLI output or internal protocol as a d2b
 contract. Management helper JSON uses bounded pipes or a direct AF_UNIX stream
 owned by guestd, not a systemd pipe proxy. Streamed JSON is explicitly framed,
 for example with a fixed-size length prefix followed by a bounded JSON payload;
@@ -169,7 +169,7 @@ guestd on demand. The daemon service owns the workload-user environment for
 persistent shells and uses a custom PAM service:
 
 ```nix
-security.pam.services.nixling-shpool-daemon = {
+security.pam.services.d2b-shpool-daemon = {
   startSession = false;
   setEnvironment = true;
   setLoginUid = true;
@@ -177,7 +177,7 @@ security.pam.services.nixling-shpool-daemon = {
 ```
 
 The daemon service sets `serviceConfig.User = <workload-user>` and
-`serviceConfig.PAMName = "nixling-shpool-daemon"`. The PAM service deliberately
+`serviceConfig.PAMName = "d2b-shpool-daemon"`. The PAM service deliberately
 does not start a `pam_systemd` session: session creation would migrate the daemon
 out of the delegated system service cgroup and make service-cgroup teardown
 unreliable. systemd, running as the dynamic root service manager, owns PAM module
@@ -199,7 +199,7 @@ without moving the daemon out of its service cgroup. The daemon uses
 `XDG_RUNTIME_DIR`, and the shpool socket is a filesystem-backed UNIX socket under
 that permissioned runtime directory. Abstract namespace sockets are rejected.
 shpool's command-less attach path must spawn the workload shell as a login shell,
-with a generated NixOS-aware initial `PATH`. Nixling
+with a generated NixOS-aware initial `PATH`. D2b
 injects `SHELL`, `HOME`, and `USER` explicitly so the static musl helper is not
 forced to rely on dynamic NSS lookups for workload users. Per-attach helpers do
 not create their own PAM sessions and do not source profiles before shpool
@@ -221,7 +221,7 @@ its own terminfo search path, or a guest-local `TERMINFO_DIRS` such as
 `LOGNAME` values, not placeholders.
 
 The same-UID socket model is an explicit trust boundary. Code already running as
-the workload user may be able to reach the shpool socket. Nixling provides
+the workload user may be able to reach the shpool socket. D2b provides
 admin-visible reconciliation and typed control, not cryptographic prevention
 against same-UID clients.
 All filesystem-backed UNIX socket paths used by this feature, including test
@@ -284,7 +284,7 @@ shpool socket. The long-lived shpool daemon is different: systemd starts it
 directly as the workload user with the PAM/logind session above, and it does not
 run the guestd-spawned helper capability-bounding prelude. guestd does not use an
 unsafe `CommandExt::pre_exec` closure; the unsafe/syscall privilege setup for
-guestd-spawned helpers lives in the excluded `nixling-guest-shell-runner` crate
+guestd-spawned helpers lives in the excluded `d2b-guest-shell-runner` crate
 before libshpool is initialized. In that
 single-threaded helper prelude, the helper immediately re-applies `FD_CLOEXEC` to
 inherited control/liveness fds, redirects unused standard streams to `/dev/null`,
@@ -319,13 +319,13 @@ guestd/exec PTY primitives for terminal bytes only; structured JSON for
 management verbs and setup/close metadata never shares that PTY. Helper process
 identifiers include nonces and never include VM or session names. Long-lived
 attach helper child processes are owned and stopped by guestd through the child
-handle/pid plus any registered user manager scope cleanup. Nixling does not rely
+handle/pid plus any registered user manager scope cleanup. D2b does not rely
 on a `systemd-run` client process or on PTY SIGHUP propagation for authoritative
 teardown.
 
 ### Lifecycle and persistence
 
-Persistence is live-process persistence. Sessions survive dropped nixling/client
+Persistence is live-process persistence. Sessions survive dropped d2b/client
 connections and guestd restart when guestd can adopt the still-running shpool
 daemon. Sessions do not survive VM reboot or shpool daemon restart/crash. A
 shpool daemon epoch is tracked so daemon-only loss cannot silently recreate
@@ -339,14 +339,14 @@ added only with its own UX and lifecycle contract.
 guestd records guest boot id, guestd instance id, shpool daemon instance id, and
 opaque shell session instance ids for attach handles and audit correlation.
 Session-instance metadata is boot-scoped and root-owned. If a stable shpool
-session fingerprint cannot be proven during adoption, nixling emits an
+session fingerprint cannot be proven during adoption, d2b emits an
 observable reconciliation gap and downgrades exact lifecycle invariants until
 state is resynchronized.
 
 ### Audit, metrics, and redaction
 
 Admin-initiated events such as list, create/attach, attach close, force detach,
-admin detach, and kill are synchronously audited by nixlingd with actor
+admin detach, and kill are synchronously audited by d2bd with actor
 `peer_uid`, the validated 64-byte session name, bounded result enums, and opaque
 correlation ids. Involuntary detach events record the acting admin and, when
 known, the victim `peer_uid` and `attach_id`. Raw terminal bytes, argv,
@@ -363,10 +363,10 @@ with sequence numbers, bounded batches, gap markers, deduplication by
 instance change is itself an event-gap boundary because the previous in-memory
 queue may have been lost. The guestd event queue has a hard capacity; when it is
 full, guestd drops oldest events, records the dropped count, and emits a gap
-marker so nixlingd can audit degraded state and force reconciliation.
+marker so d2bd can audit degraded state and force reconciliation.
 
 System-induced disconnects and losses are distinct from admin actions. guestd
-and nixlingd record bounded system/no-actor causes for network loss, owner drop,
+and d2bd record bounded system/no-actor causes for network loss, owner drop,
 daemon OOM/signal/exit, resource kill, orphan reap, and reconciliation gaps so
 operators can distinguish expected admin detaches from unexpected session loss.
 
@@ -376,7 +376,7 @@ exit-code, and timeout outcomes where available, and may fetch bounded sanitized
 journal excerpts on daemon readiness failure or abnormal daemon exit. The daemon
 service clamps verbosity and prevents raw terminal I/O from being written to the
 guest journal; startup diagnostics are bounded and sanitized before surfacing to
-nixlingd.
+d2bd.
 
 Metrics use bounded labels only. Session names, attach ids, shell session
 instance ids, terminal stream ids, provider resource ids, raw output, stdin,
@@ -391,7 +391,7 @@ that increment when the bounded guestd event queue drops events.
 
 Shell management RPCs propagate trace context across the host/guest boundary
 using the repository's OpenTelemetry/W3C trace-context conventions so host
-`nixlingd` spans and guestd spans share one trace root. Metric labels remain
+`d2bd` spans and guestd spans share one trace root. Metric labels remain
 strictly low-cardinality. Structured logs and trace spans may carry
 high-cardinality opaque ids or validated session names when needed for debugging,
 subject to the same redaction rules above.
@@ -406,7 +406,7 @@ Tests follow `tests/AGENTS.md`: Layer 1 first, no new top-level `tests/*.sh`,
 and Layer 2 only with justification. Nix module defaults, option values, and
 eval rejections for `guest.shell.*` are Type 1 eval cases in
 `tests/unit/nix/cases/*.nix`. Rendered manifest/bundle fields for shell
-configuration are Type 4 contract tests in `packages/nixling-contract-tests/`.
+configuration are Type 4 contract tests in `packages/d2b-contract-tests/`.
 Static helper packaging assertions, including no ELF interpreter and no dynamic
 dependencies, are Type 6 flake checks or existing static derivation checks wired
 into the flake; no new top-level shell gate is added for them. The guest helper's
@@ -450,7 +450,7 @@ ADR 0035 keys shaped like
 - The terminal streaming path is reused instead of duplicated, reducing protocol
   and flow-control drift between exec and shell.
 - shpool remains an implementation detail behind a static guest helper and a
-  nixling-owned protocol.
+  d2b-owned protocol.
 - The same-UID socket trust boundary is a real limitation: untrusted workload-UID
   services should not be co-located with persistent admin shells.
 - The MVP does not provide per-shell cgroup isolation. A pool-level resource
@@ -461,7 +461,7 @@ ADR 0035 keys shaped like
 
 ## Alternatives considered
 
-- **Use tmux or screen.** Rejected because nixling needs typed lifecycle,
+- **Use tmux or screen.** Rejected because d2b needs typed lifecycle,
   audit/metrics, guest-control integration, and a minimal one-session-per-command
   UX rather than exposing a general terminal multiplexer.
 - **Call libshpool inside guestd.** Rejected because `libshpool::run` is unsafe
@@ -469,13 +469,13 @@ ADR 0035 keys shaped like
   CLI.
 - **Implement a new persistent shell protocol from scratch.** Rejected because
   shpool already owns the hard persistence/redraw behavior, and exec already owns
-  the terminal streaming substrate nixling should reuse.
+  the terminal streaming substrate d2b should reuse.
 - **Make interactive exec implicitly persistent.** Rejected because it would
   break exec's command exit-status and connection-owned lifetime contract.
-- **Place shell under `nixling vm shell`.** Rejected because persistent shells
+- **Place shell under `d2b vm shell`.** Rejected because persistent shells
   are a first-class operator entry point with their own lifecycle and management
   verbs, not a one-off exec submode. The chosen top-level command still keeps the
-  VM target first (`nixling shell <vm> ...`) to match the detached-management
+  VM target first (`d2b shell <vm> ...`) to match the detached-management
   grammar operators already use with exec.
 - **Derive the default shell name from the host operator username.** Rejected
   because host usernames are not a stable guest configuration contract and would

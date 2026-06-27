@@ -1,6 +1,6 @@
 # Rust dry-run snapshot only; bash side comparison gated on Tier-2 self-hosted KVM runner.
-nixling migrate --dry-run: deployment shape = all-daemon, 2 VM(s) in manifest.
+d2b migrate --dry-run: deployment shape = all-daemon, 2 VM(s) in manifest.
 v1.1 daemon-only: every enabled VM is daemon-supervised; the per-VM
 `supervisor` option was removed in v1.1-P2 (ADR 0015). Use
-`nixling status <vm>` to inspect each VM directly; `nixling migrate --apply`
+`d2b status <vm>` to inspect each VM directly; `d2b migrate --apply`
 is the live mutation path when you are ready.

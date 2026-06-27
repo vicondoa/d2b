@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Aggregating wrapper for the nixling test layers.
+# Aggregating wrapper for the d2b test layers.
 #
 # Runs in a deterministic order:
-#   static.sh -> integration/live/nixling-store.sh -> integration/live/audio.sh -> every security-*.sh (sorted)
+#   static.sh -> integration/live/d2b-store.sh -> integration/live/audio.sh -> every security-*.sh (sorted)
 #
 # This is the single gate that the `security/hardening` branch's daily
 # smoke is checked against. Sub-scripts have varying dispatcher
@@ -32,27 +32,27 @@
 # Each invocation mints its own output dir so concurrent runs don't
 # clobber each other:
 #   RUN_ID   = <UTC timestamp>-<pid>
-#   RUN_ROOT = $NL_RUN_ROOT (if set, e.g. for CI)
-#              else /run/nixling-runner                (when EUID == 0)
-#              else $HOME/.local/state/nixling-runner  (otherwise, per XDG)
+#   RUN_ROOT = $D2B_RUN_ROOT (if set, e.g. for CI)
+#              else /run/d2b-runner                (when EUID == 0)
+#              else $HOME/.local/state/d2b-runner  (otherwise, per XDG)
 #   RUN_DIR  = $RUN_ROOT/<RUN_ID>
-#     aggregate.log    — the shared lib.sh log (NL_LOG) for this run
+#     aggregate.log    — the shared lib.sh log (D2B_LOG) for this run
 #     <scriptname>.log — per-script stdout+stderr
 # RUN_ROOT is created mode 0700 owned by $EUID and validated on every
-# run; the prior /tmp/nixling-runner path is no longer used (it was
+# run; the prior /tmp/d2b-runner path is no longer used (it was
 # world-writable and let an unprivileged user influence root's log
 # path via symlink races). Validation is fail-closed: if RUN_ROOT
 # already exists with the wrong owner, wrong mode, or as a symlink,
 # the runner exits non-zero and asks the user to fix it manually --
 # the runner NEVER `rm -rf`s an existing RUN_ROOT (the previous
-# behaviour was unsafe with overrides like NL_RUN_ROOT=/home/<user>).
+# behaviour was unsafe with overrides like D2B_RUN_ROOT=/home/<user>).
 # On a fully-green run $RUN_ROOT/latest is symlinked to the new
 # RUN_DIR and older successful runs are pruned (newest 10 kept).
 # Failed runs are always retained for diagnostics.
 #
-# Honors NL_VMS and NL_RUN_ROOT — NL_VMS is passed through to children
+# Honors D2B_VMS and D2B_RUN_ROOT — D2B_VMS is passed through to children
 # via the environment so the live integration scripts target the same VM set;
-# NL_RUN_ROOT pins the log root (useful for CI).
+# D2B_RUN_ROOT pins the log root (useful for CI).
 
 set -uo pipefail
 
@@ -61,7 +61,7 @@ HERE=$(dirname "$(readlink -f "$0")")
 # Fixed-order layers. static.sh has no --quick flag and is cheap, so it
 # always runs as-is. The live store and audio gates both speak the
 # --quick / --only / --list dispatcher contract.
-SCRIPTS=( static.sh integration/live/nixling-store.sh integration/live/audio.sh )
+SCRIPTS=( static.sh integration/live/d2b-store.sh integration/live/audio.sh )
 
 # Append every security-*.sh in lexical order. We use shell glob
 # expansion sorted by LC_ALL=C so phases can drop new files in without
@@ -98,42 +98,42 @@ done
 
 # ---------- per-run output dir ----------
 # Mint a unique id per invocation so two concurrent runs do not stomp
-# each other's logs (the shared NL_LOG used by lib.sh in particular).
+# each other's logs (the shared D2B_LOG used by lib.sh in particular).
 # RUN_ROOT is chosen to avoid the world-writable /tmp directory: it is
-# root-only /run/nixling-runner when invoked as root, the invoking
-# user's XDG state dir otherwise. $NL_RUN_ROOT overrides both.
-NL_RUN_ROOT_IS_OVERRIDE=0
-if [ -n "${NL_RUN_ROOT:-}" ]; then
-  RUN_ROOT="$NL_RUN_ROOT"
-  NL_RUN_ROOT_IS_OVERRIDE=1
+# root-only /run/d2b-runner when invoked as root, the invoking
+# user's XDG state dir otherwise. $D2B_RUN_ROOT overrides both.
+D2B_RUN_ROOT_IS_OVERRIDE=0
+if [ -n "${D2B_RUN_ROOT:-}" ]; then
+  RUN_ROOT="$D2B_RUN_ROOT"
+  D2B_RUN_ROOT_IS_OVERRIDE=1
 elif [ "$EUID" -eq 0 ]; then
-  RUN_ROOT="/run/nixling-runner"
+  RUN_ROOT="/run/d2b-runner"
 else
-  RUN_ROOT="${HOME:?HOME must be set when not running as root}/.local/state/nixling-runner"
+  RUN_ROOT="${HOME:?HOME must be set when not running as root}/.local/state/d2b-runner"
 fi
 
-# Critical system mount points / top-level dirs. An NL_RUN_ROOT
+# Critical system mount points / top-level dirs. An D2B_RUN_ROOT
 # override must neither equal one of these nor be a direct child of
 # one (the latter catches /home/<user>, /etc/<anything>, /var/<anything>,
 # …). The list is intentionally non-exhaustive but covers the obvious
 # ones the spec calls out.
 RUN_ROOT_CRITICAL_PATHS=( / /etc /var /home /run /srv /opt /usr /boot /sys /proc /dev /root /nix /lib /lib64 /bin /sbin /mnt /media )
 
-# Verify an NL_RUN_ROOT override path is structurally sensible. Bails
+# Verify an D2B_RUN_ROOT override path is structurally sensible. Bails
 # with a clear error to stderr on any violation; does NOT touch the
 # path. Default RUN_ROOT values skip these structural checks because
-# they are well-known canonical paths (e.g. /run/nixling-runner has a
+# they are well-known canonical paths (e.g. /run/d2b-runner has a
 # critical parent /run by construction).
 validate_run_root_override() {
   local d="$1"
   if [[ "$d" != /* ]]; then
-    printf 'runner.sh: NL_RUN_ROOT must be an absolute path; got: %s\n' "$d" >&2
+    printf 'runner.sh: D2B_RUN_ROOT must be an absolute path; got: %s\n' "$d" >&2
     exit 4
   fi
   local c
   for c in "${RUN_ROOT_CRITICAL_PATHS[@]}"; do
     if [ "$d" = "$c" ]; then
-      printf 'runner.sh: NL_RUN_ROOT refuses critical system path: %s\n' "$d" >&2
+      printf 'runner.sh: D2B_RUN_ROOT refuses critical system path: %s\n' "$d" >&2
       exit 4
     fi
   done
@@ -141,16 +141,16 @@ validate_run_root_override() {
   parent=$(dirname -- "$d")
   for c in "${RUN_ROOT_CRITICAL_PATHS[@]}"; do
     if [ "$parent" = "$c" ]; then
-      printf 'runner.sh: NL_RUN_ROOT refuses path whose immediate parent is a critical mount: %s (parent=%s)\n' "$d" "$parent" >&2
+      printf 'runner.sh: D2B_RUN_ROOT refuses path whose immediate parent is a critical mount: %s (parent=%s)\n' "$d" "$parent" >&2
       exit 4
     fi
   done
   if [ ! -d "$parent" ]; then
-    printf 'runner.sh: NL_RUN_ROOT parent directory does not exist: %s (for %s)\n' "$parent" "$d" >&2
+    printf 'runner.sh: D2B_RUN_ROOT parent directory does not exist: %s (for %s)\n' "$parent" "$d" >&2
     exit 4
   fi
   if [ ! -w "$parent" ]; then
-    printf 'runner.sh: NL_RUN_ROOT parent directory is not writable by uid %s: %s (for %s)\n' "$EUID" "$parent" "$d" >&2
+    printf 'runner.sh: D2B_RUN_ROOT parent directory is not writable by uid %s: %s (for %s)\n' "$EUID" "$parent" "$d" >&2
     exit 4
   fi
 }
@@ -187,12 +187,12 @@ validate_existing_run_root() {
 }
 
 # Ensure RUN_ROOT is present and compliant. Validates override
-# structure (for NL_RUN_ROOT paths) and existing-dir state (always);
+# structure (for D2B_RUN_ROOT paths) and existing-dir state (always);
 # only creates the directory when it is fully absent, with strict
 # 0700 perms. Never destructive: an existing non-compliant RUN_ROOT
 # is reported and the script exits -- the previous behaviour of
 # `rm -rf -- "$d"` could nuke arbitrary user data (e.g.
-# NL_RUN_ROOT=/home/<user>).
+# D2B_RUN_ROOT=/home/<user>).
 #
 # RUN_ROOT is CANONICALIZED before any other validation so the
 # critical-path block-list cannot be bypassed via traversal
@@ -237,10 +237,10 @@ ensure_run_root() {
 
   # Defense in depth: if the override path contained literal `..` AND
   # canonicalization changed it, refuse the traversal even if it would
-  # have landed somewhere safe. Catches NL_RUN_ROOT=/tmp/foo/../etc/nixos
+  # have landed somewhere safe. Catches D2B_RUN_ROOT=/tmp/foo/../etc/nixos
   # whether or not /tmp/foo happens to exist.
   if [ "$is_override" = "1" ] && [ "$canonical" != "$d" ] && [[ "$d" == *..* ]]; then
-    printf 'runner.sh: NL_RUN_ROOT contains traversal segments (..); refusing: %s (resolves to %s)\n' "$d" "$canonical" >&2
+    printf 'runner.sh: D2B_RUN_ROOT contains traversal segments (..); refusing: %s (resolves to %s)\n' "$d" "$canonical" >&2
     exit 4
   fi
 
@@ -283,17 +283,17 @@ ensure_run_root() {
 
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 # Validate (and create-if-absent) RUN_ROOT in every mode -- including
-# --list -- so dangerous NL_RUN_ROOT overrides fail closed before any
+# --list -- so dangerous D2B_RUN_ROOT overrides fail closed before any
 # I/O. ensure_run_root canonicalizes RUN_ROOT in place, so RUN_DIR is
 # derived AFTER the call to ensure it uses the canonical
 # path. Only the RUN_DIR creation and aggregate log are gated on
 # non-list mode.
-ensure_run_root "$RUN_ROOT" "$NL_RUN_ROOT_IS_OVERRIDE"
+ensure_run_root "$RUN_ROOT" "$D2B_RUN_ROOT_IS_OVERRIDE"
 RUN_DIR="$RUN_ROOT/$RUN_ID"
 if [ "$mode" != "list" ]; then
   mkdir -p -- "$RUN_DIR"
-  export NL_LOG="$RUN_DIR/aggregate.log"
-  : > "$NL_LOG"
+  export D2B_LOG="$RUN_DIR/aggregate.log"
+  : > "$D2B_LOG"
   printf 'runner.sh: RUN_ROOT=%s  RUN_ID=%s\n' "$RUN_ROOT" "$RUN_ID"
 fi
 
@@ -410,7 +410,7 @@ run_one() {
 # ---------- main ----------
 
 if [ "$mode" = "list" ]; then
-  printf 'nixling test runner — available tests\n\n'
+  printf 'd2b test runner — available tests\n\n'
 fi
 
 pass=0

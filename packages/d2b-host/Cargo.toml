@@ -1,0 +1,61 @@
+[package]
+name = "d2b-host"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+# d2b-host is the W3 disjoint host-prepare API surface consumed by
+# d2bd and d2b-priv-broker. Stub modules land in the integrator
+# prep commit; W3 scope agents s1-s4 fill them in.
+#
+# Dependency rule (per W3 file-ownership map): d2b-host depends only
+# on d2b-core + d2b-contracts + low-level OS crates declared in the
+# workspace. It must NEVER depend on d2bd or d2b-priv-broker
+# (both are downstream consumers).
+
+[features]
+default = []
+# Opt-in test backends used by scope agents to drive fake/recorded I/O
+# without touching the real netlink / cgroup / nft surfaces. Real
+# implementations live behind the default build.
+fake-backends = []
+
+[dependencies]
+d2b-constellation-core = { path = "../d2b-constellation-core", version = "0.0.0-bootstrap" }
+d2b-constellation-provider = { path = "../d2b-constellation-provider", version = "0.0.0-bootstrap" }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+async-trait = "0.1"
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+rustix = { workspace = true }
+# `nix` provides safe Uid/Gid constructors and a safe `fchown` wrapper
+# that `rustix 0.38` only exposes through `unsafe`. d2b-host is
+# `#![forbid(unsafe_code)]`, so the cgroup delegation chown path uses
+# `nix::unistd::fchown` rather than `rustix::fs::fchown`. `nix` is
+# already a transitive workspace dependency (broker + d2bd), so
+# this is not a new top-level supply-chain entry.
+nix = { version = "0.29", default-features = false, features = ["fs", "user"] }
+libc = "0.2"
+sha2 = { workspace = true }
+# `miniz_oxide` is a raw-DEFLATE decoder; d2b-host wraps it in a
+# tiny inline gzip header/trailer skipper so the W3 kernel-module
+# probe can read `/proc/config.gz` as a secondary kernel-config
+# evidence source per plan.md §"W3 kernel-module probe order" step 4.
+# Already in the workspace lockfile as a transitive of `backtrace`, so
+# promoting it to a direct dependency does not widen the supply-chain
+# surface tracked by cargo-deny + cargo-audit.
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+
+[dev-dependencies]
+nix = { version = "0.29", default-features = false, features = ["fs", "user"] }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
+serde_json.workspace = true
+tempfile = "3"
+tokio = { version = "1", features = ["net"] }
+ttrpc = { version = "0.9.0", default-features = false, features = ["async"] }

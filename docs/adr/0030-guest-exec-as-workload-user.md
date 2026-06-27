@@ -9,15 +9,15 @@
 ## Context
 
 The guest-control plane (ADR 0028) shipped guest exec as **root-only**:
-`nixling vm exec` ran the requested command in the guest as `root` with a
+`d2b vm exec` ran the requested command in the guest as `root` with a
 cleared environment (`env_clear()` + the client-supplied `--env` pairs only)
 and **no PAM session and no login shell**. Non-root exec was deferred to a
-future wave behind a `nixling-userd` stub crate and a reserved
+future wave behind a `d2b-userd` stub crate and a reserved
 `guest.exec.users` option.
 
 That model is wrong for the actual operator workflow, which is to reproduce
 what the retired SSH `vm konsole` did: land an interactive or non-interactive
-command **as the per-VM workload user** (`nixling.vms.<vm>.ssh.user`, e.g.
+command **as the per-VM workload user** (`d2b.vms.<vm>.ssh.user`, e.g.
 `john`) with a real login session. Empirically (verified live on a graphics
 VM):
 
@@ -52,7 +52,7 @@ argv as root.
 2. **Non-interactive exec runs through a PAM login session.** Guestd spawns
    `systemd-run --uid=<uid> --pipe --wait --quiet --collect
    --expand-environment=no --property=PAMName=login -- <login-shell> -l -c
-   'exec "$@"' nl-exec <program> <args…>`. The user argv is passed as shell
+   'exec "$@"' d2b-exec <program> <args…>`. The user argv is passed as shell
    **positional parameters** (never string-joined into `-c`), so an argv
    element that looks like `$VAR`/`$(...)` stays inert; `--expand-environment=no`
    additionally stops systemd expanding variables at unit-load time. The
@@ -64,7 +64,7 @@ argv as root.
    workload login session.** Like every exec, `-it` requires an explicit
    command after `--` (the CLI rejects an empty command); it runs that
    command on a guestd-allocated PTY inside the workload login session. The
-   `vm konsole` replacement is therefore `nixling vm exec -it <vm> -- <shell>`
+   `vm konsole` replacement is therefore `d2b vm exec -it <vm> -- <shell>`
    (e.g. `-- bash`), which gives an interactive login shell with
    `XDG_RUNTIME_DIR`/`WAYLAND_DISPLAY`/the login profile. (`-i` without `-t`
    is rejected, since guestd forwards stdin only in PTY mode.)
@@ -84,13 +84,13 @@ argv as root.
 
 5. **Removals.** `guest.exec.allowRoot` and `guest.exec.users` are removed
    (hidden tombstone stubs + friendly migration assertions remain so legacy
-   assignments fail eval with guidance), along with the `nixling-userd` stub
+   assignments fail eval with guidance), along with the `d2b-userd` stub
    crate, the `UserDirectory`/`GuestUserIdentity` scaffolding, and the
-   `nixling vm konsole` subcommand (superseded by `vm exec -it`).
+   `d2b vm konsole` subcommand (superseded by `vm exec -it`).
 
 ## Consequences
 
-- `nixling vm exec` reproduces the old SSH `vm konsole` behaviour without
+- `d2b vm exec` reproduces the old SSH `vm konsole` behaviour without
   SSH: workload user, login profile, `XDG_RUNTIME_DIR`, and `WAYLAND_DISPLAY`,
   so graphical apps launch. Elevation is the user's own `sudo` inside the
   session.

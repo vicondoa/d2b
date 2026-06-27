@@ -1,12 +1,12 @@
-# `nixling host validate` — composite default-switch readiness preflight
+# `d2b host validate` — composite default-switch readiness preflight
 
-`nixling host validate` is the operator-facing one-command preflight
+`d2b host validate` is the operator-facing one-command preflight
 the operator runs after `nixos-rebuild switch` to record per-wave
 validation evidence. It is the umbrella verb that produces the
 per-wave evidence records consumed by the per-wave
 `defaultSwitchReadiness.<wave>.validated` assertion
 (`nixos-modules/options-daemon.nix:validationEvidencePresent`).
-(`nixling.daemonExperimental.enable` defaults `true` and no longer
+(`d2b.daemonExperimental.enable` defaults `true` and no longer
 depends on this evidence — it is no longer evidence-auto-flipped — but
 it still functionally gates the daemon control plane, so leave it at
 its default.)
@@ -16,7 +16,7 @@ its default.)
 1. Iterates the default-switch readiness waves in the deterministic catalog
    order (`w4Fu`, `w5Fu`, `w6Fu`, `w7Fu`, `w8Fu`, `w9Fu`, `p0`,
    `p0Fu`, `p1`, `p2`, `p3`, `p4`, `p5`, `p6`, `p7`). The catalog
-   is sourced from `packages/nixling/src/host_validate.rs::WAVE_CATALOG`
+   is sourced from `packages/d2b/src/host_validate.rs::WAVE_CATALOG`
    and is held byte-identical to `readinessWaveSpecs` in
    `nixos-modules/options-daemon.nix` by the Layer-1 gate
    [`tests/host-validate-verb-eval.sh`](../../tests/host-validate-verb-eval.sh).
@@ -24,10 +24,10 @@ its default.)
    scripts shipped under `tests/` (e.g.
    `tests/minijail-validator-*.sh`,
    `tests/per-vm-state-ownership-eval.sh`,
-   `tests/nixlingd-startup-smoke.sh`). A wave is `ready` only when
+   `tests/d2bd-startup-smoke.sh`). A wave is `ready` only when
    every declared validator is present and readable on disk.
 3. In `--apply` mode, writes the canonical evidence record
-   `/var/lib/nixling/validated/<wave>.json` for every `ready`
+   `/var/lib/d2b/validated/<wave>.json` for every `ready`
    wave; the default-switch gate then accepts that wave as `validated`.
 
 The verb does NOT execute the per-wave shell validators itself
@@ -43,7 +43,7 @@ readiness option consumes.
 ## Usage
 
 ```text
-nixling host validate (--dry-run | --apply)
+d2b host validate (--dry-run | --apply)
                       [--wave <name>]
                       [--operator-signature <sig>]
                       [--evidence-dir <path>]
@@ -61,9 +61,9 @@ neither is given — matching every other `host *` verb).
 | `--apply` | Writes evidence for every `ready` wave. Returns exit 78 if any wave is still `missing` (operator must run the listed validators first). |
 | `--wave <name>` | Restrict to a single wave (validated against the catalog; unknown values surface the typed `unknown-wave` envelope, exit 78). |
 | `--operator-signature <sig>` | Override the per-wave operator signature. By default the verb computes a deterministic `sha256:` digest of `hostname \| wave \| scripts_dir \| timestamp`. |
-| `--evidence-dir <path>` | Override the evidence directory. Defaults to `/var/lib/nixling/validated` (the default-switch evidence path). Tests use a scratch dir; operators should never override this in production. |
-| `--scripts-dir <path>` | Override the validator scripts directory. Defaults to `/run/current-system/sw/share/nixling/tests` (installed) → `./tests` (dev). Override with `NIXLING_VALIDATE_SCRIPTS_DIR`. |
-| `--json` / `--human` | Render JSON (machine-consumable) vs human-readable text. JSON is default-suitable for the `nixling` JSON contract. |
+| `--evidence-dir <path>` | Override the evidence directory. Defaults to `/var/lib/d2b/validated` (the default-switch evidence path). Tests use a scratch dir; operators should never override this in production. |
+| `--scripts-dir <path>` | Override the validator scripts directory. Defaults to `/run/current-system/sw/share/d2b/tests` (installed) → `./tests` (dev). Override with `D2B_VALIDATE_SCRIPTS_DIR`. |
+| `--json` / `--human` | Render JSON (machine-consumable) vs human-readable text. JSON is default-suitable for the `d2b` JSON contract. |
 
 ## Evidence schema
 
@@ -87,18 +87,18 @@ or whose `timestamp` / `operatorSignature` are absent or empty.
 
 | Wave | Validators (relative to `tests/`) |
 | --- | --- |
-| `w4Fu` | `nixlingd-startup-smoke.sh` |
+| `w4Fu` | `d2bd-startup-smoke.sh` |
 | `w5Fu` | `hardware-smoke-gpu-yubikey.sh` |
 | `w6Fu` | `hardware-smoke-gpu-yubikey.sh`, `usbip-state-machine-eval.sh` |
 | `w7Fu` | `per-vm-state-ownership-eval.sh` |
 | `w8Fu` | `ssh-host-key-preflight-eval.sh` |
 | `w9Fu` | `harness-ubuntu-eval.sh` |
-| `p0` | `broker-socket-activation-eval.sh`, `broker-caps-eval.sh`, `nixlingd-startup-smoke.sh` |
+| `p0` | `broker-socket-activation-eval.sh`, `broker-caps-eval.sh`, `d2bd-startup-smoke.sh` |
 | `p0Fu` | `broker-bundle-path-eval.sh` |
 | `p1` | `minijail-validator-{cloud-hypervisor,virtiofsd,swtpm,gpu,audio,video,vsock-relay,usbip,otel-host-bridge}.sh` |
 | `p2` | `per-vm-state-ownership-eval.sh`, `daemon-autostart-eval.sh`, `host-prep-dag-eval.sh` |
 | `p3` | `observability-eval.sh`, `daemon-metrics-eval.sh`, `usbip-state-machine-eval.sh` |
-| `p4` | `packages/nixling/tests/vm_verbs_contract.rs`, `desktop-wrapper-contract-eval.sh` |
+| `p4` | `packages/d2b/tests/vm_verbs_contract.rs`, `desktop-wrapper-contract-eval.sh` |
 | `p5` | `host-validate-verb-eval.sh` |
 | `p6` | _(no per-host validator; readiness is gate-output only)_ |
 | `p7` | _(no per-host validator; readiness is gate-output only)_ |
@@ -126,21 +126,21 @@ A typical validation workflow on a fresh host:
 sudo nixos-rebuild switch --flake .#myhost
 
 # 2. Inventory what's ready to attest.
-nixling host validate --dry-run --json | jq '.waves[] | {wave, status}'
+d2b host validate --dry-run --json | jq '.waves[] | {wave, status}'
 
 # 3. Run any per-wave Layer-2 validators that aren't `ready` yet
-#    (e.g. tests/minijail-validator-swtpm.sh requires NL_LIVE=1).
-sudo NL_LIVE=1 bash tests/minijail-validator-swtpm.sh
+#    (e.g. tests/minijail-validator-swtpm.sh requires D2B_LIVE=1).
+sudo D2B_LIVE=1 bash tests/minijail-validator-swtpm.sh
 # … repeat for every wave you want to attest …
 
 # 4. Write the umbrella evidence records.
-sudo nixling host validate --apply
+sudo d2b host validate --apply
 
 # 5. Rebuild to apply the validated bits.
 #    The per-wave defaultSwitchReadiness.<wave>.validated assertion
 #    passes because every <wave>.json record exists with the canonical
 #    schema. (The daemon-backed control plane is already the default;
-#    nixling.daemonExperimental.enable defaults true and is no longer
+#    d2b.daemonExperimental.enable defaults true and is no longer
 #    evidence-auto-flipped, but it still functionally gates the daemon.)
 sudo nixos-rebuild switch --flake .#myhost
 ```
@@ -161,4 +161,4 @@ implementation has already shipped in-tree.
 - [`docs/reference/default-switch-and-deprecation.md`](./default-switch-and-deprecation.md) — per-wave evidence gate reference.
 - [`docs/reference/error-codes.md`](./error-codes.md) — `--apply-or-dry-run-required` and `unknown-wave` envelopes.
 - [`tests/host-validate-verb-eval.sh`](../../tests/host-validate-verb-eval.sh) — Layer-1 regression gate.
-- [`packages/nixling/src/host_validate.rs`](../../packages/nixling/src/host_validate.rs) — verb implementation + per-wave catalog.
+- [`packages/d2b/src/host_validate.rs`](../../packages/d2b/src/host_validate.rs) — verb implementation + per-wave catalog.

@@ -8,19 +8,19 @@
 # audit log, the collector can (opt-in) tail the host journal and accept
 # OTLP from host-local instrumentation, mirroring the per-VM guest
 # collector. Host-origin identity (`vm.name`/`host.name`) is the host's
-# `nixling.observability.host.identityName`; it is stamped here advisorily
+# `d2b.observability.host.identityName`; it is stamped here advisorily
 # and re-stamped authoritatively at the trusted ingress boundary.
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.nixling.observability;
+  cfg = config.d2b.observability;
   hostCfg = cfg.host;
   identityName = hostCfg.identityName;
   scrapeJournal = hostCfg.scrapeJournal;
   otlpIngest = hostCfg.otlpIngest.enable;
   clientGroup = hostCfg.otlpIngest.clientGroup;
 
-  otelRuntimeDir = "/run/nixling/otel";
+  otelRuntimeDir = "/run/d2b/otel";
   hostEgressSocket = "${otelRuntimeDir}/host-egress.sock";
   # OTLP ingest lives in its own subdirectory so the collector's write
   # authority for bind(2) cannot reach host-egress.sock — unlink/rename
@@ -29,12 +29,12 @@ let
   hostOtlpSocket = "${otelIngestDir}/host-otlp.sock";
 
   hostCollectorMetricsPort = 12345;
-  journaldStorageDir = "/var/lib/nixling-host-otel-collector/journald";
+  journaldStorageDir = "/var/lib/d2b-host-otel-collector/journald";
 
-  storeSyncExportDir = "${config.nixling.site.stateDir}/observability/store-sync";
+  storeSyncExportDir = "${config.d2b.site.stateDir}/observability/store-sync";
   storeSyncExportGlob = "${storeSyncExportDir}/store-sync-*.jsonl";
 
-  ingestGroup = if clientGroup == null then "nixling-host-otel-collector" else clientGroup;
+  ingestGroup = if clientGroup == null then "d2b-host-otel-collector" else clientGroup;
   ingestDirMode = if clientGroup == null then "0700" else "2750";
   ingestUmask = if clientGroup == null then "0177" else "0117";
 
@@ -48,16 +48,16 @@ let
     { key = "host.name"; value = identityName; action = "upsert"; }
   ];
 
-  runtimePrep = pkgs.writeShellScript "nixling-host-otel-runtime-prep" ''
+  runtimePrep = pkgs.writeShellScript "d2b-host-otel-runtime-prep" ''
     set -eu
-    ${pkgs.coreutils}/bin/install -d -m 0750 -o nixlingd -g nixling ${otelRuntimeDir}
-    ${pkgs.acl}/bin/setfacl -m u:nixling-host-otel-collector:--x /run/nixling
+    ${pkgs.coreutils}/bin/install -d -m 0750 -o d2bd -g d2b ${otelRuntimeDir}
+    ${pkgs.acl}/bin/setfacl -m u:d2b-host-otel-collector:--x /run/d2b
     # Access ACL on ${otelRuntimeDir}: collector gets --x (traverse only, NO
     # write authority on the directory itself). The mask m::rwx preserves the
     # bridge uid's rwx effective access (set by activation) so it can still
     # create host-egress.sock here.
     #
-    # Default ACL: d:u:nixling-host-otel-collector:rw is intentionally kept so
+    # Default ACL: d:u:d2b-host-otel-collector:rw is intentionally kept so
     # that when the broker-spawned bridge creates host-egress.sock AFTER this
     # runtimePrep runs, the socket inherits rw for the collector automatically
     # (connect(2) requires write on the socket file). Without this default ACL
@@ -65,25 +65,25 @@ let
     # default mask is d:m::rwx (write-capable) so the bridge runner's rwx
     # effective access on newly created children is not masked away.
     ${pkgs.acl}/bin/setfacl \
-      -m u:nixling-host-otel-collector:--x \
+      -m u:d2b-host-otel-collector:--x \
       -m m::rwx \
-      -m d:u:nixling-host-otel-collector:rw \
+      -m d:u:d2b-host-otel-collector:rw \
       -m d:m::rwx \
       ${otelRuntimeDir}
     if [ -S ${hostEgressSocket} ]; then
-      ${pkgs.acl}/bin/setfacl -m u:nixling-host-otel-collector:rw,m::rw ${hostEgressSocket}
+      ${pkgs.acl}/bin/setfacl -m u:d2b-host-otel-collector:rw,m::rw ${hostEgressSocket}
     fi
 
-    state_dir=${lib.escapeShellArg config.nixling.site.stateDir}
+    state_dir=${lib.escapeShellArg config.d2b.site.stateDir}
     obs_dir="$state_dir/observability"
     export_dir=${lib.escapeShellArg storeSyncExportDir}
     if [ -d "$state_dir" ]; then
       [ -d "$obs_dir" ] || ${pkgs.coreutils}/bin/install -d -m 0700 -o root -g root "$obs_dir"
       [ -d "$export_dir" ] || ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g root "$export_dir"
-      ${pkgs.acl}/bin/setfacl -m "u:nixling-host-otel-collector:--x" "$state_dir" 2>/dev/null || true
-      ${pkgs.acl}/bin/setfacl -m "u:nixling-host-otel-collector:--x" "$obs_dir" 2>/dev/null || true
-      ${pkgs.acl}/bin/setfacl -m "u:nixling-host-otel-collector:r-x" "$export_dir" 2>/dev/null || true
-      ${pkgs.acl}/bin/setfacl -d -m "u:nixling-host-otel-collector:r--" "$export_dir" 2>/dev/null || true
+      ${pkgs.acl}/bin/setfacl -m "u:d2b-host-otel-collector:--x" "$state_dir" 2>/dev/null || true
+      ${pkgs.acl}/bin/setfacl -m "u:d2b-host-otel-collector:--x" "$obs_dir" 2>/dev/null || true
+      ${pkgs.acl}/bin/setfacl -m "u:d2b-host-otel-collector:r-x" "$export_dir" 2>/dev/null || true
+      ${pkgs.acl}/bin/setfacl -d -m "u:d2b-host-otel-collector:r--" "$export_dir" 2>/dev/null || true
     fi
     ${lib.optionalString scrapeJournal ''
 
@@ -93,7 +93,7 @@ let
       # owner execute bit (0750 & ~0177 = 0640) and making the dir unusable.
       # Provisioning it here (privileged ExecStartPre, under StateDirectory)
       # lets the extension run with create_directory = false.
-      ${pkgs.coreutils}/bin/install -d -m 0700 -o nixling-host-otel-collector -g nixling-host-otel-collector ${journaldStorageDir}
+      ${pkgs.coreutils}/bin/install -d -m 0700 -o d2b-host-otel-collector -g d2b-host-otel-collector ${journaldStorageDir}
     ''}
     ${lib.optionalString otlpIngest ''
 
@@ -102,11 +102,11 @@ let
       # (no ReadWritePaths there), so host-egress.sock cannot be
       # unlinked/replaced. setfacl -b then chmod give deterministic perms,
       # not whatever the parent default ACL would mask in.
-      ${pkgs.coreutils}/bin/install -d -o nixling-host-otel-collector -g ${ingestGroup} ${otelIngestDir}
+      ${pkgs.coreutils}/bin/install -d -o d2b-host-otel-collector -g ${ingestGroup} ${otelIngestDir}
       ${pkgs.acl}/bin/setfacl -b ${otelIngestDir}
       ${pkgs.coreutils}/bin/chmod ${ingestDirMode} ${otelIngestDir}
       ${lib.optionalString (clientGroup != null) ''
-        ${pkgs.acl}/bin/setfacl -m g:${clientGroup}:--x /run/nixling ${otelRuntimeDir}
+        ${pkgs.acl}/bin/setfacl -m g:${clientGroup}:--x /run/d2b ${otelRuntimeDir}
       ''}
       # Remove a stale pathname socket so AF_UNIX bind(2) succeeds after an
       # unclean exit (Restart=on-failure).
@@ -132,7 +132,7 @@ let
       prometheus = {
         config.scrape_configs = [
           {
-            job_name = "nixling-host-otel-collector";
+            job_name = "d2b-host-otel-collector";
             scrape_interval = "30s";
             static_configs = [
               { targets = [ "127.0.0.1:${toString hostCollectorMetricsPort}" ]; }
@@ -197,10 +197,10 @@ let
       resource.attributes = identityAttrs;
       # The collector's own self-metrics carry the collector service.name.
       "resource/self".attributes = identityAttrs ++ [
-        { key = "service.name"; value = "nixling-host-otel-collector"; action = "upsert"; }
+        { key = "service.name"; value = "d2b-host-otel-collector"; action = "upsert"; }
       ];
       "resource/store_sync_audit".attributes = identityAttrs ++ [
-        { key = "service.name"; value = "nixling-store-sync"; action = "upsert"; }
+        { key = "service.name"; value = "d2b-store-sync"; action = "upsert"; }
         { key = "source"; value = "store-sync-audit"; action = "upsert"; }
       ];
       batch = {
@@ -266,52 +266,52 @@ let
     };
   };
 
-  collectorConfig = pkgs.writeText "nixling-host-otel-collector.yaml" (
+  collectorConfig = pkgs.writeText "d2b-host-otel-collector.yaml" (
     lib.generators.toYAML { } collectorAttrs
   );
 in
 lib.mkIf cfg.enable {
-  users.users."nixling-host-otel-collector" = {
+  users.users."d2b-host-otel-collector" = {
     isSystemUser = true;
-    group = "nixling-host-otel-collector";
-    home = "/var/lib/nixling-host-otel-collector";
+    group = "d2b-host-otel-collector";
+    home = "/var/lib/d2b-host-otel-collector";
     createHome = false;
-    description = "nixling host OpenTelemetry collector";
+    description = "d2b host OpenTelemetry collector";
   };
-  users.groups."nixling-host-otel-collector" = { };
+  users.groups."d2b-host-otel-collector" = { };
 
   # Internal test surface: the pre-serialization collector attrset
   # (ADR 0033). Lets eval-cases assert receiver/pipeline/extension shape
   # without parsing the generated YAML.
-  nixling.observability._internal.hostCollectorConfig = collectorAttrs;
+  d2b.observability._internal.hostCollectorConfig = collectorAttrs;
 
   systemd.tmpfiles.rules = [
-    "d ${otelRuntimeDir} 0750 nixlingd nixling -"
-    "L+ /run/nixling/host-egress.sock - - - - ${hostEgressSocket}"
+    "d ${otelRuntimeDir} 0750 d2bd d2b -"
+    "L+ /run/d2b/host-egress.sock - - - - ${hostEgressSocket}"
   ] ++ lib.optional otlpIngest
     # The OTLP ingest subdir MUST exist before the unit's mount namespace
     # is constructed: systemd builds the ReadWritePaths bind mount for it
     # at start, and a missing path fails the unit at the NAMESPACE step
     # (226/NAMESPACE) before any ExecStartPre runs. tmpfiles creates it
     # ahead of the unit; runtimePrep then refines perms/ACLs.
-    "d ${otelIngestDir} ${ingestDirMode} nixling-host-otel-collector ${ingestGroup} -";
+    "d ${otelIngestDir} ${ingestDirMode} d2b-host-otel-collector ${ingestGroup} -";
 
-  systemd.services.nixling-host-otel-collector = {
-    description = "nixling host OpenTelemetry collector";
+  systemd.services.d2b-host-otel-collector = {
+    description = "d2b host OpenTelemetry collector";
     wantedBy = [ "multi-user.target" ];
-    after = [ "nixlingd.service" ];
+    after = [ "d2bd.service" ];
     unitConfig.StartLimitIntervalSec = 0;
     # journald receiver shells out to `journalctl`.
     path = lib.optional scrapeJournal pkgs.systemd;
     serviceConfig = {
       Type = "exec";
-      User = "nixling-host-otel-collector";
-      Group = "nixling-host-otel-collector";
+      User = "d2b-host-otel-collector";
+      Group = "d2b-host-otel-collector";
       ExecStartPre = "+${runtimePrep}";
       ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config=file:${collectorConfig}";
       Restart = "on-failure";
       RestartSec = "3s";
-      StateDirectory = "nixling-host-otel-collector";
+      StateDirectory = "d2b-host-otel-collector";
       NoNewPrivileges = true;
       ProtectSystem = "strict";
       ProtectHome = true;

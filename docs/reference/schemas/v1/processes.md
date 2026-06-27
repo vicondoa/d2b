@@ -1,8 +1,8 @@
 # `processes.json` schema reference
 
-`processes.json` is the private supervision artifact. It encodes the per-VM process DAG, typed readiness predicates, cgroup placement, restart policy, and minijail profile references that `nixlingd` uses to launch and reconcile roles.
+`processes.json` is the private supervision artifact. It encodes the per-VM process DAG, typed readiness predicates, cgroup placement, restart policy, and minijail profile references that `d2bd` uses to launch and reconcile roles.
 
-Producer: `nixos-modules/manifest-processes.nix` emits this artifact; `packages/nixling-core` parses it.
+Producer: `nixos-modules/manifest-processes.nix` emits this artifact; `packages/d2b-core` parses it.
 
 Schema: [`processes.json`](./processes.json) (forward reference; generated with `cargo xtask gen-schemas`).
 
@@ -57,7 +57,7 @@ form of [ADR 0004](../../../adr/0004-cloud-hypervisor-runner-shape.md).
 | `namespaces` | object | yes | Namespace policy reference: mount, pid, net, ipc, uts, user. |
 | `seccompPolicy` | string | yes | Policy ID or path reference. This schema stores references only, not syscall allowlists. |
 | `mountPolicy` | object | yes | Readonly/readwrite bind set and propagation rules. |
-| `cgroup` | object | yes | Per-VM and per-role cgroup placement under the delegated nixling subtree. |
+| `cgroup` | object | yes | Per-VM and per-role cgroup placement under the delegated d2b subtree. |
 | `restartPolicy` | object | yes | Explicit crash/restart behavior. Running VMs are not restarted automatically for config drift. |
 | `preStart` | array | yes | Typed pre-start hooks, including TPM flush where applicable. |
 

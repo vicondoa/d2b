@@ -7,38 +7,38 @@
   (microvm.nix removal), ADR 0024 (in-VM guest config sync)
 
 > **Update (W16) — current shipped reality.** The guest-control plane
-> described here has landed: `nixling-guestd` serves `Hello`/`Health`/
+> described here has landed: `d2b-guestd` serves `Hello`/`Health`/
 > `Capabilities`, the bounded `ReadGuestFile` read, and the exec
-> lifecycle RPCs over the authenticated vsock channel. `nixling config
+> lifecycle RPCs over the authenticated vsock channel. `d2b config
 > sync` reads the guest config working copy over `ReadGuestFile` (no
 > `ssh cat`) and **fails closed** on a VM whose running generation does
 > not declare the guest-control transport — the SSH compatibility path
-> sketched below is **not yet wired** into the command. `nixling vm
-> konsole` runs `nixling vm exec -it` over guest-control (no SSH), and
-> the admin-only `nixling vm exec` verb shipped alongside it. The DAG
+> sketched below is **not yet wired** into the command. `d2b vm
+> konsole` runs `d2b vm exec -it` over guest-control (no SSH), and
+> the admin-only `d2b vm exec` verb shipped alongside it. The DAG
 > readiness node is `guest-control-health`, not `guest-ssh-readiness`.
 > Per-VM SSH keys are retained only for the remaining compatibility
 > surfaces (notably `usb attach --apply`). There is no separate
-> guest-control field on `nixling status` yet. The original decision
+> guest-control field on `d2b status` yet. The original decision
 > text below is preserved as the historical record.
 
 ## Context
 
-Nixling's host control plane is daemon-only: the CLI talks to
-`nixlingd`, and privileged host mutation is quarantined in the host
+D2b's host control plane is daemon-only: the CLI talks to
+`d2bd`, and privileged host mutation is quarantined in the host
 broker. Some framework guest operations still depend on SSH:
 
-- `nixling config sync` pulls the guest-editable config with `ssh cat`.
-- `nixling vm konsole` opens a terminal running SSH.
+- `d2b config sync` pulls the guest-editable config with `ssh cat`.
+- `d2b vm konsole` opens a terminal running SSH.
 - the process DAG still has a `guest-ssh-readiness` node.
 
 That is the wrong long-term control boundary. SSH is useful as an
 operator workload tool, but framework control should not depend on
 guest network reachability, host firewall posture, known-host state, or
 an SSH user account. The desired end-state is a guest control plane:
-host `nixlingd` communicates with an in-guest `nixling-guestd` over
-virtio-vsock, and `nixling-guestd` brokers per-user execution to
-allowlisted `nixling-userd` instances.
+host `d2bd` communicates with an in-guest `d2b-guestd` over
+virtio-vsock, and `d2b-guestd` brokers per-user execution to
+allowlisted `d2b-userd` instances.
 
 The hard part is the wire protocol. We do not want to invest in a
 bespoke protocol if an existing microVM agent practice meets the need.
@@ -69,7 +69,7 @@ For terminal/exec behavior, the closest public examples are:
   `EchoStream(stream EchoPayload) returns (stream EchoPayload)`.
 
 No all-in-one Rust package was found that provides a ready-made
-terminal/PTY-over-ttRPC protocol. Nixling must still define its own exec
+terminal/PTY-over-ttRPC protocol. D2b must still define its own exec
 session semantics, but it should first try to express them through
 ttRPC/protobuf rather than inventing a control protocol.
 
@@ -85,13 +85,13 @@ small in-guest control daemon.
 
 Nitro Enclave deployments often bridge vsock to HTTP or gRPC through a
 proxy. That pattern is useful prior art for application traffic, but it
-is less direct for nixling's control plane because nixling already owns
+is less direct for d2b's control plane because d2b already owns
 both host and guest endpoints and should not add a host proxy daemon or
 per-VM host unit for the control path.
 
 ### Docker and Kubernetes exec behavior
 
-The user-facing `nixling exec` behavior should follow Docker-style
+The user-facing `d2b exec` behavior should follow Docker-style
 semantics:
 
 - non-TTY mode keeps stdout and stderr separate;
@@ -103,23 +103,23 @@ semantics:
   surfaced explicitly.
 
 Docker's internal stream format and Kubernetes remotecommand channels
-are useful references, but nixling does not promise Docker or Kubernetes
+are useful references, but d2b does not promise Docker or Kubernetes
 wire compatibility.
 
 The concrete user-facing exec surface to preserve through the feasibility
 gate is:
 
 ```text
-nixling exec <vm> [--interactive|-i] [--tty|-t] [--detach|-d]
+d2b exec <vm> [--interactive|-i] [--tty|-t] [--detach|-d]
   [--user <user>] [--workdir <path>] [--env KEY=VALUE]...
   [--env-file <path>] [--timeout <duration>]
   -- <argv...>
 
-nixling vm exec run <vm> [same flags] [--json with --detach only] -- <argv...>
-nixling vm exec inspect <vm> <exec-id> [--json]
-nixling vm exec logs <vm> <exec-id> [--stdout] [--stderr] [--json]
-nixling vm exec attach <vm> <exec-id>
-nixling vm exec kill <vm> <exec-id> [--signal <name-or-number>]
+d2b vm exec run <vm> [same flags] [--json with --detach only] -- <argv...>
+d2b vm exec inspect <vm> <exec-id> [--json]
+d2b vm exec logs <vm> <exec-id> [--stdout] [--stderr] [--json]
+d2b vm exec attach <vm> <exec-id>
+d2b vm exec kill <vm> <exec-id> [--signal <name-or-number>]
 ```
 
 Plain `exec` is attached, non-TTY, and has stdin closed unless
@@ -135,7 +135,7 @@ stream semantics.
 Exit status propagation follows the remote command: normal exit returns
 the command's exit code; signal termination returns signal metadata and
 shell-style status `128 + signal`. Transport/protocol failures use typed
-nixling errors.
+d2b errors.
 
 ## Decision
 
@@ -174,23 +174,23 @@ new panel-approved decision.
 
 Detached exec (`exec_create` with `detach=true`) runs a non-interactive
 command that outlives the originating connection. It is served entirely by
-the root-owned guest daemon (`nixlingd`'s guest counterpart `nixling-guestd`);
-there is no per-user `nixling-userd` involvement and no per-user state
+the root-owned guest daemon (`d2bd`'s guest counterpart `d2b-guestd`);
+there is no per-user `d2b-userd` involvement and no per-user state
 directory.
 
 **Slot-based transient units.** Each detached exec occupies one of 32 fixed
 slots. guestd launches the per-exec worker through `systemd-run` as a
-transient unit named `nixling-exec-<NN>.service` (zero-padded slot index),
-scoped to the guest-internal `nixling-exec.slice`. The unit name and its
+transient unit named `d2b-exec-<NN>.service` (zero-padded slot index),
+scoped to the guest-internal `d2b-exec.slice`. The unit name and its
 `ExecStart` argv carry **only** the slot index — never the opaque exec id,
 argv, environment, or cwd — so journald/systemd metadata cardinality is
 bounded to ≤32 stable values and leaks no command detail. The worker is the
-dependency-pure `nixling-exec-runner` binary invoked as
-`nixling-exec-runner --serve-exec --slot <NN>`.
+dependency-pure `d2b-exec-runner` binary invoked as
+`d2b-exec-runner --serve-exec --slot <NN>`.
 
 **Retained logs and quota.** Each exec retains stdout and stderr in
 slot-keyed files under the root-owned, 0700, boot-scoped parent
-`/run/nixling-exec/slot-<NN>/`. Each stream is capped at **4 MiB** with
+`/run/d2b-exec/slot-<NN>/`. Each stream is capped at **4 MiB** with
 drop-oldest truncation accounting (a truncation marker plus a dropped-byte
 counter); there is no per-user quota. The VM-global retained-log quota is
 **256 MiB** (32 slots × 2 streams × 4 MiB), enforced as an exact invariant.
@@ -248,7 +248,7 @@ guard drops do files and the registry entry drop, with future reads returning
 
 Interactive exec (`exec_create` with `tty=true && detach=false`) routes to a
 **PTY-backed, connection-owned, non-durable** attached exec. It is served by
-`nixling-guestd` with no per-user `nixling-userd` involvement and no retained
+`d2b-guestd` with no per-user `d2b-userd` involvement and no retained
 log/registry record: the session lives only for the originating connection.
 `tty=true && detach=true` is rejected with a typed `ProtocolError`
 (unsupported mode); there is no durable interactive exec.
@@ -256,7 +256,7 @@ log/registry record: the session lives only for the originating connection.
 **Helper-exec, no first-party unsafe.** guestd never performs the
 controlling-terminal handshake itself and never acquires a controlling tty.
 It allocates the PTY master (`posix_openpt`/`grantpt`/`unlockpt`/`ptsname`)
-and spawns a dedicated `--tty-exec` mode of the static `nixling-exec-runner`
+and spawns a dedicated `--tty-exec` mode of the static `d2b-exec-runner`
 helper, passing the slave on stdin and an `O_CLOEXEC` status pipe on stdout
 via safe `Stdio::from(OwnedFd)` (no `pass_fds`, no `pre_exec`, no
 `process_group`). The helper, in safe `rustix`, dups the status fd high,
@@ -344,7 +344,7 @@ The feasibility dossier must include:
   cargo audit --no-fetch
   ```
 
-Real `nixling-guestd`, `nixling-userd`, and `nixling-exec-runner`
+Real `d2b-guestd`, `d2b-userd`, and `d2b-exec-runner`
 static/no-unsafe artifacts are not produced by W0. They are a required
 implementation gate before any guest-control release.
 
@@ -461,7 +461,7 @@ for failing a must-pass row.
 - Each VM has one bundle-derived Cloud Hypervisor vsock base UDS path
   for guest control, under a daemon/runtime-owned per-VM directory.
   The parent directory is not world-searchable; the socket is mode
-  `0660` or stricter and owned so only nixlingd/runner authority can
+  `0660` or stricter and owned so only d2bd/runner authority can
   open it.
 - CLI users never receive the CH base UDS path.
 - Cross-VM reuse is rejected by host-side CH socket selection and peer checks,
@@ -469,7 +469,7 @@ for failing a must-pass row.
   transcript.
 - The port registry owns all guest-control ports. Reserve at least a
   guestd control port and, only if needed, a separate exec stream port:
-  `14318` is the host-to-guest `nixling-guestd` ttRPC control port and
+  `14318` is the host-to-guest `d2b-guestd` ttRPC control port and
   `14319` is reserved for any future panel-approved guest-control
   stream side channel. The selected chunked-stdio design does not use
   `14319`. Existing guest-to-host observability port `14317` remains
@@ -500,7 +500,7 @@ for failing a must-pass row.
   full `OK <local-port>\n` acknowledgement without consuming payload
   bytes, and only then hand the raw post-OK byte stream to ttRPC. The
   numeric value is the host-side allocated local port/opaque
-  acknowledgement from Cloud Hypervisor; nixling must not derive buffer
+  acknowledgement from Cloud Hypervisor; d2b must not derive buffer
   sizes, flow-control windows, or ttRPC limits from it. The feasibility
   proof covers success, refusal, malformed reply, timeout, EOF before OK,
   and host-write EOF after OK while guest output continues to drain. The
@@ -532,8 +532,8 @@ for failing a must-pass row.
 - Guestd consumes its token through systemd `LoadCredential`.
 - The guest-control token is never sent over vsock. Authentication is
   proof-of-possession only.
-- Host-side proof generation goes through `nixling-priv-broker`'s structured
-  guest-control signer. `nixlingd` sends typed transcript fields and receives
+- Host-side proof generation goes through `d2b-priv-broker`'s structured
+  guest-control signer. `d2bd` sends typed transcript fields and receives
   only a fixed-size HMAC tag; the broker keeps token bytes confined to the
   privileged process and audits only bounded metadata.
 - The guest-verified auth transcript includes only values both sides can
@@ -546,7 +546,7 @@ for failing a must-pass row.
   single-use per connection, and MAC verification is constant-time.
 - Operator-supplied token files must pass runtime safety validation:
   regular file, no symlink, not under `/nix/store`, root-owned, mode `0400` or
-  the materialized `0440 root:nixling-<vm>-gctlfs` share-reader posture, and
+  the materialized `0440 root:d2b-<vm>-gctlfs` share-reader posture, and
   safe parents.
 - The token value is never written to the Nix store, public manifest,
   CLI JSON, logs, metrics, CH argv, or user-facing health text.
@@ -655,8 +655,8 @@ following minor release. The exact release numbers are set when the
 feature lands, but the window must not be shorter than one minor
 release after the first guestd-capable release:
 
-- `nixling config sync`;
-- `nixling vm konsole`;
+- `d2b config sync`;
+- `d2b vm konsole`;
 - current SSH-key/known-host convenience paths.
 
 Framework guest operations such as `config sync` prefer guestd when it
@@ -664,19 +664,19 @@ is healthy. If guestd is absent because the running VM is old and SSH
 metadata exists, they use the existing SSH path, emit
 `transport: "ssh-compat"` in JSON, and print human remediation to
 restart/switch the VM. Human remediation names the VM and the exact
-command, for example `nixling vm restart <vm>` or
-`nixling switch <vm> --apply`, depending on the command context. JSON
+command, for example `d2b vm restart <vm>` or
+`d2b switch <vm> --apply`, depending on the command context. JSON
 uses a stable typed error/remediation shape with fields for `kind`,
 `vm`, `transport`, and `remediation`.
 
-`nixling vm konsole` is an explicit compatibility exception because it
+`d2b vm konsole` is an explicit compatibility exception because it
 is a user-facing SSH convenience rather than a framework guest
 operation. It may keep the SSH path for guestd-capable VMs until a
 documented conversion gate turns it into a guest-control wrapper. That
 gate must update this ADR's follow-up docs and tests so implementers do
 not silently change terminal behavior mid-window.
 
-The new `nixling vm exec` / `nixling exec` command does not fall back
+The new `d2b vm exec` / `d2b exec` command does not fall back
 to SSH. On old running VMs it returns a typed
 `guest-control-unavailable-old-generation` error with remediation.
 
@@ -706,11 +706,11 @@ The compatibility test matrix must cover:
   convenience until converted;
 - `vm konsole` with an old running VM and SSH metadata present: keeps
   the existing SSH behavior and emits the compatibility warning;
-- the implementing release updates `nixling status` and
-  `nixling vm status <vm>` with a schema-versioned guest-control state
+- the implementing release updates `d2b status` and
+  `d2b vm status <vm>` with a schema-versioned guest-control state
   field exposing `unavailable-old-generation` and the remediation
   command;
-- `nixling exec` and `nixling vm exec run` never fall back to SSH and
+- `d2b exec` and `d2b vm exec run` never fall back to SSH and
   return typed `guest-control-unavailable-old-generation` on old VMs;
 - human output includes the VM name and exact remediation command;
 - JSON output includes stable `kind`, `vm`, `transport`, and
@@ -720,7 +720,7 @@ The compatibility test matrix must cover:
 
 Positive:
 
-- Nixling follows existing microVM-agent practice before inventing a
+- D2b follows existing microVM-agent practice before inventing a
   custom control protocol.
 - The protocol choice is evidence-driven and panel-gated.
 - Existing SSH workflows keep working for old running VMs during the
@@ -749,7 +749,7 @@ Negative:
   feasibility evidence proves ttRPC cannot meet the requirements.
 - **Use a host proxy daemon:** rejected because it would add another
   persistent host surface and complicate the daemon-only model.
-- **Fallback to SSH for generic `nixling exec`:** rejected because it
+- **Fallback to SSH for generic `d2b exec`:** rejected because it
   would introduce a new generic SSH exec surface. Compatibility SSH is
   limited to commands that already use SSH today.
 
@@ -774,5 +774,5 @@ Negative:
 - [Kubernetes remotecommand stream options](https://github.com/kubernetes/client-go/blob/master/tools/remotecommand/remotecommand.go#L31-L37)
 - [AWS Nitro Enclaves vsock proxy](https://github.com/aws/aws-nitro-enclaves-cli/blob/main/vsock_proxy/README.md#L1-L4)
 - [AWS Nitro Enclaves vsock proxy usage](https://github.com/aws/aws-nitro-enclaves-cli/blob/main/vsock_proxy/README.md#L27-L65)
-- [`nixos-modules/nixling-ch-vsock-connect.nix`](../../nixos-modules/nixling-ch-vsock-connect.nix)
-- [`packages/nixling-host/src/ch_argv.rs`](../../packages/nixling-host/src/ch_argv.rs)
+- [`nixos-modules/d2b-ch-vsock-connect.nix`](../../nixos-modules/d2b-ch-vsock-connect.nix)
+- [`packages/d2b-host/src/ch_argv.rs`](../../packages/d2b-host/src/ch_argv.rs)

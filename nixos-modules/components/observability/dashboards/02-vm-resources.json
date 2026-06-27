@@ -1,7 +1,7 @@
 {
   "uid": "vm-resources",
   "title": "VM Resources",
-  "tags": ["nixling", "v0.2.0"],
+  "tags": ["d2b", "v0.2.0"],
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",
@@ -13,8 +13,8 @@
         "label": "VM",
         "type": "query",
         "datasource": {"type": "prometheus", "uid": "prometheus"},
-        "query": "label_values(nixling_vm_ch_api_up, vm)",
-        "definition": "label_values(nixling_vm_ch_api_up, vm)",
+        "query": "label_values(d2b_vm_ch_api_up, vm)",
+        "definition": "label_values(d2b_vm_ch_api_up, vm)",
         "includeAll": true,
         "allValue": ".+",
         "multi": true,
@@ -70,8 +70,8 @@
       "fieldConfig": {"defaults": {"unit": "Bps"}, "overrides": []},
       "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "none"}},
       "targets": [
-        {"refId": "A", "expr": "sum by (vm) (rate(nixling_vm_counter_virtio_net_tx_bytes{vm=~\"${vm:regex}\"}[5m]))", "legendFormat": "{{vm}} tx"},
-        {"refId": "B", "expr": "sum by (vm) (rate(nixling_vm_counter_virtio_net_rx_bytes{vm=~\"${vm:regex}\"}[5m]))", "legendFormat": "{{vm}} rx"}
+        {"refId": "A", "expr": "sum by (vm) (rate(d2b_vm_counter_virtio_net_tx_bytes{vm=~\"${vm:regex}\"}[5m]))", "legendFormat": "{{vm}} tx"},
+        {"refId": "B", "expr": "sum by (vm) (rate(d2b_vm_counter_virtio_net_rx_bytes{vm=~\"${vm:regex}\"}[5m]))", "legendFormat": "{{vm}} rx"}
       ]
     },
     {
@@ -84,7 +84,7 @@
       "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}, "mappings": []}, "overrides": []},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "colorMode": "background"},
       "targets": [
-        {"refId": "A", "expr": "up{job=\"nixling-ch-exporter\"}", "instant": true}
+        {"refId": "A", "expr": "up{job=\"d2b-ch-exporter\"}", "instant": true}
       ]
     }
   ]

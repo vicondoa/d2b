@@ -1,19 +1,19 @@
 # Store lifecycle
 
-Reference for nixling's per-VM `/nix/store` lifecycle.
+Reference for d2b's per-VM `/nix/store` lifecycle.
 
 This contract is implemented in two layers today:
 
 - the shipping NixOS/module path in [`nixos-modules/store.nix`](../../nixos-modules/store.nix)
-- the Rust primitive layer in [`packages/nixling-host/src/hardlink_farm.rs`](../../packages/nixling-host/src/hardlink_farm.rs)
+- the Rust primitive layer in [`packages/d2b-host/src/hardlink_farm.rs`](../../packages/d2b-host/src/hardlink_farm.rs)
 
 The file names differ slightly between those layers, but the operator-visible
 invariants are the same.
 
 ## On-disk layout
 
-Per VM, nixling keeps the canonical store-view tree under
-`/var/lib/nixling/vms/<vm>/store-view/`.
+Per VM, d2b keeps the canonical store-view tree under
+`/var/lib/d2b/vms/<vm>/store-view/`.
 
 Rust `StoreSync` writes the ADR 0027 **split** layout, keyed by a
 collision-free `generation_id` (SHA-256 over the full ordered closure
@@ -23,7 +23,7 @@ display/wire `generation_token`):
 | Path | Trust | Purpose |
 | --- | --- | --- |
 | `store-view/live/` | guest (ro) | The flat hardlink pool virtiofsd exposes to the guest. Every entry is a hardlink to a host `/nix/store` path, never a copy. |
-| `store-view/live/.nixling-marker-<vm>` | guest (ro) | Zero-length cold-start readiness marker, planted **last**. |
+| `store-view/live/.d2b-marker-<vm>` | guest (ro) | Zero-length cold-start readiness marker, planted **last**. |
 | `store-view/meta/current -> generations/<id>` | guest (ro) | Active guest-served generation pointer. |
 | `store-view/meta/generations/<id>/store-paths` | guest (ro) | Newline-delimited closure list. |
 | `store-view/meta/generations/<id>/meta.json` | guest (ro) | Guest-safe allow-list metadata. |
@@ -35,7 +35,7 @@ display/wire `generation_token`):
 | `store-view/gcroots/generation-<id>` | host-only | Host-side GC root pinning the retained generation's system path. |
 | `store-view/sync.lock` | host-only | `flock(2)` exclusion for the `StoreSync` op. |
 
-The guest `nl-meta` share is pointed at `store-view/meta/` only;
+The guest `d2b-meta` share is pointed at `store-view/meta/` only;
 `state/`, `gcroots/`, and `sync.lock` are host-only and never exposed.
 
 > **Transitional note:** the shipping `nixos-modules/store.nix`
@@ -51,7 +51,7 @@ rename.
 
 ## Hardlink-farm invariants
 
-nixling relies on these invariants for every per-VM store:
+d2b relies on these invariants for every per-VM store:
 
 1. **Only the VM's declared closure is exposed.** The guest does not see the
    host's whole `/nix/store`.
@@ -69,22 +69,22 @@ fail with `EXDEV` even on the same block device.
 
 ## Same-filesystem fatal checks
 
-Hardlinks cannot cross filesystems. nixling therefore fails closed before it
+Hardlinks cannot cross filesystems. d2b therefore fails closed before it
 tries to materialize a farm:
 
 - the shell helper compares the filesystem ID of `/nix/store` and the per-VM
   state root and aborts if they differ;
 - the Rust layer's `assert_same_filesystem` checks `st_dev` for the same reason.
 
-If `/var/lib/nixling` and `/nix/store` are on different filesystems,
+If `/var/lib/d2b` and `/nix/store` are on different filesystems,
 `switch`/`boot`/`test`/`rollback` refuse rather than silently copying data or
 building an unusable tree.
 
 ## Marker checks
 
-nixling uses two marker styles:
+d2b uses two marker styles:
 
-- **Farm marker**: `store-view/live/.nixling-marker-<vm>` is planted by the
+- **Farm marker**: `store-view/live/.d2b-marker-<vm>` is planted by the
   broker `StoreSync` writer as the cold-start readiness signal. Per
   [ADR 0027](../adr/0027-store-view-hardlink-live-pool.md) it is a
   **zero-length** file — existence alone is the signal (the readiness probe is
@@ -124,7 +124,7 @@ The store lifecycle has two destructive surfaces:
   no longer referenced.
 
 On the private wire, the broker marks `RunActivation` and `RunGc` as
-`destructive: true` and audits every decision. Only `nixlingd` may call those
+`destructive: true` and audits every decision. Only `d2bd` may call those
 broker operations directly. On the public socket, the current outer boundary is
 still the configured launcher/admin user set, so treat `rollback` and `gc` as
 admin-owned operational procedures whenever you need a narrower human trust
@@ -161,7 +161,7 @@ operators still need host-level garbage collection such as:
 sudo nix-collect-garbage --delete-older-than 7d
 ```
 
-## Upgrading from bash nixling
+## Upgrading from bash d2b
 
 The Rust/daemon migration deliberately reuses the bash-era store
 state on disk. There is no one-shot data migration as long as the
@@ -169,21 +169,21 @@ existing per-VM store tree is healthy.
 
 ### Bash-era state that stays in place
 
-- `/var/lib/nixling/vms/<vm>/current`
-- `/var/lib/nixling/vms/<vm>/booted`
-- `/var/lib/nixling/vms/<vm>/store/` (legacy fallback only)
-- `/var/lib/nixling/vms/<vm>/store-meta/generations/` (legacy fallback only)
-- `/var/lib/nixling/vms/<vm>/store-meta/gcroots/` (legacy fallback only)
-- `/var/lib/nixling/vms/<vm>/store-view/`
+- `/var/lib/d2b/vms/<vm>/current`
+- `/var/lib/d2b/vms/<vm>/booted`
+- `/var/lib/d2b/vms/<vm>/store/` (legacy fallback only)
+- `/var/lib/d2b/vms/<vm>/store-meta/generations/` (legacy fallback only)
+- `/var/lib/d2b/vms/<vm>/store-meta/gcroots/` (legacy fallback only)
+- `/var/lib/d2b/vms/<vm>/store-view/`
 
 ### Safety checks before the first native `--apply`
 
-- confirm `/var/lib/nixling` and `/nix/store` are on the same
+- confirm `/var/lib/d2b` and `/nix/store` are on the same
   filesystem;
 - confirm `current` / `booted` still resolve and the latest retained
   generation still has its marker file;
-- run `nixling generations <vm>` and a dry run (`nixling switch <vm>
-  --dry-run` or `nixling gc --dry-run`) before the first apply.
+- run `d2b generations <vm>` and a dry run (`d2b switch <vm>
+  --dry-run` or `d2b gc --dry-run`) before the first apply.
 
 ### Transition steps
 
@@ -192,7 +192,7 @@ existing per-VM store tree is healthy.
    `StoreSync` is the canonical writer for `store-view/`.
 3. Run the native verb with `--dry-run` first, then `--apply`. The
    v1.0 daemon-only contract (ADR 0015) is the only path; the
-   historical `NIXLING_NATIVE_ONLY=1` env var is a no-op (its
+   historical `D2B_NATIVE_ONLY=1` env var is a no-op (its
    behaviour is the default).
 4. If the daemon is unavailable, the CLI surfaces a typed
    `daemon-down` envelope (exit-1); the store layout stays intact
@@ -201,7 +201,7 @@ existing per-VM store tree is healthy.
 ### Rollback
 
 - Roll back by reverting the host generation and rebuilding (the
-  `NIXLING_LEGACY_BASH_OPT_IN=1` escape hatch was retired in v1.0
+  `D2B_LEGACY_BASH_OPT_IN=1` escape hatch was retired in v1.0
   along with the bash CLI; see ADR 0015 for the full removal list).
 - Do **not** manually delete `store-view` or `store-meta` generations just because
   you changed control-plane owners; both paths still expect the

@@ -12,30 +12,30 @@ let
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
 
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = true;
       allowUnsafeEastWest = true;
     };
-    nixling.hostLanCidrs = [ "172.16.0.0/12" "10.0.0.0/8" ];
-    nixling.observability.enable = true;
+    d2b.hostLanCidrs = [ "172.16.0.0/12" "10.0.0.0/8" ];
+    d2b.observability.enable = true;
 
-    nixling.envs.zeta = {
+    d2b.envs.zeta = {
       lanSubnet = "10.50.0.0/24";
       uplinkSubnet = "198.51.100.0/30";
       hostBlocklist = [ "203.0.113.0/24" "192.168.0.0/16" ];
     };
-    nixling.envs.empty = {
+    d2b.envs.empty = {
       lanSubnet = "10.40.0.0/24";
       uplinkSubnet = "203.0.113.0/30";
     };
-    nixling.envs.disabled = {
+    d2b.envs.disabled = {
       enable = false;
       lanSubnet = "10.60.0.0/24";
       uplinkSubnet = "203.0.113.4/30";
     };
-    nixling.envs.alpha = {
+    d2b.envs.alpha = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
       lan.allowEastWest = true;
@@ -43,7 +43,7 @@ let
       mssClamp = true;
     };
 
-    nixling.vms.zed = {
+    d2b.vms.zed = {
       env = "zeta";
       index = 12;
       ssh.user = "alice";
@@ -65,7 +65,7 @@ let
       config.users.users.alice = { isNormalUser = true; uid = 1000; };
     };
 
-    nixling.vms.app = {
+    d2b.vms.app = {
       env = "alpha";
       index = 10;
       ssh.user = "alice";
@@ -77,7 +77,7 @@ let
       config.users.users.alice = { isNormalUser = true; uid = 1000; };
     };
 
-    nixling.vms.media = {
+    d2b.vms.media = {
       runtime.kind = "qemu-media";
       env = "alpha";
       index = 20;
@@ -95,7 +95,7 @@ let
       };
     };
 
-    nixling.vms.disabled = {
+    d2b.vms.disabled = {
       enable = false;
       env = "zeta";
       index = 99;
@@ -105,9 +105,9 @@ let
 
   cfg = (mkEval [ fixture ]).config;
   cfgYubikeyDisabled = (mkEval [ fixture ({ lib, ... }: {
-    nixling.site.yubikey.enable = lib.mkForce false;
+    d2b.site.yubikey.enable = lib.mkForce false;
   }) ]).config;
-  index = cfg.nixling._index;
+  index = cfg.d2b._index;
   expectedVmNames = [
     "app"
     "media"
@@ -153,7 +153,7 @@ in
   };
 
   "index/env-meta-compat-alias" = {
-    expr = cfg.nixling._envMeta == index.envMeta;
+    expr = cfg.d2b._envMeta == index.envMeta;
     expected = true;
   };
 
@@ -239,16 +239,16 @@ in
 
   "index/site-yubikey-disabled-suppresses-runtime-usbip" = {
     expr = {
-      declaredVmOptIns = cfgYubikeyDisabled.nixling._index.usbip.vmNames;
-      declaredEnvOptIns = cfgYubikeyDisabled.nixling._index.usbip.envNames;
-      activeEnvNames = cfgYubikeyDisabled.nixling._index.usbip.activeEnvNames;
-      busidLocksByEnv = cfgYubikeyDisabled.nixling._index.usbip.busidLocksByEnv;
+      declaredVmOptIns = cfgYubikeyDisabled.d2b._index.usbip.vmNames;
+      declaredEnvOptIns = cfgYubikeyDisabled.d2b._index.usbip.envNames;
+      activeEnvNames = cfgYubikeyDisabled.d2b._index.usbip.activeEnvNames;
+      busidLocksByEnv = cfgYubikeyDisabled.d2b._index.usbip.busidLocksByEnv;
       hostJsonLocks = lib.listToAttrs (map
         (env: { name = env.env; value = env.usbipBusidLocks; })
-        cfgYubikeyDisabled.nixling._bundle.hostJson.data.environments);
+        cfgYubikeyDisabled.d2b._bundle.hostJson.data.environments);
       hostJsonBackendPorts = lib.listToAttrs (map
         (env: { name = env.env; value = env.usbipBackendPort or null; })
-        cfgYubikeyDisabled.nixling._bundle.hostJson.data.environments);
+        cfgYubikeyDisabled.d2b._bundle.hostJson.data.environments);
     };
     expected = {
       declaredVmOptIns = [ "media" "zed" ];
@@ -360,8 +360,8 @@ in
 
   "index/computed-net-vms-remain-reachable" = {
     expr =
-      builtins.hasAttr "sys-alpha-net" cfg.nixling._computed
-      && cfg.nixling._computed.sys-alpha-net.config.networking.hostName == "sys-alpha-net";
+      builtins.hasAttr "sys-alpha-net" cfg.d2b._computed
+      && cfg.d2b._computed.sys-alpha-net.config.networking.hostName == "sys-alpha-net";
     expected = true;
   };
 }

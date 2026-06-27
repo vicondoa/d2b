@@ -2744,7 +2744,7 @@
       ]
     },
     "UsbipImportRequest": {
-      "description": "Guest-side USBIP lifecycle operation. `host` and `bus_id` are host-declared values resolved by nixlingd from the trusted manifest; guestd validates both before invoking `usbip`.",
+      "description": "Guest-side USBIP lifecycle operation. `host` and `bus_id` are host-declared values resolved by d2bd from the trusted manifest; guestd validates both before invoking `usbip`.",
       "type": "object",
       "required": [
         "action",

@@ -1,9 +1,9 @@
-# `nixling status` output
+# `d2b status` output
 
 Schema: [`status.schema.json`](./status.schema.json)
 
-`nixling status <vm> --json` emits one object for the selected VM. Unfiltered
-`nixling status --json` emits an inventory object with `runtime`, optional
+`d2b status <vm> --json` emits one object for the selected VM. Unfiltered
+`d2b status --json` emits an inventory object with `runtime`, optional
 `readModel`, and `vms`. The JSON form is intentionally narrower than the human
 form: it does **not** inline the bridge-health table.
 
@@ -12,19 +12,19 @@ form: it does **not** inline the bridge-health table.
 | Field | Type | Semantics | Stability |
 | --- | --- | --- | --- |
 | `name` | string | Stable VM name. | Stable wire contract. |
-| `services.nixling` | string | `nixlingd.service` unit state. | Stable wire contract. |
+| `services.d2b` | string | `d2bd.service` unit state. | Stable wire contract. |
 | `services.microvm` | string | Cloud Hypervisor runner state from the daemon pidfd table (`ch-runner`). | Stable wire contract. |
 | `services.virtiofsd` | string | Aggregate virtiofsd runner state from daemon pidfd roles prefixed `virtiofsd`. | Stable wire contract. |
 | `services.gpu` | string or `null` | GPU runner state from the daemon pidfd table. Present and `null` when graphics is disabled. | Stable wire contract. |
 | `services.video` | string or `null` | Video runner state from daemon pidfd table when the trusted bundle declares the `video` role. `null` means the video sidecar is not declared. | Stable wire contract. |
 | `services.snd` | string or `null` | Audio runner state from the daemon pidfd table. Present and `null` when audio is disabled. | Stable wire contract. |
 | `services.swtpm` | string or `null` | TPM runner state from the daemon pidfd table. Present and `null` when TPM is disabled. | Stable wire contract. |
-| `current` | string or `null` | Target of `/var/lib/nixling/vms/<vm>/current`. | Stable wire contract. |
-| `booted` | string or `null` | Target of `/var/lib/nixling/vms/<vm>/booted`. | Stable wire contract. |
+| `current` | string or `null` | Target of `/var/lib/d2b/vms/<vm>/current`. | Stable wire contract. |
+| `booted` | string or `null` | Target of `/var/lib/d2b/vms/<vm>/booted`. | Stable wire contract. |
 | `pendingRestart` | boolean | True when the VM is running and `booted != current`. | Stable wire contract. |
 | `apiReady` | string, object, or `null` | Optional last daemon-observed Cloud Hypervisor API readiness state. Simple values are `yes`, `pending`, or `timeout`; the legacy object form is `{ "error": "<readiness error text>" }`. Omitted, or legacy `null`, means no readiness result is known. Guest-control rollout must use a separate negotiated bounded status field rather than extending this free-form error string. | Stable wire contract. |
 | `declaredRoles` | array of strings | Process-DAG roles declared for the VM in the trusted bundle. Video-enabled VMs include `video`; graphics VMs without `graphics.videoSidecar` omit it. | Stable wire contract. |
-| `readiness` | array of strings | Readiness predicates rendered as strings. Video-enabled VMs include `unix-socket-listening:/run/nixling-video/<vm>/video.sock`; graphics VMs with video disabled omit video readiness because the video sidecar is a default-off capability. | Stable wire contract. |
+| `readiness` | array of strings | Readiness predicates rendered as strings. Video-enabled VMs include `unix-socket-listening:/run/d2b-video/<vm>/video.sock`; graphics VMs with video disabled omit video readiness because the video sidecar is a default-off capability. | Stable wire contract. |
 | `runtime` | string | Daemon runtime state label. | Stable wire contract. |
 | `readModel` | object or omitted | Present on unfiltered inventory output served from the daemon public read model. Contains `schemaVersion`, `kind`, `generation`, `sourceFingerprint`, `updatedAtUnixMs`, `freshness`, and `deepRefresh` so fast-refresh clients can render and reason about cached/stale model state without triggering deep probes. | Stable additive field. |
 | `usb` | object or omitted | Per-VM USBIP status when the trusted bundle declares USB claims for the VM. Contains `degraded` plus redacted probe entries with the host-session claim, active host bind/carrier/proxy, guest import, topology/policy, degraded reasons, and remediation commands. Uses the same entry contract as [`usb-probe.md`](./usb-probe.md). | Stable additive field. |
@@ -52,7 +52,7 @@ compatibility surfaces rather than an ad hoc extra key.
 ## Human example
 
 ```text
-$ nixling status corp-vm
+$ d2b status corp-vm
 === corp-vm ===
 env: work
 runtime: unknown
@@ -63,8 +63,8 @@ gpu-runner: stopped
 usb: degraded
   - busid=1-2 status=degraded session-claim=held-by-desired-owner host-bind=unknown carrier=unknown proxy=unknown guest-import=detached topology=unknown policy=allowed
     degraded: guest-import-unavailable - the guest USBIP import has not converged
-    remediation: Run `nixling usb attach corp-vm 1-2 --apply` after the VM is running.
-    command: nixling usb attach corp-vm 1-2 --apply
+    remediation: Run `d2b usb attach corp-vm 1-2 --apply` after the VM is running.
+    command: d2b usb attach corp-vm 1-2 --apply
 ssh: declared
 pending-restart: no
 current: (missing)
@@ -93,7 +93,7 @@ Unfiltered inventory form:
       "name": "corp-vm",
       "env": "work",
       "services": {
-        "nixling": "active",
+        "d2b": "active",
         "microvm": "running",
         "virtiofsd": "running",
         "gpu": "stopped",
@@ -127,7 +127,7 @@ Single-VM form:
   "name": "corp-vm",
   "env": "work",
   "services": {
-    "nixling": "active",
+    "d2b": "active",
     "microvm": "running",
     "virtiofsd": "running",
     "gpu": "stopped",

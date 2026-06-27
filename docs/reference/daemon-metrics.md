@@ -2,8 +2,8 @@
 
 **Diataxis category:** reference.
 
-> Canonical metric inventory exposed by `nixlingd`.
-> Implementation: [`packages/nixlingd/src/metrics.rs`](../../packages/nixlingd/src/metrics.rs).
+> Canonical metric inventory exposed by `d2bd`.
+> Implementation: [`packages/d2bd/src/metrics.rs`](../../packages/d2bd/src/metrics.rs).
 > Static gate: [`tests/daemon-metrics-eval.sh`](../../tests/daemon-metrics-eval.sh).
 
 > **v1.2 status — scrapable endpoint deferred.** The in-process
@@ -11,18 +11,18 @@
 > (`broker-fallback` and friends record correctly), but the actual
 > scrapable HTTP `/metrics` listener is **deferred to a later release** —
 > see [`TODO.md`](../../TODO.md) "scrapable /metrics endpoint for
-> nixlingd". An attempt to multiplex HTTP through the public
+> d2bd". An attempt to multiplex HTTP through the public
 > `SOCK_SEQPACKET` socket was reverted because Prometheus scrapers
 > require `SOCK_STREAM`. A later release will land a dedicated
 > `SOCK_STREAM` metrics socket (loopback) per the same
 > trust model as the broker. Until then `metrics-endpoint` in
-> `nixling host doctor` warns by design, and the URL/port shape
+> `d2b host doctor` warns by design, and the URL/port shape
 > below documents the *intended* contract — not a currently
 > reachable endpoint.
 
 ## Endpoint shape
 
-`nixlingd` exposes a **Prometheus text-format scrape endpoint**
+`d2bd` exposes a **Prometheus text-format scrape endpoint**
 (content-type `text/plain; version=0.0.4`) on the daemon's public
 socket. The request line is `GET /metrics HTTP/1.1`. The response
 body is the registry rendered in
@@ -47,12 +47,12 @@ pipeline that scrapes this endpoint and exports OTLP downstream.
 
 ## Metric inventory
 
-Every metric below ships with the `nixling_daemon_` name prefix so
+Every metric below ships with the `d2b_daemon_` name prefix so
 collector relabeling can scope-match the daemon without enumerating
 each metric individually. Label cardinality is bounded by the
 declared schema; see "Cardinality bounds" below.
 
-### `nixling_daemon_vm_state`
+### `d2b_daemon_vm_state`
 
 - **Type:** gauge
 - **Labels:** `vm`, `state`
@@ -62,18 +62,18 @@ declared schema; see "Cardinality bounds" below.
   are `0`. Operators graph `sum by (state) (...)` for an at-a-glance
   fleet view.
 
-### `nixling_daemon_vm_start_duration_seconds`
+### `d2b_daemon_vm_start_duration_seconds`
 
 - **Type:** histogram
 - **Labels:** `vm`, `outcome`
 - **Outcome values:** `success`, `failure`
 - **Buckets (seconds):** `0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300`
-- **Meaning:** Wall-clock duration of `nixling vm start <vm>` as
+- **Meaning:** Wall-clock duration of `d2b vm start <vm>` as
   observed by the daemon's supervisor DAG, from the moment the
   start intent is accepted to the moment the runner is either
   ready or declared failed.
 
-### `nixling_daemon_host_prep_step_duration_seconds`
+### `d2b_daemon_host_prep_step_duration_seconds`
 
 - **Type:** histogram
 - **Labels:** `step`
@@ -86,7 +86,7 @@ declared schema; see "Cardinality bounds" below.
   pass. The label space is closed: only documented step IDs are
   emitted.
 
-### `nixling_daemon_broker_request_total`
+### `d2b_daemon_broker_request_total`
 
 - **Type:** counter
 - **Labels:** `op`, `outcome`
@@ -105,16 +105,16 @@ declared schema; see "Cardinality bounds" below.
   `denied-refused` / `denied-unknown` disposition; `error`
   corresponds to `errored`.
 
-### `nixling_daemon_broker_request_duration_seconds`
+### `d2b_daemon_broker_request_duration_seconds`
 
 - **Type:** histogram
 - **Labels:** `op`
-- **Op values:** same set as `nixling_daemon_broker_request_total`.
+- **Op values:** same set as `d2b_daemon_broker_request_total`.
 - **Buckets (seconds):** `0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5`
 - **Meaning:** Round-trip latency of a single broker request
   (send → receive → typed-decode) as measured by the daemon.
 
-### `nixling_daemon_vm_shutdown_total`
+### `d2b_daemon_vm_shutdown_total`
 
 - **Type:** counter
 - **Labels:** `vm`, `vmm`, `outcome`
@@ -126,7 +126,7 @@ declared schema; see "Cardinality bounds" below.
   shutdown outcome. Labels never include human summaries or provider error
   text.
 
-### `nixling_daemon_vm_shutdown_duration_seconds`
+### `d2b_daemon_vm_shutdown_duration_seconds`
 
 - **Type:** histogram
 - **Labels:** `vm`, `vmm`, `outcome`
@@ -135,7 +135,7 @@ declared schema; see "Cardinality bounds" below.
   force and config-disabled paths record near-zero observations with their
   bounded outcomes.
 
-### `nixling_daemon_activation_phase_duration_seconds`
+### `d2b_daemon_activation_phase_duration_seconds`
 
 - **Type:** histogram
 - **Labels:** `phase`, `mode`, `status`
@@ -151,7 +151,7 @@ declared schema; see "Cardinality bounds" below.
   orchestration phases. Labels never include activation ids, store paths,
   switch script paths, guest output, or error text.
 
-### `nixling_daemon_vm_degraded`
+### `d2b_daemon_vm_degraded`
 
 - **Type:** gauge
 - **Labels:** `vm`, `reason`
@@ -162,7 +162,7 @@ declared schema; see "Cardinality bounds" below.
   marker is unresolved and clears it after a successful commit or
   definitive guest activation failure.
 
-### `nixling_daemon_ownership_drift_total`
+### `d2b_daemon_ownership_drift_total`
 
 - **Type:** counter
 - **Labels:** `vm`
@@ -171,7 +171,7 @@ declared schema; see "Cardinality bounds" below.
   files under `${stateDir}/vms/<vm>/`). A non-zero counter is
   always a remediation signal.
 
-### `nixling_daemon_ssh_host_key_drift_total`
+### `d2b_daemon_ssh_host_key_drift_total`
 
 - **Type:** counter
 - **Labels:** `vm`
@@ -181,7 +181,7 @@ declared schema; see "Cardinality bounds" below.
   Increment paths are documented in
   [`docs/reference/ssh-host-key-preflight.md`](./ssh-host-key-preflight.md).
 
-### `nixling_daemon_pidfd_table_size`
+### `d2b_daemon_pidfd_table_size`
 
 - **Type:** gauge
 - **Labels:** *(none)*
@@ -190,23 +190,23 @@ declared schema; see "Cardinality bounds" below.
   sidecars). Tracks the supervisor pidfd table documented in the
   Control-plane row of [`AGENTS.md`](../../AGENTS.md).
 
-### `nixling_daemon_uptime_seconds`
+### `d2b_daemon_uptime_seconds`
 
 - **Type:** gauge
 - **Labels:** *(none)*
 - **Meaning:** Wall-clock seconds since the daemon process started.
   Resets to zero on every restart; pair with
-  `changes(nixling_daemon_uptime_seconds[5m]) > 0` for a restart
+  `changes(d2b_daemon_uptime_seconds[5m]) > 0` for a restart
   alert.
 
-### `nixling_daemon_guest_control_exec_total`
+### `d2b_daemon_guest_control_exec_total`
 
 - **Type:** counter
 - **Labels:** `subsystem`, `outcome`, `error_kind`
 - **Meaning:** Cumulative count of guest-control exec session/op outcomes by
   subsystem, closed outcome, and bounded error bucket.
 
-### `nixling_daemon_guest_control_shell_total`
+### `d2b_daemon_guest_control_shell_total`
 
 - **Type:** counter
 - **Labels:** `subsystem`, `outcome`, `error_kind`
@@ -220,7 +220,7 @@ declared schema; see "Cardinality bounds" below.
 
 | Label | Source | Bound |
 | --- | --- | --- |
-| `vm` | declared `nixling.vms.<vm>` + auto-declared `sys-*` VMs | one series per declared VM |
+| `vm` | declared `d2b.vms.<vm>` + auto-declared `sys-*` VMs | one series per declared VM |
 | `state` | closed enum | 3 |
 | `outcome` (vm start) | closed enum | 2 |
 | `step` | closed enum (host-prep DAG step IDs) | bounded by [`host-prep-dag.md`](./host-prep-dag.md) |
@@ -249,7 +249,7 @@ receivers:
   prometheus:
     config:
       scrape_configs:
-        - job_name: nixlingd
+        - job_name: d2bd
           scrape_interval: 30s
           metrics_path: /metrics
           static_configs:

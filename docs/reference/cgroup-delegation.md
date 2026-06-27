@@ -13,14 +13,14 @@ broker, daemon, and CLI.
 
 ## Scope and invariants
 
-Nixling uses **non-root `nixlingd` cgroup delegation**: the broker
+D2b uses **non-root `d2bd` cgroup delegation**: the broker
 runs the privileged Phase A setup once at host prepare, then
-`nixling.slice` and its descendants belong to the `nixlingd` system
+`d2b.slice` and its descendants belong to the `d2bd` system
 user. Subsequent runtime operations against the delegated subtree
 split into two categories:
 
 - **Daemon-direct** (read-only enumeration + pidfd-table
-  registration): the daemon's `nixlingd` uid owns the subtree via
+  registration): the daemon's `d2bd` uid owns the subtree via
   Phase A `fchown` and READS delegated files using cgroup-directory
   fds obtained via the **broker's `OpenCgroupDir` op** (per the
   broker-ops table below — pidfds in the daemon's `PidfdTable` are
@@ -28,7 +28,7 @@ split into two categories:
   pidfds cannot read cgroup files like `cgroup.events`). The
   read-only cgroup files the daemon may need (e.g., `cgroup.events`
   `populated` field for liveness queries, per-leaf state for the
-  `nixling status` verb) are accessed via dedicated cgroup-dir
+  `d2b status` verb) are accessed via dedicated cgroup-dir
   fds returned by `OpenCgroupDir`. The daemon does NOT perform
   process placement, leaf mkdir, leaf
   rmdir, kill, or any other mutation — all mutations are
@@ -50,9 +50,9 @@ split into two categories:
   runtime state changes.
 
 The host systemd posture is part of that contract:
-`nixling.slice` is delegated by systemd with the `cpu`, `memory`,
+`d2b.slice` is delegated by systemd with the `cpu`, `memory`,
 `pids`, `io`, and `cpuset` controllers, and
-`nixling-priv-broker.service` runs inside that slice with
+`d2b-priv-broker.service` runs inside that slice with
 `Delegate=true` and `KillMode=process`. Broker restarts therefore stop
 only the broker process; runner teardown stays on the audited
 pidfd/`CgroupKill` path instead of a service-wide systemd kill.
@@ -61,7 +61,7 @@ pidfd/`CgroupKill` path instead of a service-wide systemd kill.
 
 | Broker op | Status | Audit | Owner of side-effect |
 | --- | --- | --- | --- |
-| `DelegateCgroupV2` | live | yes | Broker (one-shot Phase A: `+controllers` cascade, slice/leaf `mkdir`, `fchown` to `nixlingd` uid/gid; re-runnable on host re-prepare). |
+| `DelegateCgroupV2` | live | yes | Broker (one-shot Phase A: `+controllers` cascade, slice/leaf `mkdir`, `fchown` to `d2bd` uid/gid; re-runnable on host re-prepare). |
 | `OpenCgroupDir` | live | yes | Broker (fd-passing for delegated leaves; the daemon acquires fresh fds when needed). |
 | `CgroupKill` | live | yes | Broker, broker-only. The broker holds the leaf write-fd via the Phase A `fchown` and is the **sole writer** of `cgroup.kill` files. The daemon NEVER writes `cgroup.kill` directly — daemon teardown of a runner uses `pidfd_send_signal(SIGTERM)` first; if SIGTERM does not drain the leaf within the role's documented grace period, the daemon escalates by issuing a `CgroupKill` broker request as a last resort. |
 
@@ -84,29 +84,29 @@ Hard invariants:
    controllers (`rdma`, `hugetlb`, `misc`, ...) are accepted but
    never required.
 3. **Single slice name; per-VM-interior + per-role-leaf
-   hierarchy.** The slice is `nixling.slice` literally — not
+   hierarchy.** The slice is `d2b.slice` literally — not
    configurable. Per-VM **intermediate** directories live at
-   `nixling.slice/<vm-id>/` (process-free) with **per-role leaves**
-   at `nixling.slice/<vm-id>/<role>/`. Host-scoped roles split
+   `d2b.slice/<vm-id>/` (process-free) with **per-role leaves**
+   at `d2b.slice/<vm-id>/<role>/`. Host-scoped roles split
    into two patterns, both `path_class: host-scoped-leaf`:
-   per-env (e.g., USBIP) at `nixling.slice/sys-<env>/<role>/`
+   per-env (e.g., USBIP) at `d2b.slice/sys-<env>/<role>/`
    with `sys-<env>/` process-free interior; host singletons
-   (e.g., otel-host-bridge) at `nixling.slice/host/<role>/`
+   (e.g., otel-host-bridge) at `d2b.slice/host/<role>/`
    with `host/` process-free interior. The role-leaf model is
    required because the framework replaces the old per-VM
    systemd-template scope model with one broker-spawned child
    per role; each role needs its own pidfd / `cgroup.kill` scope.
-4. **`partition=member` on nixling-created cgroups.** `cpuset.cpus.partition`
-   STAYS `member` on `nixling.slice` and every nixling-created
+4. **`partition=member` on d2b-created cgroups.** `cpuset.cpus.partition`
+   STAYS `member` on `d2b.slice` and every d2b-created
    descendant (per-VM intermediate `<vm-id>/`, per-role leaves
    `<vm-id>/<role>/`, host-scoped `sys-<env>/<role>/`). The
    `assert_partition_member_only` guard panics in debug builds and
    returns `cgroup-partition-root-forbidden` in release builds for
    any code path that tries to write the partition key on a
-   nixling-owned cgroup. The R10 kernel reviewer correctly noted
+   d2b-owned cgroup. The R10 kernel reviewer correctly noted
    that the cgroup v2 root is normally a partition root; the
    invariant therefore explicitly does NOT apply to the cgroup v2
-   root or to any cgroup outside `nixling.slice` — nixling never
+   root or to any cgroup outside `d2b.slice` — d2b never
    reads or writes ancestor `cpuset.cpus.partition` values
    (partition-root state on the kernel root or distro-owned
    ancestors is a host concern, not a delegated-subtree concern).
@@ -116,7 +116,7 @@ Hard invariants:
 5. **Threaded cgroups forbidden.** `cgroup.type=threaded` is refused
    with `cgroup-threaded-forbidden`. Removing this restriction
    requires a panel-approved ADR override.
-6. **No internal processes.** `nixling.slice` and intermediate VM
+6. **No internal processes.** `d2b.slice` and intermediate VM
    cgroup directories MUST be process-free. Leaf role cgroups are the
    only directories that carry processes.
 7. **Kill scope.** `cgroup.kill` is allowed only on **broker-mediated**
@@ -131,7 +131,7 @@ Hard invariants:
    guard at step 8 is enforced on subsequent calls into the cgroup
    module **AFTER** the initial Phase A delegation completes
    (steps 1-6 are Phase A; they require root for `+controllers`,
-   slice/leaf `mkdir`, and `fchown` to `nixlingd`'s uid/gid; the
+   slice/leaf `mkdir`, and `fchown` to `d2bd`'s uid/gid; the
    broker drops privileges between steps 6 and 7). See
    [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md)
    § Decision item 2 for the explicit Phase A vs Phase B split.
@@ -139,7 +139,7 @@ Hard invariants:
 ## The 8-step algorithm
 
 The algorithm runs through
-[`nixling_host::cgroup`](../../packages/nixling-host/src/cgroup.rs):
+[`d2b_host::cgroup`](../../packages/d2b-host/src/cgroup.rs):
 
 | Step | Function | Failure code |
 | --- | --- | --- |
@@ -147,8 +147,8 @@ The algorithm runs through
 | 2 | `require_controllers(root, REQUIRED)` | `cgroup-controllers-missing` |
 | 3 | `prepare_cpuset_inheritance(<ancestor>)` before `+cpuset` | `cpuset-inheritance-failed` |
 | 4 | `enable_subtree_controllers(<path>, ENABLE_ORDER)` per-controller, re-read after each | `cgroup-subtree-control-enable-failed` |
-| 5 | `create_nixling_slice(...)` creates `nixling.slice`; `create_vm_subtree(...)` creates per-VM intermediate `<vm-id>/` and per-role leaves `<vm-id>/<role>/` (current taxonomy per ADR 0011); `assert_no_internal_processes(<path>)` checks intermediate dirs | `cgroup-internal-processes-present` |
-| 6 | `chown_subtree_to_nixlingd(<path>, uid, gid)` via fd-based `fchown` | `cgroup-io-error` |
+| 5 | `create_d2b_slice(...)` creates `d2b.slice`; `create_vm_subtree(...)` creates per-VM intermediate `<vm-id>/` and per-role leaves `<vm-id>/<role>/` (current taxonomy per ADR 0011); `assert_no_internal_processes(<path>)` checks intermediate dirs | `cgroup-internal-processes-present` |
+| 6 | `chown_subtree_to_d2bd(<path>, uid, gid)` via fd-based `fchown` | `cgroup-io-error` |
 | 7 | `cgroup_kill_leaf_only(<path>, leaf_set)` | `cgroup-kill-on-ancestor-refused` |
 | 8 | `require_non_root_delegation()` (uid != 0 guard) | `cgroup-delegation-refused` |
 
@@ -158,8 +158,8 @@ cpuset enable is the only one with a preceding inheritance step.
 ## Fd ownership table
 
 The daemon owns one `Arc<OwnedFd>` per registered pidfd in
-[`nixling_priv_broker` →
-`nixlingd::supervisor::pidfd::PidfdTable`](../../packages/nixlingd/src/supervisor/pidfd.rs).
+[`d2b_priv_broker` →
+`d2bd::supervisor::pidfd::PidfdTable`](../../packages/d2bd/src/supervisor/pidfd.rs).
 
 | Layer | What it holds | Lifetime |
 | --- | --- | --- |
@@ -200,7 +200,7 @@ every refusal path.
 ## Audit records
 
 Every `DelegateCgroupV2` and `OpenCgroupDir` decision emits one JSON
-record to `/var/lib/nixling/audit/broker-<utc-date>.jsonl` (root:nixlingd 0640).
+record to `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root:d2bd 0640).
 
 The common audit header is defined canonically in
 [`docs/reference/privileges.md`](privileges.md) § "Audit record
@@ -262,16 +262,16 @@ non-bootstrap dispatcher as well as the cgroup paths documented here:
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `slice_path` | string | Canonical `/sys/fs/cgroup/nixling.slice`. Derived from the trusted bundle. |
+| `slice_path` | string | Canonical `/sys/fs/cgroup/d2b.slice`. Derived from the trusted bundle. |
 | `controllers_enabled` | array<string> | Always `["cpu","memory","io","pids","cpuset"]` on success. |
-| `owner_uid` | integer | The `nixlingd` uid the subtree is chowned to. |
+| `owner_uid` | integer | The `d2bd` uid the subtree is chowned to. |
 
 ### `OpenCgroupDir` `operation_fields`
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `cgroup_id` | string | The canonical path the broker resolved from the subject. Omitted on subject-resolution failure. |
-| `path_class` | string | One of `slice` / `vm-interior` / `vm-role-leaf` / `host-scoped-leaf` (the current four-value taxonomy per [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) Decision item 1). Legacy `nixling-slice` / `vm-leaf` / `foreign` / `unknown-subject` values are retired. **Bundle-miss / unresolved-subject cases**: same convention as `CgroupKill` below — the `path_class` field is OMITTED from `operation_fields` on subject-resolution failure; the failure is recorded via `decision: "denied-unknown"` + `error_kind: "unknown-subject"` at the audit-header level. |
+| `path_class` | string | One of `slice` / `vm-interior` / `vm-role-leaf` / `host-scoped-leaf` (the current four-value taxonomy per [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) Decision item 1). Legacy `d2b-slice` / `vm-leaf` / `foreign` / `unknown-subject` values are retired. **Bundle-miss / unresolved-subject cases**: same convention as `CgroupKill` below — the `path_class` field is OMITTED from `operation_fields` on subject-resolution failure; the failure is recorded via `decision: "denied-unknown"` + `error_kind: "unknown-subject"` at the audit-header level. |
 
 ### `CgroupKill` (internal teardown path)
 
@@ -282,29 +282,29 @@ non-bootstrap dispatcher as well as the cgroup paths documented here:
 
 ## Forbidden surfaces
 
-Nixling explicitly forbids the following:
+D2b explicitly forbids the following:
 
-- writing `cpuset.cpus.partition` on nixling-owned cgroups
-  (`nixling.slice` and every nixling-created descendant stays
+- writing `cpuset.cpus.partition` on d2b-owned cgroups
+  (`d2b.slice` and every d2b-created descendant stays
   `member` per invariant 4 above; the cgroup v2 root and other
   ancestor `cpuset.cpus.partition` values are out of scope —
-  nixling never reads or writes them);
+  d2b never reads or writes them);
 - creating threaded cgroups;
-- holding non-leaf processes inside `nixling.slice` or an intermediate
+- holding non-leaf processes inside `d2b.slice` or an intermediate
   VM cgroup (`<vm-id>/` and `sys-<env>/` interiors stay
   process-free per the taxonomy in invariant 3);
-- `cgroup.kill` on `nixling.slice` or any ancestor (including
+- `cgroup.kill` on `d2b.slice` or any ancestor (including
   per-VM `<vm-id>/` and host-scope `sys-<env>/` interiors);
 - **Phase B (post-delegation) runtime mutation while running as
   uid 0** — i.e., once Phase A (privileged setup: `+controllers`
-  cascade, slice/leaf `mkdir`, `fchown` to `nixlingd`'s uid/gid;
+  cascade, slice/leaf `mkdir`, `fchown` to `d2bd`'s uid/gid;
   legitimately runs as root per
   [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md)
   Decision item 2) has completed and the broker has dropped
   privileges, all subsequent calls into the cgroup module
   (any potential daemon-side cgroup interaction — though the daemon
   performs read-only enumeration only per the
-  scope-and-invariants section above) MUST run as `nixlingd`'s uid
+  scope-and-invariants section above) MUST run as `d2bd`'s uid
   (`getuid() != 0`). Mutating operations (process placement via
   `clone3(CLONE_INTO_CGROUP)`, leaf kill via `CgroupKill`, leaf
   mkdir via Phase A `DelegateCgroupV2`) are broker-only and

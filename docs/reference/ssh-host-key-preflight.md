@@ -9,16 +9,16 @@ Related preflight: per-VM state-directory ownership matrix — see
 
 ## What it checks
 
-For every VM the daemon starts (`nixling vm start <vm>`) the daemon
+For every VM the daemon starts (`d2b vm start <vm>`) the daemon
 runs the preflight against
-`/var/lib/nixling/vms/<vm>/sshd-host-keys/` before dispatching any
+`/var/lib/d2b/vms/<vm>/sshd-host-keys/` before dispatching any
 broker op:
 
 1. **Directory shape.** The path must exist as a real directory, not
    a symlink. Real directory ownership and mode are enforced
    separately by the
    [ownership matrix](./per-vm-state-ownership.md) preflight (which
-   declares `nixlingd:nixling 0750` for this directory).
+   declares `d2bd:d2b 0750` for this directory).
 2. **Key file shape.** For each `ssh_host_*_key` private-key file
    directly under the directory (excluding `.pub` siblings and any
    unrelated files):
@@ -49,7 +49,7 @@ SSH endpoint. Two failure modes drove this preflight:
   propagated a default ACL onto ssh host key paths inside
   `/nix/store`; OpenSSH's `safe_path()` then refused to load them.
   This preflight catches the drift even when the offending operation
-  ran outside nixling.
+  ran outside d2b.
 
 ## Operator-facing failure envelope
 
@@ -57,8 +57,8 @@ SSH endpoint. Two failure modes drove this preflight:
 {
   "kind": "sshd-host-key-drift",
   "exitCode": 62,
-  "message": "vm 'work' refused: sshd host key drift: ssh host key mode 644 != expected 400: /var/lib/nixling/vms/work/sshd-host-keys/ssh_host_ed25519_key",
-  "remediation": "regenerate or chown/chmod the per-VM sshd host keys so each ssh_host_*_key under /var/lib/nixling/vms/<vm>/sshd-host-keys is a regular file owned root:root with mode 0400 (no symlinks); see docs/reference/ssh-host-key-preflight.md. Recovery: nixos-rebuild switch (re-runs the host-activation key sync), or remove the offending key and let nixling keys rotate <vm> reprovision it."
+  "message": "vm 'work' refused: sshd host key drift: ssh host key mode 644 != expected 400: /var/lib/d2b/vms/work/sshd-host-keys/ssh_host_ed25519_key",
+  "remediation": "regenerate or chown/chmod the per-VM sshd host keys so each ssh_host_*_key under /var/lib/d2b/vms/<vm>/sshd-host-keys is a regular file owned root:root with mode 0400 (no symlinks); see docs/reference/ssh-host-key-preflight.md. Recovery: nixos-rebuild switch (re-runs the host-activation key sync), or remove the offending key and let d2b keys rotate <vm> reprovision it."
 }
 ```
 
@@ -85,7 +85,7 @@ same drift reproducibly surfaces the same offending entry across runs.
 ## Migration-window posture
 
 The per-VM `sshd-host-keys` directory is materialized by the
-nixling host-activation chain on first
+d2b host-activation chain on first
 `nixos-rebuild switch`. Until that has run, the directory may be
 absent on a freshly provisioned host. To avoid a chicken-and-egg
 on first boot the daemon **tolerates a missing keys directory** (a
@@ -99,10 +99,10 @@ an existing path → fail-closed.
 ## Implementation
 
 - Pure check:
-  [`nixlingd::ssh_host_key_preflight::check_sshd_host_keys`](../../packages/nixlingd/src/ssh_host_key_preflight.rs)
+  [`d2bd::ssh_host_key_preflight::check_sshd_host_keys`](../../packages/d2bd/src/ssh_host_key_preflight.rs)
   — takes `(vm, keys_dir)`, returns `Result<(), SshdHostKeyDrift>`.
 - Typed error:
-  [`TypedError::SshdHostKeyDrift`](../../packages/nixlingd/src/typed_error.rs)
+  [`TypedError::SshdHostKeyDrift`](../../packages/d2bd/src/typed_error.rs)
   — exit code `62`, kind `sshd-host-key-drift`.
 - Call sites:
   1. `dispatch_broker_vm_start` runs the preflight inline after
@@ -111,7 +111,7 @@ an existing path → fail-closed.
   2. `execute_host_prep_dag` calls the same handler when its
      `HostPrepStepKind::SshHostKeyPreflight` step is reached (when
      the host-prep DAG executor is gated on via
-     `NIXLING_HOST_PREP_DAG_EXECUTE=1`). The broker stub variant
+     `D2B_HOST_PREP_DAG_EXECUTE=1`). The broker stub variant
      (`BrokerRequest::SshHostKeyPreflight`) is left in the wire enum
      as a typed placeholder; the live handler lives daemon-side
      because the check is a pure filesystem stat that the daemon
@@ -120,7 +120,7 @@ an existing path → fail-closed.
 ## Tests
 
 - Unit:
-  [`nixlingd::ssh_host_key_preflight::tests`](../../packages/nixlingd/src/ssh_host_key_preflight.rs)
+  [`d2bd::ssh_host_key_preflight::tests`](../../packages/d2bd/src/ssh_host_key_preflight.rs)
   exhaustively covers each drift class against a tempdir-built
   fixture.
 - Integration: [`tests/ssh-host-key-preflight-eval.sh`](../../tests/ssh-host-key-preflight-eval.sh)
@@ -129,9 +129,9 @@ an existing path → fail-closed.
 
 ## Spec correction
 
-Earlier drafts referenced `/var/lib/nixling/keys/<vm>/sshd-host-keys`
-and a `root:nixling-<vm>-runner 0750` directory posture with `0640`
+Earlier drafts referenced `/var/lib/d2b/keys/<vm>/sshd-host-keys`
+and a `root:d2b-<vm>-runner 0750` directory posture with `0640`
 key files. The canonical paths and modes shipped by the ownership
-matrix (`/var/lib/nixling/vms/<vm>/sshd-host-keys`,
-`nixlingd:nixling 0750` directory, `root:root 0400` key
+matrix (`/var/lib/d2b/vms/<vm>/sshd-host-keys`,
+`d2bd:d2b 0750` directory, `root:root 0400` key
 files) take precedence per AGENTS.md "Existing code is canon".

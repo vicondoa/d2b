@@ -1,5 +1,5 @@
 
-=== nixling security audit ===
+=== d2b security audit ===
 
   kvm_dev_mode:                            660 ✓
   wayland_user_in_kvm:                     false ✓

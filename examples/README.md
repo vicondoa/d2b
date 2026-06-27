@@ -1,4 +1,4 @@
-# nixling examples
+# d2b examples
 
 Five ready-to-eval consumer flakes plus two doc-friendly alias
 directories. Read the per-directory README first.
@@ -24,7 +24,7 @@ stable VM names while CI keeps one checked flake per scenario
 ## `flake.lock` policy
 
 Examples that are primarily meant to evaluate the in-tree framework
-via `nixling.url = "path:../.."` do **not** commit a `flake.lock`
+via `d2b.url = "path:../.."` do **not** commit a `flake.lock`
 (currently `minimal/`, `graphics-workstation/`, `multi-env/`, and
 `with-observability/`). Even when an example spells out shared inputs
 such as `nixpkgs`, `microvm`, or `home-manager`, the point is still to
@@ -39,10 +39,10 @@ the example builds bit-identically across machines.
 
 ## In-tree vs published consumption
 
-Every checked example's `flake.nix` uses `nixling.url = "path:../.."`
+Every checked example's `flake.nix` uses `d2b.url = "path:../.."`
 so it can be evaluated against the in-tree framework without a
 network round-trip. When you copy any of these layouts into your own
-repo, swap that for a real flake ref — `github:vicondoa/nixling`
+repo, swap that for a real flake ref — `github:vicondoa/d2b`
 (track `main`) or a tagged release.
 
 ## See also

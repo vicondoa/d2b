@@ -1,20 +1,20 @@
 # shellcheck shell=bash
-# Shared helpers for the nixling test suite.
+# Shared helpers for the d2b test suite.
 #
 # Each helper is small, dependency-free, and assumes:
-#   - We are running on a host with nixling installed and the
+#   - We are running on a host with d2b installed and the
 #     framework activated (i.e. `nixos-rebuild switch` has happened).
 #   - sudo -A works without prompting (the invoking user is in
 #     `wheel` and an askPass helper is configured) for tests that
 #     touch root-owned state.
-#   - `nixling` is on PATH (it's in system.environment, installed by the
+#   - `d2b` is on PATH (it's in system.environment, installed by the
 #     framework's cli.nix).
 #   - jq, ip, ssh are installed (nixpkgs default).
 #
 # Configurable via env:
 #   FLAKE — consumer flake root (default: derived from this lib's
 #           location, i.e. the repo containing tests/).
-#   NL_OPERATOR_SSH_KEY — host operator's SSH private key for the
+#   D2B_OPERATOR_SSH_KEY — host operator's SSH private key for the
 #           net-VM root login (default: $HOME/.ssh/id_ed25519).
 #
 # All output goes to stderr so test functions can `echo` their actual
@@ -26,26 +26,26 @@ set -u
 # Override with FLAKE=/path/to/clone when running against an alien tree.
 _LIB_HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 FLAKE=${FLAKE:-$(dirname "$_LIB_HERE")}
-# NL_LOG defaults outside $FLAKE so the append churn doesn't race
+# D2B_LOG defaults outside $FLAKE so the append churn doesn't race
 # `builtins.getFlake (toString $FLAKE)` source captures during
 # flake-eval gates. Operators who need a stable in-tree log location
 # can still override
-# NL_LOG=$FLAKE/.nixling-test.log explicitly.
-NL_LOG=${NL_LOG:-${TMPDIR:-/tmp}/nixling-test.$$.log}
+# D2B_LOG=$FLAKE/.d2b-test.log explicitly.
+D2B_LOG=${D2B_LOG:-${TMPDIR:-/tmp}/d2b-test.$$.log}
 # shellcheck disable=SC2034  # STATE_ROOT used by scripts that source this lib
-STATE_ROOT=/var/lib/nixling/vms
+STATE_ROOT=/var/lib/d2b/vms
 
 # Sccache-based cross-worktree dedupe of compiled rustc outputs.
 # Default storage location lives outside any single worktree's .cache so
 # multiple worktrees share a single rustc-output cache. Override with
 # SCCACHE_DIR=... locally to bypass.
-export SCCACHE_DIR="${SCCACHE_DIR:-$HOME/.cache/nixling-sccache}"
+export SCCACHE_DIR="${SCCACHE_DIR:-$HOME/.cache/d2b-sccache}"
 # Cap the on-disk cache so a runaway build can't fill the volume. Tune
 # via SCCACHE_CACHE_SIZE in the operator environment if 10 GiB is wrong
 # for the host's free-space envelope.
 export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-10G}"
 
-nl_repo_root() {
+d2b_repo_root() {
   printf '%s\n' "${ROOT:-${FLAKE:-$(dirname "$_LIB_HERE")}}"
 }
 
@@ -67,16 +67,16 @@ nl_repo_root() {
 #
 # Purity: `nix-instantiate --eval` is impure by default (works as-is);
 # `nix eval` is pure by default and callers MUST pass --impure.
-nl_flake_ref() {
-  printf 'git+file://%s\n' "${1:-$(nl_repo_root)}"
+d2b_flake_ref() {
+  printf 'git+file://%s\n' "${1:-$(d2b_repo_root)}"
 }
 
-nl_cargo_config_path() {
+d2b_cargo_config_path() {
   case "${1:-workspace}" in
-    workspace) printf '%s\n' "$(nl_repo_root)/packages/.cargo/config.toml" ;;
-    broker) printf '%s\n' "$(nl_repo_root)/packages/nixling-priv-broker/.cargo/config.toml" ;;
-    guest-shell-runner) printf '%s\n' "$(nl_repo_root)/packages/nixling-guest-shell-runner/.cargo/config.toml" ;;
-    fuzz) printf '%s\n' "$(nl_repo_root)/packages/nixling-core/fuzz/.cargo/config.toml" ;;
+    workspace) printf '%s\n' "$(d2b_repo_root)/packages/.cargo/config.toml" ;;
+    broker) printf '%s\n' "$(d2b_repo_root)/packages/d2b-priv-broker/.cargo/config.toml" ;;
+    guest-shell-runner) printf '%s\n' "$(d2b_repo_root)/packages/d2b-guest-shell-runner/.cargo/config.toml" ;;
+    fuzz) printf '%s\n' "$(d2b_repo_root)/packages/d2b-core/fuzz/.cargo/config.toml" ;;
     *)
       fail "unknown cargo target scope: ${1:-<empty>}"
       return 1
@@ -84,9 +84,9 @@ nl_cargo_config_path() {
   esac
 }
 
-nl_cargo_target_dir() {
+d2b_cargo_target_dir() {
   local scope="${1:-workspace}" config target_dir base
-  config=$(nl_cargo_config_path "$scope") || return 1
+  config=$(d2b_cargo_config_path "$scope") || return 1
   if [ ! -f "$config" ]; then
     fail "missing cargo config: $config"
     return 1
@@ -102,10 +102,10 @@ nl_cargo_target_dir() {
     return 0
   fi
   case "$scope" in
-    workspace) base="$(nl_repo_root)/packages/target" ;;
-    broker) base="$(nl_repo_root)/packages/nixling-priv-broker/target" ;;
-    guest-shell-runner) base="$(nl_repo_root)/packages/nixling-guest-shell-runner/target" ;;
-    fuzz) base="$(nl_repo_root)/packages/nixling-core/fuzz/target" ;;
+    workspace) base="$(d2b_repo_root)/packages/target" ;;
+    broker) base="$(d2b_repo_root)/packages/d2b-priv-broker/target" ;;
+    guest-shell-runner) base="$(d2b_repo_root)/packages/d2b-guest-shell-runner/target" ;;
+    fuzz) base="$(d2b_repo_root)/packages/d2b-core/fuzz/target" ;;
     *)
       fail "unknown cargo target scope: $scope"
       return 1
@@ -114,34 +114,34 @@ nl_cargo_target_dir() {
   printf '%s\n' "$base"
 }
 
-nl_cargo_bin_path() {
+d2b_cargo_bin_path() {
   local scope="$1" bin_name="$2" target_dir
-  target_dir=$(nl_cargo_target_dir "$scope") || return 1
+  target_dir=$(d2b_cargo_target_dir "$scope") || return 1
   printf '%s\n' "$target_dir/debug/$bin_name"
 }
 
-nl_prepend_path() {
+d2b_prepend_path() {
   local prefix="${1:-}"
   [ -n "$prefix" ] || return 0
   PATH="$prefix:$PATH"
   export PATH
 }
 
-nl_activate_rust_toolchain_path() {
-  if [ -n "${NL_RUST_TOOLCHAIN_PATH:-}" ]; then
-    nl_prepend_path "$NL_RUST_TOOLCHAIN_PATH"
+d2b_activate_rust_toolchain_path() {
+  if [ -n "${D2B_RUST_TOOLCHAIN_PATH:-}" ]; then
+    d2b_prepend_path "$D2B_RUST_TOOLCHAIN_PATH"
     return 0
   fi
   return 1
 }
 
-nl_now_ms() {
+d2b_now_ms() {
   date +%s%3N
 }
 
-_nl_time_append() {
+_d2b_time_append() {
   local line="$1" log_path lock_path
-  log_path=${NL_STATIC_TIMING_LOG:-}
+  log_path=${D2B_STATIC_TIMING_LOG:-}
   [ -n "$log_path" ] || return 0
   lock_path="$log_path.lock"
   if command -v flock >/dev/null 2>&1; then
@@ -155,30 +155,30 @@ _nl_time_append() {
   fi
 }
 
-nl_time_begin() {
-  local label="${1:?nl_time_begin: missing label}"
+d2b_time_begin() {
+  local label="${1:?d2b_time_begin: missing label}"
   local started_ms
-  started_ms=$(nl_now_ms)
-  _nl_time_append "BEGIN	$label	$started_ms"
+  started_ms=$(d2b_now_ms)
+  _d2b_time_append "BEGIN	$label	$started_ms"
 }
 
-nl_time_end() {
-  local label="${1:?nl_time_end: missing label}"
+d2b_time_end() {
+  local label="${1:?d2b_time_end: missing label}"
   local log_path ended_ms started_ms elapsed_ms
-  log_path=${NL_STATIC_TIMING_LOG:-}
+  log_path=${D2B_STATIC_TIMING_LOG:-}
   [ -n "$log_path" ] || return 0
-  ended_ms=$(nl_now_ms)
+  ended_ms=$(d2b_now_ms)
   started_ms=$(awk -F '\t' -v label="$label" '$1 == "BEGIN" && $2 == label { started = $3 } END { print started }' "$log_path" 2>/dev/null || true)
   if [ -z "$started_ms" ]; then
     started_ms=$ended_ms
   fi
   elapsed_ms=$((ended_ms - started_ms))
-  _nl_time_append "END	$label	$ended_ms	$elapsed_ms"
+  _d2b_time_append "END	$label	$ended_ms	$elapsed_ms"
 }
 
 # ---------- logging ----------
 
-log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$NL_LOG" >&2; }
+log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$D2B_LOG" >&2; }
 ok()  { log "  PASS: $*"; }
 fail() {
   log "  FAIL: $*"
@@ -255,15 +255,15 @@ vm_running() {
   pgrep -f "microvm@${vm}\\b|nixos-system-${vm}-" >/dev/null 2>&1
 }
 
-# Read the on-disk manifest baked into the nixling derivation. Avoids
+# Read the on-disk manifest baked into the d2b derivation. Avoids
 # duplicating SSH credential discovery across tests.
 vm_ssh_user() {
   jq -r --arg v "$1" '.[$v].sshUser // empty' \
-    /run/current-system/sw/share/nixling/vms.json 2>/dev/null
+    /run/current-system/sw/share/d2b/vms.json 2>/dev/null
 }
 vm_ssh_key() {
   local vm="$1"
-  local override_var="NL_VM_SSH_KEY_${vm//-/_}"
+  local override_var="D2B_VM_SSH_KEY_${vm//-/_}"
   local override="${!override_var:-}"
   if [ -n "$override" ]; then
     printf '%s\n' "$override"
@@ -271,12 +271,12 @@ vm_ssh_key() {
   fi
   local manifest_key
   manifest_key=$(jq -r --arg v "$vm" '.[$v].sshKeyPath // empty' \
-    /run/current-system/sw/share/nixling/vms.json 2>/dev/null)
+    /run/current-system/sw/share/d2b/vms.json 2>/dev/null)
   if [ -n "$manifest_key" ]; then
     printf '%s\n' "$manifest_key"
     return
   fi
-  local key_dir="${NL_VM_SSH_KEY_DIR:-/var/lib/nixling/keys}"
+  local key_dir="${D2B_VM_SSH_KEY_DIR:-/var/lib/d2b/keys}"
   local candidate="$key_dir/${vm}_ed25519"
   if [ -r "$candidate" ]; then
     printf '%s\n' "$candidate"
@@ -286,7 +286,7 @@ vm_ssh_key() {
 }
 vm_ssh_ip() {
   jq -r --arg v "$1" '.[$v].staticIp // empty' \
-    /run/current-system/sw/share/nixling/vms.json 2>/dev/null
+    /run/current-system/sw/share/d2b/vms.json 2>/dev/null
 }
 
 ssh_vm() {
@@ -299,7 +299,7 @@ ssh_vm() {
     fail "ssh_vm: $vm missing ssh.user/ssh.keyPath/staticIp in manifest"
     return 1
   fi
-  local kh=/var/lib/nixling/known_hosts.nixling
+  local kh=/var/lib/d2b/known_hosts.d2b
   ssh -o StrictHostKeyChecking=yes \
       -o UserKnownHostsFile="$kh" \
       -o ConnectTimeout=10 \
@@ -323,8 +323,8 @@ ssh_vm() {
                   -i "$key" "$user@$ip" : 2>&1) || true
     if printf '%s' "$ssh_err" | grep -q "HOST IDENTIFICATION HAS CHANGED"; then
       sudo -A ssh-keygen -R "$ip" -f "$kh" >/dev/null 2>&1 || true
-      sudo -A systemctl reset-failed "nixling-known-hosts-refresh@${vm}.service" >/dev/null 2>&1 || true
-      sudo -A systemctl start "nixling-known-hosts-refresh@${vm}.service" >/dev/null 2>&1 || true
+      sudo -A systemctl reset-failed "d2b-known-hosts-refresh@${vm}.service" >/dev/null 2>&1 || true
+      sudo -A systemctl start "d2b-known-hosts-refresh@${vm}.service" >/dev/null 2>&1 || true
       sleep 1
       ssh -o StrictHostKeyChecking=yes \
           -o UserKnownHostsFile="$kh" \
@@ -353,10 +353,10 @@ ssh_vm() {
 #   * — whatever ssh itself returned (255 transport, command exit)
 ssh_net_vm() {
   local vm="$1"; shift
-  local ip key=${NL_OPERATOR_SSH_KEY:-$HOME/.ssh/id_ed25519}
+  local ip key=${D2B_OPERATOR_SSH_KEY:-$HOME/.ssh/id_ed25519}
   ip=$(jq -r --arg v "$vm" \
     '.[$v] | select(.isNetVm == true) | .staticIp // empty' \
-    /run/current-system/sw/share/nixling/vms.json 2>/dev/null)
+    /run/current-system/sw/share/d2b/vms.json 2>/dev/null)
   if [ -z "$ip" ]; then
     return 2
   fi
@@ -373,62 +373,62 @@ ssh_net_vm() {
 
 # ---------- cleanup ----------
 
-# Per-process cleanup bookkeeping files MUST live outside $(nl_repo_root)
+# Per-process cleanup bookkeeping files MUST live outside $(d2b_repo_root)
 # so they can't race with `builtins.getFlake (toString <repo>)` source
 # captures during a static.sh run. Nix copies the entire flake source
-# tree at first eval; if .nl-cleanups.<PID> or .nl-scratch-registry is
+# tree at first eval; if .d2b-cleanups.<PID> or .d2b-scratch-registry is
 # created/removed/appended between the kernel `stat` and the store
 # copy, the copy fails with
-#   error: path '//<flake source>/.nl-cleanups.<pid>' does not exist
+#   error: path '//<flake source>/.d2b-cleanups.<pid>' does not exist
 # (observed in cli-legacy-bash-dispatch / cli-json timing-path runs).
 #
 # Cleanups + scratch registry move to
-#   ${NL_BOOKKEEPING_DIR:-${TMPDIR:-/tmp}/nixling-bookkeeping}
+#   ${D2B_BOOKKEEPING_DIR:-${TMPDIR:-/tmp}/d2b-bookkeeping}
 # which is shared across forks of the same gate run (so the orphan
 # reaper at static.sh start can find dead-PID cleanup files there),
 # but is invisible to the flake-source enumeration.
-NL_BOOKKEEPING_DIR=${NL_BOOKKEEPING_DIR:-${TMPDIR:-/tmp}/nixling-bookkeeping}
-export NL_BOOKKEEPING_DIR
-mkdir -p "$NL_BOOKKEEPING_DIR"
+D2B_BOOKKEEPING_DIR=${D2B_BOOKKEEPING_DIR:-${TMPDIR:-/tmp}/d2b-bookkeeping}
+export D2B_BOOKKEEPING_DIR
+mkdir -p "$D2B_BOOKKEEPING_DIR"
 
-NL_CLEANUP_OWNER_PID=${NL_CLEANUP_OWNER_PID:-$BASHPID}
-NL_CLEANUPS=()
-NL_CLEANUPS_FILE=${NL_CLEANUPS_FILE:-$NL_BOOKKEEPING_DIR/cleanups.$NL_CLEANUP_OWNER_PID}
-: >> "$NL_CLEANUPS_FILE"
+D2B_CLEANUP_OWNER_PID=${D2B_CLEANUP_OWNER_PID:-$BASHPID}
+D2B_CLEANUPS=()
+D2B_CLEANUPS_FILE=${D2B_CLEANUPS_FILE:-$D2B_BOOKKEEPING_DIR/cleanups.$D2B_CLEANUP_OWNER_PID}
+: >> "$D2B_CLEANUPS_FILE"
 
 add_cleanup() {
-  NL_CLEANUPS+=( "$*" )
-  printf '%s\n' "$*" >> "$NL_CLEANUPS_FILE"
+  D2B_CLEANUPS+=( "$*" )
+  printf '%s\n' "$*" >> "$D2B_CLEANUPS_FILE"
 }
 
 run_cleanups() {
   local i
   local -a cleanup_entries=()
-  if [ "$BASHPID" != "$NL_CLEANUP_OWNER_PID" ]; then
+  if [ "$BASHPID" != "$D2B_CLEANUP_OWNER_PID" ]; then
     return 0
   fi
-  if [ -f "$NL_CLEANUPS_FILE" ]; then
-    mapfile -t cleanup_entries < "$NL_CLEANUPS_FILE" || true
+  if [ -f "$D2B_CLEANUPS_FILE" ]; then
+    mapfile -t cleanup_entries < "$D2B_CLEANUPS_FILE" || true
   else
-    cleanup_entries=( "${NL_CLEANUPS[@]}" )
+    cleanup_entries=( "${D2B_CLEANUPS[@]}" )
   fi
   for ((i=${#cleanup_entries[@]}-1; i>=0; i--)); do
     [ -n "${cleanup_entries[$i]}" ] || continue
     log "cleanup: ${cleanup_entries[$i]}"
     eval "${cleanup_entries[$i]}" || log "  (cleanup failed, continuing)"
   done
-  rm -f -- "$NL_CLEANUPS_FILE"
+  rm -f -- "$D2B_CLEANUPS_FILE"
 }
 trap run_cleanups EXIT
 
-nl_scratch_registry_path() {
-  printf '%s\n' "$NL_BOOKKEEPING_DIR/scratch-registry"
+d2b_scratch_registry_path() {
+  printf '%s\n' "$D2B_BOOKKEEPING_DIR/scratch-registry"
 }
 
-_nl_scratch_unregister() {
+_d2b_scratch_unregister() {
   local path="$1" registry entry
   local -a registry_entries=()
-  registry=$(nl_scratch_registry_path)
+  registry=$(d2b_scratch_registry_path)
   [ -f "$registry" ] || return 0
   mapfile -t registry_entries < "$registry" || true
   : > "$registry"
@@ -439,30 +439,30 @@ _nl_scratch_unregister() {
   done
 }
 
-_nl_cleanup_scratch() {
+_d2b_cleanup_scratch() {
   local path="$1"
   rm -rf -- "$path"
-  _nl_scratch_unregister "$path"
+  _d2b_scratch_unregister "$path"
 }
 
-nl_mktemp() {
-  local pattern="${1:?nl_mktemp: missing pattern}" root scratch registry quoted_path
-  root=$(nl_repo_root)
+d2b_mktemp() {
+  local pattern="${1:?d2b_mktemp: missing pattern}" root scratch registry quoted_path
+  root=$(d2b_repo_root)
   scratch=$(mktemp -d -p "$root" "$pattern") || return 1
-  registry=$(nl_scratch_registry_path)
+  registry=$(d2b_scratch_registry_path)
   : >> "$registry"
   printf '%s\n' "$scratch" >> "$registry"
   printf -v quoted_path '%q' "$scratch"
-  add_cleanup "_nl_cleanup_scratch $quoted_path"
+  add_cleanup "_d2b_cleanup_scratch $quoted_path"
   printf '%s\n' "$scratch"
 }
 
-nl_reap_scratch_orphans() {
+d2b_reap_scratch_orphans() {
   local registry root path
   local -a registry_entries=()
-  registry=$(nl_scratch_registry_path)
+  registry=$(d2b_scratch_registry_path)
   [ -f "$registry" ] || return 0
-  root=$(nl_repo_root)
+  root=$(d2b_repo_root)
   mapfile -t registry_entries < "$registry" || true
   : > "$registry"
   for path in "${registry_entries[@]}"; do
@@ -485,15 +485,15 @@ nl_reap_scratch_orphans() {
   # process died without running its EXIT trap (SIGKILL, crash) the
   # file lingers. Skip the current owner's file and anything whose
   # PID is still alive.
-  if [ -d "$NL_BOOKKEEPING_DIR" ]; then
+  if [ -d "$D2B_BOOKKEEPING_DIR" ]; then
     local f pid
-    for f in "$NL_BOOKKEEPING_DIR"/cleanups.*; do
+    for f in "$D2B_BOOKKEEPING_DIR"/cleanups.*; do
       [ -e "$f" ] || continue
       pid=${f##*/cleanups.}
       case "$pid" in
         ''|*[!0-9]*) continue ;;
       esac
-      [ "$pid" = "${NL_CLEANUP_OWNER_PID:-}" ] && continue
+      [ "$pid" = "${D2B_CLEANUP_OWNER_PID:-}" ] && continue
       if kill -0 "$pid" 2>/dev/null; then
         continue
       fi
@@ -515,12 +515,12 @@ nl_reap_scratch_orphans() {
 # host's shared /nix/store comfortably below the watchdog threshold
 # at /tmp/disk-watchdog.sh.
 #
-# Honor NL_GATE_DISK_BUDGET_GIB (default 0 = unbounded) at each
+# Honor D2B_GATE_DISK_BUDGET_GIB (default 0 = unbounded) at each
 # phase boundary: if /nix free space drops below this, abort with a
 # clear "disk budget exceeded" message rather than wait for the
 # emergency watchdog to SIGTERM us mid-derivation.
 
-nl_disk_free_gib() {
+d2b_disk_free_gib() {
   # Query the /nix/store filesystem specifically.
   # The gate's pressure and gc target are /nix/store; on hosts where
   # /nix is a separate mount or subvolume, `df /` would silently
@@ -530,39 +530,39 @@ nl_disk_free_gib() {
   df -BG --output=avail /nix/store 2>/dev/null | tail -1 | tr -dc '0-9'
 }
 
-nl_nix_store_used_gib() {
+d2b_nix_store_used_gib() {
   du -s -BG /nix/store 2>/dev/null | awk '{print $1+0}'
 }
 
-nl_phase_gc() {
+d2b_phase_gc() {
   local label="$1"
   local before after reclaimed
-  before=$(nl_disk_free_gib)
+  before=$(d2b_disk_free_gib)
   log "  phase-gc: $label (free before: ${before:-?}G)"
   if ! nix store gc >/dev/null 2>&1; then
     log "  phase-gc: $label: nix store gc returned non-zero (continuing)"
   fi
-  after=$(nl_disk_free_gib)
+  after=$(d2b_disk_free_gib)
   if [ -n "$before" ] && [ -n "$after" ]; then
     reclaimed=$((after - before))
     log "  phase-gc: $label (free after: ${after}G; reclaimed ~${reclaimed}G)"
   fi
 }
 
-nl_check_disk_budget() {
+d2b_check_disk_budget() {
   local label="$1"
-  local budget="${NL_GATE_DISK_BUDGET_GIB:-0}"
+  local budget="${D2B_GATE_DISK_BUDGET_GIB:-0}"
   if [ "$budget" -le 0 ]; then
     return 0
   fi
   local free
-  free=$(nl_disk_free_gib)
+  free=$(d2b_disk_free_gib)
   if [ -z "$free" ]; then
     log "  disk-budget: $label: could not read free disk; skipping check"
     return 0
   fi
   if [ "$free" -lt "$budget" ]; then
-    log "  FAIL: disk-budget: $label: ${free}G free < ${budget}G NL_GATE_DISK_BUDGET_GIB"
+    log "  FAIL: disk-budget: $label: ${free}G free < ${budget}G D2B_GATE_DISK_BUDGET_GIB"
     return 1
   fi
   log "  disk-budget: $label: ${free}G free >= ${budget}G budget"
@@ -573,7 +573,7 @@ nl_check_disk_budget() {
 #
 # Several Layer-1 gates render the same smoke manifest/bundle JSON
 # from the flake (e.g. world-readable-leak and opaque-key-ids both
-# render `nixling._manifestPkg.text` against the canonical
+# render `d2b._manifestPkg.text` against the canonical
 # work/corp-vm smoke config). Re-rendering it inside each gate
 # wastes work, multiplies nix-daemon load, and creates intra-run
 # contention that surfaces as transient "could not render smoke
@@ -581,13 +581,13 @@ nl_check_disk_budget() {
 # (e.g. integrator + review fleet).
 #
 # When `tests/static.sh` runs the Layer-1 gates it exports
-# `NL_STATIC_CACHE=<scratch dir>` and pre-renders the shared smoke
-# artifacts. Each gate calls `nl_smoke_vms_json` / `nl_smoke_bundle_*`
+# `D2B_STATIC_CACHE=<scratch dir>` and pre-renders the shared smoke
+# artifacts. Each gate calls `d2b_smoke_vms_json` / `d2b_smoke_bundle_*`
 # which lazily render on first request (cached for subsequent
 # callers in the same run) and otherwise reuse the cache. When a
 # gate runs standalone, the helper still works — it just renders
 # into a per-shell fallback scratch dir created here at lib.sh source
-# time so that command-substitution callers (e.g. `path=$(nl_smoke_*)`)
+# time so that command-substitution callers (e.g. `path=$(d2b_smoke_*)`)
 # read from a stable directory whose cleanup is tied to the outer
 # shell, not to the subshell.
 #
@@ -595,43 +595,43 @@ nl_check_disk_budget() {
 # failures propagate (non-zero exit, caller-visible stderr).
 # Always provision a per-process fallback so the cache-dir helper can
 # never return an unbound value. The fallback is cheap (empty dir) and
-# may go unused when NL_STATIC_CACHE is set and live. Keeping it around
-# means a vanishing NL_STATIC_CACHE (e.g. registry race, external rm,
+# may go unused when D2B_STATIC_CACHE is set and live. Keeping it around
+# means a vanishing D2B_STATIC_CACHE (e.g. registry race, external rm,
 # external cleanup) degrades to a fresh render rather than a `set -u`
 # crash. The earlier conditional skipped fallback creation whenever
-# NL_STATIC_CACHE was set at lib.sh source-time, which left
-# `_NL_SMOKE_FALLBACK` unbound and surfaced as a hard gate failure on
-# any code path that fell through `_nl_smoke_cache_dir`'s primary
+# D2B_STATIC_CACHE was set at lib.sh source-time, which left
+# `_D2B_SMOKE_FALLBACK` unbound and surfaced as a hard gate failure on
+# any code path that fell through `_d2b_smoke_cache_dir`'s primary
 # branch (observed at the bundle/schema gate after rust-workspace
 # completed).
-if [ -z "${_NL_SMOKE_FALLBACK:-}" ]; then
-  _NL_SMOKE_FALLBACK=$(nl_mktemp .nl-smoke-cache.XXXXXX)
-  export _NL_SMOKE_FALLBACK
+if [ -z "${_D2B_SMOKE_FALLBACK:-}" ]; then
+  _D2B_SMOKE_FALLBACK=$(d2b_mktemp .d2b-smoke-cache.XXXXXX)
+  export _D2B_SMOKE_FALLBACK
 fi
 
-_nl_smoke_cache_dir() {
-  if [ -n "${NL_STATIC_CACHE:-}" ] && [ -d "$NL_STATIC_CACHE" ]; then
-    printf '%s\n' "$NL_STATIC_CACHE"
+_d2b_smoke_cache_dir() {
+  if [ -n "${D2B_STATIC_CACHE:-}" ] && [ -d "$D2B_STATIC_CACHE" ]; then
+    printf '%s\n' "$D2B_STATIC_CACHE"
     return 0
   fi
-  if [ -n "${NL_STATIC_CACHE:-}" ]; then
+  if [ -n "${D2B_STATIC_CACHE:-}" ]; then
     # Primary cache configured but the directory has vanished (registry
     # race, external rm, or a sub-process cleanup that removed it).
     # Try to recreate so callers downstream still see a consistent
-    # NL_STATIC_CACHE; if that fails, fall back to the per-process
+    # D2B_STATIC_CACHE; if that fails, fall back to the per-process
     # cache. Either way, the helper must never emit an unbound var.
-    if mkdir -p "$NL_STATIC_CACHE" 2>/dev/null; then
-      printf '%s\n' "$NL_STATIC_CACHE"
+    if mkdir -p "$D2B_STATIC_CACHE" 2>/dev/null; then
+      printf '%s\n' "$D2B_STATIC_CACHE"
       return 0
     fi
   fi
-  if [ ! -d "$_NL_SMOKE_FALLBACK" ]; then
-    mkdir -p "$_NL_SMOKE_FALLBACK" 2>/dev/null || return 1
+  if [ ! -d "$_D2B_SMOKE_FALLBACK" ]; then
+    mkdir -p "$_D2B_SMOKE_FALLBACK" 2>/dev/null || return 1
   fi
-  printf '%s\n' "$_NL_SMOKE_FALLBACK"
+  printf '%s\n' "$_D2B_SMOKE_FALLBACK"
 }
 
-_nl_smoke_config_modules() {
+_d2b_smoke_config_modules() {
   cat <<'EOF'
 flake.nixosModules.default
         ({ lib, ... }: {
@@ -643,16 +643,16 @@ flake.nixosModules.default
             "00000000000000000000000000000000";
           system.stateVersion = "25.11";
           users.users.alice = { isNormalUser = true; uid = 1000; };
-          nixling.site = {
+          d2b.site = {
             waylandUser = "alice";
             launcherUsers = [ "alice" ];
             yubikey.enable = false;
           };
-          nixling.envs.work = {
+          d2b.envs.work = {
             lanSubnet = "10.20.0.0/24";
             uplinkSubnet = "192.0.2.0/30";
           };
-          nixling.vms.corp-vm = {
+          d2b.vms.corp-vm = {
             enable = true; env = "work"; index = 10; ssh.user = "alice";
             config = {
               networking.hostName = lib.mkDefault "corp-vm";
@@ -663,10 +663,10 @@ flake.nixosModules.default
 EOF
 }
 
-# Render the smoke `nixling._manifestPkg.text` once per run and emit
+# Render the smoke `d2b._manifestPkg.text` once per run and emit
 # its cached path. Subsequent calls return the same path with no work.
-nl_smoke_vms_json() {
-  local cache; cache=$(_nl_smoke_cache_dir) || return 1
+d2b_smoke_vms_json() {
+  local cache; cache=$(_d2b_smoke_cache_dir) || return 1
   local out="$cache/vms.json"
   local err="$cache/vms.json.stderr"
   if [ -s "$out" ]; then
@@ -674,8 +674,8 @@ nl_smoke_vms_json() {
     return 0
   fi
   local root="${FLAKE:-${ROOT:-$(pwd)}}"
-  local modules; modules=$(_nl_smoke_config_modules)
-  local flake_ref; flake_ref=$(nl_flake_ref "$root")
+  local modules; modules=$(_d2b_smoke_config_modules)
+  local flake_ref; flake_ref=$(d2b_flake_ref "$root")
   : > "$err"
   if ! nix-instantiate --eval --strict --json --expr "
     let
@@ -687,7 +687,7 @@ nl_smoke_vms_json() {
           $modules
         ];
       };
-    in nixos.config.nixling._manifestPkg.text
+    in nixos.config.d2b._manifestPkg.text
   " 2> "$err" | jq -r . > "$out.tmp"; then
     head -40 "$err" >&2 || true
     rm -f "$out.tmp"
@@ -697,10 +697,10 @@ nl_smoke_vms_json() {
   printf '%s\n' "$out"
 }
 
-# Render the smoke `nixling._bundle.privilegesJson.jsonText` once per
+# Render the smoke `d2b._bundle.privilegesJson.jsonText` once per
 # run and emit its cached path.
-nl_smoke_bundle_privileges_json() {
-  local cache; cache=$(_nl_smoke_cache_dir) || return 1
+d2b_smoke_bundle_privileges_json() {
+  local cache; cache=$(_d2b_smoke_cache_dir) || return 1
   local out="$cache/bundle-privileges.json"
   local err="$cache/bundle-privileges.json.stderr"
   if [ -s "$out" ]; then
@@ -708,8 +708,8 @@ nl_smoke_bundle_privileges_json() {
     return 0
   fi
   local root="${FLAKE:-${ROOT:-$(pwd)}}"
-  local modules; modules=$(_nl_smoke_config_modules)
-  local flake_ref; flake_ref=$(nl_flake_ref "$root")
+  local modules; modules=$(_d2b_smoke_config_modules)
+  local flake_ref; flake_ref=$(d2b_flake_ref "$root")
   : > "$err"
   if ! nix eval --impure --raw --expr "
     let
@@ -721,7 +721,7 @@ nl_smoke_bundle_privileges_json() {
           $modules
         ];
       };
-    in nixos.config.nixling._bundle.privilegesJson.jsonText
+    in nixos.config.d2b._bundle.privilegesJson.jsonText
   " > "$out.tmp" 2> "$err"; then
     head -40 "$err" >&2 || true
     rm -f "$out.tmp"
@@ -731,10 +731,10 @@ nl_smoke_bundle_privileges_json() {
   printf '%s\n' "$out"
 }
 
-# Render the smoke `nixling._bundle.hostJson.jsonText` once per run and
+# Render the smoke `d2b._bundle.hostJson.jsonText` once per run and
 # emit its cached path for host-json contract and parity gates.
-nl_smoke_bundle_host_json() {
-  local cache; cache=$(_nl_smoke_cache_dir) || return 1
+d2b_smoke_bundle_host_json() {
+  local cache; cache=$(_d2b_smoke_cache_dir) || return 1
   local out="$cache/bundle-host.json"
   local err="$cache/bundle-host.json.stderr"
   if [ -s "$out" ]; then
@@ -742,8 +742,8 @@ nl_smoke_bundle_host_json() {
     return 0
   fi
   local root="${FLAKE:-${ROOT:-$(pwd)}}"
-  local modules; modules=$(_nl_smoke_config_modules)
-  local flake_ref; flake_ref=$(nl_flake_ref "$root")
+  local modules; modules=$(_d2b_smoke_config_modules)
+  local flake_ref; flake_ref=$(d2b_flake_ref "$root")
   : > "$err"
   if ! nix eval --impure --raw --expr "
     let
@@ -755,7 +755,7 @@ nl_smoke_bundle_host_json() {
           $modules
         ];
       };
-    in nixos.config.nixling._bundle.hostJson.jsonText
+    in nixos.config.d2b._bundle.hostJson.jsonText
   " > "$out.tmp" 2> "$err"; then
     head -40 "$err" >&2 || true
     rm -f "$out.tmp"

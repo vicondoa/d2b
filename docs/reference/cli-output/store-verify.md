@@ -1,8 +1,8 @@
-# `nixling store verify --json`
+# `d2b store verify --json`
 
 **Diataxis category:** reference.
 
-`nixling store verify <vm> --json` emits one JSON object on stdout. The
+`d2b store verify <vm> --json` emits one JSON object on stdout. The
 CLI is a thin daemon client: it never reads `store-view/live` or
 `store-view/state` directly.
 

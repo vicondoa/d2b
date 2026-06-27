@@ -1,35 +1,35 @@
 # Daemon autostart contract
 
-`nixlingd` runs a single **autostart pass** on startup that brings
+`d2bd` runs a single **autostart pass** on startup that brings
 per-env net VMs and workload VMs up in a controlled, degraded-aware
 order. The contract is intentionally narrow: it sequences the VMs,
 caps how many start at once, tolerates failures, and is safe to
 re-run.
 
 This page is the reference. The Rust implementation lives in
-`packages/nixlingd/src/autostart.rs`; the production starter wires
+`packages/d2bd/src/autostart.rs`; the production starter wires
 into `dispatch_broker_vm_start` so each per-VM start drives the
 same host-prep DAG → process DAG → pidfd-registration sequence
 that a manual `vm start` would.
 
 ## When the pass runs
 
-`nixlingd::serve()` calls `run_startup_autostart()` once, after:
+`d2bd::serve()` calls `run_startup_autostart()` once, after:
 
 1. `PidfdTable::restore_from_disk` has loaded any previously
-   supervised runners off `/var/lib/nixling/daemon-state/`.
+   supervised runners off `/var/lib/d2b/daemon-state/`.
 2. `adopt_orphaned_runners_on_startup` has reconciled the table
    against `/proc` (so VMs that survived a daemon restart are
    already accounted for).
 
 Only then does the pass dispatch the plan. The daemon's accept
 loop starts immediately afterwards; autostart progress is logged
-to `journalctl -u nixlingd.service` but never blocks the public
+to `journalctl -u d2bd.service` but never blocks the public
 socket from serving `status` / `doctor` / `audit`.
 
 If the trusted bundle fails to load, autostart is **skipped** with
 a warning — the daemon must still come up so operators can run
-`nixling doctor` against a broken bundle.
+`d2b doctor` against a broken bundle.
 
 ## Plan order
 
@@ -51,7 +51,7 @@ it is a graphics VM (graphics VMs are barred from autostart by
 session at boot).
 
 VMs with `autostart = false` remain in the plan (so a future
-`nixling status --plan` can surface the full picture) but
+`d2b status --plan` can surface the full picture) but
 `execute_autostart` skips them with `Outcome::NotAutostart`. A
 non-autostart net VM does **not** propagate as a degraded gate for
 its env's workloads — opting out is an explicit operator choice,
@@ -60,7 +60,7 @@ not a failure.
 ## Concurrency cap
 
 Both stages honour a single concurrency cap N
-(`nixling.daemon.autostart.parallelism`, default `3`):
+(`d2b.daemon.autostart.parallelism`, default `3`):
 
 - up to N net VMs start in parallel in stage 1;
 - once stage 1 settles (every net VM has reached a terminal
@@ -100,7 +100,7 @@ Every per-VM dispatch is gated on
 the autostart pass against the same live daemon reports
 `Outcome::AlreadyRunning` for every VM the previous pass started
 and dispatches nothing new. This is the property the SIGHUP /
-bundle-reload path relies on: a future `nixlingctl reload` can
+bundle-reload path relies on: a future `d2bctl reload` can
 re-run the pass without double-spawning runners.
 
 ## Configuration
@@ -108,7 +108,7 @@ re-run the pass without double-spawning runners.
 NixOS option set (`nixos-modules/options-daemon.nix`):
 
 ```nix
-nixling.daemon.autostart = {
+d2b.daemon.autostart = {
   # Concurrency cap N for the autostart pass. Net-VM phase and
   # workload phase each honour the cap independently. Default 3;
   # values < 1 are clamped to 1.
@@ -137,7 +137,7 @@ workloads grouped by env.
 
 ## Testing
 
-- Unit tests live in `packages/nixlingd/src/autostart.rs`
+- Unit tests live in `packages/d2bd/src/autostart.rs`
   (`cargo test --lib autostart`). They cover ordering,
   concurrency-cap enforcement, degraded-mode propagation,
   idempotent re-entry, and the `parallelism = 0` clamp.

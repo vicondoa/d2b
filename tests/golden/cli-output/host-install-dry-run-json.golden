@@ -6,15 +6,15 @@
   "planned_steps": [
     {
       "step": 1,
-      "what": "place systemd units at /etc/systemd/system/nixlingd.service + nixling-priv-broker.socket"
+      "what": "place systemd units at /etc/systemd/system/d2bd.service + d2b-priv-broker.socket"
     },
     {
       "step": 2,
-      "what": "write daemon-config.json to /etc/nixling/daemon-config.json with paths matching the daemon's compiled-in defaults"
+      "what": "write daemon-config.json to /etc/d2b/daemon-config.json with paths matching the daemon's compiled-in defaults"
     },
     {
       "step": 3,
-      "what": "bind /run/nixling/public.sock + /run/nixling/priv.sock with the W3 socket ACLs (launcher / admin groups)"
+      "what": "bind /run/d2b/public.sock + /run/d2b/priv.sock with the W3 socket ACLs (launcher / admin groups)"
     },
     {
       "step": 4,
@@ -22,7 +22,7 @@
     },
     {
       "step": 5,
-      "what": "smoke: nixling auth status against /run/nixling/public.sock"
+      "what": "smoke: d2b auth status against /run/d2b/public.sock"
     }
   ]
 }

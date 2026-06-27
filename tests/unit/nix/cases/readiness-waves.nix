@@ -1,15 +1,15 @@
 # nix-unit cases migrated from tests/readiness-waves-eval.sh.
 #
 # Eval-time gate that the p0..p7 daemon-only rollout waves are present in
-# the `nixling.defaultSwitchReadiness` option schema, that p0 defaults to
+# the `d2b.defaultSwitchReadiness` option schema, that p0 defaults to
 # implemented=false / validated=false (so the daemon doesn't auto-attest a
 # wave that hasn't shipped + been validated), and that the obsolete
-# `nixling.daemonExperimental.enable` compatibility option now defaults
+# `d2b.daemonExperimental.enable` compatibility option now defaults
 # `true` (the daemon-only control plane is always enabled; see ADR 0015).
 #
-# Uses `mkEval` (== nixosSystem with the nixling module set) over a minimal
+# Uses `mkEval` (== nixosSystem with the d2b module set) over a minimal
 # host config — no VMs required — and reads the rendered
-# `config.nixling.defaultSwitchReadiness` attrset directly. The bash gate
+# `config.d2b.defaultSwitchReadiness` attrset directly. The bash gate
 # hardcoded system = "x86_64-linux"; these cases are schema/value
 # assertions whose results are platform-independent, so they contribute to
 # the nix-unit check on every system unguarded.
@@ -24,19 +24,19 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
   };
 
   cfg = (mkEval [ base ]).config;
-  rw = cfg.nixling.defaultSwitchReadiness;
+  rw = cfg.d2b.defaultSwitchReadiness;
   waveNames = builtins.attrNames rw;
   hasWave = w: builtins.elem w waveNames;
 in
@@ -64,7 +64,7 @@ in
   # daemonExperimental.enable is now an obsolete compatibility option whose
   # default is true; the daemon-only control plane is always enabled.
   "readiness-waves/daemon-auto-default" = {
-    expr = cfg.nixling.daemonExperimental.enable;
+    expr = cfg.d2b.daemonExperimental.enable;
     expected = true;
   };
 }

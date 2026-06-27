@@ -1,4 +1,4 @@
-# dag-topo (nixlingd supervisor DAG + state + daemon_version canaries)
+# dag-topo (d2bd supervisor DAG + state + daemon_version canaries)
 supervisor::dag::tests::topo_sort_linear_dag
 supervisor::dag::tests::topo_sort_diamond_emits_both_branches
 supervisor::dag::tests::topo_sort_detects_cycle

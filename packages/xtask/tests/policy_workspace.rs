@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const CONTRACTS_CRATE: &str = "nixling-contracts";
-const EXCLUDED_WORKSPACES: &[&str] = &["nixling-priv-broker", "nixling-guest-shell-runner"];
+const CONTRACTS_CRATE: &str = "d2b-contracts";
+const EXCLUDED_WORKSPACES: &[&str] = &["d2b-priv-broker", "d2b-guest-shell-runner"];
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -49,11 +49,11 @@ fn workspace_names_contract_crate_by_role() {
         "main workspace must include the contract/DTO crate by role"
     );
     assert!(
-        !workspace.contains(&format!("\"{}{}\"", "nixling", "-ipc")),
+        !workspace.contains(&format!("\"{}{}\"", "d2b", "-ipc")),
         "main workspace must not reintroduce the old transport-shaped contract crate name"
     );
 
-    let manifest = read_repo_file("packages/nixling-contracts/Cargo.toml");
+    let manifest = read_repo_file("packages/d2b-contracts/Cargo.toml");
     assert!(
         manifest.contains(&format!("name = \"{CONTRACTS_CRATE}\"")),
         "contract crate manifest must use the role-based package name"
@@ -62,8 +62,8 @@ fn workspace_names_contract_crate_by_role() {
 
 #[test]
 fn stale_ipc_crate_name_is_absent_from_current_sources() {
-    let old_hyphen = format!("{}{}", "nixling", "-ipc");
-    let old_underscore = format!("{}{}", "nixling", "_ipc");
+    let old_hyphen = format!("{}{}", "d2b", "-ipc");
+    let old_underscore = format!("{}{}", "d2b", "_ipc");
     let self_path = "packages/xtask/tests/policy_workspace.rs";
     let mut violations = Vec::new();
     for rel in git_tracked_files() {

@@ -1,11 +1,11 @@
 # Wave validation evidence schema
 
 Canonical reference for the host-local proof files that gate
-`nixling.defaultSwitchReadiness.<wave>.validated = true`. (These files
-no longer drive `nixling.daemonExperimental.enable`, which now defaults
+`d2b.defaultSwitchReadiness.<wave>.validated = true`. (These files
+no longer drive `d2b.daemonExperimental.enable`, which now defaults
 `true` and is no longer evidence-auto-flipped but still functionally
 gates the daemon control plane; they remain live for the per-wave
-`validated` assertion and for `nixling host validate`.)
+`validated` assertion and for `d2b host validate`.)
 
 The schema is implicitly defined by the cargo-checked validator in
 [`nixos-modules/options-daemon.nix`](../../nixos-modules/options-daemon.nix)
@@ -17,7 +17,7 @@ companion JSON Schema lives at
 ## File location
 
 ```
-/var/lib/nixling/validated/<wave>.json
+/var/lib/d2b/validated/<wave>.json
 ```
 
 One file per wave. The basename (sans `.json`) MUST match the
@@ -47,8 +47,8 @@ Failure of any predicate flips the per-wave assertion shipped from
 `options-daemon.nix`:
 
 ```
-nixling.defaultSwitchReadiness.<wave>.validated = true requires
-/var/lib/nixling/validated/<wave>.json to exist and contain JSON
+d2b.defaultSwitchReadiness.<wave>.validated = true requires
+/var/lib/d2b/validated/<wave>.json to exist and contain JSON
 fields "wave" = "<wave>", "timestamp", and "operatorSignature".
 ```
 
@@ -81,8 +81,8 @@ validator ignores them.
 ## Per-wave inventory
 
 Every readiness wave declared in `readinessWaveSpecs` requires an
-evidence file under `/var/lib/nixling/validated/<wave>.json` before
-`nixling.defaultSwitchReadiness.<wave>.validated = true` will pass
+evidence file under `/var/lib/d2b/validated/<wave>.json` before
+`d2b.defaultSwitchReadiness.<wave>.validated = true` will pass
 eval.
 
 | Wave key | Implemented (shipped code)                                                                                                                                            | Validated (what the evidence file attests) — i.e. what the operator must have exercised before writing the file |
@@ -93,14 +93,14 @@ eval.
 | `w7Fu`   | W7b store-lifecycle verbs + admin auth (`switch` / `boot` / `test` / `rollback` / `gc`).                                                                              | Switch/boot/test/rollback/gc smoke + audit log evidence.                                                       |
 | `w8Fu`   | W14 keys/trust/rotate-known-host live wiring.                                                                                                                         | Keys/trust smoke + audit log evidence.                                                                         |
 | `w9Fu`   | W15 host install + migrate live broker ops.                                                                                                                           | Host install/migrate smoke + audit log evidence.                                                               |
-| `p0`     | P0 daemon-only foundation: broker socket-activation, bundle digest verify, canonical `/run/nixling`, notify-ready `nixlingd.service`.                                  | `tests/nixlingd-startup-smoke.sh` green on this host, recorded into the evidence file.                         |
+| `p0`     | P0 daemon-only foundation: broker socket-activation, bundle digest verify, canonical `/run/d2b`, notify-ready `d2bd.service`.                                  | `tests/d2bd-startup-smoke.sh` green on this host, recorded into the evidence file.                         |
 | `p0Fu`   | P0fu: cgroup delegation sequence, bundle-tampered envelope, per-artifact hash verification, `ListenSequentialPacket` socket fix.                                      | `tests/broker-cgroup-delegation-smoke.sh` green on this host.                                                  |
 | `p1`     | Per-role minijail profiles + byte-parity argv generators (CH, virtiofsd, swtpm, gpu, audio, video, vsockRelay, usbip, otelHostBridge).                                | Per-role `tests/minijail-validator-<role>.sh` green + hardware smoke on the target SKUs.                       |
 | `p2`     | Daemon-side host-prep + ownership matrix + `manifestVersion=4` + daemon autostart.                                                                                    | `tests/daemon-autostart-smoke.sh` + `tests/unit/gates/vms-json-parity.sh` + ownership-eval green.                         |
 | `p3`     | Host singletons retired (net-route-preflight, audit-check, ch-exporter, otel-host-bridge, per-env usbipd) + daemon health endpoint.                                   | `tests/observability-eval.sh` + USBIP smoke + degraded-mode escape-hatch smoke green.                          |
 | `p4`     | `vm start/stop/restart/list` daemon-native end-to-end; `.desktop` wrapper updated.                                                                                    | Per-VM `vm start` smoke + Wayland desktop launcher smoke green.                                                |
-| `p5`     | First-run validation UX shipped (`nixling host validate --apply` + daemon auto-write on first op).                                                                    | Fresh-host bootstrap smoke green on this host.                                                                 |
-| `p6`     | Legacy systemd template emission + bash CLI removed (clean break). The `nixling.vms.<vm>.supervisor` option's hard removal + eval-time rejection assertion was deferred to v1.1 backlog (see ADR 0015 § Decision); v1.0 retains the option with default `"systemd"` for backward-compat. | `tests/legacy-unit-denylist-eval.sh` + `tests/static.sh` green. |
+| `p5`     | First-run validation UX shipped (`d2b host validate --apply` + daemon auto-write on first op).                                                                    | Fresh-host bootstrap smoke green on this host.                                                                 |
+| `p6`     | Legacy systemd template emission + bash CLI removed (clean break). The `d2b.vms.<vm>.supervisor` option's hard removal + eval-time rejection assertion was deferred to v1.1 backlog (see ADR 0015 § Decision); v1.0 retains the option with default `"systemd"` for backward-compat. | `tests/legacy-unit-denylist-eval.sh` + `tests/static.sh` green. |
 | `p7`     | Docs blast-radius + v1.0 cut shipped.                                                                                                                                 | `tests/static.sh` + per-example flake-check green.                                                             |
 
 > **Drift gate.** `tests/wave-evidence-schema-eval.sh` asserts every
@@ -123,7 +123,7 @@ Cross-dependencies enforced by additional assertions in
 The intended path from a fresh host to a wave's
 `defaultSwitchReadiness.<wave>.validated = true`:
 
-1. **Land the code.** `nixos-rebuild switch` to a nixling version
+1. **Land the code.** `nixos-rebuild switch` to a d2b version
    that ships the wave's implementation (`implemented = true`
    already defaults on for the `w*Fu` waves; `p0..p7` flip in their
    own merge commits).
@@ -131,18 +131,18 @@ The intended path from a fresh host to a wave's
 2. **Exercise the wave on this host.** Run the per-wave smoke
    listed in the inventory above. For `w5Fu` / `w6Fu` this is
    `tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh`; for `p0` it is
-   `tests/nixlingd-startup-smoke.sh`; etc.
+   `tests/d2bd-startup-smoke.sh`; etc.
 
 3. **Write the evidence file.** Run:
 
    ```bash
-   sudo nixling host validate --apply
+   sudo d2b host validate --apply
    ```
 
    (P5 sibling deliverable; see [`host-validate.md`](./host-validate.md).)
    The verb composes the per-wave evidence record from the
    wave inventory and writes one
-   `/var/lib/nixling/validated/<wave>.json` file per wave with
+   `/var/lib/d2b/validated/<wave>.json` file per wave with
    the canonical `{wave, timestamp, operatorSignature}` payload.
    It does NOT itself run the validators — operators are expected
    to have run each wave's validator (`tests/minijail-validator-*.sh`,
@@ -153,48 +153,48 @@ The intended path from a fresh host to a wave's
 
    The daemon also opportunistically writes evidence on its
    first successful op for the corresponding wave (e.g. the first
-   end-to-end `nixling vm start --apply` writes `p4.json`),
+   end-to-end `d2b vm start --apply` writes `p4.json`),
    bootstrapping operators who do not run `host validate`
    explicitly.
 
 4. **Flip the readiness bit.** Add to host config:
 
    ```nix
-   nixling.defaultSwitchReadiness.<wave>.validated = true;
+   d2b.defaultSwitchReadiness.<wave>.validated = true;
    ```
 
 5. **Rebuild.** `nixos-rebuild switch` now sees
    `defaultSwitchReadiness.<wave>.validated = true` for each
    wave whose evidence file is present, and the fail-closed eval
    assertion passes. The wave evidence no longer computes or flips
-   the `nixling.daemonExperimental.enable` default: that option
+   the `d2b.daemonExperimental.enable` default: that option
    defaults `true` and still functionally gates the daemon control
    plane, independent of these `validated` bits.
 
-`nixling.daemonExperimental.enable` still functionally gates the
+`d2b.daemonExperimental.enable` still functionally gates the
 daemon control plane: it defaults `true`, and consumers should leave
 it at its default (setting it `false` reverts the host to the
 unsupported pre-daemon legacy state). What changed is that the wave
 evidence no longer computes or flips that default. The `validated`
 bits remain meaningful as host-local validation evidence, surfaced by
-`nixling host validate`.
+`d2b host validate`.
 
 ### Manual evidence writing (escape hatch)
 
-`nixling host validate` is the supported writer. If it is
+`d2b host validate` is the supported writer. If it is
 unavailable (e.g. an older daemon, a partial bootstrap, or a CI
 fixture), the same file can be hand-rolled:
 
 ```bash
-sudo install -d -o root -g root -m 0755 /var/lib/nixling/validated
-sudo tee /var/lib/nixling/validated/p0.json > /dev/null <<'JSON'
+sudo install -d -o root -g root -m 0755 /var/lib/d2b/validated
+sudo tee /var/lib/d2b/validated/p0.json > /dev/null <<'JSON'
 {
   "wave": "p0",
   "timestamp": "2025-04-12T17:42:11Z",
   "operatorSignature": "alice@example"
 }
 JSON
-sudo chmod 0644 /var/lib/nixling/validated/p0.json
+sudo chmod 0644 /var/lib/d2b/validated/p0.json
 ```
 
 The eval-time validator does not care who wrote the file, only
@@ -203,7 +203,7 @@ that the three fields are present and well-typed.
 ## See also
 
 - [`host-validate.md`](./host-validate.md) — the
-  `nixling host validate` verb (P5 sibling deliverable) that
+  `d2b host validate` verb (P5 sibling deliverable) that
   writes these files.
 - [`default-switch-and-deprecation.md`](./default-switch-and-deprecation.md)
   — the per-wave evidence gate this evidence feeds.

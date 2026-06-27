@@ -2,6 +2,6 @@ error: host-prepare-apply-error
   code: single-writer-conflict
   exit_code: 78
   what_was_checked: Whether legacy + daemon writers are both targeting host state at apply time.
-  observed_state: Both legacy units and nixlingd.service hold an exclusive writer claim.
+  observed_state: Both legacy units and d2bd.service hold an exclusive writer claim.
   remediation: Stop legacy units before running `host prepare --apply` on a Tier-0 mixed host.
   docs_anchor: docs/reference/error-codes.md#single-writer-conflict

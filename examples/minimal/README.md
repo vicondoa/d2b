@@ -1,6 +1,6 @@
 # `examples/minimal` — single headless VM, single env
 
-The "is nixling for me?" sanity test. About 25 lines of `flake.nix`
+The "is d2b for me?" sanity test. About 25 lines of `flake.nix`
 plus a small `configuration.nix` get you:
 
 - one isolated network environment named `personal`,
@@ -15,18 +15,18 @@ in the `graphics-workstation` example. Start here.
 
 ```nix
 {
-  description = "Minimal nixling example — one headless workload VM in one env";
+  description = "Minimal d2b example — one headless workload VM in one env";
 
   inputs = {
-    nixling.url   = "github:vicondoa/nixling/v0.1.0";  # ← use this in real consumers
-    nixpkgs.follows = "nixling/nixpkgs";
+    d2b.url   = "github:vicondoa/d2b/v0.1.0";  # ← use this in real consumers
+    nixpkgs.follows = "d2b/nixpkgs";
   };
 
-  outputs = { self, nixpkgs, nixling, ... }: {
+  outputs = { self, nixpkgs, d2b, ... }: {
     nixosConfigurations.demo = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
-        nixling.nixosModules.default
+        d2b.nixosModules.default
         ./configuration.nix
       ];
     };
@@ -36,18 +36,18 @@ in the `graphics-workstation` example. Start here.
 
 Two things to note:
 
-1. **`nixling.nixosModules.default` is the entire framework surface.**
-   Importing it lights up `nixling.site`, `nixling.envs.<env>`, and
-   `nixling.vms.<name>` options under your top-level config.
-2. **`nixpkgs.follows = "nixling/nixpkgs"`.** Sharing nixling's pinned
+1. **`d2b.nixosModules.default` is the entire framework surface.**
+   Importing it lights up `d2b.site`, `d2b.envs.<env>`, and
+   `d2b.vms.<name>` options under your top-level config.
+2. **`nixpkgs.follows = "d2b/nixpkgs"`.** Sharing d2b's pinned
    nixpkgs keeps option types aligned between framework and consumer.
    Mixing nixpkgs revisions is a common source of subtle eval errors.
 
 > **Note on the in-tree path** — the version of `flake.nix` checked
-> into this directory uses `nixling.url = "path:../..";` so the
+> into this directory uses `d2b.url = "path:../..";` so the
 > example can be evaluated against the in-tree framework without a
 > network. When you copy this layout into your own repo, swap it for
-> a real flake ref (`github:vicondoa/nixling/v0.1.0` or a pinned
+> a real flake ref (`github:vicondoa/d2b/v0.1.0` or a pinned
 > revision).
 
 ## The consumer config
@@ -55,18 +55,18 @@ Two things to note:
 `configuration.nix` is split into three labelled sections:
 
 ```nix
-nixling.site = {
+d2b.site = {
   waylandUser = null;            # ← headless: no Wayland forwarding
   launcherUsers = [ ];
   yubikey.enable = false;
 };
 
-nixling.envs.personal = {
+d2b.envs.personal = {
   lanSubnet    = "10.99.0.0/24"; # workload VMs land in here
   uplinkSubnet = "192.0.2.0/30"; # point-to-point host ↔ net VM
 };
 
-nixling.vms.personal-dev = {
+d2b.vms.personal-dev = {
   enable   = true;
   env      = "personal";         # bind to the env above
   index    = 10;                 # → 10.99.0.10
@@ -86,7 +86,7 @@ honest: any future VM that turns on `graphics.enable` or
 
 ## What materialises after `nixos-rebuild switch`
 
-Declaring just `nixling.envs.personal = { … };` and one workload VM
+Declaring just `d2b.envs.personal = { … };` and one workload VM
 expands into a surprisingly large amount of host plumbing. After
 the rebuild, on the host you will find:
 
@@ -97,9 +97,9 @@ the rebuild, on the host you will find:
 | `sys-personal-net` (microVM)                           | Auto-declared headless net VM. Runs NAT, dnsmasq, and the per-env firewall blocklist. Set to `autostart = true`. |
 | `personal-dev` (microVM)                                | Your declared workload VM. Tap on `br-personal-lan`, IP `10.99.0.10`, DHCP-driven inside the guest. |
 | USBIP runners                                           | Not materialised by this headless starter unless a VM opts into `usbip.yubikey = true`; see the USBIP reference/how-to before adding YubiKey passthrough. |
-| Per-VM store farm                                  | Daemon-owned hardlink farm under `/var/lib/nixling/vms/<vm>/store/` mirroring each VM's closure. |
-| `/var/lib/nixling/keys/personal-dev_ed25519`       | Framework-managed Ed25519 key for SSH into `personal-dev`. Regenerated on activation if missing. |
-| `nixling` CLI on `$PATH`                           | `nixling list` shows declared VMs + env metadata; `nixling switch personal-dev --apply` rebuilds and live-applies inside the running VM. |
+| Per-VM store farm                                  | Daemon-owned hardlink farm under `/var/lib/d2b/vms/<vm>/store/` mirroring each VM's closure. |
+| `/var/lib/d2b/keys/personal-dev_ed25519`       | Framework-managed Ed25519 key for SSH into `personal-dev`. Regenerated on activation if missing. |
+| `d2b` CLI on `$PATH`                           | `d2b list` shows declared VMs + env metadata; `d2b switch personal-dev --apply` rebuilds and live-applies inside the running VM. |
 
 All of that comes from the ~25-line flake plus the small consumer
 config in this directory. The framework is opinionated by design;
@@ -127,13 +127,13 @@ checkout).
 ## What to do next
 
 - **Add components** — `examples/graphics-workstation` shows how to
-  set `nixling.site.waylandUser`, then flip `graphics.enable`,
+  set `d2b.site.waylandUser`, then flip `graphics.enable`,
   `audio.enable`, and `usbip.yubikey` on a workload VM.
 - **Add a second env** — `examples/multi-env` demonstrates two
-  parallel `nixling.envs.<name>` instances with no cross-traffic
+  parallel `d2b.envs.<name>` instances with no cross-traffic
   between them.
 - **Add Entra ID** — `examples/with-entra-id` consumes the sibling
-  `entrablau` flake to put a domain-joined VM behind nixling
+  `entrablau` flake to put a domain-joined VM behind d2b
   without the framework knowing about Himmelblau.
 
 ## After activation
@@ -143,12 +143,12 @@ up and the auto-declared net VM running. The single workload VM
 is **not** autostarted.
 
 ```bash
-nixling list
+d2b list
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # personal-dev       personal      false     false false   10.99.0.10      stopped
 # sys-personal-net   personal  false     false false   192.0.2.2       running (net-vm)
 
-nixling status
+d2b status
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # personal-dev       personal      false     false false   10.99.0.10      stopped
 # sys-personal-net   personal  false     false false   192.0.2.2       running (net-vm)
@@ -159,15 +159,15 @@ nixling status
 # br-personal-lan          NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
 
 # STATUS legend:
-#   running      — supervised by nixlingd with a live runner.
+#   running      — supervised by d2bd with a live runner.
 #                  Net VMs are tagged `running (net-vm)`.
 #   stopped      — not running.
 
-nixling vm start personal-dev --apply
-ssh -i /var/lib/nixling/keys/personal-dev_ed25519 alice@10.99.0.10 hostname
+d2b vm start personal-dev --apply
+ssh -i /var/lib/d2b/keys/personal-dev_ed25519 alice@10.99.0.10 hostname
 # personal-dev
 
-nixling vm stop personal-dev --apply
+d2b vm stop personal-dev --apply
 ```
 
 ## Common gotchas
@@ -177,24 +177,24 @@ nixling vm stop personal-dev --apply
   `audio.enable = true` on any VM without setting `waylandUser`
   to a real user, eval fails. That's the assertion gate the
   example deliberately exercises.
-- **`/var/lib/nixling` MUST be on the same filesystem as
+- **`/var/lib/d2b` MUST be on the same filesystem as
   `/nix/store`.** The per-VM `/nix/store` is a hardlink farm; a
   cross-FS layout fails with a fatal error from
-  `nixling-store-sync`.
+  `d2b-store-sync`.
 - **CIDR overlap is an eval error.** `lanSubnet` and
   `uplinkSubnet` must be disjoint from each other, from any
-  other env, and from `nixling.hostLanCidrs`.
-- **The framework key under `/var/lib/nixling/keys/` is the only
-  way `nixling` itself talks to the VM.** Removing it forces a
+  other env, and from `d2b.hostLanCidrs`.
+- **The framework key under `/var/lib/d2b/keys/` is the only
+  way `d2b` itself talks to the VM.** Removing it forces a
   fresh keypair on next activation.
 
 ## After subsequent rebuilds
 
-`nixos-rebuild switch` updates the declared nixling bundle and may
-restart `nixlingd`, but daemon restarts are continuation events:
+`nixos-rebuild switch` updates the declared d2b bundle and may
+restart `d2bd`, but daemon restarts are continuation events:
 running VM runners are re-adopted rather than cycled. After rebuilding,
-`nixling list` flags any VM whose declared closure has drifted from the
-running one as `[pending restart]`; apply with `nixling vm restart
+`d2b list` flags any VM whose declared closure has drifted from the
+running one as `[pending restart]`; apply with `d2b vm restart
 <vm> --apply`. See
 [`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and

@@ -3,7 +3,7 @@
 {
   # Safe, eval-only qemu-media example for the requested `dark` env and
   # `dark-live` VM. Physical USB devices are referenced only by opaque
-  # media refs; discover live hardware at runtime with `nixling usb probe`,
+  # media refs; discover live hardware at runtime with `d2b usb probe`,
   # keeping the transient probe selector on the CLI and never in this file.
   boot.loader.grub.enable = false;
   boot.loader.systemd-boot.enable = false;
@@ -20,23 +20,23 @@
     uid = 1000;
   };
 
-  nixling.site = {
+  d2b.site = {
     waylandUser = "alice";
     launcherUsers = [ "alice" ];
     ui.compositors.niri.enable = true;
     yubikey.enable = false;
   };
 
-  nixling.hostLanCidrs = [
+  d2b.hostLanCidrs = [
     "192.168.1.0/24"
   ];
 
-  nixling.envs.dark = {
+  d2b.envs.dark = {
     lanSubnet = "10.60.0.0/24";
     uplinkSubnet = "203.0.113.0/30";
   };
 
-  nixling.vms.dark-live = {
+  d2b.vms.dark-live = {
     enable = true;
     runtime.kind = "qemu-media";
     env = "dark";

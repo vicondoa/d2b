@@ -5,12 +5,12 @@ Schema: [`guest-control.json`](./guest-control.json)
 `guest-control.json` is the typed guest-control contract for ADR 0028's
 ttRPC/protobuf surface. It snapshots the guest daemon control messages, health
 states, exec lifecycle messages, and chunked stdio RPC shapes that host
-`nixlingd` and guest `nixling-guestd` must keep aligned. The protobuf service
+`d2bd` and guest `d2b-guestd` must keep aligned. The protobuf service
 source lives at
-[`packages/nixling-contracts/proto/guest_control.proto`](../../../../packages/nixling-contracts/proto/guest_control.proto).
+[`packages/d2b-contracts/proto/guest_control.proto`](../../../../packages/d2b-contracts/proto/guest_control.proto).
 The generated Rust bindings are intentionally split by role:
-`packages/nixling-contracts/src/generated/guest_control.rs` is message-only and
-`ttrpc`-free, while `packages/nixling-guestd/src/generated/guest_control_ttrpc.rs`
+`packages/d2b-contracts/src/generated/guest_control.rs` is message-only and
+`ttrpc`-free, while `packages/d2b-guestd/src/generated/guest_control_ttrpc.rs`
 contains the guestd-local service bindings.
 
 ## Top-level sections
@@ -36,7 +36,7 @@ contains the guestd-local service bindings.
   challenge, and Authenticate failures are host-synthesized status, not
   guest-returned `Health` RPC payloads.
 - `readGuestFile` / `readGuestFileResult` - the authenticated host↔guest
-  framework config-read RPC that grounds `nixling config sync` for
+  framework config-read RPC that grounds `d2b config sync` for
   guest-control VMs (the daemon's `ReadGuestConfig` bridge wraps it).
   `ReadGuestFileRequest` keys a **closed** `GuestFileId` enum (currently
   only `guest-config`, the in-guest editable config working copy) — never
@@ -48,7 +48,7 @@ contains the guestd-local service bindings.
   optional closed-enum `GuestControlError`. It is only reachable over the
   authenticated channel after `Authenticate` succeeds.
 - `usbipImport` / `usbipImportResult` - the authenticated guest-side USBIP
-  import lifecycle RPC that grounds `nixling usb attach|detach`. Requests carry
+  import lifecycle RPC that grounds `d2b usb attach|detach`. Requests carry
   a closed action (`attach`/`detach`), a daemon-resolved USBIP backend host, and
   a validated sysfs bus id; guestd runs `usbip port`/`detach`/`attach` inside
   the VM and returns only bounded status fields plus an optional closed-enum

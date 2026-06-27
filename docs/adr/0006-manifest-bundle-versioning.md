@@ -9,7 +9,7 @@
 ## Context
 
 The v0.4.0 baseline ships `vms.json` at
-`/run/current-system/sw/share/nixling/vms.json` with
+`/run/current-system/sw/share/d2b/vms.json` with
 `manifestVersion = 2`. Operators, scripts, and the mature bash CLI use
 that public manifest as the compatibility surface for VM list and
 capability metadata.
@@ -39,7 +39,7 @@ broker, Nix emitter, schema, or prose contract drifts.
    preserved unchanged through W1. W1 lands bundle metadata as
    additional fields and sibling artifacts, not by mutating `vms.json`
    semantics.
-4. Rust wire types in `nixling-core` plus `schemars` are canonical for
+4. Rust wire types in `d2b-core` plus `schemars` are canonical for
    the JSON Schemas. Nix emitters validate against the generated
    schemas, and `tests/static.sh` static gates fail closed on any
    schema, documentation, emitter, Rust, or Nix divergence.
@@ -49,7 +49,7 @@ broker, Nix emitter, schema, or prose contract drifts.
    world-readable per v0.4.0. `bundle.json`, `host.json`,
    `processes.json`, `privileges.json`, `closures/<vm>.json`,
    `minijail/*.json`, and `seccomp/*.policy` install as
-   root:`nixlingd` with mode `0640`.
+   root:`d2bd` with mode `0640`.
 7. The broker independently re-loads the trusted bundle per ADR 0002.
    Daemon-supplied paths, UIDs, capabilities, and authorization claims
    are never trusted.
@@ -80,11 +80,11 @@ broker, Nix emitter, schema, or prose contract drifts.
   Schemas, and tests need a single canonical contract.
 - Make all bundle files world-readable like `vms.json`: rejected
   because process, privilege, closure, minijail, and seccomp artifacts
-  expose control-plane details intended only for root and `nixlingd`.
+  expose control-plane details intended only for root and `d2bd`.
 
 ## References
 
-- plan.md, "Baseline: nixling v0.4.0"
+- plan.md, "Baseline: d2b v0.4.0"
 - plan.md, "Manifest bundle"
 - plan.md, "W1 Bundle and schema contract"
 - [ADR 0007](0007-bash-coexistence-and-migration.md)

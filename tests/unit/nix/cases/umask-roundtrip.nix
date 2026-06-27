@@ -31,16 +31,16 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
-    nixling.vms.umask-probe = {
+    d2b.vms.umask-probe = {
       enable = true;
       env = "work";
       index = 10;
@@ -57,7 +57,7 @@ let
     };
   };
 
-  vms = (mkEval [ base ]).config.nixling._bundle.processesJson.data.vms;
+  vms = (mkEval [ base ]).config.d2b._bundle.processesJson.data.vms;
   vm = builtins.head (builtins.filter (v: v.vm == "umask-probe") vms);
   nodes = vm.nodes;
   umaskOf = role:

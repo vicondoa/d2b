@@ -1,19 +1,19 @@
 # nix-unit cases for the with-observability example.
 #
 # PARTIAL migration. The source/file-layout assertions are now Rust policy
-# lints in packages/nixling-contract-tests/tests/policy_examples_observability.rs.
+# lints in packages/d2b-contract-tests/tests/policy_examples_observability.rs.
 # The example-level flake check is covered by the root
 # `eval-with-observability` check; this file keeps the resolved value cases.
 #
 # Covered here: the targeted `nix eval` of
-# examples/with-observability#nixosConfigurations.demo.config.nixling,
+# examples/with-observability#nixosConfigurations.demo.config.d2b,
 # reconstructed through the root flake's mkEval helper to avoid the example
 # flake's `path:../..` mutable-lock fragility.
 { mkEval, flakeRoot, ... }:
 
 let
   configMod = import (flakeRoot + "/examples/with-observability/configuration.nix");
-  cfg = (mkEval [ configMod ]).config.nixling;
+  cfg = (mkEval [ configMod ]).config.d2b;
 in
 {
   "examples-with-observability/obs-enable" = {

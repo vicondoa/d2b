@@ -1,26 +1,26 @@
 {
-  description = "nixling example: one workload VM plus the auto-declared native SigNoz observability stack";
+  description = "d2b example: one workload VM plus the auto-declared native SigNoz observability stack";
 
   inputs = {
-    # Pin nixling to a published release tag for real-world use:
+    # Pin d2b to a published release tag for real-world use:
     #
-    #   nixling.url = "github:vicondoa/nixling/v0.2.0";
+    #   d2b.url = "github:vicondoa/d2b/v0.2.0";
     #
     # The relative `path:../..` reference here is what makes this
     # example evaluate against the in-tree framework so
     # `nix flake check` runs without a network or a published tag.
-    nixling.url = "path:../..";
+    d2b.url = "path:../..";
 
-    # Share nixling's pinned nixpkgs so option types line up between
+    # Share d2b's pinned nixpkgs so option types line up between
     # the framework and your top-level NixOS config.
-    nixpkgs.follows = "nixling/nixpkgs";
+    nixpkgs.follows = "d2b/nixpkgs";
   };
 
-  outputs = { self, nixpkgs, nixling, ... }: {
+  outputs = { self, nixpkgs, d2b, ... }: {
     nixosConfigurations.demo = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
-        nixling.nixosModules.default
+        d2b.nixosModules.default
         ./configuration.nix
       ];
     };

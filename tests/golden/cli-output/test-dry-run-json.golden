@@ -2,7 +2,7 @@
 {
   "command": "test",
   "mode": "dry-run",
-  "notes": "nixling test --dry-run reports the planned operation; --apply uses the daemon-first bridge and falls back to the legacy bash path only when needed.",
+  "notes": "d2b test --dry-run reports the planned operation; --apply uses the daemon-first bridge and falls back to the legacy bash path only when needed.",
   "planned": [],
   "vm": "corp-vm"
 }

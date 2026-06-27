@@ -1,14 +1,14 @@
-# nixling.envs.<env>.* — isolated per-env networks. Each env is
+# d2b.envs.<env>.* — isolated per-env networks. Each env is
 # materialised by network.nix into two host bridges (`br-<env>-up`
 # point-to-point host↔net-VM, `br-<env>-lan` net-VM↔workload-VMs),
 # an auto-generated headless net VM (`sys-<env>-net`), NAT/firewall,
 # and a per-env broker-spawned USBIP proxy. Workload
-# VMs join an env by setting `nixling.vms.<name>.env = "<env>"` and
+# VMs join an env by setting `d2b.vms.<name>.env = "<env>"` and
 # `index = <N>`. Extracted from options.nix for reviewability.
 { lib, ... }:
 
 {
-  options.nixling.envs = lib.mkOption {
+  options.d2b.envs = lib.mkOption {
     description = ''
       Isolated per-env networks. Each env owns two bridges
       (`br-<name>-up` and `br-<name>-lan`), an auto-declared headless
@@ -17,7 +17,7 @@
       broker-spawned USBIP proxy on the host bound to
       the uplink IP.
 
-      Workload VMs reference an env via `nixling.vms.<vm>.env`.
+      Workload VMs reference an env via `d2b.vms.<vm>.env`.
     '';
     default = { };
     type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
@@ -49,7 +49,7 @@
             host's `.1` here. Must be a /30. RFC 5737 reserves
             192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24 as
             documentation ranges; pick a /30 inside one of those if
-            you want addresses that visibly belong to nixling.
+            you want addresses that visibly belong to d2b.
           '';
         };
 
@@ -61,15 +61,15 @@
 
         mssClamp = lib.mkEnableOption "TCP MSS clamping on the net VM's nftables forward chain (recommended when running over a tunneled uplink)";
 
-        lan.allowEastWest = lib.mkEnableOption "east-west traffic between workload VMs in this env (default: isolated; also requires nixling.site.allowUnsafeEastWest = true)";
+        lan.allowEastWest = lib.mkEnableOption "east-west traffic between workload VMs in this env (default: isolated; also requires d2b.site.allowUnsafeEastWest = true)";
 
         ui.accentColor = lib.mkOption {
           type = lib.types.nullOr (lib.types.strMatching "^#[0-9a-fA-F]{6}$");
           default = null;
           example = "#ffa500";
           description = ''
-            Optional compositor-agnostic accent color for this nixling env,
-            as a six-digit CSS hex color (`#rrggbb`). When null, nixling
+            Optional compositor-agnostic accent color for this d2b env,
+            as a six-digit CSS hex color (`#rrggbb`). When null, d2b
             derives a deterministic color from the env name. Resolved UI
             color artifacts normalize the value to lowercase.
           '';
@@ -79,7 +79,7 @@
           type = lib.types.str;
           default = "sys-${name}-net";
           description = ''
-            VM name under `nixling.vms.<netName>` for the
+            VM name under `d2b.vms.<netName>` for the
             auto-declared net VM. Defaults to `sys-<env>-net`.
           '';
         };
@@ -97,7 +97,7 @@
             the LAN. Intent: workload VMs must not reach the host's
             primary-LAN IP, peer envs, or other RFC1918 services.
             The framework automatically augments this with
-            `nixling.hostLanCidrs` and every other env's LAN/uplink
+            `d2b.hostLanCidrs` and every other env's LAN/uplink
             CIDR. Carve-outs (intra-env LAN, USBIP-to-host-uplink-IP)
             are evaluated before this list.
           '';

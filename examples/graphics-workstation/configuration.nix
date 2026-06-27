@@ -41,9 +41,9 @@
 
   # ---------------------------------------------------------------
   # Host audio: PipeWire. The framework's audio sidecar
-  # (`nixling-<vm>-snd`) speaks vhost-user-sound on the VM side and
+  # (`d2b-<vm>-snd`) speaks vhost-user-sound on the VM side and
   # pipes the stream to the host's PipeWire daemon as a regular
-  # client (visible in plasma-pa as `nixling-<vm>`), so PipeWire
+  # client (visible in plasma-pa as `d2b-<vm>`), so PipeWire
   # must be running on the host for audio.enable to do anything.
   #
   # Commented out for the same eval-cost reason as the Wayland
@@ -57,8 +57,8 @@
   # security.rtkit.enable = true;
 
   # ---------------------------------------------------------------
-  # The Wayland-session user `nixling.site.waylandUser` references.
-  # Required: the Wayland filter proxy (`nixling-<vm>-wlproxy`) connects
+  # The Wayland-session user `d2b.site.waylandUser` references.
+  # Required: the Wayland filter proxy (`d2b-<vm>-wlproxy`) connects
   # to this user's compositor socket; the audio sidecar also uses this
   # user's PipeWire socket.
   #   /run/user/<uid>/<waylandDisplay>   (filter proxy; not the GPU sidecar)
@@ -74,30 +74,30 @@
   };
 
   # ---------------------------------------------------------------
-  # nixling.site — host-wide knobs
+  # d2b.site — host-wide knobs
   # ---------------------------------------------------------------
-  nixling.site = {
+  d2b.site = {
     # Required for any VM with graphics.enable or audio.enable.
     waylandUser = "alice";
 
-    # Members of `nixling` can call the daemon public socket for
-    # lifecycle operations such as `nixling vm start`.
+    # Members of `d2b` can call the daemon public socket for
+    # lifecycle operations such as `d2b vm start`.
     launcherUsers = [ "alice" ];
 
     # Install host-side YubiKey support (Yubico udev rules; the
     # `usbip-host` kernel module is loaded only when an enabled VM
     # also sets `usbip.yubikey = true`). Required for any VM that
-    # uses `nixling usb <vm>`. Flip to `false` on hosts without one.
+    # uses `d2b usb <vm>`. Flip to `false` on hosts without one.
     yubikey.enable = true;
   };
 
   # Declare the host's primary LAN so the eval-time CIDR-overlap
   # check catches collisions between env subnets and the wire the
   # host actually sits on. Replace with your real LAN.
-  nixling.hostLanCidrs = [ "192.168.1.0/24" ];
+  d2b.hostLanCidrs = [ "192.168.1.0/24" ];
 
   # ---------------------------------------------------------------
-  # nixling.envs.desktop — one isolated env
+  # d2b.envs.desktop — one isolated env
   # ---------------------------------------------------------------
   #   - lanSubnet must be /24; workload VM gets 10.42.0.10 (.index)
   #     and the auto-declared net VM takes .1.
@@ -106,13 +106,13 @@
   #   - env name must be ≤ 8 chars (IFNAMSIZ limit for the
   #     `br-<env>-lan` / `br-<env>-up` bridges).
   # ---------------------------------------------------------------
-  nixling.envs.desktop = {
+  d2b.envs.desktop = {
     lanSubnet    = "10.42.0.0/24";
     uplinkSubnet = "192.0.2.0/30";
   };
 
   # ---------------------------------------------------------------
-  # nixling.vms.corp-desktop — the workstation VM, full stack
+  # d2b.vms.corp-desktop — the workstation VM, full stack
   # ---------------------------------------------------------------
   # graphics + audio + YubiKey USBIP. This is the example's reason
   # for existing — the headless baseline is in
@@ -121,10 +121,10 @@
   #
   # `autostart` is intentionally left at the default `false` —
   # graphics VMs cannot autostart because there is no Wayland
-  # session at multi-user.target. Use `nixling vm start corp-desktop --apply`
+  # session at multi-user.target. Use `d2b vm start corp-desktop --apply`
   # from a Plasma terminal once you're logged in.
   # ---------------------------------------------------------------
-  nixling.vms.corp-desktop = {
+  d2b.vms.corp-desktop = {
     enable = true;
 
     env    = "desktop";
@@ -132,7 +132,7 @@
 
     ssh.user = "alice";
     # ssh.keyPath left null: the framework-managed key under
-    # /var/lib/nixling/keys/corp-desktop_ed25519 is used.
+    # /var/lib/d2b/keys/corp-desktop_ed25519 is used.
 
     # --- component toggles (the point of this example) ---------
     graphics.enable = true;         # crosvm GPU sidecar
@@ -140,15 +140,15 @@
     # Do not enable this for VMs that run privileged Docker/container workloads.
     graphics.crossDomainTrusted = true;
     audio.enable    = true;         # vhost-user-sound → host PipeWire
-    usbip.yubikey   = true;         # `nixling usb attach corp-desktop <busid> --apply`
+    usbip.yubikey   = true;         # `d2b usb attach corp-desktop <busid> --apply`
     guest.control.enable = true;    # guestd owns guest-side USBIP import
 
     # Audio grants are OFF by default. The host-side audio sidecar
     # is installed, but the per-VM state file at
-    # /var/lib/nixling/vms/corp-desktop/state/audio-state.json
+    # /var/lib/d2b/vms/corp-desktop/state/audio-state.json
     # records `mic = false, speaker = false` on first
-    # materialisation. Use `nixling audio mic on corp-desktop` /
-    # `nixling audio speaker on corp-desktop` to grant interactively
+    # materialisation. Use `d2b audio mic on corp-desktop` /
+    # `d2b audio speaker on corp-desktop` to grant interactively
     # after the VM is up. The README documents the full flow.
     #
     # If you want the VM to come up with mic/speaker already
@@ -159,9 +159,9 @@
     config = { lib, pkgs, ... }: {
       networking.hostName = lib.mkDefault "corp-desktop";
 
-      # The in-VM user that nixling SSHes in as. The framework
+      # The in-VM user that d2b SSHes in as. The framework
       # injects the authorized pubkey at boot via
-      # `nixling-load-host-keys.service`; you only have to declare
+      # `d2b-load-host-keys.service`; you only have to declare
       # the user.
       users.users.alice = {
         isNormalUser = true;

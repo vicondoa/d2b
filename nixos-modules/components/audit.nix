@@ -1,12 +1,12 @@
-# Guest-side auditd support for nixling VMs. Imported by host.nix
-# whenever a VM sets `nixling.vms.<name>.audit.enable = true`.
+# Guest-side auditd support for d2b VMs. Imported by host.nix
+# whenever a VM sets `d2b.vms.<name>.audit.enable = true`.
 { config, lib, ... }:
 
 let
-  cfg = config.nixling.audit;
+  cfg = config.d2b.audit;
 in
 {
-  options.nixling.audit = {
+  options.d2b.audit = {
     enable = lib.mkEnableOption "guest-side auditd with forwarding to the observability pipeline";
 
     rules = lib.mkOption {

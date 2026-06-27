@@ -17,7 +17,7 @@ struct Config {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: nixling-host-activation-helper chgrp-by-numeric-gid --root PATH --legacy-gids GID[,GID...] --target-gid GID [--no-follow-symlinks] [--skip-while-lock-held PATH] [--fail-closed]"
+        "usage: d2b-host-activation-helper chgrp-by-numeric-gid --root PATH --legacy-gids GID[,GID...] --target-gid GID [--no-follow-symlinks] [--skip-while-lock-held PATH] [--fail-closed]"
     );
     process::exit(64);
 }
@@ -170,7 +170,7 @@ fn is_symlink(mode: libc::mode_t) -> bool {
 
 fn log_chgrp(path: &Path, old_gid: libc::gid_t, new_gid: libc::gid_t) {
     eprintln!(
-        "nixling-group-migration: chgrp path={} old_gid={} new_gid={}",
+        "d2b-group-migration: chgrp path={} old_gid={} new_gid={}",
         path.display(),
         old_gid,
         new_gid
@@ -274,7 +274,7 @@ fn run(cfg: Config) -> io::Result<i32> {
     if let Some(lock) = &cfg.skip_while_lock_held
         && lock_is_held(lock)?
     {
-        eprintln!("nixling-group-migration: {lock:?} is locked; skipping legacy gid migration");
+        eprintln!("d2b-group-migration: {lock:?} is locked; skipping legacy gid migration");
         if !cfg.fail_closed {
             return Ok(0);
         }
@@ -282,7 +282,7 @@ fn run(cfg: Config) -> io::Result<i32> {
         scan_for_leftovers(&cfg, &mut leftovers)?;
         return Ok(if leftovers > 0 {
             eprintln!(
-                "nixling-group-migration: {leftovers} entries still have a legacy gid under {:?}",
+                "d2b-group-migration: {leftovers} entries still have a legacy gid under {:?}",
                 cfg.root
             );
             1
@@ -313,7 +313,7 @@ fn run(cfg: Config) -> io::Result<i32> {
     }
     if cfg.fail_closed && leftovers > 0 {
         eprintln!(
-            "nixling-group-migration: {leftovers} entries still have a legacy gid under {:?}",
+            "d2b-group-migration: {leftovers} entries still have a legacy gid under {:?}",
             cfg.root
         );
         Ok(1)
@@ -336,13 +336,13 @@ fn scan_for_leftovers(cfg: &Config, leftovers: &mut u64) -> io::Result<()> {
 
 fn main() {
     let cfg = parse_args().unwrap_or_else(|err| {
-        eprintln!("nixling-host-activation-helper: {err}");
+        eprintln!("d2b-host-activation-helper: {err}");
         usage();
     });
     match run(cfg) {
         Ok(code) => process::exit(code),
         Err(err) => {
-            eprintln!("nixling-host-activation-helper: {err}");
+            eprintln!("d2b-host-activation-helper: {err}");
             process::exit(1);
         }
     }
@@ -364,7 +364,7 @@ mod tests {
             let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
             let path = std::env::current_dir()?
                 .join("target")
-                .join("nixling-host-activation-helper-tests")
+                .join("d2b-host-activation-helper-tests")
                 .join(format!("{}-{id}", std::process::id()));
             fs::create_dir_all(&path)?;
             Ok(Self(path))

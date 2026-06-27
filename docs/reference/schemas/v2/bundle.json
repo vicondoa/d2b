@@ -60,8 +60,8 @@
     "managedKeys": {
       "description": "Managed SSH key metadata used by the CLI/daemon key inventory surface.",
       "default": {
-        "keysDir": "/var/lib/nixling/keys",
-        "knownHostsPath": "/var/lib/nixling/known_hosts.nixling",
+        "keysDir": "/var/lib/d2b/keys",
+        "knownHostsPath": "/var/lib/d2b/known_hosts.d2b",
         "overrides": []
       },
       "allOf": [
@@ -178,11 +178,11 @@
       "type": "object",
       "properties": {
         "keysDir": {
-          "default": "/var/lib/nixling/keys",
+          "default": "/var/lib/d2b/keys",
           "type": "string"
         },
         "knownHostsPath": {
-          "default": "/var/lib/nixling/known_hosts.nixling",
+          "default": "/var/lib/d2b/known_hosts.d2b",
           "type": "string"
         },
         "overrides": {

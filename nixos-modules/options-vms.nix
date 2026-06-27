@@ -1,4 +1,4 @@
-# nixling.vms.<vm>.* — per-VM submodule schema. Includes the
+# d2b.vms.<vm>.* — per-VM submodule schema. Includes the
 # component toggles (graphics.enable / tpm.enable / usbip.* /
 # audio.* / audit.*) whose matching files under
 # `nixos-modules/components/`
@@ -31,7 +31,7 @@ let
       path = lib.mkOption {
         type = lib.types.nullOr (lib.types.strMatching "^/.*$");
         default = null;
-        example = "/var/lib/nixling/images/installer.img";
+        example = "/var/lib/d2b/images/installer.img";
         description = ''
           Absolute host path for a direct `image-file` source. The path is
           operator-authored configuration and may appear in Nix-store-backed
@@ -39,7 +39,7 @@ let
           runtime (regular raw file, safe owner/mode/parents, no symlink escape,
           no mounted/loop-backed use, and non-blocking lease/lock checks).
           `physical-usb` sources must leave this unset and use an opaque
-          `ref`; runtime selectors are discovered with `nixling usb probe`.
+          `ref`; runtime selectors are discovered with `d2b usb probe`.
         '';
       };
 
@@ -120,8 +120,8 @@ let
   });
 in
 {
-  options.nixling.vms = lib.mkOption {
-    description = "MicroVMs to declare via the nixling framework.";
+  options.d2b.vms = lib.mkOption {
+    description = "MicroVMs to declare via the d2b framework.";
     default = { };
     type = lib.types.attrsOf (lib.types.submodule ({ name, config, ... }: {
       # options-vms-removed.nix's mkRemovedOptionModule shim
@@ -143,7 +143,7 @@ in
           default = "nixos";
           description = ''
             Runtime family for this VM declaration. `nixos` (the default)
-            uses nixling's per-VM NixOS evaluator and Cloud Hypervisor DAG.
+            uses d2b's per-VM NixOS evaluator and Cloud Hypervisor DAG.
             `qemu-media` is the foundational external-media VM kind; it is
             manual-only for now, emits a paused fd-backed QEMU runner, and
             deliberately skips the per-VM NixOS evaluator.
@@ -155,7 +155,7 @@ in
             type = lib.types.bool;
             description = ''
               Whether this VM participates in provider-aware graceful guest
-              shutdown before nixlingd falls back to host-side VMM
+              shutdown before d2bd falls back to host-side VMM
               termination. Supported local providers (`nixos`/Cloud
               Hypervisor and `qemu-media`) inherit the global daemon
               default; unsupported future providers default false unless
@@ -169,8 +169,8 @@ in
             example = 120;
             description = ''
               Optional per-VM graceful guest shutdown timeout, in seconds.
-              When null, nixlingd uses
-              `nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds`.
+              When null, d2bd uses
+              `d2b.daemon.lifecycle.gracefulShutdown.timeoutSeconds`.
               Non-null values must be between 1 and 600 seconds.
             '';
           };
@@ -182,9 +182,9 @@ in
           example = 1800;
           description = ''
             Optional per-VM live activation timeout, in seconds, for
-            authenticated in-guest `nixling switch`, `test`, and `rollback`.
-            When null, nixlingd uses
-            `nixling.daemon.lifecycle.liveActivation.timeoutSeconds`.
+            authenticated in-guest `d2b switch`, `test`, and `rollback`.
+            When null, d2bd uses
+            `d2b.daemon.lifecycle.liveActivation.timeoutSeconds`.
             Identity-bound guests whose user-manager activation waits on an
             operator-mediated provider flow (for example Entra/Himmelblau
             hello/PIN) may need a larger value.
@@ -198,7 +198,7 @@ in
             example = "#7fc8ff";
             description = ''
               Optional compositor-agnostic active border color for this VM,
-              as a six-digit CSS hex color (`#rrggbb`). When null, nixling
+              as a six-digit CSS hex color (`#rrggbb`). When null, d2b
               uses the legacy niri-specific color if set, otherwise a
               deterministic color derived from the VM name.
             '';
@@ -210,7 +210,7 @@ in
             example = "#7fc8ff";
             description = ''
               Optional compositor-agnostic inactive border color for this VM.
-              When null, nixling resolves it to the VM's active border color so
+              When null, d2b resolves it to the VM's active border color so
               identity coloring remains visible even when the window is not
               focused.
             '';
@@ -222,7 +222,7 @@ in
             example = "#f38ba8";
             description = ''
               Optional compositor-agnostic urgent border color for this VM.
-              When null, nixling resolves it to the VM's active border color.
+              When null, d2b resolves it to the VM's active border color.
             '';
           };
         };
@@ -365,7 +365,7 @@ in
                         Deprecated compatibility input for this qemu-media
                         VM's host-window active border color in the niri
                         compositor, as a six-digit CSS hex color (`#rrggbb`).
-                        Use `nixling.vms.<vm>.ui.border.activeColor` instead.
+                        Use `d2b.vms.<vm>.ui.border.activeColor` instead.
 
                         Set to `null` (the default) to use the deterministic
                         palette color derived from the VM name. When set, the
@@ -397,7 +397,7 @@ in
           description = ''
             Start this microVM at host boot. Graphics VMs cannot
             autostart (the systemd unit has no Wayland session).
-            Net VMs declared via nixling.envs.<env> default
+            Net VMs declared via d2b.envs.<env> default
             to autostart = true (set in network.nix).
           '';
         };
@@ -435,24 +435,24 @@ in
             but is **contained**: it may set only guest OS options, and
             is rejected at eval time (a hard assertion) if it sets any
             host-owned `microvm.*` (runner substrate: mounts, devices,
-            volumes, hypervisor args, kernel, vsock, …) or `nixling.*`
+            volumes, hypervisor args, kernel, vsock, …) or `d2b.*`
             (framework) option. Those host-owned concerns stay in the
             host-owned `config` above, which the guest cannot edit.
 
             This is the surface that the in-VM config-sync workflow
-            (`nixling config sync` / `diff` / `approve`) edits: an
+            (`d2b config sync` / `diff` / `approve`) edits: an
             operator can change it from inside the VM, sync the change
             back to the host, review it, and approve it — without ever
             being able to escape the VM's own OS boundary.
           '';
         };
 
-        # Nixling-owned per-VM evaluator output.
+        # D2b-owned per-VM evaluator output.
         # Populated by host.nix's composeVm pass which runs the
-        # consumer's `config` through the nixling-owned per-VM
+        # consumer's `config` through the d2b-owned per-VM
         # NixOS evaluator (see vm-evaluator.nix). Stored at the
-        # SIBLING attribute `nixling._computed.vms.<name>` rather
-        # than `nixling.vms.<name>.computed` to avoid the
+        # SIBLING attribute `d2b._computed.vms.<name>` rather
+        # than `d2b.vms.<name>.computed` to avoid the
         # NixOS-module infinite-recursion that occurs when a
         # mapAttrs-over-cfg.vms write target is the same attribute
         # path the iteration reads from.
@@ -465,8 +465,8 @@ in
           internal = true;
           description = ''
             DEPRECATED in v1.1: per-VM evaluation output moved to
-            `nixling._computed.vms.<name>` to avoid module-system
-            infinite recursion. Read via `nl.vmRunner config name`
+            `d2b._computed.vms.<name>` to avoid module-system
+            infinite recursion. Read via `d2bLib.vmRunner config name`
             from `nixos-modules/lib.nix` (helpers route to the new
             location automatically).
           '';
@@ -511,7 +511,7 @@ in
           description = ''
             Spawn the per-VM crosvm video-decoder sidecar for the
             H264 virtio-media decode path. Requires graphics.enable
-            and uses nixling's patched Cloud Hypervisor
+            and uses d2b's patched Cloud Hypervisor
             --vhost-user-media support plus the patched crosvm
             video-decoder build. Default false so graphics VMs boot
             without the media backend unless explicitly opted in.
@@ -575,7 +575,7 @@ in
             Enable the host-jailed Wayland filter proxy between the crosvm
             GPU sidecar and the real host compositor. When true (the default),
             crosvm connects to the per-VM filter socket at
-            `/run/nixling-wlproxy/<vm>/wayland-0`; when false, the
+            `/run/d2b-wlproxy/<vm>/wayland-0`; when false, the
             `wayland-proxy` DAG node is not emitted and the GPU runner uses
             the legacy direct compositor socket path. Has no effect unless
             `graphics.crossDomainTrusted = true`.
@@ -621,7 +621,7 @@ in
             Each entry is an interface name (e.g. `wp_drm_lease_device_v1`).
             Repeated `--deny-global` arguments are passed to the filter proxy.
             The filter proxy emits runtime advisory diagnostics if an entry
-            shadows a nixling-required or high-risk rule.
+            shadows a d2b-required or high-risk rule.
           '';
         };
 
@@ -685,7 +685,7 @@ in
           description = ''
             Deprecated compatibility input for this VM's active border color
             in the niri compositor, as a six-digit CSS hex color (`#rrggbb`).
-            Use `nixling.vms.<vm>.ui.border.activeColor` instead.
+            Use `d2b.vms.<vm>.ui.border.activeColor` instead.
 
             Set to `null` (the default) to use the deterministic
             palette color derived from the VM name — each VM name
@@ -703,7 +703,7 @@ in
           CRB at /dev/tpm0 + /dev/tpmrm0. Implies hypervisor =
           cloud-hypervisor (the only one microvm.nix can wire swtpm
           to). Persistent state lives in
-          /var/lib/nixling/vms/<vm>/swtpm/ on the host.
+          /var/lib/d2b/vms/<vm>/swtpm/ on the host.
         '';
 
         writableStoreOverlaySize = lib.mkOption {
@@ -711,7 +711,7 @@ in
           default = 1073741824;
           description = ''
             Size in bytes of the writable store overlay disk image at
-            <filename>/var/lib/nixling/vms/&lt;vm&gt;/store-overlay.img</filename>.
+            <filename>/var/lib/d2b/vms/&lt;vm&gt;/store-overlay.img</filename>.
             Default is 1 GiB (1073741824 bytes). Only used when the
             guest VM sets <option>microvm.writableStoreOverlay</option>
             to a non-null path; the broker provisions the disk image via
@@ -721,7 +721,7 @@ in
 
         usbip.yubikey = lib.mkEnableOption ''
           YubiKey USBIP passthrough. Loads vhci_hcd in the guest and
-          installs the usbip CLI so the `nixling usb <vm>` host-side
+          installs the usbip CLI so the `d2b usb <vm>` host-side
           wrapper can redirect a plugged-in Yubico device from the
           host's xhci to this VM via USBIP. Host-side daemon is
           per-env (`sys-<env>-usbipd`/`proxy` broker runner); see
@@ -745,13 +745,13 @@ in
           Host microphone + speaker, mediated via vhost-user-sound +
           PipeWire. Setting this only enables the *capability*: the
           per-VM state file at
-          /var/lib/nixling/vms/<vm>/state/audio-state.json is what
+          /var/lib/d2b/vms/<vm>/state/audio-state.json is what
           actually decides whether the VM has a virtio-sound device
           at any given moment. Both mic and speaker default to OFF
           on first materialisation (unless allowMicByDefault /
           allowSpeakerByDefault below are flipped). Live grant/revoke
-          is via `nixling audio …`. The VM shows up in plasma-pa as a
-          PipeWire client named `nixling-<vm>` for per-stream mute /
+          is via `d2b audio …`. The VM shows up in plasma-pa as a
+          PipeWire client named `d2b-<vm>` for per-stream mute /
           volume.
         '';
 
@@ -761,7 +761,7 @@ in
           description = ''
             Initial value of the `mic` field when the per-VM audio
             state file is first materialised. Only consulted at file
-            creation time; subsequent edits via `nixling audio …`
+            creation time; subsequent edits via `d2b audio …`
             persist. Default false (explicit-grant model).
           '';
         };
@@ -772,7 +772,7 @@ in
           description = ''
             Initial value of the `speaker` field when the per-VM
             audio state file is first materialised. Only consulted at
-            file creation time; subsequent edits via `nixling audio
+            file creation time; subsequent edits via `d2b audio
             …` persist. Default false (explicit-grant model).
           '';
         };
@@ -810,7 +810,7 @@ in
             ];
             description = ''
               Curated guest-side audit rules. Propagated to the
-              guest's `nixling.audit.rules` when `audit.enable = true`.
+              guest's `d2b.audit.rules` when `audit.enable = true`.
               The default excludes `execve` argv capture because
               command lines routinely carry secrets; add that rule
               explicitly only for short-lived, high-sensitivity audits.
@@ -848,7 +848,7 @@ in
           default = null;
           example = "work";
           description = ''
-            Name of a `nixling.envs.<env>` this VM belongs to.
+            Name of a `d2b.envs.<env>` this VM belongs to.
             When non-null, the framework auto-derives the VM's MAC
             and IP from `(env, index)`, creates a tap on the env's
             LAN bridge, and registers a dnsmasq host-reservation on
@@ -895,19 +895,19 @@ in
             type = lib.types.nullOr lib.types.str;
             default = null;
             example = "alice";
-            description = "Username for `nixling`-driven SSH into the VM.";
+            description = "Username for `d2b`-driven SSH into the VM.";
           };
           keyPath = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
             default = null;
             defaultText = lib.literalExpression
-              "\"\${config.nixling.site.keysDir}/<vm>_ed25519\"";
+              "\"\${config.d2b.site.keysDir}/<vm>_ed25519\"";
             example = "~/.ssh/example-vm_ed25519";
             description = ''
-              Private-key path for `nixling`-driven SSH into the VM.
+              Private-key path for `d2b`-driven SSH into the VM.
 
               **Default (when unset): derived from
-              `nixling.site.keysDir`** as
+              `d2b.site.keysDir`** as
               `<keysDir>/<vm>_ed25519`, matching the framework-
               managed Ed25519 key generated by `host-keys.nix` on
               every activation. The derived default is applied at
@@ -918,11 +918,11 @@ in
               a hardware-backed key whose private half does not
               live in `<keysDir>/`). The framework-managed key
               itself is still generated regardless; see
-              `nixling.site.keysDir`.
+              `d2b.site.keysDir`.
 
-              Setting this to `null` AND `nixling.site.keysDir` to
+              Setting this to `null` AND `d2b.site.keysDir` to
               an unreadable location is the only way to opt out of
-              the framework-managed key entirely — `nixling` CLI
+              the framework-managed key entirely — `d2b` CLI
               subcommands that need SSH (`keys rotate`, `switch`,
               …) will refuse to run when the resolved path doesn't
               exist.
@@ -934,7 +934,7 @@ in
           passwordless sudo for the VM's SSH user (`ssh.user`). When
           enabled, the framework adds a NOPASSWD sudoers rule for
           the user inside the guest, allowing `sudo` from the
-          nixling SSH session without an interactive password prompt.
+          d2b SSH session without an interactive password prompt.
           Useful for development/debugging VMs where the SSH user
           needs root for `tpm2_flushcontext`, `systemctl restart`,
           etc.
@@ -949,14 +949,14 @@ in
           '';
           description = ''
             Per-VM authorized SSH keys, merged with the global
-            `nixling.site.userAuthorizedKeys` set. Both lists are
-            handed to the VM's `nixling-load-host-keys.service`,
+            `d2b.site.userAuthorizedKeys` set. Both lists are
+            handed to the VM's `d2b-load-host-keys.service`,
             which writes them — together with the framework's own
-            nixling-managed pubkey for this VM — into the SSH user's
+            d2b-managed pubkey for this VM — into the SSH user's
             `authorized_keys` file.
 
             Entries follow the same shape as
-            `nixling.site.userAuthorizedKeys`: paths to `.pub` files
+            `d2b.site.userAuthorizedKeys`: paths to `.pub` files
             or literal pubkey strings, validated at eval time.
           '';
         };
@@ -986,7 +986,7 @@ in
             default = false;
             description = ''
               Enable the guest-control credential/share surface and the
-              `nixling-guestd` service wiring for this VM. The static
+              `d2b-guestd` service wiring for this VM. The static
               guest-control binaries are installed for every VM; this option
               opts the VM into the live guest-control plane (credential share
               plus guestd), which serves the readiness Health probe, `config
@@ -998,21 +998,21 @@ in
           auth.tokenFile = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
             default = null;
-            example = "/run/secrets/nixling/work/guest-control-token";
+            example = "/run/secrets/d2b/work/guest-control-token";
             description = ''
               Absolute runtime path to an operator-managed guest-control token
               file. Do not use Nix path literals such as `./token`; those can
-              copy secret material into `/nix/store`. When null, nixling
+              copy secret material into `/nix/store`. When null, d2b
               generates a stable per-VM fallback token under
-              `nixling.site.stateDir` outside the runner-writable per-VM
+              `d2b.site.stateDir` outside the runner-writable per-VM
               state root.
 
               Runtime validation requires the source and its parent
               directories to be symlink-free, the file to be regular,
               root-owned, outside `/nix/store`, and inaccessible to
-              group/world permission bits. Nixling materializes a
+              group/world permission bits. D2b materializes a
               root-owned copy readable only by the dedicated
-              `nixling-<vm>-gctlfs` guest-control virtiofsd principal.
+              `d2b-<vm>-gctlfs` guest-control virtiofsd principal.
             '';
           };
         };
@@ -1025,7 +1025,7 @@ in
               Enable the guest-control exec runtime for this VM.
 
               This wires the guestd exec service so admin operators (callers in
-              `nixling.site.adminUsers`) can run `nixling vm exec` against this
+              `d2b.site.adminUsers`) can run `d2b vm exec` against this
               VM over the authenticated guest-control vsock — no SSH. Exec is
               off by default; enabling it requires `guest.control.enable = true`
               and a workload user (`ssh.user`).
@@ -1169,27 +1169,27 @@ in
           visible = false;
           description = ''
             REMOVED. Use `vicondoa/entrablau.nix`'s
-            module per-VM via `nixling.vms.<vm>.config.imports`.
+            module per-VM via `d2b.vms.<vm>.config.imports`.
           '';
         };
       };
 
       config = {
         lifecycle.gracefulShutdown.enable = lib.mkDefault (
-          globalConfig.nixling.daemon.lifecycle.gracefulShutdown.enable
+          globalConfig.d2b.daemon.lifecycle.gracefulShutdown.enable
           && builtins.elem config.runtime.kind [ "nixos" "qemu-media" ]
         );
       };
     }));
   };
 
-  # Per-VM evaluation outputs stored OUTSIDE `nixling.vms.<name>` to
+  # Per-VM evaluation outputs stored OUTSIDE `d2b.vms.<name>` to
   # avoid module-system infinite recursion.
-  # host.nix's composeVm pass populates `nixling._computed.vms.<name>`
+  # host.nix's composeVm pass populates `d2b._computed.vms.<name>`
   # with the evaluated NixOS attrset (config + options) for each
   # enabled VM. lib.nix helpers (vmRunner / vmToplevel /
   # vmDeclaredRunner) route through this attribute.
-  options.nixling._computed = lib.mkOption {
+  options.d2b._computed = lib.mkOption {
     type = lib.types.attrsOf lib.types.unspecified;
     default = { };
     internal = true;
@@ -1197,9 +1197,9 @@ in
     description = ''
       Internal storage for per-VM evaluator outputs. Populated by
       host.nix's composeVm pass. Stored here (not under
-      `nixling.vms.<name>.computed`) to avoid the NixOS module-
+      `d2b.vms.<name>.computed`) to avoid the NixOS module-
       system infinite-recursion that occurs when a mapAttrs over
-      cfg.vms writes back to the same `nixling.vms` attribute it
+      cfg.vms writes back to the same `d2b.vms` attribute it
       reads from.
     '';
   };

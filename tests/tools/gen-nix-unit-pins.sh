@@ -42,14 +42,14 @@ case_names() {
       f = builtins.getFlake "git+file://'"$ROOT"'";
       pkgs = f.inputs.nixpkgs.legacyPackages.'"$sys"';
       inputs = f.inputs // { self = f; };
-      nixlingModule = import '"$ROOT"'/nixos-modules { inherit inputs; };
+      d2bModule = import '"$ROOT"'/nixos-modules { inherit inputs; };
       mkEval = modules: f.inputs.nixpkgs.lib.nixosSystem {
-        system = "'"$sys"'"; modules = [ nixlingModule ] ++ modules;
+        system = "'"$sys"'"; modules = [ d2bModule ] ++ modules;
       };
       cases = import '"$ROOT"'/tests/unit/nix {
         lib = pkgs.lib; inherit pkgs; system = "'"$sys"'";
         flakeRoot = '"$ROOT"';
-        nl = import '"$ROOT"'/nixos-modules/lib.nix { lib = pkgs.lib; };
+        d2bLib = import '"$ROOT"'/nixos-modules/lib.nix { lib = pkgs.lib; };
         inherit mkEval;
       };
     in pkgs.lib.concatStringsSep "\n" (builtins.attrNames cases)

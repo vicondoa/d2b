@@ -9,7 +9,7 @@
 
 ## Context
 
-`nixlingd` must run per-VM payloads inside their own cgroup leaves so
+`d2bd` must run per-VM payloads inside their own cgroup leaves so
 the daemon can enforce CPU/memory/io/pids quotas, attach pidfds for
 authoritative control, and kill stuck payloads at teardown — but
 [ADR 0002](0002-non-root-daemon-and-privileged-broker.md) commits to
@@ -34,17 +34,17 @@ W3 must pick:
 1. **Single slice, fixed name; per-VM intermediate + per-role leaf
    hierarchy (v1.1 reconciles SUPERSEDES the v1.0 flat
    `<vm-id>.scope` model).** The delegated subtree is
-   `/sys/fs/cgroup/nixling.slice` — literally that name, not
+   `/sys/fs/cgroup/d2b.slice` — literally that name, not
    configurable.
 
    - **v1.0 model (historical):** per-VM leaves at
-     `nixling.slice/<vm-id>.scope`. This held for v1.0 because every
+     `d2b.slice/<vm-id>.scope`. This held for v1.0 because every
      per-VM systemd-template service mapped 1:1 to a scope unit.
    - **v1.1 model (CANONICAL after this ADR's v1.1 update):**
      per-VM **intermediate** cgroup directory at
-     `nixling.slice/<vm-id>/` (process-free per ADR 0011 § Decision
+     `d2b.slice/<vm-id>/` (process-free per ADR 0011 § Decision
      item 5 — "no internal processes" in non-leaf nodes), with
-     **per-role leaves** at `nixling.slice/<vm-id>/<role>/` for
+     **per-role leaves** at `d2b.slice/<vm-id>/<role>/` for
      each broker `SpawnRunner{role}` child per
      [ADR 0018](0018-microvm-nix-removal.md) § "Sidecar/template
      retirement — full role matrix". The role-leaf model is
@@ -55,22 +55,22 @@ W3 must pick:
    Operator-facing path-class values (referenced by audit records
    per [ADR 0010](0010-wire-protocol-and-typed-errors.md) and
    [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md)):
-   - `slice` — `/sys/fs/cgroup/nixling.slice` (the delegated root).
-   - `vm-interior` (v1.1 only) — `nixling.slice/<vm-id>/` (process-
+   - `slice` — `/sys/fs/cgroup/d2b.slice` (the delegated root).
+   - `vm-interior` (v1.1 only) — `d2b.slice/<vm-id>/` (process-
      free intermediate). `cgroup.kill` on this path is REFUSED
      with `cgroup-kill-on-ancestor-refused`.
-   - `vm-role-leaf` (v1.1 canonical) — `nixling.slice/<vm-id>/<role>/`
+   - `vm-role-leaf` (v1.1 canonical) — `d2b.slice/<vm-id>/<role>/`
      (leaf, per-SpawnRunner role). Carries processes; `cgroup.kill`
      allowed during declared teardown per item 6 below.
    - `host-scoped-leaf` — leaves for SpawnRunner roles that have no
      associated workload VM. Two host-scope path patterns are
      recognized, both carrying `path_class: host-scoped-leaf`:
-     - **Per-env host roles** at `nixling.slice/sys-<env>/<role>/`
+     - **Per-env host roles** at `d2b.slice/sys-<env>/<role>/`
        (e.g., `usbipd-backend`, `usbipd-proxy` for each USBIP-enabled
        environment per
        [ADR 0018](0018-microvm-nix-removal.md)).
        `sys-<env>/` is the process-free interior.
-     - **Host singletons** at `nixling.slice/host/<role>/` (e.g.,
+     - **Host singletons** at `d2b.slice/host/<role>/` (e.g.,
        `otel-host-bridge` per
        [`docs/reference/privileges.md`](../reference/privileges.md)
        § "Per-runner-role profile catalog"). `host/` is the
@@ -88,9 +88,9 @@ W3 must pick:
    (cross-ADR cgroup-hierarchy contradiction).
 
    v1.1-P10 migrates existing v1.0 scope-based audit records / path
-   parsers (`nixling-host`, `nixlingd::supervisor::pidfd`) to the
+   parsers (`d2b-host`, `d2bd::supervisor::pidfd`) to the
    role-leaf taxonomy. The path-class enum lands in
-   `packages/nixling-contracts/src/audit_path_class.rs` in v1.1-P10.
+   `packages/d2b-contracts/src/audit_path_class.rs` in v1.1-P10.
 
 2. **8-step algorithm, split into Phase A (privileged setup) and
    Phase B (post-delegation runtime mutation).** The broker performs
@@ -106,7 +106,7 @@ W3 must pick:
 
    **Phase A (privileged, uid 0) — steps 1-6** (probe, controllers,
    cpuset inheritance, `+controller` enables, slice/leaf mkdir, fd-
-   based `fchown` of the delegated subtree to `nixlingd`'s uid/gid)
+   based `fchown` of the delegated subtree to `d2bd`'s uid/gid)
    run as uid 0 because they require write access above the
    delegated subtree (mkdir under cgroup root, `+controllers` on
    parent cgroups, `fchown` to a target uid). This matches
@@ -115,7 +115,7 @@ W3 must pick:
 
    **Phase B (post-delegation, uid != 0) — steps 7-8** (leaf-only
    kill enforcement, uid-0 refusal guard) run after the broker has
-   dropped privileges to `nixlingd`'s uid. Step 8's
+   dropped privileges to `d2bd`'s uid. Step 8's
    `require_non_root_delegation()` (`getuid() != 0`) gates
    **runtime mutation of the already-delegated subtree** — i.e., it
    is enforced on subsequent calls into the cgroup module **AFTER
@@ -136,7 +136,7 @@ W3 must pick:
    with `cgroup-threaded-forbidden`. W3 has no use case that requires
    thread-granularity cgroups.
 
-5. **No internal processes.** `nixling.slice` and intermediate VM
+5. **No internal processes.** `d2b.slice` and intermediate VM
    cgroup directories MUST stay process-free; leaf role cgroups are
    the only directories that carry processes.
 
@@ -155,12 +155,12 @@ W3 must pick:
 
 7. **Non-root delegation invariant (steady state).** **Phase B
    runtime mutation** of the already-delegated subtree (post-Phase A
-   setup per item 2 above) MUST run as `nixlingd`'s target uid;
+   setup per item 2 above) MUST run as `d2bd`'s target uid;
    `require_non_root_delegation` asserts `getuid() != 0` and returns
    `cgroup-delegation-refused` if violated. This is the steady-state
    invariant after Phase A (which legitimately runs as root for
    `+controllers` cascade, slice/leaf `mkdir`, and `fchown` to
-   `nixlingd`'s uid/gid before drop-priv per
+   `d2bd`'s uid/gid before drop-priv per
    [ADR 0015](0015-daemon-only-clean-break.md) lifecycle). The
    R9+R10 reviews flagged the prior wording ("never as uid 0") as
    self-contradictory with Phase A privileged setup; the steady-state
@@ -168,7 +168,7 @@ W3 must pick:
 
 8. **pidfd handoff over SCM_RIGHTS.** The broker forks payloads via
    `clone3(CLONE_PIDFD)` (preferred) or `fork + pidfd_open` (fallback)
-   and transports the resulting CLOEXEC pidfd to `nixlingd` over
+   and transports the resulting CLOEXEC pidfd to `d2bd` over
    `priv.sock` via SCM_RIGHTS. The daemon takes ownership in
    `PidfdTable` and registers each pidfd in its tokio epoll/poll loop.
    Raw-pid kill/wait is forbidden except in the reconciliation path
@@ -209,22 +209,22 @@ W3 must pick:
    tracer); fallback parent-side-write is denied at compile
    time. No `cgroup.procs` writes from outside the broker.
 
-   **Subreaper note — v1.0 said `nixlingd` sets
+   **Subreaper note — v1.0 said `d2bd` sets
    `PR_SET_CHILD_SUBREAPER`; v1.1 SUPERSEDES this for SpawnRunner
    children.** Per
    [ADR 0018](0018-microvm-nix-removal.md) § "set-booted race-free
    serialization" / "broker-as-parent reaping model", NEITHER the
-   broker NOR `nixlingd` claims `PR_SET_CHILD_SUBREAPER` for the
+   broker NOR `d2bd` claims `PR_SET_CHILD_SUBREAPER` for the
    SpawnRunner-child population in v1.1. The broker is the direct
    parent of every SpawnRunner child (via `clone3(CLONE_PIDFD)`)
    and reaps via `waitid(P_PIDFD)`; making either side a
    subreaper would silently re-parent unrelated host processes
    into the daemon/broker, breaking the audit/lifecycle model.
-   The v1.0 `nixlingd` PR_SET_CHILD_SUBREAPER self-test described
+   The v1.0 `d2bd` PR_SET_CHILD_SUBREAPER self-test described
    here remains historically accurate for v1.0 source but is
    explicitly REMOVED in v1.1; ADR 0018's normative supersession
    note is the operative contract for v1.1+ implementations.
-   `nixlingd` does NOT set `PR_SET_CHILD_SUBREAPER` in v1.1;
+   `d2bd` does NOT set `PR_SET_CHILD_SUBREAPER` in v1.1;
    the R11 kernel reviewer flagged this contradiction.
 
    **Updated v1.2 (D7).** The broker now runs a dedicated background
@@ -234,7 +234,7 @@ W3 must pick:
    entries from the registry and recording a typed `ChildReaped`
    event. The event is written to the broker audit log for forensics
    and also buffered in-memory (256-entry FIFO) for daemon pickup via
-   the additive `PollChildReaped` IPC request. `nixlingd` records
+   the additive `PollChildReaped` IPC request. `d2bd` records
    those notifications in its `BrokerReapLog` and, on
    `waitid(P_PIDFD, ... WNOWAIT)` returning `ECHILD`, treats the
    broker notification as authoritative and returns immediately
@@ -259,7 +259,7 @@ Rejected because:
 
 ### systemd `Slice=` delegation without the broker
 
-Letting `nixling.slice` be a real `nixling.slice` systemd slice with
+Letting `d2b.slice` be a real `d2b.slice` systemd slice with
 `Delegate=yes` and bypassing the broker for the delegation step.
 Rejected because:
 
@@ -273,7 +273,7 @@ Rejected because:
   (`DelegateCgroupV2` row), which breaks the CLI error-code golden
   table.
 
-### Per-env or per-VM slices instead of a single `nixling.slice`
+### Per-env or per-VM slices instead of a single `d2b.slice`
 
 Considered to make cross-env quota isolation more visible. Rejected
 because:
@@ -339,7 +339,7 @@ the broker captured at spawn.
 ## Test coverage
 
 - `tests/cgroup-delegation-oracle.sh` (L1c) — exercises every refusal
-  path through the fake `nixling_host::cgroup::fake::FakeCgroupBackend`
+  path through the fake `d2b_host::cgroup::fake::FakeCgroupBackend`
   plus the broker audit recorder.
 - `tests/pidfd-handoff.sh` (L1c) — exercises the SCM_RIGHTS transport,
   CLOEXEC preservation, supervisor poll registration, and

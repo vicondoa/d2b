@@ -1,19 +1,19 @@
 {
-  description = "nixling example: two isolated envs (work + personal) demonstrating per-env network separation";
+  description = "d2b example: two isolated envs (work + personal) demonstrating per-env network separation";
 
-  # Consume nixling as a path input so this example works without
+  # Consume d2b as a path input so this example works without
   # pinning a tag. In a real consumer flake you'd write:
-  #   nixling.url = "github:vicondoa/nixling/v0.1.0";
-  # Nixpkgs comes through nixling's own inputs so the consumer doesn't
+  #   d2b.url = "github:vicondoa/d2b/v0.1.0";
+  # Nixpkgs comes through d2b's own inputs so the consumer doesn't
   # have to pin it separately.
-  inputs.nixling.url = "path:../..";
+  inputs.d2b.url = "path:../..";
 
-  outputs = { self, nixling }: {
+  outputs = { self, d2b }: {
     # Base variant: two isolated envs with daemon-supervised VMs.
-    nixosConfigurations.demo = nixling.inputs.nixpkgs.lib.nixosSystem {
+    nixosConfigurations.demo = d2b.inputs.nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
-        nixling.nixosModules.default
+        d2b.nixosModules.default
         ./configuration.nix
       ];
     };
@@ -23,25 +23,25 @@
     # `allowUnsafeEastWest` acknowledgement. VM supervision is still
     # daemon-only; see ./README.md for the operator UX.
     nixosConfigurations.multi-env-daemon-experimental =
-      nixling.inputs.nixpkgs.lib.nixosSystem {
+      d2b.inputs.nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = [
-          nixling.nixosModules.default
+          d2b.nixosModules.default
           ./configuration.nix
           ({ lib, ... }: {
             # Site-level acknowledgement that this host accepts
             # the relaxed east-west isolation for envs that
             # opt in below.
-            nixling.site.allowUnsafeEastWest = true;
+            d2b.site.allowUnsafeEastWest = true;
 
             # Per-env network knobs on the `work` env:
             #   * MTU clamp to 1400 (tunneled uplink reference).
             #   * MSS clamp on the net VM's nft forward chain.
             #   * East-west between workload LAN ports — double
             #     opt-in with site.allowUnsafeEastWest above.
-            nixling.envs.work.mtu = lib.mkForce 1400;
-            nixling.envs.work.mssClamp = lib.mkForce true;
-            nixling.envs.work.lan.allowEastWest = lib.mkForce true;
+            d2b.envs.work.mtu = lib.mkForce 1400;
+            d2b.envs.work.mssClamp = lib.mkForce true;
+            d2b.envs.work.lan.allowEastWest = lib.mkForce true;
 
             # Every enabled VM is daemon-supervised by default.
           })

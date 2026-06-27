@@ -393,7 +393,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nixling-relay-bridge"
+name = "d2b-relay-bridge"
 version = "0.0.0-poc"
 dependencies = [
  "anyhow",

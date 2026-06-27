@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["packages/nixling-core/tests/manifest_bounded_property.rs::{manifest_v04,bundle,host_json,privileges_json}_bounded_byte_inputs_do_not_panic (cargo test -p nixling-core --test manifest_bounded_property)", "tests/golden/pinned/manifest-fuzz-bounded.txt + tests/tools/assert-pinned-tests.sh"]
+successor_ids = ["packages/d2b-core/tests/manifest_bounded_property.rs::{manifest_v04,bundle,host_json,privileges_json}_bounded_byte_inputs_do_not_panic (cargo test -p d2b-core --test manifest_bounded_property)", "tests/golden/pinned/manifest-fuzz-bounded.txt + tests/tools/assert-pinned-tests.sh"]

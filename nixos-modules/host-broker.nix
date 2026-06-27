@@ -1,7 +1,7 @@
-# nixling-priv-broker.{socket,service}
+# d2b-priv-broker.{socket,service}
 #
 # Socket-activated privileged broker per ADR 0001 (`unsafe_code =
-# "deny"` quarantine boundary). Daemon connects to /run/nixling/priv.sock
+# "deny"` quarantine boundary). Daemon connects to /run/d2b/priv.sock
 # via the systemd-owned listening socket; the broker binary inherits
 # the listen fd via SD_LISTEN_FDS and never binds the path itself
 # (eliminates address-in-use races and lets systemd own the socket's
@@ -15,8 +15,8 @@
 { pkgs, lib, config, ... }:
 
 let
-  cfg = config.nixling;
-  nl = import ./lib.nix { inherit lib; };
+  cfg = config.d2b;
+  d2bLib = import ./lib.nix { inherit lib; };
   prebuilt =
     if cfg.site.usePrebuiltHostTools
     then import ./prebuilt-packages.nix { inherit pkgs lib; }
@@ -24,17 +24,17 @@ let
 
   # filter out `target/` dev caches from the source
   # so the Nix copy stays small (broker target alone is ~6 GB).
-  packagesSrc = nl.cleanRustPackagesSource ../packages;
+  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
 
   brokerSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "nixling-priv-broker";
+    pname = "d2b-priv-broker";
     version =
-      (builtins.fromTOML (builtins.readFile ../packages/nixling-priv-broker/Cargo.toml))
+      (builtins.fromTOML (builtins.readFile ../packages/d2b-priv-broker/Cargo.toml))
         .package.version;
     src = packagesSrc;
-    sourceRoot = "source/nixling-priv-broker";
+    sourceRoot = "source/d2b-priv-broker";
     cargoLock = {
-      lockFile = ../packages/nixling-priv-broker/Cargo.lock;
+      lockFile = ../packages/d2b-priv-broker/Cargo.lock;
     };
     cargoBuildFlags = [ "--no-default-features" ];
     doCheck = false;
@@ -46,12 +46,12 @@ rustc-wrapper = ""
 EOF
       rm -f .cargo/rustc-wrapper.sh
     '';
-    meta.description = "nixling privileged broker (uid 0 host-mutation surface)";
+    meta.description = "d2b privileged broker (uid 0 host-mutation surface)";
   };
-  brokerPackage = if prebuilt ? "nixling-priv-broker" then prebuilt."nixling-priv-broker" else brokerSourcePackage;
+  brokerPackage = if prebuilt ? "d2b-priv-broker" then prebuilt."d2b-priv-broker" else brokerSourcePackage;
 
   bundleManifestPath =
-    cfg.site.bundle.currentManifest or "/etc/nixling/bundle.json";
+    cfg.site.bundle.currentManifest or "/etc/d2b/bundle.json";
 
   auditRetentionDays = cfg.site.audit.retentionDays or 14;
 in
@@ -62,7 +62,7 @@ in
   # socket/service default-on (ADR 0015 daemon-only clean break), so
   # this broker module is no longer gated by the toggle. The toggle
   # itself is NOT a no-op: it defaults `true` and still functionally
-  # gates the daemon control plane (`nixlingd`, daemon-config, and the
+  # gates the daemon control plane (`d2bd`, daemon-config, and the
   # bundle-artifact group ownership) in `nixos-modules/host-daemon.nix`
   # and the `*-json.nix` emitters — setting it `false` reverts the host
   # to the unsupported pre-daemon legacy state. It is no longer
@@ -76,64 +76,64 @@ in
 
     environment.systemPackages = [ brokerPackage ];
 
-    # broker-owned state + bundle dirs; /run/nixling itself is owned by
-    # root:nixling 1770 with explicit ACLs from host-daemon.nix (canonical;
-    # this module MUST NOT touch /run/nixling tmpfiles to avoid the
+    # broker-owned state + bundle dirs; /run/d2b itself is owned by
+    # root:d2b 1770 with explicit ACLs from host-daemon.nix (canonical;
+    # this module MUST NOT touch /run/d2b tmpfiles to avoid the
     # runtime-dir ownership conflict).
     systemd.tmpfiles.rules = [
-      "d /var/lib/nixling/audit 0750 root nixlingd -"
-      "d /var/lib/nixling/current-bundle 0755 root root -"
+      "d /var/lib/d2b/audit 0750 root d2bd -"
+      "d /var/lib/d2b/current-bundle 0755 root root -"
     ];
 
-    # Declare nixling.slice as a top-level slice (systemd naming
+    # Declare d2b.slice as a top-level slice (systemd naming
     # convention: no dashes in the basename = top-level). The broker's
     # DEFAULT_DELEGATED_PARENT_SLICE constant was updated to
-    # /sys/fs/cgroup/nixling.slice to match (was previously
-    # /sys/fs/cgroup/system.slice/nixling.slice, but that nested
-    # form requires systemd-style naming `system-nixling.slice`
-    # which would put it at system.slice/system-nixling.slice
-    # NOT system.slice/nixling.slice). Top-level is simpler and
+    # /sys/fs/cgroup/d2b.slice to match (was previously
+    # /sys/fs/cgroup/system.slice/d2b.slice, but that nested
+    # form requires systemd-style naming `system-d2b.slice`
+    # which would put it at system.slice/system-d2b.slice
+    # NOT system.slice/d2b.slice). Top-level is simpler and
     # matches the broker's cgroup walk-up logic.
-    systemd.slices.nixling = {
-      description = "Slice for nixling-managed VMs and broker-spawned runners";
+    systemd.slices.d2b = {
+      description = "Slice for d2b-managed VMs and broker-spawned runners";
       sliceConfig = {
         Delegate = "cpu memory pids io cpuset";
       };
     };
 
     # SOCKET-ACTIVATED. systemd owns the bind, ACL, and lifecycle
-    # of /run/nixling/priv.sock. The broker process receives the fd
+    # of /run/d2b/priv.sock. The broker process receives the fd
     # via SD_LISTEN_FDS=1 LISTEN_FDS=1 LISTEN_FDNAMES=priv.sock and
     # MUST NOT bind/listen itself when activated this way.
-    systemd.sockets.nixling-priv-broker = {
-      description = "nixling privileged broker socket";
+    systemd.sockets.d2b-priv-broker = {
+      description = "d2b privileged broker socket";
       wantedBy = [ "sockets.target" ];
       requires = [ "systemd-tmpfiles-setup.service" ];
       after = [ "systemd-tmpfiles-setup.service" ];
       socketConfig = {
-        ListenSequentialPacket = "/run/nixling/priv.sock";
+        ListenSequentialPacket = "/run/d2b/priv.sock";
         SocketUser = "root";
-        SocketGroup = "nixlingd";
+        SocketGroup = "d2bd";
         SocketMode = "0660";
         Accept = false;
         FileDescriptorName = "priv.sock";
       };
     };
 
-    systemd.services.nixling-priv-broker = {
-      description = "nixling privileged broker (uid 0 host-mutation surface)";
+    systemd.services.d2b-priv-broker = {
+      description = "d2b privileged broker (uid 0 host-mutation surface)";
       documentation = [
-        "https://github.com/vicondoa/nixling/blob/main/docs/adr/0001-broker-privilege-quarantine.md"
-        "https://github.com/vicondoa/nixling/blob/main/docs/reference/privileges.md"
+        "https://github.com/vicondoa/d2b/blob/main/docs/adr/0001-broker-privilege-quarantine.md"
+        "https://github.com/vicondoa/d2b/blob/main/docs/reference/privileges.md"
       ];
       # Socket-activated; service activation comes from the socket unit.
       # No wantedBy here.
       requires = [
-        "nixling-priv-broker.socket"
+        "d2b-priv-broker.socket"
         "systemd-tmpfiles-setup.service"
       ];
       after = [
-        "nixling-priv-broker.socket"
+        "d2b-priv-broker.socket"
         "systemd-tmpfiles-setup.service"
         "local-fs.target"
       ];
@@ -144,11 +144,11 @@ in
       environment = {
         RUST_LOG = lib.mkDefault "info";
         # Point at host tools (NixOS has no /usr/sbin/nft default).
-        NIXLING_BROKER_NFT_BINARY = "${pkgs.nftables}/bin/nft";
+        D2B_BROKER_NFT_BINARY = "${pkgs.nftables}/bin/nft";
         # iproute2 binary lives in /bin not /sbin on NixOS.
-        NIXLING_BROKER_IP_BINARY = "${pkgs.iproute2}/bin/ip";
+        D2B_BROKER_IP_BINARY = "${pkgs.iproute2}/bin/ip";
         # usbip binary from linuxPackages_latest.usbip.
-        NIXLING_BROKER_USBIP_BINARY = "${pkgs.linuxPackages_latest.usbip}/bin/usbip";
+        D2B_BROKER_USBIP_BINARY = "${pkgs.linuxPackages_latest.usbip}/bin/usbip";
       };
 
       # ApplyNftables / SpawnRunner mount-prep ops invoke nft /
@@ -165,7 +165,7 @@ in
         # Type=notify so the daemon can deterministically observe
         # READY=1 after the broker has adopted the listen fd and
         # completed cgroup delegation. Pair with sd_notify(READY=1)
-        # in packages/nixling-priv-broker/src/runtime.rs after the
+        # in packages/d2b-priv-broker/src/runtime.rs after the
         # SD_LISTEN_FDS adoption + cgroup delegation sequence.
         #
         Type = "notify";
@@ -174,8 +174,8 @@ in
         # Broker MUST be uid 0 for cgroup v2 delegation + tap/bridge
         # ops + nft mutations.
         User = "root";
-        # Group=nixlingd matches priv.sock peer-cred group.
-        Group = "nixlingd";
+        # Group=d2bd matches priv.sock peer-cred group.
+        Group = "d2bd";
 
         # Canonical CapabilityBoundingSet. The set includes every cap
         # the broker may need to pass through to
@@ -219,12 +219,12 @@ in
         # cgroup-delegation startup window with a reduced cap set.
         NoNewPrivileges = false;
 
-        # Place broker under nixling.slice so the broker's cgroup path
+        # Place broker under d2b.slice so the broker's cgroup path
         # matches the broker's DEFAULT_DELEGATED_PARENT_SLICE.
-        Slice = "nixling.slice";
+        Slice = "d2b.slice";
         Delegate = true;
-        # Broker-spawned runners are placed into dedicated nixling.slice
-        # role leaves and handed to nixlingd by pidfd. Stopping/restarting
+        # Broker-spawned runners are placed into dedicated d2b.slice
+        # role leaves and handed to d2bd by pidfd. Stopping/restarting
         # the socket-activated broker must not make systemd recursively
         # tear down those runner leaves; targeted teardown is broker/daemon
         # mediated via pidfd/CgroupKill instead.
@@ -257,22 +257,22 @@ in
         SystemCallArchitectures = "native";
         UMask = "0027";
 
-        # Resolve nixlingd uid/gid at start time. Broker validates
+        # Resolve d2bd uid/gid at start time. Broker validates
         # SO_PEERCRED on incoming connections against these.
-        ExecStartPre = "+${pkgs.writeShellScript "nixling-priv-broker-prep" ''
+        ExecStartPre = "+${pkgs.writeShellScript "d2b-priv-broker-prep" ''
           set -euo pipefail
-          uid=$(${pkgs.coreutils}/bin/id -u nixlingd)
-          gid=$(${pkgs.coreutils}/bin/id -g nixlingd)
-          ${pkgs.systemd}/bin/systemctl set-environment NIXLINGD_UID="$uid"
-          ${pkgs.systemd}/bin/systemctl set-environment NIXLINGD_GID="$gid"
+          uid=$(${pkgs.coreutils}/bin/id -u d2bd)
+          gid=$(${pkgs.coreutils}/bin/id -g d2bd)
+          ${pkgs.systemd}/bin/systemctl set-environment D2BD_UID="$uid"
+          ${pkgs.systemd}/bin/systemctl set-environment D2BD_GID="$gid"
         ''}";
 
         # NOTE: NO --socket-path here. With SD_LISTEN_FDS the broker
         # MUST adopt the inherited fd; the --socket-path flag is the
         # non-activated-mode fallback only.
         ExecStart =
-          "${brokerPackage}/bin/nixling-priv-broker serve " +
-          "--audit-dir /var/lib/nixling/audit " +
+          "${brokerPackage}/bin/d2b-priv-broker serve " +
+          "--audit-dir /var/lib/d2b/audit " +
           "--audit-retention-days ${toString auditRetentionDays} " +
           "--bundle-path ${bundleManifestPath} " +
           "--state-dir ${cfg.site.stateDir}";
@@ -282,7 +282,7 @@ in
 
         StandardOutput = "journal";
         StandardError = "journal";
-        SyslogIdentifier = "nixling-priv-broker";
+        SyslogIdentifier = "d2b-priv-broker";
       };
     };
 
@@ -292,18 +292,18 @@ in
     # request.
     #
     # NOTE: The previous guard `lib.mkIf (config.systemd.services ?
-    # nixlingd)` caused infinite recursion in the NixOS module system
+    # d2bd)` caused infinite recursion in the NixOS module system
     # because it forced evaluation of `systemd.services` from within a
     # definition contributing to `systemd.services`. This broker module
     # is unconditional (no `mkIf` wrapper); only host-daemon.nix is
     # gated on `daemonExperimental.enable`. The guard is unnecessary: we
     # unconditionally merge the wants/after entries here — they are
-    # harmless if the `nixlingd` unit is absent (e.g. when
+    # harmless if the `d2bd` unit is absent (e.g. when
     # `daemonExperimental.enable = false` drops the daemon config),
     # since systemd merges these at the unit-file level.
-    systemd.services.nixlingd = {
-      wants = [ "nixling-priv-broker.socket" ];
-      after = [ "nixling-priv-broker.socket" ];
+    systemd.services.d2bd = {
+      wants = [ "d2b-priv-broker.socket" ];
+      after = [ "d2b-priv-broker.socket" ];
     };
   };
 }

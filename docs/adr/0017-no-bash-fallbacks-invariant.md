@@ -14,14 +14,14 @@ bulk of the bash CLI surface: the `cli.nix` Nix module
 (`ph6-p6-cli-nix-migrations` + `ph6-remove-bash-cli`) and the
 lifecycle-verb fallback bridge (`ph4-cli-up`) both retired in P4/P6.
 The W14c bash fallback bridge and its env-knob escape hatches
-(`NIXLING_LEGACY_BASH_OPT_IN`, `NIXLING_LEGACY_CLI`,
-`NIXLING_NATIVE_ONLY`) all became no-ops or were removed.
+(`D2B_LEGACY_BASH_OPT_IN`, `D2B_LEGACY_CLI`,
+`D2B_NATIVE_ONLY`) all became no-ops or were removed.
 
 Two residual surfaces survived into v1.0 as dead/stub code:
 
 1. **`exec_legacy_passthrough(args, warning)` in
-   `packages/nixling/src/lib.rs:3990`.** At v1.0 HEAD `00b24c5`
-   this function no longer execs `/run/current-system/sw/bin/nixling-legacy`
+   `packages/d2b/src/lib.rs:3990`.** At v1.0 HEAD `00b24c5`
+   this function no longer execs `/run/current-system/sw/bin/d2b-legacy`
    (the binary was deleted in P6); it emits a typed
    `not-yet-implemented` (exit 78) envelope and is therefore a
    stub. The function is still called from seven live sites:
@@ -35,7 +35,7 @@ Two residual surfaces survived into v1.0 as dead/stub code:
    in the source even though no bash exec actually fires; the
    v1.1 invariant retires the residual intent and prevents
    reintroduction.
-2. **`should_fallback_to_legacy(args)` in `packages/nixling/src/lib.rs:3897`.**
+2. **`should_fallback_to_legacy(args)` in `packages/d2b/src/lib.rs:3897`.**
    A predicate used by the early-dispatch path (`lib.rs:1413`) to
    route certain unrecognized argv shapes to the stub above. Its
    allow-list was chiselled down across P0–P7 until the function
@@ -55,8 +55,8 @@ workspace-wide CI gate.
 
 ### Hard invariant
 
-> The `nixling` Rust binary path never executes a bash sub-process
-> and never execs any `nixling-legacy` entrypoint. Daemon-unreachable,
+> The `d2b` Rust binary path never executes a bash sub-process
+> and never execs any `d2b-legacy` entrypoint. Daemon-unreachable,
 > broker-error, not-yet-implemented, and legacy-arg-shape conditions
 > all surface typed envelopes per
 > [ADR 0010](0010-wire-protocol-and-typed-errors.md) with exit codes
@@ -69,9 +69,9 @@ workspace-wide CI gate.
 The following are deleted wholesale in v1.1-P1 (no `#[cfg(legacy)]`
 escape hatch, no deprecation warnings, no off-by-default fallback):
 
-- `exec_legacy_passthrough` (`packages/nixling/src/lib.rs:3990`).
+- `exec_legacy_passthrough` (`packages/d2b/src/lib.rs:3990`).
 - `should_fallback_to_legacy`
-  (`packages/nixling/src/lib.rs:3897`) and its early-dispatch arm
+  (`packages/d2b/src/lib.rs:3897`) and its early-dispatch arm
   at `lib.rs:1413`.
 - `tests/cli-legacy-bash-dispatch.sh` (no longer applicable; the
   test asserted dispatch routing that no longer exists).
@@ -118,22 +118,22 @@ not the verb implementation.
 The human-readable remediation for every `#daemon-down` and
 `#not-yet-implemented` envelope on these verbs cross-links the
 v1.1 migration guide
-(`docs/how-to/migrate-nixling-v0-to-v1.md` — future, v1.1-P12)
+(`docs/how-to/migrate-d2b-v0-to-v1.md` — future, v1.1-P12)
 so a v1.0 operator who relied on the silent-fail stub has a
 single-click path to the behaviour-delta explanation. The
 cross-link is **authoritatively wired through
-`nixling_core::error::Error::remediation()`**: the v1.1-P1
+`d2b_core::error::Error::remediation()`**: the v1.1-P1
 implementation extends every typed envelope kind in the table
 above to include the **full repository-relative guide path**
-(`docs/how-to/migrate-nixling-v0-to-v1.md`, NOT just the
+(`docs/how-to/migrate-d2b-v0-to-v1.md`, NOT just the
 basename) in the `remediation` string for the `cmd_audit` /
 `cmd_console` / `cmd_audio` / `cmd_keys` verbs. CLI contract
 tests under
-`packages/nixling/tests/cli_remediation_migration_guide.rs`
+`packages/d2b/tests/cli_remediation_migration_guide.rs`
 (future, v1.1-P1) assert that for each retired site:
-- JSON output (`nixling ... --json` on these verbs with daemon
+- JSON output (`d2b ... --json` on these verbs with daemon
   down) contains the literal substring
-  `docs/how-to/migrate-nixling-v0-to-v1.md` (the full path,
+  `docs/how-to/migrate-d2b-v0-to-v1.md` (the full path,
   not just the basename) in the `error.remediation` field; AND
 - human output contains the same full-path substring in the
   rendered remediation hint AND the path appears on a
@@ -153,7 +153,7 @@ tests under
     `Specifically the "<verb-specific anchor>" section.`
   - **Category 2 (daemon-down only — `audit` (non-strict),
     `keys list`, `keys show`)**: 6-line block emitting
-    `nixlingd is not reachable. Start the daemon and re-run:`
+    `d2bd is not reachable. Start the daemon and re-run:`
     + two `sudo systemctl start ...` lines + `For full v1.0
     operator runbook context, see:` + repository-relative path
     on its own indented line + verb-specific anchor line.
@@ -174,7 +174,7 @@ tests under
   ```text
   Remediation:
     See migration guide:
-      docs/how-to/migrate-nixling-v0-to-v1.md
+      docs/how-to/migrate-d2b-v0-to-v1.md
   ```
   (path on its own indented line; copy-paste-safe on any
   terminal width). Golden fixture
@@ -203,7 +203,7 @@ tests under
   multi-line format documented here.
 
 Asserting the full path (rather than the basename
-`migrate-nixling-v0-to-v1.md`) ensures the operator can
+`migrate-d2b-v0-to-v1.md`) ensures the operator can
 copy-paste the string into a browser or `view` invocation
 without manually prepending `docs/how-to/`.
 
@@ -220,7 +220,7 @@ not arise.
 **Layer 1 — syntactic grep (fast).** Reject any of:
 
 ```
-ripgrep -P 'Command::new\("(/bin/)?(ba)?sh"\)|spawn.*"/bin/sh"|/usr/bin/env\s+bash|Command::new\("nixling-legacy"\)|nixling-legacy\b|#\[path\s*=\s*"\.\./tests/fixtures/no-bash-exec/'
+ripgrep -P 'Command::new\("(/bin/)?(ba)?sh"\)|spawn.*"/bin/sh"|/usr/bin/env\s+bash|Command::new\("d2b-legacy"\)|d2b-legacy\b|#\[path\s*=\s*"\.\./tests/fixtures/no-bash-exec/'
   --type rust
   --glob '!packages/*/tests/**'
   --glob '!packages/*/examples/**'
@@ -228,7 +228,7 @@ ripgrep -P 'Command::new\("(/bin/)?(ba)?sh"\)|spawn.*"/bin/sh"|/usr/bin/env\s+ba
 ```
 
 This catches direct `Command::new("bash")` / `"sh"` /
-`"nixling-legacy"` invocations (qualified `std::process::Command`
+`"d2b-legacy"` invocations (qualified `std::process::Command`
 and `tokio::process::Command` included by `--type rust`), any
 re-introduction of the legacy entrypoint by name, AND any
 production `#[path = "../tests/fixtures/no-bash-exec/..."]`
@@ -238,7 +238,7 @@ fixture-bypass attack the R2 security reviewer flagged).
 **Layer 2 — Command::new allowlist (authoritative).** A
 test-mode-only inventory check parses `cargo metadata --format-version 1`
 to enumerate the binary-crate compile units (Layer 2 covers
-`packages/nixling/src/`, including any `mod` files reached
+`packages/d2b/src/`, including any `mod` files reached
 transitively from `lib.rs`). The check then walks the call-site
 inventory in three passes:
 
@@ -269,7 +269,7 @@ inventory in three passes:
            "required": ["name", "source_path", "allowed_callees", "rationale", "owner"],
            "properties": {
              "name": { "type": "string", "pattern": "^(spawn|exec)_[a-z_]+$" },
-             "source_path": { "type": "string", "pattern": "^packages/nixling/src/.+\\.rs$" },
+             "source_path": { "type": "string", "pattern": "^packages/d2b/src/.+\\.rs$" },
              "allowed_callees": {
                "type": "array",
                "items": { "type": "string" },
@@ -299,7 +299,7 @@ The check fails if any site spawns a shell-like literal
 (`bash`, `sh`, `dash`, `ksh`, `zsh`, `fish`,
 `/usr/bin/env`-with-shell-arg, `${SHELL}` indirection via
 `std::env::var("SHELL")`, or any path containing
-`nixling-legacy`). The `legacy-bash` cargo feature is also
+`d2b-legacy`). The `legacy-bash` cargo feature is also
 explicitly denied: `cargo metadata --format-version 1 |
 jq '.packages[].features | keys[]'` must not include
 `legacy-bash` on the binary crate.
@@ -333,7 +333,7 @@ with explicit per-fixture expected-catch table:
 | `command_new_env_bash.rs.fixture`                             | env + bash arg                     | ❌              | ✅               | `Command::new("env")...arg("bash")` (Layer 2 arg inspection)  |
 | `command_new_shell_var.rs.fixture`                            | env-var indirection                | ❌              | ✅               | `Command::new(std::env::var("SHELL"...))`                      |
 | `command_new_const_sh.rs.fixture`                             | const-held literal                 | ✅ (`/bin/sh` literal still in source)  | ✅ (no allowlist entry) | `const SH: &str = "/bin/sh"` (Layer 1) + `Command::new(SH)` (Layer 2) |
-| `command_new_nixling_legacy.rs.fixture`                       | legacy entrypoint reintroduction   | ✅              | ✅               | `nixling-legacy`                                              |
+| `command_new_d2b_legacy.rs.fixture`                       | legacy entrypoint reintroduction   | ✅              | ✅               | `d2b-legacy`                                              |
 | `command_new_alias.rs.fixture`                                | aliased Command import             | ❌              | ✅               | `use std::process::Command as C; C::new("bash")` (Layer 2 alias pass) |
 | `command_new_wrapper.rs.fixture`                              | wrapper function                   | ❌              | ✅               | `fn spawn_my(arg: &str)` not in `cli-spawn-wrappers-allowlist.json` |
 | `tokio_command_new.rs.fixture`                                | tokio::process::Command            | ✅              | ✅               | `tokio::process::Command::new("bash")` (Layer 1 catches via `--type rust`) |
@@ -367,7 +367,7 @@ compile-time gate). The new test-mode contract:
      pass (the formerly-proposed build.rs gate, moved to a
      dedicated test-mode invocation to avoid the build-script
      recursion).
-2. The `syn-ast-walk` mode runs `cargo expand --bin nixling
+2. The `syn-ast-walk` mode runs `cargo expand --bin d2b
    --no-default-features` ONCE as a separate subprocess (NOT
    re-entered from build.rs), captures the expanded source to a
    tempfile, and invokes a syn-based walker
@@ -394,7 +394,7 @@ is provisioned via the **flake-pinned** devShell that
 `tests/no-bash-exec-eval.sh` invokes:
 
 ```
-nix develop .#cargoExpandShell --command cargo expand --bin nixling --no-default-features
+nix develop .#cargoExpandShell --command cargo expand --bin d2b --no-default-features
 ```
 
 (uses `nix develop` not `nix shell` — `.#cargoExpandShell` is a
@@ -480,7 +480,7 @@ existed, or via timing/environment side channels). The walker
 therefore CANNOT make a complete-coverage claim against
 adversarial proc-macros. The hardening:
 
-- **Proc-macro dependency allowlist.** The `nixling` binary
+- **Proc-macro dependency allowlist.** The `d2b` binary
   crate's direct proc-macro dependencies are enumerated in
   `tests/fixtures/cli-proc-macro-allowlist.json`. Every entry
   has the form
@@ -508,7 +508,7 @@ adversarial proc-macros. The hardening:
   `**/.cargo/config{,.toml}` for any `[source.*]` block or
   `replace-with =` directive and fails-closed if any are
   present in the v1.1 baseline (no source replacement is
-  legitimate in the v1.1 nixling workspace; legitimate future
+  legitimate in the v1.1 d2b workspace; legitimate future
   source replacements would need panel review + an explicit
   allowlist entry that does not exist in the v1.1 baseline).
   This is enforced in addition to the `Cargo.lock` registry-url
@@ -524,11 +524,11 @@ adversarial proc-macros. The hardening:
   from the locked nixpkgs input, not the host's `$PATH`.
 - A new test `tests/proc-macro-allowlist-eval.sh` (future,
   v1.1-P1) parses `cargo metadata --format-version 1` for the
-  `nixling` binary crate in the sanitized environment AND
+  `d2b` binary crate in the sanitized environment AND
   parses `Cargo.lock` for the per-dep `source` field. The
   proc-macro identification MUST use `cargo metadata.resolve`
   graph traversal: for each package in the closure reachable
-  from the `nixling` binary crate root (including transitive
+  from the `d2b` binary crate root (including transitive
   deps such as `clap_derive` pulled in via `clap`), the gate
   inspects the package's `targets[]` array and selects every
   package whose `targets[].kind` array contains `"proc-macro"`
@@ -540,12 +540,12 @@ adversarial proc-macros. The hardening:
   matched against the allowlist by name + version-req +
   source-rev-hash + registry-url. Unallowlisted proc-macros
   fail the gate. The gate also verifies the `resolve` graph
-  closure is fully reachable from the `nixling` binary crate
+  closure is fully reachable from the `d2b` binary crate
   root (a proc-macro pulled in only via `dev-dependencies` of
   a transitive dep is in-scope iff Cargo's resolver promotes
   it into the binary crate's build graph; the gate uses
   `cargo metadata --filter-platform=<host>` with
-  `--manifest-path=packages/nixling/Cargo.toml` to scope to
+  `--manifest-path=packages/d2b/Cargo.toml` to scope to
   the binary crate's resolved closure).
 - **AST walker source review** (resolves R7 security major).
   The `tests/tools/no-bash-ast-walker/` Cargo crate is exempt
@@ -556,7 +556,7 @@ adversarial proc-macros. The hardening:
   TIME (not only at allowlist-edit time). v1.1-P1 lands an
   explicit `.github/CODEOWNERS` (or equivalent) entry:
   ```
-  tests/tools/no-bash-ast-walker/    @nixling-panel-rust @nixling-panel-security
+  tests/tools/no-bash-ast-walker/    @d2b-panel-rust @d2b-panel-security
   ```
   This makes the walker source as audit-controlled as the
   allowlist itself — any modification triggers the two
@@ -746,15 +746,15 @@ respectively:
 
 ```
 # v1.1-P1
-tests/tools/no-bash-ast-walker/             @nixling-panel-rust @nixling-panel-security
-tests/fixtures/cli-process-allowlist.json   @nixling-panel-rust @nixling-panel-security
-tests/fixtures/cli-proc-macro-allowlist.json    @nixling-panel-rust @nixling-panel-security
-tests/fixtures/cli-spawn-wrappers-allowlist.json @nixling-panel-rust @nixling-panel-security
-tests/fixtures/no-bash-exec-exempt-paths.json @nixling-panel-rust @nixling-panel-security
+tests/tools/no-bash-ast-walker/             @d2b-panel-rust @d2b-panel-security
+tests/fixtures/cli-process-allowlist.json   @d2b-panel-rust @d2b-panel-security
+tests/fixtures/cli-proc-macro-allowlist.json    @d2b-panel-rust @d2b-panel-security
+tests/fixtures/cli-spawn-wrappers-allowlist.json @d2b-panel-rust @d2b-panel-security
+tests/fixtures/no-bash-exec-exempt-paths.json @d2b-panel-rust @d2b-panel-security
 
 # v1.1-P10 (added when baseline-exception-validator crate lands)
-tests/tools/baseline-exception-validator/   @nixling-panel-rust @nixling-panel-security
-tests/fixtures/broker-spawn-audit-baseline-exceptions.yaml @nixling-panel-rust @nixling-panel-test
+tests/tools/baseline-exception-validator/   @d2b-panel-rust @d2b-panel-security
+tests/fixtures/broker-spawn-audit-baseline-exceptions.yaml @d2b-panel-rust @d2b-panel-test
 ```
 
 The combined coverage (commit-time CODEOWNERS for walker
@@ -770,7 +770,7 @@ Cargo.toml dependencies (syn, etc.); at v1.1-P10
 its own dependencies (serde_yaml, etc.). These dev tools are
 NOT governed by the production-crate
 `cli-proc-macro-allowlist.json` (which is scoped to the
-`nixling` binary crate's proc-macro deps). Instead, each dev
+`d2b` binary crate's proc-macro deps). Instead, each dev
 tool declares its proc-macro/build-script dependencies in the
 **sibling** allowlist `tests/fixtures/dev-tool-proc-macro-allowlist.json`
 with the same schema as the production allowlist (name,
@@ -872,7 +872,7 @@ invoked in v1.1, schedule removal for v1.2.
 **Rejected** because:
 - At v1.0 HEAD `00b24c5` `exec_legacy_passthrough` is already a
   typed-envelope-emitting stub (no longer execs the deleted
-  `nixling-legacy` binary). The function name and call shape are
+  `d2b-legacy` binary). The function name and call shape are
   the only remaining "intent" surface; emitting an additional
   runtime warning on top of the existing typed envelope adds noise
   without changing operator behaviour.
@@ -904,13 +904,13 @@ concern is secondary:
 
 ### A3. Escape hatch via env knob
 
-Keep `NIXLING_LEGACY_BASH_OPT_IN` honoured as a "support break-glass"
+Keep `D2B_LEGACY_BASH_OPT_IN` honoured as a "support break-glass"
 toggle.
 
 **Rejected** because:
 - ADR 0015 already retired the env knob as a no-op in v1.0.
 - Any retained escape hatch reopens the two-writer hazard ADR 0015
-  closed: bash entrypoints can race the daemon for `/run/nixling`
+  closed: bash entrypoints can race the daemon for `/run/d2b`
   state.
 - Support break-glass is served by the typed envelopes themselves
   (`daemon-down` envelope tells the operator exactly what to do —
@@ -950,18 +950,18 @@ toggle.
     successful-call path is unchanged when the daemon is up.
   Both categories' human-form remediation now cross-links the
   v0→v1 migration guide
-  (`docs/how-to/migrate-nixling-v0-to-v1.md`, which includes
+  (`docs/how-to/migrate-d2b-v0-to-v1.md`, which includes
   the "v1.1 deferred verbs and daemon-down rendering pointers"
   section landed in v1.1-P0) so an operator who relied on the
   silent-fail bash fallback (which actually failed `ENOENT` for
-  `nixling-legacy` even in v1.0; many operators may not have
+  `d2b-legacy` even in v1.0; many operators may not have
   noticed) has a discoverable path to the behaviour-delta
   explanation.
 - **No fallback for daemon-side bugs.** If the daemon crashes
   uncleanly in a future v1.x release and the operator wants to
   recover via bash, no such path exists. Recovery is via daemon
   restart. The exact runbook command
-  (`systemctl restart nixlingd nixling-priv-broker.service nixling-priv-broker.socket`)
+  (`systemctl restart d2bd d2b-priv-broker.service d2b-priv-broker.socket`)
   is added to `docs/how-to/migrate-nixos-to-daemon.md` as part of
   v1.1-P4 (broker NixOS module), which is where the broker
   service unit becomes a first-class operator surface. Until P4
@@ -985,9 +985,9 @@ toggle.
   for a commit to be accepted.
 - [`tests/legacy-unit-denylist-eval.sh`](../../tests/legacy-unit-denylist-eval.sh)
   (existing) continues to pass.
-- `cargo test --lib` for `nixling` continues to pass after the
+- `cargo test --lib` for `d2b` continues to pass after the
   dead-code removal (38 tests at v1.0 HEAD `00b24c5` per
-  `cargo test --lib --package nixling`; the four
+  `cargo test --lib --package d2b`; the four
   `should_fallback_to_legacy` assertion tests are removed,
   matching coverage of the new envelope path is added in their
   place).
@@ -995,18 +995,18 @@ toggle.
   daemon-down arm; `audit --strict` returns from the early arm
   BEFORE socket probing per `lib.rs:1614-1616` and so does not
   reach the `Unreachable` envelope):
-  - `systemctl stop nixlingd nixling-priv-broker.socket nixling-priv-broker.service`
-    then `nixling audit` (no `--strict`) returns the typed
+  - `systemctl stop d2bd d2b-priv-broker.socket d2b-priv-broker.service`
+    then `d2b audit` (no `--strict`) returns the typed
     `#daemon-down` envelope (exit 1) without any `execve` of
-    `bash` / `nixling-legacy` in `strace -f`.
-  - `systemctl stop nixlingd nixling-priv-broker.socket nixling-priv-broker.service`
-    then `nixling audit --strict` returns the typed
+    `bash` / `d2b-legacy` in `strace -f`.
+  - `systemctl stop d2bd d2b-priv-broker.socket d2b-priv-broker.service`
+    then `d2b audit --strict` returns the typed
     `#not-yet-implemented` envelope (exit 78); the early-strict
     arm is unaffected by daemon state.
-  - `systemctl stop nixlingd nixling-priv-broker.socket nixling-priv-broker.service`
-    then `nixling keys list` and `nixling keys show <id>` each
+  - `systemctl stop d2bd d2b-priv-broker.socket d2b-priv-broker.service`
+    then `d2b keys list` and `d2b keys show <id>` each
     return `#daemon-down` (exit 1).
-  - `nixling console <vm>` and `nixling audio <vm>` each return
+  - `d2b console <vm>` and `d2b audio <vm>` each return
     `#not-yet-implemented` (exit 78) regardless of daemon state
     (these have no daemon-side implementation in v1.1; they
     surface the typed envelope unconditionally).

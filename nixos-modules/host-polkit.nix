@@ -6,23 +6,23 @@ let
   #
   # Pre- this module generated an exact-unit allowlist covering every
   # per-VM sidecar the bash CLI drove via `systemctl <verb>
-  # <unit>`: `nixling@<vm>.service`,
-  # `nixling-<vm>-{gpu,snd,swtpm,store-sync}.service`,
-  # `nixling-sys-<env>-usbipd-{proxy,backend}.{service,socket}`, plus a
-  # second rule scoped to the per-VM `nixling-<vm>-gpu` system user
+  # <unit>`: `d2b@<vm>.service`,
+  # `d2b-<vm>-{gpu,snd,swtpm,store-sync}.service`,
+  # `d2b-sys-<env>-usbipd-{proxy,backend}.{service,socket}`, plus a
+  # second rule scoped to the per-VM `d2b-<vm>-gpu` system user
   # granting it start/stop/restart of its paired
-  # `nixling-<vm>-snd.service`.
+  # `d2b-<vm>-snd.service`.
   #
   # All of those grants are vestigial post-clean-break (ADR 0015)
   #
   #   * `` + ``
   #     delete the bash CLI and every per-VM systemd template the
   #     allowlist named — there is no longer any unit shaped like
-  #     `nixling@<vm>` / `nixling-<vm>-*` / `nixling-sys-<env>-*`
+  #     `d2b@<vm>` / `d2b-<vm>-*` / `d2b-sys-<env>-*`
   #     for polkit to be asked about.
   #   * The  bash fallback bridge was retired in; mutating verbs
   #     run daemon-only end-to-end. The operator-facing control plane
-  #     is the daemon's public socket (group-readable to `nixlingd`),
+  #     is the daemon's public socket (group-readable to `d2bd`),
   #     authorised at accept time via SO_PEERCRED — polkit is no
   #     longer in the per-VM lifecycle path.
   #
@@ -30,10 +30,10 @@ let
   # singleton units that operators still drive directly with
   # `systemctl`
   #
-  #   * `nixlingd.service` — the public daemon. It may restart after a
+  #   * `d2bd.service` — the public daemon. It may restart after a
   #     `nixos-rebuild switch`; VM runners survive via KillMode=process
   #     and daemon re-adoption.
-  #   * `nixling-priv-broker.service` + `nixling-priv-broker.socket` —
+  #   * `d2b-priv-broker.service` + `d2b-priv-broker.socket` —
   #     the privileged broker pair. Socket-activated; operators may
   #     bounce them to recover from a stuck handler.
   #
@@ -50,9 +50,9 @@ let
   # password-prompt default.
   # ---------------------------------------------------------------------------
   launcherAllowedUnits = [
-    "nixlingd.service"
-    "nixling-priv-broker.service"
-    "nixling-priv-broker.socket"
+    "d2bd.service"
+    "d2b-priv-broker.service"
+    "d2b-priv-broker.socket"
   ];
 
   launcherAllowedUnitsJs =
@@ -62,7 +62,7 @@ in
   security.polkit.extraConfig = ''
     polkit.addRule(function(action, subject) {
       if (action.id !== "org.freedesktop.systemd1.manage-units") return;
-      if (!subject.isInGroup("nixling")) return;
+      if (!subject.isInGroup("d2b")) return;
       var verb = action.lookup("verb") || "";
       if (verb !== "start" && verb !== "stop" && verb !== "restart") return;
       var unit = action.lookup("unit") || "";

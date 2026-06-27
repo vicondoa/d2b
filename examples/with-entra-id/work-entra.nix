@@ -5,7 +5,7 @@
 #
 # The split of responsibility is:
 #
-#   nixling.vms.work-entra.tpm.enable = true   (in flake.nix)
+#   d2b.vms.work-entra.tpm.enable = true   (in flake.nix)
 #     -> wires swtpm on the host, exposes /dev/tpmrm0 in the guest
 #
 #   entrablau.* (here)
@@ -33,13 +33,13 @@
   }];
 
   # Required so /dev/tpmrm0 is reachable + the `tss` group exists
-  # for himmelblaud's DynamicUser. The nixling TPM component sets
+  # for himmelblaud's DynamicUser. The d2b TPM component sets
   # this too (via `nixos-modules/components/tpm.nix`), so this is
   # belt-and-suspenders; explicit here for readability when this
   # file is read on its own.
   security.tpm2.enable = true;
 
-  # In-guest user. Matches `nixling.vms.work-entra.ssh.user` from
+  # In-guest user. Matches `d2b.vms.work-entra.ssh.user` from
   # flake.nix so the framework's authorized-key injection lands
   # in the right ~/.ssh/authorized_keys.
   users.users.alice = {

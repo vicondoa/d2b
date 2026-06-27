@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Shared state-dir traversal ACL helper for nixlingStateDirAcl.
+# Shared state-dir traversal ACL helper for d2bStateDirAcl.
 # Caller must set STATE_DIR and LAUNCHER_GROUP. SETFACL_BIN may
 # override the setfacl binary path used by NixOS activation.
 : "${STATE_DIR:?STATE_DIR must be set}"

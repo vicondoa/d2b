@@ -1,10 +1,10 @@
-# TPM support for nixling VMs. Imported by host.nix whenever a VM
-# sets `nixling.vms.<name>.tpm.enable = true`.
+# TPM support for d2b VMs. Imported by host.nix whenever a VM
+# sets `d2b.vms.<name>.tpm.enable = true`.
 #
 # Wires cloud-hypervisor's `--tpm socket=...` to the per-VM
-# nixling-<name>-swtpm.service running on the host (see host.nix for
+# d2b-<name>-swtpm.service running on the host (see host.nix for
 # the per-VM systemd unit). State persists in
-# /var/lib/nixling/swtpm/<name>/ on the host across launches — wiping
+# /var/lib/d2b/swtpm/<name>/ on the host across launches — wiping
 # it looks like device tampering to remote IdPs and forces
 # re-enrolment.
 { lib, pkgs, config, ... }:
@@ -16,14 +16,14 @@
   microvm.hypervisor = lib.mkDefault "cloud-hypervisor";
 
   # cloud-hypervisor's --tpm path moved from /run/swtpm/<vm>/sock
-  # to /run/nixling/vms/<vm>/tpm.sock. The per-VM runtime dir already exists,
-  # is owned nixlingd:nixling 0750 with default ACL granting every
+  # to /run/d2b/vms/<vm>/tpm.sock. The per-VM runtime dir already exists,
+  # is owned d2bd:d2b 0750 with default ACL granting every
   # per-VM ephemeral UID rwx (see host-activation.nix
-  # nixlingRoleUidAcls). Putting the TPM socket there lets cloud-hypervisor
+  # d2bRoleUidAcls). Putting the TPM socket there lets cloud-hypervisor
   # connect via the inherited named-user ACL — no separate /run/swtpm/ dir
   # or per-VM ACL needed.
   microvm.cloud-hypervisor.extraArgs = [
-      "--tpm" "socket=/run/nixling/vms/${config.networking.hostName}/tpm.sock"
+      "--tpm" "socket=/run/d2b/vms/${config.networking.hostName}/tpm.sock"
   ];
 
   security.tpm2.enable = true;

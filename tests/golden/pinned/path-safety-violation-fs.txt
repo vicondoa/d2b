@@ -1,7 +1,7 @@
 # path-safety-violation-fs — broker filesystem-mutating op path-safety
 # #[test]s. Successor of tests/path-safety-violation-fs.sh, whose hard
 # assertions ran these broker #[test]s via substring filters
-# (`cargo test --all-features -- <name>` in packages/nixling-priv-broker);
+# (`cargo test --all-features -- <name>` in packages/d2b-priv-broker);
 # each name resolves to exactly one test below, and they already run in the
 # broker layer1-bootstrap pass in tests/tools/rust-workspace-checks.sh. Pinned
 # fail-closed via tests/tools/assert-pinned-tests.sh.

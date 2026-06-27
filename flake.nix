@@ -5,10 +5,10 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # `microvm` flake input DROPPED per ADR 0018.
-    # The nixling NixOS substrate owns its per-VM evaluator via
+    # The d2b NixOS substrate owns its per-VM evaluator via
     # `nixos-modules/vm-evaluator.nix` + `nixos-modules/vm-options.nix`.
     # Runner argv generation lives in the Rust crate
-    # `packages/nixling-host/src/*_argv.rs` (broker-side).
+    # `packages/d2b-host/src/*_argv.rs` (broker-side).
 
     home-manager = {
       url = "github:nix-community/home-manager";
@@ -31,12 +31,12 @@
       #
       # Downstream consumers:
       #
-      #   imports = [ inputs.nixling.nixosModules.default ];
+      #   imports = [ inputs.d2b.nixosModules.default ];
       #
       # Future work will populate the remaining surface:
       #   packages.<sys>       — patched cloud-hypervisor, crosvm, etc.
-      #   apps.<sys>           — the `nixling` CLI as a runnable app
-      #   templates.default    — `nix flake init -t github:vicondoa/nixling`
+      #   apps.<sys>           — the `d2b` CLI as a runnable app
+      #   templates.default    — `nix flake init -t github:vicondoa/d2b`
       #   checks.<sys>         — flake-eval CI gates
       #   lib                  — re-exported helpers (subnetIp, mkMac, …)
       #   overlays.default     — adds vhostDeviceSound, crosvmPatched, …
@@ -44,20 +44,20 @@
 
       packages = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
-        guestRustPackagesSrc = pkgs.runCommand "nixling-guest-rust-src" { } ''
+        guestRustPackagesSrc = pkgs.runCommand "d2b-guest-rust-src" { } ''
           mkdir -p $out/packages
-          cp -r ${./packages/nixling-constellation-core} $out/packages/nixling-constellation-core
-          cp -r ${./packages/nixling-core} $out/packages/nixling-core
-          cp -r ${./packages/nixling-contracts} $out/packages/nixling-contracts
-          cp -r ${./packages/nixling-guestd} $out/packages/nixling-guestd
-          cp -r ${./packages/nixling-userd} $out/packages/nixling-userd
-          cp -r ${./packages/nixling-exec-runner} $out/packages/nixling-exec-runner
+          cp -r ${./packages/d2b-constellation-core} $out/packages/d2b-constellation-core
+          cp -r ${./packages/d2b-core} $out/packages/d2b-core
+          cp -r ${./packages/d2b-contracts} $out/packages/d2b-contracts
+          cp -r ${./packages/d2b-guestd} $out/packages/d2b-guestd
+          cp -r ${./packages/d2b-userd} $out/packages/d2b-userd
+          cp -r ${./packages/d2b-exec-runner} $out/packages/d2b-exec-runner
           cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
-          chmod -R u+w $out/packages/nixling-core
-          chmod -R u+w $out/packages/nixling-constellation-core
-          cat > $out/packages/nixling-constellation-core/Cargo.toml <<'EOF'
+          chmod -R u+w $out/packages/d2b-core
+          chmod -R u+w $out/packages/d2b-constellation-core
+          cat > $out/packages/d2b-constellation-core/Cargo.toml <<'EOF'
           [package]
-          name = "nixling-constellation-core"
+          name = "d2b-constellation-core"
           version = "0.0.0-bootstrap"
           edition = "2024"
           publish = false
@@ -74,9 +74,9 @@
           serde.workspace = true
           schemars.workspace = true
           EOF
-          cat > $out/packages/nixling-core/Cargo.toml <<'EOF'
+          cat > $out/packages/d2b-core/Cargo.toml <<'EOF'
           [package]
-          name = "nixling-core"
+          name = "d2b-core"
           version = "0.0.0-bootstrap"
           edition = "2024"
           publish = false
@@ -104,12 +104,12 @@
           [workspace]
           resolver = "2"
           members = [
-            "nixling-constellation-core",
-            "nixling-core",
-            "nixling-contracts",
-            "nixling-guestd",
-            "nixling-userd",
-            "nixling-exec-runner",
+            "d2b-constellation-core",
+            "d2b-core",
+            "d2b-contracts",
+            "d2b-guestd",
+            "d2b-userd",
+            "d2b-exec-runner",
           ]
 
           [workspace.package]
@@ -138,7 +138,7 @@
             pname = "${binName}-static";
             version = "0.0.0-bootstrap";
             src = guestRustPackagesSrc;
-            sourceRoot = "nixling-guest-rust-src/packages";
+            sourceRoot = "d2b-guest-rust-src/packages";
             inherit cargoLock;
             cargoBuildFlags = [ "--package" packageName "--bin" binName ];
             doCheck = false;
@@ -171,11 +171,11 @@
           };
         guestShellRunnerStatic =
           pkgs.pkgsStatic.rustPlatform.buildRustPackage {
-            pname = "nixling-guest-shell-runner-static";
+            pname = "d2b-guest-shell-runner-static";
             version = "0.0.0-bootstrap";
-            src = ./packages/nixling-guest-shell-runner;
+            src = ./packages/d2b-guest-shell-runner;
             cargoLock = {
-              lockFile = ./packages/nixling-guest-shell-runner/Cargo.lock;
+              lockFile = ./packages/d2b-guest-shell-runner/Cargo.lock;
             };
             cargoBuildFlags = [ "--features" "real-libshpool" ];
             doCheck = false;
@@ -187,44 +187,44 @@
             ];
             postInstall = ''
               readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
-              bin="$out/bin/nixling-guest-shell-runner"
+              bin="$out/bin/d2b-guest-shell-runner"
               test -x "$bin"
               "$readelf" -h "$bin" >/dev/null
-              "$readelf" -l "$bin" > "$TMPDIR/nixling-guest-shell-runner.program-headers"
-              if grep -q 'Requesting program interpreter' "$TMPDIR/nixling-guest-shell-runner.program-headers"; then
-                echo "nixling-guest-shell-runner: unexpected ELF interpreter" >&2
-                cat "$TMPDIR/nixling-guest-shell-runner.program-headers" >&2
+              "$readelf" -l "$bin" > "$TMPDIR/d2b-guest-shell-runner.program-headers"
+              if grep -q 'Requesting program interpreter' "$TMPDIR/d2b-guest-shell-runner.program-headers"; then
+                echo "d2b-guest-shell-runner: unexpected ELF interpreter" >&2
+                cat "$TMPDIR/d2b-guest-shell-runner.program-headers" >&2
                 exit 1
               fi
-              if "$readelf" -d "$bin" > "$TMPDIR/nixling-guest-shell-runner.dynamic" 2> "$TMPDIR/nixling-guest-shell-runner.dynamic.err"; then
-                if grep -q '(NEEDED)' "$TMPDIR/nixling-guest-shell-runner.dynamic"; then
-                  echo "nixling-guest-shell-runner: unexpected dynamic dependency" >&2
-                  cat "$TMPDIR/nixling-guest-shell-runner.dynamic" >&2
+              if "$readelf" -d "$bin" > "$TMPDIR/d2b-guest-shell-runner.dynamic" 2> "$TMPDIR/d2b-guest-shell-runner.dynamic.err"; then
+                if grep -q '(NEEDED)' "$TMPDIR/d2b-guest-shell-runner.dynamic"; then
+                  echo "d2b-guest-shell-runner: unexpected dynamic dependency" >&2
+                  cat "$TMPDIR/d2b-guest-shell-runner.dynamic" >&2
                   exit 1
                 fi
-              elif ! grep -qi 'no dynamic section' "$TMPDIR/nixling-guest-shell-runner.dynamic.err"; then
-                echo "nixling-guest-shell-runner: readelf -d failed unexpectedly" >&2
-                cat "$TMPDIR/nixling-guest-shell-runner.dynamic.err" >&2
+              elif ! grep -qi 'no dynamic section' "$TMPDIR/d2b-guest-shell-runner.dynamic.err"; then
+                echo "d2b-guest-shell-runner: readelf -d failed unexpectedly" >&2
+                cat "$TMPDIR/d2b-guest-shell-runner.dynamic.err" >&2
                 exit 1
               fi
             '';
           };
       in {
-        manpages = pkgs.runCommand "nixling-manpages" { } ''
-          install -Dm644 ${./docs/manpages/nixling.1} "$out/share/man/man1/nixling.1"
-          ${pkgs.gzip}/bin/gzip -n -c ${./docs/manpages/nixling.1} > "$out/share/man/man1/nixling.1.gz"
+        manpages = pkgs.runCommand "d2b-manpages" { } ''
+          install -Dm644 ${./docs/manpages/d2b.1} "$out/share/man/man1/d2b.1"
+          ${pkgs.gzip}/bin/gzip -n -c ${./docs/manpages/d2b.1} > "$out/share/man/man1/d2b.1.gz"
         '';
 
-        completions = pkgs.runCommand "nixling-completions" { } ''
-          install -Dm644 ${./docs/completions/nixling.bash} "$out/share/bash-completion/completions/nixling"
-          install -Dm644 ${./docs/completions/nixling.zsh}  "$out/share/zsh/site-functions/_nixling"
-          install -Dm644 ${./docs/completions/nixling.fish} "$out/share/fish/vendor_completions.d/nixling.fish"
+        completions = pkgs.runCommand "d2b-completions" { } ''
+          install -Dm644 ${./docs/completions/d2b.bash} "$out/share/bash-completion/completions/d2b"
+          install -Dm644 ${./docs/completions/d2b.zsh}  "$out/share/zsh/site-functions/_d2b"
+          install -Dm644 ${./docs/completions/d2b.fish} "$out/share/fish/vendor_completions.d/d2b.fish"
         '';
-        nixling-guestd-static = guestStaticPackage "nixling-guestd" "nixling-guestd";
-        nixling-userd-static = guestStaticPackage "nixling-userd" "nixling-userd";
-        nixling-exec-runner-static =
-          guestStaticPackage "nixling-exec-runner" "nixling-exec-runner";
-        nixling-guest-shell-runner-static = guestShellRunnerStatic;
+        d2b-guestd-static = guestStaticPackage "d2b-guestd" "d2b-guestd";
+        d2b-userd-static = guestStaticPackage "d2b-userd" "d2b-userd";
+        d2b-exec-runner-static =
+          guestStaticPackage "d2b-exec-runner" "d2b-exec-runner";
+        d2b-guest-shell-runner-static = guestShellRunnerStatic;
 
         signoz = import ./pkgs/signoz { inherit pkgs; };
         signozOtelCollector = import ./pkgs/signoz-otel-collector { inherit pkgs; };
@@ -242,10 +242,10 @@
       # preinstalled there) and locally.
       #
       # Scope: this layer is ONLY for things that need a foreign (non-Nix)
-      # userland — e.g. proving a static nixling binary runs on stock Ubuntu.
+      # userland — e.g. proving a static d2b binary runs on stock Ubuntu.
       # It deliberately does NOT boot systemd for daemon/socket activation;
       # that is covered natively by
-      # packages/nixling-priv-broker/tests/socket_activation.rs plus nix-unit.
+      # packages/d2b-priv-broker/tests/socket_activation.rs plus nix-unit.
       # See tests/integration/containers/README.md.
       #
       # Auto-discovered from tests/integration/containers/images/*.nix: each image module is
@@ -271,12 +271,12 @@
         else { });
 
       # Type-G runNixOSTest integration tests (the additive real-kernel
-      # coverage layer). Each test boots a real NixOS VM with the nixling
+      # coverage layer). Each test boots a real NixOS VM with the d2b
       # daemon surface and asserts live broker/daemon/host-posture behaviour
       # (socket activation, SO_PEERCRED, bridge isolation, state-dir ACLs,
       # broker privilege posture) that the fake-backed native Rust canaries and
       # pure-eval gates cannot exercise. This is the hermetic, non-destructive
-      # successor to the `NL_LIVE`-against-the-real-host bash scripts.
+      # successor to the `D2B_LIVE`-against-the-real-host bash scripts.
       #
       # Exposed under `vmChecks`, NOT `checks`, so the Layer-1 `nix flake check
       # --no-build --all-systems` never realizes a VM. Selected explicitly by
@@ -310,7 +310,7 @@
 
       templates.default = {
         path = ./templates/default;
-        description = "Minimal nixling host scaffold — one env, one headless workload VM";
+        description = "Minimal d2b host scaffold — one env, one headless workload VM";
       };
 
       # Eval-only gates for the in-tree examples + template. The
@@ -336,23 +336,23 @@
       # local to this check.
       checks = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
-        nixlingModule = import ./nixos-modules { inherit inputs; };
+        d2bModule = import ./nixos-modules { inherit inputs; };
         mkEval = modules: nixpkgs.lib.nixosSystem {
           inherit system;
           modules = [
-            nixlingModule
+            d2bModule
             ({ lib, ... }: {
               # Cross-system eval cannot use x86-only release prebuilts.
               # Native x86 eval keeps the consumer default to avoid forcing
               # source host-tool derivations through every lightweight check.
-              nixling.site.usePrebuiltHostTools = lib.mkDefault (system == "x86_64-linux");
+              d2b.site.usePrebuiltHostTools = lib.mkDefault (system == "x86_64-linux");
             })
           ] ++ modules;
         };
-        mkCheck = name: cfg: pkgs.runCommand "nixling-check-${name}" { } ''
+        mkCheck = name: cfg: pkgs.runCommand "d2b-check-${name}" { } ''
           echo ${builtins.unsafeDiscardStringContext cfg.config.system.build.toplevel.drvPath} > $out
         '';
-        mkEvalOnlyCheck = name: value: pkgs.runCommand "nixling-check-${name}" { } ''
+        mkEvalOnlyCheck = name: value: pkgs.runCommand "d2b-check-${name}" { } ''
           echo ${builtins.unsafeDiscardStringContext (builtins.toJSON value)} > $out
         '';
         smokeConfigModule = { lib, ... }: {
@@ -372,18 +372,18 @@
             uid = 1000;
           };
 
-          nixling.site = {
+          d2b.site = {
             waylandUser = "alice";
             launcherUsers = [ "alice" ];
             yubikey.enable = false;
           };
 
-          nixling.envs.work = {
+          d2b.envs.work = {
             lanSubnet = "10.20.0.0/24";
             uplinkSubnet = "192.0.2.0/30";
           };
 
-          nixling.vms.corp-vm = {
+          d2b.vms.corp-vm = {
             enable = true;
             env = "work";
             index = 10;
@@ -399,9 +399,9 @@
         };
         smokeEval = mkEval [ smokeConfigModule ];
         smokeFixture = let
-          bundle = smokeEval.config.nixling._bundle;
-          manifestPkg = smokeEval.config.nixling._manifestPkg;
-        in pkgs.runCommand "nixling-fixture-smoke" { } ''
+          bundle = smokeEval.config.d2b._bundle;
+          manifestPkg = smokeEval.config.d2b._manifestPkg;
+        in pkgs.runCommand "d2b-fixture-smoke" { } ''
           mkdir -p $out $out/closures
           cp ${bundle.privilegesJson.path} $out/privileges.json
           cp ${bundle.hostJson.path} $out/host.json
@@ -409,7 +409,7 @@
           cp ${bundle.storageJson.path} $out/storage.json
           cp ${bundle.syncJson.path} $out/sync.json
           cp ${bundle.bundle.path} $out/bundle.json
-          cp ${manifestPkg}/share/nixling/vms.json $out/manifest.json
+          cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
           ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
             (vm: c: "cp ${c.path} $out/closures/${vm}.json")
             bundle.closures)}
@@ -439,20 +439,20 @@
             uid = 1000;
           };
 
-          nixling.site = {
+          d2b.site = {
             waylandUser = "alice";
             launcherUsers = [ "alice" ];
             yubikey.enable = true;
           };
 
-          nixling.observability.enable = true;
+          d2b.observability.enable = true;
 
-          nixling.envs.work = {
+          d2b.envs.work = {
             lanSubnet = "10.20.0.0/24";
             uplinkSubnet = "192.0.2.0/30";
           };
 
-          nixling.vms.corp-full = {
+          d2b.vms.corp-full = {
             enable = true;
             env = "work";
             index = 10;
@@ -476,9 +476,9 @@
         };
         fullEval = mkEval [ fullConfigModule ];
         fullFixture = let
-          bundle = fullEval.config.nixling._bundle;
-          manifestPkg = fullEval.config.nixling._manifestPkg;
-        in pkgs.runCommand "nixling-fixture-smoke-full" { } ''
+          bundle = fullEval.config.d2b._bundle;
+          manifestPkg = fullEval.config.d2b._manifestPkg;
+        in pkgs.runCommand "d2b-fixture-smoke-full" { } ''
           mkdir -p $out $out/closures
           cp ${bundle.privilegesJson.path} $out/privileges.json
           cp ${bundle.hostJson.path} $out/host.json
@@ -486,10 +486,10 @@
           cp ${bundle.storageJson.path} $out/storage.json
           cp ${bundle.syncJson.path} $out/sync.json
           cp ${bundle.bundle.path} $out/bundle.json
-          cp ${manifestPkg}/share/nixling/vms.json $out/manifest.json
+          cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
           ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
             (vm: c: "cp ${c.path} $out/closures/${vm}.json")
-            fullEval.config.nixling._bundle.closures)}
+            fullEval.config.d2b._bundle.closures)}
         '';
         # Rust tests reach repo-level fixtures under tests/golden/
         # (compile-time
@@ -500,27 +500,27 @@
         # source in the Nix sandbox. Operators running cargo OUTSIDE
         # the sandbox use the raw ./packages tree and the same relative
         # paths still resolve against the checkout.
-        rustPackagesSrc = pkgs.runCommand "nixling-rust-src" { } ''
+        rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
           mkdir -p $out/packages
           cp -r ${./packages}/. $out/packages/
           mkdir -p $out/tests
           cp -r ${./tests/golden} $out/tests/golden
           cp -r ${./tests/fixtures} $out/tests/fixtures
         '';
-        guestRustPackagesSrc = pkgs.runCommand "nixling-guest-rust-src" { } ''
+        guestRustPackagesSrc = pkgs.runCommand "d2b-guest-rust-src" { } ''
           mkdir -p $out/packages
-          cp -r ${./packages/nixling-constellation-core} $out/packages/nixling-constellation-core
-          cp -r ${./packages/nixling-core} $out/packages/nixling-core
-          cp -r ${./packages/nixling-contracts} $out/packages/nixling-contracts
-          cp -r ${./packages/nixling-guestd} $out/packages/nixling-guestd
-          cp -r ${./packages/nixling-userd} $out/packages/nixling-userd
-          cp -r ${./packages/nixling-exec-runner} $out/packages/nixling-exec-runner
+          cp -r ${./packages/d2b-constellation-core} $out/packages/d2b-constellation-core
+          cp -r ${./packages/d2b-core} $out/packages/d2b-core
+          cp -r ${./packages/d2b-contracts} $out/packages/d2b-contracts
+          cp -r ${./packages/d2b-guestd} $out/packages/d2b-guestd
+          cp -r ${./packages/d2b-userd} $out/packages/d2b-userd
+          cp -r ${./packages/d2b-exec-runner} $out/packages/d2b-exec-runner
           cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
-          chmod -R u+w $out/packages/nixling-core
-          chmod -R u+w $out/packages/nixling-constellation-core
-          cat > $out/packages/nixling-constellation-core/Cargo.toml <<'EOF'
+          chmod -R u+w $out/packages/d2b-core
+          chmod -R u+w $out/packages/d2b-constellation-core
+          cat > $out/packages/d2b-constellation-core/Cargo.toml <<'EOF'
           [package]
-          name = "nixling-constellation-core"
+          name = "d2b-constellation-core"
           version = "0.0.0-bootstrap"
           edition = "2024"
           publish = false
@@ -537,9 +537,9 @@
           serde.workspace = true
           schemars.workspace = true
           EOF
-          cat > $out/packages/nixling-core/Cargo.toml <<'EOF'
+          cat > $out/packages/d2b-core/Cargo.toml <<'EOF'
           [package]
-          name = "nixling-core"
+          name = "d2b-core"
           version = "0.0.0-bootstrap"
           edition = "2024"
           publish = false
@@ -567,12 +567,12 @@
           [workspace]
           resolver = "2"
           members = [
-            "nixling-constellation-core",
-            "nixling-core",
-            "nixling-contracts",
-            "nixling-guestd",
-            "nixling-userd",
-            "nixling-exec-runner",
+            "d2b-constellation-core",
+            "d2b-core",
+            "d2b-contracts",
+            "d2b-guestd",
+            "d2b-userd",
+            "d2b-exec-runner",
           ]
 
           [workspace.package]
@@ -594,10 +594,10 @@
           EOF
         '';
         rustWorkspace = args: pkgs.rustPlatform.buildRustPackage ({
-          pname = "nixling-rust-workspace";
+          pname = "d2b-rust-workspace";
           version = "0.0.0-bootstrap";
           src = rustPackagesSrc;
-          sourceRoot = "nixling-rust-src/packages";
+          sourceRoot = "d2b-rust-src/packages";
           cargoLock = {
             lockFile = ./packages/Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
@@ -614,7 +614,7 @@
         } // args);
         rustToolchainChannel =
           (builtins.fromTOML (builtins.readFile ./packages/rust-toolchain.toml)).toolchain.channel;
-        brokerManifestToml = builtins.fromTOML (builtins.readFile ./packages/nixling-priv-broker/Cargo.toml);
+        brokerManifestToml = builtins.fromTOML (builtins.readFile ./packages/d2b-priv-broker/Cargo.toml);
         mainManifestToml = builtins.fromTOML (builtins.readFile ./packages/Cargo.toml);
         assertRustToolchain = ''
           rustc --version | grep -F "${rustToolchainChannel}"
@@ -623,10 +623,10 @@
           test -f ${rustPackagesSrc}/packages/Cargo.lock
           test -f ${rustPackagesSrc}/packages/Cargo.guest.lock
           test -f ${rustPackagesSrc}/packages/deny.toml
-          test -f ${rustPackagesSrc}/packages/nixling-priv-broker/Cargo.lock
-          test -f ${rustPackagesSrc}/packages/nixling-priv-broker/deny.toml
-          test -f ${rustPackagesSrc}/packages/nixling-guest-shell-runner/Cargo.lock
-          test -f ${rustPackagesSrc}/packages/nixling-guest-shell-runner/deny.toml
+          test -f ${rustPackagesSrc}/packages/d2b-priv-broker/Cargo.lock
+          test -f ${rustPackagesSrc}/packages/d2b-priv-broker/deny.toml
+          test -f ${rustPackagesSrc}/packages/d2b-guest-shell-runner/Cargo.lock
+          test -f ${rustPackagesSrc}/packages/d2b-guest-shell-runner/deny.toml
           printf '%s\n' '${builtins.toJSON mainManifestToml.workspace.members}' >/dev/null
           printf '%s\n' '${brokerManifestToml.package.name}' >/dev/null
           printf '%s\n' '${builtins.toJSON brokerManifestToml.workspace}' >/dev/null
@@ -674,7 +674,7 @@
             "daemon-autostart.nix"
             "daemon-default-compat.nix"
             "gateway-vm.nix"
-            "nixlingd-startup-smoke.nix"
+            "d2bd-startup-smoke.nix"
           ];
           nix-unit-guest = [
             "guest-config-containment.nix"
@@ -740,14 +740,14 @@
           lib = pkgs.lib;
           inherit pkgs system;
           flakeRoot = ./.;
-          nl = import ./nixos-modules/lib.nix { lib = pkgs.lib; };
+          d2bLib = import ./nixos-modules/lib.nix { lib = pkgs.lib; };
           inherit mkEval;
           # Direct-injection handles for tests/unit/nix/eval-cases/shared.nix (the
           # minimal lib.evalModules fast evaluator) — passing the nixpkgs
-          # flake input + the nixling module set avoids a `getFlake ./.`
+          # flake input + the d2b module set avoids a `getFlake ./.`
           # (which would resolve to a non-git store path inside the flake).
           nixpkgsFlake = nixpkgs;
-          inherit nixlingModule;
+          inherit d2bModule;
           inherit caseFileNames;
         };
         nixUnitCases = nixUnitCasesFor null;
@@ -801,7 +801,7 @@
               ${report}
             ''
           else
-            pkgs.runCommand "nixling-${checkName}" { } ''
+            pkgs.runCommand "d2b-${checkName}" { } ''
               echo "${checkName}: ${toString total} cases passed"
               mkdir -p "$out"
               echo ok > "$out/${checkName}"
@@ -863,7 +863,7 @@
           if system == "x86_64-linux" then
             fullFixture
           else
-            pkgs.runCommand "nixling-fixture-smoke-full-unsupported" { } ''
+            pkgs.runCommand "d2b-fixture-smoke-full-unsupported" { } ''
               echo "fixture-smoke-full is x86_64-linux only (graphics gate)" > $out
             '';
 
@@ -884,7 +884,7 @@
               shardCoverage=${nixUnitShardCoverageReport}${pkgs.lib.optionalString (nixUnitMissingPins != [ ]) "\n${nixUnitMissingReport}"}
             ''
           else
-            pkgs.runCommand "nixling-nix-unit" { } ''
+            pkgs.runCommand "d2b-nix-unit" { } ''
               echo "nix-unit: ${toString (pkgs.lib.length nixUnitCaseNames)} pinned case names present; ${toString (pkgs.lib.length (pkgs.lib.attrNames nixUnitShardCaseFiles))} shards cover ${toString (pkgs.lib.length nixUnitCaseFileNames)} case files"
               mkdir -p "$out"
               echo ok > "$out/nix-unit"
@@ -894,13 +894,13 @@
         # checks from volume-mounts-eval.sh — a hermetic source-wiring
         # invariant (the nix-unit value cases assert the helpers; this
         # asserts the production modules actually call them).
-        module-helper-wiring = pkgs.runCommand "nixling-module-helper-wiring" { } ''
+        module-helper-wiring = pkgs.runCommand "d2b-module-helper-wiring" { } ''
           set -e
-          grep -Fq 'serial = nl.volumeSerial volume;' ${./nixos-modules/processes-json.nix} \
+          grep -Fq 'serial = d2bLib.volumeSerial volume;' ${./nixos-modules/processes-json.nix} \
             || { echo "processes-json.nix must use shared volumeSerial helper" >&2; exit 1; }
-          grep -Fq 'nl.volumeFileSystem volume' ${./nixos-modules/vm-guest-base.nix} \
+          grep -Fq 'd2bLib.volumeFileSystem volume' ${./nixos-modules/vm-guest-base.nix} \
             || { echo "vm-guest-base.nix must use shared volumeFileSystem helper" >&2; exit 1; }
-          grep -Fq 'builtins.filter nl.volumeDiskInitEligible microvm.volumes' ${./nixos-modules/processes-json.nix} \
+          grep -Fq 'builtins.filter d2bLib.volumeDiskInitEligible microvm.volumes' ${./nixos-modules/processes-json.nix} \
             || { echo "processes-json.nix must gate DiskInit with shared eligibility helper" >&2; exit 1; }
           mkdir -p "$out"
           echo ok > "$out/module-helper-wiring"
@@ -916,11 +916,11 @@
           (mkEval [
             (import ./examples/multi-env/configuration.nix)
             ({ lib, ... }: {
-              nixling.site.allowUnsafeEastWest = true;
-              nixling.daemonExperimental.enable = true;
-              nixling.envs.work.mtu = lib.mkForce 1400;
-              nixling.envs.work.mssClamp = lib.mkForce true;
-              nixling.envs.work.lan.allowEastWest = lib.mkForce true;
+              d2b.site.allowUnsafeEastWest = true;
+              d2b.daemonExperimental.enable = true;
+              d2b.envs.work.mtu = lib.mkForce 1400;
+              d2b.envs.work.mssClamp = lib.mkForce true;
+              d2b.envs.work.lan.allowEastWest = lib.mkForce true;
             })
           ]);
 
@@ -930,10 +930,10 @@
             observed = {
               assertionsGreen = pkgs.lib.all (a: a.assertion) cfg.config.assertions;
               observabilityEnabled =
-                (builtins.fromJSON cfg.config.nixling._manifestPkg.text)._observability.enabled;
-              stackVmDeclared = builtins.hasAttr "sys-obs" cfg.config.nixling.vms;
+                (builtins.fromJSON cfg.config.d2b._manifestPkg.text)._observability.enabled;
+              stackVmDeclared = builtins.hasAttr "sys-obs" cfg.config.d2b.vms;
               workloadAgentDeclared =
-                cfg.config.nixling.vms.work-app.observability.enable;
+                cfg.config.d2b.vms.work-app.observability.enable;
             };
           in
           mkEvalOnlyCheck "eval-with-observability" (
@@ -946,23 +946,23 @@
           );
 
         rust-build = rustWorkspace {
-          pname = "nixling-rust-build";
+          pname = "d2b-rust-build";
           preBuild = assertRustToolchain;
           cargoBuildFlags = [ "--workspace" ];
           doCheck = false;
         };
 
         rust-tests = rustWorkspace {
-          pname = "nixling-rust-tests";
+          pname = "d2b-rust-tests";
           preBuild = assertRustToolchain;
           cargoBuildFlags = [ "--workspace" ];
           # Keep fixture-dependent contract crates out of generic
-          # sandbox workspace tests. Full NL_FIXTURES delivery to the
+          # sandbox workspace tests. Full D2B_FIXTURES delivery to the
           # sandbox/CI is a tracked W1 deliverable.
           cargoTestFlags = [
             "--workspace"
             "--exclude"
-            "nixling-contract-tests"
+            "d2b-contract-tests"
           ];
           installPhase = ''
             runHook preInstall
@@ -973,7 +973,7 @@
         };
 
         rust-clippy = rustWorkspace {
-          pname = "nixling-rust-clippy";
+          pname = "d2b-rust-clippy";
           nativeBuildInputs = [ pkgs.clippy ];
           cargoBuildFlags = [ "--workspace" ];
           doCheck = false;
@@ -991,15 +991,15 @@
           '';
         };
 
-        guest-static-elf = pkgs.runCommand "nixling-guest-static-elf" {
+        guest-static-elf = pkgs.runCommand "d2b-guest-static-elf" {
           nativeBuildInputs = [ pkgs.pkgsStatic.binutils ];
         } ''
           readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
           for bin in \
-            ${self.packages.${system}.nixling-guestd-static}/bin/nixling-guestd \
-            ${self.packages.${system}.nixling-userd-static}/bin/nixling-userd \
-            ${self.packages.${system}.nixling-exec-runner-static}/bin/nixling-exec-runner \
-            ${self.packages.${system}.nixling-guest-shell-runner-static}/bin/nixling-guest-shell-runner
+            ${self.packages.${system}.d2b-guestd-static}/bin/d2b-guestd \
+            ${self.packages.${system}.d2b-userd-static}/bin/d2b-userd \
+            ${self.packages.${system}.d2b-exec-runner-static}/bin/d2b-exec-runner \
+            ${self.packages.${system}.d2b-guest-shell-runner-static}/bin/d2b-guest-shell-runner
           do
             test -x "$bin"
             name="$(basename "$bin")"
@@ -1031,7 +1031,7 @@
             inherit system pkgs;
             flake = self;
           };
-        in pkgs.runCommand "nixling-guest-static-consumption" { } ''
+        in pkgs.runCommand "d2b-guest-static-consumption" { } ''
           mkdir -p "$out"
           printf '%s\n' '${evidence}' > "$out/guest-static-consumption.json"
         '';
@@ -1042,7 +1042,7 @@
             flake = self;
             scenario = "enabled";
           };
-        in pkgs.runCommand "nixling-guest-exec-policy" { } ''
+        in pkgs.runCommand "d2b-guest-exec-policy" { } ''
           mkdir -p "$out"
           printf '%s\n' '${evidence}' > "$out/guest-exec-policy.json"
         '';
@@ -1053,7 +1053,7 @@
             flake = self;
             scenario = "base";
           };
-        in pkgs.runCommand "nixling-guest-control-vsock" { } ''
+        in pkgs.runCommand "d2b-guest-control-vsock" { } ''
           mkdir -p "$out"
           printf '%s\n' '${evidence}' > "$out/guest-control-vsock.json"
         '';
@@ -1073,10 +1073,10 @@
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
           };
           brokerVendor = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./packages/nixling-priv-broker/Cargo.lock;
+            lockFile = ./packages/d2b-priv-broker/Cargo.lock;
           };
           guestShellRunnerVendor = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./packages/nixling-guest-shell-runner/Cargo.lock;
+            lockFile = ./packages/d2b-guest-shell-runner/Cargo.lock;
           };
           cargoConfig = vendorDir: ''
             [source.crates-io]
@@ -1088,7 +1088,7 @@
             [source.vendored-sources]
             directory = "${vendorDir}"
           '';
-        in pkgs.runCommand "nixling-rust-deny" {
+        in pkgs.runCommand "d2b-rust-deny" {
           nativeBuildInputs = [ pkgs.cargo-deny pkgs.cargo pkgs.rustc ];
         } ''
           export HOME="$TMPDIR"
@@ -1118,15 +1118,15 @@
 
           run_deny "broker" \
             "${rustPackagesSrc}" \
-            "nixling-priv-broker/Cargo.toml" \
+            "d2b-priv-broker/Cargo.toml" \
             '${cargoConfig brokerVendor}' \
-            "${rustPackagesSrc}/packages/nixling-priv-broker/deny.toml"
+            "${rustPackagesSrc}/packages/d2b-priv-broker/deny.toml"
 
           run_deny "guest-shell-runner" \
             "${rustPackagesSrc}" \
-            "nixling-guest-shell-runner/Cargo.toml" \
+            "d2b-guest-shell-runner/Cargo.toml" \
             '${cargoConfig guestShellRunnerVendor}' \
-            "${rustPackagesSrc}/packages/nixling-guest-shell-runner/deny.toml"
+            "${rustPackagesSrc}/packages/d2b-guest-shell-runner/deny.toml"
 
           echo ok > $out
         '';
@@ -1141,7 +1141,7 @@
             [source.vendored-sources]
             directory = "${guestVendor}"
           '';
-        in pkgs.runCommand "nixling-guest-rust-deny" {
+        in pkgs.runCommand "d2b-guest-rust-deny" {
           nativeBuildInputs = [ pkgs.cargo-deny pkgs.cargo pkgs.rustc ];
         } ''
           export HOME="$TMPDIR"
@@ -1158,7 +1158,7 @@
         # Real cargo-audit gate: vulnerability scan of every committed lockfile
         # against the pinned advisory DB snapshot.  Runs offline via
         # --no-fetch with the bundled git-repo copy of the RustSec DB.
-        rust-audit = pkgs.runCommand "nixling-rust-audit" {
+        rust-audit = pkgs.runCommand "d2b-rust-audit" {
           nativeBuildInputs = [ pkgs.cargo-audit ];
         } ''
           export HOME="$TMPDIR"
@@ -1171,17 +1171,17 @@
           }
           run_audit ${rustPackagesSrc}/packages/Cargo.lock
           run_audit ${rustPackagesSrc}/packages/Cargo.guest.lock
-          run_audit ${rustPackagesSrc}/packages/nixling-priv-broker/Cargo.lock
+          run_audit ${rustPackagesSrc}/packages/d2b-priv-broker/Cargo.lock
           # libshpool 0.11.0 pulls notify 7 -> notify-types -> instant 0.1.13.
           # Track that feasibility-spike warning explicitly while the helper
           # evaluates the pinned shpool dependency.
-          run_audit ${rustPackagesSrc}/packages/nixling-guest-shell-runner/Cargo.lock \
+          run_audit ${rustPackagesSrc}/packages/d2b-guest-shell-runner/Cargo.lock \
             --ignore RUSTSEC-2024-0384
           echo ok > $out
         '';
 
         guest-static-dependency-policy =
-          pkgs.runCommand "nixling-guest-static-dependency-policy" { } ''
+          pkgs.runCommand "d2b-guest-static-dependency-policy" { } ''
             lock=${./packages/Cargo.guest.lock}
             if grep -E 'name = "(cc|cmake|pkg-config|openssl|openssl-sys|native-tls|libsystemd|systemd)"' "$lock"; then
               echo "guest static lock contains a native-link/build-script dependency" >&2
@@ -1191,8 +1191,8 @@
           '';
 
         guest-shell-runner-static-dependency-policy =
-          pkgs.runCommand "nixling-guest-shell-runner-static-dependency-policy" { } ''
-            lock=${./packages/nixling-guest-shell-runner/Cargo.lock}
+          pkgs.runCommand "d2b-guest-shell-runner-static-dependency-policy" { } ''
+            lock=${./packages/d2b-guest-shell-runner/Cargo.lock}
             if grep -E 'name = "(openssl|openssl-sys|native-tls|libsystemd|systemd|pam-sys|dlopen2)"' "$lock"; then
               echo "guest shell runner lock contains a forbidden dynamic/PAM/systemd dependency" >&2
               exit 1
@@ -1233,8 +1233,8 @@
             # replaces a sentinel with a valid stand-in so the
             # assertions pass and the rest of the module eval runs.
             networking.hostName = lib.mkForce "check-template";
-            nixling.site.launcherUsers = lib.mkForce [ "check-user" ];
-            nixling.site.userAuthorizedKeys = lib.mkForce [
+            d2b.site.launcherUsers = lib.mkForce [ "check-user" ];
+            d2b.site.userAuthorizedKeys = lib.mkForce [
               "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBcheckcheckcheckcheckcheckcheckcheckchecky check@template-check"
             ];
 

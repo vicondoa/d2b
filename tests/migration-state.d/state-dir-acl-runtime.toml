@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["vmChecks.<system>.state-dir-acl (tests/host-integration/state-dir-acl.nix — hermetic runNixOSTest asserting the 5 g:nixling:--x traversal-ACL invariants against the real activated /var/lib/nixling)"]
+successor_ids = ["vmChecks.<system>.state-dir-acl (tests/host-integration/state-dir-acl.nix — hermetic runNixOSTest asserting the 5 g:d2b:--x traversal-ACL invariants against the real activated /var/lib/d2b)"]

@@ -5,14 +5,14 @@
 { lib, pkgs, config, ... }:
 
 let
-  cfg = config.nixling.observability;
+  cfg = config.d2b.observability;
   collectorMetricsPort = 12345;
-  otelRuntimeDir = "/run/nixling/otel";
+  otelRuntimeDir = "/run/d2b/otel";
   guestOtlpSocket = "${otelRuntimeDir}/otlp.sock";
   guestOtlpEgressSocket = "${otelRuntimeDir}/otlp-egress.sock";
-  auditEnabled = config.nixling.audit.enable or false;
+  auditEnabled = config.d2b.audit.enable or false;
 
-  collectorConfig = pkgs.writeText "nixling-guest-otel-collector.yaml" (
+  collectorConfig = pkgs.writeText "d2b-guest-otel-collector.yaml" (
     lib.generators.toYAML { } {
       receivers = {
         otlp.protocols.grpc = {
@@ -22,7 +22,7 @@ let
         prometheus = {
           config.scrape_configs = [
             {
-              job_name = "nixling-guest-otel-collector";
+              job_name = "d2b-guest-otel-collector";
               scrape_interval = "30s";
               static_configs = [
                 { targets = [ "127.0.0.1:${toString collectorMetricsPort}" ]; }
@@ -89,7 +89,7 @@ let
           { key = "vm.name"; value = cfg.identity.vmName; action = "upsert"; }
           { key = "vm.env"; value = cfg.identity.envName; action = "upsert"; }
           { key = "vm.role"; value = "workload"; action = "upsert"; }
-          { key = "service.name"; value = "nixling-guest-otel-collector"; action = "upsert"; }
+          { key = "service.name"; value = "d2b-guest-otel-collector"; action = "upsert"; }
         ];
         batch = {
           send_batch_size = 2048;
@@ -148,7 +148,7 @@ let
   );
 in
 {
-  options.nixling.observability = {
+  options.d2b.observability = {
     scrapeJournal = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -202,12 +202,12 @@ in
 
     systemd.tmpfiles.rules = [
       "d ${otelRuntimeDir} 0710 otel otel -"
-      "L+ /run/nixling/otlp.sock - - - - ${guestOtlpSocket}"
-      "L+ /run/nixling/otlp-egress.sock - - - - ${guestOtlpEgressSocket}"
+      "L+ /run/d2b/otlp.sock - - - - ${guestOtlpSocket}"
+      "L+ /run/d2b/otlp-egress.sock - - - - ${guestOtlpEgressSocket}"
     ];
 
-    systemd.services.nixling-otel-collector = {
-      description = "nixling guest OpenTelemetry collector";
+    systemd.services.d2b-otel-collector = {
+      description = "d2b guest OpenTelemetry collector";
       wantedBy = [ "multi-user.target" ];
       restartIfChanged = false;
       # The journald receiver shells out to `journalctl`; expose it (and
@@ -225,7 +225,7 @@ in
         Restart = "on-failure";
         RestartSec = "3s";
         StateDirectory = "otel";
-        RuntimeDirectory = "nixling/otel";
+        RuntimeDirectory = "d2b/otel";
         RuntimeDirectoryMode = "0710";
         RuntimeDirectoryPreserve = "yes";
         NoNewPrivileges = true;
@@ -242,11 +242,11 @@ in
       };
     };
 
-    systemd.services.nixling-otel-vsock-out = {
+    systemd.services.d2b-otel-vsock-out = {
       description = "Bridge guest OTLP UDS to host vsock port 14317.";
       wantedBy = [ "multi-user.target" ];
-      after = [ "nixling-otel-collector.service" ];
-      wants = [ "nixling-otel-collector.service" ];
+      after = [ "d2b-otel-collector.service" ];
+      wants = [ "d2b-otel-collector.service" ];
       restartIfChanged = false;
 
       serviceConfig = {

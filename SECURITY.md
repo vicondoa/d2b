@@ -14,7 +14,7 @@ Please **do not** open public GitHub issues for security vulnerabilities.
 ### Channel: GitHub Security Advisory
 
 File a private security advisory:
-<https://github.com/vicondoa/nixling/security/advisories/new>
+<https://github.com/vicondoa/d2b/security/advisories/new>
 
 **For v0.1.0 (alpha), GitHub Security Advisories are the only
 supported disclosure channel.** Email is not monitored and there is
@@ -44,17 +44,17 @@ path to a coordinated fix.
 ## Scope
 
 In scope:
-- The nixling host-side modules (`nixos-modules/`).
-- The nixling CLI (`nixos-modules/cli.nix`).
+- The d2b host-side modules (`nixos-modules/`).
+- The d2b CLI (`nixos-modules/cli.nix`).
 - The per-VM sidecars (`nixos-modules/host-sidecars.nix`, `nixos-modules/components/`).
-- The framework's SSH key management (`nixling-keys` activation, virtiofs injection).
+- The framework's SSH key management (`d2b-keys` activation, virtiofs injection).
 - Network isolation / NAT / firewalling (`nixos-modules/net.nix`, `nixos-modules/network.nix`).
 - The Rust workspace (`packages/`) — bootstrap surface, supply-chain gates, and long-lived control-plane behavior.
 
 Out of scope:
 - Vulnerabilities in upstream `nixpkgs`, `microvm.nix`, `cloud-hypervisor`, `crosvm`, `swtpm` — report those to their respective maintainers; we'll coordinate.
-- Vulnerabilities in consumer-side code that *uses* nixling (your own `/etc/nixos` is your concern; nixling provides primitives).
-- Physical attacks (encrypted disk + TPM-bound unlock is a Lanzaboote concern, not nixling's).
+- Vulnerabilities in consumer-side code that *uses* d2b (your own `/etc/nixos` is your concern; d2b provides primitives).
+- Physical attacks (encrypted disk + TPM-bound unlock is a Lanzaboote concern, not d2b's).
 - Side-channel attacks on shared CPU cache / SMT — out of scope (hardware-level concern).
 - Supply-chain attacks on the Nix store (defer to upstream Nix + nixpkgs).
 
@@ -62,26 +62,26 @@ Out of scope:
 
 For the full threat model, see [`docs/explanation/design.md`](docs/explanation/design.md).
 
-The short version: nixling defends against compromised-guest-userspace and cross-VM lateral movement. It does NOT defend against compromised host kernel, multi-user trust on a single host, or hardware-level adversaries.
+The short version: d2b defends against compromised-guest-userspace and cross-VM lateral movement. It does NOT defend against compromised host kernel, multi-user trust on a single host, or hardware-level adversaries.
 
 ### Portability roadmap
 
-The portability work introduces a non-root `nixlingd` daemon plus a
-minimal root-owned `nixling-priv-broker` (see ADRs 0001-0008 under
+The portability work introduces a non-root `d2bd` daemon plus a
+minimal root-owned `d2b-priv-broker` (see ADRs 0001-0008 under
 [`docs/adr/`](docs/adr/)). The new trust boundaries the daemon work
 will introduce are:
 
-- A single public CLI socket at `/run/nixling/public.sock`, mode
-  `0660` group `nixling`. Membership in the `nixling` group (populated
-  from `nixling.site.launcherUsers`) is the only *connection* gate —
-  there is no second `nixling-admin` socket or group. Destructive /
+- A single public CLI socket at `/run/d2b/public.sock`, mode
+  `0660` group `d2b`. Membership in the `d2b` group (populated
+  from `d2b.site.launcherUsers`) is the only *connection* gate —
+  there is no second `d2b-admin` socket or group. Destructive /
   admin verbs (`vm exec`, `audit`, and `config sync`'s
   guest read) are gated a second time *inside the daemon*: the
   `SO_PEERCRED` peer identity must also appear in
-  `nixling.site.adminUsers`. Authorization is `SO_PEERCRED` plus the
+  `d2b.site.adminUsers`. Authorization is `SO_PEERCRED` plus the
   system account database — never polkit at runtime.
-- A private broker socket at `/run/nixling/priv.sock` reachable only
-  by the `nixlingd` service uid. The broker re-derives every
+- A private broker socket at `/run/d2b/priv.sock` reachable only
+  by the `d2bd` service uid. The broker re-derives every
   privileged parameter from its own copy of the root-owned bundle
   and writes an append-only root-owned audit log.
 - Per-role minijail profiles for every VM runner and sidecar, with
@@ -97,7 +97,7 @@ will introduce are:
   > and a `userNamespace` block mapping in-NS UID/GID 0 to the
   > per-share principal. Normal VM shares map to the per-VM runner
   > principal; the guest-control token share maps to the narrower
-  > `nixling-<vm>-gctlfs` principal. The broker pre-establishes the
+  > `d2b-<vm>-gctlfs` principal. The broker pre-establishes the
   > namespace via `clone3(CLONE_NEWUSER)` + `/proc/<pid>/uid_map`
   > writes before exec; virtiofsd runs fake-root only inside the
   > per-share user NS. This is strictly stronger than v1.1.1: a
@@ -116,11 +116,11 @@ crosvm-as-full-VMM parity, and aarch64 runtime graphics/audio are
 **explicitly rejected** at the first milestone; adding any of these
 requires a new ADR + panel sign-off.
 
-Telemetry posture is preserved: `nixlingd` makes no outbound network
+Telemetry posture is preserved: `d2bd` makes no outbound network
 connections by default; any future opt-in lands behind an explicit
 `--enable-diagnostics` flag and an update to this file.
 
-The v2 constellation layer ([ADR 0032](docs/adr/0032-nixling-v2-constellation-control-plane.md))
+The v2 constellation layer ([ADR 0032](docs/adr/0032-d2b-v2-constellation-control-plane.md))
 preserves the host's no-realm-egress posture: the **host** daemon and
 broker still open no realm relay/provider connections. Realm egress
 (relay rendezvous, provider APIs) is opt-in and confined to a per-realm
@@ -141,7 +141,7 @@ This section documents the daemon trust-boundary delta for consumers.
 The broker's closed-enum surface covers host-prepare
 mutation: cgroup v2 delegation + pidfd handoff (ADR 0011), per-link
 sysctls + bridge/TAP + NetworkManager unmanaged config + `/etc/hosts`
-managed-block + route preflight (ADR 0012), `inet nixling` nftables
+managed-block + route preflight (ADR 0012), `inet d2b` nftables
 table apply + USBIP firewall-rule skeleton (ADR 0013), and
 `modprobe`/device-node opens + runner-shape preflight (ADR 0014).
 The full operation catalog with audit/destructive/secret flags is
@@ -153,23 +153,23 @@ The new trust-boundary statements are:
 
 - The broker mutates network, cgroup, sysctl, `/etc/hosts`,
   NetworkManager unmanaged config, and `modprobe` state on behalf
-  of `nixlingd`, gated entirely by the closed broker enum plus the
+  of `d2bd`, gated entirely by the closed broker enum plus the
   trusted bundle. Every operation has a typed handler under
-  `packages/nixling-priv-broker/src/ops/` and re-derives its
+  `packages/d2b-priv-broker/src/ops/` and re-derives its
   operating paths from the bundle, never from caller input.
-- Compromise of `nixlingd` cannot escalate to arbitrary host
+- Compromise of `d2bd` cannot escalate to arbitrary host
   mutation beyond the declared broker enum variants. Unknown
   variants and unknown fields in security-sensitive artifacts are
   refused (`defaultForUnknown: deny`).
 - The broker audit log
-  (`/var/lib/nixling/audit/broker-<utc-date>.jsonl`) is
+  (`/var/lib/d2b/audit/broker-<utc-date>.jsonl`) is
   root-owned, append-only via a pre-opened `O_APPEND` fd, and
   rotated daily. Retention defaults to 14 days, overridable via
-  `nixling.site.audit.retentionDays` (set to `0` to disable
+  `d2b.site.audit.retentionDays` (set to `0` to disable
   pruning). **Reserved**: broker prune-on-rotate is shipping, but
   the NixOS option is not yet threaded into the broker invocation;
   broker uses the 14-day default regardless of overrides until
-  then. The legacy `/var/lib/nixling/broker-audit.log`
+  then. The legacy `/var/lib/d2b/broker-audit.log`
   compatibility shim has been retired: both the writer
   (`AuditLog::write_entry` and `AuditLog::write_op_record`) and
   the reader (`AuditLog::export_lines`, which now enumerates the
@@ -177,7 +177,7 @@ The new trust-boundary statements are:
   solely against `broker-<utc-date>.jsonl` files — see
   [`docs/reference/daemon-api.md`](docs/reference/daemon-api.md#audit)
   "Retention" and "Legacy retirement".
-- An admin can pause the broker (`nixling admin broker --pause`);
+- An admin can pause the broker (`d2b admin broker --pause`);
   the post-compromise rotation/repair runbook lives at
   [`docs/explanation/host-prepare.md`](docs/explanation/host-prepare.md)
   § Recovery runbook.
@@ -188,13 +188,13 @@ The new trust-boundary statements are:
 
 ### Guest-control exec trust boundary
 
-`nixling vm exec` runs a command inside a VM over
+`d2b vm exec` runs a command inside a VM over
 the authenticated guest-control vsock channel — there is no SSH. The
 trust-boundary statements are:
 
 - **Admin-only, destructive.** Guest exec is a destructive verb: the
-  `SO_PEERCRED` caller must be in `nixling.site.adminUsers` (the
-  daemon-side role gate above), on top of the `nixling`-group
+  `SO_PEERCRED` caller must be in `d2b.site.adminUsers` (the
+  daemon-side role gate above), on top of the `d2b`-group
   connection gate. Per-VM exec must also be enabled in the bundle
   (`guest.control.enable` + `guest.exec.enable`). Every exec runs the
   requested command as the VM's workload user (`ssh.user`) — **never

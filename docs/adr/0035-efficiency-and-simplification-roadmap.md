@@ -4,7 +4,7 @@
 - Date: 2026-06-19
 - Related: ADR 0006 (manifest bundle versioning), ADR 0009 (Rust
   toolchain, MSRV, and supply-chain policy), ADR 0015 (daemon-only clean
-  break), ADR 0022 (stabilization-mode releases), ADR 0032 (nixling v2
+  break), ADR 0022 (stabilization-mode releases), ADR 0032 (d2b v2
   constellation control plane), ADR 0034 (storage lifecycle, restart
   adoption, and synchronization), ADR 0036 (qemu-media runtime), ADR 0037
   (local hypervisor runtime seam), ADR 0038 (persistent named guest shell
@@ -12,7 +12,7 @@
 
 ## Context
 
-Nixling has intentionally paid complexity to remove legacy surfaces and
+D2b has intentionally paid complexity to remove legacy surfaces and
 to make host mutation explicit: daemon-only lifecycle, typed broker ops,
 generated bundle artifacts, pidfd handoff, minijail profiles, guest-control
 RPCs, and v2 constellation/provider seams. Those decisions are still correct.
@@ -39,8 +39,8 @@ The current codebase now has a different risk: every security hardening,
 feature wave, generated contract, and test migration has left scaffolding
 behind. The result is high cognitive load and slower iteration:
 
-- large Rust hub files concentrate unrelated concerns (`packages/nixlingd`,
-  `packages/nixling`, and `packages/nixling-priv-broker`);
+- large Rust hub files concentrate unrelated concerns (`packages/d2bd`,
+  `packages/d2b`, and `packages/d2b-priv-broker`);
 - some CLI/daemon JSON view models still live beside presentation or
   dispatch logic instead of a shared contract boundary;
 - Nix modules repeatedly construct the same bundle-artifact shapes and
@@ -62,12 +62,12 @@ context.
 
 This stage does **not** preserve backward compatibility for retired
 framework surfaces. Consumers that still need an old behavior can stay pinned
-to an older nixling revision. New efficiency work should delete obsolete
+to an older d2b revision. New efficiency work should delete obsolete
 compatibility layers outright. If current code still calls a compatibility
 wrapper, the cleanup wave updates those callers and removes the wrapper in
 the same patch series.
 
-That does not mean nixling loses the ability to handle future incompatible
+That does not mean d2b loses the ability to handle future incompatible
 changes. Versioned contracts, migration commands, schema evolution, operator
 cutover tooling, and explicit release notes remain first-class mechanisms.
 The distinction is simple: delete stale compatibility logic for surfaces that
@@ -76,12 +76,12 @@ intentional migration path when a future breaking change actually needs one.
 
 ## Decision
 
-Nixling will run an efficiency and simplification program as a set of
+D2b will run an efficiency and simplification program as a set of
 reviewed waves. Each wave removes one class of duplication or transitional
 surface while preserving the load-bearing contracts from earlier ADRs:
 
-- `nixlingd` remains the sole lifecycle supervisor.
-- `nixling-priv-broker` remains the sole privileged host-mutation authority.
+- `d2bd` remains the sole lifecycle supervisor.
+- `d2b-priv-broker` remains the sole privileged host-mutation authority.
 - The Rust CLI remains the only operator CLI surface.
 - Generated bundle artifacts remain versioned contracts, not ad hoc JSON.
 - Storage, lock, ACL, cleanup, and restart behavior follow ADR 0034.
@@ -171,45 +171,45 @@ Canonical concern prefixes:
 | --- | --- |
 | `core` | Pure shared model, validation, IDs, and DTOs with no runtime side effects. |
 | `ipc` | Local daemon, broker, and guest wire contracts. |
-| `daemon` | Unprivileged `nixlingd` request handling, task ownership, and supervision. Public binary crate may stay `nixlingd`; internal libraries/modules use `daemon`. |
-| `broker` | Privileged broker dispatch, audited ops, fd passing, and FFI quarantine. Public binary crate may stay `nixling-priv-broker`; internal libraries/modules use `broker`. |
+| `daemon` | Unprivileged `d2bd` request handling, task ownership, and supervision. Public binary crate may stay `d2bd`; internal libraries/modules use `daemon`. |
+| `broker` | Privileged broker dispatch, audited ops, fd passing, and FFI quarantine. Public binary crate may stay `d2b-priv-broker`; internal libraries/modules use `broker`. |
 | `host` | Local or remote full-host substrate work: host OS state, NixOS/generic Linux integration, host networking, and broker-prepared host resources. |
 | `guest` | Code running inside workload or gateway guests, including guestd, user/session helpers, and in-guest exec runners. |
 | `gateway` | Per-realm gateway guest control-plane services and realm entrypoint glue. |
-| `provider` | External provider adapters such as ACA or Relay. Provider crates use `nixling-provider-<name>`. |
+| `provider` | External provider adapters such as ACA or Relay. Provider crates use `d2b-provider-<name>`. |
 | `constellation` | Transport-neutral cross-node/realm protocol, routing, streams, IDs, and capability negotiation from ADR 0032. |
 | `contract` | Schema, generated-artifact, policy, and fixture contract tests. |
-| `cli` | Operator presentation and command dispatch. Public binary crate may stay `nixling`; internal modules use `cli` or command-family names. |
+| `cli` | Operator presentation and command dispatch. Public binary crate may stay `d2b`; internal modules use `cli` or command-family names. |
 
 Avoid catch-all names such as `remote`, `manager`, `helper`, `util`, and
 `common` unless the item is genuinely generic and has no clearer authority
 or lifecycle owner. "Remote" is relative to the caller; code should instead
 name the actual concern (`constellation`, `provider`, `gateway`, or `host`).
-ADR 0032 target names remain DNS-shaped (`<workload>.<node>.<realm>.nixling`
-or `nl://...`) and do not encode whether a realm is host-resident or
+ADR 0032 target names remain DNS-shaped (`<workload>.<node>.<realm>.d2b`
+or `d2b://...`) and do not encode whether a realm is host-resident or
 gateway-backed; crate/module/type names follow the implementation concern,
 not the address string.
 
 For v2 provider axes, name the axis explicitly:
 
-- local hypervisor providers sort under `nixling-provider-hypervisor-<name>`
+- local hypervisor providers sort under `d2b-provider-hypervisor-<name>`
   or an equivalent `provider::hypervisor::<name>` module family;
-- host substrate providers sort under `nixling-host-substrate-<name>` or
+- host substrate providers sort under `d2b-host-substrate-<name>` or
   `host::substrate::<name>`;
-- display/Wayland providers sort under `nixling-provider-display-<name>` or
+- display/Wayland providers sort under `d2b-provider-display-<name>` or
   `provider::display::<name>`;
-- transport providers sort under `nixling-constellation-transport-<name>` or
+- transport providers sort under `d2b-constellation-transport-<name>` or
   `constellation::transport::<name>`.
 
-Crate names should follow `nixling-<concern>-<specific-capability>` when the
+Crate names should follow `d2b-<concern>-<specific-capability>` when the
 crate is not a public binary. Examples:
 
-- `nixling-constellation-core`, `nixling-constellation-router`,
-  `nixling-constellation-transport`;
-- `nixling-provider-aca`, `nixling-provider-relay`;
-- `nixling-host-activation-helper`, `nixling-host-substrate-nixos` or
-  `nixling-host-substrate-linux` for future host-substrate adapters;
-- `nixling-guest-exec-runner` rather than a locus-free exec crate if the
+- `d2b-constellation-core`, `d2b-constellation-router`,
+  `d2b-constellation-transport`;
+- `d2b-provider-aca`, `d2b-provider-relay`;
+- `d2b-host-activation-helper`, `d2b-host-substrate-nixos` or
+  `d2b-host-substrate-linux` for future host-substrate adapters;
+- `d2b-guest-exec-runner` rather than a locus-free exec crate if the
   code runs in the guest.
 
 Rust type names should use standard Rust acronym casing (`VmId`, `IpcFrame`,
@@ -233,7 +233,7 @@ Do not encode historical wave names, temporary implementation phases, or
 review finding IDs in source file, type, crate, or package names.
 
 ADR 0038's shell helper follows the same rule: the binary may be named
-`nixling-guest-shell-runner` because it runs in the guest and owns shell
+`d2b-guest-shell-runner` because it runs in the guest and owns shell
 helper behavior; host terminal adapters, daemon shell admission, guestd shell
 RPC handlers, and shpool translation do not share a locus-free `shell` or
 `terminal` bucket.
@@ -242,7 +242,7 @@ RPC handlers, and shpool translation do not share a locus-free `shell` or
 
 Every mutable host surface has exactly one owner. NixOS tmpfiles creates
 static base roots, activation performs migrations and static repairs, the
-broker mutates privileged runtime state, and `nixlingd` owns daemon ledgers.
+broker mutates privileged runtime state, and `d2bd` owns daemon ledgers.
 No wave may reintroduce broad recursive `chmod`, `chown`, `setfacl`, or
 raw-path repair logic to make a test pass.
 
@@ -275,7 +275,7 @@ the failure understandable is also required.
 
 ### Non-blocking task model by default
 
-Nixling's daemon, guest-control, provider, gateway, relay, and metrics paths
+D2b's daemon, guest-control, provider, gateway, relay, and metrics paths
 must have a declared task model. Async tasks may perform CPU-light state
 transitions and non-blocking socket I/O; they must not perform unbounded
 blocking filesystem walks, process spawning/waiting, synchronous network
@@ -374,9 +374,9 @@ Example:
 compat-ADR0042-added-20260815-wire-v6-handshake
 from=wire-v5
 to=wire-v6
-owner=packages/nixling-contracts
+owner=packages/d2b-contracts
 removeWhen=minSupportedWireVersion >= 6
-validation=packages/nixling-contract-tests/tests/policy_compat.rs
+validation=packages/d2b-contract-tests/tests/policy_compat.rs
 ```
 
 Compatibility keys are reserved for deliberate future bridges, not for stale
@@ -496,8 +496,8 @@ Tasks:
    - `data`;
    - compact `jsonText`;
    - `pkgs.writeText` / `pkgs.runCommand` output;
-   - `options.nixling._bundle.<artifact>`;
-   - private `/etc/nixling/<artifact>.json` installation.
+   - `options.d2b._bundle.<artifact>`;
+   - private `/etc/d2b/<artifact>.json` installation.
 2. Apply it to the repeated host/process/privilege/closure/storage/sync
    emitters while preserving each artifact's schema, path, owner, and mode.
 3. Keep `bundle.json` hashing special, but factor the common install and
@@ -600,29 +600,29 @@ Goal: move shared JSON/wire/output models out of CLI and daemon hub files.
 
 Tasks:
 
-1. Classify all serde/json schema structs in `nixling`, `nixlingd`,
-   `nixling-contracts`, and `nixling-core` as one of:
+1. Classify all serde/json schema structs in `d2b`, `d2bd`,
+   `d2b-contracts`, and `d2b-core` as one of:
    - wire contract;
    - bundle contract;
    - CLI output contract;
    - daemon internal state;
    - presentation-only view.
 2. Move stable CLI output DTOs and daemon API DTOs to a contract crate
-   boundary. The exact home may be an expanded `nixling-contracts` or a narrower
-   `nixling-contracts` crate, but dependency direction must stay acyclic:
+   boundary. The exact home may be an expanded `d2b-contracts` or a narrower
+   `d2b-contracts` crate, but dependency direction must stay acyclic:
    presentation crates depend on contracts; contracts do not depend on CLI
    or daemon execution crates.
-3. Leave formatting, terminal behavior, and command dispatch in `nixling`.
+3. Leave formatting, terminal behavior, and command dispatch in `d2b`.
 4. Leave listener loops, process supervision, and mutation orchestration in
-   `nixlingd`.
+   `d2bd`.
 5. Regenerate CLI schemas and daemon API docs from the new DTO homes.
 
 Primary targets:
 
-- `packages/nixling/src/lib.rs`;
-- `packages/nixlingd/src/lib.rs`;
-- `packages/nixling-contracts/src/public_wire.rs`;
-- `packages/nixling-core/src/*`;
+- `packages/d2b/src/lib.rs`;
+- `packages/d2bd/src/lib.rs`;
+- `packages/d2b-contracts/src/public_wire.rs`;
+- `packages/d2b-core/src/*`;
 - `packages/xtask/src/main.rs`;
 - `docs/reference/cli-output/`;
 - `docs/reference/daemon-api.md`.
@@ -636,8 +636,8 @@ Validation:
 
 Exit criteria:
 
-- `nixling/src/lib.rs` is presentation and dispatch, not a schema warehouse;
-- `nixlingd/src/lib.rs` is orchestration and module wiring, not the canonical
+- `d2b/src/lib.rs` is presentation and dispatch, not a schema warehouse;
+- `d2bd/src/lib.rs` is orchestration and module wiring, not the canonical
   source for public output schemas.
 
 ### Wave 4 — Rust hub-file decomposition
@@ -667,13 +667,13 @@ Tasks:
 
 Primary targets:
 
-- `packages/nixlingd/src/lib.rs`;
-- `packages/nixling/src/lib.rs`;
-- `packages/nixling-priv-broker/src/runtime.rs`;
-- `packages/nixling-priv-broker/src/live_handlers.rs`;
-- `packages/nixling-core/src/bundle_resolver.rs`;
-- `packages/nixling-guestd/src/service.rs`;
-- `packages/nixling-guest-shell-runner/*` once ADR 0038 implementation
+- `packages/d2bd/src/lib.rs`;
+- `packages/d2b/src/lib.rs`;
+- `packages/d2b-priv-broker/src/runtime.rs`;
+- `packages/d2b-priv-broker/src/live_handlers.rs`;
+- `packages/d2b-core/src/bundle_resolver.rs`;
+- `packages/d2b-guestd/src/service.rs`;
+- `packages/d2b-guest-shell-runner/*` once ADR 0038 implementation
   introduces the excluded helper workspace.
 
 Validation:
@@ -721,15 +721,15 @@ Tasks:
 
 Primary targets:
 
-- `packages/nixling-host/src/*_argv.rs`;
-- `packages/nixling-host/src/runner_argv_regenerator.rs`;
-- `packages/nixling-host/src/qemu_media_argv.rs` if present, or the current
+- `packages/d2b-host/src/*_argv.rs`;
+- `packages/d2b-host/src/runner_argv_regenerator.rs`;
+- `packages/d2b-host/src/qemu_media_argv.rs` if present, or the current
   qemu-media argv renderer home;
-- `packages/nixling-core/src/processes.rs`;
+- `packages/d2b-core/src/processes.rs`;
 - `nixos-modules/processes-json.nix`;
 - `nixos-modules/minijail-profiles.nix`;
-- `packages/nixling-priv-broker/src/ops/*`;
-- `packages/nixlingd/src/supervisor/*`.
+- `packages/d2b-priv-broker/src/ops/*`;
+- `packages/d2bd/src/supervisor/*`.
 
 Validation:
 
@@ -781,8 +781,8 @@ Primary targets:
 - `nixos-modules/bundle.nix`;
 - `nixos-modules/storage-json.nix`;
 - `nixos-modules/sync-json.nix`;
-- `packages/nixling-priv-broker/src/ops/*`;
-- `packages/nixlingd/src/storage_lifecycle.rs`.
+- `packages/d2b-priv-broker/src/ops/*`;
+- `packages/d2bd/src/storage_lifecycle.rs`.
 
 Validation:
 
@@ -813,7 +813,7 @@ Tasks:
    and Nix parse; `static-fast-tier0.sh` is retired after any remaining
    callers move to `test-lint`.
 3. Move source-tree policy checks that need parsing or cross-file reasoning
-   into Rust policy tests under `packages/nixling-contract-tests/tests`.
+   into Rust policy tests under `packages/d2b-contract-tests/tests`.
 4. Keep shell only for orchestration that genuinely needs ecosystem tools,
    Nix evaluation, or platform setup.
 5. Split generated-artifact drift failures by artifact family as defined in
@@ -830,7 +830,7 @@ Primary targets:
 - `tests/test-drift.sh`;
 - `tests/unit/gates/drift-check.sh`;
 - `tests/unit/meta/*`;
-- `packages/nixling-contract-tests/tests/*`;
+- `packages/d2b-contract-tests/tests/*`;
 - `.github/workflows/*`.
 
 Validation:
@@ -857,7 +857,7 @@ Tasks:
 1. Audit crates with one source file or no independent release boundary:
    keep them only if they enforce dependency direction, feature isolation,
    static-link boundaries, or provider plug-in boundaries.
-2. Decide whether `nixling-priv-broker` remains a separate workspace. If it
+2. Decide whether `d2b-priv-broker` remains a separate workspace. If it
    must remain separate for security or build reasons, document the reason
    and remove duplicated dependency/lint declarations through shared
    metadata where possible.
@@ -873,7 +873,7 @@ Tasks:
    crates and modules are not.
 7. Rename or delete ambiguous crates and modules as part of cleanup waves
    instead of preserving compatibility aliases. Initial audit targets include
-   `nixling-host-providers` (ambiguous host/provider boundary),
+   `d2b-host-providers` (ambiguous host/provider boundary),
    locus-free runner names, and daemon modules that mix request handling,
    background task ownership, and presentation DTOs in one root.
 8. Extend `docs/reference/naming-conventions.md` from host-visible resource
@@ -893,12 +893,12 @@ Tasks:
 Primary targets:
 
 - `packages/Cargo.toml`;
-- `packages/nixling-priv-broker/Cargo.toml`;
-- `packages/nixling-constellation-*`;
-- `packages/nixling-provider-*`;
-- `packages/nixling-gateway*`;
-- `packages/nixling-host-providers`;
-- `packages/nixling-guest-shell-runner/*` once introduced;
+- `packages/d2b-priv-broker/Cargo.toml`;
+- `packages/d2b-constellation-*`;
+- `packages/d2b-provider-*`;
+- `packages/d2b-gateway*`;
+- `packages/d2b-host-providers`;
+- `packages/d2b-guest-shell-runner/*` once introduced;
 - `flake.nix` Rust package source construction;
 - `docs/reference/naming-conventions.md`.
 
@@ -958,14 +958,14 @@ Tasks:
 
 Primary targets:
 
-- `packages/nixling-constellation-core`;
-- `packages/nixling-constellation-provider`;
-- `packages/nixling-constellation-router`;
-- `packages/nixling-provider-aca`;
-- `packages/nixling-provider-relay`;
-- qemu-media provider/adapter modules in `packages/nixlingd` and
-  `packages/nixling-priv-broker`;
-- `packages/nixling-gateway-runtime`;
+- `packages/d2b-constellation-core`;
+- `packages/d2b-constellation-provider`;
+- `packages/d2b-constellation-router`;
+- `packages/d2b-provider-aca`;
+- `packages/d2b-provider-relay`;
+- qemu-media provider/adapter modules in `packages/d2bd` and
+  `packages/d2b-priv-broker`;
+- `packages/d2b-gateway-runtime`;
 - `nixos-modules/gateway-vm.nix`;
 - ADR 0032 implementation wave notes.
 
@@ -990,7 +990,7 @@ Exit criteria:
 
 ### Wave 10 — Threading, task, and non-blocking I/O model
 
-Goal: make nixling's concurrency model explicit and keep request/task threads
+Goal: make d2b's concurrency model explicit and keep request/task threads
 from doing unbounded blocking I/O.
 
 Tasks:
@@ -1028,7 +1028,7 @@ Tasks:
    request handling.
 8. Replace OS-thread-per-connection handling in daemon request paths with
    runtime-owned tasks and bounded admission. The initial audit includes
-   `nixlingd` connection handling for public socket requests, exec-owner
+   `d2bd` connection handling for public socket requests, exec-owner
    sessions, gateway display sessions, and exec writer plumbing.
 9. Delete runtime-in-runtime bridge patterns. Guest-control probes and ttRPC
    clients become natively async or actor-owned adapters; they do not consume
@@ -1058,25 +1058,25 @@ Tasks:
 
 Primary targets:
 
-- `packages/nixlingd/src/lib.rs`;
-- `packages/nixlingd/src/autostart.rs`;
-- `packages/nixlingd/src/concurrency.rs`;
-- `packages/nixlingd/src/exec_session*.rs`;
-- `packages/nixlingd/src/shell*`;
-- `packages/nixlingd/src/guest_control_bridge.rs`;
-- `packages/nixlingd/src/guest_control_*`;
-- `packages/nixlingd/src/supervisor/*`;
-- `packages/nixlingd/src/metrics.rs`;
-- `packages/nixlingd/src/ch_stats.rs`;
-- `packages/nixling-priv-broker/src/live_handlers.rs`;
-- `packages/nixling-priv-broker/src/runtime.rs`;
-- `packages/nixling-priv-broker/src/ops/*`;
-- `packages/nixling-gateway-runtime/*`;
-- `packages/nixling-provider-*`;
-- `packages/nixling-constellation-*`;
-- `packages/nixling-core/src/bundle_resolver.rs`;
-- `packages/nixling-guestd/src/service.rs`;
-- `packages/nixling-guest-shell-runner/*` once introduced.
+- `packages/d2bd/src/lib.rs`;
+- `packages/d2bd/src/autostart.rs`;
+- `packages/d2bd/src/concurrency.rs`;
+- `packages/d2bd/src/exec_session*.rs`;
+- `packages/d2bd/src/shell*`;
+- `packages/d2bd/src/guest_control_bridge.rs`;
+- `packages/d2bd/src/guest_control_*`;
+- `packages/d2bd/src/supervisor/*`;
+- `packages/d2bd/src/metrics.rs`;
+- `packages/d2bd/src/ch_stats.rs`;
+- `packages/d2b-priv-broker/src/live_handlers.rs`;
+- `packages/d2b-priv-broker/src/runtime.rs`;
+- `packages/d2b-priv-broker/src/ops/*`;
+- `packages/d2b-gateway-runtime/*`;
+- `packages/d2b-provider-*`;
+- `packages/d2b-constellation-*`;
+- `packages/d2b-core/src/bundle_resolver.rs`;
+- `packages/d2b-guestd/src/service.rs`;
+- `packages/d2b-guest-shell-runner/*` once introduced.
 
 Validation:
 
@@ -1150,13 +1150,13 @@ Tasks:
 
 Primary targets:
 
-- `packages/nixlingd/src/concurrency.rs`;
-- `packages/nixlingd/src/supervisor/*`;
-- `packages/nixlingd/src/storage_lifecycle.rs`;
-- `packages/nixlingd/src/ch_stats.rs`;
-- `packages/nixlingd/src/metrics.rs`;
-- `packages/nixling-priv-broker/src/runtime.rs`;
-- `packages/nixling-core/src/bundle_resolver.rs`.
+- `packages/d2bd/src/concurrency.rs`;
+- `packages/d2bd/src/supervisor/*`;
+- `packages/d2bd/src/storage_lifecycle.rs`;
+- `packages/d2bd/src/ch_stats.rs`;
+- `packages/d2bd/src/metrics.rs`;
+- `packages/d2b-priv-broker/src/runtime.rs`;
+- `packages/d2b-core/src/bundle_resolver.rs`.
 
 Validation:
 
@@ -1196,7 +1196,7 @@ Tasks:
    sections.
 6. Describe qemu-media as a narrow local runtime with explicit unsupported
    capabilities, not as a general NixOS VM mode or USBIP replacement.
-7. Describe persistent shell as a first-class `nixling shell` UX over
+7. Describe persistent shell as a first-class `d2b shell` UX over
    guest-control and shpool-backed guest state, not as SSH, tmux/screen, or a
    public shpool protocol.
 
@@ -1234,11 +1234,11 @@ Tasks:
    the broker FFI quarantine and tests plus the host activation helper; when
    the persistent-shell helper lands, include its prelude/libshpool boundary in
    the same inventory:
-   - `packages/nixling-priv-broker/src/sys.rs`;
-   - `packages/nixling-priv-broker/src/seccomp_compile_tests.rs`;
-   - `packages/nixling-priv-broker/tests/socket_activation.rs`;
-   - `packages/nixling-host-activation-helper/src/main.rs`;
-   - `packages/nixling-guest-shell-runner/*`.
+   - `packages/d2b-priv-broker/src/sys.rs`;
+   - `packages/d2b-priv-broker/src/seccomp_compile_tests.rs`;
+   - `packages/d2b-priv-broker/tests/socket_activation.rs`;
+   - `packages/d2b-host-activation-helper/src/main.rs`;
+   - `packages/d2b-guest-shell-runner/*`.
 2. For each site, choose one disposition:
    - replace with a maintained safe API (`rustix`, `nix`, `capctl`, or another
      focused crate);
@@ -1286,13 +1286,13 @@ Tasks:
 
 Primary targets:
 
-- `packages/nixling-priv-broker/src/sys.rs`;
-- `packages/nixling-priv-broker/src/seccomp_compile_tests.rs`;
-- `packages/nixling-priv-broker/tests/socket_activation.rs`;
-- `packages/nixling-host-activation-helper/src/main.rs`;
-- `packages/nixling-guest-shell-runner/*` once introduced;
+- `packages/d2b-priv-broker/src/sys.rs`;
+- `packages/d2b-priv-broker/src/seccomp_compile_tests.rs`;
+- `packages/d2b-priv-broker/tests/socket_activation.rs`;
+- `packages/d2b-host-activation-helper/src/main.rs`;
+- `packages/d2b-guest-shell-runner/*` once introduced;
 - `packages/*/Cargo.toml` lint settings;
-- `packages/nixling-contract-tests/tests/policy_*.rs`.
+- `packages/d2b-contract-tests/tests/policy_*.rs`.
 
 Validation:
 
@@ -1392,7 +1392,7 @@ Tasks:
 
 1. Add a daemon-maintained public status read model for unfiltered list/status
    requests. The model carries generation, source-fingerprint, freshness, and
-   deep-diagnostic availability metadata so `nixling-wlcontrol` and other UI
+   deep-diagnostic availability metadata so `d2b-wlcontrol` and other UI
    clients can render from one fast model instead of recomputing expensive
    probes on every refresh.
 2. Keep status/read-model paths free of deep USB/guest-control diagnostics and
@@ -1414,13 +1414,13 @@ Validation:
   status uses the model, and pidfd-table generation changes invalidate it;
 - USBIP broker tests prove both bind and unbind use the bounded driver helper
   and preserve bounded stderr/timeout behavior;
-- local Rust checks cover `nixlingd` and the privileged broker helper paths;
+- local Rust checks cover `d2bd` and the privileged broker helper paths;
 - implementation review verifies the real `/etc/nixos` host-switch path and
   latency budgets before PR merge.
 
 Exit criteria:
 
-- `nixling status --json` and `nixling list --json` have a fast daemon-side model
+- `d2b status --json` and `d2b list --json` have a fast daemon-side model
   path for UI refreshes;
 - USBIP driver mutation cannot indefinitely pin the broker control path;
 - status/read-model clients never trigger sysfs bind/unbind or deep guest USB
@@ -1437,7 +1437,7 @@ These targets are good first compatibility-removal and consolidation inputs:
 | Duplicate JSON emitter boilerplate | One helper-backed artifact emitter pattern. |
 | Repeated full `cfg.vms` / `cfg.envs` scans | One normalized Nix index consumed by host/network/process modules. |
 | CLI/daemon public DTOs in hub files | Shared contract boundary plus presentation adapters. |
-| `nixlingd`, `nixling`, and broker hub files | Focused modules with narrow APIs. |
+| `d2bd`, `d2b`, and broker hub files | Focused modules with narrow APIs. |
 | One-off argv/readiness/audit assembly | Typed runner/process builder shared by Nix and Rust contracts. |
 | Activation/tmpfiles/broker ownership overlap | ADR 0034 storage/sync ownership rows with one repair owner. |
 | Blocking I/O in daemon/provider hot paths | Declared task model with bounded blocking pools, workers, actors, cancellation, and backpressure. |
@@ -1469,7 +1469,7 @@ These targets are good first compatibility-removal and consolidation inputs:
   adding guest-control, store sync, SSH, or observability assumptions it does
   not support.
 - Do not expose shpool's CLI, config language, templates, or protocol as
-  nixling's public shell contract.
+  d2b's public shell contract.
 - Do not reintroduce SSH, tmux/screen management, or broker shell execution to
   implement persistent shells.
 - Do not add new shell gates for efficiency measurement; use existing

@@ -1,7 +1,7 @@
 # nix-unit cases for the privileged broker service cgroup posture.
 #
 # The broker is socket-activated but owns privileged runner spawn and
-# cgroup-delegation operations. Its unit must stay in nixling.slice,
+# cgroup-delegation operations. Its unit must stay in d2b.slice,
 # must be explicitly delegated, and must not use systemd service teardown
 # as the runner lifecycle mechanism.
 { mkEval, ... }:
@@ -14,17 +14,17 @@ let
     fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
-    nixling.daemonExperimental.enable = true;
+    d2b.daemonExperimental.enable = true;
   };
 
   cfg = (mkEval [ minimal ]).config;
-  svcCfg = cfg.systemd.services.nixling-priv-broker.serviceConfig or { };
-  sliceCfg = cfg.systemd.slices.nixling.sliceConfig or { };
+  svcCfg = cfg.systemd.services.d2b-priv-broker.serviceConfig or { };
+  sliceCfg = cfg.systemd.slices.d2b.sliceConfig or { };
 in
 {
   "broker-service-posture/service-slice" = {
     expr = svcCfg.Slice or "";
-    expected = "nixling.slice";
+    expected = "d2b.slice";
   };
 
   "broker-service-posture/service-delegate" = {

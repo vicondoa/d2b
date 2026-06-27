@@ -1,4 +1,4 @@
-# `nixling shell <target> list --json`
+# `d2b shell <target> list --json`
 
 > Diataxis: reference. JSON output contract for persistent shell listing.
 

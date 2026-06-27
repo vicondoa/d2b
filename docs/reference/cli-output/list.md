@@ -1,8 +1,8 @@
-# `nixling list` output
+# `d2b list` output
 
 Schema: [`list.schema.json`](./list.schema.json)
 
-`nixling list --json` emits one JSON array ordered lexicographically by
+`d2b list --json` emits one JSON array ordered lexicographically by
 VM name. Each array element is a declared VM plus its current dispatch
 status.
 
@@ -37,7 +37,7 @@ may not change without an intentional schema update.
 ## Human example
 
 ```text
-$ nixling list
+$ d2b list
 NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 corp-vm            work      false     false false   10.20.0.10      stopped
 sys-work-net       work      false     false false   192.0.2.1       stopped (net-vm)

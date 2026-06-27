@@ -1,0 +1,73 @@
+[package]
+name = "d2b-priv-broker"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+[lints.rust]
+unsafe_code = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
+
+[features]
+# W4-fu clean-break: `layer1-bootstrap` is no longer a default
+# feature. The broker's production wire dispatch path now uses
+# the real opaque-ID `d2b_contracts::broker_wire::BrokerRequest`
+# shape via the `runtime::dispatch_request` non-bootstrap arm
+# (which routes audit / Hello / ValidateBundle / ExportBrokerAudit
+# end-to-end and surfaces typed-Unimplemented envelopes for the
+# W*-fu live ops awaiting their bundle resolver). The
+# `layer1-bootstrap` feature remains opt-in for the W2/W3 legacy
+# probe-hello / probe-stub / probe-export-audit shell harnesses
+# (tests/broker-export-audit.sh, tests/broker-scm-rights-fd-lifecycle.sh,
+# tests/broker-socket-acl.sh) that exercise the bootstrap dispatch
+# shape directly. New code should target the real wire.
+#
+# `tests/broker-default-features-build.sh` was flipped to assert
+# the empty default. `tests/broker-no-default-features.sh` asserts
+# the production binary compiles clean against the real wire.
+default = []
+layer1-bootstrap = []
+# Forwarded feature so the broker's `ops::cgroup::test_harness` +
+# `ops::pidfd::test_harness` can be invoked from an out-of-tree
+# fake-backend test binary (the W3 s1 L1c oracles). Pulls in
+# d2b-host's matching fake backends.
+fake-backends = ["d2b-host/fake-backends"]
+
+[workspace]
+
+
+[dependencies]
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
+d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
+hmac = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "process", "net"] }
+# W3fu1 H1 (security-3): the W3 broker filesystem ops require
+# `openat2` with `O_NOFOLLOW | RESOLVE_BENEATH`, fd-based
+# `fchmod`/`fchown`, and `O_TMPFILE` + `linkat` atomic replace per
+# plan.md §"W3 filesystem path-safety tests". `rustix` provides
+# those calls without a per-syscall `unsafe` block, so the broker's
+# `unsafe_code = "deny"` lint stays clean.
+rustix = { version = "0.38", features = ["fs", "process", "net"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "sync"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+# Dev-only override to enable d2b-host's `fake-backends` feature
+# for in-tree broker unit tests (`src/ops/cgroup.rs` mod tests pulls
+# `d2b_host::cgroup::fake::FakeCgroupBackend`). The `fake` module
+# in d2b-host is gated by `#[cfg(any(test, feature = "fake-backends"))]`;
+# the `test` cfg only fires for d2b-host's own tests, not for
+# downstream crates' tests, so we forward the feature here. This is
+# the W3 H3 integrator fix: surfaced when the broker-scm-rights-fd-
+# lifecycle gate invoked `cargo test --features layer1-bootstrap` and
+# the broker test target failed to find `d2b_host::cgroup::fake`.
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap", features = ["fake-backends"] }
+tempfile = "3"
+sha2 = "0.10"

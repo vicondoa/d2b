@@ -7,7 +7,7 @@ They do not authenticate users, authorize operations, or multiplex named
 streams; those checks happen in the peer-session and stream-mux layers.
 
 Every transport adapter should pass the shared conformance checks in
-`nixling-constellation-transport::conformance` before it is wired into a
+`d2b-constellation-transport::conformance` before it is wired into a
 gateway or remote node.
 
 | Behavior | Required result | Loopback status | Local TCP status |

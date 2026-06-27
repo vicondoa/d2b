@@ -4,13 +4,13 @@
   "sockets": [
     {
       "name": "public",
-      "path": "/run/nixling/public.sock",
+      "path": "/run/d2b/public.sock",
       "reachable": true,
       "version": "0.4.0-test"
     },
     {
       "name": "broker",
-      "path": "/run/nixling/priv.sock",
+      "path": "/run/d2b/priv.sock",
       "reachable": false,
       "version": null
     }
@@ -45,7 +45,7 @@
   "deniedSubcommands": [
     {
       "name": "audit",
-      "reason": "audit requires admin role in `nixling.site.adminUsers`."
+      "reason": "audit requires admin role in `d2b.site.adminUsers`."
     }
   ]
 }

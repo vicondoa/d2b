@@ -1,18 +1,18 @@
 # Migrating from microvm.nix
 
-> How-to: migrate an existing `microvm.nix` configuration to use `nixling`
+> How-to: migrate an existing `microvm.nix` configuration to use `d2b`
 > for richer host-side glue (networking, sidecars, CLI, per-VM /nix/store,
 > SSH key management).
 >
 > Reading time: ~15 minutes.
 > Difficulty: intermediate.
 
-`nixling` does not replace [`microvm.nix`][upstream] — it sits on top of it.
+`d2b` does not replace [`microvm.nix`][upstream] — it sits on top of it.
 The upstream module still owns the `microvm.vms.<vm>.config` evaluation,
 the hypervisor runners, the volume/share machinery, and the
-`microvm@<vm>.service` unit. `nixling` adds an opinionated layer above:
+`microvm@<vm>.service` unit. `d2b` adds an opinionated layer above:
 per-env networking (bridges + auto-declared NAT VM + dnsmasq + nftables),
-per-VM `/nix/store` hardlink farms, SSH key lifecycle, a `nixling` CLI,
+per-VM `/nix/store` hardlink farms, SSH key lifecycle, a `d2b` CLI,
 and component toggles (graphics, audio, TPM, USBIP).
 
 This document is the recipe for porting a working `microvm.nix`
@@ -33,17 +33,17 @@ You should already have:
   user vs. macvtap" do not ring a bell, read the upstream README first.
 - Root on the target host. Activation rewrites
   `microvm.stateDir`, drops new systemd units, and creates
-  `/var/lib/nixling/`.
+  `/var/lib/d2b/`.
 
 Pick a maintenance window. The first `nixos-rebuild switch` after
 adoption will:
 
 - Move state from your existing `microvm.stateDir` (commonly
-  `/var/lib/microvms/`) to `/var/lib/nixling/vms/<vm>/`.
+  `/var/lib/microvms/`) to `/var/lib/d2b/vms/<vm>/`.
 - Tear down whatever taps / bridges / dnsmasq instances you ran by hand
   and replace them with per-env bridges + an auto-declared net VM.
 - Generate fresh per-VM Ed25519 SSH host keys under
-  `/var/lib/nixling/keys/` — your existing in-VM `authorized_keys` for
+  `/var/lib/d2b/keys/` — your existing in-VM `authorized_keys` for
   ssh-from-host will need to be updated (or just trust the framework's
   injection flow, below).
 
@@ -52,29 +52,29 @@ the existing taps), stop here and shrink the scope first.
 
 ## What changes
 
-| Concern              | microvm.nix-only                                   | nixling                                                              |
+| Concern              | microvm.nix-only                                   | d2b                                                              |
 | -------------------- | -------------------------------------------------- | -------------------------------------------------------------------- |
-| VM declaration       | `microvm.vms.<vm>.config = { ... }`                | `nixling.vms.<vm>.config = { ... }` (env-aware, components-aware)    |
-| Per-VM /nix/store    | shared host `/nix/store` via virtiofs              | per-VM hardlink farm under `/var/lib/nixling/vms/<vm>/store/`        |
-| `microvm.stateDir`   | `/var/lib/microvms/` (upstream default)            | `/var/lib/nixling/vms/` (forced by `host.nix`)                       |
+| VM declaration       | `microvm.vms.<vm>.config = { ... }`                | `d2b.vms.<vm>.config = { ... }` (env-aware, components-aware)    |
+| Per-VM /nix/store    | shared host `/nix/store` via virtiofs              | per-VM hardlink farm under `/var/lib/d2b/vms/<vm>/store/`        |
+| `microvm.stateDir`   | `/var/lib/microvms/` (upstream default)            | `/var/lib/d2b/vms/` (forced by `host.nix`)                       |
 | Networking           | user-owned (`microvm.interfaces`, manual bridges)  | per-env net VM auto-declared as `sys-<env>-net` + bridges            |
 | DHCP / DNS for VMs   | user-owned (`services.dnsmasq` on host, or static) | dnsmasq inside the per-env net VM, host-reservations from `index`    |
 | Egress firewall      | host nftables                                      | nftables inside the net VM (`hostBlocklist` + RFC1918 DROP)          |
 | VM-to-VM isolation   | shared bridge by default                           | one bridge per env, no inter-env forwarding                          |
-| SSH into the VM      | bake keys into the guest's nixos config            | framework-managed per-VM Ed25519 key under `nixling.site.keysDir`    |
-| Lifecycle commands   | `systemctl start microvm@<vm>` + `microvm -R`      | `nixling vm start\|vm stop\|switch\|build\|boot\|test\|status <vm>` (dispatches through `nixlingd` → `nixling-priv-broker` per ADR 0015 v1.0 daemon-only) |
-| Autostart            | `microvm.autostart` list                           | `nixling.vms.<vm>.autostart` per-VM bool                             |
-| Graphics             | hand-rolled crosvm + virtio-gpu wiring             | `nixling.vms.<vm>.graphics.enable = true` (component toggle)         |
-| TPM                  | hand-rolled `swtpm`, manual socket plumbing        | `nixling.vms.<vm>.tpm.enable = true`                                 |
-| Audio                | hand-rolled vhost-user-sound                       | `nixling.vms.<vm>.audio.enable = true` + `nixling audio mic/speaker` |
-| USBIP                | manual `usbipd` + `usbip attach` on the host       | `nixling usb attach <vm> <busid> --apply` (dispatches through nixlingd → broker `SpawnRunner` per-env usbipd runner; legacy systemd `nixling-sys-<env>-usbipd-proxy.{service,socket}` was retired in v1.0 per ADR 0015) |
-| Non-root start/stop  | sudo every time                                    | `nixling` group + SO_PEERCRED at `public.sock` accept time (v1.0 daemon-only per ADR 0015; the polkit per-VM allowlist was retired in v1.0) |
-| Wrapping             | direct `microvm@<vm>.service`                      | wrapped by `nixlingd` supervisor DAG + broker `SpawnRunner` per-runner pidfd ownership (the legacy `nixling@<vm>.service` wrapper was retired in v1.0) |
+| SSH into the VM      | bake keys into the guest's nixos config            | framework-managed per-VM Ed25519 key under `d2b.site.keysDir`    |
+| Lifecycle commands   | `systemctl start microvm@<vm>` + `microvm -R`      | `d2b vm start\|vm stop\|switch\|build\|boot\|test\|status <vm>` (dispatches through `d2bd` → `d2b-priv-broker` per ADR 0015 v1.0 daemon-only) |
+| Autostart            | `microvm.autostart` list                           | `d2b.vms.<vm>.autostart` per-VM bool                             |
+| Graphics             | hand-rolled crosvm + virtio-gpu wiring             | `d2b.vms.<vm>.graphics.enable = true` (component toggle)         |
+| TPM                  | hand-rolled `swtpm`, manual socket plumbing        | `d2b.vms.<vm>.tpm.enable = true`                                 |
+| Audio                | hand-rolled vhost-user-sound                       | `d2b.vms.<vm>.audio.enable = true` + `d2b audio mic/speaker` |
+| USBIP                | manual `usbipd` + `usbip attach` on the host       | `d2b usb attach <vm> <busid> --apply` (dispatches through d2bd → broker `SpawnRunner` per-env usbipd runner; legacy systemd `d2b-sys-<env>-usbipd-proxy.{service,socket}` was retired in v1.0 per ADR 0015) |
+| Non-root start/stop  | sudo every time                                    | `d2b` group + SO_PEERCRED at `public.sock` accept time (v1.0 daemon-only per ADR 0015; the polkit per-VM allowlist was retired in v1.0) |
+| Wrapping             | direct `microvm@<vm>.service`                      | wrapped by `d2bd` supervisor DAG + broker `SpawnRunner` per-runner pidfd ownership (the legacy `d2b@<vm>.service` wrapper was retired in v1.0) |
 
 ## Option mapping
 
 For every common upstream pattern, the section below shows the
-`nixling` equivalent. Examples are minimal — copy what you need
+`d2b` equivalent. Examples are minimal — copy what you need
 into your real config.
 
 ### Pattern: one VM, one tap, host runs dnsmasq
@@ -99,18 +99,18 @@ into your real config.
 }
 ```
 
-**nixling:**
+**d2b:**
 
 ```nix
 {
-  nixling.hostLanCidrs = [ "192.168.1.0/24" ];
+  d2b.hostLanCidrs = [ "192.168.1.0/24" ];
 
-  nixling.envs.work = {
+  d2b.envs.work = {
     lanSubnet    = "10.20.0.0/24";
     uplinkSubnet = "192.0.2.0/30";
   };
 
-  nixling.vms.work = {
+  d2b.vms.work = {
     env    = "work";
     index  = 10;            # → 10.20.0.10
     ssh.user = "alice";
@@ -129,20 +129,20 @@ DHCP + DNS + egress NAT on `br-work-lan`.
 **microvm.nix:** you would declare one `microvm.vms.*` block per VM,
 share a bridge by hand, and reserve MACs yourself.
 
-**nixling:**
+**d2b:**
 
 ```nix
 {
-  nixling.envs.work = {
+  d2b.envs.work = {
     lanSubnet    = "10.20.0.0/24";
     uplinkSubnet = "192.0.2.0/30";
   };
 
-  nixling.vms.work-app = {
+  d2b.vms.work-app = {
     env = "work"; index = 10; ssh.user = "alice";
     config = { networking.hostName = "work-app"; };
   };
-  nixling.vms.work-db = {
+  d2b.vms.work-db = {
     env = "work"; index = 11; ssh.user = "alice";
     config = { networking.hostName = "work-db"; };
   };
@@ -158,8 +158,8 @@ explicit VM-to-VM traffic (e.g. service mesh inside an env), opt in
 with the two-step unsafe acknowledgement:
 
 ```nix
-nixling.site.allowUnsafeEastWest = true;
-nixling.envs.work.lan.allowEastWest = true;
+d2b.site.allowUnsafeEastWest = true;
+d2b.envs.work.lan.allowEastWest = true;
 ```
 
 Leave both unset for the default isolated LAN.
@@ -168,20 +168,20 @@ Leave both unset for the default isolated LAN.
 
 ```nix
 {
-  nixling.envs.work = {
+  d2b.envs.work = {
     lanSubnet    = "10.20.0.0/24";
     uplinkSubnet = "192.0.2.0/30";
   };
-  nixling.envs.personal = {
+  d2b.envs.personal = {
     lanSubnet    = "10.30.0.0/24";
     uplinkSubnet = "192.0.2.4/30";
   };
 
-  nixling.vms.work-app = {
+  d2b.vms.work-app = {
     env = "work"; index = 10; ssh.user = "alice";
     config = { networking.hostName = "work-app"; };
   };
-  nixling.vms.personal-app = {
+  d2b.vms.personal-app = {
     env = "personal"; index = 10; ssh.user = "alice";
     config = { networking.hostName = "personal-app"; };
   };
@@ -200,7 +200,7 @@ PPPoE, ...), set `mtu` to the effective path MTU and enable
 
 ```nix
 {
-  nixling.envs.work = {
+  d2b.envs.work = {
     lanSubnet = "10.20.0.0/24";
     uplinkSubnet = "192.0.2.0/30";
     mtu = 1280;
@@ -223,15 +223,15 @@ cross-domain goes away.
 
 ```nix
 {
-  nixling.site.waylandUser   = "alice";
-  nixling.site.launcherUsers = [ "alice" ];
+  d2b.site.waylandUser   = "alice";
+  d2b.site.launcherUsers = [ "alice" ];
 
-  nixling.envs.desktop = {
+  d2b.envs.desktop = {
     lanSubnet    = "10.42.0.0/24";
     uplinkSubnet = "192.0.2.0/30";
   };
 
-  nixling.vms.workstation = {
+  d2b.vms.workstation = {
     env = "desktop"; index = 10; ssh.user = "alice";
     graphics.enable = true;       # crosvm GPU sidecar + Wayland
     audio.enable    = true;       # vhost-user-sound → host PipeWire
@@ -243,17 +243,17 @@ cross-domain goes away.
 `graphics.enable = true` implicitly pins `microvm.hypervisor =
 "cloud-hypervisor"` — the only hypervisor wired for the GPU sidecar.
 Do not also start it with `systemctl start microvm@workstation`: use
-`nixling vm start workstation` from a Plasma/sway/Hyprland terminal so the
+`d2b vm start workstation` from a Plasma/sway/Hyprland terminal so the
 sidecar can reach `$WAYLAND_DISPLAY`. See `examples/graphics-workstation/`.
 
 ### Pattern: TPM-backed VM
 
 **microvm.nix:** hand-roll `swtpm` socket, point the runner at it.
 
-**nixling:**
+**d2b:**
 
 ```nix
-nixling.vms.secure = {
+d2b.vms.secure = {
   env = "work"; index = 12; ssh.user = "alice";
   tpm.enable = true;            # swtpm + CRB on /dev/tpm0 in guest
   config = { networking.hostName = "secure"; };
@@ -261,26 +261,26 @@ nixling.vms.secure = {
 ```
 
 `tpm.enable = true` pins cloud-hypervisor and points TPM state at
-`/var/lib/nixling/vms/secure/swtpm/`. Treat that directory as secret;
+`/var/lib/d2b/vms/secure/swtpm/`. Treat that directory as secret;
 back up only to encrypted, access-controlled media.
 
 ### Pattern: YubiKey passthrough
 
 ```nix
-nixling.site.yubikey.enable = true;       # host udev; usbip-host loads on per-VM opt-in
+d2b.site.yubikey.enable = true;       # host udev; usbip-host loads on per-VM opt-in
 
-nixling.vms.work-app = {
+d2b.vms.work-app = {
   env = "work"; index = 10; ssh.user = "alice";
   usbip.yubikey = true;                   # guest vhci_hcd + usbip CLI
   config = { networking.hostName = "work-app"; };
 };
 ```
 
-Then `nixling usb attach work-app <busid> --apply` from the host
+Then `d2b usb attach work-app <busid> --apply` from the host
 attaches a plugged-in YubiKey via the per-env usbipd broker-spawned
-runner under `nixling.slice/sys-work/usbipd-proxy` (v1.0 per ADR
-0015; the legacy `nixling usb work-app` bash orchestrator + the
-per-env `nixling-sys-work-usbipd-proxy.service` systemd unit were
+runner under `d2b.slice/sys-work/usbipd-proxy` (v1.0 per ADR
+0015; the legacy `d2b usb work-app` bash orchestrator + the
+per-env `d2b-sys-work-usbipd-proxy.service` systemd unit were
 retired in v1.0). Ctrl-C detaches.
 
 ### Pattern: keeping legacy / hand-rolled networking
@@ -290,9 +290,9 @@ a physical NIC), leave `env = null` and keep using
 `microvm.interfaces` and `systemd.network` inside `config`:
 
 ```nix
-nixling.vms.legacy = {
+d2b.vms.legacy = {
   env = null;                              # opt out of per-env wiring
-  ssh.user = null;                         # nixling CLI won't ssh in
+  ssh.user = null;                         # d2b CLI won't ssh in
   config = { ... }: {
     microvm.interfaces = [{
       type = "macvtap";
@@ -310,11 +310,11 @@ and the manifest entry — just no env-derived addressing.
 
 ### Pattern: per-VM overrides of upstream knobs
 
-`nixling.vms.<vm>.config` is just a NixOS module merged into the guest.
+`d2b.vms.<vm>.config` is just a NixOS module merged into the guest.
 It can carry `microvm.*` options directly:
 
 ```nix
-nixling.vms.work-app = {
+d2b.vms.work-app = {
   env = "work"; index = 10; ssh.user = "alice";
   config = {
     networking.hostName = "work-app";
@@ -352,24 +352,24 @@ has built cleanly. See "Rollback" at the end of this section.
      --apply 'builtins.attrNames'
    ```
 
-   Write the list down. Every name here becomes a `nixling.vms.<name>`.
+   Write the list down. Every name here becomes a `d2b.vms.<name>`.
 
 2. **Group by trust / network boundary, pick CIDRs** (read-only / planning).
 
    A "trust boundary" is the coarsest answer to "which of these VMs
    are allowed to see each other on the LAN, and which must be
-   quarantined?" Each group becomes one `nixling.envs.<env>`. Most
+   quarantined?" Each group becomes one `d2b.envs.<env>`. Most
    consumers end up with 1–3 envs (e.g. `work`, `personal`, `lab`).
 
    For each env, choose:
 
    - `lanSubnet` — a `/24` for the workload bridge. Must not overlap
-     `nixling.hostLanCidrs` or any other env's `lanSubnet`.
+     `d2b.hostLanCidrs` or any other env's `lanSubnet`.
    - `uplinkSubnet` — a `/30` for the host↔net-VM point-to-point link.
      Pick from RFC 5737 (`192.0.2.0/24`, `198.51.100.0/24`,
-     `203.0.113.0/24`) so the addresses visibly belong to nixling.
+     `203.0.113.0/24`) so the addresses visibly belong to d2b.
 
-   Also set `nixling.hostLanCidrs` from `ip route` output (capture
+   Also set `d2b.hostLanCidrs` from `ip route` output (capture
    every CIDR the host sits on). The framework unions this into
    every env's `hostBlocklist`, so VMs cannot reach the host's
    neighbours.
@@ -377,7 +377,7 @@ has built cleanly. See "Rollback" at the end of this section.
    For each VM, decide whether it needs `graphics.enable`,
    `audio.enable`, `tpm.enable`, or `usbip.yubikey = true`. If
    anything turns on graphics or audio, plan to set
-   `nixling.site.waylandUser` to the desktop session user.
+   `d2b.site.waylandUser` to the desktop session user.
 
 3. **Add the flake input + import the module** (code only, no
    activation). In your top-level `flake.nix`:
@@ -397,9 +397,9 @@ has built cleanly. See "Rollback" at the end of this section.
        # code; v0.1.6 ships the matching docs catch-up so this
        # how-to and the rest of the reference docs describe the
        # behaviour you're actually running.
-       nixling.url = "github:vicondoa/nixling/v0.1.6";
-       nixling.inputs.nixpkgs.follows = "nixpkgs";
-       nixling.inputs.microvm.follows = "microvm";
+       d2b.url = "github:vicondoa/d2b/v0.1.6";
+       d2b.inputs.nixpkgs.follows = "nixpkgs";
+       d2b.inputs.microvm.follows = "microvm";
      };
    }
    ```
@@ -409,18 +409,18 @@ has built cleanly. See "Rollback" at the end of this section.
    `nixosConfigurations.<host>.modules`, add:
 
    ```nix
-   inputs.nixling.nixosModules.default
+   inputs.d2b.nixosModules.default
    ```
 
    Do **not** also import the upstream `microvm.nixosModules.host`
-   manually — `nixling`'s default module pulls it in.
+   manually — `d2b`'s default module pulls it in.
 
-4. **Replace `microvm.vms.*` with `nixling.vms.*`** (code only).
+4. **Replace `microvm.vms.*` with `d2b.vms.*`** (code only).
    Apply the mapping from the previous section. For each VM `<name>`:
 
    - Drop `interfaces` (env-managed) and the manual MAC.
    - Move whatever was in `microvm.vms.<name>.config` into
-     `nixling.vms.<name>.config` verbatim.
+     `d2b.vms.<name>.config` verbatim.
    - Keep `microvm.mem`, `microvm.vcpu`, `microvm.volumes`,
      `microvm.hypervisor` inside that `config` block — they still
      resolve.
@@ -455,7 +455,7 @@ has built cleanly. See "Rollback" at the end of this section.
 
    ```bash
    for vm in <names>; do
-     mv /var/lib/microvms/$vm /var/lib/nixling/vms/$vm
+     mv /var/lib/microvms/$vm /var/lib/d2b/vms/$vm
    done
    ```
 
@@ -463,7 +463,7 @@ has built cleanly. See "Rollback" at the end of this section.
    their `image = ...` paths updated to the new location. Volumes
    referenced by bare filename (relative to `microvm.stateDir`) move
    transparently because the framework forces `microvm.stateDir =
-   /var/lib/nixling/vms`.
+   /var/lib/d2b/vms`.
 
 8. **Activate.**
 
@@ -474,33 +474,33 @@ has built cleanly. See "Rollback" at the end of this section.
 9. **Verify.**
 
    ```bash
-   nixling list                       # what's declared + status
-   nixling status <vm>                # per-VM health
-   nixling vm start <vm> --apply      # bring up (graphics: needs Wayland)
-   nixling switch <vm> --apply        # push a new closure live
+   d2b list                       # what's declared + status
+   d2b status <vm>                # per-VM health
+   d2b vm start <vm> --apply      # bring up (graphics: needs Wayland)
+   d2b switch <vm> --apply        # push a new closure live
    ```
 
    For headless VMs, `autostart = true` plus
-   `nixling vm list` will show the broker-spawned runner state
-   (`nixling vm start <vm>` registers the runner in the supervisor
+   `d2b vm list` will show the broker-spawned runner state
+   (`d2b vm start <vm>` registers the runner in the supervisor
    pidfd table). SSH into each migrated VM to confirm reachability.
 
 ### After every subsequent `nixos-rebuild switch` (v1.0)
 
-In v1.0 (per ADR 0015) `nixlingd` and `nixling-priv-broker` are the
+In v1.0 (per ADR 0015) `d2bd` and `d2b-priv-broker` are the
 only persistent system units the framework declares; rebuilds update
-the systemd unit files and `/etc/nixling/{bundle,host,processes,
+the systemd unit files and `/etc/d2b/{bundle,host,processes,
 privileges}.json` but the broker's per-runner pidfd ownership
 protects in-flight session state (interactive Wayland clients,
 in-RAM Entra device-bound tokens, virtiofsd socket handshakes) —
-the runners are not respawned. Use `nixling vm restart <vm> --apply`
+the runners are not respawned. Use `d2b vm restart <vm> --apply`
 to explicitly cycle a VM after a rebuild.
 
 After `nixos-rebuild switch`, check whether any VM has pending
 changes:
 
 ```bash
-nixling list
+d2b list
 ```
 
 A VM with a drift between its declared closure and its booted
@@ -514,14 +514,14 @@ work             work   true     true  true    10.20.0.10      running [pending 
 Apply with:
 
 ```bash
-nixling vm restart <vm> --apply
+d2b vm restart <vm> --apply
 ```
 
-(Or `nixling switch <vm> --apply` if you want a per-VM closure rebuild +
+(Or `d2b switch <vm> --apply` if you want a per-VM closure rebuild +
 live activation via SSH; restart cycles the existing closure
 cleanly.)
 
-`nixling status <vm>` prints both the `booted` and `current`
+`d2b status <vm>` prints both the `booted` and `current`
 store paths plus the exact remediation command, so the user
 doesn't have to memorize which command applies which kind of
 change. For the full predicate semantics see
@@ -536,13 +536,13 @@ change. For the full predicate semantics see
 - **Steps 6–7 succeed but step 8 (`switch`) fails:** the new closure
   is built but not active; state directories have been renamed. To
   roll back: revert the config, move state back
-  (`mv /var/lib/nixling/vms/<vm> /var/lib/microvms/<vm>` for each
+  (`mv /var/lib/d2b/vms/<vm> /var/lib/microvms/<vm>` for each
   VM), and `nixos-rebuild switch --flake .#<host>` against the old
   config. Start the VMs with `systemctl start microvm@<vm>` as
   before.
 - **Step 9 verification fails on a specific VM** but activation
   succeeded: prefer fixing forward (the per-env net VM may take a
-  few seconds to come up; check `nixling status sys-<env>-net` and
+  few seconds to come up; check `d2b status sys-<env>-net` and
   the troubleshooting section). If a deeper rollback is needed,
   `nixos-rebuild switch --rollback` reverts to the previous
   generation, then move state back as above.
@@ -553,30 +553,30 @@ change. For the full predicate semantics see
   routing, host-LAN drop rule applied by default.
 - **Per-VM /nix/store.** Each guest sees only its own closure plus
   the microvm.nix runner — a closure-limited `/nix/store` view backed
-  by a per-VM hardlink farm under `/var/lib/nixling/vms/<vm>/store/`.
-  Zero byte duplication. `nixling switch <vm> --apply` updates it live
-  without a VM reboot. Back up `/var/lib/nixling/` only to encrypted,
+  by a per-VM hardlink farm under `/var/lib/d2b/vms/<vm>/store/`.
+  Zero byte duplication. `d2b switch <vm> --apply` updates it live
+  without a VM reboot. Back up `/var/lib/d2b/` only to encrypted,
   access-controlled media.
-- **Explicit lifecycle.** In v1.0 (per ADR 0015) `nixling vm start /
-  stop / restart` dispatch through `nixlingd` → `nixling-priv-broker`;
+- **Explicit lifecycle.** In v1.0 (per ADR 0015) `d2b vm start /
+  stop / restart` dispatch through `d2bd` → `d2b-priv-broker`;
   the broker's `SpawnRunner` / `SignalRunner` ops + supervisor pidfd
   table are the lifecycle-of-record. Single commands, clear exit
   codes (`docs/reference/cli-contract.md`).
-- **CLI ergonomics.** `nixling vm start / vm stop / status / list /
+- **CLI ergonomics.** `d2b vm start / vm stop / status / list /
   audio / usb` — no more remembering tap names, MAC byte counts, or
   which env's usbipd is bound to which `192.0.2.X`.
 - **SSH key management.** Per-VM Ed25519 keys generated at activation,
-  ACL'd to the `nixling` group, injected into the guest
-  at boot via `nixling-load-host-keys.service`. No flake-baked keys.
-- **Permission boundary.** Members of `nixling` can drive
-  `vm start` / `vm stop` / `vm restart` against `nixlingd`'s public
-  socket (mode 0660, group `nixling`); `SO_PEERCRED` at
+  ACL'd to the `d2b` group, injected into the guest
+  at boot via `d2b-load-host-keys.service`. No flake-baked keys.
+- **Permission boundary.** Members of `d2b` can drive
+  `vm start` / `vm stop` / `vm restart` against `d2bd`'s public
+  socket (mode 0660, group `d2b`); `SO_PEERCRED` at
   accept time is the authorisation surface. The legacy polkit per-VM
   allowlist was retired in v1.0 (ADR 0015).
 
-## What microvm.nix users lose / what's nixling-only
+## What microvm.nix users lose / what's d2b-only
 
-- **Single-user assumption.** `nixling.site.waylandUser` is a single
+- **Single-user assumption.** `d2b.site.waylandUser` is a single
   string — graphics + audio sidecars bind that user's
   `/run/user/<uid>/wayland-0` and `pipewire-0`. Multi-user desktops
   need additional work (out of scope for v0.1.0).
@@ -592,15 +592,15 @@ change. For the full predicate semantics see
   `audio.enable` (the vhost-user-sound device is wired only via
   cloud-hypervisor's `--device` plumbing — see
   `nixos-modules/components/audio/guest.nix:121-127`). You can still
-  override per-VM via `nixling.vms.<vm>.config.microvm.hypervisor = ...`
+  override per-VM via `d2b.vms.<vm>.config.microvm.hypervisor = ...`
   for headless VMs.
 - **Framework-owned shares.** Do not add a `/nix/store` entry to
-  `microvm.shares` in `nixling.vms.<vm>.config` — the framework
+  `microvm.shares` in `d2b.vms.<vm>.config` — the framework
   injects it with `lib.mkForce`.
 - **The daemon owns VM lifecycle.** In v1.0 (per ADR 0015) per-VM
-  lifecycle moved fully to `nixlingd` -> `nixling-priv-broker` via the
+  lifecycle moved fully to `d2bd` -> `d2b-priv-broker` via the
   supervisor DAG; the legacy systemd wrapper path was retired. Use
-  `nixling vm start / vm stop / vm restart` for day-to-day lifecycle.
+  `d2b vm start / vm stop / vm restart` for day-to-day lifecycle.
 
 ## Naming conventions you'll see post-migration
 
@@ -608,52 +608,52 @@ change. For the full predicate semantics see
 - `br-<env>-up` — point-to-point host↔net-VM bridge.
 - `sys-<env>-net` — auto-declared net VM (NAT + dnsmasq + nftables).
 - `vm-<vm>-<env>` / `vm-<vm>-up` — taps on the bridges above.
-- `nixling-sys-<env>-usbipd-proxy.service` — host-side USBIP proxy
+- `d2b-sys-<env>-usbipd-proxy.service` — host-side USBIP proxy
   per env (retired as a host singleton and now a broker-spawned
   runner per ADR 0015; the unit name above is preserved as the
   cgroup leaf identifier).
-- `nixlingd.service` — daemon control plane (read-only RPCs + dispatch
+- `d2bd.service` — daemon control plane (read-only RPCs + dispatch
   to broker; never root).
-- `nixling-priv-broker.{service,socket}` — socket-activated privileged
+- `d2b-priv-broker.{service,socket}` — socket-activated privileged
   broker (single audited host-mutation surface; see
   [`docs/reference/privileges.md`](../reference/privileges.md)).
 - broker-spawned VM runners — in v1.0 the broker `SpawnRunner` path is
   the lifecycle of record.
-- `nixling` — host group whose members can drive `vm start
-  / vm stop / vm restart` against `nixlingd`'s public socket (mode
-  0660, group `nixling`).
+- `d2b` — host group whose members can drive `vm start
+  / vm stop / vm restart` against `d2bd`'s public socket (mode
+  0660, group `d2b`).
 
 ## Backup / state directories
 
 - Upstream defaults: `microvm.stateDir = /var/lib/microvms/<vm>/`.
-- After migration: `microvm.stateDir = /var/lib/nixling/vms/`
+- After migration: `microvm.stateDir = /var/lib/d2b/vms/`
   (forced in `nixos-modules/host.nix`). Per-VM state lives under
-  `/var/lib/nixling/vms/<vm>/`.
-- Per-VM `/nix/store` mirror: `/var/lib/nixling/vms/<vm>/store/`
+  `/var/lib/d2b/vms/<vm>/`.
+- Per-VM `/nix/store` mirror: `/var/lib/d2b/vms/<vm>/store/`
   (hardlinks; same FS as `/nix/store` is required).
-- SSH keys: `/var/lib/nixling/keys/<vm>_ed25519` (private) +
-  `.pub`. Mode `0700`, ACL'd to `nixling`.
+- SSH keys: `/var/lib/d2b/keys/<vm>_ed25519` (private) +
+  `.pub`. Mode `0700`, ACL'd to `d2b`.
 - TPM state (if `tpm.enable = true`):
-  `/var/lib/nixling/vms/<vm>/swtpm/`. Treat as secret; back up only to
+  `/var/lib/d2b/vms/<vm>/swtpm/`. Treat as secret; back up only to
   encrypted, access-controlled media.
 
-Back up `/var/lib/nixling/` only to encrypted, access-controlled media
+Back up `/var/lib/d2b/` only to encrypted, access-controlled media
 (TPM NVRAM and per-VM SSH keys live there). Restoring requires the
-same `nixling.site.keysDir` / `stateDir` layout — those are
+same `d2b.site.keysDir` / `stateDir` layout — those are
 advisory-only in v0.1.0 and effectively hardcoded.
 
 ## Troubleshooting
 
-**Eval fails with `nixling.envs.<env>: lanSubnet overlaps …`.**
-You picked a LAN subnet that overlaps `nixling.hostLanCidrs` or
+**Eval fails with `d2b.envs.<env>: lanSubnet overlaps …`.**
+You picked a LAN subnet that overlaps `d2b.hostLanCidrs` or
 another env's `lanSubnet`. Pick a disjoint `/24`.
 
 **Eval fails with `graphics.enable = true` but `waylandUser = null`.**
-Set `nixling.site.waylandUser = "<your-user>"` and declare that user
+Set `d2b.site.waylandUser = "<your-user>"` and declare that user
 in `users.users`. The user must have a running Wayland session at the
-time `nixling vm start <vm>` runs.
+time `d2b vm start <vm>` runs.
 
-**`nixling vm start <vm>` fails: `cannot find $WAYLAND_DISPLAY`.**
+**`d2b vm start <vm>` fails: `cannot find $WAYLAND_DISPLAY`.**
 You ran it over SSH or as root. Graphics VMs require a terminal
 inside the host's Wayland session. Headless VMs work over SSH and
 as root.
@@ -662,31 +662,31 @@ as root.
 `ip link delete vm-<oldname>` and rerun `nixos-rebuild switch`. The
 framework only manages the taps it declares.
 
-**`nixling switch <vm> --apply` errors with `cross-FS hardlink refused`.**
-`/var/lib/nixling` and `/nix/store` are on different filesystems.
+**`d2b switch <vm> --apply` errors with `cross-FS hardlink refused`.**
+`/var/lib/d2b` and `/nix/store` are on different filesystems.
 The per-VM store needs same-FS hardlinks; move
-`/var/lib/nixling` to the same FS as `/nix/store` (typically by
+`/var/lib/d2b` to the same FS as `/nix/store` (typically by
 remounting or relocating).
 
-**`nixling vm start` is denied by the daemon socket.**
-The invoking user is not in `nixling`. Add them to
-`nixling.site.launcherUsers` (which only adjoins the group; you must
+**`d2b vm start` is denied by the daemon socket.**
+The invoking user is not in `d2b`. Add them to
+`d2b.site.launcherUsers` (which only adjoins the group; you must
 still declare the user) and re-log-in so the group membership
 takes effect.
 
 **SSH into the VM still uses your old key.**
 The guest's `authorized_keys` is populated at boot by
-`nixling-load-host-keys.service`. Restart the VM
-(`nixling vm stop <vm> --apply && nixling vm start <vm> --apply`) or, inside the guest,
-`systemctl restart nixling-load-host-keys.service`.
+`d2b-load-host-keys.service`. Restart the VM
+(`d2b vm stop <vm> --apply && d2b vm start <vm> --apply`) or, inside the guest,
+`systemctl restart d2b-load-host-keys.service`.
 
 **`microvm.vms.<vm>` declared in two places.**
 You left an old `microvm.vms.<name>` block alongside the new
-`nixling.vms.<name>`. Remove the old one — the framework manages
+`d2b.vms.<name>`. Remove the old one — the framework manages
 the translation.
 
 **Per-env net VM (`sys-<env>-net`) won't start.**
-Check `nixling vm status sys-<env>-net` first. The most common cause is
+Check `d2b vm status sys-<env>-net` first. The most common cause is
 that the env's `lanSubnet` is not a `/24` ending in `.0`, or
 `uplinkSubnet` is not a `/30`. Eval should have caught this; if it
 didn't, file an issue.

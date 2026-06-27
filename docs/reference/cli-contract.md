@@ -1,11 +1,11 @@
-# nixling CLI contract
+# d2b CLI contract
 
 **Diataxis category:** reference.
 
 This document is the command contract for the single user-facing
-`nixling` entry point. It covers the CLI surfaces that are fully
+`d2b` entry point. It covers the CLI surfaces that are fully
 owned in Rust, including the read-only and daemon-backed commands
-that go through `nixlingd`.
+that go through `d2bd`.
 
 Examples use the smoke topology from the Layer-1 fixtures: one workload
 VM (`corp-vm`) and one auto-declared net VM (`sys-work-net`) in the
@@ -21,7 +21,7 @@ than literal byte-for-byte goldens unless the corresponding
 > `not-yet-implemented` or `daemon-down` now surface typed
 > envelopes (`not-yet-implemented` exit 78, `daemon-down` exit 1) —
 > see [`error-codes.md` § "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions)
-> for the multi-line block format used on those envelopes. `nixling
+> for the multi-line block format used on those envelopes. `d2b
 > up/down/restart/list` are first-class top-level aliases for `vm
 > start/stop/restart/list` and route through the same daemon path.
 > Stop-like aliases accept the same `--force` / `-f` flag as the
@@ -46,7 +46,7 @@ than literal byte-for-byte goldens unless the corresponding
 
 ### `list`
 
-**Synopsis:** `nixling list [--human] [--json]`
+**Synopsis:** `d2b list [--human] [--json]`
 
 **Flags**
 
@@ -72,7 +72,7 @@ than literal byte-for-byte goldens unless the corresponding
 **Human example**
 
 ```text
-$ nixling list
+$ d2b list
 NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 corp-vm            work      false     false false   10.20.0.10      running
 sys-work-net       work      false     false false   192.0.2.1       running (net-vm)
@@ -109,7 +109,7 @@ sys-work-net       work      false     false false   192.0.2.1       running (ne
 
 **Status**
 
-`list` is a daemon-native, read-only inventory query. When nixlingd is
+`list` is a daemon-native, read-only inventory query. When d2bd is
 reachable, the CLI queries the public socket and reports declared VM
 metadata, daemon-derived lifecycle state, and the VM guest closure out
 path when closure metadata is available. For a running VM with
@@ -133,7 +133,7 @@ Rows are ordered by VM name because the historical bash implementation iterated 
 
 ### `realm enter`
 
-**Synopsis:** `nixling realm enter <realm>`
+**Synopsis:** `d2b realm enter <realm>`
 
 Enters the local gateway VM for a gateway-backed realm by opening an
 interactive `vm exec` session to the gateway workload. The host resolves
@@ -143,7 +143,7 @@ relay/provider credentials remain inside the gateway guest.
 
 ### `realm list`
 
-**Synopsis:** `nixling realm list [--human | --json]`
+**Synopsis:** `d2b realm list [--human | --json]`
 
 Lists rendered local realm entrypoints. The output reports each realm's mode
 (`host-resident` or `gateway-backed`), gateway VM when present, local gateway
@@ -151,7 +151,7 @@ lifecycle state, credential boundary, and default-deny cross-realm policy.
 
 ### `realm inspect`
 
-**Synopsis:** `nixling realm inspect <realm> [--human | --json]`
+**Synopsis:** `d2b realm inspect <realm> [--human | --json]`
 
 Inspects one realm entrypoint using the same bounded fields as `realm list`.
 Unknown realms fail closed with the same actionable missing-entrypoint envelope
@@ -159,7 +159,7 @@ used by routed VM targets.
 
 ### `op inspect`
 
-**Synopsis:** `nixling op inspect [--trace-id <id> --span-id <id>] [--human | --json]`
+**Synopsis:** `d2b op inspect [--trace-id <id> --span-id <id>] [--human | --json]`
 
 Inspects current local constellation operation state without making the host a
 global telemetry owner. The command reports bounded local VM/gateway counts,
@@ -169,24 +169,24 @@ credentials, or generic tunnels.
 
 ### `realm run`
 
-**Synopsis:** `nixling realm run <realm> -- <argv...> [--human | --json]`
+**Synopsis:** `d2b realm run <realm> -- <argv...> [--human | --json]`
 
 Runs a one-shot command inside the local gateway VM for a
 gateway-backed realm. This is the low-level escape hatch for scripts that
 need to issue an exact command in the realm trust boundary. Daily
-workload operations should continue to use `nixling vm ...`; realm
+workload operations should continue to use `d2b vm ...`; realm
 targets route through the configured gateway entrypoint when supported.
 
 ### Realm target routing
 
-`nixling vm start|stop|restart|exec <workload>.<node>.<realm>.nixling`
+`d2b vm start|stop|restart|exec <workload>.<node>.<realm>.d2b`
 keeps local VM names on the existing host fast path. Fully qualified
 realm targets are resolved through the generated `realm-entrypoints.json`
 table. Missing entrypoints fail closed with an actionable
 `missing-realm-entrypoint` error; stopped gateway VMs fail with
 `gateway-not-running` and a remediation command to start the gateway.
 
-`nixling vm list --realm <realm>` runs `nixling vm list` inside the
+`d2b vm list --realm <realm>` runs `d2b vm list` inside the
 realm gateway through the same local guest-control exec path. It does not
 make the host persist a remote node/workload registry.
 
@@ -194,8 +194,8 @@ make the host persist a remote node/workload registry.
 
 **Synopsis:**
 
-- `nixling vm display list [--target <nl://...>] [--human | --json]`
-- `nixling vm display close <session-id> [--human | --json]`
+- `d2b vm display list [--target <d2b://...>] [--human | --json]`
+- `d2b vm display close <session-id> [--human | --json]`
 
 `vm display` manages active gateway display sessions. It requires the
 gateway daemon's public socket and does not fall back to SSH or host-side
@@ -213,11 +213,11 @@ already-absent session.
 ```json
 {
   "command": "vm display list",
-  "target": "nl://demo.gw.work.nixling",
+  "target": "d2b://demo.gw.work.d2b",
   "sessions": [
     {
       "sessionId": "s0",
-      "target": "nl://demo.gw.work.nixling",
+      "target": "d2b://demo.gw.work.d2b",
       "state": "running",
       "operationId": "gw-exec-1",
       "principal": "uid-1000"
@@ -234,12 +234,12 @@ capability boundary.
 
 ### `vm start`
 
-**Synopsis:** `nixling vm start <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b vm start <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
 `vm start` is a daemon-native headless-lifecycle verb. If neither
-mutation flag is set, stderr emits `nixling: NOTICE: defaulting to
+mutation flag is set, stderr emits `d2b: NOTICE: defaulting to
 --dry-run` and the CLI defaults to `--dry-run`; `--apply` routes
 through the daemon.
 
@@ -256,7 +256,7 @@ through the daemon.
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name as declared in `nixling.vms.<name>`. |
+| `vm` | Required VM name as declared in `d2b.vms.<name>`. |
 
 **Exit codes**
 
@@ -268,37 +268,37 @@ through the daemon.
 | `78` | Typed `broker-error` or `not-yet-implemented`. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 There is no bash fallback. Daemon-unreachable returns `daemon-down`
-(exit 1), and the old `nixling up` exit table is preserved in this
+(exit 1), and the old `d2b up` exit table is preserved in this
 file as history.
 
 **Human example**
 
 ```text
-$ nixling vm start corp-vm --apply
+$ d2b vm start corp-vm --apply
 vm start corp-vm: spawned pid=4242 start_time_ticks=123456789
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable
+- `--apply`: routes through `d2bd` → broker. Daemon-unreachable
   surfaces `daemon-down` exit 1; native-handler-deferred surfaces
   `not-yet-implemented` exit 78; `broker-error` exit 78.
-- `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` are
+- `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` are
   unrecognised. Broker failures surface on stderr with the redacted
   public-safe remediation and exit `78`.
-- Live path: `nixlingd` → broker `SpawnRunner`.
+- Live path: `d2bd` → broker `SpawnRunner`.
 
 **Bash**
 
 - There is no bash execution path for this verb.
 ### `vm stop`
 
-**Synopsis:** `nixling vm stop <vm> [--force | -f] [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b vm stop <vm> [--force | -f] [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
 `vm stop` is a daemon-native headless-lifecycle verb. If neither
-mutation flag is set, stderr emits `nixling: NOTICE: defaulting to
+mutation flag is set, stderr emits `d2b: NOTICE: defaulting to
 --dry-run` and the CLI defaults to `--dry-run`; `--apply` routes
 through the daemon.
 
@@ -316,7 +316,7 @@ through the daemon.
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name as declared in `nixling.vms.<name>`. |
+| `vm` | Required VM name as declared in `d2b.vms.<name>`. |
 
 **Exit codes**
 
@@ -328,14 +328,14 @@ through the daemon.
 | `78` | Typed `broker-error` or `not-yet-implemented`. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 There is no bash fallback. Daemon-unreachable returns `daemon-down`
-(exit 1), and the old `nixling down` exit table is preserved in this
+(exit 1), and the old `d2b down` exit table is preserved in this
 file as history.
 
 Normal `vm stop --apply` asks supported local providers to shut the guest
 down before host-side VMM cleanup: Cloud Hypervisor receives
 `PUT /api/v1/vm.shutdown`, and qemu-media receives broker-mediated QMP
 `system_powerdown`. The wait is bounded by
-`nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds` or the per-VM
+`d2b.daemon.lifecycle.gracefulShutdown.timeoutSeconds` or the per-VM
 manifest override. Human output prints progress such as
 `Waiting for guest to shut down (up to 90s)...`; the maximum command wait is
 that graceful timeout plus the standard forced-cleanup signal windows.
@@ -351,24 +351,24 @@ still surface as `broker-error` / exit 78.
 **Human example**
 
 ```text
-$ nixling vm stop corp-vm --apply
+$ d2b vm stop corp-vm --apply
 Waiting for guest to shut down (up to 90s)...
 vm stop corp-vm: clean guest shutdown
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → provider graceful shutdown
+- `--apply`: routes through `d2bd` → provider graceful shutdown
   (when enabled) → broker cleanup as needed. Daemon-unreachable
   surfaces `daemon-down` exit 1; native-handler-deferred surfaces
   `not-yet-implemented` exit 78; `broker-error` exit 78.
 - `--force` / `-f`: available on both `vm stop` and the top-level
   `down` alias. It is an explicit stop override, not a shortcut around
   the existing forced cleanup policy.
-- `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` are
+- `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` are
   unrecognised. Broker failures surface on stderr with the redacted
   public-safe remediation and exit `78`.
-- Live path: `nixlingd` → CH API or broker-mediated QMP for guest
+- Live path: `d2bd` → CH API or broker-mediated QMP for guest
   shutdown → broker `SignalRunner` / cgroup cleanup fallback.
 
 **Bash**
@@ -376,12 +376,12 @@ vm stop corp-vm: clean guest shutdown
 - There is no bash execution path for this verb.
 ### `vm restart`
 
-**Synopsis:** `nixling vm restart <vm> [--force | -f] [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b vm restart <vm> [--force | -f] [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
 `vm restart` is a daemon-native headless-lifecycle verb. If neither
-mutation flag is set, stderr emits `nixling: NOTICE: defaulting to
+mutation flag is set, stderr emits `d2b: NOTICE: defaulting to
 --dry-run` and the CLI defaults to `--dry-run`; `--apply` routes
 through the daemon.
 
@@ -399,7 +399,7 @@ through the daemon.
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name as declared in `nixling.vms.<name>`. |
+| `vm` | Required VM name as declared in `d2b.vms.<name>`. |
 
 **Exit codes**
 
@@ -411,24 +411,24 @@ through the daemon.
 | `78` | Typed `broker-error` or `not-yet-implemented`. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 There is no bash fallback. Daemon-unreachable returns `daemon-down`
-(exit 1), and the old `nixling restart` exit table is preserved in
+(exit 1), and the old `d2b restart` exit table is preserved in
 this file as history.
 
 **Human example**
 
 ```text
-$ nixling vm restart corp-vm --apply
+$ d2b vm restart corp-vm --apply
 vm restart corp-vm: vm stop corp-vm: clean guest shutdown; vm start corp-vm: spawned pid=4242 start_time_ticks=123456789
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable
+- `--apply`: routes through `d2bd` → broker. Daemon-unreachable
   surfaces `daemon-down` exit 1; native-handler-deferred surfaces
   `not-yet-implemented` exit 78; `broker-error` exit 78.
 - `--force` / `-f`: available on both `vm restart` and the top-level
   `restart` alias. It affects only the stop phase.
-- `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` are
+- `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` are
   unrecognised. Broker failures surface on stderr with the redacted
   public-safe remediation and exit `78`.
 - Live path: same as `vm stop` for the stop phase, then broker
@@ -440,13 +440,13 @@ vm restart corp-vm: vm stop corp-vm: clean guest shutdown; vm start corp-vm: spa
 
 ### `vm list`
 
-**Synopsis:** `nixling vm list [--human] [--json]`
+**Synopsis:** `d2b vm list [--human] [--json]`
 
 **Status:** `vm list` is the daemon-side runtime inventory surface. It
-queries nixlingd's public socket and returns the same live lifecycle/runtime
+queries d2bd's public socket and returns the same live lifecycle/runtime
 entries the daemon exposes to desktop clients. If the public socket is not
 available, the command exits successfully with an empty `entries` array plus
-a note explaining that nixlingd must be started or restarted.
+a note explaining that d2bd must be started or restarted.
 
 **Flags**
 
@@ -472,7 +472,7 @@ a note explaining that nixlingd must be started or restarted.
 **Human example**
 
 ```text
-$ nixling vm list
+$ d2b vm list
 VM        STATE    RUNTIME
 corp-vm   running  running
 ```
@@ -499,7 +499,7 @@ corp-vm   running  running
       "services": {
         "gpu": null,
         "microvm": "running",
-        "nixling": "active",
+        "d2b": "active",
         "snd": null,
         "swtpm": null,
         "video": null,
@@ -514,22 +514,22 @@ corp-vm   running  running
 }
 ```
 
-When nixlingd's public socket is unavailable, `--json` returns:
+When d2bd's public socket is unavailable, `--json` returns:
 
 ```json
 {
   "command": "vm list",
   "entries": [],
-  "notes": "vm list requires nixlingd's public socket; start or restart nixlingd and retry."
+  "notes": "vm list requires d2bd's public socket; start or restart d2bd and retry."
 }
 ```
 
 **Current disposition:** `rust-native` — the Rust CLI owns the stable
-daemon-side runtime-view contract and reads it from nixlingd's public socket.
+daemon-side runtime-view contract and reads it from d2bd's public socket.
 
 ### `status`
 
-**Synopsis:** `nixling status [<vm>] [--json]`
+**Synopsis:** `d2b status [<vm>] [--json]`
 
 **Flags**
 
@@ -556,7 +556,7 @@ daemon-side runtime-view contract and reads it from nixlingd's public socket.
 **Human example**
 
 ```text
-$ nixling status corp-vm
+$ d2b status corp-vm
 === corp-vm ===
 daemon: inactive
 backend-runner: inactive
@@ -578,7 +578,7 @@ br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
   "name": "corp-vm",
   "env": "work",
   "services": {
-    "nixling": "inactive",
+    "d2b": "inactive",
     "microvm": "inactive",
     "virtiofsd": "inactive",
     "gpu": null,
@@ -615,7 +615,7 @@ appear as an ad hoc unversioned key.
 
 ### `status --check-bridges`
 
-**Synopsis:** `nixling status --check-bridges`
+**Synopsis:** `d2b status --check-bridges`
 
 **Flags**
 
@@ -640,7 +640,7 @@ appear as an ad hoc unversioned key.
 **Human example**
 
 ```text
-$ nixling status --check-bridges
+$ d2b status --check-bridges
 === Bridge health ===
 BRIDGE               STATE      ADMIN   EXPECTED     RESULT
 br-work-lan          DOWN       up      NO-CARRIER   no-carrier (no workloads up)
@@ -661,14 +661,14 @@ The bridge-health probe is part of the read-only status surface, even though rec
 
 ### `usb attach`
 
-**Synopsis:** `nixling usb attach <vm> <busid> [--dry-run | --apply] [--human] [--json]`
+**Synopsis:** `d2b usb attach <vm> <busid> [--dry-run | --apply] [--human] [--json]`
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | `false` | Print the daemon → broker USBIP attach plan plus the authenticated guestd import step without mutating host or guest state. |
-| `--apply` | boolean | `false` | Ask `nixlingd` to run three fail-closed pre-flight checks (sysfs presence, USB-capable gate, active claim exclusivity), then dispatch the appropriate broker path: **declared path** (when a static bundle intent exists for the busid — `UsbipBind` + firewall carve-out + `UsbipProxyReconcile`), or **explicit path** (when no declared intent exists — `UsbipExplicitFirewallRule` + `UsbipExplicitBind` per-device ops), then ask guestd over authenticated guest-control to import the selected busid. |
+| `--apply` | boolean | `false` | Ask `d2bd` to run three fail-closed pre-flight checks (sysfs presence, USB-capable gate, active claim exclusivity), then dispatch the appropriate broker path: **declared path** (when a static bundle intent exists for the busid — `UsbipBind` + firewall carve-out + `UsbipProxyReconcile`), or **explicit path** (when no declared intent exists — `UsbipExplicitFirewallRule` + `UsbipExplicitBind` per-device ops), then ask guestd over authenticated guest-control to import the selected busid. |
 | `--json` | boolean | `false` | Emit the dry-run summary as structured JSON. |
 | `--human` | boolean | `false` | Force the human dry-run summary on stdout. |
 
@@ -684,7 +684,7 @@ The bridge-health probe is part of the read-only status surface, even though rec
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | — |
-| `1` | `nixlingd` is unreachable, or the daemon returned a non-typed USBIP failure. | [`daemon-down`](./error-codes.md#daemon-down) |
+| `1` | `d2bd` is unreachable, or the daemon returned a non-typed USBIP failure. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Missing VM / busid or another usage error. | [`usage`](./error-codes.md#usage) |
 | `67` | The USB device busid is not present in sysfs (`usbip-busid-not-present`), or another VM already holds an active claim on this busid (`usbip-explicit-claim-conflict`). | [`usbip-busid-not-present`](./error-codes.md#usbip-busid-not-present), [`usbip-explicit-claim-conflict`](./error-codes.md#usbip-explicit-claim-conflict) |
 | `78` | The daemon reached the broker but the native USBIP apply path was refused. | [`broker-error`](./error-codes.md#broker-error) |
@@ -692,13 +692,13 @@ The bridge-health probe is part of the read-only status surface, even though rec
 **Human example**
 
 ```text
-$ nixling usb attach corp-vm 1-2 --dry-run
-nixling usb attach --dry-run: would bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for busid '1-2' for vm 'corp-vm', reconcile the USBIP proxy, and ask guestd to import the device
+$ d2b usb attach corp-vm 1-2 --dry-run
+d2b usb attach --dry-run: would bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for busid '1-2' for vm 'corp-vm', reconcile the USBIP proxy, and ask guestd to import the device
 ```
 
 **Explicit attach (present-busid, no static allowlist required)**
 
-`nixling usb attach` accepts any USB device that is physically present in sysfs
+`d2b usb attach` accepts any USB device that is physically present in sysfs
 without requiring a static busid or vendor allowlist in the NixOS configuration.
 The daemon selects the **explicit path** when no declared bundle intent exists for
 the requested busid. Three fail-closed checks run before any broker call:
@@ -710,7 +710,7 @@ the requested busid. Three fail-closed checks run before any broker call:
    declared in its manifest. Non-USB-capable VMs fail with a typed
    `RuntimeCapabilityUnsupported` error.
 3. **Active claim exclusivity** — the daemon reads the OFD lock under
-   `/run/nixling/locks/usbip/<busid>`. If another VM already holds the claim, the
+   `/run/d2b/locks/usbip/<busid>`. If another VM already holds the claim, the
    attach fails with `UsbipExplicitClaimConflict` (exit 67) naming the owner VM
    and guiding the operator to detach from the owner first.
 
@@ -722,16 +722,16 @@ unaffected.
 
 **Status**
 
-The native CLI sends one intent to `nixlingd`; the daemon drives broker host
+The native CLI sends one intent to `d2bd`; the daemon drives broker host
 USBIP state and authenticated guestd import cleanup/attach over guest-control.
 If the target VM is stopped, `--apply` fails before host mutation with an
 actionable usage error: start the VM with
-`nixling vm start <vm> --apply`, wait until it is running, then retry
-`nixling usb attach <vm> <busid> --apply`. This preflight does not create a
+`d2b vm start <vm> --apply`, wait until it is running, then retry
+`d2b usb attach <vm> <busid> --apply`. This preflight does not create a
 degraded USB state. If an earlier failed apply left a stale or bound USBIP
 session claim, start the VM and rerun the attach or run
-`nixling usb detach <vm> <busid> --apply`; the attach/detach paths and
-`nixling usb probe` all run the USBIP proxy reconcile pass, and `usb probe`
+`d2b usb detach <vm> <busid> --apply`; the attach/detach paths and
+`d2b usb probe` all run the USBIP proxy reconcile pass, and `usb probe`
 shows the session claim as cleared once the lock/proxy state is consistent.
 
 Prerequisites for `--apply` are: the target VM is running and guest-control
@@ -739,12 +739,12 @@ advertises USBIP status/import, the bundle declares a USBIP bind/firewall intent
 for the VM/busid, policy/topology checks allow the physical device, the
 `usbip-host` module and per-env backend/proxy carrier can be prepared, and no
 other owner holds the busid session claim. Failing prerequisites surface as
-typed errors or as `nixling usb probe` degraded reasons with exact remediation
+typed errors or as `d2b usb probe` degraded reasons with exact remediation
 commands.
 
 **Native**
 
-- `--apply` routes through `nixlingd` → broker + guestd. There is no SSH fallback for USBIP.
+- `--apply` routes through `d2bd` → broker + guestd. There is no SSH fallback for USBIP.
 
 **Bash**
 
@@ -752,14 +752,14 @@ commands.
 
 ### `usb detach`
 
-**Synopsis:** `nixling usb detach <vm> <busid> [--dry-run | --apply] [--human] [--json]`
+**Synopsis:** `d2b usb detach <vm> <busid> [--dry-run | --apply] [--human] [--json]`
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | `false` | Print the daemon → broker USBIP unbind plan without mutating host state. |
-| `--apply` | boolean | `false` | Ask `nixlingd` to run `UsbipUnbind` followed by `UsbipProxyReconcile` for the selected VM/busid pair. |
+| `--apply` | boolean | `false` | Ask `d2bd` to run `UsbipUnbind` followed by `UsbipProxyReconcile` for the selected VM/busid pair. |
 | `--json` | boolean | `false` | Emit the dry-run summary as structured JSON. |
 | `--human` | boolean | `false` | Force the human dry-run summary on stdout. |
 
@@ -775,15 +775,15 @@ commands.
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | — |
-| `1` | `nixlingd` is unreachable, or the daemon returned a non-typed USBIP failure. | [`daemon-down`](./error-codes.md#daemon-down) |
+| `1` | `d2bd` is unreachable, or the daemon returned a non-typed USBIP failure. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Missing VM / busid or another usage error. | [`usage`](./error-codes.md#usage) |
 | `78` | The daemon reached the broker but the native USBIP apply path was refused. | [`broker-error`](./error-codes.md#broker-error) |
 
 **Human example**
 
 ```text
-$ nixling usb detach corp-vm 1-2 --dry-run
-nixling usb detach --dry-run: would ask guestd to detach busid '1-2' for vm 'corp-vm', unbind it on the host, and reconcile the USBIP proxy
+$ d2b usb detach corp-vm 1-2 --dry-run
+d2b usb detach --dry-run: would ask guestd to detach busid '1-2' for vm 'corp-vm', unbind it on the host, and reconcile the USBIP proxy
 ```
 
 **Status**
@@ -799,11 +799,11 @@ prove firewall-withdrawal-before-flow-kill ordering plus an exact VM/proxy
 cleanup tuple, `--apply` fails closed with `usbip-revocation-not-isolated` and
 preserves the session claim for manual drain/recovery. The public error names the
 target busid. The safe next step is to stop the VM so the stream drains, then
-rerun `nixling usb detach <vm> <busid> --apply`.
+rerun `d2b usb detach <vm> <busid> --apply`.
 
 **Native**
 
-- `--apply` routes through `nixlingd` → broker `UsbipUnbind` then `UsbipProxyReconcile`.
+- `--apply` routes through `d2bd` → broker `UsbipUnbind` then `UsbipProxyReconcile`.
 
 **Bash**
 
@@ -811,7 +811,7 @@ rerun `nixling usb detach <vm> <busid> --apply`.
 
 ### `usb probe`
 
-**Synopsis:** `nixling usb probe [--human] [--json]`
+**Synopsis:** `d2b usb probe [--human] [--json]`
 
 **Flags**
 
@@ -831,19 +831,19 @@ rerun `nixling usb detach <vm> <busid> --apply`.
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | — |
-| `1` | `nixlingd` is unreachable or does not expose the native USBIP probe request. | [`daemon-down`](./error-codes.md#daemon-down) |
+| `1` | `d2bd` is unreachable or does not expose the native USBIP probe request. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `78` | The daemon reached the broker but the `UsbipProxyReconcile` pass failed. | [`broker-error`](./error-codes.md#broker-error) |
 
 **Human example**
 
 ```text
-$ nixling usb probe
+$ d2b usb probe
 VM                       ENV          BUSID        STATUS     SESSION-CLAIM          HOST-BIND                CARRIER        PROXY        GUEST      POLICY
 corp-vm                  work         1-2          degraded   held-by-desired-owner  unknown                  unknown        unknown      detached   allowed
   degraded guest-import-unavailable: the guest USBIP import has not converged
-  remediation: Run `nixling usb attach corp-vm 1-2 --apply` after the VM is running.
-  command: nixling usb attach corp-vm 1-2 --apply
+  remediation: Run `d2b usb attach corp-vm 1-2 --apply` after the VM is running.
+  command: d2b usb attach corp-vm 1-2 --apply
 ```
 
 **`--json` example** — schema: [`usb-probe.schema.json`](./cli-output/usb-probe.schema.json); prose companion: [`usb-probe.md`](./cli-output/usb-probe.md).
@@ -856,7 +856,7 @@ corp-vm                  work         1-2          degraded   held-by-desired-ow
       "vm": "corp-vm",
       "env": "work",
       "busId": "1-2",
-      "lockPath": "/run/nixling/locks/usbip/1-2",
+      "lockPath": "/run/d2b/locks/usbip/1-2",
       "status": "degraded",
       "ownerVm": "corp-vm",
       "durableClaim": {
@@ -879,11 +879,11 @@ corp-vm                  work         1-2          degraded   held-by-desired-ow
         {
           "code": "guest-import-unavailable",
           "summary": "the guest USBIP import has not converged",
-          "remediation": "Run `nixling usb attach corp-vm 1-2 --apply` after the VM is running."
+          "remediation": "Run `d2b usb attach corp-vm 1-2 --apply` after the VM is running."
         }
       ],
       "remediationCommands": [
-        "nixling usb attach corp-vm 1-2 --apply"
+        "d2b usb attach corp-vm 1-2 --apply"
       ]
     }
   ]
@@ -904,8 +904,8 @@ Probe is a read-only daemon RPC backed by the broker's
   topology/policy state;
 - closed degraded reasons with human remediation; and
 - copy-paste lifecycle commands such as
-  `nixling usb attach corp-vm 1-2 --apply` or
-  `nixling usb detach <owner> 1-2 --apply` when the daemon can name a safe
+  `d2b usb attach corp-vm 1-2 --apply` or
+  `d2b usb detach <owner> 1-2 --apply` when the daemon can name a safe
   next command.
 
 A persisted lock by itself is not reported as healthy `bound`; stale or
@@ -932,7 +932,7 @@ command.
 
 ### `console`
 
-**Synopsis:** `nixling console <vm>`
+**Synopsis:** `d2b console <vm>`
 
 **Flags**
 
@@ -944,7 +944,7 @@ command.
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required headless VM name. Graphics VMs are rejected and must be launched with `nixling vm start <vm> --apply`. |
+| `vm` | Required headless VM name. Graphics VMs are rejected and must be launched with `d2b vm start <vm> --apply`. |
 
 **Exit codes**
 
@@ -959,7 +959,7 @@ command.
 **Human example**
 
 ```text
-$ nixling console corp-vm
+$ d2b console corp-vm
 Connected to corp-vm serial console.
 Use ~. to detach.
 ```
@@ -978,7 +978,7 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 
 ### `audio status`
 
-**Synopsis:** `nixling audio status [<vm>]`
+**Synopsis:** `d2b audio status [<vm>]`
 
 **Flags**
 
@@ -1004,7 +1004,7 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 **Human example**
 
 ```text
-$ nixling audio status corp-vm
+$ d2b audio status corp-vm
 audio:    enabled
 mic:      off
 speaker:  off
@@ -1026,7 +1026,7 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 
 ### `audio mic`
 
-**Synopsis:** `nixling audio mic on|off <vm>`
+**Synopsis:** `d2b audio mic on|off <vm>`
 
 **Flags**
 
@@ -1053,8 +1053,8 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 **Human example**
 
 ```text
-$ nixling audio mic on corp-vm
-nixling audio: state -> mic=on, speaker=off
+$ d2b audio mic on corp-vm
+d2b audio: state -> mic=on, speaker=off
 
 audio:    enabled
 mic:      on
@@ -1077,7 +1077,7 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 
 ### `audio speaker`
 
-**Synopsis:** `nixling audio speaker on|off <vm>`
+**Synopsis:** `d2b audio speaker on|off <vm>`
 
 **Flags**
 
@@ -1104,8 +1104,8 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 **Human example**
 
 ```text
-$ nixling audio speaker on corp-vm
-nixling audio: state -> mic=off, speaker=on
+$ d2b audio speaker on corp-vm
+d2b audio: state -> mic=off, speaker=on
 
 audio:    enabled
 mic:      off
@@ -1128,7 +1128,7 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 
 ### `audio off`
 
-**Synopsis:** `nixling audio off <vm>`
+**Synopsis:** `d2b audio off <vm>`
 
 **Flags**
 
@@ -1154,8 +1154,8 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 **Human example**
 
 ```text
-$ nixling audio off corp-vm
-nixling audio: state -> mic=off, speaker=off
+$ d2b audio off corp-vm
+d2b audio: state -> mic=off, speaker=off
 
 audio:    enabled
 mic:      off
@@ -1178,7 +1178,7 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 
 ### `build`
 
-**Synopsis:** `nixling build <vm>`
+**Synopsis:** `d2b build <vm>`
 
 **Flags**
 
@@ -1203,10 +1203,10 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 **Human example**
 
 ```text
-$ nixling build corp-vm
-nixling: building corp-vm closure...
-nixling: corp-vm closure → /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-nixos-system-corp-vm
-  GC root: /var/lib/nixling/vms/corp-vm/result
+$ d2b build corp-vm
+d2b: building corp-vm closure...
+d2b: corp-vm closure → /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-nixos-system-corp-vm
+  GC root: /var/lib/d2b/vms/corp-vm/result
 ```
 
 **Status**
@@ -1222,7 +1222,7 @@ Build is a native non-destructive planner that renders the eval/build preview wi
 - There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 ### `switch`
 
-**Synopsis:** `nixling switch <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b switch <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
@@ -1244,14 +1244,14 @@ guest-control.
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name as declared in `nixling.vms.<name>`. |
+| `vm` | Required VM name as declared in `d2b.vms.<name>`. |
 
 **Exit codes**
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
-| `1` | `nixlingd` is unreachable or guest-control transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
+| `1` | `d2bd` is unreachable or guest-control transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Host store publication, broker commit, guest activation capability, or guest activation status failed closed. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
@@ -1259,28 +1259,28 @@ guest-control.
 Stopped/offline VMs fail closed: `switch --apply` never asks the host
 broker to execute the guest activation program, never mutates host
 systemd for the VM, and never falls back to SSH or a host shell. Start
-the VM first with `nixling vm start <vm> --apply`, wait for guest-control
-readiness, then rerun `nixling switch <vm> --apply`.
+the VM first with `d2b vm start <vm> --apply`, wait for guest-control
+readiness, then rerun `d2b switch <vm> --apply`.
 
 The live guest activation wait is bounded by
-`nixling.daemon.lifecycle.liveActivation.timeoutSeconds` or the per-VM
-`nixling.vms.<vm>.lifecycle.liveActivation.timeoutSeconds` override. If
+`d2b.daemon.lifecycle.liveActivation.timeoutSeconds` or the per-VM
+`d2b.vms.<vm>.lifecycle.liveActivation.timeoutSeconds` override. If
 activation times out in an identity-bound guest, the typed error points at
 the guest activation unit. Complete the in-guest provider flow (for example
-an Entra/Himmelblau hello/PIN prompt) and retry, or use `nixling boot <vm>
+an Entra/Himmelblau hello/PIN prompt) and retry, or use `d2b boot <vm>
 --apply` followed by a VM restart when live user-session activation is
 expected to block.
 
 **Human example**
 
 ```text
-$ nixling switch corp-vm --apply
-nixling switch --apply activated in guest via guest-control (vm=corp-vm, mode=switch, summary=activated, generationNumber=42)
+$ d2b switch corp-vm --apply
+d2b switch --apply activated in guest via guest-control (vm=corp-vm, mode=switch, summary=activated, generationNumber=42)
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd`, which prepares/publishes the
+- `--apply`: routes through `d2bd`, which prepares/publishes the
   closure, opens the authenticated guest-control activation flow, waits
   for guestd status, and only then asks the broker to commit host-side
   generation metadata. Successful commits publish both legacy activation
@@ -1288,7 +1288,7 @@ nixling switch --apply activated in guest via guest-control (vm=corp-vm, mode=sw
   Daemon-unreachable surfaces `daemon-down` exit 1;
   guest capability/readiness and broker failures surface typed non-zero
   envelopes. There is no host-side execution of guest activation scripts.
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars
+- The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars
   were retired; the daemon-only contract is the only path.
 
 **Bash**
@@ -1296,7 +1296,7 @@ nixling switch --apply activated in guest via guest-control (vm=corp-vm, mode=sw
 - There is no live bash fallback for this verb.
 ### `boot`
 
-**Synopsis:** `nixling boot <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b boot <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
@@ -1317,14 +1317,14 @@ mutation flag is set, the CLI prints the parity notice and defaults to
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name as declared in `nixling.vms.<name>`. |
+| `vm` | Required VM name as declared in `d2b.vms.<name>`. |
 
 **Exit codes**
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
-| `1` | `nixlingd` is unreachable. | [`daemon-down`](./error-codes.md#daemon-down) |
+| `1` | `d2bd` is unreachable. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Host store publication, broker commit, or native handler support failed closed. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
@@ -1337,16 +1337,16 @@ guest and does not require guest-control capability.
 **Human example**
 
 ```text
-$ nixling boot corp-vm --apply
-nixling boot --apply staged next-boot toplevel (vm=corp-vm, mode=boot, summary=staged for next boot, generationNumber=42)
+$ d2b boot corp-vm --apply
+d2b boot --apply staged next-boot toplevel (vm=corp-vm, mode=boot, summary=staged for next boot, generationNumber=42)
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` and the broker-backed store
+- `--apply`: routes through `d2bd` and the broker-backed store
   publication/commit path only. It intentionally skips guest-control
   activation because there may be no running guest.
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars
+- The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars
   were retired; the daemon-only contract is the only path.
 
 **Bash**
@@ -1354,7 +1354,7 @@ nixling boot --apply staged next-boot toplevel (vm=corp-vm, mode=boot, summary=s
 - There is no live bash fallback for this verb.
 ### `test`
 
-**Synopsis:** `nixling test <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b test <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
@@ -1376,14 +1376,14 @@ to be running and reachable over guest-control.
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name as declared in `nixling.vms.<name>`. |
+| `vm` | Required VM name as declared in `d2b.vms.<name>`. |
 
 **Exit codes**
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
-| `1` | `nixlingd` is unreachable or guest-control transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
+| `1` | `d2bd` is unreachable or guest-control transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Host store publication, broker commit, guest activation capability, or guest activation status failed closed. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
@@ -1395,16 +1395,16 @@ advertises activation support.
 **Human example**
 
 ```text
-$ nixling test corp-vm --apply
-nixling test --apply activated in guest via guest-control (vm=corp-vm, mode=test, summary=activated until reboot, generationNumber=42)
+$ d2b test corp-vm --apply
+d2b test --apply activated in guest via guest-control (vm=corp-vm, mode=test, summary=activated until reboot, generationNumber=42)
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd`, guest-control activation, and a
+- `--apply`: routes through `d2bd`, guest-control activation, and a
   broker commit after guestd reports success. There is no host-side
   execution of guest activation scripts.
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars
+- The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars
   were retired; the daemon-only contract is the only path.
 
 **Bash**
@@ -1412,7 +1412,7 @@ nixling test --apply activated in guest via guest-control (vm=corp-vm, mode=test
 - There is no live bash fallback for this verb.
 ### `rollback`
 
-**Synopsis:** `nixling rollback <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b rollback <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
@@ -1434,14 +1434,14 @@ over guest-control.
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name as declared in `nixling.vms.<name>`. |
+| `vm` | Required VM name as declared in `d2b.vms.<name>`. |
 
 **Exit codes**
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
-| `1` | `nixlingd` is unreachable or guest-control transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
+| `1` | `d2bd` is unreachable or guest-control transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Host store publication, broker commit, guest activation capability, or guest activation status failed closed. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
@@ -1454,16 +1454,16 @@ run guest activation from the host.
 **Human example**
 
 ```text
-$ nixling rollback corp-vm --apply
-nixling rollback --apply activated previous toplevel in guest via guest-control (vm=corp-vm, mode=rollback, summary=rolled back, generationNumber=41)
+$ d2b rollback corp-vm --apply
+d2b rollback --apply activated previous toplevel in guest via guest-control (vm=corp-vm, mode=rollback, summary=rolled back, generationNumber=41)
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd`, guest-control activation, and a
+- `--apply`: routes through `d2bd`, guest-control activation, and a
   broker commit after guestd reports success. There is no host-side
   execution of guest activation scripts.
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars
+- The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars
   were retired; the daemon-only contract is the only path.
 
 **Bash**
@@ -1473,7 +1473,7 @@ nixling rollback --apply activated previous toplevel in guest via guest-control 
 
 ### `generations`
 
-**Synopsis:** `nixling generations <vm>`
+**Synopsis:** `d2b generations <vm>`
 
 **Flags**
 
@@ -1497,9 +1497,9 @@ nixling rollback --apply activated previous toplevel in guest via guest-control 
 **Human example**
 
 ```text
-$ nixling generations corp-vm
-=== Host-side per-VM store generations (/var/lib/nixling/vms/corp-vm/store-meta/generations) ===
-  (none yet — run 'nixling build corp-vm')
+$ d2b generations corp-vm
+=== Host-side per-VM store generations (/var/lib/d2b/vms/corp-vm/store-meta/generations) ===
+  (none yet — run 'd2b build corp-vm')
 
 === In-VM nix-profile generations ===
   (corp-vm is not running — start it and try again)
@@ -1518,7 +1518,7 @@ Generations is a native introspection surface that reports current/booted symlin
 - There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 ### `gc`
 
-**Synopsis:** `nixling gc [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b gc [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
@@ -1547,27 +1547,27 @@ Generations is a native introspection surface that reports current/booted symlin
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling gc` exit table is preserved in this file as history.
+The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `d2b gc` exit table is preserved in this file as history.
 
 **Human example**
 
 ```text
-$ nixling gc --apply
-nixling gc --apply executed via the native daemon → broker path (retainedStorePaths=12, keepGenerations=None, summary=pruned nixling-managed store roots)
+$ d2b gc --apply
+d2b gc --apply executed via the native daemon → broker path (retainedStorePaths=12, keepGenerations=None, summary=pruned d2b-managed store roots)
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative: wired through `nixlingd` → broker `RunGc` (commit `7de9194`).
+- `--apply`: routes through `d2bd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- LiveNative: wired through `d2bd` → broker `RunGc` (commit `7de9194`).
 
 **Bash**
 
 - In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 ### `store verify`
 
-**Synopsis:** `nixling store verify <vm> [--repair] [--human | --json]`
+**Synopsis:** `d2b store verify <vm> [--repair] [--human | --json]`
 
 **Status**
 
@@ -1587,7 +1587,7 @@ surface for the ADR 0027 split store-view. The CLI is thin: it never reads
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name as declared in `nixling.vms.<name>`. |
+| `vm` | Required VM name as declared in `d2b.vms.<name>`. |
 
 **Exit codes**
 
@@ -1617,7 +1617,7 @@ surface for the ADR 0027 split store-view. The CLI is thin: it never reads
 
 **Native**
 
-- Routes through `nixlingd` → broker `StoreVerify`.
+- Routes through `d2bd` → broker `StoreVerify`.
 - Verifies the current marker/manifest and top-level `live/` basenames
   and writes host-only integrity records.
 - `--repair` never claims success from the StoreSync attempt alone; it
@@ -1626,7 +1626,7 @@ surface for the ADR 0027 split store-view. The CLI is thin: it never reads
 **Human example**
 
 ```text
-$ nixling store verify corp-vm
+$ d2b store verify corp-vm
 store verify corp-vm: status=ok checked=42 drifted=0 repaired=0
 ```
 
@@ -1636,7 +1636,7 @@ store verify corp-vm: status=ok checked=42 drifted=0 repaired=0
 
 ### `trust`
 
-**Synopsis:** `nixling trust <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b trust <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
@@ -1666,27 +1666,27 @@ store verify corp-vm: status=ok checked=42 drifted=0 repaired=0
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling trust` exit table is preserved in this file as history.
+The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `d2b trust` exit table is preserved in this file as history.
 
 **Human example**
 
 ```text
-$ nixling trust corp-vm --apply
-nixling trust --apply executed via the native daemon → broker path (vm=corp-vm, staticIp=10.20.0.10, knownHostsPath=/var/lib/nixling/known_hosts.nixling, updated=true)
+$ d2b trust corp-vm --apply
+d2b trust --apply executed via the native daemon → broker path (vm=corp-vm, staticIp=10.20.0.10, knownHostsPath=/var/lib/d2b/known_hosts.d2b, updated=true)
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative: wired through `nixlingd` → broker `RunHostKeyTrust` (commit `7de9194`).
+- `--apply`: routes through `d2bd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- LiveNative: wired through `d2bd` → broker `RunHostKeyTrust` (commit `7de9194`).
 
 **Bash**
 
 - In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 ### `rotate-known-host`
 
-**Synopsis:** `nixling rotate-known-host <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b rotate-known-host <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
@@ -1721,15 +1721,15 @@ In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in v
 **Human example**
 
 ```text
-$ nixling rotate-known-host corp-vm --apply
-nixling rotate-known-host --apply executed via the native daemon → broker path (vm=corp-vm, staticIp=10.20.0.10, knownHostsPath=/var/lib/nixling/known_hosts.nixling, removed=true)
+$ d2b rotate-known-host corp-vm --apply
+d2b rotate-known-host --apply executed via the native daemon → broker path (vm=corp-vm, staticIp=10.20.0.10, knownHostsPath=/var/lib/d2b/known_hosts.d2b, removed=true)
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative: wired through `nixlingd` → broker `RunRotateKnownHost` (commit `7de9194`).
+- `--apply`: routes through `d2bd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- LiveNative: wired through `d2bd` → broker `RunRotateKnownHost` (commit `7de9194`).
 
 **Bash**
 
@@ -1738,7 +1738,7 @@ nixling rotate-known-host --apply executed via the native daemon → broker path
 
 ### `keys list`
 
-**Synopsis:** `nixling keys list [--human] [--json]`
+**Synopsis:** `d2b keys list [--human] [--json]`
 
 **Flags**
 
@@ -1758,15 +1758,15 @@ nixling rotate-known-host --apply executed via the native daemon → broker path
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | — |
-| `1` | `nixlingd` is unreachable; the typed `#daemon-down` envelope is emitted (the v1.0 daemon-only contract — there is no bash fallback; the v1.0 clean-break per ADR 0015 retired the legacy fallback in v1.0). The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 2 — daemon-down rendering pointer) points operators at the daemon-startup runbook. | [`daemon-down`](./error-codes.md#daemon-down) |
+| `1` | `d2bd` is unreachable; the typed `#daemon-down` envelope is emitted (the v1.0 daemon-only contract — there is no bash fallback; the v1.0 clean-break per ADR 0015 retired the legacy fallback in v1.0). The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 2 — daemon-down rendering pointer) points operators at the daemon-startup runbook. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unsupported invocation shape inherited from the `keys` subcommand dispatcher. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
 
 ```text
-$ nixling keys list
+$ d2b keys list
 VM                       ENV          FINGERPRINT                                                      MANAGED KEY
-corp-vm                  work         SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA              /var/lib/nixling/keys/corp-vm_ed25519
+corp-vm                  work         SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA              /var/lib/d2b/keys/corp-vm_ed25519
 ```
 
 **`--json` example**
@@ -1778,7 +1778,7 @@ corp-vm                  work         SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
     {
       "vm": "corp-vm",
       "env": "work",
-      "managedKeyPath": "/var/lib/nixling/keys/corp-vm_ed25519",
+      "managedKeyPath": "/var/lib/d2b/keys/corp-vm_ed25519",
       "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       "knownHostsEntry": "10.42.0.11 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockedExampleKeyForDocsOnly corp-vm"
     }
@@ -1800,7 +1800,7 @@ Keys list is a native inventory preview that reports the managed-key resolution 
 
 ### `keys show`
 
-**Synopsis:** `nixling keys show <vm> [--human] [--json]`
+**Synopsis:** `d2b keys show <vm> [--human] [--json]`
 
 **Flags**
 
@@ -1820,13 +1820,13 @@ Keys list is a native inventory preview that reports the managed-key resolution 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | — |
-| `1` | `nixlingd` is unreachable (typed `#daemon-down` envelope; multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the daemon-startup runbook) — OR the daemon returned the request but the key material was unreadable (typed `#generic` envelope; rare). | [`daemon-down`](./error-codes.md#daemon-down) / [`generic`](./error-codes.md#generic) |
+| `1` | `d2bd` is unreachable (typed `#daemon-down` envelope; multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the daemon-startup runbook) — OR the daemon returned the request but the key material was unreadable (typed `#generic` envelope; rare). | [`daemon-down`](./error-codes.md#daemon-down) / [`generic`](./error-codes.md#generic) |
 | `2` | Unknown VM, missing VM argument, or unreadable key material reported by daemon as an unknown subject. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
 
 ```text
-$ nixling keys show corp-vm
+$ d2b keys show corp-vm
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockedExampleKeyForDocsOnly corp-vm_ed25519.pub
 ```
 
@@ -1843,7 +1843,7 @@ Keys show is a native preview that reports daemon-resolved key metadata placehol
 - There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 ### `keys rotate`
 
-**Synopsis:** `nixling keys rotate <vm> [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b keys rotate <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
@@ -1862,7 +1862,7 @@ Keys show is a native preview that reports daemon-resolved key metadata placehol
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name as declared in `nixling.vms.<name>`. |
+| `vm` | Required VM name as declared in `d2b.vms.<name>`. |
 
 **Exit codes**
 
@@ -1878,15 +1878,15 @@ In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in v
 **Human example**
 
 ```text
-$ nixling keys rotate corp-vm --apply
-nixling keys rotate --apply executed via the native daemon → broker path (vm=corp-vm, fingerprint=SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA, keyPath=/var/lib/nixling/keys/corp-vm_ed25519)
+$ d2b keys rotate corp-vm --apply
+d2b keys rotate --apply executed via the native daemon → broker path (vm=corp-vm, fingerprint=SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA, keyPath=/var/lib/d2b/keys/corp-vm_ed25519)
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative: wired through `nixlingd` → broker `RunKeysRotate` (commit `7de9194`).
+- `--apply`: routes through `d2bd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- LiveNative: wired through `d2bd` → broker `RunKeysRotate` (commit `7de9194`).
 
 **Bash**
 
@@ -1895,7 +1895,7 @@ nixling keys rotate --apply executed via the native daemon → broker path (vm=c
 
 ### `audit`
 
-**Synopsis:** `nixling audit [--strict] [--human] [--json]`
+**Synopsis:** `d2b audit [--strict] [--human] [--json]`
 
 **Flags**
 
@@ -1915,17 +1915,17 @@ nixling keys rotate --apply executed via the native daemon → broker path (vm=c
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `78` | **`--strict` flag arm only** — `nixling audit --strict` emits typed `#not-yet-implemented` envelope unconditionally regardless of daemon state per [ADR 0017](../adr/0017-no-bash-fallbacks-invariant.md) § "Migration target table" line 91 (the strict-audit surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017) implementation). The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the migration runbook. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `78` | **`--strict` flag arm only** — `d2b audit --strict` emits typed `#not-yet-implemented` envelope unconditionally regardless of daemon state per [ADR 0017](../adr/0017-no-bash-fallbacks-invariant.md) § "Migration target table" line 91 (the strict-audit surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017) implementation). The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the migration runbook. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 | `0` | Success (non-`--strict` arm only — `--strict` returns exit 78 unconditionally per above). | — |
-| `1` | (Non-`--strict` arm only) `nixlingd` is unreachable; typed `#daemon-down` envelope emitted. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the daemon-startup runbook. | [`daemon-down`](./error-codes.md#daemon-down) |
+| `1` | (Non-`--strict` arm only) `d2bd` is unreachable; typed `#daemon-down` envelope emitted. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the daemon-startup runbook. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unknown flag or unexpected positional argument. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
 
 ```text
-$ nixling audit --human
+$ d2b audit --human
 
-=== nixling security audit ===
+=== d2b security audit ===
 
   kvm_dev_mode:                            660 ✓
   wayland_user_in_kvm:                     false ✓
@@ -1980,7 +1980,7 @@ Audit is part of the read-only daemon surface and keeps both human and JSON outp
 
 ### `host check`
 
-**Synopsis:** `nixling host check [--strict] [--read-only] [--human] [--json]`
+**Synopsis:** `d2b host check [--strict] [--read-only] [--human] [--json]`
 
 **Flags**
 
@@ -2009,7 +2009,7 @@ Audit is part of the read-only daemon surface and keeps both human and JSON outp
 **Human example**
 
 ```text
-$ nixling host check
+$ d2b host check
 PASS
 - kernel-version: running kernel 6.8.0 satisfies >= 6.6
 - cgroup-v2: /sys/fs/cgroup/cgroup.controllers is present
@@ -2069,11 +2069,11 @@ Host check is a read-only daemon RPC by design; mutation is explicitly handled b
 The command never mutates nftables, cgroups, users, or runtime directories. `--read-only` is therefore part of the compatibility surface, not a capability toggle.
 ### `host prepare`
 
-**Synopsis:** `nixling host prepare [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b host prepare [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`host prepare` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`. `--dry-run` is wired live; `--apply` is **not yet wired** — the daemon-side typed-intent dispatch and bundle resolver that back it are still pending, so it returns the typed `daemon-down` envelope (exit 1) today (use `--dry-run` for now). On a Tier-0 legacy/mixed host, `--apply` is refused with `tier-0-legacy-uses-nixos-module` / `single-writer-conflict` (exit 78).
+`host prepare` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "d2b: NOTICE: defaulting to --dry-run; d2b 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`. `--dry-run` is wired live; `--apply` is **not yet wired** — the daemon-side typed-intent dispatch and bundle resolver that back it are still pending, so it returns the typed `daemon-down` envelope (exit 1) today (use `--dry-run` for now). On a Tier-0 legacy/mixed host, `--apply` is refused with `tier-0-legacy-uses-nixos-module` / `single-writer-conflict` (exit 78).
 
 **Flags**
 
@@ -2103,32 +2103,32 @@ In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in v
 **Human example**
 
 ```text
-$ nixling host prepare --dry-run
+$ d2b host prepare --dry-run
 host prepare --dry-run: would reconcile nftables + routes + sysctls + /etc/hosts + NetworkManager unmanaged state
 ```
 
 **Native**
 
-- `--apply`: **not yet wired** — returns the typed `daemon-down` envelope (exit 1) today; re-run with `--dry-run` for now. When the daemon-side dispatch ships, `--apply` will route through `nixlingd` → broker; daemon-unreachable will surface `daemon-down` exit 1, native-handler-deferred `not-yet-implemented` exit 78, and `broker-error` exit 78. On a Tier-0 legacy/mixed host `--apply` is refused today (exit 78). The historical bash fallback was retired in v1.0 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative (forthcoming): once the public-socket dispatch ships, `--apply` wires `nixlingd` → broker `ApplyNftables` + `ApplyRoute` + `ApplySysctl` + `UpdateHostsFile` + `ApplyNmUnmanaged` (broker ops staged in commit `ee6ed0b`; public-socket dispatch pending).
+- `--apply`: **not yet wired** — returns the typed `daemon-down` envelope (exit 1) today; re-run with `--dry-run` for now. When the daemon-side dispatch ships, `--apply` will route through `d2bd` → broker; daemon-unreachable will surface `daemon-down` exit 1, native-handler-deferred `not-yet-implemented` exit 78, and `broker-error` exit 78. On a Tier-0 legacy/mixed host `--apply` is refused today (exit 78). The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- LiveNative (forthcoming): once the public-socket dispatch ships, `--apply` wires `d2bd` → broker `ApplyNftables` + `ApplyRoute` + `ApplySysctl` + `UpdateHostsFile` + `ApplyNmUnmanaged` (broker ops staged in commit `ee6ed0b`; public-socket dispatch pending).
 
 **Bash**
 
 - In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 ### `host destroy`
 
-**Synopsis:** `nixling host destroy [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b host destroy [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`host destroy` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`. `--dry-run` is wired live; `--apply` is **not yet wired** — the daemon-side typed-intent dispatch and bundle resolver that back it are still pending, so it returns the typed `daemon-down` envelope (exit 1) today (use `--dry-run` for now). On a Tier-0 legacy host, `--apply` is refused with `tier-0-legacy-uses-nixos-module` (exit 78).
+`host destroy` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "d2b: NOTICE: defaulting to --dry-run; d2b 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`. `--dry-run` is wired live; `--apply` is **not yet wired** — the daemon-side typed-intent dispatch and bundle resolver that back it are still pending, so it returns the typed `daemon-down` envelope (exit 1) today (use `--dry-run` for now). On a Tier-0 legacy host, `--apply` is refused with `tier-0-legacy-uses-nixos-module` (exit 78).
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--dry-run` | boolean | implicit if neither mutation flag is set | Plan removal of nixling-owned host reconcile state without mutating host state. |
+| `--dry-run` | boolean | implicit if neither mutation flag is set | Plan removal of d2b-owned host reconcile state without mutating host state. |
 | `--apply` | boolean | `false` | Perform the host-reconcile teardown. **Not yet wired** — returns `daemon-down` (exit 1) today; use `--dry-run` for now. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
@@ -2152,14 +2152,14 @@ In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in v
 **Human example**
 
 ```text
-$ nixling host destroy --dry-run
-host destroy --dry-run: no nixling-owned resources to remove
+$ d2b host destroy --dry-run
+host destroy --dry-run: no d2b-owned resources to remove
 ```
 
 **Native**
 
-- `--apply`: **not yet wired** — returns the typed `daemon-down` envelope (exit 1) today; re-run with `--dry-run` for now. When the daemon-side dispatch ships, `--apply` will route through `nixlingd` → broker; daemon-unreachable will surface `daemon-down` exit 1, native-handler-deferred `not-yet-implemented` exit 78, and `broker-error` exit 78. On a Tier-0 legacy host `--apply` is refused today (exit 78). The historical bash fallback was retired in v1.0 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- `--apply`: **not yet wired** — returns the typed `daemon-down` envelope (exit 1) today; re-run with `--dry-run` for now. When the daemon-side dispatch ships, `--apply` will route through `d2bd` → broker; daemon-unreachable will surface `daemon-down` exit 1, native-handler-deferred `not-yet-implemented` exit 78, and `broker-error` exit 78. On a Tier-0 legacy host `--apply` is refused today (exit 78). The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
 - LiveNative (forthcoming): once the public-socket dispatch ships, `--apply` wires the same broker-op set in reverse order: `ApplyNmUnmanaged` + `ApplyRoute` + `ApplySysctl` + `UpdateHostsFile` + `ApplyNftables` (broker ops staged in commit `ee6ed0b`; reverse-order hardening in `b73e28f`; public-socket dispatch pending).
 
 **Bash**
@@ -2168,7 +2168,7 @@ host destroy --dry-run: no nixling-owned resources to remove
 
 ### `host migrate-storage`
 
-**Synopsis:** `nixling host migrate-storage [--dry-run | --apply | --rollback --from-checkpoint <id>] [--human | --json]`
+**Synopsis:** `d2b host migrate-storage [--dry-run | --apply | --rollback --from-checkpoint <id>] [--human | --json]`
 
 **Status**
 
@@ -2202,13 +2202,13 @@ cutover-only cleanup candidates, and fail-closed hazards. `--apply` and
   "command": "host migrate-storage",
   "mode": "dry-run",
   "checkpointId": "storage-cutover-…",
-  "rollbackCommand": "nixling host migrate-storage --rollback --from-checkpoint storage-cutover-…",
+  "rollbackCommand": "d2b host migrate-storage --rollback --from-checkpoint storage-cutover-…",
   "vmCount": 2,
   "vms": ["corp-vm", "work-vm"],
   "preflightRequirements": [
-    "all nixling VMs stopped",
-    "nixlingd.service stopped",
-    "nixling-priv-broker.service stopped",
+    "all d2b VMs stopped",
+    "d2bd.service stopped",
+    "d2b-priv-broker.service stopped",
     "net VMs stopped; guest routing, TAP connectivity, and dependent bridge traffic will be interrupted"
   ],
   "preserve": [
@@ -2216,8 +2216,8 @@ cutover-only cleanup candidates, and fail-closed hazards. `--apply` and
     "declared host bridges, TAP naming intent, nftables/NM/networkd ownership metadata, and network-preflight evidence"
   ],
   "cutoverOnlyCleanup": [
-    "/run/nixling-gpu",
-    "boot-scoped runtime socket files only after all nixling services are stopped"
+    "/run/d2b-gpu",
+    "boot-scoped runtime socket files only after all d2b services are stopped"
   ],
   "failClosedHazards": [
     "symlink or path traversal inside any moved path",
@@ -2239,13 +2239,13 @@ cutover-only cleanup candidates, and fail-closed hazards. `--apply` and
 **Human example**
 
 ```text
-$ nixling host migrate-storage --dry-run
+$ d2b host migrate-storage --dry-run
 host migrate-storage --dry-run: checkpoint=storage-cutover-… vm_count=2
-rollback command: nixling host migrate-storage --rollback --from-checkpoint storage-cutover-…
+rollback command: d2b host migrate-storage --rollback --from-checkpoint storage-cutover-…
 preflight requirements:
-  - all nixling VMs stopped
-  - nixlingd.service stopped
-  - nixling-priv-broker.service stopped
+  - all d2b VMs stopped
+  - d2bd.service stopped
+  - d2b-priv-broker.service stopped
   - net VMs stopped; guest routing, TAP connectivity, and dependent bridge traffic will be interrupted
 ```
 
@@ -2266,15 +2266,15 @@ the handoff contract for the later broker-backed cutover implementation.
 
 ### `host reconcile-otel-acls` (reserved)
 
-**Synopsis:** `nixling host reconcile-otel-acls [--dry-run | --apply] [--human | --json]`
+**Synopsis:** `d2b host reconcile-otel-acls [--dry-run | --apply] [--human | --json]`
 
 Reconciles per-VM OTel relay/bridge filesystem ACLs to the
 current bundle's intended state. Replaces the v0.4-era
 `host-otel-relay-acl.nix` activation script (retired in v1.1
 per [ADR 0018](../adr/0018-microvm-nix-removal.md) "Host-OTel
 ACL migration table"). Invoked from
-`system.activationScripts.nixlingReconcileOtelAcls` on every
-`nixos-rebuild switch` and from `nixlingd.service` `ExecStartPost=`
+`system.activationScripts.d2bReconcileOtelAcls` on every
+`nixos-rebuild switch` and from `d2bd.service` `ExecStartPost=`
 on daemon startup; operators may also invoke it directly for
 mid-cycle reconciliation.
 
@@ -2283,7 +2283,7 @@ mid-cycle reconciliation.
 - `--dry-run` (default if neither flag given): reports the
   planned ACL set/revoke ops without dispatching to the broker;
   exit 0 with a planned-ops summary.
-- `--apply`: dispatches through `nixlingd` →
+- `--apply`: dispatches through `d2bd` →
   `daemon-api/host-prep ReconcileOtelAcls` → broker
   `SetSocketAcl` / `RevokeSocketAclIfPresent` per the
   ADR 0018 migration table. Emits daemon-side
@@ -2335,7 +2335,7 @@ mid-cycle reconciliation.
 
 ### `host doctor`
 
-**Synopsis:** `nixling host doctor --read-only [--human] [--json]`
+**Synopsis:** `d2b host doctor --read-only [--human] [--json]`
 
 Read-only daemon-path health probe. The baseline broker socket, daemon
 socket, and audit-log checks are extended with structured liveness for
@@ -2382,10 +2382,10 @@ Legacy top-level fields (`broker_ready`, `findings[]`, `summary`,
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `NIXLING_BROKER_SOCKET` | `/run/nixling/broker.sock` | Probe target for `broker-ready`. |
-| `NIXLING_PUBLIC_SOCKET` | `/run/nixling/public.sock` | Probe target for `daemon-ready`. |
-| `NIXLING_DAEMON_STATE_DIR` | `/var/lib/nixling/daemon-state` | Where the daemon writes pidfd/module/autostart reports. |
-| `NIXLING_METRICS_URL` | `http://127.0.0.1:9101/metrics` | URL probed by `metrics-endpoint`. |
+| `D2B_BROKER_SOCKET` | `/run/d2b/broker.sock` | Probe target for `broker-ready`. |
+| `D2B_PUBLIC_SOCKET` | `/run/d2b/public.sock` | Probe target for `daemon-ready`. |
+| `D2B_DAEMON_STATE_DIR` | `/var/lib/d2b/daemon-state` | Where the daemon writes pidfd/module/autostart reports. |
+| `D2B_METRICS_URL` | `http://127.0.0.1:9101/metrics` | URL probed by `metrics-endpoint`. |
 
 **Exit codes**
 
@@ -2400,7 +2400,7 @@ Legacy top-level fields (`broker_ready`, `findings[]`, `summary`,
 
 ### `host install`
 
-**Synopsis:** `nixling host install (--dry-run | --apply [--enable] [--start | --no-start]) [--human | --json]`
+**Synopsis:** `d2b host install (--dry-run | --apply [--enable] [--start | --no-start]) [--human | --json]`
 
 `--dry-run` prints the synthesized 5-step installer preview. `--apply`
 routes through the daemon → broker `RunHostInstall` path. Broker
@@ -2416,9 +2416,9 @@ fallback was retired in v1.0).
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | `false` | Preview the synthesized 5-step install plan. |
 | `--apply` | boolean | `false` | Run the live daemon → broker `RunHostInstall` path. |
-| `--enable` | boolean | `false` | After `--apply`, enable `nixlingd.service`. |
-| `--start` | boolean | `false` | After `--apply --enable`, start `nixlingd.service`. |
-| `--no-start` | boolean | `false` | After `--apply`, leave `nixlingd.service` stopped. |
+| `--enable` | boolean | `false` | After `--apply`, enable `d2bd.service`. |
+| `--start` | boolean | `false` | After `--apply --enable`, start `d2bd.service`. |
+| `--no-start` | boolean | `false` | After `--apply`, leave `d2bd.service` stopped. |
 | `--json` | boolean | `false` | Emit the stable JSON plan or typed error envelope. |
 | `--human` | boolean | `false` | Force the human summary. |
 
@@ -2433,13 +2433,13 @@ fallback was retired in v1.0).
 
 ### `migrate`
 
-**Synopsis:** `nixling migrate (--dry-run | --apply) [--human | --json]`
+**Synopsis:** `d2b migrate (--dry-run | --apply) [--human | --json]`
 
 `migrate` is the migration analyzer. `--dry-run` reports the current
 deployment-shape tier plus the stable migration checklist. Per-VM
 supervisor classification is still unavailable on the public manifest, so
 the planner keeps that limitation explicit and points operators at
-`nixling status <vm>` for per-VM truth. `--apply` uses the daemon-first
+`d2b status <vm>` for per-VM truth. `--apply` uses the daemon-first
 bridge and broker `RunMigrate` path.
 
 **Flags**
@@ -2470,27 +2470,27 @@ In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in v
 **Human example**
 
 ```text
-$ nixling migrate --dry-run
-nixling migrate --dry-run: deployment shape = tier-0-mixed, 2 VM(s) in manifest.
+$ d2b migrate --dry-run
+d2b migrate --dry-run: deployment shape = tier-0-mixed, 2 VM(s) in manifest.
 Per-VM supervisor classification is not available on the public manifest today.
-Use `nixling status <vm>` to inspect each VM directly; `nixling migrate --apply`
+Use `d2b status <vm>` to inspect each VM directly; `d2b migrate --apply`
 is the live mutation path when you are ready.
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable
+- `--apply`: routes through `d2bd` → broker. Daemon-unreachable
   surfaces `daemon-down` exit 1; native-handler-deferred surfaces
   [`not-yet-implemented`](./error-codes.md#not-yet-implemented) exit 78;
   [`broker-error`](./error-codes.md#broker-error) exit 78. The historical
   bash fallback was retired in v1.0 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Native refusals stay on the typed envelope, and broker failures surface with exit `78`.
-- Dry-run analysis is pure Rust; `--apply` dispatches through `nixlingd` →
+- The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Native refusals stay on the typed envelope, and broker failures surface with exit `78`.
+- Dry-run analysis is pure Rust; `--apply` dispatches through `d2bd` →
   broker `RunMigrate`.
 
 **Bash**
 
-  `nixling migrate` path directly.
+  `d2b migrate` path directly.
 - In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 
 **Disposition:** `rust-native` — dry-run analysis is native, and
@@ -2498,7 +2498,7 @@ is the live mutation path when you are ready.
 
 ### `auth status`
 
-**Synopsis:** `nixling auth status [--human] [--json]`
+**Synopsis:** `d2b auth status [--human] [--json]`
 
 **Flags**
 
@@ -2524,12 +2524,12 @@ is the live mutation path when you are ready.
 **Human example**
 
 ```text
-$ nixling auth status
+$ d2b auth status
 role: launcher
-public socket: /run/nixling/public.sock (reachable, server=0.2.0, selected=0.2.0)
+public socket: /run/d2b/public.sock (reachable, server=0.2.0, selected=0.2.0)
 allowed commands: auth status, host check, list, status
 denied commands:
-- audit: requires admin role in nixling.site.adminUsers
+- audit: requires admin role in d2b.site.adminUsers
 ```
 
 **`--json` example** — schema: [`auth-status.schema.json`](./cli-output/auth-status.schema.json); prose companion: [`auth-status.md`](./cli-output/auth-status.md).
@@ -2538,7 +2538,7 @@ denied commands:
 {
   "role": "launcher",
   "publicSocket": {
-    "path": "/run/nixling/public.sock",
+    "path": "/run/d2b/public.sock",
     "reachable": true,
     "serverVersion": "0.2.0",
     "selectedVersion": "0.2.0"
@@ -2552,7 +2552,7 @@ denied commands:
   "deniedCommands": [
     {
       "command": "audit",
-      "reason": "requires admin role in nixling.site.adminUsers"
+      "reason": "requires admin role in d2b.site.adminUsers"
     }
   ]
 }
@@ -2572,13 +2572,13 @@ Auth status is a read-only daemon query that reports caller mapping, socket reac
 
 ### `config sync`
 
-**Synopsis:** `nixling config sync <vm> [--guest-path <path>] [--host <h>] [--user <u>] [--key <path>] [--known-hosts <path>] [--dry-run] [--json]`
+**Synopsis:** `d2b config sync <vm> [--guest-path <path>] [--host <h>] [--user <u>] [--key <path>] [--known-hosts <path>] [--dry-run] [--json]`
 
 <a id="config-sync-guest-control-transport"></a>
 On a guest-control-capable VM, `config sync` reads the VM's canonical
-guest config working copy (default `/var/lib/nixling-guest/guest-config.nix`)
+guest config working copy (default `/var/lib/d2b-guest/guest-config.nix`)
 over the authenticated **guest-control transport** — a typed
-`readGuestConfig` request to `nixlingd` over the daemon public socket.
+`readGuestConfig` request to `d2bd` over the daemon public socket.
 There is no SSH: no ssh/scp process is spawned, and the SSH-shaped flags
 (`--host`/`--user`/`--key`/`--known-hosts`) and a non-default
 `--guest-path` are rejected up front with `guest-control-ssh-flag-rejected`
@@ -2590,7 +2590,7 @@ OOM/hang the host), the host re-enforces the size cap and recomputes size
 + sha256 from the received bytes (never a guest-reported value), the
 content is validated (non-empty, valid UTF-8), and the result is
 atomically written to a host-side **staging** file
-(`${XDG_STATE_HOME:-~/.local/state}/nixling/config-staging/<vm>.guest.nix`).
+(`${XDG_STATE_HOME:-~/.local/state}/d2b/config-staging/<vm>.guest.nix`).
 The staging copy is never evaluated until approved.
 
 `--dry-run` selects and reports the transport WITHOUT contacting the
@@ -2601,7 +2601,7 @@ content.
 Fail-closed behaviour:
 
 - `config sync` is **admin-only**: `readGuestConfig` is gated to the
-  `nixling-admin` role (`nixling.site.adminUsers`) at the daemon's
+  `d2b-admin` role (`d2b.site.adminUsers`) at the daemon's
   `SO_PEERCRED` accept time. A launcher-role caller is rejected with the
   typed `authz-not-admin` error (exit `75`, AUTH) before any socket
   request reads guest bytes. The staging-only verbs (`diff`/`approve`/
@@ -2621,8 +2621,8 @@ Fail-closed behaviour:
   each map to exit `70` with their slug and never echo guest content,
   paths, or transport detail.
 
-`nixling host shutdown-hook --apply` is intentionally absent from the public
-clap/completion surface and is invoked by `nixlingd.service` only while the host
+`d2b host shutdown-hook --apply` is intentionally absent from the public
+clap/completion surface and is invoked by `d2bd.service` only while the host
 manager is stopping. When that hook connects as uid `0`, the daemon assigns the
 narrow `HostShutdown` role. This role can dispatch only `vmStop`; it cannot run
 admin-only operator verbs such as exec, USB attach/detach, host prepare/destroy,
@@ -2634,7 +2634,7 @@ surface.
 
 ### `config diff`
 
-**Synopsis:** `nixling config diff <vm> --against <guestConfigFile> [--json]`
+**Synopsis:** `d2b config diff <vm> --against <guestConfigFile> [--json]`
 
 Shows a unified diff between the staged guest config and the live
 host-side file the operator names with `--against` (typically their
@@ -2645,7 +2645,7 @@ reports `differs` + the diff text.
 
 ### `config approve`
 
-**Synopsis:** `nixling config approve <vm> --to <target-file> [--json]`
+**Synopsis:** `d2b config approve <vm> --to <target-file> [--json]`
 
 Validates the staged guest config (non-empty, valid UTF-8) and
 atomically writes it onto the operator-chosen `--to` target (unique
@@ -2653,13 +2653,13 @@ atomically writes it onto the operator-chosen `--to` target (unique
 staging file. The CLI never auto-locates the operator's config tree —
 the operator names the target explicitly. The authoritative containment
 + eval gate is the per-VM `guestConfigFile` assertion that runs on the
-subsequent `nixling switch`.
+subsequent `d2b switch`.
 
 **Disposition:** `rust-native` — host-operator-only; atomic publish.
 
 ### `config reject`
 
-**Synopsis:** `nixling config reject <vm> [--json]`
+**Synopsis:** `d2b config reject <vm> [--json]`
 
 Discards the staged guest config for a VM.
 
@@ -2667,7 +2667,7 @@ Discards the staged guest config for a VM.
 
 ### `config status`
 
-**Synopsis:** `nixling config status [<vm>] [--all] [--json]`
+**Synopsis:** `d2b config status [<vm>] [--all] [--json]`
 
 Reports whether a VM (or, with `--all`, every VM) has a pending
 (un-approved) staged guest config.
@@ -2684,7 +2684,7 @@ All `config` verbs share these exit codes:
 | `1` | Runtime error: nothing staged, a low-level public-socket I/O failure on `config sync` (send/receive frame), size-cap/timeout on the staging verbs, missing `--to`/`--against` target dir, I/O error. |
 | `2` | Usage error (bad/missing arguments; surfaced by `clap`), or `config sync` SSH-shaped flags rejected on a guest-control VM (`guest-control-ssh-flag-rejected`). |
 | `70` | `config sync` only. The VM is not declared in the active manifest (`require_known_vm`); the VM's generation does not declare the guest-control transport (`guest-control-unavailable-old-generation`); the daemon socket is unreachable (`guest-control-transport-unavailable`); or a per-kind guest-control read error (`guest-control-file-not-found`, `guest-control-file-too-large`, `guest-control-path-unsafe`, `guest-control-read-denied`, `guest-control-timeout`, `guest-control-protocol-error`, `guest-control-auth-failed`, `guest-control-capability-unavailable`). The staging-only verbs (`diff`/`approve`/`reject`/`status`) do not consult the manifest or transport and so never return `70`. |
-| `75` | `config sync` only. The caller is not in `nixling.site.adminUsers`. `config sync` dispatches the admin-only `ReadGuestConfig` daemon verb, so a launcher-role peer is rejected with the typed `authz-not-admin` (AUTH) error — exit `75`, the daemon's reserved authz code — before any guest read. The staging-only verbs (`diff`/`approve`/`reject`/`status`) dispatch no daemon verb and so never return `75`. |
+| `75` | `config sync` only. The caller is not in `d2b.site.adminUsers`. `config sync` dispatches the admin-only `ReadGuestConfig` daemon verb, so a launcher-role peer is rejected with the typed `authz-not-admin` (AUTH) error — exit `75`, the daemon's reserved authz code — before any guest read. The staging-only verbs (`diff`/`approve`/`reject`/`status`) dispatch no daemon verb and so never return `75`. |
 
 With `--json` each verb emits a single stdout object:
 
@@ -2696,13 +2696,13 @@ With `--json` each verb emits a single stdout object:
 - `config status` → `{ "command": "config status", "pending": [ <vm>… ] }`
   (the single-VM form reports a list with 0 or 1 entry).
 
-Pending-staging notes (`nixling status`, `nixling vm start`, and the mutating
+Pending-staging notes (`d2b status`, `d2b vm start`, and the mutating
 verbs) are emitted on **stderr** for human output only, so they never perturb a
 `--json` stdout envelope.
 
 ### `shell`
 
-**Synopsis:** `nixling shell <target> [ACTION] [--name NAME] [--force] [--json|--human]`
+**Synopsis:** `d2b shell <target> [ACTION] [--name NAME] [--force] [--json|--human]`
 
 `ACTION` is one of:
 
@@ -2712,24 +2712,24 @@ verbs) are emitted on **stderr** for human output only, so they never perturb a
 - `detach` — detach a live/stale client without killing the shell;
 - `kill` — terminate a named shell session.
 
-The first positional after `shell` is always a nixling target address. Current
+The first positional after `shell` is always a d2b target address. Current
 local-shell-only generations accept declared local VM names as target addresses.
 A local VM named `list`, `attach`, `detach`, or `kill` attaches by default; use
-`nixling shell <target> <ACTION>` for management. Command-like trailing words such as
-`nixling shell work htop` are rejected with a hint to use
-`nixling vm exec <target> -- <cmd>` for one-off commands.
+`d2b shell <target> <ACTION>` for management. Command-like trailing words such as
+`d2b shell work htop` are rejected with a hint to use
+`d2b vm exec <target> -- <cmd>` for one-off commands.
 
 `shell` keeps declared local VM names on the local daemon public socket and the
 authenticated guest-control terminal transport. Gateway-backed management forms
 (`list`, `detach`, `kill`) resolve the local realm entrypoint, verify the gateway
-VM is running, and run the same `nixling shell <target> ...` command inside the
+VM is running, and run the same `d2b shell <target> ...` command inside the
 gateway VM over the typed `vm exec` guest-control path. The host does not load
 realm credentials, provider transports, raw guest-control frames, SSH, or
 provider-native shell APIs.
 
 Interactive gateway `attach` is fail-closed in this generation with an
 actionable `gateway-shell-attach-unavailable` error. Use
-`nixling realm enter <realm>` and run `nixling shell <target>` inside the
+`d2b realm enter <realm>` and run `d2b shell <target>` inside the
 gateway until semantic ADR 0039 shell attach is implemented. [ADR
 0039](../adr/0039-constellation-persistent-shell-routing.md) defines the final
 constellation route: gateway-backed targets forward through the selected gateway
@@ -2753,12 +2753,12 @@ metrics never use names or terminal handles as labels.
 **Human examples**
 
 ```text
-$ nixling shell work
+$ d2b shell work
 attached to shell 'default' on vm 'work'; detach with Ctrl-Space Ctrl-q; exit or Ctrl-D ends the session
 ```
 
 ```text
-$ nixling shell work list
+$ d2b shell work list
 NAME    STATE     ATTACHED  DEFAULT
 default detached  false     true
 ```
@@ -2827,14 +2827,14 @@ ids, helper diagnostics, paths, argv, env, or terminal bytes.
 
 ### `vm exec`
 
-**Synopsis:** `nixling vm exec [-i] [-t] [-d|--detach] [--env KEY=VALUE]… [--cwd DIR] [--json|--human] <vm> -- <cmd> [args…]`
+**Synopsis:** `d2b vm exec [-i] [-t] [-d|--detach] [--env KEY=VALUE]… [--cwd DIR] [--json|--human] <vm> -- <cmd> [args…]`
 
 **Detached management synopsis:**
 
-- `nixling vm exec [--json] <vm> list`
-- `nixling vm exec [--json] <vm> logs <exec-id>`
-- `nixling vm exec [--json] <vm> status <exec-id>`
-- `nixling vm exec [--json] <vm> kill <exec-id>`
+- `d2b vm exec [--json] <vm> list`
+- `d2b vm exec [--json] <vm> logs <exec-id>`
+- `d2b vm exec [--json] <vm> status <exec-id>`
+- `d2b vm exec [--json] <vm> kill <exec-id>`
 
 Runs or manages commands inside a running VM over the authenticated
 **guest-control transport**: the CLI opens an owner connection to the
@@ -2880,7 +2880,7 @@ supports attached, interactive, detached, and detached-management forms.
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name as declared in `nixling.vms.<name>`. Management words such as `status` and `logs` are valid VM names because command execution always uses `--`. |
+| `vm` | Required VM name as declared in `d2b.vms.<name>`. Management words such as `status` and `logs` are valid VM names because command execution always uses `--`. |
 | `cmd [args…]` | Guest command and arguments after `--`. `argv[0]` may be a bare command name, absolute path, or relative path; it must be non-empty and must not start with `-`. |
 | `list` | Detached management verb: list retained detached exec metadata. |
 | `logs <exec-id>` | Detached management verb: emit retained stdout/stderr bytes plus bounded metadata warnings, optionally starting at per-stream offsets. |
@@ -2891,8 +2891,8 @@ Exec command forms **always require `--`** before `<cmd>`. Tokens after
 `<vm>` without `--` are management verbs; an unknown verb is a usage
 error that tells the operator to use `--` to run a command. This means
 `list`, `logs`, `status`, and `kill` remain valid VM names:
-`nixling vm exec list -- bash` runs `bash` in a VM named `list`, while
-`nixling vm exec list status <id>` asks that VM for a detached exec's
+`d2b vm exec list -- bash` runs `bash` in a VM named `list`, while
+`d2b vm exec list status <id>` asks that VM for a detached exec's
 status.
 
 **Execution identity and command resolution.** Every attached and
@@ -2907,7 +2907,7 @@ wire `user` field is host-fixed by `guestd` and ignored; operators
 elevate with `sudo` inside the session. The console replacement is:
 
 ```console
-$ nixling vm exec -it corp-vm -- bash
+$ d2b vm exec -it corp-vm -- bash
 ```
 
 Modes:
@@ -2948,10 +2948,10 @@ foreground process group.
 
 Detached management:
 
-- **create** — `nixling vm exec -d <vm> -- <cmd> [args…]`: human output
+- **create** — `d2b vm exec -d <vm> -- <cmd> [args…]`: human output
   is one copy-pasteable `exec_id` line. JSON emits
   `{ "command": "vm exec", "vm": "<vm>", "execId": "<id>", "state": "<state>" }`.
-- **list** — `nixling vm exec <vm> list`: human output is a table with
+- **list** — `d2b vm exec <vm> list`: human output is a table with
   `execId`, state, start time, terminal status when available, aggregate
   and per-stream retained offset windows, and aggregate/per-stream
   dropped/truncated metadata. JSON
@@ -2960,12 +2960,12 @@ Detached management:
   "endOffset", "droppedBytes", "truncated" } ] }`; implementations also
   expose per-stream stdout/stderr offsets and dropped/truncated flags for
   resume-capable clients.
-- **status** — `nixling vm exec <vm> status <exec-id>`: human output is
+- **status** — `d2b vm exec <vm> status <exec-id>`: human output is
   the state plus terminal disposition. JSON emits
   `{ "command": "vm exec status", "vm": "<vm>", "execId": "<id>",
   "state", "reason"?, "exitCode"?, "signal"?, "startOffset",
   "endOffset", "droppedBytes", "truncated" }`.
-- **logs** — `nixling vm exec <vm> logs <exec-id>`: human output writes
+- **logs** — `d2b vm exec <vm> logs <exec-id>`: human output writes
   retained stdout/stderr bytes to the corresponding host streams and
   prints only bounded metadata warnings to stderr when bytes were
   dropped or truncated. An expired detached record is a typed failure
@@ -2978,7 +2978,7 @@ Detached management:
   `stderrEof` fields for offset resume. Logs are bounded ring buffers;
   dropped and truncated
   accounting is metadata, not log content.
-- **kill** — `nixling vm exec <vm> kill <exec-id>`: public name for
+- **kill** — `d2b vm exec <vm> kill <exec-id>`: public name for
   `ExecCancel`. Guestd requests graceful termination, waits a bounded
   grace window, then force-kills the workload if needed. The operation is
   idempotent: human output confirms the result, and JSON emits
@@ -3009,15 +3009,15 @@ runs a periodic reaper for terminal records and retained-log slots.
 **Human example**
 
 ```text
-$ nixling vm exec work -- id
+$ d2b vm exec work -- id
 uid=1000(alice) gid=100(users)
-$ nixling vm exec work list
+$ d2b vm exec work list
 EXEC ID                  STATE                  STARTED AT                EXIT/SIGNAL    OFFSETS                                    DROPPED/TRUNCATED
 exec-1                   exited                 2026-06-15T00:00:00Z      exit=0         all=4..18 stdout=4..8 stderr=9..18         all=5/truncated stdout=2/truncated stderr=3/complete
-$ nixling vm exec work logs exec-1 --stdout-offset=4 --stderr-offset=9 --max-len=4096
+$ d2b vm exec work logs exec-1 --stdout-offset=4 --stderr-offset=9 --max-len=4096
 OUT
 ERR
-nixling: vm exec logs: retained output incomplete (startOffset=4 endOffset=18 droppedBytes=5 truncated=true stdoutStartOffset=4 stdoutEndOffset=8 stdoutNextOffset=10 stdoutEof=false stdoutDroppedBytes=2 stdoutTruncated=true stderrStartOffset=9 stderrEndOffset=18 stderrNextOffset=21 stderrEof=true stderrDroppedBytes=3 stderrTruncated=false)
+d2b: vm exec logs: retained output incomplete (startOffset=4 endOffset=18 droppedBytes=5 truncated=true stdoutStartOffset=4 stdoutEndOffset=8 stdoutNextOffset=10 stdoutEof=false stdoutDroppedBytes=2 stdoutTruncated=true stderrStartOffset=9 stderrEndOffset=18 stderrNextOffset=21 stderrEof=true stderrDroppedBytes=3 stderrTruncated=false)
 ```
 
 Detached JSON shapes are generated as
@@ -3077,7 +3077,7 @@ closed action/result enums, and the opaque exec id only.
 
 **Disposition:** `rust-native` — daemon public socket → authenticated
 guest-control session → `guestd` exec RPCs; no SSH, no host PTY, no new
-privileged broker op (attached sessions live in-process in `nixlingd`;
+privileged broker op (attached sessions live in-process in `d2bd`;
 detached state lives in guestd's detached registry).
 
 ## Dispatch capability table
@@ -3088,11 +3088,11 @@ detached state lives in guestd's detached registry).
 | `vm start` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed `SpawnRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `vm stop` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output, including explicit `--force` / `-f` stop intent; `--apply` routes through the daemon-backed `SignalRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `vm restart` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output, including explicit `--force` / `-f` stop-phase intent; `--apply` routes through the daemon-backed stop+start sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
-| `vm list` | `rust-native` | Daemon-side runtime inventory from nixlingd's public socket; daemon-unavailable returns an explicit empty inventory with remediation text. |
+| `vm list` | `rust-native` | Daemon-side runtime inventory from d2bd's public socket; daemon-unavailable returns an explicit empty inventory with remediation text. |
 | `status` | `rust-native` | Status is a read-only daemon RPC, including the frozen per-VM JSON shape. |
 | `status --check-bridges` | `rust-native` | The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred. |
-| `usb attach` | `rust-native` | USBIP attach parses and dispatches one intent to `nixlingd`; the daemon coordinates broker host bind/firewall/proxy state and authenticated guestd import over guest-control. |
-| `usb detach` | `rust-native` | USBIP detach parses and dispatches one intent to `nixlingd`; the daemon asks guestd to detach matching imports, then runs broker `UsbipUnbind` / `UsbipProxyReconcile`. |
+| `usb attach` | `rust-native` | USBIP attach parses and dispatches one intent to `d2bd`; the daemon coordinates broker host bind/firewall/proxy state and authenticated guestd import over guest-control. |
+| `usb detach` | `rust-native` | USBIP detach parses and dispatches one intent to `d2bd`; the daemon asks guestd to detach matching imports, then runs broker `UsbipUnbind` / `UsbipProxyReconcile`. |
 | `usb probe` | `rust-native` | USBIP probe is a read-only daemon query backed by the broker's `UsbipProxyReconcile` validation pass. |
 | `console` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native foreground console handoff is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
 | `audio status` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native audio-status surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
@@ -3106,7 +3106,7 @@ detached state lives in guestd's detached registry).
 | `rollback` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `generations` | `rust-native` | Generations is a native introspection surface that reports current/booted symlink targets without falling back to bash. |
 | `gc` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunGc` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
-| `store verify` | `rust-native` | Routes through `nixlingd` → broker `StoreVerify`; the CLI never reads the store-view directly. |
+| `store verify` | `rust-native` | Routes through `d2bd` → broker `StoreVerify`; the CLI never reads the store-view directly. |
 | `trust` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunHostKeyTrust` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `rotate-known-host` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunRotateKnownHost` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `keys list` | `rust-native` | Keys list is a native inventory preview that reports the managed-key resolution placeholders without falling back to bash. |
@@ -3119,6 +3119,6 @@ detached state lives in guestd's detached registry).
 | `host doctor` | `rust-native` | Host doctor is a read-only daemon health probe; `--read-only` is mandatory and there is no bash fallback for mutation forms. |
 | `host migrate-storage` | `rust-native` | Storage cutover dry-run planning is native and read-only; `--apply` / `--rollback` fail closed until the broker-backed mover lands. |
 | `host install` | `rust-native` | Host install owns its dry-run preview in Rust and routes `--apply` through the daemon → broker `RunHostInstall` path without broker-error fallback to bash. |
-| `migrate` | `rust-native` | Dry-run analysis is native; `--apply` routes through `nixlingd` → broker `RunMigrate`. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `migrate` | `rust-native` | Dry-run analysis is native; `--apply` routes through `d2bd` → broker `RunMigrate`. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `auth status` | `rust-native` | Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints. |
-| `vm exec` | `rust-native` | Daemon public socket → authenticated guest-control session → `guestd` exec RPCs. Admin-only; no SSH, no host PTY, no new privileged broker op. Attached exec uses the in-process `nixlingd` session table; detached exec uses guestd's detached registry and VM-first management verbs. |
+| `vm exec` | `rust-native` | Daemon public socket → authenticated guest-control session → `guestd` exec RPCs. Admin-only; no SSH, no host PTY, no new privileged broker op. Attached exec uses the in-process `d2bd` session table; detached exec uses guestd's detached registry and VM-first management verbs. |

@@ -1,7 +1,7 @@
 error: host-check-error
   code: cgroup-delegation-refused
   exit_code: 1
-  what_was_checked: Whether systemd delegated +cpu +memory +io +pids to the nixling host slice.
+  what_was_checked: Whether systemd delegated +cpu +memory +io +pids to the d2b host slice.
   observed_state: Delegation request refused; controllers missing from cgroup.subtree_control.
-  remediation: Add `Delegate=cpu memory io pids` to /etc/systemd/system/nixling-host.slice and `systemctl daemon-reload`.
+  remediation: Add `Delegate=cpu memory io pids` to /etc/systemd/system/d2b-host.slice and `systemctl daemon-reload`.
   docs_anchor: docs/reference/error-codes.md#cgroup-delegation-refused

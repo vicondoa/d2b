@@ -1,9 +1,9 @@
 { config, lib, ... }:
 
 let
-  cfg = config.nixling;
-  nl = import ./lib.nix { inherit lib; };
-  inherit (nl) mkMac subnetIp subnetMask;
+  cfg = config.d2b;
+  d2bLib = import ./lib.nix { inherit lib; };
+  inherit (d2bLib) mkMac subnetIp subnetMask;
 
   sortNames = names: lib.sort lib.lessThan names;
   sortedAttrNames = attrs: sortNames (lib.attrNames attrs);
@@ -15,8 +15,8 @@ let
 
   enabledEnvs = sortedAttrs (lib.filterAttrs (_: env: env.enable) cfg.envs);
   enabledVms = sortedAttrs (lib.filterAttrs (_: vm: vm.enable) cfg.vms);
-  normalNixosVms = sortedAttrs (nl.normalNixosVms cfg.vms);
-  qemuMediaVms = sortedAttrs (nl.qemuMediaVms cfg.vms);
+  normalNixosVms = sortedAttrs (d2bLib.normalNixosVms cfg.vms);
+  qemuMediaVms = sortedAttrs (d2bLib.qemuMediaVms cfg.vms);
 
   workloadsInEnv = envName:
     sortedAttrs (lib.filterAttrs (_: vm: vm.env == envName) enabledVms);
@@ -91,7 +91,7 @@ let
     })
     (sortedAttrNames enabledEnvs));
 
-  obsOtlpPort = nl.observabilityOtlpVsockPort;
+  obsOtlpPort = d2bLib.observabilityOtlpVsockPort;
   observedVmNames = sortedAttrNames observedVms;
   obsSourcePortMap = lib.listToAttrs (lib.imap0
     (i: name: { inherit name; value = obsOtlpPort + 1 + i; })
@@ -172,15 +172,15 @@ let
     (name: vm: {
       inherit name;
       value = {
-        kind = nl.vmRuntimeKind vm;
-        metadata = nl.vmRuntimeMetadata name vm;
+        kind = d2bLib.vmRuntimeKind vm;
+        metadata = d2bLib.vmRuntimeMetadata name vm;
       };
     })
     enabledVms);
 
   runtimeProviders = lib.sortOn (provider: provider.provider.id)
     (map (provider: builtins.removeAttrs provider [ "_hypervisorService" ])
-      (lib.attrValues nl.runtimeProviderCatalog));
+      (lib.attrValues d2bLib.runtimeProviderCatalog));
 
   index = {
     enabledEnvs = enabledEnvs;
@@ -283,16 +283,16 @@ let
   };
 in
 {
-  options.nixling._index = lib.mkOption {
+  options.d2b._index = lib.mkOption {
     type = lib.types.attrs;
     default = { };
     internal = true;
     visible = false;
-    description = "Internal normalized, deterministic VM/env index derived from declared nixling inputs.";
+    description = "Internal normalized, deterministic VM/env index derived from declared d2b inputs.";
   };
 
-  config.nixling = {
+  config.d2b = {
     _index = index;
-    _envMeta = config.nixling._index.envMeta;
+    _envMeta = config.d2b._index.envMeta;
   };
 }

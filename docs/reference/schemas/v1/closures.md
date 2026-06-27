@@ -2,7 +2,7 @@
 
 `closures/<vm>.json` is the private per-VM closure artifact. It records the evaluated toplevel, the closure paths required by the guest and sidecars, declared-runner parity data, and generation metadata consumed by the future daemon runner.
 
-Producer: `nixos-modules/manifest-closures.nix` emits this artifact; `packages/nixling-core` parses it.
+Producer: `nixos-modules/manifest-closures.nix` emits this artifact; `packages/d2b-core` parses it.
 
 Schema: [`closures.json`](./closures.json) (forward reference; generated with `cargo xtask gen-schemas`).
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the nixling Wayland sandbox image with Nix and push it to the ACR
+# Build the d2b Wayland sandbox image with Nix and push it to the ACR
 # created by the Bicep deployment (ADR 0032).
 #
 # Usage:
@@ -10,12 +10,12 @@
 # --expose-token) — no stored registry credentials.
 set -euo pipefail
 
-REGION="${NIXLING_REGION:-centralus}"
-WORKLOAD="${NIXLING_WORKLOAD:-nixling}"
-RG="${NIXLING_RG:-rg-${WORKLOAD}-${REGION}}"
+REGION="${D2B_REGION:-centralus}"
+WORKLOAD="${D2B_WORKLOAD:-d2b}"
+RG="${D2B_RG:-rg-${WORKLOAD}-${REGION}}"
 
 REGISTRY="${1:-}"
-IMAGE_REF="${2:-nixling-wayland:latest}"
+IMAGE_REF="${2:-d2b-wayland:latest}"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -38,7 +38,7 @@ log "built $IMAGE_TAR"
 # 2. Load it into podman.
 log "loading into podman..."
 LOADED="$(podman load -i "$IMAGE_TAR" 2>&1 | sed -n 's/.*: //p' | tail -1)"
-: "${LOADED:=localhost/nixling-wayland:latest}"
+: "${LOADED:=localhost/d2b-wayland:latest}"
 log "loaded as $LOADED"
 
 # 3. Tag for the registry.

@@ -1,47 +1,47 @@
 # Type-G runNixOSTest: live broker privilege posture oracle.
 #
 # Hermetic successor to the retired self-hosted L1c shell oracle. It boots a
-# nixling daemon host, starts the socket-activated privileged broker, derives the
+# d2b daemon host, starts the socket-activated privileged broker, derives the
 # expected posture from the rendered systemd unit, and checks the live
 # /proc/<pid> state for the hardening invariants that matter at runtime.
 { pkgs, self }:
 
 let
-  nixlingLib = import ./lib.nix {
+  d2bLib = import ./lib.nix {
     inherit self;
     inherit (pkgs) lib;
   };
 in
 pkgs.testers.runNixOSTest {
-  name = "nixling-privilege-oracle";
+  name = "d2b-privilege-oracle";
 
-  nodes.machine = nixlingLib.nixlingDaemonNode { };
+  nodes.machine = d2bLib.d2bDaemonNode { };
 
   testScript = ''
     import shlex
 
     start_all()
 
-    machine.wait_for_unit("nixling-priv-broker.socket")
-    machine.wait_for_unit("nixlingd.service")
+    machine.wait_for_unit("d2b-priv-broker.socket")
+    machine.wait_for_unit("d2bd.service")
 
     # The broker is socket-activated, but starting the service directly keeps a
     # live Type=notify process long enough to read its /proc posture.
-    machine.succeed("systemctl start nixling-priv-broker.service")
+    machine.succeed("systemctl start d2b-priv-broker.service")
     broker_pid = machine.succeed(
         "for i in $(seq 1 100); do "
-        "pid=$(systemctl show -p MainPID --value nixling-priv-broker.service); "
+        "pid=$(systemctl show -p MainPID --value d2b-priv-broker.service); "
         "if [ -n \"$pid\" ] && [ \"$pid\" != 0 ] && [ -r \"/proc/$pid/status\" ]; then "
         "echo \"$pid\"; exit 0; fi; "
         "sleep 0.2; "
         "done; "
-        "systemctl status --no-pager nixling-priv-broker.service >&2; "
+        "systemctl status --no-pager d2b-priv-broker.service >&2; "
         "exit 1"
     ).strip()
-    print(f"live nixling-priv-broker PID: {broker_pid}")
+    print(f"live d2b-priv-broker PID: {broker_pid}")
 
     unit_raw = machine.succeed(
-        "systemctl show nixling-priv-broker.service "
+        "systemctl show d2b-priv-broker.service "
         "-p CapabilityBoundingSet "
         "-p AmbientCapabilities "
         "-p NoNewPrivileges "
@@ -50,7 +50,7 @@ pkgs.testers.runNixOSTest {
         "-p Slice "
         "-p SystemCallFilter"
     )
-    print("rendered nixling-priv-broker.service posture:\n" + unit_raw)
+    print("rendered d2b-priv-broker.service posture:\n" + unit_raw)
     unit = dict(line.split("=", 1) for line in unit_raw.strip().splitlines() if "=" in line)
 
     status_raw = machine.succeed(f"cat /proc/{broker_pid}/status")
@@ -203,8 +203,8 @@ pkgs.testers.runNixOSTest {
     assert any(expected_slice in path for path in cgroup_paths), (
         f"broker cgroup path must contain rendered Slice={expected_slice}, got {cgroup_paths}"
     )
-    assert any("nixling.slice" in path for path in cgroup_paths), (
-        f"broker cgroup path must contain nixling.slice, got {cgroup_paths}"
+    assert any("d2b.slice" in path for path in cgroup_paths), (
+        f"broker cgroup path must contain d2b.slice, got {cgroup_paths}"
     )
   '';
 }

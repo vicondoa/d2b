@@ -1,0 +1,108 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH d2b 1 1970-01-01 "d2b 0.0.0-bootstrap" "d2b CLI"
+.SH NAME
+d2b \- d2b — opinionated NixOS desktop microVM CLI.
+.SH SYNOPSIS
+\fBd2b\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+d2b — daemon\-native CLI for d2b microVMs.
+.PP
+All mutating verbs dispatch through d2bd and d2b\-priv\-broker. Read\-only verbs (list, status, audit, host check) prefer d2bd\*(Aqs public socket and fall back to static/local sources where documented. See `d2b <COMMAND> \-\-help` for per\-verb usage.
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
+.TP
+d2b\-list(1)
+List declared VMs with daemon runtime state when d2bd is reachable
+.TP
+d2b\-status(1)
+Show per\-VM runtime status plus bridge health
+.TP
+d2b\-usb(1)
+USB attach / detach / probe
+.TP
+d2b\-console(1)
+Foreground serial console bridge for headless VMs (not yet implemented)
+.TP
+d2b\-audio(1)
+Per\-VM audio grant bridge (not yet implemented)
+.TP
+d2b\-audit(1)
+Tail the broker audit log
+.TP
+d2b\-host(1)
+Host\-side preflight, install, doctor, and reconcile verbs
+.TP
+d2b\-auth(1)
+Authorisation introspection
+.TP
+d2b\-realm(1)
+Low\-level realm gateway helpers
+.TP
+d2b\-shell(1)
+Attach to or manage persistent named guest shells
+.TP
+d2b\-op(1)
+Inspect current constellation operation and trace state
+.TP
+d2b\-vm(1)
+Per\-VM lifecycle verbs (start / stop / restart / list / status) plus the admin\-only guest\-control sub\-verb `exec`, which runs commands or an interactive session inside a VM over the authenticated guest\-control transport (no SSH)
+.TP
+d2b\-up(1)
+Alias for `vm start <vm>`
+.TP
+d2b\-down(1)
+Alias for `vm stop <vm>`
+.TP
+d2b\-restart(1)
+Alias for `vm restart <vm>`
+.TP
+d2b\-build(1)
+Non\-destructive eval + build of the per\-VM toplevel
+.TP
+d2b\-generations(1)
+List current / booted / numbered generations for a VM
+.TP
+d2b\-switch(1)
+Atomically activate a new per\-VM closure
+.TP
+d2b\-boot(1)
+Stage a per\-VM closure for the next boot only
+.TP
+d2b\-test(1)
+Activate a per\-VM closure with rollback on reboot
+.TP
+d2b\-rollback(1)
+Roll a VM back to its previous generation
+.TP
+d2b\-gc(1)
+Garbage\-collect the per\-VM /nix/store hardlink farm
+.TP
+d2b\-store(1)
+Store\-view maintenance and verification
+.TP
+d2b\-keys(1)
+Managed\-key lifecycle (list / show / rotate)
+.TP
+d2b\-trust(1)
+Trust a VM\*(Aqs host key on first use (TOFU)
+.TP
+d2b\-rotate\-known\-host(1)
+Rotate the consumer\*(Aqs recorded known\-host entry for a VM
+.TP
+d2b\-migrate(1)
+Analyse the host config and emit a migration plan
+.TP
+d2b\-config(1)
+Sync / review / approve a VM\*(Aqs guest\-editable config (`guestConfigFile`): pull the operator\*(Aqs in\-VM edits to a host\-side staging file, diff them, and approve them
+.TP
+d2b\-help(1)
+Print this message or the help of the given subcommand(s)
+.SH VERSION
+v0.0.0\-bootstrap

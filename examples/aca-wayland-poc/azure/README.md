@@ -1,7 +1,7 @@
-# nixling ACA + Wayland POC — Azure deployment (Bicep)
+# d2b ACA + Wayland POC — Azure deployment (Bicep)
 
 Infrastructure-as-code for the ADR 0032 vertical of
-[ADR 0032](../../../docs/adr/0032-nixling-v2-constellation-control-plane.md):
+[ADR 0032](../../../docs/adr/0032-d2b-v2-constellation-control-plane.md):
 a real Azure Container Apps **sandbox** that runs a Wayland-native app, plus
 an **Azure Relay** hybrid connection that carries the constellation
 control/display streams. The app is forwarded to the operator's local
@@ -28,27 +28,27 @@ Every resource follows one scheme (configured in `main.bicep`):
 - **prefix** — a short resource-type abbreviation. Defaults follow the
   Azure Cloud Adoption Framework (CAF)
   [recommended abbreviations](https://learn.microsoft.com/azure/cloud-adoption-framework/ready/azure-best-practices/resource-abbreviations).
-  Two types CAF does not define get a nixling-chosen prefix: the Container
+  Two types CAF does not define get a d2b-chosen prefix: the Container
   Apps sandbox group (`casbx`, in the CAF `ca*` family — `ca`/`cae`/`caj`)
   and the Relay namespace (`relns`, mirroring CAF's `<svc>ns` convention
   such as `sbns`).
-- **workload** — a stable token for the deployment (default `nixling`).
+- **workload** — a stable token for the deployment (default `d2b`).
 - **suffix** — `uniqueString(subscription().id, resourceGroup().id)`: a
   deterministic hash that is stable across redeploys but unique per
   (subscription, resource group).
 
 | Resource | Type | Prefix | Example name |
 | --- | --- | --- | --- |
-| Regional resource group | `Microsoft.Resources/resourceGroups` | `rg` | `rg-nixling-centralus` |
-| Container registry | `Microsoft.ContainerRegistry/registries` | `cr` | `crnixling<suffix>` |
-| Managed identity | `Microsoft.ManagedIdentity/userAssignedIdentities` | `id` | `id-nixling-<suffix>` |
-| Sandbox group | `Microsoft.App/sandboxGroups` | `casbx` | `casbx-nixling-<suffix>` |
-| Relay namespace | `Microsoft.Relay/namespaces` | `relns` | `relns-nixling-<suffix>` |
-| Hybrid connection | `.../hybridConnections` | `hc` | `hc-nixling-display` |
+| Regional resource group | `Microsoft.Resources/resourceGroups` | `rg` | `rg-d2b-centralus` |
+| Container registry | `Microsoft.ContainerRegistry/registries` | `cr` | `crd2b<suffix>` |
+| Managed identity | `Microsoft.ManagedIdentity/userAssignedIdentities` | `id` | `id-d2b-<suffix>` |
+| Sandbox group | `Microsoft.App/sandboxGroups` | `casbx` | `casbx-d2b-<suffix>` |
+| Relay namespace | `Microsoft.Relay/namespaces` | `relns` | `relns-d2b-<suffix>` |
+| Hybrid connection | `.../hybridConnections` | `hc` | `hc-d2b-display` |
 
 ## Resource group layout
 
-- **`rg-<workload>-<region>`** (e.g. `rg-nixling-centralus`) — every
+- **`rg-<workload>-<region>`** (e.g. `rg-d2b-centralus`) — every
   resource in this POC is regional, so they all live here.
 - **`rg-common`** is reserved by the scheme for genuinely subscription-global
   resources. This POC has none, so it is not created.
@@ -107,7 +107,7 @@ az deployment sub what-if \
   --parameters main.bicepparam
 
 az deployment sub create \
-  --name nixling-aca-wayland \
+  --name d2b-aca-wayland \
   --location centralus \
   --template-file main.bicep \
   --parameters main.bicepparam
@@ -124,7 +124,7 @@ realm gateway.
 > deployments with an `InvalidRequestContent` "unexpected character `$`"
 > error that reproduces even on an empty template. If you hit that, deploy
 > the two modules at resource-group scope instead: `az group create -n
-> rg-nixling-<region> -l <region>`, then `az deployment group create` for
+> rg-d2b-<region> -l <region>`, then `az deployment group create` for
 > `modules/registry.bicep` and `modules/sandbox.bicep` (the sandbox module
 > takes the registry's `managedIdentityPrincipalId` output). Both modules
 > are RG-scoped and self-contained.
@@ -141,5 +141,5 @@ realm gateway.
 - Both ends connect outbound (gateway listener and in-sandbox sender), so no
   inbound ports are opened. Per-sandbox egress is further constrained by the
   data-plane egress policy the gateway sets.
-- These resources hold no nixling host credentials; the host daemon never
+- These resources hold no d2b host credentials; the host daemon never
   receives the relay/provider credentials (they live in the gateway guest).

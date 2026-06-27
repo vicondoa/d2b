@@ -2,7 +2,7 @@
 
 Status: historical reference for the pre-SigNoz observability backend.
 
-Current nixling observability no longer emits a Loki backend or
+Current d2b observability no longer emits a Loki backend or
 `loki.source.*` Alloy pipeline. Logs flow through OpenTelemetry
 Collector pipelines into the SigNoz OTel Collector and ClickHouse.
 
@@ -10,7 +10,7 @@ The live contract enforced by
 [`tests/loki-label-cardinality-eval.sh`](../../tests/loki-label-cardinality-eval.sh)
 is the OTel resource-attribute contract for the native SigNoz path:
 
-- Resource attribute keys in nixling-managed collector configs are
+- Resource attribute keys in d2b-managed collector configs are
   allowlisted to:
   - `deployment.environment`
   - `host.name`
@@ -40,5 +40,5 @@ See:
 
 The old Loki label contract is retained here only for migration context:
 historical branches that still carry the Grafana/Prometheus/Loki/Tempo
-stack should use their branch-local Loki label gate. New nixling changes
+stack should use their branch-local Loki label gate. New d2b changes
 must follow the OTel resource-attribute contract above.

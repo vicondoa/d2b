@@ -1,4 +1,4 @@
-# daemon-state-lock — nixlingd daemon-spawn #[test]s. Successor of
+# daemon-state-lock — d2bd daemon-spawn #[test]s. Successor of
 # tests/daemon-state-lock.sh, which exercised lock-only state-lock ownership,
 # AlreadyRunning, and symlink-parent fail-closed behavior. These integration
 # tests run in the default cargo test --workspace pass gated by

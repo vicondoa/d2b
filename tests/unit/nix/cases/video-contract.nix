@@ -43,16 +43,16 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
-    nixling.vms.demo-gfx = {
+    d2b.vms.demo-gfx = {
       enable = true;
       env = "work";
       index = 11;
@@ -69,17 +69,17 @@ let
   mk = extra: mkEval [ base extra ];
   nixos = mk ({ ... }: { });
 
-  processes = nixos.config.nixling._bundle.processesJson.data;
+  processes = nixos.config.d2b._bundle.processesJson.data;
   dag = builtins.head (builtins.filter (vm: vm.vm == "demo-gfx") processes.vms);
   nodeById = id: builtins.head (builtins.filter (node: node.id == id) dag.nodes);
   ch = nodeById "cloud-hypervisor";
   gpu = nodeById "gpu";
   video = nodeById "video";
 
-  videoProfile = nixos.config.nixling._bundle.minijailProfiles."vm-demo-gfx-video".data;
-  gpuProfile = nixos.config.nixling._bundle.minijailProfiles."vm-demo-gfx-gpu".data;
-  videoUser = nixos.config.users.users."nixling-demo-gfx-video";
-  videoGroup = nixos.config.users.groups."nixling-demo-gfx-video";
+  videoProfile = nixos.config.d2b._bundle.minijailProfiles."vm-demo-gfx-video".data;
+  gpuProfile = nixos.config.d2b._bundle.minijailProfiles."vm-demo-gfx-gpu".data;
+  videoUser = nixos.config.users.users."d2b-demo-gfx-video";
+  videoGroup = nixos.config.users.groups."d2b-demo-gfx-video";
 
   mediaPositions =
     builtins.filter (i: builtins.elemAt ch.argv i == "--vhost-user-media")
@@ -89,55 +89,55 @@ let
       (arg: builtins.isString arg && lib.hasPrefix "--vhost-user-media" arg)
       ch.argv;
   mediaArgValues = map (i: builtins.elemAt ch.argv (i + 1)) mediaPositions;
-  expectedMediaArg = "socket=/run/nixling-video/demo-gfx/video.sock";
+  expectedMediaArg = "socket=/run/d2b-video/demo-gfx/video.sock";
 
   renderNixos = mk ({ ... }: {
-    nixling.vms.demo-gfx.graphics.renderNodeOnly = true;
+    d2b.vms.demo-gfx.graphics.renderNodeOnly = true;
   });
   renderDag = builtins.head (builtins.filter (vm: vm.vm == "demo-gfx")
-    renderNixos.config.nixling._bundle.processesJson.data.vms);
+    renderNixos.config.d2b._bundle.processesJson.data.vms);
 
   nvidiaNixos = mk ({ ... }: {
-    nixling.vms.demo-gfx.graphics.videoNvidiaDecode = true;
+    d2b.vms.demo-gfx.graphics.videoNvidiaDecode = true;
   });
   nvidiaDag = builtins.head (builtins.filter (vm: vm.vm == "demo-gfx")
-    nvidiaNixos.config.nixling._bundle.processesJson.data.vms);
+    nvidiaNixos.config.d2b._bundle.processesJson.data.vms);
   nvidiaVideo = builtins.head (builtins.filter (node: node.id == "video") nvidiaDag.nodes);
 
   virglNixos = mk ({ ... }: {
-    nixling.vms.demo-gfx.graphics.virglVideo = true;
+    d2b.vms.demo-gfx.graphics.virglVideo = true;
   });
   virglDag = builtins.head (builtins.filter (vm: vm.vm == "demo-gfx")
-    virglNixos.config.nixling._bundle.processesJson.data.vms);
+    virglNixos.config.d2b._bundle.processesJson.data.vms);
   virglGpu = builtins.head (builtins.filter (node: node.id == "gpu") virglDag.nodes);
 
   noVideoNixos = mk ({ lib, ... }: {
-    nixling.vms.demo-gfx.graphics.videoSidecar = lib.mkForce false;
+    d2b.vms.demo-gfx.graphics.videoSidecar = lib.mkForce false;
   });
 
   failingAssertions = cfg: builtins.filter (a: !a.assertion) cfg.config.assertions;
   anyMsg = sub: assertions: builtins.any (a: lib.hasInfix sub a.message) assertions;
 
   failingVideoNoGraphics = failingAssertions (mk ({ ... }: {
-    nixling.vms.demo-gfx.graphics.enable = lib.mkForce false;
-    nixling.vms.demo-gfx.graphics.videoSidecar = true;
+    d2b.vms.demo-gfx.graphics.enable = lib.mkForce false;
+    d2b.vms.demo-gfx.graphics.videoSidecar = true;
   }));
   failingNvidiaNoSidecar = failingAssertions (mk ({ ... }: {
-    nixling.vms.demo-gfx.graphics.videoSidecar = lib.mkForce false;
-    nixling.vms.demo-gfx.graphics.videoNvidiaDecode = true;
+    d2b.vms.demo-gfx.graphics.videoSidecar = lib.mkForce false;
+    d2b.vms.demo-gfx.graphics.videoNvidiaDecode = true;
   }));
   failingVirglNoGraphics = failingAssertions (mk ({ ... }: {
-    nixling.vms.demo-gfx.graphics.enable = lib.mkForce false;
-    nixling.vms.demo-gfx.graphics.virglVideo = true;
+    d2b.vms.demo-gfx.graphics.enable = lib.mkForce false;
+    d2b.vms.demo-gfx.graphics.virglVideo = true;
   }));
   failingEqualsMediaOverride = failingAssertions (mk ({ ... }: {
-    nixling.vms.demo-gfx.config.microvm.cloud-hypervisor.extraArgs = [
-      "--vhost-user-media=socket=/run/nixling-video/demo-gfx/evil.sock"
+    d2b.vms.demo-gfx.config.microvm.cloud-hypervisor.extraArgs = [
+      "--vhost-user-media=socket=/run/d2b-video/demo-gfx/evil.sock"
     ];
   }));
 
   graphicsSrc = builtins.readFile (flakeRoot + "/nixos-modules/components/graphics.nix");
-  useVideoLine = ''let use_video = ''${if config.nixling.graphics.virglVideo then "true" else "false"};'';
+  useVideoLine = ''let use_video = ''${if config.d2b.graphics.virglVideo then "true" else "false"};'';
   setUseVideoCall = ".set_use_video(use_video)";
 in
 {
@@ -147,12 +147,12 @@ in
   };
   "video-contract/video-socket" = {
     expr = builtins.elemAt video.argv 4;
-    expected = "/run/nixling-video/demo-gfx/video.sock";
+    expected = "/run/d2b-video/demo-gfx/video.sock";
   };
   "video-contract/video-readiness" = {
     expr = video.readiness;
     expected = [
-      { kind = "unix-socket-listening"; value = "/run/nixling-video/demo-gfx/video.sock"; }
+      { kind = "unix-socket-listening"; value = "/run/d2b-video/demo-gfx/video.sock"; }
     ];
   };
   "video-contract/media-arg-count" = {
@@ -187,7 +187,7 @@ in
   };
   "video-contract/video-principal" = {
     expr = videoProfile.principal;
-    expected = "nixling-demo-gfx-video";
+    expected = "d2b-demo-gfx-video";
   };
   "video-contract/video-uid-matches-user" = {
     expr = videoProfile.uid == videoUser.uid;
@@ -203,8 +203,8 @@ in
   };
   "video-contract/video-user-only-with-sidecar" = {
     expr =
-      !(builtins.hasAttr "nixling-demo-gfx-video" noVideoNixos.config.users.users)
-      && !(builtins.hasAttr "nixling-demo-gfx-video" noVideoNixos.config.users.groups);
+      !(builtins.hasAttr "d2b-demo-gfx-video" noVideoNixos.config.users.users)
+      && !(builtins.hasAttr "d2b-demo-gfx-video" noVideoNixos.config.users.groups);
     expected = true;
   };
   "video-contract/nvidia-video-device-binds" = {
@@ -217,7 +217,7 @@ in
     ];
   };
   "video-contract/virgl-default-off" = {
-    expr = nixos.config.nixling.vms.demo-gfx.graphics.virglVideo;
+    expr = nixos.config.d2b.vms.demo-gfx.graphics.virglVideo;
     expected = false;
   };
   "video-contract/virgl-opt-in-preserves-closed-gpu-argv" = {
@@ -261,7 +261,7 @@ in
     expected = true;
   };
   "video-contract/equals-media-override-rejected" = {
-    expr = anyMsg "--vhost-user-media argument equal to socket=/run/nixling-video/demo-gfx/video.sock" failingEqualsMediaOverride;
+    expr = anyMsg "--vhost-user-media argument equal to socket=/run/d2b-video/demo-gfx/video.sock" failingEqualsMediaOverride;
     expected = true;
   };
   "video-contract/graphics-virgl-use-video-source" = {

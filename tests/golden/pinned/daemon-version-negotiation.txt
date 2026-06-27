@@ -1,4 +1,4 @@
-# daemon-version-negotiation — nixlingd daemon-spawn #[test]s. Successor of
+# daemon-version-negotiation — d2bd daemon-spawn #[test]s. Successor of
 # tests/daemon-version-negotiation.sh, which exercised hello version ranges,
 # deny_unknown_fields, unknown feature tolerance, and IfName validation through
 # serve --once plus test-client frames. These integration tests run in the
