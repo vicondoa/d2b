@@ -71,6 +71,7 @@ let
   tmpfiles = cfg.systemd.tmpfiles.rules;
   qemuMediaTmpfiles = qemuMediaCfg.systemd.tmpfiles.rules;
   roleAclText = cfg.system.activationScripts.d2bRoleUidAcls.text or "";
+  qemuMediaRoleAclText = qemuMediaCfg.system.activationScripts.d2bRoleUidAcls.text or "";
   runtimePostureText = cfg.system.activationScripts.d2bRuntimeDirPosture.text or "";
   stateDirAclText = cfg.system.activationScripts.d2bStateDirAcl.text or "";
   vmStatePermsText = cfg.system.activationScripts.d2bVmStatePerms.text or "";
@@ -314,6 +315,17 @@ in
     expr =
       lib.hasInfix ''setfacl -m "u:$uid:x" /run/d2b 2>/dev/null || true'' roleAclText
       && lib.hasInfix ''setfacl -m "u:$uid:x" /run/d2b/vms 2>/dev/null || true'' roleAclText;
+    expected = true;
+  };
+
+  "activation-runtime-tmpfiles/qemu-media-role-acl-script-repairs-run-write-mask" = {
+    expr =
+      lib.hasInfix ''qemu_media_acl_mask_repair=0'' qemuMediaRoleAclText
+      && lib.hasInfix ''qemu_media_acl_mask_repair=1'' qemuMediaRoleAclText
+      && lib.hasInfix ''if [ "$qemu_media_acl_mask_repair" = "1" ]; then'' qemuMediaRoleAclText
+      && lib.hasInfix ''setfacl -m "m::rwx" /run/d2b/vms/media 2>/dev/null || true'' qemuMediaRoleAclText
+      && !(lib.hasInfix ''setfacl -d -m "m::rwx" /run/d2b/vms/media'' qemuMediaRoleAclText)
+      && !(lib.hasInfix ''setfacl -m "m::rwx" /var/lib/d2b/vms/media'' qemuMediaRoleAclText);
     expected = true;
   };
 
