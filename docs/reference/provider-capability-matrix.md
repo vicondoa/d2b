@@ -112,9 +112,9 @@ not a holder of the console fd.
 
 | Provider | Host audio enforcement | Guest audio enforcement | Offline audio policy | Notes |
 | --- | --- | --- | --- | --- |
-| Cloud Hypervisor NixOS | ✓ PipeWire/vhost-user-sound controller | ✓ via `guestd` over authenticated guest-control | N/A (live state) | Host-side `off` is fail-closed; see [Audio enforcement — Cloud Hypervisor](#audio-enforcement--cloud-hypervisor). |
+| Cloud Hypervisor NixOS | ✓ PipeWire/vhost-user-sound controller | ✓ via `guestd` over authenticated guest-control | N/A (live state) | Reports `enforcement: host-and-guest` when both sides apply; host-side `off` is fail-closed; see [Audio enforcement — Cloud Hypervisor](#audio-enforcement--cloud-hypervisor). |
 | qemu-media | ✓ host/qemu audio subset when declared | `unsupported` — `enforcement: unsupported` reported for guest-side capability | ✓ Persisted offline policy | See [Audio enforcement — qemu-media](#audio-enforcement--qemu-media). |
-| ACA sandbox | None (no local host PipeWire nodes or broker mutations) | ✓ remote guestd policy only | None | No local audio state files or broker host mutations for ACA sandboxes; see [ACA audio](#aca-audio). |
+| ACA sandbox | None (no local host PipeWire nodes or broker mutations) | ✓ remote guestd policy only | None | Reports `enforcement: guest-only` when guestd applies; no local audio state files or broker host mutations for ACA sandboxes; see [ACA audio](#aca-audio). |
 
 ### Audio enforcement — Cloud Hypervisor
 
@@ -148,6 +148,8 @@ and guest-side enforcement via `guestd`:
   even when `guestd` is unresponsive; the response carries a degraded
   result for the guest-side enforcement step so the operator knows the
   guest-side did not apply.
+- Successful host and guest application reports `enforcement:
+  host-and-guest` in `audio status` output.
 - Multi-target `audio status` returns per-target errors and remediations
   so one misconfigured provider does not fail the entire status command.
 
@@ -172,6 +174,9 @@ create local audio state files, PipeWire nodes, vhost-user-sound
 connections, or broker host mutations for ACA targets. Missing guestd
 on an ACA sandbox is provider misconfiguration and surfaces as a typed
 error with remediation, not a silent no-op.
+
+Successful ACA guestd application reports `enforcement: guest-only` in
+`audio status` output.
 
 ---
 
