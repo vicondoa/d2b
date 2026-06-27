@@ -184,12 +184,13 @@ provider:
   write root-owned d2b state.
 - Audio controls are grouped behind an explicit expanded surface or audio
   view. Collapsed VM cards show only a subtle badge for degraded,
-  unsupported, host-only, or provider-misconfigured audio state.
+  unsupported, or host-only audio state, and a distinct error badge when
+  `AudioErrorKind::ProviderMisconfigured` appears in the errors list.
 - qemu-media host-side audio controls are enabled when the host subset
   is supported; the UI shows a `host-only` annotation alongside the
   controls.
-- ACA missing-guestd states surface as provider-misconfiguration with
-  remediation text, not as disabled UI controls.
+- ACA missing-guestd states surface as `provider-misconfigured` errors
+  in `AudioVmError.kind` with remediation text, not as disabled UI controls.
 - Volume and gain sliders send final or debounced mutations only; they
   do not dismiss layer-shell popups during drag.
 - Keyboard increments are supported; slider values are preserved across
