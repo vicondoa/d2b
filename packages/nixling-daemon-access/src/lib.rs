@@ -596,6 +596,8 @@ pub struct DaemonVmListEntry {
     pub is_net_vm: bool,
     pub lifecycle: DaemonVmLifecycle,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_closure_out_path: Option<String>,
     pub runtime: DaemonRuntimeSummary,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtime_capabilities: Vec<String>,
@@ -617,6 +619,7 @@ impl From<ListEntry> for DaemonVmListEntry {
             is_net_vm: entry.is_net_vm,
             lifecycle: entry.lifecycle.into(),
             name: entry.name,
+            guest_closure_out_path: entry.guest_closure_out_path,
             runtime: entry.runtime.into(),
             runtime_capabilities: entry.runtime_capabilities,
             services: entry.services.into(),
@@ -1771,6 +1774,7 @@ mod tests {
                 state,
             },
             name: vm.to_owned(),
+            guest_closure_out_path: None,
             autostart: None,
             qemu_media: None,
             runtime: RuntimeSummary {

@@ -19,6 +19,8 @@ pub struct ListItemOutputV2 {
     pub status: String,
     pub is_net_vm: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_closure_out_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autostart: Option<crate::public_wire::VmAutostartPosture>,

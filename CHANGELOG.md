@@ -34,6 +34,9 @@ deprecations ship one minor release before removal.
   addition to `/proc/modules` and `modules.builtin`. Built-in virtio/KVM
   modules compiled as `=y` are now correctly detected as present without
   the `NIXLING_SKIP_KERNEL_MODULE_CHECK` operator override.
+- `nixling list --json` now exposes `guestClosureOutPath` for VMs whose
+  bundle closure metadata is available, giving host-side scanners a public
+  VM-to-guest-closure mapping for `sbomnix` without private path conventions.
 
 ### Fixed
 

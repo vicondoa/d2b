@@ -36,6 +36,12 @@
         "graphics": {
           "type": "boolean"
         },
+        "guestClosureOutPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "isNetVm": {
           "type": "boolean"
         },

@@ -1851,6 +1851,8 @@ pub struct ListEntry {
     pub lifecycle: VmLifecycle,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_closure_out_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autostart: Option<VmAutostartPosture>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qemu_media: Option<QemuMediaStatus>,

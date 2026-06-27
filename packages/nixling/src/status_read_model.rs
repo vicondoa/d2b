@@ -52,6 +52,9 @@ pub(crate) fn list_output_from_manifest(
                 let pending_restart =
                     is_pending_restart(vm, &services, current.as_deref(), booted.as_deref());
                 let qemu_media = qemu_media_status(context, vm, bundle, process_vm, &services);
+                let declared_guest_closure_out_path = bundle
+                    .and_then(|bundle| bundle.closures.get(&vm.name))
+                    .map(|closure| closure.toplevel.clone());
                 ListItemOutputV2 {
                     name: vm.name.clone(),
                     env: vm.env.clone(),
@@ -61,6 +64,15 @@ pub(crate) fn list_output_from_manifest(
                     static_ip: vm.static_ip.clone(),
                     status: list_status_label(vm, &services, pending_restart),
                     is_net_vm: vm.is_net_vm,
+                    guest_closure_out_path: if pending_restart {
+                        booted
+                            .as_ref()
+                            .filter(|path| path.starts_with('/'))
+                            .cloned()
+                            .or(declared_guest_closure_out_path)
+                    } else {
+                        declared_guest_closure_out_path
+                    },
                     runtime_kind: output_runtime_kind(vm),
                     autostart: output_autostart_posture(vm),
                     runtime_capabilities: output_runtime_capabilities(vm),
@@ -92,6 +104,11 @@ pub(crate) fn list_output_from_public_entries(
                 static_ip: entry.static_ip.clone(),
                 status: public_lifecycle_list_status_label(&entry.lifecycle),
                 is_net_vm: entry.is_net_vm,
+                guest_closure_out_path: entry.guest_closure_out_path.clone().or_else(|| {
+                    bundle
+                        .and_then(|bundle| bundle.closures.get(&entry.vm))
+                        .map(|closure| closure.toplevel.clone())
+                }),
                 runtime_kind: entry.runtime.kind.clone(),
                 autostart: entry.autostart.clone(),
                 runtime_capabilities: entry.runtime_capabilities.clone(),

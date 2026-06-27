@@ -90,7 +90,8 @@ sys-work-net       work      false     false false   192.0.2.1       running (ne
     "usbip": false,
     "staticIp": "10.20.0.10",
     "status": "running",
-    "isNetVm": false
+    "isNetVm": false,
+    "guestClosureOutPath": "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-nixos-system-corp-vm"
   },
   {
     "name": "sys-work-net",
@@ -100,7 +101,8 @@ sys-work-net       work      false     false false   192.0.2.1       running (ne
     "usbip": false,
     "staticIp": "192.0.2.1",
     "status": "running",
-    "isNetVm": true
+    "isNetVm": true,
+    "guestClosureOutPath": "/nix/store/ffffffffffffffffffffffffffffffff-nixos-system-sys-work-net"
   }
 ]
 ```
@@ -109,9 +111,14 @@ sys-work-net       work      false     false false   192.0.2.1       running (ne
 
 `list` is a daemon-native, read-only inventory query. When nixlingd is
 reachable, the CLI queries the public socket and reports declared VM
-metadata plus daemon-derived lifecycle state. If the public socket is
-unavailable or does not support the request, the CLI falls back to the
-static manifest/local status path.
+metadata, daemon-derived lifecycle state, and the VM guest closure out
+path when closure metadata is available. For a running VM with
+`status = "pending-restart"`, `guestClosureOutPath` points at the
+booted closure so scanners inspect the running guest generation. If the
+public socket is unavailable or does not support the request, the CLI
+falls back to the static manifest/local status path and may still
+populate `guestClosureOutPath` when the caller can read local closure
+metadata.
 
 **Native**
 

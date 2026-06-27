@@ -14838,6 +14838,7 @@ mod host_install_dispatch_tests {
                 state: nixling_contracts::public_wire::VmLifecycleState::Running,
             },
             name: "vm-a".to_owned(),
+            guest_closure_out_path: Some("/nix/store/vm-a-system".to_owned()),
             autostart: None,
             qemu_media: None,
             runtime: nixling_contracts::public_wire::RuntimeSummary {
@@ -14862,6 +14863,10 @@ mod host_install_dispatch_tests {
         assert_eq!(output.0.len(), 1);
         assert_eq!(output.0[0].name, "vm-a");
         assert_eq!(output.0[0].status, "running");
+        assert_eq!(
+            output.0[0].guest_closure_out_path.as_deref(),
+            Some("/nix/store/vm-a-system")
+        );
         assert!(output.0[0].graphics);
         assert!(output.0[0].usbip);
     }
@@ -14907,6 +14912,7 @@ mod host_install_dispatch_tests {
             static_ip: Some("192.168.100.2".to_owned()),
             status: "stopped".to_owned(),
             is_net_vm: true,
+            guest_closure_out_path: None,
             runtime_kind: None,
             autostart: None,
             runtime_capabilities: Vec::new(),

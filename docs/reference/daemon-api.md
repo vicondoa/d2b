@@ -388,7 +388,7 @@ running live guest activation.
 
 | Type | Kind | Rust definition | Shape |
 | --- | --- | --- | --- |
-| `VmLifecycleState` | enum | [`VmLifecycleState`](../../packages/nixling-contracts/src/public_wire.rs#L1943) | `Stopped`; `Starting`; `Booted`; `Running`; `Stopping`; `Restarting`; `Failed`; `Unknown` |
+| `VmLifecycleState` | enum | [`VmLifecycleState`](../../packages/nixling-contracts/src/public_wire.rs#L1945) | `Stopped`; `Starting`; `Booted`; `Running`; `Stopping`; `Restarting`; `Failed`; `Unknown` |
 
 ### Other documented enums
 
@@ -460,7 +460,7 @@ running live guest activation.
 | `UsbProbeEntryKind` | enum | [`UsbProbeEntryKind`](../../packages/nixling-contracts/src/public_wire.rs#L1753) | `Usbip`; `QemuMediaSlot` |
 | `AuditFormat` | enum | [`AuditFormat`](../../packages/nixling-contracts/src/public_wire.rs#L1817) | `Human`; `Json` |
 | `AuthRole` | enum | [`AuthRole`](../../packages/nixling-contracts/src/public_wire.rs#L1825) | `None`; `Launcher`; `Admin` |
-| `HostFindingSeverity` | enum | [`HostFindingSeverity`](../../packages/nixling-contracts/src/public_wire.rs#L2032) | `Pass`; `Warn`; `Fail` |
+| `HostFindingSeverity` | enum | [`HostFindingSeverity`](../../packages/nixling-contracts/src/public_wire.rs#L2034) | `Pass`; `Warn`; `Fail` |
 | `TerminalStream` | enum | [`TerminalStream`](../../packages/nixling-contracts/src/terminal_wire.rs#L19) | `Stdout`; `Stderr` |
 | `TerminalStatus` | enum | [`TerminalStatus`](../../packages/nixling-contracts/src/terminal_wire.rs#L197) | `Exited` — struct { `code`: `i32` }; `Signaled` — struct { `signal`: `u32` }; `Error` — struct { `slug`: `String` } |
 | `PathClass` | enum | [`PathClass`](../../packages/nixling-contracts/src/types.rs#L171) | `Vm`; `Runtime` |
