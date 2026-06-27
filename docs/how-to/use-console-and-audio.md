@@ -21,7 +21,7 @@
   capability summary once the backend ships.
 - For `d2b console` on an ACA sandbox, the sandbox must be running a
   guestd-compatible in-sandbox agent. If it is absent, the daemon
-  returns a typed `provider-misconfiguration` error with remediation
+  returns a typed `provider-misconfigured` error with remediation
   text; there is no console fallback.
 - Graphics VMs do not have a serial console surface. Use
   `d2b vm start <vm> --apply` to launch graphics VMs.
@@ -64,7 +64,7 @@
 - *qemu-media VMs* — the daemon uses a broker-owned fd-backed chardev.
   The ring-buffer drainer contract is identical to Cloud Hypervisor.
 - *ACA sandboxes* — the console attaches over the guestd-compatible
-  provider transport. Missing guestd is a provider-misconfiguration
+  provider transport. Missing guestd is a `provider-misconfigured`
   error, not a degraded-mode connection.
 
 ---
@@ -101,7 +101,7 @@
      This is normal and expected for qemu-media VMs, not an error.
    - `degraded` — host-side enforcement succeeded but guestd was
      unresponsive; the guest boundary may not be sealed.
-   - `provider-misconfiguration` — ACA sandbox missing its guestd
+   - `provider-misconfigured` — ACA sandbox missing its guestd
      agent; use the remediation text in the error envelope.
 
 3. If one provider in a multi-VM status run fails, its entry carries an
@@ -192,7 +192,7 @@ Collapsed cards show a subtle badge for states that need attention:
 | Badge | Meaning | Action |
 | --- | --- | --- |
 | `host-only` | qemu-media host subset only; guest enforcement unavailable. | Expected; no action required. |
-| `provider-misconfiguration` | ACA sandbox missing guestd agent. | Deploy the guestd-compatible in-sandbox agent. |
+| `provider-misconfigured` | ACA sandbox missing guestd agent. | Deploy the guestd-compatible in-sandbox agent. |
 | `degraded` | Cloud Hypervisor guest-side did not apply while host succeeded. | Check guestd status inside the VM. |
 | `unsupported` | Provider advertises no audio capability. | Verify the VM's audio configuration. |
 

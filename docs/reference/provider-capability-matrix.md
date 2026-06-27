@@ -74,7 +74,7 @@ contract is identical to the Cloud Hypervisor case.
 
 ACA sandboxes are expected to run a guestd-compatible in-sandbox
 agent. If the agent is absent, the daemon returns a typed
-`provider-misconfiguration` error with a remediation that points
+`provider-misconfigured` error with a remediation that points
 to the sandbox configuration. The daemon does **not** fall back to
 `executeShellCommand` as a console substitute; that would violate the
 no-raw-shell-channel constraint in ADR 0032 and ADR 0041.

@@ -156,12 +156,12 @@ Audio policy uses typed state and provider-specific enforcement:
   stable coordination point; unlinking it would silently create a new
   inode on next open, breaking coordination with any process that still
   holds the old fd). Per-VM lock files
-  (`/run/d2b/locks/audio-<vm>.lock`, mode 0660 `root:d2b`) are
+  (`/run/d2b/locks/audio-<vm>.lock`, mode `0660 root:d2b`) are
   precreated by `systemd-tmpfiles` (`f` rule) on each boot for every
   VM with `audio.enable = true`; the `f` rule never overwrites, so OFD
   lock semantics are preserved across daemon restarts. The inode
-  footprint is bounded by the declared VM name set (eval-time regex
-  `^[a-z][a-z0-9-]*$`), capped to the operator's declared
+  footprint is bounded by the declared audio VM name set (eval-time
+  regex `^[a-z][a-z0-9-]*$`), capped to the operator's declared
   configuration.
 - Cloud Hypervisor NixOS VMs apply both host-side PipeWire policy and
   guest-side guestd policy. Host-side `off` requests are fail-closed:
