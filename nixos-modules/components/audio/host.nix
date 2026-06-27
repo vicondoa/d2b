@@ -347,8 +347,22 @@ in
              ''a+ /var/lib/d2b/vms/${name} - - - - g:d2b:--x''
              # GPU sidecar reads audio routing state to set vhost-user-sound
              # PIPEWIRE_PROPS at spawn time.
+             #
+             # Access ACL on the directory allows the GPU user to traverse
+             # into state/ and read the current audio-state.json inode.
+             # The default ACL on state/ ensures that any replacement inode
+             # written via an atomic rename (create temp file in state/,
+             # rename to audio-state.json) inherits the GPU read permission
+             # on the new inode; without a default ACL the access ACL on the
+             # old inode is lost after the rename.
              ''a+ /var/lib/d2b/vms/${name}/state - - - - u:d2b-${name}-gpu:r-x''
              ''a+ /var/lib/d2b/vms/${name}/state/audio-state.json - - - - u:d2b-${name}-gpu:r--''
+             # Default ACL: newly created files in state/ (including temp
+             # files that are later renamed to audio-state.json) inherit
+             # d2b-<vm>-gpu:r--. default:m::r-- caps the mask so the
+             # effective permission on newly created files is exactly r--.
+             ''a+ /var/lib/d2b/vms/${name}/state - - - - default:u:d2b-${name}-gpu:r--''
+             ''a+ /var/lib/d2b/vms/${name}/state - - - - default:m::r--''
              # Audio advisory lock under /run/d2b/locks/ per ADR 0034.
              # Mode 0660 root:d2b so d2b members can flock it.
              # 'f' never unlinks; OFD locks survive across daemon restarts.
