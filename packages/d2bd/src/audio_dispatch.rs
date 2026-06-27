@@ -282,12 +282,12 @@ pub enum HostEnforcementResult {
 
 /// Apply host-side audio policy for Cloud Hypervisor / PipeWire-vhost-user-sound.
 ///
-/// The implementation calls `wpexec` / `pw-cli` as a subprocess with argv
-/// only (no shell strings). On a live host this targets the WirePlumber state
-/// of the matching vhost-user-sound PipeWire node.
+/// The actual `wpexec`/`pw-cli` subprocess invocation is not yet implemented.
+/// Returns `Unsupported` on production builds so callers report honest
+/// degraded state rather than falsely claiming enforcement succeeded.
 ///
-/// For correctness in unit tests the actual subprocess invocation is
-/// behind `cfg(not(test))`; tests receive `Applied` from the fake.
+/// Tests receive `Applied` via the `cfg(test)` path so dispatch logic can
+/// be exercised end-to-end without a live PipeWire session.
 pub fn enforce_pipewire_grant(
     vm_name: &str,
     grant: AudioGrant,
@@ -296,11 +296,11 @@ pub fn enforce_pipewire_grant(
     #[cfg(not(test))]
     {
         let _ = (vm_name, grant, channel);
-        // TODO: implement pw-cli / wpexec argv-only invocation.
-        // The property names follow the vhost-user-sound PipeWire node naming:
-        //   d2b.mic  d2b.speaker  (both "on"/"off")
-        // Keep as Applied stub until validated against a live host.
-        HostEnforcementResult::Applied
+        // PipeWire enforcement via pw-cli/wpexec is not implemented in this
+        // wave. Return Unsupported so callers surface honest degraded state
+        // rather than reporting false success. Remove once the argv-only
+        // wpexec invocation targeting the vhost-user-sound node lands.
+        HostEnforcementResult::Unsupported
     }
     #[cfg(test)]
     {
@@ -310,6 +310,10 @@ pub fn enforce_pipewire_grant(
 }
 
 /// Apply host-side audio level change (volume/gain).
+///
+/// See [`enforce_pipewire_grant`] for the enforcement status. Returns
+/// `Unsupported` in production until the argv-only `pw-cli` level set
+/// path is connected; tests receive `Applied`.
 pub fn enforce_pipewire_level(
     vm_name: &str,
     level: LevelPercent,
@@ -318,8 +322,9 @@ pub fn enforce_pipewire_level(
     #[cfg(not(test))]
     {
         let _ = (vm_name, level, channel);
-        // TODO: pw-cli volume/gain argv-only invocation.
-        HostEnforcementResult::Applied
+        // PipeWire level enforcement via pw-cli is not implemented in this
+        // wave. Return Unsupported so callers report honest degraded state.
+        HostEnforcementResult::Unsupported
     }
     #[cfg(test)]
     {
@@ -348,6 +353,33 @@ fn state_to_vm_state(
         microphone: state_to_channel(state.mic, state.mic_gain),
         provider_kind: public_provider_kind(cap),
         enforcement: public_enforcement_posture(cap),
+    }
+}
+
+// ── Enforcement result → AudioSetApplied mapping ──────────────────────────────
+
+/// Map a host enforcement result to the public [`AudioSetApplied`] outcome.
+///
+/// Guest-side enforcement (guestd AudioSet RPC) is not yet connected in this
+/// build. The `guest` parameter is accepted to make the expected future
+/// integration site obvious but is intentionally unused until guestd dispatch
+/// is implemented. This function MUST NOT return `HostAndGuest` until that
+/// integration exists.
+///
+/// This function is `pub(crate)` so the test suite can lock the mapping
+/// without needing a full [`crate::ServerState`].
+pub(crate) fn applied_from_host_result(
+    host_result: HostEnforcementResult,
+    guest: AudioGuestEnforcementKind,
+) -> AudioSetApplied {
+    // Guest enforcement integration site: when guestd AudioSet is connected,
+    // check the guestd result here and return HostAndGuest on joint success.
+    let _ = guest;
+    match host_result {
+        HostEnforcementResult::Applied => AudioSetApplied::HostOnly,
+        HostEnforcementResult::Failed | HostEnforcementResult::Unsupported => {
+            AudioSetApplied::Unsupported
+        }
     }
 }
 
@@ -477,15 +509,12 @@ fn dispatch_audio_set_volume(
     })?;
 
     // Host enforcement for running VMs.
-    let _host_result = enforce_pipewire_level(vm_name, level, channel);
+    let host_result = enforce_pipewire_level(vm_name, level, channel);
 
-    // Guest enforcement for CH VMs.
-    let applied = if cap.guest_enforcement == AudioGuestEnforcementKind::GuestdCapable {
-        // TODO: call guestd AudioSet RPC in Wave 2 full guestd integration.
-        AudioSetApplied::HostAndGuest
-    } else {
-        AudioSetApplied::HostOnly
-    };
+    // Guest enforcement for CH VMs: guestd AudioSet integration is not yet
+    // implemented. applied_from_host_result reports HostOnly on host success
+    // and Unsupported when enforcement was unavailable/failed.
+    let applied = applied_from_host_result(host_result, cap.guest_enforcement);
 
     let channel_state = match channel {
         AudioChannel::Speaker => state_to_channel(new_state.speaker, new_state.speaker_level),
@@ -551,19 +580,11 @@ fn dispatch_audio_mute(
     // Host enforcement: `off` seals the host boundary even if guestd fails.
     let host_result = enforce_pipewire_grant(vm_name, grant, channel);
 
-    let applied = match (host_result, cap.guest_enforcement) {
-        (HostEnforcementResult::Applied, AudioGuestEnforcementKind::GuestdCapable) => {
-            // TODO: call guestd AudioSet RPC.
-            AudioSetApplied::HostAndGuest
-        }
-        (HostEnforcementResult::Applied, AudioGuestEnforcementKind::Unsupported) => {
-            AudioSetApplied::HostOnly
-        }
-        (HostEnforcementResult::Failed | HostEnforcementResult::Unsupported, _) => {
-            // `off` is still persisted; host boundary not yet sealed.
-            AudioSetApplied::Unsupported
-        }
-    };
+    // applied_from_host_result returns HostOnly on host success. When host
+    // enforcement is Unsupported/Failed, `off` is still persisted in the state
+    // file but the live boundary is not sealed; report Unsupported so callers
+    // know the policy is pending, not enforced.
+    let applied = applied_from_host_result(host_result, cap.guest_enforcement);
 
     let channel_state = match channel {
         AudioChannel::Speaker => state_to_channel(new_state.speaker, new_state.speaker_level),
@@ -693,5 +714,58 @@ mod tests {
             public_enforcement_posture(&aca_cap),
             AudioEnforcementPosture::GuestOnly
         );
+    }
+
+    // ── applied_from_host_result honesty guards ─────────────────────────────
+    //
+    // These tests lock the invariant that applied_from_host_result NEVER
+    // returns HostAndGuest regardless of the guest enforcement kind.
+    // Any future refactor that reintroduces a success-shaped guestd stub will
+    // break these tests before the lie surfaces in the public wire response.
+
+    #[test]
+    fn applied_host_applied_with_guestd_capable_returns_host_only_not_host_and_guest() {
+        // The critical case: host succeeded, VM is guestd-capable. Without a
+        // real guestd call, we must report HostOnly, not HostAndGuest.
+        let result = applied_from_host_result(
+            HostEnforcementResult::Applied,
+            AudioGuestEnforcementKind::GuestdCapable,
+        );
+        assert_ne!(
+            result,
+            AudioSetApplied::HostAndGuest,
+            "must not report HostAndGuest when guestd integration is not connected"
+        );
+        assert_eq!(result, AudioSetApplied::HostOnly);
+    }
+
+    #[test]
+    fn applied_host_applied_with_unsupported_guest_returns_host_only() {
+        let result = applied_from_host_result(
+            HostEnforcementResult::Applied,
+            AudioGuestEnforcementKind::Unsupported,
+        );
+        assert_eq!(result, AudioSetApplied::HostOnly);
+    }
+
+    #[test]
+    fn applied_host_unsupported_returns_unsupported_for_guestd_capable() {
+        // When host enforcement is unavailable (pw-cli not connected), the
+        // result must be Unsupported, not HostOnly, so callers know the policy
+        // was persisted but the live boundary was not sealed.
+        let result = applied_from_host_result(
+            HostEnforcementResult::Unsupported,
+            AudioGuestEnforcementKind::GuestdCapable,
+        );
+        assert_eq!(result, AudioSetApplied::Unsupported);
+    }
+
+    #[test]
+    fn applied_host_failed_returns_unsupported() {
+        let result = applied_from_host_result(
+            HostEnforcementResult::Failed,
+            AudioGuestEnforcementKind::Unsupported,
+        );
+        assert_eq!(result, AudioSetApplied::Unsupported);
     }
 }

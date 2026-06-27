@@ -38,9 +38,17 @@ deprecations ship one minor release before removal.
   guest-enforcement as unsupported; ACA sandbox VMs route exclusively
   through provider guest-control (no local audio state is created).
   Provider capability resolution runs before any state access.
-- `guestd` now advertises `AudioStatus` and `AudioSet` capabilities and
-  handles the corresponding ttrpc RPCs; guest PipeWire control stubs are
-  wired for future in-guest enforcement.
+  Host PipeWire enforcement (`pw-cli`/`wpexec`) and guestd `AudioSet`
+  integration are not yet connected; `set-volume` and `mute` return
+  `applied: host-only` when state is persisted and
+  `applied: unsupported` when live enforcement is unavailable rather
+  than falsely reporting `host-and-guest`.
+- `guestd` no longer advertises `AudioStatus` or `AudioSet` capabilities:
+  the in-guest PipeWire query/set path is not yet connected and the
+  handlers always return `AUDIO_PIPEWIRE_UNAVAILABLE`. Advertising
+  capabilities the handlers cannot fulfil would cause `d2bd` to report
+  false `HostAndGuest` enforcement. Capabilities will be re-enabled once
+  the in-guest `wpctl` integration lands.
 - `audioService` (`d2b-<vm>-snd.service`) is fully retired: the field
   is unconditionally `null` in all manifest and daemon-access paths;
   `ProcessRole::Audio` is the sole source of truth for audio runner

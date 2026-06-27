@@ -422,6 +422,16 @@ fn derive_capabilities_config(
 ) -> CapabilitiesConfig {
     let shell_usable = shell_limits.is_some();
     let (shell_sessions_per_vm, shell_attached_sessions_per_vm) = shell_limits.unwrap_or((0, 0));
+    // Audio capabilities are intentionally not advertised regardless of the
+    // `audio` flag: the `audio_status` and `audio_set` handlers always return
+    // AUDIO_PIPEWIRE_UNAVAILABLE because the in-guest PipeWire query/set path
+    // is not yet connected in this build. Advertising capabilities the
+    // handlers cannot fulfil would cause host-side dispatch to falsely report
+    // HostAndGuest enforcement. Re-enable when the wpctl argv-only integration
+    // lands and the handlers return real state. The `audio` parameter is
+    // retained for configuration tracking; only capability advertisement is
+    // suppressed here.
+    let _ = audio;
     CapabilitiesConfig {
         exec_attached: exec_paths_present,
         exec_detached,
@@ -436,8 +446,8 @@ fn derive_capabilities_config(
         shell_force_attach: shell_usable,
         shell_sessions_per_vm,
         shell_attached_sessions_per_vm,
-        audio_status: audio,
-        audio_set: audio,
+        audio_status: false,
+        audio_set: false,
     }
 }
 
@@ -4466,6 +4476,37 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn audio_caps_never_advertised_when_handlers_return_unavailable() {
+        // audio_status and audio_set handlers always return PIPEWIRE_UNAVAILABLE
+        // in this build because the in-guest wpctl path is not connected.
+        // Advertising these capabilities would cause d2bd to falsely report
+        // HostAndGuest enforcement. This test locks that they are NEVER
+        // advertised regardless of the `audio` parameter.
+        for audio in [false, true] {
+            let cfg = derive_capabilities_config(
+                true,  // exec_paths_present
+                false, // exec_detached
+                false, // exec_tty
+                false, // read_guest_file
+                false, // usbip_import
+                false, // system_activation
+                None,  // shell_limits
+                audio,
+            );
+            assert!(
+                !cfg.audio_status,
+                "audio_status must not be advertised (audio={audio}): \
+                 handlers return PIPEWIRE_UNAVAILABLE"
+            );
+            assert!(
+                !cfg.audio_set,
+                "audio_set must not be advertised (audio={audio}): \
+                 handlers return PIPEWIRE_UNAVAILABLE"
+            );
         }
     }
 
