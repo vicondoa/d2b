@@ -484,6 +484,10 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
             "storage root:path:state-root",
         ),
         (
+            "nixos-modules/host-daemon.nix",
+            "storage root:path:run-root",
+        ),
+        (
             "nixos-modules/host-ssh-host-keys.nix",
             "storage root:path:state-root",
         ),
