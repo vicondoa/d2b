@@ -64,6 +64,10 @@ deprecations ship one minor release before removal.
   for built-in virtio modules on hosts with `=y` kernel config; the
   `D2B_SKIP_KERNEL_MODULE_CHECK` workaround is no longer needed for these
   hosts.
+- qemu-media host activation now repairs the `/run` ACL mask for the
+  qemu-media runner UID, so a switched host cannot leave
+  `/run/d2b/vms/<vm>` with `mask::r-x` and prevent QEMU from creating its QMP
+  socket before boot-media auto-enrollment runs.
 
 - Live guest activation timeouts are now configurable globally via
   `d2b.daemon.lifecycle.liveActivation.timeoutSeconds` and per VM via

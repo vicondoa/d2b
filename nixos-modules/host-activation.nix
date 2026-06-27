@@ -470,8 +470,10 @@ in
           qemu_media_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "qemu-media-runner") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
           ${activationHelper} clear-acl-on-path --path "/var/lib/d2b/guest-control-${name}" --require-kind directory --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
           ${activationHelper} clear-acl-on-path --path "/var/lib/d2b/guest-control-${name}/token" --require-kind regular --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
+          qemu_media_acl_mask_repair=0
           for uid in $qemu_media_session_uids; do
             [ "$uid" = "0" ] && continue
+            qemu_media_acl_mask_repair=1
             ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /var/lib/d2b/vms/${name} 2>/dev/null || true
             ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /var/lib/d2b/vms/${name} 2>/dev/null || true
             ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/d2b 2>/dev/null || true
@@ -946,6 +948,9 @@ in
                 fi
               fi
             ''}
+            if [ "$qemu_media_acl_mask_repair" = "1" ]; then
+              ${pkgs.acl}/bin/setfacl -m "m::rwx" /run/d2b/vms/${name} 2>/dev/null || true
+            fi
           fi
         '')
         roleAclVms)}
