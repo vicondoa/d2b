@@ -311,9 +311,13 @@ fn parse_optional_level(
     let Some(raw) = value.get(key) else {
         return Ok(None);
     };
+    // Explicit JSON null is treated as "unset; use system default".
+    if raw.is_null() {
+        return Ok(None);
+    }
     let n = raw.as_u64().and_then(|v| u8::try_from(v).ok()).ok_or_else(|| {
         AudioPolicyError::InvalidField(format!(
-            "field {key:?} must be an integer; got {raw}"
+            "field {key:?} must be an integer or null; got {raw}"
         ))
     })?;
     LevelPercent::new(n).map(Some).map_err(|err| {
@@ -347,112 +351,5 @@ fn parse_v2(value: &Value) -> Result<AudioPolicyState, AudioPolicyError> {
     })
 }
 
-// ── Provider capability matrix ───────────────────────────────────────────────
 
-/// Audio enforcement capability class for a provider.
-///
-/// Distinguishes what the host and guest sides can enforce for a given
-/// runtime provider, per the ADR 0041 capability matrix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum AudioEnforcementKind {
-    /// Full enforcement: policy applied and confirmed in-guest via guestd.
-    GuestdEnforced,
-    /// Host-side enforcement only; no guest-side confirmation available.
-    HostOnly,
-    /// Not supported for this provider; enforcement will not be attempted.
-    Unsupported,
-}
-
-/// Per-provider audio capability row, used by the daemon to select the
-/// correct enforcement path before dispatching an audio op.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AudioProviderCapability {
-    /// Whether the host side can enforce audio policy for this provider.
-    pub host_enforcement: AudioEnforcementKind,
-    /// Whether the guest side (via guestd) can enforce audio policy.
-    pub guest_enforcement: AudioEnforcementKind,
-    /// Whether the provider requires a local audio-state file on the host.
-    pub needs_local_state_file: bool,
-}
-
-impl AudioProviderCapability {
-    /// Capability row for Cloud Hypervisor NixOS VMs.
-    pub fn cloud_hypervisor_nixos() -> Self {
-        Self {
-            host_enforcement: AudioEnforcementKind::GuestdEnforced,
-            guest_enforcement: AudioEnforcementKind::GuestdEnforced,
-            needs_local_state_file: true,
-        }
-    }
-
-    /// Capability row for qemu-media VMs: host-only, no guest enforcement.
-    pub fn qemu_media() -> Self {
-        Self {
-            host_enforcement: AudioEnforcementKind::HostOnly,
-            guest_enforcement: AudioEnforcementKind::Unsupported,
-            needs_local_state_file: true,
-        }
-    }
-
-    /// Capability row for ACA sandbox targets: guest-only via relay, no
-    /// local host state.
-    pub fn aca_sandbox() -> Self {
-        Self {
-            host_enforcement: AudioEnforcementKind::Unsupported,
-            guest_enforcement: AudioEnforcementKind::GuestdEnforced,
-            needs_local_state_file: false,
-        }
-    }
-}
-
-/// Console access capability class for a provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum ConsoleBackendKind {
-    /// Local hypervisor console backend (CH serial socket or broker-owned fd).
-    LocalHypervisor,
-    /// Provider relay transport (ACA sandbox via ADR 0032 guestd route).
-    ProviderRelay,
-    /// Not supported for this provider.
-    Unsupported,
-}
-
-/// Per-provider console capability row.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConsoleProviderCapability {
-    /// How the console stream is established for this provider.
-    pub backend: ConsoleBackendKind,
-    /// Whether a persistent drain keeps the ring buffer populated even when
-    /// no client is attached.
-    pub persistent_drain: bool,
-}
-
-impl ConsoleProviderCapability {
-    /// Capability row for Cloud Hypervisor NixOS VMs.
-    pub fn cloud_hypervisor_nixos() -> Self {
-        Self {
-            backend: ConsoleBackendKind::LocalHypervisor,
-            persistent_drain: true,
-        }
-    }
-
-    /// Capability row for qemu-media VMs.
-    pub fn qemu_media() -> Self {
-        Self {
-            backend: ConsoleBackendKind::LocalHypervisor,
-            persistent_drain: true,
-        }
-    }
-
-    /// Capability row for ACA sandbox targets.
-    pub fn aca_sandbox() -> Self {
-        Self {
-            backend: ConsoleBackendKind::ProviderRelay,
-            persistent_drain: false,
-        }
-    }
-}
 

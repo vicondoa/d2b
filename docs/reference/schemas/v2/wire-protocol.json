@@ -6130,6 +6130,13 @@
           "enum": [
             "bundle-tampered"
           ]
+        },
+        {
+          "description": "A provider required by an audio or console operation is present but not in a state where enforcement can proceed (e.g. expected guestd agent absent). Operator remediation required.",
+          "type": "string",
+          "enum": [
+            "provider-misconfigured"
+          ]
         }
       ]
     },
@@ -6158,6 +6165,7 @@
       "additionalProperties": false
     },
     "LevelPercent": {
+      "description": "Audio level in the range 0..=100.",
       "type": "integer",
       "maximum": 100.0,
       "minimum": 0.0

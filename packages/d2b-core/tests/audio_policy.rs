@@ -1,9 +1,12 @@
 //! Integration tests for `d2b_core::audio_policy`.
 
 use d2b_core::audio_policy::{
-    AudioEnforcementKind, AudioGrant, AudioPolicyError, AudioPolicyState, AudioProviderCapability,
-    ConsoleBackendKind, ConsoleProviderCapability, LevelPercent, LevelPercentError,
+    AudioGrant, AudioPolicyError, AudioPolicyState, LevelPercent, LevelPercentError,
     parse_audio_state,
+};
+use d2b_core::provider_capabilities::{
+    AudioGuestEnforcementKind, AudioHostEnforcementKind, AudioProviderCapability,
+    ConsoleBackendKind, ConsoleProviderCapability,
 };
 
 // ── LevelPercent ─────────────────────────────────────────────────────────────
@@ -139,6 +142,15 @@ fn parse_v2_omitted_levels_are_none() {
 }
 
 #[test]
+fn parse_v2_explicit_null_levels_are_none() {
+    // Explicit JSON null must be accepted as "unset; use system default".
+    let doc = br#"{"schemaVersion":"v2","mic":"off","speaker":"on","speakerLevel":null,"micGain":null}"#;
+    let state = parse_audio_state(doc).unwrap();
+    assert!(state.speaker_level.is_none());
+    assert!(state.mic_gain.is_none());
+}
+
+#[test]
 fn parse_v2_level_out_of_range_is_error() {
     let doc =
         br#"{"schemaVersion":"v2","mic":"off","speaker":"off","speakerLevel":101}"#;
@@ -235,11 +247,11 @@ fn cloud_hypervisor_has_full_enforcement() {
     let cap = AudioProviderCapability::cloud_hypervisor_nixos();
     assert!(matches!(
         cap.host_enforcement,
-        AudioEnforcementKind::GuestdEnforced
+        AudioHostEnforcementKind::PipeWireVhostUserSound
     ));
     assert!(matches!(
         cap.guest_enforcement,
-        AudioEnforcementKind::GuestdEnforced
+        AudioGuestEnforcementKind::GuestdCapable
     ));
     assert!(cap.needs_local_state_file);
 }
@@ -249,11 +261,11 @@ fn qemu_media_has_host_only_enforcement() {
     let cap = AudioProviderCapability::qemu_media();
     assert!(matches!(
         cap.host_enforcement,
-        AudioEnforcementKind::HostOnly
+        AudioHostEnforcementKind::QemuAudioBackend
     ));
     assert!(matches!(
         cap.guest_enforcement,
-        AudioEnforcementKind::Unsupported
+        AudioGuestEnforcementKind::Unsupported
     ));
     assert!(cap.needs_local_state_file);
 }
@@ -263,11 +275,11 @@ fn aca_sandbox_has_no_host_enforcement() {
     let cap = AudioProviderCapability::aca_sandbox();
     assert!(matches!(
         cap.host_enforcement,
-        AudioEnforcementKind::Unsupported
+        AudioHostEnforcementKind::None
     ));
     assert!(matches!(
         cap.guest_enforcement,
-        AudioEnforcementKind::GuestdEnforced
+        AudioGuestEnforcementKind::GuestdCapable
     ));
     assert!(!cap.needs_local_state_file);
 }
