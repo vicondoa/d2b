@@ -78,6 +78,8 @@ let
   netVmVarImgText = cfg.system.activationScripts.d2bNetVmVarImgPerms.text or "";
   storeSyncText = cfg.system.activationScripts.d2bStoreSync.text or "";
   audioStateDirsText = cfg.system.activationScripts.d2bAudioStateDirs.text or "";
+  storageJsonPaths = cfg.d2b._bundle.storageJson.data.paths;
+  corpManifest = cfg.d2b.manifest."corp-vm" or null;
 
   rulesForPath = path:
     builtins.filter (lib.hasInfix (" " + path + " ")) tmpfiles;
@@ -356,8 +358,74 @@ in
     expected = true;
   };
 
+  # Audio ACL grants are now in tmpfiles (a+ rules) not activation scripts:
+  # this eliminates the fresh-boot race where setfacl could run before the
+  # audio-state.json file was created by tmpfiles.
+  "activation-runtime-tmpfiles/audio-acls-in-tmpfiles-not-activation" = {
+    expr = !x86 || (
+      !(lib.hasInfix "setfacl" audioStateDirsText)
+      && lib.all (rule: builtins.elem rule tmpfiles) [
+        "a+ /var/lib/d2b/vms/corp-vm - - - - g:d2b:--x"
+        "a+ /var/lib/d2b/vms/corp-vm/state - - - - u:d2b-corp-vm-gpu:r-x"
+        "a+ /var/lib/d2b/vms/corp-vm/state/audio-state.json - - - - u:d2b-corp-vm-gpu:r--"
+      ]
+    );
+    expected = true;
+  };
+
+  # Audio lock is at the canonical /run/d2b/locks/ location (ADR 0034)
+  # and is NOT at the old /run/d2b/audio-<vm>.lock root location.
+  "activation-runtime-tmpfiles/audio-lock-in-locks-dir" = {
+    expr = !x86 || (
+      builtins.elem "f /run/d2b/locks/audio-corp-vm.lock 0660 root d2b -" tmpfiles
+      && !(builtins.elem "f /run/d2b/audio-corp-vm.lock 0660 root d2b -" tmpfiles)
+    );
+    expected = true;
+  };
+
+  # d2b group traversal on /run/d2b/locks is granted when any audio VM
+  # is enabled, so d2b members can reach the per-VM advisory lock files.
+  "activation-runtime-tmpfiles/audio-locks-dir-d2b-traversal" = {
+    expr = !x86 || builtins.elem "a+ /run/d2b/locks - - - - g:d2b:--x" tmpfiles;
+    expected = true;
+  };
+
   "activation-runtime-tmpfiles/runtime-posture-no-store-view-mkdir" = {
     expr = !(lib.hasInfix ''mkdir -p "$path"'' runtimePostureText);
+    expected = true;
+  };
+
+  # audioService is always null: the d2b-<vm>-snd.service systemd unit is
+  # retired; the audio sidecar runs as a broker-spawned runner.
+  "activation-runtime-tmpfiles/manifest-audio-service-null" = {
+    expr = !x86 || (corpManifest != null && corpManifest.audioService == null);
+    expected = true;
+  };
+
+  # storage-json declares the per-VM audio state directory path.
+  "activation-runtime-tmpfiles/storage-json-has-audio-state-dir" = {
+    expr = !x86 || builtins.any
+      (p: p.id == "path:vm-audio-state-dir:corp-vm"
+        && p.pathTemplate == "/var/lib/d2b/vms/corp-vm/state")
+      storageJsonPaths;
+    expected = true;
+  };
+
+  # storage-json declares the per-VM audio state file path.
+  "activation-runtime-tmpfiles/storage-json-has-audio-state-file" = {
+    expr = !x86 || builtins.any
+      (p: p.id == "path:vm-audio-state-file:corp-vm"
+        && p.pathTemplate == "/var/lib/d2b/vms/corp-vm/state/audio-state.json")
+      storageJsonPaths;
+    expected = true;
+  };
+
+  # storage-json declares the per-VM audio lock at the canonical locks/ path.
+  "activation-runtime-tmpfiles/storage-json-has-audio-lock-in-locks-dir" = {
+    expr = !x86 || builtins.any
+      (p: p.id == "path:vm-audio-lock:corp-vm"
+        && p.pathTemplate == "/run/d2b/locks/audio-corp-vm.lock")
+      storageJsonPaths;
     expected = true;
   };
 }

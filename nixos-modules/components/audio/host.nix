@@ -315,11 +315,18 @@ in
       # written real values, this is a no-op forever. Argument is
       # the initial contents (single-line JSON).
       #
-      # The state file is now under a root-owned non-group-writable
-      # subdir /var/lib/d2b/vms/<vm>/state/ (root:root 0750).
+      # The state file is under a daemon-owned subdir
+      # /var/lib/d2b/vms/<vm>/state/ (d2bd:d2b 0750).
       # This prevents any kvm-group process from unlinking/replacing the file.
-      # The parent /var/lib/d2b/vms/<vm>/ remains microvm:kvm 2775 so the CLI
-      # can still acquire the per-VM audio.lock and write temp files there.
+      # ACLs for the GPU sidecar and d2b group are applied inline as 'a+'
+      # tmpfiles rules so they are guaranteed present on fresh boot before
+      # any runner starts (fixes the setfacl activation-script ordering race).
+      #
+      # The audio advisory lock is placed under /run/d2b/locks/ per the
+      # ADR 0034 lockfile convention. The 'f' type creates it only if absent
+      # and never unlinks it, preserving OFD lock semantics across daemon
+      # restarts. d2b group traversal on /run/d2b/locks is granted inline so
+      # d2b members can reach the lock without broader locks-dir access.
       systemd.tmpfiles.rules =
         let
           mk = name: vm:
@@ -328,22 +335,34 @@ in
               spk = if vm.audio.allowSpeakerByDefault then "on" else "off";
               initial = ''{"mic":"${mic}","speaker":"${spk}"}'';
             in
-            # 'd' = create directory if missing (won't change mode of existing).
-            # state/: d2bd:d2b 0750 — daemon owns it,
-            # launcher-group traverses. v1.1.1 matches the ownership-
-            # matrix declaration (previously root:d2b
-            # which failed ownership-matrix preflight).
+            # 'd'  = create directory if missing (won't change mode of existing).
+            # 'f'  = create regular file only if absent; never overwrites.
+            # 'a+' = append ACL entries (idempotent; runs even on existing paths).
+            #
+            # state/: d2bd:d2b 0750 — daemon owns it, launcher-group traverses.
             [''d /var/lib/d2b/vms/${name}/state 0750 d2bd d2b -''
              ''f /var/lib/d2b/vms/${name}/state/audio-state.json 0640 d2bd d2b - ${initial}''
-             # audio lock in /run/d2b/ (d2b 0660) so
-             # d2b members can open it without kvm-group membership.
-             ''f /run/d2b/audio-${name}.lock 0660 root d2b -''];
+             # d2b group traversal on the VM state root so CLI users can
+             # reach state/ without relying on the users group membership.
+             ''a+ /var/lib/d2b/vms/${name} - - - - g:d2b:--x''
+             # GPU sidecar reads audio routing state to set vhost-user-sound
+             # PIPEWIRE_PROPS at spawn time.
+             ''a+ /var/lib/d2b/vms/${name}/state - - - - u:d2b-${name}-gpu:r-x''
+             ''a+ /var/lib/d2b/vms/${name}/state/audio-state.json - - - - u:d2b-${name}-gpu:r--''
+             # Audio advisory lock under /run/d2b/locks/ per ADR 0034.
+             # Mode 0660 root:d2b so d2b members can flock it.
+             # 'f' never unlinks; OFD locks survive across daemon restarts.
+             ''f /run/d2b/locks/audio-${name}.lock 0660 root d2b -''];
         in
-        lib.concatLists (lib.mapAttrsToList mk enabledVms);
+        lib.concatLists (lib.mapAttrsToList mk enabledVms)
+        # Grant d2b group traversal into the locks directory so members
+        # can open per-VM advisory lock files placed there.
+        ++ [ ''a+ /run/d2b/locks - - - - g:d2b:--x'' ];
 
       # Migration-only: if the old audio-state path exists and the new path does
-      # not, move it. Directory creation/posture is tmpfiles-owned above and the
-      # VM root itself is postured by host-activation.nix tmpfiles.
+      # not, move it. Directory creation, posture, and ACL grants are all
+      # tmpfiles-owned above (d, f, and a+ rules) so a fresh boot grants are
+      # deterministic with no activation-script ordering dependency.
       system.activationScripts.d2bAudioStateDirs =
         lib.stringAfter [ "users" ] (lib.concatStringsSep "\n" (lib.mapAttrsToList
           (name: _: ''
@@ -352,19 +371,6 @@ in
             new_f="/var/lib/d2b/vms/${name}/state/audio-state.json"
             if [ -f "$old_f" ] && [ ! -f "$new_f" ]; then
               install -m 0640 -o d2bd -g d2b "$old_f" "$new_f" && rm -f "$old_f" || true
-            fi
-            # software-r2-1: grant d2b group x-only traversal on the VM
-            # dir so d2b members (not kvm members) can reach state/.
-            # Combined with the existing mask:rwx the effective permission is --x.
-            ${pkgs.acl}/bin/setfacl -m "g:d2b:x" /var/lib/d2b/vms/${name} || true
-            # software-r2-1: grant d2b-<vm>-gpu rx on state/ and r on the
-            # audio-state.json file so the GPU sidecar can read audio state without
-            # joining d2b (which would grant polkit launcher rights).
-            if [ -d "/var/lib/d2b/vms/${name}/state" ]; then
-              ${pkgs.acl}/bin/setfacl -m "u:d2b-${name}-gpu:rx" /var/lib/d2b/vms/${name}/state || true
-            fi
-            if [ -f "/var/lib/d2b/vms/${name}/state/audio-state.json" ]; then
-              ${pkgs.acl}/bin/setfacl -m "u:d2b-${name}-gpu:r" /var/lib/d2b/vms/${name}/state/audio-state.json || true
             fi
           '')
           enabledVms));
