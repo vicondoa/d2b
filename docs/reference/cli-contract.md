@@ -950,11 +950,11 @@ command.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `78` | **v1.0 disposition** — typed `#not-yet-implemented` envelope (the daemon-native console surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015 and the disposition note below). v1.0 invocation returns this exit code unconditionally; the multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the migration guide. v1.2+ (unscheduled) implementation MAY lift this to the codes below. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
-| `0` | (v1.2+ unscheduled) Success. | — |
-| `1` | (v1.2+ unscheduled) Console launch failure. | [`generic`](./error-codes.md#generic) |
+| `78` | Typed `#not-yet-implemented` envelope (the daemon-native console surface is planned per ADR 0041; the current release delivers only typed-envelope rendering + remediation per ADR 0017). Invocation returns this exit code unconditionally until the backend ships. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the migration guide. When the backend ships the codes below will become active. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `0` | (planned) Success. | — |
+| `1` | (planned) Console launch failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown VM, missing argument, or graphics VM selected. | [`usage`](./error-codes.md#usage) |
-| `130` | (v1.2+ unscheduled) Console session interrupted with SIGINT. | — |
+| `130` | (planned) Console session interrupted with SIGINT. | — |
 
 **Human example**
 
@@ -966,7 +966,7 @@ Use ~. to detach.
 
 **Status**
 
-The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native foreground console handoff is queued for a future release; see ADR 0015 and ADR 0017).
+The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native foreground console handoff is planned per ADR 0041 — provider-capability-aware console streaming across Cloud Hypervisor, qemu-media, and ACA targets; see [provider capability matrix](./provider-capability-matrix.md) for the per-provider transport model; the current CLI behavior is governed by ADR 0015 and ADR 0017).
 
 **Native**
 
@@ -996,9 +996,9 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `78` | **v1.0 disposition** — typed `#not-yet-implemented` envelope (the daemon-native audio status surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015 and the disposition note below). v1.0 invocation returns this exit code unconditionally. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. v1.2+ (unscheduled) implementation MAY lift this to the codes below. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
-| `0` | (v1.2+ unscheduled) Success. | — |
-| `1` | (v1.2+ unscheduled) Unexpected filesystem or sidecar probe failure. | [`generic`](./error-codes.md#generic) |
+| `78` | Typed `#not-yet-implemented` envelope (the daemon-native audio status surface is planned per ADR 0041 — provider-capability-aware enforcement across Cloud Hypervisor, qemu-media, and ACA targets; see [provider capability matrix](./provider-capability-matrix.md); the current release delivers typed-envelope rendering + remediation per ADR 0017). Invocation returns this exit code unconditionally until the backend ships. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `0` | (planned) Success. | — |
+| `1` | (planned) Unexpected filesystem or sidecar probe failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown VM or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
@@ -1014,7 +1014,7 @@ device:   detached
 
 **Status**
 
-The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-status surface is queued for a future release; see ADR 0015 and ADR 0017).
+The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-status surface is planned per ADR 0041; see [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model; the current CLI behavior is governed by ADR 0015 and ADR 0017).
 
 **Native**
 
@@ -1045,9 +1045,9 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `78` | **v1.0 disposition** — typed `#not-yet-implemented` envelope (the daemon-native audio mic surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015 and the disposition note below). v1.0 invocation returns this exit code unconditionally. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. v1.2+ (unscheduled) implementation MAY lift this to the codes below. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
-| `0` | (v1.2+ unscheduled) Success. | — |
-| `1` | (v1.2+ unscheduled) Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
+| `78` | Typed `#not-yet-implemented` envelope (the daemon-native audio mic surface is planned per ADR 0041 — provider-capability-aware enforcement across Cloud Hypervisor, qemu-media, and ACA targets; see [provider capability matrix](./provider-capability-matrix.md); the current release delivers typed-envelope rendering + remediation per ADR 0017). Invocation returns this exit code unconditionally until the backend ships. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `0` | (planned) Success. | — |
+| `1` | (planned) Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Bad state literal, unknown VM, or audio not enabled for the VM. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
@@ -1065,7 +1065,7 @@ device:   will-attach-on-next-up
 
 **Status**
 
-The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-hotplug surface is queued for a future release; see ADR 0015 and ADR 0017).
+The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-hotplug surface is planned per ADR 0041; see [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model; the current CLI behavior is governed by ADR 0015 and ADR 0017).
 
 **Native**
 
@@ -1096,9 +1096,9 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `78` | **v1.0 disposition** — typed `#not-yet-implemented` envelope (the daemon-native audio speaker surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015 and the disposition note below). v1.0 invocation returns this exit code unconditionally. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. v1.2+ (unscheduled) implementation MAY lift this to the codes below. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
-| `0` | (v1.2+ unscheduled) Success. | — |
-| `1` | (v1.2+ unscheduled) Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
+| `78` | Typed `#not-yet-implemented` envelope (the daemon-native audio speaker surface is planned per ADR 0041 — provider-capability-aware enforcement across Cloud Hypervisor, qemu-media, and ACA targets; see [provider capability matrix](./provider-capability-matrix.md); the current release delivers typed-envelope rendering + remediation per ADR 0017). Invocation returns this exit code unconditionally until the backend ships. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `0` | (planned) Success. | — |
+| `1` | (planned) Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Bad state literal, unknown VM, or audio not enabled for the VM. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
@@ -1116,7 +1116,7 @@ device:   will-attach-on-next-up
 
 **Status**
 
-The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-speaker surface is queued for a future release; see ADR 0015 and ADR 0017).
+The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-speaker surface is planned per ADR 0041; see [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model; the current CLI behavior is governed by ADR 0015 and ADR 0017).
 
 **Native**
 
@@ -1146,9 +1146,9 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `78` | **v1.0 disposition** — typed `#not-yet-implemented` envelope (the daemon-native audio off surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015 and the disposition note below). v1.0 invocation returns this exit code unconditionally. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. v1.2+ (unscheduled) implementation MAY lift this to the codes below. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
-| `0` | (v1.2+ unscheduled) Success. Calling the command against a VM that never had audio enabled is an idempotent no-op. | — |
-| `1` | (v1.2+ unscheduled) Audio state write or sidecar failure. | [`generic`](./error-codes.md#generic) |
+| `78` | Typed `#not-yet-implemented` envelope (the daemon-native audio off surface is planned per ADR 0041 — provider-capability-aware enforcement across Cloud Hypervisor, qemu-media, and ACA targets; see [provider capability matrix](./provider-capability-matrix.md); the current release delivers typed-envelope rendering + remediation per ADR 0017). Invocation returns this exit code unconditionally until the backend ships. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `0` | (planned) Success. Calling the command against a VM that never had audio enabled is an idempotent no-op. | — |
+| `1` | (planned) Audio state write or sidecar failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Missing or unknown VM name. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
@@ -1166,7 +1166,7 @@ device:   detached
 
 **Status**
 
-The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-off shorthand is queued for a future release; see ADR 0015 and ADR 0017).
+The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-off shorthand is planned per ADR 0041; see [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model; the current CLI behavior is governed by ADR 0015 and ADR 0017).
 
 **Native**
 
@@ -3094,11 +3094,11 @@ detached state lives in guestd's detached registry).
 | `usb attach` | `rust-native` | USBIP attach parses and dispatches one intent to `d2bd`; the daemon coordinates broker host bind/firewall/proxy state and authenticated guestd import over guest-control. |
 | `usb detach` | `rust-native` | USBIP detach parses and dispatches one intent to `d2bd`; the daemon asks guestd to detach matching imports, then runs broker `UsbipUnbind` / `UsbipProxyReconcile`. |
 | `usb probe` | `rust-native` | USBIP probe is a read-only daemon query backed by the broker's `UsbipProxyReconcile` validation pass. |
-| `console` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native foreground console handoff is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
-| `audio status` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native audio-status surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
-| `audio mic` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native microphone grant surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
-| `audio speaker` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native speaker grant surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
-| `audio off` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native `off` shorthand is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
+| `console` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native foreground console handoff is planned per ADR 0041 — provider-capability-aware streaming across Cloud Hypervisor (broker serial backend), qemu-media (broker fd-backed chardev), and ACA (guestd over relay/peer transport); see [provider capability matrix](./provider-capability-matrix.md). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
+| `audio status` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native audio-status surface is planned per ADR 0041 — provider-capability-aware enforcement returning per-target results across Cloud Hypervisor, qemu-media, and ACA; see [provider capability matrix](./provider-capability-matrix.md). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
+| `audio mic` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native microphone grant surface is planned per ADR 0041; see [provider capability matrix](./provider-capability-matrix.md). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
+| `audio speaker` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native speaker grant surface is planned per ADR 0041; see [provider capability matrix](./provider-capability-matrix.md). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
+| `audio off` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native `off` shorthand is planned per ADR 0041; see [provider capability matrix](./provider-capability-matrix.md). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
 | `build` | `rust-native` | Build is a native non-destructive planner that renders the eval/build preview without falling back to bash. |
 | `switch` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `boot` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |

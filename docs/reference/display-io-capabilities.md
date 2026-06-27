@@ -56,8 +56,18 @@ sender connects, spawns the provider agent, waits for the verified handshake,
 and invokes the configured listener/provider cleanup hooks for tracked
 sessions on close, failed open, and daemon-side stale-session collection.
 
+## Console and audio controls
+
+Console streaming and audio enforcement are separately tracked from the
+display capability set documented above. The provider capability matrix
+for console and audio — covering Cloud Hypervisor NixOS VMs, qemu-media
+targets, and ACA sandboxes — is documented in
+[provider capability matrix](./provider-capability-matrix.md).
+
 ## Related references
 
+- [Provider capability matrix](./provider-capability-matrix.md) documents
+  the console and audio capability boundaries across runtime providers.
 - [Provider-managed sandboxes](./provider-managed-sandboxes.md) documents the
   Azure Container Apps adapter and its absent display/I/O capabilities.
 - [Graphics](./components-graphics.md) documents local Wayland forwarding.
