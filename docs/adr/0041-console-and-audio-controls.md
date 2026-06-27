@@ -64,10 +64,34 @@ the guest when no operator is attached:
 
 - Cloud Hypervisor may use a reviewed `--serial socket=...` backend only
   if it is proven non-blocking and attach-safe.
-- qemu-media must use a broker-owned fd-backed chardev or an equivalent
-  broker-owned PTY/fd-store design. A qemu-created path socket is not the
-  default because it weakens socket-permission posture and can race with
-  stale socket cleanup.
+- qemu-media must use a broker-owned fd-backed chardev backed by a
+  socketpair or broker-opened PTY master, with the relevant fd passed to
+  QEMU at launch time via the `chardev fd,fd=N` or `chardev socket,fd=N`
+  mechanism. A qemu-created UNIX path socket (`chardev socket,path=...`)
+  is not the default for the following reasons:
+
+  1. **Ownership inversion**: With a path socket, QEMU binds and listens
+     and the daemon connects. That inverts the fd-ownership relationship;
+     the broker loses authority over the listening end.
+  2. **Filesystem path exposure**: A path-based UNIX socket is addressable
+     by any process that can traverse its parent directories. A broker-held
+     fd passed via `SCM_RIGHTS` has no filesystem path after the descriptor
+     is passed; there is no path-based access vector.
+  3. **Stale socket race**: A previous QEMU crash may leave a stale socket
+     file at the expected path. Cleanup requires an unlink-and-rebind
+     sequence that races with a reconnect attempt. A broker-owned fd has
+     no such leftover; the kernel reclaims resources when the fd closes.
+  4. **QEMU socket-permission posture**: QEMU's path socket applies only
+     filesystem permissions to restrict connections. A broker-held fd
+     enforces the restriction at the kernel level via fd-transfer semantics;
+     there is nothing to "connect to" from outside.
+
+  A broker-held PTY master (`chardev pty` equivalent with the master fd
+  pre-opened and passed to QEMU) avoids the path-socket problems but
+  requires the broker to open the PTY. The socketpair/fd-store design is
+  preferred because it does not place any device node in the filesystem
+  namespace at all.
+
 - A persistent drainer continuously reads console output into a bounded
   ring buffer. If the console fd is retained by a persistent component
   such as the broker or a broker-spawned helper, that same persistent
@@ -81,13 +105,65 @@ Provider-managed ACA console attaches over the guestd-compatible
 provider transport. The public surface must redact ACA resource ids,
 relay coordinates, command payloads, and credentials.
 
+### Console stream isolation and QoS
+
+Console I/O is a continuous streaming workload. If console data and
+health/audio/control RPCs share the same transport connection or vsock
+channel, a large burst of console output can fill send buffers and
+stall time-sensitive RPC traffic.
+
+The daemon must prevent console streams from starving other traffic:
+
+- **Local vsock (Cloud Hypervisor and qemu-media)**: The daemon must use
+  a separate vsock CID/port for console streaming, distinct from the
+  vsock port used for guestd health checks, audio RPCs, and exec
+  sessions. Multiplexing console data and control RPCs over the same
+  vsock connection is forbidden. virtio-vsock per-connection flow control
+  is credit-based; a stalled consumer on one connection does not affect
+  independent connections.
+- **ADR 0032 relay/peer transport (ACA sandboxes)**: Console bytes must
+  travel on a dedicated logical stream or channel within the relay
+  transport, separated from health-check pings, audio policy RPC
+  messages, and other control traffic. The relay transport layer must
+  not share backpressure state between the console stream and control
+  message queues. If the relay protocol provides per-stream priority or
+  weight, the console stream must be assigned lower priority than
+  health/control messages.
+- **Ring-buffer backpressure limit**: The daemon-side ring buffer is
+  bounded. When the buffer is full, the drainer drops the oldest bytes
+  and records the drop in cursor metadata so clients can detect the gap.
+  The drainer must not apply backpressure to the guest console fd; the
+  guest must never block on console output regardless of whether any
+  operator is attached.
+- **Attach/detach with no stall**: An operator attaching to or detaching
+  from a console session must not pause draining or cause the guest to
+  stall. The persistent drainer owns the console fd continuously; the
+  attaching operator session is a secondary reader of the ring buffer,
+  not a holder of the console fd.
+
 ### Audio control
 
 Audio policy uses typed state and provider-specific enforcement:
 
 - Local audio state is versioned and written atomically under an
-  fd-lifetime lock in `/run/d2b/locks/`. Lock files are persistent
-  coordination inodes and must never be unlinked during VM cleanup.
+  fd-lifetime OFD lock in `/run/d2b/locks/`. The lock is acquired with
+  `fcntl(F_OFD_SETLKW)` (blocking exclusive write lock for mutations;
+  shared read lock for readers). Lock file descriptors are opened with
+  `O_CLOEXEC` so exec'd child processes do not inherit the lock. Lock
+  files are persistent coordination inodes and must never be unlinked
+  during VM cleanup (the kernel releases the OFD lock when all fds to
+  the open file description close, but the inode stays on disk as a
+  stable coordination point; unlinking it would silently create a new
+  inode on next open, breaking coordination with any process that still
+  holds the old fd). The per-VM lock inode footprint is bounded by the
+  declared VM name set: exactly one lock file per named VM
+  (`/run/d2b/locks/<vm>.lock`) is created at first audio mutation; no
+  lock files are created for VMs that have never had an audio mutation.
+  The total inodes consumed equals the number of VM names that have ever
+  had audio state written in the current host activation. Declared VM
+  names are validated at eval time (regex `^[a-z][a-z0-9-]*$`), so the
+  inode count is strictly bounded by the operator's declared
+  configuration.
 - Cloud Hypervisor NixOS VMs apply both host-side PipeWire policy and
   guest-side guestd policy. Host-side `off` requests are fail-closed:
   the host boundary is sealed even if guestd is unresponsive, with a
@@ -138,8 +214,10 @@ The implementation must add or update:
 Tests must cover provider capability mapping, ring-buffer cursor
 behavior, slow/no-client console draining, daemon restart while a
 persistent fd owner keeps draining, qemu console fd lifecycle, missing
-ACA guestd misconfiguration, provider guest-control routing, and the
-host-only qemu audio subset.
+ACA guestd misconfiguration, provider guest-control routing, the
+host-only qemu audio subset, and console-stream starvation of control
+RPC traffic (verify that a saturated ring-buffer drainer does not delay
+health-check or audio RPC responses on the same transport peer).
 
 The approach deliberately makes unsupported provider behavior explicit
 instead of hiding it behind fallback shells or best-effort state edits.

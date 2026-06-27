@@ -51,12 +51,22 @@ console fd during a `d2bd` restart so draining is not interrupted.
 ### Console transport — qemu-media
 
 qemu-media VMs do not run `guestd`. The daemon accesses the console
-through a broker-owned fd-backed chardev. A qemu-created UNIX path
-socket is not the default because it weakens socket-permission posture
-and can race with stale socket cleanup on restart.
+through a broker-owned fd-backed chardev. The broker opens a socketpair
+(or PTY master) and passes the relevant fd to QEMU at launch time using
+the `chardev fd,fd=N` or `chardev socket,fd=N` mechanism rather than a
+qemu-created UNIX path socket.
+
+**Why not a qemu-created path socket**: A `chardev socket,path=...`
+entry causes QEMU to bind and listen on the path, inverting the
+ownership relationship — the daemon connects rather than holds. The
+filesystem path is addressable by any process that can traverse the
+parent directory. A stale socket file from a previous crash requires an
+unlink-then-rebind sequence that races with reconnect attempts. A
+broker-owned fd has no filesystem path after the descriptor is passed;
+the kernel reclaims resources when the fd closes.
 
 The broker holds the console fd across VM lifecycle transitions. On
-daemon restart, the broker fd owner survives restart (it is not the
+daemon restart, the broker fd owner survives the restart (it is not the
 daemon main process) so console draining is not paused. The drainer
 contract is identical to the Cloud Hypervisor case.
 
@@ -68,6 +78,33 @@ agent. If the agent is absent, the daemon returns a typed
 to the sandbox configuration. The daemon does **not** fall back to
 `executeShellCommand` as a console substitute; that would violate the
 no-raw-shell-channel constraint in ADR 0032 and ADR 0041.
+
+---
+
+## Console stream isolation
+
+Console I/O is a continuous streaming workload. If console data and
+health/audio/control RPCs share the same transport connection, a burst
+of console output can fill send buffers and delay time-sensitive
+control traffic.
+
+| Transport | Isolation mechanism |
+| --- | --- |
+| Local vsock (Cloud Hypervisor, qemu-media) | Separate vsock port per stream type. Console and guestd control (health, audio, exec) must use distinct vsock CID/port pairs. Multiplexing console data and control RPCs over the same vsock connection is forbidden. virtio-vsock per-connection flow control is credit-based; independent connections do not share backpressure. |
+| ADR 0032 relay/peer (ACA) | Dedicated logical channel or stream within the relay transport for console bytes, separated from health-check pings, audio policy RPCs, and other control traffic. The relay transport must not share backpressure state between the console stream and control queues. Where the relay protocol supports per-stream priority, the console stream is assigned lower priority than health and control messages. |
+
+**Ring-buffer backpressure contract**: The daemon-side ring buffer is
+bounded. When the buffer is full, the drainer drops the oldest bytes
+and records the drop in cursor metadata so clients can detect the gap.
+The drainer must **not** apply backpressure to the guest console fd;
+the guest must never block on console output regardless of whether any
+operator is attached or how fast the operator's client consumes output.
+
+**Attach/detach with no stall**: An operator attaching to or detaching
+from a console session must not pause draining or cause the guest to
+stall. The persistent drainer owns the console fd continuously; an
+attaching operator session is a secondary reader of the ring buffer,
+not a holder of the console fd.
 
 ---
 
@@ -86,10 +123,26 @@ and guest-side enforcement via `guestd`:
 
 - Volume and gain are bounded `0..=100` domain values validated at the
   public-wire boundary before reaching the daemon.
-- Local audio state is versioned and written atomically under an
-  fd-lifetime lock at `/run/d2b/locks/`.
-- Lock files are persistent coordination inodes and must never be
-  unlinked during VM cleanup.
+- Local audio state is versioned and written atomically under an OFD
+  lock at `/run/d2b/locks/<vm>.lock`. The lock is acquired with
+  `fcntl(F_OFD_SETLKW)` (blocking exclusive write lock for state
+  mutations; shared read locks for readers). Lock file descriptors are
+  opened with `O_CLOEXEC` so exec'd child processes do not inherit the
+  lock. OFD locks are tied to the open file description, not the
+  process: closing an unrelated fd to the same inode does not drop the
+  lock, and the lock survives intentional fd inheritance across fork.
+- Lock files are persistent coordination inodes. They must never be
+  unlinked during VM cleanup or `d2b vm stop`: unlinking the inode
+  would silently create a fresh inode on next open, breaking
+  coordination with any process that still holds the old fd. The kernel
+  releases the OFD lock when all fds to the open file description close;
+  the inode persisting on disk is not a stale lock.
+- The per-VM lock inode footprint is bounded by the declared VM name
+  set. Exactly one lock file per named VM is created on first audio
+  mutation; VMs that have never had an audio mutation have no lock file.
+  Declared VM names are validated at eval time
+  (`^[a-z][a-z0-9-]*$`), so the inode count is bounded by the
+  operator's declared configuration, not by dynamic runtime state.
 - Host-side `off` requests are fail-closed: the host boundary is sealed
   even when `guestd` is unresponsive; the response carries a degraded
   result for the guest-side enforcement step so the operator knows the
@@ -146,7 +199,9 @@ provider:
 ## Related references
 
 - [ADR 0041](../adr/0041-console-and-audio-controls.md) — binding decision
-  for the provider-capability-aware console and audio design.
+  for the provider-capability-aware console and audio design, including
+  the QEMU chardev preference rationale, stream isolation constraints,
+  and audio lock semantics.
 - [Display and virtual I/O capabilities](./display-io-capabilities.md) —
   display, clipboard, USB, HID, GPU, and video sidecar capability boundaries.
 - [Provider-managed sandboxes](./provider-managed-sandboxes.md) — Azure
