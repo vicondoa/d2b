@@ -325,6 +325,20 @@
           "enum": [
             "enforcement-unavailable"
           ]
+        },
+        {
+          "description": "The VM exists but audio is not enabled in its manifest entry.",
+          "type": "string",
+          "enum": [
+            "audio-not-enabled"
+          ]
+        },
+        {
+          "description": "An unexpected I/O or deserialization error occurred while reading or writing audio state. Operator should check daemon logs.",
+          "type": "string",
+          "enum": [
+            "internal-error"
+          ]
         }
       ]
     },

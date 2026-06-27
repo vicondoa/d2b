@@ -183,6 +183,9 @@ pub mod autostart;
 // broker `SpawnRunner` with `RunnerRole::Usbip`, keyed per-env on
 // `vm_id = sys-<env>-usbipd` with role_ids `backend` / `proxy`.
 pub mod usbipd_perenv_autostart;
+// Audio policy dispatch: OFD-locked state I/O, provider capability
+// resolution, host PipeWire enforcement, and guestd RPC dispatch.
+mod audio_dispatch;
 // Prometheus scrape endpoint shape. Owns the canonical metric inventory (see
 // `docs/reference/daemon-metrics.md`) and a minimal HTTP/1.1
 // `GET /metrics` handler. The registry is process-local; serving is
@@ -2615,6 +2618,7 @@ fn request_invalidates_public_status_model(request: &wire::Request) -> bool {
             | wire::Request::Exec(public_wire::ExecOp::List(_))
             | wire::Request::Exec(public_wire::ExecOp::Logs(_))
             | wire::Request::Exec(public_wire::ExecOp::Status(_))
+            | wire::Request::Audio(public_wire::AudioOp::Status(_))
     )
 }
 
@@ -2676,6 +2680,7 @@ fn dispatch_request_locked(
         wire::Request::Exec(op) => dispatch_exec_management(state, peer, op),
         wire::Request::Shell(op) => dispatch_shell_management(state, peer, op),
         wire::Request::GatewayDisplay(op) => dispatch_gateway_display(state, peer, op),
+        wire::Request::Audio(op) => audio_dispatch::dispatch_audio(state, op),
     }
 }
 
@@ -18796,7 +18801,7 @@ fn resolve_bundle_artifact_path(base_dir: &Path, raw_path: &str) -> PathBuf {
     }
 }
 
-fn load_json<T>(path: &Path) -> Result<T, TypedError>
+pub(crate) fn load_json<T>(path: &Path) -> Result<T, TypedError>
 where
     T: for<'de> Deserialize<'de>,
 {
@@ -20751,7 +20756,7 @@ mod broker_dispatch_tests {
                 "vm-a": {
                     "apiSocket": api_socket.display().to_string(),
                     "audio": false,
-                    "audioService": "d2b-vm-a-snd.service",
+                    "audioService": null,
                     "audioStateFile": "/var/lib/d2b/vms/vm-a/state/audio-state.json",
                     "bridge": null,
                     "env": "dev",
@@ -21149,7 +21154,7 @@ mod broker_dispatch_tests {
                 "vm-a": {
                     "apiSocket": api_socket.display().to_string(),
                     "audio": false,
-                    "audioService": "d2b-vm-a-snd.service",
+                    "audioService": null,
                     "audioStateFile": "/var/lib/d2b/vms/vm-a/state/audio-state.json",
                     "bridge": null,
                     "env": "dev",

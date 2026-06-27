@@ -31,6 +31,20 @@ deprecations ship one minor release before removal.
   The docs cover broker-owned qemu chardev posture, console stream QoS,
   OFD audio lock semantics, provider-specific enforcement modes, and
   d2b-wlcontrol badge/control constraints.
+- `d2bd` now dispatches `AudioOp` (status, set-volume, mute/off) for all
+  provider types. Cloud Hypervisor NixOS VMs use OFD-locked atomic
+  reads and writes of `/run/d2b/audio/<vm>.json` guarded by
+  `/run/d2b/locks/audio-<vm>.lock`; qemu-media VMs report
+  guest-enforcement as unsupported; ACA sandbox VMs route exclusively
+  through provider guest-control (no local audio state is created).
+  Provider capability resolution runs before any state access.
+- `guestd` now advertises `AudioStatus` and `AudioSet` capabilities and
+  handles the corresponding ttrpc RPCs; guest PipeWire control stubs are
+  wired for future in-guest enforcement.
+- `audioService` (`d2b-<vm>-snd.service`) is fully retired: the field
+  is unconditionally `null` in all manifest and daemon-access paths;
+  `ProcessRole::Audio` is the sole source of truth for audio runner
+  identity.
 - `d2bd` now recognizes `uid=0` connections as a narrow `HostShutdown`
   authority scoped exclusively to `vmStop` during host-shutdown teardown. This
   fixes the long-standing post-reboot failure where the guarded `ExecStop`

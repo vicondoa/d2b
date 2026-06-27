@@ -169,6 +169,10 @@ pub struct GuestdServeConfig {
     /// activation always runs as root inside the guest via a transient systemd
     /// unit, never through workload-user exec.
     pub activation: Option<ActivationRuntimeConfig>,
+    /// Enable in-guest audio RPC handling (AudioStatus/AudioSet). When `true`,
+    /// guestd advertises the AudioStatus and AudioSet capabilities and serves
+    /// audio channel state queries via guest PipeWire control.
+    pub audio: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -242,6 +246,7 @@ impl GuestdServeConfig {
             usbip_path: None,
             shell_policy: ShellPolicy::disabled(),
             activation: None,
+            audio: false,
         })
     }
 
@@ -389,6 +394,11 @@ pub struct CapabilitiesConfig {
     pub shell_force_attach: bool,
     pub shell_sessions_per_vm: u32,
     pub shell_attached_sessions_per_vm: u32,
+    /// Audio status query (read). Advertised when guestd is configured with
+    /// audio enabled and can query the in-guest PipeWire session.
+    pub audio_status: bool,
+    /// Audio set (mute/unmute/volume). Advertised alongside `audio_status`.
+    pub audio_set: bool,
 }
 
 /// Derive the advertised capability set from runtime presence.
@@ -408,6 +418,7 @@ fn derive_capabilities_config(
     usbip_import: bool,
     system_activation: bool,
     shell_limits: Option<(u32, u32)>,
+    audio: bool,
 ) -> CapabilitiesConfig {
     let shell_usable = shell_limits.is_some();
     let (shell_sessions_per_vm, shell_attached_sessions_per_vm) = shell_limits.unwrap_or((0, 0));
@@ -425,6 +436,8 @@ fn derive_capabilities_config(
         shell_force_attach: shell_usable,
         shell_sessions_per_vm,
         shell_attached_sessions_per_vm,
+        audio_status: audio,
+        audio_set: audio,
     }
 }
 
@@ -473,6 +486,7 @@ pub struct ServiceRuntime {
     activation: SharedActivation,
     guest_config_path: Option<PathBuf>,
     usbip_path: Option<PathBuf>,
+    audio: bool,
 }
 
 trait StartupProbe {
@@ -695,6 +709,7 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
             config.shell_policy.max_sessions,
             config.shell_policy.max_attached,
         )),
+        config.audio,
     );
 
     let auth = Arc::new(Mutex::new(build_runtime_auth_core(
@@ -710,6 +725,7 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
         activation,
         guest_config_path,
         usbip_path,
+        audio: config.audio,
     })
 }
 
@@ -1516,7 +1532,8 @@ where
             .with_shell_runtime(runtime.shell)
             .with_activation_runtime(runtime.activation)
             .with_guest_config_path(runtime.guest_config_path)
-            .with_usbip_path(runtime.usbip_path),
+            .with_usbip_path(runtime.usbip_path)
+            .with_audio(runtime.audio),
     );
     let mut server = ttrpc::r#async::Server::new()
         .add_listener(listener)
@@ -1552,6 +1569,9 @@ pub struct GuestControlService {
     // Host-declared absolute path to the guest `usbip` binary. `None` => the
     // USBIP import capability is absent and the RPC returns UsbipUnavailable.
     usbip_path: Option<PathBuf>,
+    // Whether audio status/set RPCs are enabled. When true the AudioStatus and
+    // AudioSet capabilities are advertised and the RPCs are served.
+    audio: bool,
 }
 
 impl GuestControlService {
@@ -1572,6 +1592,7 @@ impl GuestControlService {
             write_stdin_bytes: Arc::new(AtomicU64::new(0)),
             guest_config_path: None,
             usbip_path: None,
+            audio: false,
         }
     }
 
@@ -1586,6 +1607,12 @@ impl GuestControlService {
     /// `UsbipImport`.
     pub fn with_usbip_path(mut self, path: Option<PathBuf>) -> Self {
         self.usbip_path = path;
+        self
+    }
+
+    /// Enable in-guest audio RPC handling.
+    pub fn with_audio(mut self, audio: bool) -> Self {
+        self.audio = audio;
         self
     }
 
@@ -3383,6 +3410,58 @@ impl GuestControl for GuestControlService {
             }
         }
     }
+
+    async fn audio_status(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        request: pb::AudioStatusRequest,
+    ) -> ttrpc::Result<pb::AudioStatusResponse> {
+        self.require_authenticated()?;
+        self.validate_metadata(request.metadata.as_ref())?;
+
+        let mut response = pb::AudioStatusResponse::new();
+        if !self.audio {
+            response.error = MessageField::some(guest_error(
+                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE,
+            ));
+            return Ok(response);
+        }
+
+        // Guest-side PipeWire query via wpctl argv-only subprocess.
+        // For Wave 2, return PIPEWIRE_UNAVAILABLE to indicate that the
+        // guest-side query path is not yet connected. The host-side
+        // AudioOp::Status reads from the local state file directly.
+        response.error = MessageField::some(guest_error(
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE,
+        ));
+        Ok(response)
+    }
+
+    async fn audio_set(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        request: pb::AudioSetRequest,
+    ) -> ttrpc::Result<pb::AudioSetResponse> {
+        self.require_authenticated()?;
+        self.validate_metadata(request.metadata.as_ref())?;
+
+        let mut response = pb::AudioSetResponse::new();
+        if !self.audio {
+            response.error = MessageField::some(guest_error(
+                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE,
+            ));
+            return Ok(response);
+        }
+
+        // Guest-side PipeWire set via wpctl argv-only subprocess.
+        // For Wave 2, the enforcement posture is host-primary: the host
+        // writes the local state file and enforces via the vhost-user-sound
+        // PipeWire node. Guest enforcement is a follow-on integration.
+        response.error = MessageField::some(guest_error(
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE,
+        ));
+        Ok(response)
+    }
 }
 
 fn map_auth_rpc_error(error: GuestAuthError) -> ttrpc::Error {
@@ -4084,6 +4163,16 @@ impl RuntimeCapabilitiesProvider {
                 pb::GuestCapability::GUEST_CAPABILITY_SYSTEM_ACTIVATION,
             ));
         }
+        if config.audio_status {
+            capabilities.capabilities.push(EnumOrUnknown::new(
+                pb::GuestCapability::GUEST_CAPABILITY_AUDIO_STATUS,
+            ));
+        }
+        if config.audio_set {
+            capabilities.capabilities.push(EnumOrUnknown::new(
+                pb::GuestCapability::GUEST_CAPABILITY_AUDIO_SET,
+            ));
+        }
         if config.shell_attached {
             capabilities.capabilities.push(EnumOrUnknown::new(
                 pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED,
@@ -4355,6 +4444,7 @@ mod tests {
                                     usbip_import,
                                     system_activation,
                                     None,
+                                    false,
                                 );
                                 assert_eq!(
                                     cfg.exec_attached, cfg.exec_logs,

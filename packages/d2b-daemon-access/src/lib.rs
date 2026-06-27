@@ -1640,7 +1640,7 @@ mod tests {
                 );
                 entry.is_net_vm = *vm == "vm-booted";
                 entry.tpm = index % 2 == 1;
-                entry.services.snd = Some(format!("d2b-{vm}-snd.service"));
+                entry.services.snd = None;
                 entry.services.swtpm = entry.tpm.then(|| format!("d2b-{vm}-swtpm.service"));
                 entry.services.video = entry.graphics.then(|| format!("d2b-{vm}-video.service"));
                 entry.ssh_user = (index % 2 == 0).then(|| "alice".to_owned());

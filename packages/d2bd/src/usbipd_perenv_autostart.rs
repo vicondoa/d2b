@@ -338,10 +338,7 @@ mod tests {
                 Value::String(format!("/var/lib/d2b/vms/{name}/{name}.sock")),
             );
             vm.insert("audio".into(), Value::Bool(false));
-            vm.insert(
-                "audioService".into(),
-                Value::String(format!("d2b-{name}-snd.service")),
-            );
+            vm.insert("audioService".into(), Value::Null);
             vm.insert(
                 "audioStateFile".into(),
                 Value::String(format!("/var/lib/d2b/vms/{name}/state/audio-state.json")),
