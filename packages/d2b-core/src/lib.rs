@@ -1,5 +1,6 @@
 #![doc = "Canonical data transfer objects for d2b bundle artifacts."]
 
+pub mod audio_policy;
 pub mod base64_codec;
 pub mod bundle;
 pub mod bundle_resolver;
