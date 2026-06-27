@@ -1,5 +1,7 @@
 # How to use console and audio controls
 
+**Diataxis category:** how-to.
+
 > **Status:** The `d2b console` and `d2b audio` CLI verbs are
 > currently staged surfaces that parse and validate arguments natively
 > but return typed `not-yet-implemented` exit-78 envelopes until the

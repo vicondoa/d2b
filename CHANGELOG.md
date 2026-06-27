@@ -12,23 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
-- `docs/reference/cli-contract.md` — `console` and `audio` verb sections now
-  reference ADR 0041 and the provider capability matrix instead of open-ended
-  "unscheduled" disposition notes; the dispatch capability table rows for all
-  five audio/console shims are updated accordingly.
-- `docs/reference/daemon-api.md` — added a `ConsoleOp`/`AudioOp` planned wire
-  types note after the auto-generated request-types block, documenting the
-  intended op shapes, cursor metadata contract, and per-target status design.
-- `docs/reference/display-io-capabilities.md` — added a "Console and audio
-  controls" section cross-linking the new provider capability matrix.
-- `docs/reference/runtime-provider-selection.md` — added a "Console and audio
-  provider capability gating" section referencing the provider capability matrix
-  and ADR 0041.
-- `docs/reference/components-audio.md` — intro paragraph and "See also" section
-  now reference ADR 0041 and the provider capability matrix.
-- `docs/reference/error-codes.md` — Category 1 deferred-verb description now
-  references ADR 0041 and the provider capability matrix for `console` and
-  `audio`.
+- Reference docs (`cli-contract.md`, `daemon-api.md`, `display-io-capabilities.md`,
+  `runtime-provider-selection.md`, `components-audio.md`, `error-codes.md`) now
+  point `console` and `audio` surfaces at ADR 0041 and the provider capability
+  matrix.
 - Renamed the project to **d2b: Double Dutch Bus** as an intentional breaking
   change. Commands, packages, services, sockets, Nix options, runtime paths,
   schemas, telemetry identifiers, and generated artifacts now use only `d2b`
