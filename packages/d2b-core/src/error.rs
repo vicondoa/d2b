@@ -182,9 +182,9 @@ static ERROR_KIND_RECORDS: [ErrorKindRecord; 15] = [
     ErrorKindRecord {
         kind: Kind::ProviderMisconfigured,
         exit_code: 80,
-        owning_command: "audio",
+        owning_command: "provider",
         message_template: "provider for {vm} is misconfigured: {reason}",
-        remediation: "Check the provider configuration for the VM and verify the expected agent or sidecar is running.",
+        remediation: "Check the provider configuration for the VM and verify the expected guestd-compatible agent or sidecar is running.",
         docs_anchor: "#provider-misconfigured",
     },
 ];

@@ -52,7 +52,7 @@ shape, remediation hint, and docs anchor.
 | <a id="manifest-version-mismatch"></a>`#manifest-version-mismatch` | `manifest-version-mismatch` | `41` | `status` | manifest {artifact} declared an incompatible manifestVersion (opaque reason: {opaque_reason}) | Re-run `nixos-rebuild switch` against an updated d2b input pinning the daemon's supported manifestVersion. Manifest version changes do not ship a compatibility window. |
 | <a id="internal-io"></a>`#internal-io` | `internal-io` | `50` | `daemon-api/internal` | an internal I/O step failed (opaque reason: {opaque_reason}) | Retry the command; if the error persists, inspect the daemon logs with the opaque reason token. |
 | <a id="bundle-tampered"></a>`#bundle-tampered` | `bundle-tampered` | `60` | `bundle-load` | bundle artifact {path} failed tamper-resistance check: {reason} | Re-run `nixos-rebuild switch` to restore the bundle artifacts to their signed state. |
-| <a id="provider-misconfigured"></a>`#provider-misconfigured` | `provider-misconfigured` | `80` | `audio` | provider for {vm} is misconfigured: {reason} | Check the provider configuration for the VM and verify the expected agent or sidecar is running. |
+| <a id="provider-misconfigured"></a>`#provider-misconfigured` | `provider-misconfigured` | `80` | `provider` | provider for {vm} is misconfigured: {reason} | Check the provider configuration for the VM and verify the expected guestd-compatible agent or sidecar is running. |
 <!-- END AUTO-GENERATED: error-table -->
 
 ## CLI host-verb refusal envelope

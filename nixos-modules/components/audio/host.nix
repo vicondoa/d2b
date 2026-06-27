@@ -384,7 +384,7 @@ in
             old_f="/var/lib/d2b/vms/${name}/audio-state.json"
             new_f="/var/lib/d2b/vms/${name}/state/audio-state.json"
             if [ -f "$old_f" ] && [ ! -f "$new_f" ]; then
-              install -m 0640 -o d2bd -g d2b "$old_f" "$new_f" && rm -f "$old_f" || true
+              install -D -m 0640 -o d2bd -g d2b "$old_f" "$new_f" && rm -f "$old_f" || true
             fi
           '')
           enabledVms));

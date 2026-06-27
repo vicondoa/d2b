@@ -113,7 +113,7 @@ not a holder of the console fd.
 | Provider | Host audio enforcement | Guest audio enforcement | Offline audio policy | Notes |
 | --- | --- | --- | --- | --- |
 | Cloud Hypervisor NixOS | ✓ PipeWire/vhost-user-sound controller | ✓ via `guestd` over authenticated guest-control | N/A (live state) | Host-side `off` is fail-closed; see [Audio enforcement — Cloud Hypervisor](#audio-enforcement--cloud-hypervisor). |
-| qemu-media | ✓ host/qemu audio subset when declared | `unsupported` — `guestEnforcement = "unsupported"` reported | ✓ Persisted offline policy | See [Audio enforcement — qemu-media](#audio-enforcement--qemu-media). |
+| qemu-media | ✓ host/qemu audio subset when declared | `unsupported` — `enforcement: unsupported` reported for guest-side capability | ✓ Persisted offline policy | See [Audio enforcement — qemu-media](#audio-enforcement--qemu-media). |
 | ACA sandbox | None (no local host PipeWire nodes or broker mutations) | ✓ remote guestd policy only | None | No local audio state files or broker host mutations for ACA sandboxes; see [ACA audio](#aca-audio). |
 
 ### Audio enforcement — Cloud Hypervisor
@@ -158,11 +158,12 @@ qemu-media VMs do not run `guestd`. The daemon:
 - applies the declared host/qemu audio subset when it is advertised in
   the qemu-media capability declaration;
 - persists offline audio policy to the qemu-media state directory;
-- reports `guestEnforcement = "unsupported"` in `audio status` output.
+- reports `enforcement: unsupported` for guest-side capability in
+  `audio status` output.
 
 This is a normal operating mode, not a degraded result. Operators
-seeing `guestEnforcement = "unsupported"` on a qemu-media target
-should not treat it as an error.
+seeing `enforcement: unsupported` on a qemu-media target should not
+treat it as an error.
 
 ### ACA audio
 

@@ -23,50 +23,14 @@ deprecations ship one minor release before removal.
 
 ### Added
 
-- Staged public wire DTOs for `ConsoleOp`/`ConsoleOpResponse` and
-  `AudioOp`/`AudioOpResponse` in `d2b-contracts` (ADR 0041). Console ops cover
-  attach, write-stdin, read-output (with ring-buffer cursor metadata for
-  dropped-output detection), resize, wait, and close. Audio ops cover
-  multi-target status, set-volume, and mute/unmute. `LevelPercent` is a
-  validated 0–100 wire newtype enforced at deserialize time.
-- CLI JSON output DTOs for audio status (`VmAudioStatusOutputV1`,
-  `VmAudioStatusEntryOutputV1`, `VmAudioErrorOutputV1`) and set-volume/mute
-  (`VmAudioSetOutputV1`) in `d2b-contracts::cli_output` (ADR 0041).
-- Console and audio capability descriptors (`ConsoleCapabilitySet`,
-  `ConsoleSupportKind`, `AudioCapabilitySet`, `AudioHostEnforcement`,
-  `AudioGuestEnforcement`) in `d2b-constellation-provider::capabilities` with
-  constructors for the three ADR 0041 provider cases (Cloud Hypervisor NixOS,
-  qemu-media, ACA sandbox).
-- Provider console/audio capability types (`ProviderConsoleCapability`,
-  `ProviderAudioCapability`, `ProviderAudioHostEnforcement`,
-  `ProviderAudioGuestEnforcement`) in `d2b-constellation-provider::types`.
-  `ProviderGuestdBootstrapContract` gains optional `console` and `audio`
-  fields (forward-compatible; absent fields default to fail-closed) and new
-  helper methods `console_ready()` and `audio_guest_enforcement_ready()`.
-  `advertised_capabilities()` now includes `Pty` when console is guestd-backed
-  and `AudioPlayback`/`AudioCapture` when audio guest enforcement is ready.
-  ACA sandbox descriptors never expose relay URLs, tokens, resource IDs, or
-  raw endpoints.
-- New reference doc [provider-capability-matrix.md](docs/reference/provider-capability-matrix.md)
-  documents console and audio capability boundaries across the three d2b runtime
-  providers (Cloud Hypervisor NixOS, qemu-media, ACA sandbox): console transport
-  choices (broker-owned fd-backed chardev rationale for qemu-media), per-transport
-  QoS requirements (dedicated vsock ports or relay channels, no backpressure,
-  uninterrupted draining), OFD audio lock semantics (`fcntl(F_OFD_SETLKW)`,
-  `O_CLOEXEC`, persistent inode, bounded footprint), audio enforcement modes,
-  and desktop control surface constraints. Grounded by
-  [ADR 0041](docs/adr/0041-console-and-audio-controls.md).
-- [ADR 0041](docs/adr/0041-console-and-audio-controls.md) expanded with a
-  "Console stream isolation and QoS" section (vsock port isolation, relay
-  channel separation, ring-buffer backpressure contract), expanded QEMU chardev
-  rationale in the Console transport section (four-point explanation of why
-  broker-owned fd-backed chardev is required over qemu-created path sockets),
-  and expanded audio lock semantics in the Audio control section (OFD lock type,
-  `O_CLOEXEC`, inode persistence rationale, bounded inode footprint).
-- New how-to [use-console-and-audio.md](docs/how-to/use-console-and-audio.md)
-  covers step-by-step `d2b console` / `d2b audio` usage with per-provider
-  behavior, verification steps, expected outcomes for each operator task, and
-  `d2b-wlcontrol` badge semantics.
+- Staged the ADR 0041 console/audio contract surface: public
+  `ConsoleOp`/`AudioOp` wire DTOs, audio CLI JSON DTOs, provider
+  console/audio capability descriptors for Cloud Hypervisor NixOS,
+  qemu-media, and ACA sandboxes, generated schemas, the provider
+  capability matrix reference, and a step-by-step console/audio how-to.
+  The docs cover broker-owned qemu chardev posture, console stream QoS,
+  OFD audio lock semantics, provider-specific enforcement modes, and
+  d2b-wlcontrol badge/control constraints.
 - `d2bd` now recognizes `uid=0` connections as a narrow `HostShutdown`
   authority scoped exclusively to `vmStop` during host-shutdown teardown. This
   fixes the long-standing post-reboot failure where the guarded `ExecStop`

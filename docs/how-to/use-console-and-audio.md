@@ -91,20 +91,21 @@
    audio:              enabled
    mic:                off
    speaker:            off
-   guestEnforcement:   applied
+   enforcement:        host-and-guest
    ```
 
-   The `guestEnforcement` field reflects whether the guest-side
-   enforcement step succeeded:
+   The `enforcement` field reflects which side of the policy was
+   applied:
 
-   - `applied` — guest-side enforcement is active (Cloud Hypervisor
-     NixOS VMs via guestd).
+   - `host-and-guest` — host and guest enforcement are active (Cloud
+     Hypervisor NixOS VMs with guestd).
+   - `host-only` — only host-side policy is available or applied.
+   - `guest-only` — only guest/provider policy is available or applied.
    - `unsupported` — the provider does not support guest enforcement.
      This is normal and expected for qemu-media VMs, not an error.
-   - `degraded` — host-side enforcement succeeded but guestd was
-     unresponsive; the guest boundary may not be sealed.
-   - `provider-misconfigured` — ACA sandbox missing its guestd
-     agent; use the remediation text in the error envelope.
+   Provider failures such as `provider-misconfigured` are not successful
+   enforcement postures; they appear in the separate per-target error
+   entry with remediation text.
 
 3. If one provider in a multi-VM status run fails, its entry carries an
    inline error and remediation. The remaining entries are unaffected.
@@ -134,8 +135,9 @@
   guestd guest enforcement. `off` is fail-closed: the host boundary is
   sealed even if guestd is unresponsive; the response carries a
   degraded result for the guest side.
-- *qemu-media* — host/qemu subset only; `guestEnforcement: unsupported`
-  is always reported.
+- *qemu-media* — host/qemu subset only; `enforcement: unsupported` is
+  reported for guest-side enforcement capability while host-side controls
+  remain available when declared.
 - *ACA sandbox* — remote guestd policy only; no local host mutations.
 
 Volume and microphone gain values are bounded to `0..=100` at the wire
