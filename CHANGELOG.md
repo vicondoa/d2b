@@ -19,6 +19,31 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Staged public wire DTOs for `ConsoleOp`/`ConsoleOpResponse` and
+  `AudioOp`/`AudioOpResponse` in `d2b-contracts` (ADR 0041). Console ops cover
+  attach, write-stdin, read-output (with ring-buffer cursor metadata for
+  dropped-output detection), resize, wait, and close. Audio ops cover
+  multi-target status, set-volume, and mute/unmute. `LevelPercent` is a
+  validated 0–100 wire newtype enforced at deserialize time.
+- CLI JSON output DTOs for audio status (`VmAudioStatusOutputV1`,
+  `VmAudioStatusEntryOutputV1`, `VmAudioErrorOutputV1`) and set-volume/mute
+  (`VmAudioSetOutputV1`) in `d2b-contracts::cli_output` (ADR 0041).
+- Console and audio capability descriptors (`ConsoleCapabilitySet`,
+  `ConsoleSupportKind`, `AudioCapabilitySet`, `AudioHostEnforcement`,
+  `AudioGuestEnforcement`) in `d2b-constellation-provider::capabilities` with
+  constructors for the three ADR 0041 provider cases (Cloud Hypervisor NixOS,
+  qemu-media, ACA sandbox).
+- Provider console/audio capability types (`ProviderConsoleCapability`,
+  `ProviderAudioCapability`, `ProviderAudioHostEnforcement`,
+  `ProviderAudioGuestEnforcement`) in `d2b-constellation-provider::types`.
+  `ProviderGuestdBootstrapContract` gains optional `console` and `audio`
+  fields (forward-compatible; absent fields default to fail-closed) and new
+  helper methods `console_ready()` and `audio_guest_enforcement_ready()`.
+  `advertised_capabilities()` now includes `Pty` when console is guestd-backed
+  and `AudioPlayback`/`AudioCapture` when audio guest enforcement is ready.
+  ACA sandbox descriptors never expose relay URLs, tokens, resource IDs, or
+  raw endpoints.
+
 - `d2bd` now recognizes `uid=0` connections as a narrow `HostShutdown`
   authority scoped exclusively to `vmStop` during host-shutdown teardown. This
   fixes the long-standing post-reboot failure where the guarded `ExecStop`

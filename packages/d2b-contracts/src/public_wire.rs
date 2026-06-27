@@ -8,7 +8,10 @@ use d2b_core::{
 use schemars::{
     JsonSchema,
     r#gen::SchemaGenerator,
-    schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec, StringValidation},
+    schema::{
+        InstanceType, Metadata, NumberValidation, Schema, SchemaObject, SingleOrVec,
+        StringValidation,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -104,6 +107,16 @@ pub enum PublicRequest {
     /// closed until guestd and d2bd runtime implementations are available.
     #[serde(rename = "shell")]
     Shell(ShellOp),
+    /// Console streaming operation (ADR 0041). Staged contract DTOs; daemons
+    /// return a typed not-yet-implemented envelope until runtime backends
+    /// are available.
+    #[serde(rename = "console")]
+    Console(ConsoleOp),
+    /// Audio policy and status operation (ADR 0041). Staged contract DTOs;
+    /// daemons return a typed not-yet-implemented envelope until runtime
+    /// backends are available.
+    #[serde(rename = "audio")]
+    Audio(AudioOp),
     /// Gateway-mode display-session operation. Host-mode daemons reject this
     /// with a typed gateway-unavailable error; gateway-mode d2bd handles it
     /// through the ADR 0032 orchestrator.
@@ -142,6 +155,10 @@ pub enum PublicResponse {
     Exec(ExecOpResponse),
     #[serde(rename = "shell")]
     Shell(ShellOpResponse),
+    #[serde(rename = "console")]
+    Console(ConsoleOpResponse),
+    #[serde(rename = "audio")]
+    Audio(AudioOpResponse),
     #[serde(rename = "gateway display")]
     GatewayDisplay(GatewayDisplayOpResponse),
     #[serde(rename = "error")]
@@ -1382,6 +1399,536 @@ pub enum ShellOpResponse {
     Kill(ShellKillResult),
 }
 
+// ---- Console operation (ADR 0041) -------------------------------------------
+
+/// Which runtime provider handles the console for a given target VM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConsoleProviderKind {
+    /// Cloud Hypervisor NixOS VM with a local hypervisor console backend and
+    /// daemon/broker drainer.
+    LocalHypervisor,
+    /// qemu-media VM with a broker-owned fd-backed console backend.
+    QemuMedia,
+    /// ACA sandbox with a guestd-compatible agent over the provider peer
+    /// transport (no local socket or broker fd involved).
+    AcaSandbox,
+}
+
+/// Attach to a console session for a VM.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConsoleAttachArgs {
+    /// VM whose console is requested.
+    pub vm: String,
+    /// Initial terminal geometry.
+    pub initial_terminal_size: crate::terminal_wire::TerminalSize,
+}
+
+/// Write stdin bytes to an active console session.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConsoleWriteStdinArgs {
+    /// Opaque console session handle (never logged or audited).
+    pub session: String,
+    /// Input byte offset for flow-control ordering.
+    pub offset: u64,
+    /// Base64-encoded input bytes.
+    pub chunk_base64: String,
+    /// Whether this write marks end-of-stdin.
+    #[serde(default)]
+    pub eof: bool,
+}
+
+impl fmt::Debug for ConsoleWriteStdinArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConsoleWriteStdinArgs")
+            .field("session", &"<redacted>")
+            .field("offset", &self.offset)
+            .field("chunk_base64_len", &self.chunk_base64.len())
+            .field("eof", &self.eof)
+            .finish()
+    }
+}
+
+/// Read console output from a ring-buffer–backed session.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConsoleReadOutputArgs {
+    /// Opaque console session handle.
+    pub session: String,
+    /// Stream to read (`stdout` is the primary console stream; providers that
+    /// expose a separate stderr channel report it here).
+    pub stream: crate::terminal_wire::TerminalStream,
+    /// Ring-buffer read offset. Compare against the `ring_buffer_start_offset`
+    /// from the previous response to detect dropped output.
+    pub offset: u64,
+    /// Maximum output bytes to return in this response.
+    pub max_len: u64,
+    /// Whether to block until output is available.
+    #[serde(default)]
+    pub wait: bool,
+    /// Long-poll timeout in milliseconds (0 = no timeout).
+    #[serde(default)]
+    pub timeout_ms: u64,
+}
+
+impl fmt::Debug for ConsoleReadOutputArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConsoleReadOutputArgs")
+            .field("session", &"<redacted>")
+            .field("stream", &self.stream)
+            .field("offset", &self.offset)
+            .field("max_len", &self.max_len)
+            .field("wait", &self.wait)
+            .field("timeout_ms", &self.timeout_ms)
+            .finish()
+    }
+}
+
+/// Resize the terminal associated with a console session.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConsoleResizeArgs {
+    /// Opaque console session handle.
+    pub session: String,
+    /// New terminal geometry.
+    pub size: crate::terminal_wire::TerminalSize,
+}
+
+impl fmt::Debug for ConsoleResizeArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConsoleResizeArgs")
+            .field("session", &"<redacted>")
+            .field("size", &self.size)
+            .finish()
+    }
+}
+
+/// Wait until the console session exits, or until the optional timeout elapses.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConsoleWaitArgs {
+    /// Opaque console session handle.
+    pub session: String,
+    /// Maximum time to wait in milliseconds (0 = indefinite).
+    #[serde(default)]
+    pub timeout_ms: u64,
+}
+
+impl fmt::Debug for ConsoleWaitArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConsoleWaitArgs")
+            .field("session", &"<redacted>")
+            .field("timeout_ms", &self.timeout_ms)
+            .finish()
+    }
+}
+
+/// Close a console session, detaching the client without stopping the VM.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConsoleCloseArgs {
+    /// Opaque console session handle.
+    pub session: String,
+}
+
+impl fmt::Debug for ConsoleCloseArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConsoleCloseArgs")
+            .field("session", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Console operation sub-request dispatched inside [`PublicRequest::Console`].
+///
+/// The staged DTOs fail closed with a typed not-yet-implemented response until
+/// the runtime backend implementations land.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", content = "args", rename_all = "camelCase")]
+pub enum ConsoleOp {
+    Attach(ConsoleAttachArgs),
+    WriteStdin(ConsoleWriteStdinArgs),
+    ReadOutput(ConsoleReadOutputArgs),
+    Resize(ConsoleResizeArgs),
+    Wait(ConsoleWaitArgs),
+    Close(ConsoleCloseArgs),
+}
+
+/// Result of a successful console attach.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleAttachResult {
+    /// Opaque session handle for subsequent ops (never logged or audited).
+    pub session: String,
+    /// Which provider handled the attach.
+    pub provider_kind: ConsoleProviderKind,
+    /// Ring-buffer start offset at attach time. Clients compare the
+    /// `ring_buffer_start_offset` returned by subsequent `ReadOutput` calls
+    /// against this value to detect dropped output.
+    pub ring_buffer_start_offset: u64,
+}
+
+impl fmt::Debug for ConsoleAttachResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConsoleAttachResult")
+            .field("session", &"<redacted>")
+            .field("provider_kind", &self.provider_kind)
+            .field("ring_buffer_start_offset", &self.ring_buffer_start_offset)
+            .finish()
+    }
+}
+
+/// A chunk of console output from the ring buffer.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleReadOutputResult {
+    /// Opaque session handle.
+    pub session: String,
+    /// Which output stream this chunk belongs to.
+    pub stream: crate::terminal_wire::TerminalStream,
+    /// Absolute offset of the first byte of `chunk_base64` in the logical
+    /// output stream (includes any bytes already dropped from the ring buffer).
+    pub offset: u64,
+    /// Base64-encoded output bytes.
+    pub chunk_base64: String,
+    /// Current ring-buffer start offset. If this exceeds
+    /// `offset + decoded_len(chunk_base64)`, bytes were dropped and the
+    /// client should fast-forward.
+    pub ring_buffer_start_offset: u64,
+    /// Total bytes dropped from the ring buffer since VM start.
+    pub dropped_bytes: u64,
+    /// Whether the output stream has ended (VM exited or session closed).
+    pub is_eof: bool,
+}
+
+impl fmt::Debug for ConsoleReadOutputResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConsoleReadOutputResult")
+            .field("session", &"<redacted>")
+            .field("stream", &self.stream)
+            .field("offset", &self.offset)
+            .field("chunk_base64_len", &self.chunk_base64.len())
+            .field("ring_buffer_start_offset", &self.ring_buffer_start_offset)
+            .field("dropped_bytes", &self.dropped_bytes)
+            .field("is_eof", &self.is_eof)
+            .finish()
+    }
+}
+
+/// Generic control acknowledgement for console write and resize operations.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleControlResult {
+    /// Opaque session handle.
+    pub session: String,
+    /// Whether the control operation was applied.
+    pub ok: bool,
+}
+
+impl fmt::Debug for ConsoleControlResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConsoleControlResult")
+            .field("session", &"<redacted>")
+            .field("ok", &self.ok)
+            .finish()
+    }
+}
+
+/// Result of waiting for the console session to end.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleWaitResult {
+    /// Opaque session handle.
+    pub session: String,
+    /// True if the session ended; false if the timeout elapsed before exit.
+    pub exited: bool,
+}
+
+impl fmt::Debug for ConsoleWaitResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConsoleWaitResult")
+            .field("session", &"<redacted>")
+            .field("exited", &self.exited)
+            .finish()
+    }
+}
+
+/// Result of closing a console session.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleCloseResult {
+    /// Opaque session handle.
+    pub session: String,
+    /// True if the session was found and closed; false if it was already gone.
+    pub closed: bool,
+}
+
+impl fmt::Debug for ConsoleCloseResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConsoleCloseResult")
+            .field("session", &"<redacted>")
+            .field("closed", &self.closed)
+            .finish()
+    }
+}
+
+/// Console operation response dispatched inside [`PublicResponse::Console`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", content = "result", rename_all = "camelCase")]
+pub enum ConsoleOpResponse {
+    Attach(ConsoleAttachResult),
+    WriteStdin(ConsoleControlResult),
+    ReadOutput(ConsoleReadOutputResult),
+    Resize(ConsoleControlResult),
+    Wait(ConsoleWaitResult),
+    Close(ConsoleCloseResult),
+}
+
+// ---- Audio operation (ADR 0041) ---------------------------------------------
+
+/// Audio volume/gain level bounded to 0–100 inclusive.
+///
+/// Validated at the public-wire boundary: values outside the range are
+/// rejected with a typed deserialize error. This is a local newtype; use
+/// [`LevelPercent::new`] to construct and [`LevelPercent::get`] to read
+/// the raw value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LevelPercent(u8);
+
+impl LevelPercent {
+    /// Construct a level, returning an error string if the value exceeds 100.
+    pub fn new(value: u8) -> Result<Self, String> {
+        if value > 100 {
+            return Err(format!("audio level must be 0–100, got {value}"));
+        }
+        Ok(Self(value))
+    }
+
+    /// The raw level value (always in `0..=100`).
+    pub fn get(self) -> u8 {
+        self.0
+    }
+}
+
+impl Serialize for LevelPercent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for LevelPercent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = u8::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
+impl JsonSchema for LevelPercent {
+    fn schema_name() -> String {
+        "LevelPercent".to_owned()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        Schema::Object(SchemaObject {
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Integer))),
+            number: Some(Box::new(NumberValidation {
+                minimum: Some(0.0),
+                maximum: Some(100.0),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    }
+}
+
+/// An audio channel controlled by a single operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioChannel {
+    /// Speaker / playback output volume.
+    Speaker,
+    /// Microphone / capture gain.
+    Microphone,
+}
+
+/// How audio enforcement is applied for a target VM (ADR 0041).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioEnforcementPosture {
+    /// Host-side PipeWire policy and guest-side guestd policy both applied.
+    HostAndGuest,
+    /// Host-side enforcement only; guestd is absent or the provider does not
+    /// support guest enforcement.
+    HostOnly,
+    /// Guest-side guestd enforcement only; no local PipeWire node (e.g.
+    /// ACA sandbox with a guestd-compatible agent).
+    GuestOnly,
+    /// Neither host nor guest enforcement is supported for this target.
+    Unsupported,
+    /// The provider is expected to expose a guestd-compatible agent but none
+    /// was found; operator remediation is required.
+    ProviderMisconfigured,
+}
+
+/// Which runtime provider handles audio for a given target VM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioProviderKind {
+    /// Cloud Hypervisor NixOS VM with vhost-user-sound + PipeWire.
+    LocalHypervisor,
+    /// qemu-media VM with a declared qemu audio backend.
+    QemuMedia,
+    /// ACA sandbox with a guestd-compatible agent for audio policy.
+    AcaSandbox,
+}
+
+/// Request audio status for one or more target VMs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AudioStatusArgs {
+    /// VMs to query. An empty list queries all accessible VMs.
+    #[serde(default)]
+    pub vms: Vec<String>,
+}
+
+/// Set the volume or gain level for one channel of one VM.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AudioSetVolumeArgs {
+    /// Target VM.
+    pub vm: String,
+    /// Which audio channel to adjust.
+    pub channel: AudioChannel,
+    /// New level (0–100 inclusive). Validated at the wire boundary.
+    pub level: LevelPercent,
+}
+
+/// Mute or unmute one channel of one VM.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AudioMuteArgs {
+    /// Target VM.
+    pub vm: String,
+    /// Which audio channel to mute/unmute.
+    pub channel: AudioChannel,
+    /// True to mute, false to unmute.
+    pub mute: bool,
+}
+
+/// Audio operation sub-request dispatched inside [`PublicRequest::Audio`].
+///
+/// The staged DTOs fail closed with a typed not-yet-implemented response until
+/// the runtime backend implementations land.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", content = "args", rename_all = "camelCase")]
+pub enum AudioOp {
+    Status(AudioStatusArgs),
+    SetVolume(AudioSetVolumeArgs),
+    Mute(AudioMuteArgs),
+}
+
+/// Per-channel audio state for one VM target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioChannelState {
+    /// Current volume/gain level in percent. `None` when the level is unknown
+    /// (e.g. the provider has not yet synced state).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<LevelPercent>,
+    /// Whether the channel is currently muted.
+    pub muted: bool,
+}
+
+/// Full audio status for one VM target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioVmState {
+    /// Target VM name.
+    pub vm: String,
+    /// Speaker / playback channel state.
+    pub speaker: AudioChannelState,
+    /// Microphone / capture channel state.
+    pub microphone: AudioChannelState,
+    /// Which runtime provider handles audio for this VM.
+    pub provider_kind: AudioProviderKind,
+    /// Current enforcement posture.
+    pub enforcement: AudioEnforcementPosture,
+}
+
+/// A per-VM error in a multi-target audio status response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioVmError {
+    /// VM that failed.
+    pub vm: String,
+    /// Low-cardinality error kind (e.g. `provider-misconfigured`,
+    /// `vm-not-found`, `enforcement-unavailable`). Never contains
+    /// provider-internal details or credential fragments.
+    pub kind: String,
+    /// Optional operator-facing remediation hint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<String>,
+}
+
+/// Multi-target audio status result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioStatusResult {
+    /// Per-VM state for targets that resolved successfully.
+    pub entries: Vec<AudioVmState>,
+    /// Per-VM errors for targets that could not be resolved. One
+    /// misconfigured target does not fail the entire multi-target query.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<AudioVmError>,
+}
+
+/// Whether a set-volume or mute operation was applied and through which path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioSetApplied {
+    /// Applied to both host (PipeWire/qemu) and guest (guestd).
+    HostAndGuest,
+    /// Applied to host only; guestd enforcement was unavailable or degraded.
+    HostOnly,
+    /// Applied to guest only (ACA sandbox; no local host audio state written).
+    GuestOnly,
+    /// No enforcement path was available; the operation was not applied.
+    Unsupported,
+}
+
+/// Result of a set-volume or mute operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioSetResult {
+    /// Target VM.
+    pub vm: String,
+    /// Channel that was changed.
+    pub channel: AudioChannel,
+    /// Whether and how the change was applied.
+    pub applied: AudioSetApplied,
+    /// Channel state after the operation.
+    pub state: AudioChannelState,
+}
+
+/// Audio operation response dispatched inside [`PublicResponse::Audio`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", content = "result", rename_all = "camelCase")]
+pub enum AudioOpResponse {
+    Status(AudioStatusResult),
+    SetVolume(AudioSetResult),
+    Mute(AudioSetResult),
+}
+
+// ---- Remaining request structs -----------------------------------------------
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MigrateRequest {
@@ -2044,7 +2591,8 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MutationFlags, PublicRequest, RuntimeSummary, VmLifecycleRequest, VmLifecycleState,
+        LevelPercent, MutationFlags, PublicRequest, RuntimeSummary, VmLifecycleRequest,
+        VmLifecycleState,
     };
     use crate::{decode_frame, encode_frame};
     use d2b_core::{
@@ -2655,5 +3203,248 @@ mod tests {
             serde_json::to_value(&attach_response).expect("shell attach response serializes");
         assert_eq!(value["payload"]["result"]["resolvedName"], "default");
         assert_eq!(value["payload"]["result"]["state"], "attached");
+    }
+
+    #[test]
+    fn console_public_wire_json_shape_is_stable() {
+        use super::{
+            ConsoleAttachArgs, ConsoleAttachResult, ConsoleOp, ConsoleOpResponse,
+            ConsoleProviderKind, PublicResponse,
+        };
+
+        let attach = PublicRequest::Console(ConsoleOp::Attach(ConsoleAttachArgs {
+            vm: "corp-vm".to_owned(),
+            initial_terminal_size: crate::terminal_wire::TerminalSize { rows: 24, cols: 80 },
+        }));
+        let value = serde_json::to_value(&attach).expect("console attach serializes");
+        assert_eq!(value["kind"], "console");
+        assert_eq!(value["payload"]["op"], "attach");
+        assert_eq!(value["payload"]["args"]["vm"], "corp-vm");
+        assert_eq!(value["payload"]["args"]["initialTerminalSize"]["rows"], 24);
+
+        let decoded: PublicRequest =
+            serde_json::from_value(value.clone()).expect("console attach decodes");
+        assert_eq!(decoded, attach);
+
+        let attach_response = PublicResponse::Console(ConsoleOpResponse::Attach(
+            ConsoleAttachResult {
+                session: "opaque-console".to_owned(),
+                provider_kind: ConsoleProviderKind::LocalHypervisor,
+                ring_buffer_start_offset: 0,
+            },
+        ));
+        let value =
+            serde_json::to_value(&attach_response).expect("console attach response serializes");
+        assert_eq!(value["kind"], "console");
+        assert_eq!(value["payload"]["op"], "attach");
+        assert_eq!(value["payload"]["result"]["providerKind"], "local-hypervisor");
+        assert_eq!(value["payload"]["result"]["ringBufferStartOffset"], 0);
+        // session must not be present in the serialized output (it is, but must
+        // be redacted in Debug output — verify Debug does not leak it).
+        let debug_str = format!("{attach_response:?}");
+        assert!(
+            !debug_str.contains("opaque-console"),
+            "ConsoleAttachResult Debug must not leak session handle"
+        );
+    }
+
+    #[test]
+    fn console_session_handle_is_redacted_in_debug() {
+        use super::{
+            ConsoleCloseArgs, ConsoleReadOutputArgs, ConsoleResizeArgs, ConsoleWaitArgs,
+            ConsoleWriteStdinArgs,
+        };
+        const SECRET: &str = "secret-session-handle";
+
+        let write = ConsoleWriteStdinArgs {
+            session: SECRET.to_owned(),
+            offset: 0,
+            chunk_base64: "aGVsbG8=".to_owned(),
+            eof: false,
+        };
+        assert!(!format!("{write:?}").contains(SECRET));
+
+        let read = ConsoleReadOutputArgs {
+            session: SECRET.to_owned(),
+            stream: crate::terminal_wire::TerminalStream::Stdout,
+            offset: 0,
+            max_len: 4096,
+            wait: false,
+            timeout_ms: 0,
+        };
+        assert!(!format!("{read:?}").contains(SECRET));
+
+        let resize = ConsoleResizeArgs {
+            session: SECRET.to_owned(),
+            size: crate::terminal_wire::TerminalSize { rows: 24, cols: 80 },
+        };
+        assert!(!format!("{resize:?}").contains(SECRET));
+
+        let wait = ConsoleWaitArgs {
+            session: SECRET.to_owned(),
+            timeout_ms: 5000,
+        };
+        assert!(!format!("{wait:?}").contains(SECRET));
+
+        let close = ConsoleCloseArgs {
+            session: SECRET.to_owned(),
+        };
+        assert!(!format!("{close:?}").contains(SECRET));
+    }
+
+    #[test]
+    fn audio_public_wire_json_shape_is_stable() {
+        use super::{
+            AudioChannel, AudioChannelState, AudioEnforcementPosture, AudioMuteArgs, AudioOp,
+            AudioOpResponse, AudioProviderKind, AudioSetApplied, AudioSetResult, AudioStatusArgs,
+            AudioStatusResult, AudioVmError, AudioVmState, PublicResponse,
+        };
+
+        // Status request with explicit VM list.
+        let status = PublicRequest::Audio(AudioOp::Status(AudioStatusArgs {
+            vms: vec!["corp-vm".to_owned(), "work-vm".to_owned()],
+        }));
+        let value = serde_json::to_value(&status).expect("audio status serializes");
+        assert_eq!(value["kind"], "audio");
+        assert_eq!(value["payload"]["op"], "status");
+        assert_eq!(value["payload"]["args"]["vms"][0], "corp-vm");
+
+        let decoded: PublicRequest =
+            serde_json::from_value(value).expect("audio status decodes");
+        assert_eq!(decoded, status);
+
+        // Empty-vms status request (query-all).
+        let all = PublicRequest::Audio(AudioOp::Status(AudioStatusArgs { vms: vec![] }));
+        let value = serde_json::to_value(&all).expect("empty status serializes");
+        assert_eq!(value["payload"]["args"]["vms"].as_array().unwrap().len(), 0);
+
+        // Mute request.
+        let mute = PublicRequest::Audio(AudioOp::Mute(AudioMuteArgs {
+            vm: "corp-vm".to_owned(),
+            channel: AudioChannel::Speaker,
+            mute: true,
+        }));
+        let value = serde_json::to_value(&mute).expect("mute serializes");
+        assert_eq!(value["payload"]["op"], "mute");
+        assert_eq!(value["payload"]["args"]["channel"], "speaker");
+        assert_eq!(value["payload"]["args"]["mute"], true);
+
+        // Status response with an entry and an error.
+        let status_response = PublicResponse::Audio(AudioOpResponse::Status(AudioStatusResult {
+            entries: vec![AudioVmState {
+                vm: "corp-vm".to_owned(),
+                speaker: AudioChannelState {
+                    level: Some(LevelPercent::new(80).expect("valid level")),
+                    muted: false,
+                },
+                microphone: AudioChannelState {
+                    level: Some(LevelPercent::new(60).expect("valid level")),
+                    muted: true,
+                },
+                provider_kind: AudioProviderKind::LocalHypervisor,
+                enforcement: AudioEnforcementPosture::HostAndGuest,
+            }],
+            errors: vec![AudioVmError {
+                vm: "missing-vm".to_owned(),
+                kind: "vm-not-found".to_owned(),
+                remediation: None,
+            }],
+        }));
+        let value = serde_json::to_value(&status_response).expect("audio status response serializes");
+        assert_eq!(value["kind"], "audio");
+        assert_eq!(value["payload"]["op"], "status");
+        assert_eq!(value["payload"]["result"]["entries"][0]["vm"], "corp-vm");
+        assert_eq!(
+            value["payload"]["result"]["entries"][0]["speaker"]["level"],
+            80
+        );
+        assert_eq!(
+            value["payload"]["result"]["entries"][0]["speaker"]["muted"],
+            false
+        );
+        assert_eq!(
+            value["payload"]["result"]["entries"][0]["microphone"]["muted"],
+            true
+        );
+        assert_eq!(
+            value["payload"]["result"]["entries"][0]["enforcement"],
+            "host-and-guest"
+        );
+        assert_eq!(
+            value["payload"]["result"]["errors"][0]["vm"],
+            "missing-vm"
+        );
+
+        // Set-volume response.
+        let set_response = PublicResponse::Audio(AudioOpResponse::SetVolume(AudioSetResult {
+            vm: "corp-vm".to_owned(),
+            channel: AudioChannel::Microphone,
+            applied: AudioSetApplied::HostAndGuest,
+            state: AudioChannelState {
+                level: Some(LevelPercent::new(50).expect("valid level")),
+                muted: false,
+            },
+        }));
+        let value =
+            serde_json::to_value(&set_response).expect("set-volume response serializes");
+        assert_eq!(value["payload"]["op"], "setVolume");
+        assert_eq!(value["payload"]["result"]["channel"], "microphone");
+        assert_eq!(value["payload"]["result"]["applied"], "host-and-guest");
+        assert_eq!(value["payload"]["result"]["state"]["level"], 50);
+    }
+
+    #[test]
+    fn level_percent_validates_range_at_wire_boundary() {
+        // Values in range round-trip cleanly.
+        for v in [0u8, 1, 50, 99, 100] {
+            let lp = LevelPercent::new(v).expect("valid level");
+            assert_eq!(lp.get(), v);
+            let json = serde_json::to_value(lp).expect("serializes");
+            let decoded: LevelPercent =
+                serde_json::from_value(json).expect("deserializes");
+            assert_eq!(decoded.get(), v);
+        }
+
+        // Out-of-range construction fails.
+        assert!(LevelPercent::new(101).is_err());
+
+        // Out-of-range wire value is rejected at deserialize time.
+        let bad: Result<LevelPercent, _> = serde_json::from_str("101");
+        assert!(bad.is_err(), "level 101 must be rejected at wire boundary");
+
+        // 100 is the exact cap and must be accepted.
+        let at_cap: LevelPercent = serde_json::from_str("100").expect("100 is valid");
+        assert_eq!(at_cap.get(), 100);
+    }
+
+    #[test]
+    fn audio_set_volume_rejects_out_of_range_level() {
+        use super::{AudioChannel, AudioSetVolumeArgs};
+
+        let bad_json = serde_json::json!({
+            "vm": "corp-vm",
+            "channel": "speaker",
+            "level": 101
+        });
+        serde_json::from_value::<AudioSetVolumeArgs>(bad_json)
+            .expect_err("level 101 must be rejected");
+
+        let good_json = serde_json::json!({
+            "vm": "corp-vm",
+            "channel": "speaker",
+            "level": 75
+        });
+        let args = serde_json::from_value::<AudioSetVolumeArgs>(good_json)
+            .expect("level 75 is valid");
+        assert_eq!(args.level.get(), 75);
+        assert_eq!(args.channel, AudioChannel::Speaker);
+    }
+
+    #[test]
+    fn audio_status_unknown_fields_fail_closed() {
+        use super::AudioStatusArgs;
+        let bad = serde_json::json!({ "vms": [], "extraField": true });
+        serde_json::from_value::<AudioStatusArgs>(bad)
+            .expect_err("unknown field must be rejected");
     }
 }
