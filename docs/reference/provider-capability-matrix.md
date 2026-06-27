@@ -198,6 +198,29 @@ provider:
 
 ---
 
+## Observability constraints
+
+Console and audio metric labels must be low-cardinality. The only
+permitted label dimensions are **provider kind** (e.g.
+`cloud-hypervisor`, `qemu-media`, `aca-sandbox`), **operation kind**
+(e.g. `attach`, `detach`, `read-output`, `audio-set`, `audio-status`),
+and **outcome or status** (e.g. `ok`, `error`,
+`provider-misconfigured`, `unsupported`). The following identifiers are
+**forbidden** as metric labels: VM names, workload identifiers, session
+IDs, ring-buffer cursor offsets, volume or gain values, provider
+resource IDs (including ACA container or sandbox IDs), and any other
+unbounded or user-supplied identifier.
+
+For trace and audit correlation: ConsoleOp and AudioOp spans and audit
+records use bounded, opaque operation or trace IDs only. Console bytes,
+provider credentials, resource identifiers, raw payloads, ring-buffer
+contents, and volume or gain values must never appear in span
+attributes, audit record fields, or log messages. Continuous console
+stream events correlate to the originating attach operation's trace or
+span ID; per-chunk or per-byte labelling is forbidden.
+
+---
+
 ## Related references
 
 - [ADR 0041](../adr/0041-console-and-audio-controls.md) — binding decision

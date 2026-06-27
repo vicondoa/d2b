@@ -179,6 +179,29 @@ validated at the public-wire boundary. Multi-target `audio status`
 returns per-target errors/remediations so one misconfigured provider
 does not fail the entire status command.
 
+### Observability constraints
+
+**Metric label cardinality**: Console and audio metrics must use only
+low-cardinality labels. The only permitted label dimensions are provider
+kind (e.g. `cloud-hypervisor`, `qemu-media`, `aca-sandbox`), operation
+kind (e.g. `attach`, `detach`, `read-output`, `audio-set`,
+`audio-status`), and outcome or status (e.g. `ok`, `error`,
+`provider-misconfigured`, `unsupported`). The following identifiers are
+**forbidden** as metric labels: VM names, workload identifiers, session
+IDs, ring-buffer cursor offsets, volume or gain values, provider
+resource IDs (including ACA container or sandbox IDs), and any other
+unbounded or user-supplied identifier.
+
+**Trace and correlation guidance**: ConsoleOp and AudioOp traces and
+audit records must use bounded, opaque operation or trace IDs for
+log/audit/span correlation. Console bytes, provider credentials,
+resource identifiers, raw payloads, ring-buffer contents, and volume or
+gain values must never appear in span attributes, audit record fields,
+metric labels, or log messages. Continuous console streams correlate to
+the originating attach operation's trace or span ID; per-chunk or
+per-byte spans are forbidden. The stream is a continuation of the attach
+trace, not a sequence of independently labelled output chunks.
+
 ### Desktop control surface
 
 `d2b-wlcontrol` remains a public-socket / official-CLI client. It must
