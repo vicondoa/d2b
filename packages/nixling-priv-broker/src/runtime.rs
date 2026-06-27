@@ -215,6 +215,22 @@ enum BrokerError {
         busid: String,
         reason: &'static str,
     },
+    /// `UsbipBind` refused because the busid lock is already held by a
+    /// different VM. The daemon maps this to `LockConflict` via the
+    /// wire kind `"Broker.UsbipLockConflict"` without string-matching on
+    /// a redacted `LiveHandler` message.
+    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    UsbipLockConflict {
+        busid: String,
+        owner: String,
+    },
+    /// `UsbipBind` refused because the physical USB device is absent in
+    /// sysfs. The daemon maps this to `RuntimeAbsent` via the wire kind
+    /// `"Broker.UsbipDeviceAbsent"`.
+    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    UsbipDeviceAbsent {
+        busid: String,
+    },
     /// The live executor reported an error (nft/route/sysctl shellout
     /// failed, pidfd open failed, spawn preflight failed, etc).
     #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
@@ -3644,10 +3660,10 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             let same_vm_replay = match crate::ops::usbip_lock::peek_owner(&intent.lock_path) {
                 Some(owner) if owner == intent.vm_name => true,
                 Some(owner) => {
-                    return Err(BrokerError::LiveHandler(format!(
-                        "usbip foreign lock refused for opaque intent {}: observed owner {owner}",
-                        intent.intent_id
-                    )));
+                    return Err(BrokerError::UsbipLockConflict {
+                        busid: intent.bus_id.clone(),
+                        owner,
+                    });
                 }
                 None => false,
             };
@@ -3748,10 +3764,10 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             let had_matching_lock = match crate::ops::usbip_lock::peek_owner(&intent.lock_path) {
                 Some(owner) if owner == intent.vm_name => true,
                 Some(owner) => {
-                    return Err(BrokerError::LiveHandler(format!(
-                        "usbip unbind refused for opaque intent {}: observed foreign owner {owner}",
-                        intent.intent_id
-                    )));
+                    return Err(BrokerError::UsbipLockConflict {
+                        busid: intent.bus_id.clone(),
+                        owner,
+                    });
                 }
                 None => false,
             };
@@ -3948,10 +3964,10 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             let same_vm_replay = match crate::ops::usbip_lock::peek_owner(&lock_path) {
                 Some(owner) if owner == req.vm => true,
                 Some(owner) => {
-                    return Err(BrokerError::LiveHandler(format!(
-                        "explicit usbip bind refused: bus_id={} lock owned by {owner} but caller is {}",
-                        req.bus_id, req.vm
-                    )));
+                    return Err(BrokerError::UsbipLockConflict {
+                        busid: req.bus_id.clone(),
+                        owner,
+                    });
                 }
                 None => false,
             };
@@ -6372,16 +6388,78 @@ fn handle_usbip_acl_revoke_failure_after_unbind(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+const USBIP_BACKEND_ACL_GRANT_ATTEMPTS: usize = 20;
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+const USBIP_BACKEND_ACL_GRANT_RETRY_SLEEP: std::time::Duration =
+    std::time::Duration::from_millis(100);
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn retry_usbip_backend_acl_grant<V, G, R, S>(
+    uid: u32,
+    mut verify_device_node: V,
+    mut grant_acl: G,
+    mut revoke_acl: R,
+    mut sleep: S,
+) -> Result<(), BrokerError>
+where
+    V: FnMut() -> Result<PathBuf, BrokerError>,
+    G: FnMut(&Path, u32) -> Result<(), BrokerError>,
+    R: FnMut(&Path, u32) -> Result<(), BrokerError>,
+    S: FnMut(),
+{
+    let mut last_error = None;
+
+    for _ in 0..USBIP_BACKEND_ACL_GRANT_ATTEMPTS {
+        let device_node = match verify_device_node() {
+            Ok(device_node) => device_node,
+            Err(error) => {
+                last_error = Some(error);
+                sleep();
+                continue;
+            }
+        };
+
+        if let Err(error) = grant_acl(&device_node, uid) {
+            last_error = Some(error);
+            sleep();
+            continue;
+        }
+
+        match verify_device_node() {
+            Ok(current_device_node) if current_device_node == device_node => return Ok(()),
+            Ok(current_device_node) => {
+                let _ = revoke_acl(&device_node, uid);
+                last_error = Some(BrokerError::LiveHandler(format!(
+                    "USBIP device node changed while granting backend ACL: granted {}, observed {}; retrying",
+                    device_node.display(),
+                    current_device_node.display(),
+                )));
+            }
+            Err(error) => {
+                let _ = revoke_acl(&device_node, uid);
+                last_error = Some(error);
+            }
+        }
+        sleep();
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        BrokerError::LiveHandler("grant USBIP backend device ACL failed".to_owned())
+    }))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn grant_usbip_backend_device_acl(
     resolver: &Arc<BundleResolver>,
     intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
     expected_identity: (u16, u16),
-    expected_device_node: PathBuf,
+    _expected_device_node: PathBuf,
 ) -> Result<(), BrokerError> {
     let runner = usbip_backend_runner_intent(resolver, intent)?;
     #[cfg(test)]
     {
-        let _ = (expected_identity, expected_device_node);
+        let _ = expected_identity;
         test_usbip_backend_acl_events()
             .lock()
             .map_err(|_| BrokerError::Protocol("test USBIP ACL event mutex poisoned".to_owned()))?
@@ -6390,50 +6468,10 @@ fn grant_usbip_backend_device_acl(
     }
     #[cfg(not(test))]
     {
-        let mut last_error = None;
-        let mut granted = false;
-        for _ in 0..20 {
-            if let Err(error) =
-                verify_usbip_device_unchanged(intent, expected_identity, &expected_device_node)
-            {
-                if granted {
-                    let _ = crate::live_handlers::live_revoke_verified_device_acl(
-                        &expected_device_node,
-                        runner.uid,
-                    );
-                }
-                return Err(error);
-            }
-            match crate::live_handlers::live_grant_verified_device_acl(
-                &expected_device_node,
-                runner.uid,
-            ) {
-                Ok(()) => granted = true,
-                Err(err) => {
-                    last_error = Some(err.to_string());
-                }
-            }
-            if granted
-                && let Err(error) =
-                    verify_usbip_device_unchanged(intent, expected_identity, &expected_device_node)
-            {
-                let _ = crate::live_handlers::live_revoke_verified_device_acl(
-                    &expected_device_node,
-                    runner.uid,
-                );
-                return Err(error);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        if granted {
-            return Ok(());
-        }
-
-        fn verify_usbip_device_unchanged(
+        fn verify_usbip_device_node(
             intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
             expected_identity: (u16, u16),
-            expected_device_node: &Path,
-        ) -> Result<(), BrokerError> {
+        ) -> Result<PathBuf, BrokerError> {
             let inspection = crate::ops::usbip_host::enforce_usbip_physical_policy(
                 intent,
                 usb_device_sysfs_root(),
@@ -6441,22 +6479,30 @@ fn grant_usbip_backend_device_acl(
             .map_err(|err| map_usbip_host_inspection_error_for_intent(intent, err))?;
             let current_identity = (inspection.vendor, inspection.product);
             let current_device_node = inspection.device_node;
-            if current_identity != expected_identity || current_device_node != expected_device_node
-            {
+            if current_identity != expected_identity {
                 return Err(BrokerError::LiveHandler(format!(
-                    "USBIP device identity changed while granting backend ACL for bus_id={}: expected {:?} at {}, observed {:?} at {}",
+                    "USBIP device identity changed while granting backend ACL for bus_id={}: expected {:?}, observed {:?} at {}",
                     intent.bus_id,
                     expected_identity,
-                    expected_device_node.display(),
                     current_identity,
                     current_device_node.display(),
                 )));
             }
-            Ok(())
+            Ok(current_device_node)
         }
-        Err(BrokerError::LiveHandler(last_error.unwrap_or_else(|| {
-            "grant USBIP backend device ACL failed".to_owned()
-        })))
+        retry_usbip_backend_acl_grant(
+            runner.uid,
+            || verify_usbip_device_node(intent, expected_identity),
+            |device_node, uid| {
+                crate::live_handlers::live_grant_verified_device_acl(device_node, uid)
+                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+            },
+            |device_node, uid| {
+                crate::live_handlers::live_revoke_verified_device_acl(device_node, uid)
+                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+            },
+            || std::thread::sleep(USBIP_BACKEND_ACL_GRANT_RETRY_SLEEP),
+        )
     }
 }
 
@@ -6668,13 +6714,13 @@ fn grant_explicit_usbip_backend_acl(
     env: &str,
     bus_id: &str,
     expected_identity: (u16, u16),
-    expected_device_node: PathBuf,
+    _expected_device_node: PathBuf,
 ) -> Result<(), BrokerError> {
     let backend_uid = explicit_usbip_backend_uid(resolver, env)?;
     #[cfg(test)]
     {
         let _ = bus_id;
-        let _ = (expected_identity, expected_device_node);
+        let _ = expected_identity;
         test_usbip_backend_acl_events()
             .lock()
             .map_err(|_| BrokerError::Protocol("test USBIP ACL event mutex poisoned".to_owned()))?
@@ -6683,52 +6729,19 @@ fn grant_explicit_usbip_backend_acl(
     }
     #[cfg(not(test))]
     {
-        let mut last_error = None;
-        let mut granted = false;
-        for _ in 0..20 {
-            if let Err(error) = verify_explicit_usbip_device_stable(
-                bus_id,
-                expected_identity,
-                &expected_device_node,
-            ) {
-                if granted {
-                    let _ = crate::live_handlers::live_revoke_verified_device_acl(
-                        &expected_device_node,
-                        backend_uid,
-                    );
-                }
-                return Err(error);
-            }
-            match crate::live_handlers::live_grant_verified_device_acl(
-                &expected_device_node,
-                backend_uid,
-            ) {
-                Ok(()) => granted = true,
-                Err(err) => {
-                    last_error = Some(err.to_string());
-                }
-            }
-            if granted
-                && let Err(error) = verify_explicit_usbip_device_stable(
-                    bus_id,
-                    expected_identity,
-                    &expected_device_node,
-                )
-            {
-                let _ = crate::live_handlers::live_revoke_verified_device_acl(
-                    &expected_device_node,
-                    backend_uid,
-                );
-                return Err(error);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        if granted {
-            return Ok(());
-        }
-        Err(BrokerError::LiveHandler(last_error.unwrap_or_else(|| {
-            "grant explicit USBIP backend device ACL failed".to_owned()
-        })))
+        retry_usbip_backend_acl_grant(
+            backend_uid,
+            || verify_explicit_usbip_device_stable(bus_id, expected_identity),
+            |device_node, uid| {
+                crate::live_handlers::live_grant_verified_device_acl(device_node, uid)
+                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+            },
+            |device_node, uid| {
+                crate::live_handlers::live_revoke_verified_device_acl(device_node, uid)
+                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+            },
+            || std::thread::sleep(USBIP_BACKEND_ACL_GRANT_RETRY_SLEEP),
+        )
     }
 }
 
@@ -6739,8 +6752,7 @@ fn grant_explicit_usbip_backend_acl(
 fn verify_explicit_usbip_device_stable(
     bus_id: &str,
     expected_identity: (u16, u16),
-    expected_device_node: &Path,
-) -> Result<(), BrokerError> {
+) -> Result<PathBuf, BrokerError> {
     let inspection =
         crate::ops::usbip_host::inspect_usbip_host_device(usb_device_sysfs_root(), bus_id)
             .map_err(|err| {
@@ -6750,16 +6762,15 @@ fn verify_explicit_usbip_device_stable(
             })?;
     let current_identity = (inspection.vendor, inspection.product);
     let current_device_node = inspection.device_node;
-    if current_identity != expected_identity || current_device_node != expected_device_node {
+    if current_identity != expected_identity {
         return Err(BrokerError::LiveHandler(format!(
-            "USBIP device identity changed while granting backend ACL for bus_id={bus_id}: expected {:?} at {}, observed {:?} at {}",
+            "USBIP device identity changed while granting backend ACL for bus_id={bus_id}: expected {:?}, observed {:?} at {}",
             expected_identity,
-            expected_device_node.display(),
             current_identity,
             current_device_node.display(),
         )));
     }
-    Ok(())
+    Ok(current_device_node)
 }
 
 /// Revoke the per-device ACL from the env's USBIP backend runner for the
@@ -7079,6 +7090,11 @@ fn map_usbip_host_inspection_error_for_intent(
                 reason: "observed physical topology does not match the declaration",
             }
         }
+        crate::ops::usbip_host::UsbipHostInspectionError::DeviceMissing { bus_id }
+        | crate::ops::usbip_host::UsbipHostInspectionError::DeviceDepartedDuringInspection {
+            bus_id,
+            ..
+        } => BrokerError::UsbipDeviceAbsent { busid: bus_id },
         other => BrokerError::LiveHandler(other.to_string()),
     }
 }
@@ -8217,6 +8233,26 @@ impl BrokerError {
                     })),
                 )?;
             }
+            Self::UsbipLockConflict { busid, owner } => {
+                audit_log.write_error_entry(
+                    operation,
+                    caller_uid,
+                    "usbip-lock-conflict",
+                    busid,
+                    "Broker.UsbipLockConflict",
+                    &format!("UsbipBind refused: busid {busid} is already claimed by {owner}"),
+                )?;
+            }
+            Self::UsbipDeviceAbsent { busid } => {
+                audit_log.write_error_entry(
+                    operation,
+                    caller_uid,
+                    "usbip-device-absent",
+                    busid,
+                    "Broker.UsbipDeviceAbsent",
+                    &format!("UsbipBind refused: USB device {busid} is not present in sysfs"),
+                )?;
+            }
             Self::LiveHandler(message) => {
                 // Surface the operator-facing root cause (errno / path /
                 // stderr) in the broker journal, not just the
@@ -8556,6 +8592,20 @@ impl BrokerError {
                 ),
                 "Fix the USBIP declaration, physical port/topology, and vendor:product allowlist, rebuild the trusted bundle, then retry.",
             ),
+            Self::UsbipLockConflict { busid, .. } => error_response(
+                "Broker.UsbipLockConflict",
+                "UsbipBind",
+                None,
+                &format!("UsbipBind refused: busid {busid} is already claimed by another VM"),
+                "Stop the VM currently holding this busid or use `nixling usb detach` to release the claim, then retry.",
+            ),
+            Self::UsbipDeviceAbsent { busid } => error_response(
+                "Broker.UsbipDeviceAbsent",
+                "UsbipBind",
+                None,
+                &format!("UsbipBind refused: USB device {busid} is not present in sysfs"),
+                "Confirm the physical device is connected and recognized by the host kernel, then retry.",
+            ),
             Self::LiveHandler(message) => error_response(
                 "Broker.LiveHandlerFailed",
                 "LiveHandler",
@@ -8683,7 +8733,8 @@ impl BrokerError {
 }
 
 fn public_live_handler_message(message: &str) -> String {
-    if message.contains("USB") || message.contains("usb") || message.contains("/sys/") {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("usbip") || lower.contains("/sys/bus/usb") {
         "privileged USB host operation failed; details are available only in the broker audit log"
             .to_owned()
     } else {
@@ -13154,6 +13205,235 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    // ------------------------------------------------------------------
+    // retry_usbip_backend_acl_grant unit tests
+    // ------------------------------------------------------------------
+
+    /// Helper that tracks grant/revoke calls for retry function unit tests.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[derive(Default, Debug)]
+    struct AclCallLog {
+        grants: Vec<PathBuf>,
+        revokes: Vec<PathBuf>,
+        sleeps: usize,
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn retry_acl_grant_succeeds_immediately_when_node_is_stable() {
+        use std::cell::RefCell;
+        let log = RefCell::new(AclCallLog::default());
+        let node = PathBuf::from("/dev/bus/usb/001/007");
+        let result = retry_usbip_backend_acl_grant(
+            1002,
+            || Ok(node.clone()),
+            |path, _uid| {
+                log.borrow_mut().grants.push(path.to_owned());
+                Ok(())
+            },
+            |path, _uid| {
+                log.borrow_mut().revokes.push(path.to_owned());
+                Ok(())
+            },
+            || log.borrow_mut().sleeps += 1,
+        );
+        assert!(result.is_ok(), "stable node must succeed immediately");
+        let log = log.into_inner();
+        assert_eq!(log.grants, vec![node], "exactly one grant");
+        assert!(log.revokes.is_empty(), "no revoke on clean success");
+        assert_eq!(log.sleeps, 0, "no sleep on first-attempt success");
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn retry_acl_grant_converges_after_transient_node_change() {
+        // Simulate a device re-enumeration: first verify returns node A,
+        // post-grant verify returns node B (different /dev node, same
+        // VID/PID identity from the caller's perspective). The retry then
+        // observes stable node B and succeeds.
+        use std::cell::RefCell;
+        let node_a = PathBuf::from("/dev/bus/usb/001/009");
+        let node_b = PathBuf::from("/dev/bus/usb/001/010");
+        let log = RefCell::new(AclCallLog::default());
+        // verify_device_node: first call → A, second call (post-grant re-check) → B,
+        // third call (retry pre-grant) → B, fourth call (post-grant re-check) → B.
+        let call_count = RefCell::new(0usize);
+        let result = retry_usbip_backend_acl_grant(
+            1002,
+            || {
+                let n = *call_count.borrow();
+                *call_count.borrow_mut() += 1;
+                match n {
+                    0 => Ok(node_a.clone()), // first pre-grant verify → A
+                    1 => Ok(node_b.clone()), // post-grant verify → B (changed!)
+                    _ => Ok(node_b.clone()), // subsequent calls → B (stable)
+                }
+            },
+            |path, _uid| {
+                log.borrow_mut().grants.push(path.to_owned());
+                Ok(())
+            },
+            |path, _uid| {
+                log.borrow_mut().revokes.push(path.to_owned());
+                Ok(())
+            },
+            || log.borrow_mut().sleeps += 1,
+        );
+        assert!(result.is_ok(), "must converge after transient node change");
+        let log = log.into_inner();
+        // First attempt: grant A, post-grant verify sees B → revoke A, sleep.
+        // Second attempt: grant B, post-grant verify sees B → success.
+        assert!(
+            log.grants.contains(&node_a),
+            "first grant is for the initial node A"
+        );
+        assert!(
+            log.grants.contains(&node_b),
+            "retry grant is for the stable node B"
+        );
+        assert_eq!(
+            log.revokes,
+            vec![node_a.clone()],
+            "must revoke old grant on A when re-verify sees B"
+        );
+        assert_eq!(log.sleeps, 1, "exactly one sleep between attempts");
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn retry_acl_grant_fails_when_verify_permanently_fails() {
+        use std::cell::RefCell;
+        let log = RefCell::new(AclCallLog::default());
+        let err_msg = "identity changed: VID/PID mismatch";
+        let result = retry_usbip_backend_acl_grant(
+            1002,
+            || Err(BrokerError::LiveHandler(err_msg.to_owned())),
+            |path, _uid| {
+                log.borrow_mut().grants.push(path.to_owned());
+                Ok(())
+            },
+            |path, _uid| {
+                log.borrow_mut().revokes.push(path.to_owned());
+                Ok(())
+            },
+            || log.borrow_mut().sleeps += 1,
+        );
+        assert!(result.is_err(), "must fail when verify never succeeds");
+        let log = log.into_inner();
+        assert!(log.grants.is_empty(), "no grants when verify always fails");
+        assert!(log.revokes.is_empty(), "no revokes when grant never ran");
+        assert_eq!(
+            log.sleeps, USBIP_BACKEND_ACL_GRANT_ATTEMPTS,
+            "must sleep once per attempt"
+        );
+        match result.unwrap_err() {
+            BrokerError::LiveHandler(msg) => {
+                assert_eq!(msg, err_msg, "last error from verify must be propagated")
+            }
+            other => panic!("expected LiveHandler, got {other:?}"),
+        }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn retry_acl_grant_revokes_before_every_retry_on_post_grant_verify_failure() {
+        // Grant succeeds, but post-grant verify always returns a different
+        // node. The function must revoke on every attempt before giving up.
+        use std::cell::RefCell;
+        let base = "/dev/bus/usb/001/";
+        let log = RefCell::new(AclCallLog::default());
+        let counter = RefCell::new(0u32);
+        let result = retry_usbip_backend_acl_grant(
+            1002,
+            || {
+                let n = *counter.borrow();
+                *counter.borrow_mut() += 1;
+                // Each call returns a unique node so post-grant verify
+                // always sees a "changed" path.
+                Ok(PathBuf::from(format!("{base}{n:03}")))
+            },
+            |path, _uid| {
+                log.borrow_mut().grants.push(path.to_owned());
+                Ok(())
+            },
+            |path, _uid| {
+                log.borrow_mut().revokes.push(path.to_owned());
+                Ok(())
+            },
+            || log.borrow_mut().sleeps += 1,
+        );
+        assert!(result.is_err(), "must fail when node never stabilizes");
+        let log = log.into_inner();
+        assert_eq!(
+            log.grants.len(),
+            USBIP_BACKEND_ACL_GRANT_ATTEMPTS,
+            "one grant attempt per retry round"
+        );
+        assert_eq!(
+            log.revokes.len(),
+            USBIP_BACKEND_ACL_GRANT_ATTEMPTS,
+            "must revoke once per grant when post-grant verify always disagrees"
+        );
+        // Every granted node must eventually be revoked.
+        for granted in &log.grants {
+            assert!(
+                log.revokes.contains(granted),
+                "granted node {granted:?} must be revoked"
+            );
+        }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn retry_acl_grant_tolerates_benign_enoent_during_revoke() {
+        // After a node change the old node may already be gone (kernel
+        // removes /dev/bus/usb/B/D during re-enumeration). Revoke errors
+        // must not prevent the retry from proceeding or propagating the
+        // real error.
+        use std::cell::RefCell;
+        let node_a = PathBuf::from("/dev/bus/usb/001/021");
+        let node_b = PathBuf::from("/dev/bus/usb/001/022");
+        let call_count = RefCell::new(0usize);
+        let log = RefCell::new(AclCallLog::default());
+        // Revoke always fails with "not found" — benign during re-enum.
+        let result = retry_usbip_backend_acl_grant(
+            1002,
+            || {
+                let n = *call_count.borrow();
+                *call_count.borrow_mut() += 1;
+                match n {
+                    0 => Ok(node_a.clone()),
+                    1 => Ok(node_b.clone()), // post-grant re-check sees B
+                    _ => Ok(node_b.clone()), // stable from here on
+                }
+            },
+            |path, _uid| {
+                log.borrow_mut().grants.push(path.to_owned());
+                Ok(())
+            },
+            |path, _uid| {
+                log.borrow_mut().revokes.push(path.to_owned());
+                // Simulate ENOENT: old node already removed.
+                Err(BrokerError::LiveHandler(
+                    "No such file or directory".to_owned(),
+                ))
+            },
+            || log.borrow_mut().sleeps += 1,
+        );
+        // The revoke error must not surface as the final result; the
+        // retry on node B must succeed.
+        assert!(
+            result.is_ok(),
+            "benign revoke ENOENT must not abort the retry loop"
+        );
+        let log = log.into_inner();
+        assert!(
+            log.revokes.contains(&node_a),
+            "attempted revoke on the stale node A"
+        );
+        assert!(log.grants.contains(&node_b), "retry grant on stable node B");
+    }
+
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_audit_rotation_audit_dedupe_suppresses_repeats_and_allows_retry() {
@@ -13609,6 +13889,29 @@ mod tests {
                 error_message:
                     "systemctl enable nixlingd failed: Unit nixlingd.service does not exist"
                         .to_owned(),
+            },
+            AuditCase {
+                error: BrokerError::UsbipLockConflict {
+                    busid: "1-2.3".to_owned(),
+                    owner: "other-vm".to_owned(),
+                },
+                operation: "UsbipBind",
+                target_id: "1-2.3".to_owned(),
+                decision: "usbip-lock-conflict",
+                error_kind: "Broker.UsbipLockConflict",
+                error_message: "UsbipBind refused: busid 1-2.3 is already claimed by other-vm"
+                    .to_owned(),
+            },
+            AuditCase {
+                error: BrokerError::UsbipDeviceAbsent {
+                    busid: "1-2.4".to_owned(),
+                },
+                operation: "UsbipBind",
+                target_id: "1-2.4".to_owned(),
+                decision: "usbip-device-absent",
+                error_kind: "Broker.UsbipDeviceAbsent",
+                error_message: "UsbipBind refused: USB device 1-2.4 is not present in sysfs"
+                    .to_owned(),
             },
             AuditCase {
                 error: BrokerError::ValidateBundle("bundle digest mismatch".to_owned()),

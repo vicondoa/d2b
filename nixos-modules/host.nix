@@ -393,14 +393,21 @@ in
     SUBSYSTEM=="usb", ATTRS{idVendor}=="1050", GROUP="kvm", MODE="0660", TAG+="uaccess"
   '';
 
-  # USBIP host kernel module — `nixling-sys-<env>-usbipd-proxy.service`
-  # instances live in network.nix (one per env, each bound to its
-  # uplink bridge IP). Load it only when host-side YubiKey support is
-  # enabled AND at least one enabled VM opts into `usbip.yubikey`,
-  # matching the per-VM USBIP materialization gate.
-  boot.kernelModules = lib.mkIf
-    (cfg.site.yubikey.enable && usbipYubikeyVmEnabled)
-    [ "usbip-host" ];
+  # Host modules required by nixling's Cloud Hypervisor + virtiofs substrate.
+  # These may be built in on some kernels; when they are loadable modules,
+  # preload them before nixlingd's startup contract check runs. USBIP remains
+  # conditional on the host/VM YubiKey gate.
+  boot.kernelModules = [
+    "vhost_net"
+    "tun"
+    "virtio_blk"
+    "virtio_console"
+    "virtio_net"
+    "virtio_pci"
+    "virtiofs"
+  ] ++ lib.optionals (cfg.site.yubikey.enable && usbipYubikeyVmEnabled) [
+    "usbip-host"
+  ];
 
   # Host-side debug binaries + acl (setfacl used in activation scripts and
   # nixling-<vm>-{gpu,snd,swtpm} ExecStartPre/Post stanzas)

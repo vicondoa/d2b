@@ -256,6 +256,18 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "host shutdown-hook --apply",
+    "subject": "host lifecycle",
+    "scope": "global",
+    "allowedGroups": [
+      "host-shutdown"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "host prepare --apply",
     "subject": "host",
     "scope": "global",

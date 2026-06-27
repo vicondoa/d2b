@@ -197,6 +197,11 @@ in
     };
   };
 
+  "nixlingd-startup-smoke/daemon-does-not-skip-kernel-module-check" = {
+    expr = daemonService.environment.NIXLING_SKIP_KERNEL_MODULE_CHECK or null;
+    expected = null;
+  };
+
   "nixlingd-startup-smoke/daemon-restrict-address-families" = {
     expr = daemonService.serviceConfig.RestrictAddressFamilies;
     expected = [ "AF_UNIX" "AF_INET" "AF_INET6" ];

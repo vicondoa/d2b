@@ -46,11 +46,14 @@
 //! function with fixtures.
 
 use std::collections::BTreeSet;
-use std::fs;
+use std::path::Path;
 
 use nixling_core::bundle_resolver::BundleResolver;
 use nixling_core::processes::ProcessRole;
-use nixling_host::modules::{KernelConfig, LoadedModuleSet, read_kernel_config};
+use nixling_host::modules::{
+    KernelConfig, LoadedModuleSet, read_builtin_modules_with_fallback, read_kernel_config,
+    read_loaded_modules_at,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::typed_error::TypedError;
@@ -379,31 +382,47 @@ fn kernel_config_builtin_modules(config: &KernelConfig) -> BTreeSet<String> {
 /// `proc_modules_override` is `None`. Exposed so tests can assert
 /// the production read path is `/proc/modules`.
 pub const PROC_MODULES_PATH: &str = "/proc/modules";
+/// `/sys/module` directory used alongside `/proc/modules` to detect
+/// built-in modules that appear in sysfs even when not listed in
+/// `/proc/modules`.
+pub const SYS_MODULE_DIR: &str = "/sys/module";
 
-/// Side-effecting wrapper: read `/proc/modules`, parse it, then
-/// dispatch to [`check_kernel_modules`]. Used by the daemon at
-/// startup.
+/// Side-effecting wrapper: read `/proc/modules` + `/sys/module` + the
+/// `modules.builtin` text file, then dispatch to [`check_kernel_modules`].
 ///
-/// On an `/proc/modules` read failure we conservatively return a
-/// report with an empty loaded set, so a host where `/proc` is
-/// unreadable does NOT silently slip past the gate — every
-/// required module reads as missing and the daemon refuses to
-/// start. Operators who deliberately run without `/proc` (e.g.
-/// nested test harnesses) can short-circuit by setting the
-/// override.
+/// Module detection order (union of all three sources):
+///   1. `/proc/modules` — loadable modules currently inserted.
+///   2. `/sys/module/<name>/` directory entries — also covers built-in
+///      modules that the kernel exposes in sysfs even though they do
+///      not appear in `/proc/modules`. This is the primary fix for
+///      false-positive "missing" reports on hosts where virtio modules
+///      are compiled in (`=y`) rather than loadable (`=m`).
+///   3. `/lib/modules/$(uname -r)/modules.builtin` — text list of
+///      built-in modules for offline/early-boot coverage, merged into
+///      the `builtin` set.
+///   4. `/boot/config-$(uname -r)` / `/proc/config.gz` — kernel config
+///      for `CONFIG_*=y` built-in detection (existing path).
+///
+/// On any read failure we conservatively treat the failed source as
+/// empty (the worst case is an unnecessary warning, not a silent skip).
+/// Operators on hosts where `/proc` is unavailable can short-circuit
+/// with `NIXLING_SKIP_KERNEL_MODULE_CHECK`.
 pub fn run_kernel_module_check(resolver: &BundleResolver) -> ModuleCheckReport {
-    let loaded = match fs::read_to_string(PROC_MODULES_PATH) {
-        Ok(contents) => LoadedModuleSet::parse_proc_modules(&contents),
-        Err(err) => {
-            tracing::warn!(
-                path = PROC_MODULES_PATH,
-                detail = %err,
-                "kernel-module-check: could not read /proc/modules; treating every module as absent",
-            );
-            LoadedModuleSet::default()
-        }
-    };
-    let mut builtin = BTreeSet::new();
+    // Step 1+2: /proc/modules union /sys/module.
+    if let Err(error) = std::fs::read_to_string(PROC_MODULES_PATH) {
+        tracing::warn!(
+            path = PROC_MODULES_PATH,
+            error = %error,
+            "kernel-module-check: could not read /proc/modules; falling back to /sys/module and builtin evidence"
+        );
+    }
+    let loaded = read_loaded_modules_at(Path::new(PROC_MODULES_PATH), Path::new(SYS_MODULE_DIR));
+
+    // Step 3: modules.builtin text file (uname handled internally).
+    let modules_builtin = read_builtin_modules_with_fallback();
+
+    // Step 4: kernel config (existing path).
+    let mut builtin: BTreeSet<String> = modules_builtin.names;
     if let Some(config) = read_kernel_config() {
         builtin.extend(kernel_config_builtin_modules(&config));
     }
@@ -557,6 +576,16 @@ mod tests {
             "virtio_pci",
             "virtio_console",
         ]
+    }
+
+    #[test]
+    fn production_probe_logs_proc_modules_read_failure() {
+        let source = include_str!("kernel_module_check.rs");
+        assert!(
+            source.contains("std::fs::read_to_string(PROC_MODULES_PATH)")
+                && source.contains("kernel-module-check: could not read /proc/modules"),
+            "run_kernel_module_check must log /proc/modules read failures before falling back"
+        );
     }
 
     #[test]
@@ -740,5 +769,71 @@ mod tests {
         let msg = err.message();
         assert!(msg.contains("kvm_intel|kvm_amd"), "msg={msg}");
         assert!(msg.contains("vhost_net"), "msg={msg}");
+    }
+
+    // ------------------------------------------------------------------
+    // /sys/module and modules.builtin detection tests
+    // ------------------------------------------------------------------
+
+    /// Virtio modules compiled as =y appear in `/sys/module/<name>/` but
+    /// NOT in `/proc/modules`. `read_loaded_modules_at` unions both
+    /// sources, so a built-in virtio module appearing only in the sysfs
+    /// dir must not be reported as missing.
+    #[test]
+    fn builtin_virtio_module_in_sys_module_dir_is_detected_as_present() {
+        use nixling_host::modules::read_loaded_modules_at;
+        use std::fs;
+
+        let base = std::env::var_os("CARGO_TARGET_TMPDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+        let test_dir = base.join("kernel-module-check-sysfs-test");
+        let proc_modules_path = test_dir.join("proc_modules");
+        let sys_module_dir = test_dir.join("sys_module");
+
+        // Create a fake /proc/modules with all required except virtio_net.
+        let proc_content = "vhost_net 12345 0 - Live\n\
+                            tun 12345 0 - Live\n\
+                            kvm_intel 12345 0 - Live\n\
+                            virtio_blk 12345 0 - Live\n\
+                            virtio_pci 12345 0 - Live\n\
+                            virtio_console 12345 0 - Live\n";
+        fs::create_dir_all(&test_dir).expect("create test dir");
+        fs::write(&proc_modules_path, proc_content).expect("write proc_modules");
+
+        // Put virtio_net only in /sys/module (simulating =y built-in).
+        let virtio_net_dir = sys_module_dir.join("virtio_net");
+        fs::create_dir_all(&virtio_net_dir).expect("create virtio_net sys dir");
+
+        let loaded = read_loaded_modules_at(&proc_modules_path, &sys_module_dir);
+        assert!(
+            loaded.names.contains("virtio_net"),
+            "virtio_net in /sys/module must be detected as present; names={:?}",
+            loaded.names
+        );
+
+        let resolver = build_resolver(|_| {}, vec![]);
+        let report = check_kernel_modules(&resolver, &loaded, &empty_builtin());
+        assert!(
+            !report.is_fatal(),
+            "virtio_net only in /sys/module must not trigger fatal check: {:?}",
+            report
+        );
+        assert!(
+            report.present.contains("virtio_net"),
+            "virtio_net must appear in present set; present={:?}",
+            report.present
+        );
+
+        let _ = fs::remove_dir_all(&test_dir);
+    }
+
+    /// `run_kernel_module_check` pulls from both `/proc/modules` and
+    /// `/sys/module`, so the PROC_MODULES_PATH constant must remain the
+    /// production `/proc/modules` path.
+    #[test]
+    fn run_kernel_module_check_still_reads_proc_modules() {
+        assert_eq!(PROC_MODULES_PATH, "/proc/modules");
+        assert_eq!(SYS_MODULE_DIR, "/sys/module");
     }
 }

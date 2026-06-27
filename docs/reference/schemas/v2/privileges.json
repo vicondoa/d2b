@@ -240,6 +240,7 @@
             "host prepare --apply",
             "host prepare --dry-run",
             "host reconcile-otel-acls --apply",
+            "host shutdown-hook --apply",
             "keys list",
             "keys rotate",
             "keys show",

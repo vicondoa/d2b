@@ -12,6 +12,43 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- `nixlingd` now recognizes `uid=0` connections as a narrow `HostShutdown`
+  authority scoped exclusively to `vmStop` during host-shutdown teardown. This
+  fixes the long-standing post-reboot failure where the guarded `ExecStop`
+  shutdown hook was rejected with `authz-not-admin` for every VM. Workload VMs
+  stop before net VMs. All other admin-only operations (exec, USB attach, key
+  rotation, host prepare, audit export) are explicitly denied for this role.
+- Wayland proxy startup after reboot is now reliable: the broker grants the
+  per-VM wlproxy UID a traverse ACL on the runtime directory
+  (`/run/user/<uid>`) before spawning the proxy. This fixes post-reboot
+  failures where the `0700` parent directory blocked access to the Wayland
+  socket. The broker also verifies the runtime directory exists and is owned by
+  the declared Wayland user before granting any ACL. Missing or mis-owned
+  directories produce actionable `graphical-session-not-active` errors.
+- USBIP backend ACL grant is now retry-safe across transient device
+  re-enumeration: the retry loop tolerates device-node changes between verify
+  and grant as long as VID/PID identity is stable, revokes ACLs from stale
+  nodes before each retry, and treats missing old nodes as benign during revoke
+  (kernel removes `/dev/bus/usb/B/D` during re-enumeration).
+- Kernel module detection now checks `/sys/module` directory entries in
+  addition to `/proc/modules` and `modules.builtin`. Built-in virtio/KVM
+  modules compiled as `=y` are now correctly detected as present without
+  the `NIXLING_SKIP_KERNEL_MODULE_CHECK` operator override.
+
+### Fixed
+
+- `nixling host shutdown-hook --apply` no longer fails with `authz-not-admin`
+  on every VM: the new `HostShutdown` role permits `vmStop` from the guarded
+  `ExecStop` path (uid=0) while preserving the daemon-restart continuation
+  contract (`KillMode=process` + `Restart=on-failure`).
+- Wayland-proxy VM start no longer fails with `runner-exited:wayland-proxy`
+  after a fresh login when `/run/user/<uid>` is `0700`: the broker now grants
+  a traverse ACL on the runtime directory immediately before proxy spawn.
+- Daemon startup no longer emits spurious `kernel-module-check: fatal misses`
+  for built-in virtio modules on hosts with `=y` kernel config; the
+  `NIXLING_SKIP_KERNEL_MODULE_CHECK` workaround is no longer needed for these
+  hosts.
+
 - Live guest activation timeouts are now configurable globally via
   `nixling.daemon.lifecycle.liveActivation.timeoutSeconds` and per VM via
   `nixling.vms.<vm>.lifecycle.liveActivation.timeoutSeconds`, allowing

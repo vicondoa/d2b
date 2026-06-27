@@ -16,6 +16,14 @@ pub(crate) struct PeerIdentity {
 pub(crate) enum PeerRole {
     Launcher,
     Admin,
+    /// Scoped authority for the guarded `ExecStop` host-shutdown hook
+    /// (`nixling host shutdown-hook --apply`), which runs as uid 0 under
+    /// systemd `ExecStop = "+..."`. Permits only `vmStop` during host
+    /// shutdown; all other admin-only operations (exec, USB attach, key
+    /// rotation, host prepare, audit export …) are explicitly denied.
+    /// The kernel's `SO_PEERCRED` provides the uid=0 identity — no other
+    /// per-connection credential is evaluated for this role.
+    HostShutdown,
 }
 
 #[cfg_attr(test, derive(Clone))]
@@ -74,6 +82,17 @@ pub(crate) fn authorize_peer(
         return Err(TypedError::AuthzNotALauncher { peer_uid: uid });
     }
 
+    // uid=0 is the host-shutdown hook running under systemd
+    // `ExecStop = "+..."`.  It receives the narrow `HostShutdown` role
+    // which is only permitted to issue `vmStop` during host shutdown
+    // teardown.  Any other admin-only operation is denied at dispatch.
+    if uid == 0 {
+        return Ok(PeerIdentity {
+            role: PeerRole::HostShutdown,
+            uid,
+        });
+    }
+
     let is_launcher = username
         .as_ref()
         .map(|name| {
@@ -127,6 +146,16 @@ pub(crate) fn verb_requires_admin(verb: &str) -> bool {
             | "exec"
             | "shell"
     )
+}
+
+/// Returns `true` if the verb is permitted for the narrow [`PeerRole::HostShutdown`]
+/// role. This is a strict positive allowlist: only `vmStop` is permitted.
+/// All other admin-only operations (exec, USB attach, key rotation,
+/// audit export, host prepare, …) are denied even though root could
+/// normally perform them, because the shutdown hook only needs to stop
+/// running VMs.
+pub(crate) fn verb_allowed_for_host_shutdown(verb: &str) -> bool {
+    matches!(verb, "vmStop")
 }
 
 pub(crate) fn gateway_display_op_requires_admin(op: &public_wire::GatewayDisplayOp) -> bool {

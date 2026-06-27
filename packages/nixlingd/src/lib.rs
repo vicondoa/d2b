@@ -118,7 +118,8 @@ pub mod typed_error;
 pub mod wire;
 use admission::{
     PeerIdentity, PeerRole, authorize_peer, gateway_display_op_requires_admin,
-    gateway_display_peer_principal, gateway_display_peer_principal_string, verb_requires_admin,
+    gateway_display_peer_principal, gateway_display_peer_principal_string,
+    verb_allowed_for_host_shutdown, verb_requires_admin,
 };
 #[cfg(test)]
 use admission::{PeerOverride, TEST_PEER_OVERRIDE, TEST_PEER_OVERRIDE_LOCK};
@@ -2564,9 +2565,19 @@ fn dispatch_request(
 ) -> Result<Value, TypedError> {
     let verb = request.verb_name();
     if verb_requires_admin(verb) && !matches!(peer.role, PeerRole::Admin) {
-        return Err(TypedError::AuthzNotAdmin {
-            verb: verb.to_owned(),
-        });
+        // HostShutdown is permitted for the vmStop allowlist only; all
+        // other admin-only verbs are denied even from uid 0.
+        if matches!(peer.role, PeerRole::HostShutdown) {
+            if !verb_allowed_for_host_shutdown(verb) {
+                return Err(TypedError::AuthzNotAdmin {
+                    verb: verb.to_owned(),
+                });
+            }
+        } else {
+            return Err(TypedError::AuthzNotAdmin {
+                verb: verb.to_owned(),
+            });
+        }
     }
     match &request {
         wire::Request::VmStop(lifecycle) | wire::Request::VmRestart(lifecycle)
@@ -3994,29 +4005,56 @@ fn persisted_same_vm_usbip_claims(
 fn lifecycle_broker_error_kind(
     error: &BrokerErrorResponse,
 ) -> usbip_reconcile_state::UsbipLifecycleFailureKind {
-    let combined =
-        format!("{} {} {}", error.kind, error.message, error.action).to_ascii_lowercase();
-    if combined.contains("policy")
-        || combined.contains("allowlist")
-        || combined.contains("topology")
-    {
-        usbip_reconcile_state::UsbipLifecycleFailureKind::PolicyMismatch
-    } else if combined.contains("intent") {
-        usbip_reconcile_state::UsbipLifecycleFailureKind::MissingBundleIntent
-    } else if combined.contains("foreign")
-        || combined.contains("held")
-        || combined.contains("owner")
-        || combined.contains("lock")
-    {
-        usbip_reconcile_state::UsbipLifecycleFailureKind::LockConflict
-    } else if combined.contains("absent")
-        || combined.contains("departed")
-        || combined.contains("missing")
-        || combined.contains("not present")
-    {
-        usbip_reconcile_state::UsbipLifecycleFailureKind::RuntimeAbsent
-    } else {
-        usbip_reconcile_state::UsbipLifecycleFailureKind::HostReplayFailed
+    // Typed match on the wire `kind` slug first so broker errors that
+    // have dedicated variants are classified precisely without relying
+    // on string matching in the redacted `message` field. The
+    // `Broker.LiveHandlerFailed` and similar generic kinds fall through
+    // to the legacy substring heuristic as a safety net for any
+    // error that still uses the `LiveHandler` variant.
+    match error.kind.as_str() {
+        "Broker.UsbipDeviceNotAllowed" | "Broker.UsbipPolicyMismatch" => {
+            usbip_reconcile_state::UsbipLifecycleFailureKind::PolicyMismatch
+        }
+        "Broker.BundleIntentMissing" => {
+            usbip_reconcile_state::UsbipLifecycleFailureKind::MissingBundleIntent
+        }
+        "Broker.UsbipLockConflict" => {
+            usbip_reconcile_state::UsbipLifecycleFailureKind::LockConflict
+        }
+        "Broker.UsbipDeviceAbsent" => {
+            usbip_reconcile_state::UsbipLifecycleFailureKind::RuntimeAbsent
+        }
+        _ => {
+            // Fallback: substring match on the combined field for
+            // any remaining cases that still use LiveHandler or other
+            // generic variants. Policy/intent/lock/absent cases should
+            // now be covered by the typed match above, so reaching here
+            // is expected only for unexpected or future broker errors.
+            let combined =
+                format!("{} {} {}", error.kind, error.message, error.action).to_ascii_lowercase();
+            if combined.contains("policy")
+                || combined.contains("allowlist")
+                || combined.contains("topology")
+            {
+                usbip_reconcile_state::UsbipLifecycleFailureKind::PolicyMismatch
+            } else if combined.contains("intent") {
+                usbip_reconcile_state::UsbipLifecycleFailureKind::MissingBundleIntent
+            } else if combined.contains("foreign")
+                || combined.contains("held")
+                || combined.contains("owner")
+                || combined.contains("lock")
+            {
+                usbip_reconcile_state::UsbipLifecycleFailureKind::LockConflict
+            } else if combined.contains("absent")
+                || combined.contains("departed")
+                || combined.contains("missing")
+                || combined.contains("not present")
+            {
+                usbip_reconcile_state::UsbipLifecycleFailureKind::RuntimeAbsent
+            } else {
+                usbip_reconcile_state::UsbipLifecycleFailureKind::HostReplayFailed
+            }
+        }
     }
 }
 
@@ -4972,7 +5010,11 @@ fn usbip_probe_entry_from_intent(
             }
         }
         if !guest_status_requested
-            || !matches!(guest_import, public_wire::UsbipGuestImportState::Imported)
+            || matches!(
+                guest_import,
+                public_wire::UsbipGuestImportState::Unknown
+                    | public_wire::UsbipGuestImportState::Unavailable
+            )
         {
             degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
                 usbip_reconcile_state::UsbipDegradedReason::ProbeIncomplete,
@@ -8382,6 +8424,10 @@ fn broker_caller_role_for_peer(peer: &PeerIdentity) -> BrokerCallerRole {
     match peer.role {
         PeerRole::Admin => BrokerCallerRole::AdminUid { uid: peer.uid },
         PeerRole::Launcher => BrokerCallerRole::LauncherUid { uid: peer.uid },
+        // HostShutdown maps to AdminUid so the broker executes the vmStop
+        // with full lifecycle authority. The authorization gate in
+        // dispatch_request has already ensured only vmStop can reach here.
+        PeerRole::HostShutdown => BrokerCallerRole::AdminUid { uid: peer.uid },
     }
 }
 
@@ -8621,6 +8667,12 @@ fn redact_broker_error_for_launcher(
         "Broker.Protocol" => {
             "broker protocol error; retry after admin checks broker logs".to_owned()
         }
+        "Broker.UsbipLockConflict" => format!(
+            "{op_name} refused: USB busid is already claimed by another VM. Admin: stop the other VM or use `nixling usb detach` to release the claim."
+        ),
+        "Broker.UsbipDeviceAbsent" => format!(
+            "{op_name} refused: USB device is not present in sysfs. Admin: confirm the physical device is connected and recognized by the kernel, then retry."
+        ),
         "Broker.Unimplemented" => {
             "broker operation is not implemented in this build; Admin: use the supported fallback path for this wave.".to_owned()
         }
@@ -17562,6 +17614,94 @@ mod public_status_tests {
         );
     }
 
+    fn make_broker_error_response(kind: &str, message: &str) -> BrokerErrorResponse {
+        BrokerErrorResponse {
+            kind: kind.to_owned(),
+            operation: "UsbipBind".to_owned(),
+            target_wave: None,
+            message: message.to_owned(),
+            action: "retry".to_owned(),
+        }
+    }
+
+    #[test]
+    fn lifecycle_broker_error_kind_typed_lock_conflict() {
+        let err = make_broker_error_response(
+            "Broker.UsbipLockConflict",
+            "UsbipBind refused: busid 1-2 is already claimed by another VM",
+        );
+        assert_eq!(
+            lifecycle_broker_error_kind(&err),
+            usbip_reconcile_state::UsbipLifecycleFailureKind::LockConflict,
+            "Broker.UsbipLockConflict must classify as LockConflict without string matching"
+        );
+    }
+
+    #[test]
+    fn lifecycle_broker_error_kind_typed_device_absent() {
+        let err = make_broker_error_response(
+            "Broker.UsbipDeviceAbsent",
+            "UsbipBind refused: USB device is not present in sysfs",
+        );
+        assert_eq!(
+            lifecycle_broker_error_kind(&err),
+            usbip_reconcile_state::UsbipLifecycleFailureKind::RuntimeAbsent,
+            "Broker.UsbipDeviceAbsent must classify as RuntimeAbsent without string matching"
+        );
+    }
+
+    #[test]
+    fn lifecycle_broker_error_kind_typed_policy_mismatch() {
+        let policy_err = make_broker_error_response(
+            "Broker.UsbipPolicyMismatch",
+            "privileged USB host operation failed; details are available only in the broker audit log",
+        );
+        assert_eq!(
+            lifecycle_broker_error_kind(&policy_err),
+            usbip_reconcile_state::UsbipLifecycleFailureKind::PolicyMismatch,
+            "Broker.UsbipPolicyMismatch must classify as PolicyMismatch"
+        );
+        let device_err = make_broker_error_response(
+            "Broker.UsbipDeviceNotAllowed",
+            "privileged USB host operation failed; details are available only in the broker audit log",
+        );
+        assert_eq!(
+            lifecycle_broker_error_kind(&device_err),
+            usbip_reconcile_state::UsbipLifecycleFailureKind::PolicyMismatch,
+            "Broker.UsbipDeviceNotAllowed must classify as PolicyMismatch"
+        );
+    }
+
+    #[test]
+    fn lifecycle_broker_error_kind_redacted_live_handler_falls_through_to_host_replay_failed() {
+        // After introducing typed variants for lock-conflict and device-absent,
+        // a Broker.LiveHandlerFailed with a redacted message (no policy/lock/absent
+        // substring) should fall through to HostReplayFailed rather than silently
+        // matching a wrong category.
+        let err = make_broker_error_response(
+            "Broker.LiveHandlerFailed",
+            "privileged USB host operation failed; details are available only in the broker audit log",
+        );
+        assert_eq!(
+            lifecycle_broker_error_kind(&err),
+            usbip_reconcile_state::UsbipLifecycleFailureKind::HostReplayFailed,
+            "redacted Broker.LiveHandlerFailed must classify as HostReplayFailed"
+        );
+    }
+
+    #[test]
+    fn lifecycle_broker_error_kind_typed_bundle_intent_missing() {
+        let err = make_broker_error_response(
+            "Broker.BundleIntentMissing",
+            "trusted bundle does not contain the requested usbip-bind intent",
+        );
+        assert_eq!(
+            lifecycle_broker_error_kind(&err),
+            usbip_reconcile_state::UsbipLifecycleFailureKind::MissingBundleIntent,
+            "Broker.BundleIntentMissing must classify as MissingBundleIntent"
+        );
+    }
+
     #[test]
     fn dispatch_list_emits_manifest_features_and_live_lifecycle() {
         let root = tempfile::tempdir().expect("artifact root");
@@ -20876,6 +21016,8 @@ mod broker_dispatch_tests {
             "Broker.NftablesDriftDetected",
             "Broker.ValidateBundleFailed",
             "Broker.Protocol",
+            "Broker.UsbipLockConflict",
+            "Broker.UsbipDeviceAbsent",
             "Broker.Unimplemented",
             "unknown-operation",
             "authz-audit-requires-admin",
@@ -21191,6 +21333,55 @@ mod broker_dispatch_tests {
             assert_eq!(
                 response.get("outcome").and_then(serde_json::Value::as_str),
                 Some("dry-run-planned")
+            );
+        }
+    }
+
+    fn host_shutdown_peer() -> PeerIdentity {
+        PeerIdentity {
+            role: PeerRole::HostShutdown,
+            uid: 0,
+        }
+    }
+
+    #[test]
+    fn host_shutdown_peer_is_allowed_vm_stop_only() {
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("host-shutdown-vmstop"));
+        let peer = host_shutdown_peer();
+        let (_, vm_stop_request) = destructive_mutating_requests()
+            .into_iter()
+            .find(|(verb, _)| *verb == "vmStop")
+            .expect("vmStop must be in destructive_mutating_requests");
+        // vmStop must succeed for HostShutdown.
+        let response = dispatch_request(&state, &peer, vm_stop_request)
+            .unwrap_or_else(|err| panic!("HostShutdown vmStop unexpectedly denied: {err:?}"));
+        assert_eq!(
+            response.get("type").and_then(serde_json::Value::as_str),
+            Some("mutatingVerbResponse"),
+            "HostShutdown vmStop must return mutatingVerbResponse"
+        );
+    }
+
+    #[test]
+    fn host_shutdown_peer_denied_all_non_vmstop_admin_verbs() {
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("host-shutdown-denied"));
+        let peer = host_shutdown_peer();
+        let denied_verbs: Vec<(&str, super::wire::Request)> = destructive_mutating_requests()
+            .into_iter()
+            .filter(|(verb, _)| *verb != "vmStop")
+            .collect();
+        assert!(
+            !denied_verbs.is_empty(),
+            "at least one non-vmStop admin verb must exist to deny"
+        );
+        for (verb, request) in denied_verbs {
+            let err = dispatch_request(&state, &peer, request)
+                .expect_err(&format!("HostShutdown must not be allowed {verb}"));
+            assert!(
+                matches!(err, super::typed_error::TypedError::AuthzNotAdmin { .. }),
+                "HostShutdown denial of {verb} must be AuthzNotAdmin, got {err:?}"
             );
         }
     }

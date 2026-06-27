@@ -327,6 +327,16 @@ pub const PUBLIC_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
+        "host shutdown-hook --apply",
+        "host lifecycle",
+        "global",
+        &["host-shutdown"],
+        true,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
         "host prepare --apply",
         "host",
         "global",
