@@ -755,7 +755,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Wave 4: /sys/module and modules.builtin detection tests
+    // /sys/module and modules.builtin detection tests
     // ------------------------------------------------------------------
 
     /// Virtio modules compiled as =y appear in `/sys/module/<name>/` but
@@ -813,7 +813,7 @@ mod tests {
 
     /// `run_kernel_module_check` pulls from both `/proc/modules` and
     /// `/sys/module`, so the PROC_MODULES_PATH constant must remain the
-    /// production `/proc/modules` path (not changed by the Wave-4 refactor).
+    /// production `/proc/modules` path.
     #[test]
     fn run_kernel_module_check_still_reads_proc_modules() {
         assert_eq!(PROC_MODULES_PATH, "/proc/modules");

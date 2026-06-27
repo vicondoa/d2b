@@ -13203,7 +13203,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Wave 0: retry_usbip_backend_acl_grant unit tests
+    // retry_usbip_backend_acl_grant unit tests
     // ------------------------------------------------------------------
 
     /// Helper that tracks grant/revoke calls for retry function unit tests.
