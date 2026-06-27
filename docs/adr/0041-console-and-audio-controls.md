@@ -156,14 +156,12 @@ Audio policy uses typed state and provider-specific enforcement:
   stable coordination point; unlinking it would silently create a new
   inode on next open, breaking coordination with any process that still
   holds the old fd). The per-VM lock inode footprint is bounded by the
-  declared VM name set: exactly one lock file per named VM
-  (`/run/d2b/locks/<vm>.lock`) is created at first audio mutation; no
-  lock files are created for VMs that have never had an audio mutation.
-  The total inodes consumed equals the number of VM names that have ever
-  had audio state written in the current host activation. Declared VM
-  names are validated at eval time (regex `^[a-z][a-z0-9-]*$`), so the
-  inode count is strictly bounded by the operator's declared
-  configuration.
+  declared VM name set: one lock file per declared audio VM
+  (`/run/d2b/locks/audio-<vm>.lock`) is pre-created by tmpfiles at boot
+  (`f` rule, mode `0660 root:d2b`) and is never unlinked. The inode
+  count equals the number of declared audio VMs. Declared VM names are
+  validated at eval time (regex `^[a-z][a-z0-9-]*$`), so the inode
+  count is strictly bounded by the operator's declared configuration.
 - Cloud Hypervisor NixOS VMs apply both host-side PipeWire policy and
   guest-side guestd policy. Host-side `off` requests are fail-closed:
   the host boundary is sealed even if guestd is unresponsive, with a

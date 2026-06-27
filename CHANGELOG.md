@@ -60,23 +60,15 @@ deprecations ship one minor release before removal.
   and `AudioPlayback`/`AudioCapture` when audio guest enforcement is ready.
   ACA sandbox descriptors never expose relay URLs, tokens, resource IDs, or
   raw endpoints.
-- New reference doc: [provider capability matrix](docs/reference/provider-capability-matrix.md)
-  documents the console and audio capability boundaries across the three d2b
-  runtime providers (Cloud Hypervisor NixOS, qemu-media, ACA sandbox), covering
-  console transport choices, persistent drainer ownership, audio enforcement
-  modes, and desktop control surface constraints. Grounded by
+- New reference doc [provider-capability-matrix.md](docs/reference/provider-capability-matrix.md)
+  documents console and audio capability boundaries across the three d2b runtime
+  providers (Cloud Hypervisor NixOS, qemu-media, ACA sandbox): console transport
+  choices (broker-owned fd-backed chardev rationale for qemu-media), per-transport
+  QoS requirements (dedicated vsock ports or relay channels, no backpressure,
+  uninterrupted draining), OFD audio lock semantics (`fcntl(F_OFD_SETLKW)`,
+  `O_CLOEXEC`, persistent inode, bounded footprint), audio enforcement modes,
+  and desktop control surface constraints. Grounded by
   [ADR 0041](docs/adr/0041-console-and-audio-controls.md).
-- Expanded `docs/reference/provider-capability-matrix.md` with a new "Console
-  stream isolation" section documenting per-transport QoS requirements: console
-  streams must use dedicated vsock ports or relay channels, separate from
-  health/audio/control traffic; ring-buffer drainer must never apply
-  backpressure to the guest; attach/detach must not pause draining. The Cloud
-  Hypervisor audio enforcement subsection now documents precise OFD lock
-  semantics: `fcntl(F_OFD_SETLKW)` with `O_CLOEXEC`, persistent inode
-  rationale, and bounded inode footprint per declared VM name set. The
-  qemu-media console transport subsection now documents the QEMU fd-backed
-  chardev preference over path sockets (ownership inversion, filesystem
-  exposure, stale socket race, and QEMU socket-permission posture).
 - [ADR 0041](docs/adr/0041-console-and-audio-controls.md) expanded with a
   "Console stream isolation and QoS" section (vsock port isolation, relay
   channel separation, ring-buffer backpressure contract), expanded QEMU chardev
@@ -84,13 +76,10 @@ deprecations ship one minor release before removal.
   broker-owned fd-backed chardev is required over qemu-created path sockets),
   and expanded audio lock semantics in the Audio control section (OFD lock type,
   `O_CLOEXEC`, inode persistence rationale, bounded inode footprint).
-- `docs/how-to/use-console-and-audio.md` rewritten as a proper goal-oriented
-  how-to: removed the Background section, added "Before you begin"
-  prerequisites, and restructured all content as step-by-step operator tasks
-  with verification steps and expected outcomes for each goal.
 - New how-to [use-console-and-audio.md](docs/how-to/use-console-and-audio.md)
-  documents intended `d2b console` / `d2b audio` usage, per-provider behavior,
-  and `d2b-wlcontrol` badge semantics for operators planning their configurations.
+  covers step-by-step `d2b console` / `d2b audio` usage with per-provider
+  behavior, verification steps, expected outcomes for each operator task, and
+  `d2b-wlcontrol` badge semantics.
 - `d2bd` now recognizes `uid=0` connections as a narrow `HostShutdown`
   authority scoped exclusively to `vmStop` during host-shutdown teardown. This
   fixes the long-standing post-reboot failure where the guarded `ExecStop`

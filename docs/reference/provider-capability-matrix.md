@@ -74,7 +74,7 @@ contract is identical to the Cloud Hypervisor case.
 
 ACA sandboxes are expected to run a guestd-compatible in-sandbox
 agent. If the agent is absent, the daemon returns a typed
-`provider-misconfiguration` error with a remediation that points
+`provider-misconfigured` error with a remediation that points
 to the sandbox configuration. The daemon does **not** fall back to
 `executeShellCommand` as a console substitute; that would violate the
 no-raw-shell-channel constraint in ADR 0032 and ADR 0041.
@@ -124,7 +124,7 @@ and guest-side enforcement via `guestd`:
 - Volume and gain are bounded `0..=100` domain values validated at the
   public-wire boundary before reaching the daemon.
 - Local audio state is versioned and written atomically under an OFD
-  lock at `/run/d2b/locks/<vm>.lock`. The lock is acquired with
+  lock at `/run/d2b/locks/audio-<vm>.lock`. The lock is acquired with
   `fcntl(F_OFD_SETLKW)` (blocking exclusive write lock for state
   mutations; shared read locks for readers). Lock file descriptors are
   opened with `O_CLOEXEC` so exec'd child processes do not inherit the
@@ -138,9 +138,10 @@ and guest-side enforcement via `guestd`:
   releases the OFD lock when all fds to the open file description close;
   the inode persisting on disk is not a stale lock.
 - The per-VM lock inode footprint is bounded by the declared VM name
-  set. Exactly one lock file per named VM is created on first audio
-  mutation; VMs that have never had an audio mutation have no lock file.
-  Declared VM names are validated at eval time
+  set. One lock file per declared audio VM (`audio-<vm>.lock`) is
+  pre-created by tmpfiles at boot (`f` rule, mode `0660 root:d2b`) and
+  is never unlinked; the inode count equals the number of declared audio
+  VMs. Declared VM names are validated at eval time
   (`^[a-z][a-z0-9-]*$`), so the inode count is bounded by the
   operator's declared configuration, not by dynamic runtime state.
 - Host-side `off` requests are fail-closed: the host boundary is sealed
@@ -187,7 +188,7 @@ provider:
 - qemu-media host-side audio controls are enabled when the host subset
   is supported; the UI shows a `host-only` annotation alongside the
   controls.
-- ACA missing-guestd states surface as provider-misconfiguration with
+- ACA missing-guestd states surface as `provider-misconfigured` with
   remediation text, not as disabled UI controls.
 - Volume and gain sliders send final or debounced mutations only; they
   do not dismiss layer-shell popups during drag.
