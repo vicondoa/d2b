@@ -57,7 +57,6 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       internal = true;
-      readOnly = true;
       description = ''
         Absolute in-guest path to the `wpctl` binary (from the
         `wireplumber` package). Non-null only for guests with the audio
