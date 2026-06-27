@@ -245,6 +245,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
+name = "d2b-guest-shell-runner"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "clap",
+ "libshpool",
+ "predicates",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "difflib"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -603,20 +617,6 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "memoffset",
-]
-
-[[package]]
-name = "d2b-guest-shell-runner"
-version = "0.0.0-bootstrap"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "clap",
- "libshpool",
- "predicates",
- "serde",
- "serde_json",
- "thiserror",
 ]
 
 [[package]]

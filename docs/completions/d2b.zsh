@@ -699,7 +699,7 @@ _arguments "${_arguments_options[@]}" : \
         case $line[1] in
             (list)
 _arguments "${_arguments_options[@]}" : \
-'--target=[Optional realm target to filter, for example \`d2bLib\://demo.gw.work.d2b\`]:TARGET:_default' \
+'--target=[Optional realm target to filter, for example \`d2b\://demo.gw.work.d2b\`]:TARGET:_default' \
 '(--human)--json[]' \
 '(--json)--human[]' \
 '-h[Print help]' \
