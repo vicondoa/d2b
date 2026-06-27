@@ -3254,9 +3254,10 @@ mod tests {
     #[test]
     fn audio_public_wire_json_shape_is_stable() {
         use super::{
-            AudioChannel, AudioChannelState, AudioEnforcementPosture, AudioErrorKind, AudioMuteArgs,
-            AudioOp, AudioOpResponse, AudioProviderKind, AudioSetApplied, AudioSetResult,
-            AudioStatusArgs, AudioStatusResult, AudioVmError, AudioVmState, PublicResponse,
+            AudioChannel, AudioChannelState, AudioEnforcementPosture, AudioErrorKind,
+            AudioMuteArgs, AudioOp, AudioOpResponse, AudioProviderKind, AudioSetApplied,
+            AudioSetResult, AudioStatusArgs, AudioStatusResult, AudioVmError, AudioVmState,
+            PublicResponse,
         };
 
         // Status request with explicit VM list.
