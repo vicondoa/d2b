@@ -98,6 +98,7 @@ const ACTIVATION_MAX_TIMEOUT_MS: u64 = 60 * 60 * 1_000;
 #[cfg(test)]
 const ACTIVATION_DEFAULT_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
 const ACTIVATION_TIMEOUT_STOP_SEC: u64 = 10;
+const WPCTL_COMMAND_TIMEOUT_MS: u64 = 5_000;
 /// Maximum concurrent in-flight `WriteStdin` handlers per connection. A
 /// fifth concurrent handler is shed with `StdinBackpressure`.
 const WRITE_STDIN_HANDLERS_PER_CONNECTION: u64 = 4;
@@ -169,10 +170,12 @@ pub struct GuestdServeConfig {
     /// activation always runs as root inside the guest via a transient systemd
     /// unit, never through workload-user exec.
     pub activation: Option<ActivationRuntimeConfig>,
-    /// Enable in-guest audio RPC handling (AudioStatus/AudioSet). When `true`,
-    /// guestd advertises the AudioStatus and AudioSet capabilities and serves
-    /// audio channel state queries via guest PipeWire control.
-    pub audio: bool,
+    /// Audio runtime configuration: absolute path to `wpctl`. When set and the
+    /// binary is reachable at startup, guestd advertises AudioStatus/AudioSet and
+    /// serves PipeWire queries targeting the workload user's session.
+    /// `None` (default) means audio is not configured; capabilities are not
+    /// advertised and handlers return `AudioPipeWireUnavailable` fail-closed.
+    pub audio: Option<AudioRuntimeConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -222,6 +225,29 @@ pub struct ActivationRuntimeConfig {
     pub max_timeout_ms: u64,
 }
 
+/// Host-supplied audio runtime configuration for guestd.
+///
+/// Holds the absolute path to `wpctl`. The workload-user UID is resolved
+/// at startup and combined with this path to build the active audio runtime.
+/// Capability advertisement and RPC dispatch are both gated on this being
+/// present and the wpctl binary being reachable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudioRuntimeConfig {
+    /// Absolute path to the `wpctl` binary (Nix-store path from `wireplumber`).
+    pub wpctl_path: PathBuf,
+}
+
+/// Active audio runtime derived at startup from [`AudioRuntimeConfig`] and
+/// the resolved workload-user UID. Only present when the wpctl binary exists
+/// and the workload user was successfully resolved.
+#[derive(Clone, Debug)]
+struct AudioRuntime {
+    wpctl_path: PathBuf,
+    /// Workload-user UID; used to build `PIPEWIRE_RUNTIME_DIR=/run/user/<uid>`
+    /// for every wpctl subprocess so they target the user's PipeWire session.
+    workload_uid: u32,
+}
+
 impl GuestdServeConfig {
     pub fn new(vm_id: impl Into<String>, token: Vec<u8>) -> Result<Self, GuestdServiceError> {
         Self::with_exec_policy(vm_id, token, ExecPolicy::disabled())
@@ -246,7 +272,7 @@ impl GuestdServeConfig {
             usbip_path: None,
             shell_policy: ShellPolicy::disabled(),
             activation: None,
-            audio: false,
+            audio: None,
         })
     }
 
@@ -285,6 +311,16 @@ impl GuestdServeConfig {
 
     pub fn with_activation_runtime(mut self, activation: ActivationRuntimeConfig) -> Self {
         self.activation = Some(activation);
+        self
+    }
+
+    /// Attach audio runtime configuration: the absolute path to the `wpctl`
+    /// binary. When set and the binary is reachable at startup, guestd advertises
+    /// `AudioStatus`/`AudioSet` and serves PipeWire queries in the workload
+    /// user's session. Capability advertisement requires the workload user to
+    /// also be configured (`--exec-user`).
+    pub fn with_audio_runtime(mut self, config: AudioRuntimeConfig) -> Self {
+        self.audio = Some(config);
         self
     }
 }
@@ -418,20 +454,14 @@ fn derive_capabilities_config(
     usbip_import: bool,
     system_activation: bool,
     shell_limits: Option<(u32, u32)>,
-    audio: bool,
+    audio_usable: bool,
 ) -> CapabilitiesConfig {
     let shell_usable = shell_limits.is_some();
     let (shell_sessions_per_vm, shell_attached_sessions_per_vm) = shell_limits.unwrap_or((0, 0));
-    // Audio capabilities are intentionally not advertised regardless of the
-    // `audio` flag: the `audio_status` and `audio_set` handlers always return
-    // AUDIO_PIPEWIRE_UNAVAILABLE because the in-guest PipeWire query/set path
-    // is not yet connected in this build. Advertising capabilities the
-    // handlers cannot fulfil would cause host-side dispatch to falsely report
-    // HostAndGuest enforcement. Re-enable when the wpctl argv-only integration
-    // lands and the handlers return real state. The `audio` parameter is
-    // retained for configuration tracking; only capability advertisement is
-    // suppressed here.
-    let _ = audio;
+    // Audio capabilities are advertised only when the wpctl binary was found at
+    // startup and the workload user was resolved. Both conditions are captured
+    // in `audio_usable`; without them the handlers return
+    // AudioPipeWireUnavailable fail-closed.
     CapabilitiesConfig {
         exec_attached: exec_paths_present,
         exec_detached,
@@ -446,8 +476,8 @@ fn derive_capabilities_config(
         shell_force_attach: shell_usable,
         shell_sessions_per_vm,
         shell_attached_sessions_per_vm,
-        audio_status: false,
-        audio_set: false,
+        audio_status: audio_usable,
+        audio_set: audio_usable,
     }
 }
 
@@ -496,7 +526,7 @@ pub struct ServiceRuntime {
     activation: SharedActivation,
     guest_config_path: Option<PathBuf>,
     usbip_path: Option<PathBuf>,
-    audio: bool,
+    audio: Option<Arc<AudioRuntime>>,
 }
 
 trait StartupProbe {
@@ -706,6 +736,22 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
         Arc::new(ShellRuntime::disabled())
     };
 
+    // Audio runtime: usable only when the wpctl binary is present AND the
+    // workload user was resolved. Without both conditions the handlers return
+    // AudioPipeWireUnavailable fail-closed and no capabilities are advertised.
+    let audio_runtime: Option<Arc<AudioRuntime>> = config
+        .audio
+        .as_ref()
+        .filter(|cfg| probe.path_is_file(&cfg.wpctl_path))
+        .and_then(|cfg| {
+            exec_uid.map(|uid| {
+                Arc::new(AudioRuntime {
+                    wpctl_path: cfg.wpctl_path.clone(),
+                    workload_uid: uid,
+                })
+            })
+        });
+
     let capabilities = derive_capabilities_config(
         // Non-TTY attached exec (and its required ReadOutput streaming) is served
         // iff the workload-user runtime paths are present.
@@ -719,7 +765,7 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
             config.shell_policy.max_sessions,
             config.shell_policy.max_attached,
         )),
-        config.audio,
+        audio_runtime.is_some(),
     );
 
     let auth = Arc::new(Mutex::new(build_runtime_auth_core(
@@ -735,7 +781,7 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
         activation,
         guest_config_path,
         usbip_path,
-        audio: config.audio,
+        audio: audio_runtime,
     })
 }
 
@@ -1543,7 +1589,7 @@ where
             .with_activation_runtime(runtime.activation)
             .with_guest_config_path(runtime.guest_config_path)
             .with_usbip_path(runtime.usbip_path)
-            .with_audio(runtime.audio),
+            .with_audio_runtime(runtime.audio),
     );
     let mut server = ttrpc::r#async::Server::new()
         .add_listener(listener)
@@ -1579,9 +1625,11 @@ pub struct GuestControlService {
     // Host-declared absolute path to the guest `usbip` binary. `None` => the
     // USBIP import capability is absent and the RPC returns UsbipUnavailable.
     usbip_path: Option<PathBuf>,
-    // Whether audio status/set RPCs are enabled. When true the AudioStatus and
-    // AudioSet capabilities are advertised and the RPCs are served.
-    audio: bool,
+    // Active audio runtime: wpctl path + workload-user UID. `None` => audio is
+    // not configured or the wpctl binary was not found at startup; the
+    // AudioStatus and AudioSet capabilities are not advertised and handlers
+    // return AudioPipeWireUnavailable fail-closed.
+    audio: Option<Arc<AudioRuntime>>,
 }
 
 impl GuestControlService {
@@ -1602,7 +1650,7 @@ impl GuestControlService {
             write_stdin_bytes: Arc::new(AtomicU64::new(0)),
             guest_config_path: None,
             usbip_path: None,
-            audio: false,
+            audio: None,
         }
     }
 
@@ -1620,9 +1668,11 @@ impl GuestControlService {
         self
     }
 
-    /// Enable in-guest audio RPC handling.
-    pub fn with_audio(mut self, audio: bool) -> Self {
-        self.audio = audio;
+    /// Attach the active audio runtime. When `Some`, the AudioStatus/AudioSet
+    /// capabilities are advertised and RPCs target the workload user's PipeWire
+    /// session via wpctl argv-only subprocesses.
+    pub fn with_audio_runtime(mut self, runtime: Option<Arc<AudioRuntime>>) -> Self {
+        self.audio = runtime;
         self
     }
 
@@ -2043,6 +2093,73 @@ impl GuestControlService {
                 Ok(response)
             }
         }
+    }
+
+    /// Query both audio channels from the workload user's PipeWire session.
+    async fn audio_status_inner(
+        &self,
+    ) -> Result<(pb::GuestAudioChannelState, pb::GuestAudioChannelState), pb::GuestControlErrorKind>
+    {
+        let runtime = self
+            .audio
+            .as_deref()
+            .ok_or(pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE)?;
+        let microphone = query_wpctl_channel_state(
+            &runtime.wpctl_path,
+            "@DEFAULT_SOURCE@",
+            runtime.workload_uid,
+        )
+        .await?;
+        let speaker = query_wpctl_channel_state(
+            &runtime.wpctl_path,
+            "@DEFAULT_SINK@",
+            runtime.workload_uid,
+        )
+        .await?;
+        Ok((microphone, speaker))
+    }
+
+    /// Mutate one audio channel in the workload user's PipeWire session via
+    /// wpctl argv-only subprocesses, then query and return the updated state.
+    async fn audio_set_inner(
+        &self,
+        channel: protobuf::EnumOrUnknown<pb::AudioChannel>,
+        kind: protobuf::EnumOrUnknown<pb::AudioSetKind>,
+        grant_on: bool,
+        level: u32,
+    ) -> Result<pb::GuestAudioChannelState, pb::GuestControlErrorKind> {
+        use pb::GuestControlErrorKind as K;
+        let runtime = self
+            .audio
+            .as_deref()
+            .ok_or(K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE)?;
+        let target = wpctl_channel_target(channel)?;
+        match kind.enum_value() {
+            Ok(pb::AudioSetKind::AUDIO_SET_KIND_GRANT) => {
+                let mute_arg = if grant_on { "0" } else { "1" };
+                run_wpctl_command(
+                    &runtime.wpctl_path,
+                    &["set-mute", target, mute_arg],
+                    runtime.workload_uid,
+                )
+                .await?;
+            }
+            Ok(pb::AudioSetKind::AUDIO_SET_KIND_LEVEL) => {
+                if level > 100 {
+                    return Err(K::GUEST_CONTROL_ERROR_KIND_AUDIO_LEVEL_OUT_OF_RANGE);
+                }
+                let vol = format!("{:.4}", level as f64 / 100.0);
+                run_wpctl_command(
+                    &runtime.wpctl_path,
+                    &["set-volume", target, &vol],
+                    runtime.workload_uid,
+                )
+                .await?;
+            }
+            _ => return Err(K::GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN),
+        }
+        // Return the updated state after the mutation.
+        query_wpctl_channel_state(&runtime.wpctl_path, target, runtime.workload_uid).await
     }
 }
 
@@ -3430,20 +3547,15 @@ impl GuestControl for GuestControlService {
         self.validate_metadata(request.metadata.as_ref())?;
 
         let mut response = pb::AudioStatusResponse::new();
-        if !self.audio {
-            response.error = MessageField::some(guest_error(
-                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE,
-            ));
-            return Ok(response);
+        match self.audio_status_inner().await {
+            Ok((microphone, speaker)) => {
+                response.microphone = MessageField::some(microphone);
+                response.speaker = MessageField::some(speaker);
+            }
+            Err(kind) => {
+                response.error = MessageField::some(guest_error(kind));
+            }
         }
-
-        // Guest-side PipeWire query via wpctl argv-only subprocess.
-        // For Wave 2, return PIPEWIRE_UNAVAILABLE to indicate that the
-        // guest-side query path is not yet connected. The host-side
-        // AudioOp::Status reads from the local state file directly.
-        response.error = MessageField::some(guest_error(
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE,
-        ));
         Ok(response)
     }
 
@@ -3456,20 +3568,17 @@ impl GuestControl for GuestControlService {
         self.validate_metadata(request.metadata.as_ref())?;
 
         let mut response = pb::AudioSetResponse::new();
-        if !self.audio {
-            response.error = MessageField::some(guest_error(
-                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE,
-            ));
-            return Ok(response);
+        match self
+            .audio_set_inner(request.channel, request.kind, request.grant_on, request.level)
+            .await
+        {
+            Ok(state) => {
+                response.state = MessageField::some(state);
+            }
+            Err(kind) => {
+                response.error = MessageField::some(guest_error(kind));
+            }
         }
-
-        // Guest-side PipeWire set via wpctl argv-only subprocess.
-        // For Wave 2, the enforcement posture is host-primary: the host
-        // writes the local state file and enforces via the vhost-user-sound
-        // PipeWire node. Guest enforcement is a follow-on integration.
-        response.error = MessageField::some(guest_error(
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE,
-        ));
         Ok(response)
     }
 }
@@ -3778,6 +3887,101 @@ fn parse_guest_usbip_uri(
         tcp_port,
         bus_id: bus_id.to_owned(),
     }))
+}
+
+// ── wpctl audio helpers ──────────────────────────────────────────────────────
+
+/// Map a protobuf `AudioChannel` enum to the wpctl target string.
+fn wpctl_channel_target(
+    channel: protobuf::EnumOrUnknown<pb::AudioChannel>,
+) -> Result<&'static str, pb::GuestControlErrorKind> {
+    match channel.enum_value() {
+        Ok(pb::AudioChannel::AUDIO_CHANNEL_SPEAKER) => Ok("@DEFAULT_SINK@"),
+        Ok(pb::AudioChannel::AUDIO_CHANNEL_MICROPHONE) => Ok("@DEFAULT_SOURCE@"),
+        _ => Err(pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN),
+    }
+}
+
+/// Run a wpctl subcommand as an argv-only subprocess in the workload user's
+/// PipeWire session. `PIPEWIRE_RUNTIME_DIR=/run/user/<workload_uid>` is set so
+/// wpctl connects to the user's daemon, never to root's socket.
+async fn run_wpctl_command(
+    wpctl_path: &Path,
+    args: &[&str],
+    workload_uid: u32,
+) -> Result<std::process::Output, pb::GuestControlErrorKind> {
+    use pb::GuestControlErrorKind as K;
+    let pipewire_runtime_dir = format!("/run/user/{workload_uid}");
+    let mut command = TokioCommand::new(wpctl_path);
+    command
+        .args(args)
+        .env("PIPEWIRE_RUNTIME_DIR", &pipewire_runtime_dir)
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(
+        Duration::from_millis(WPCTL_COMMAND_TIMEOUT_MS),
+        command.output(),
+    )
+    .await
+    .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE)?
+    .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE)?;
+    if output.status.success() {
+        Ok(output)
+    } else {
+        Err(K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE)
+    }
+}
+
+/// Query the current state of one wpctl target (`@DEFAULT_SINK@` or
+/// `@DEFAULT_SOURCE@`) from the workload user's PipeWire session.
+async fn query_wpctl_channel_state(
+    wpctl_path: &Path,
+    target: &str,
+    workload_uid: u32,
+) -> Result<pb::GuestAudioChannelState, pb::GuestControlErrorKind> {
+    let output =
+        run_wpctl_command(wpctl_path, &["get-volume", target], workload_uid).await?;
+    let stdout = std::str::from_utf8(&output.stdout).map_err(|_| {
+        pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE
+    })?;
+    parse_wpctl_get_volume_output(stdout)
+}
+
+/// Parse `wpctl get-volume` stdout.
+///
+/// Expected formats:
+/// - `Volume: 0.50`
+/// - `Volume: 0.50 [MUTED]`
+///
+/// Returns a protobuf `GuestAudioChannelState` with `muted`, `level` (0–100),
+/// and `level_known = true`. Returns `AudioPipeWireUnavailable` on any parse
+/// failure so the caller fails closed.
+fn parse_wpctl_get_volume_output(
+    output: &str,
+) -> Result<pb::GuestAudioChannelState, pb::GuestControlErrorKind> {
+    use pb::GuestControlErrorKind as K;
+    let line = output.lines().next().unwrap_or("").trim();
+    let rest = line
+        .strip_prefix("Volume: ")
+        .ok_or(K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE)?;
+    let muted = rest.contains("[MUTED]");
+    let vol_str = rest
+        .split_whitespace()
+        .next()
+        .ok_or(K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE)?;
+    let vol: f64 = vol_str
+        .parse()
+        .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE)?;
+    // Clamp to [0, 100] even if wpctl reports > 1.0 (boosted volume).
+    let level = (vol * 100.0).round().clamp(0.0, 100.0) as u32;
+    let mut state = pb::GuestAudioChannelState::new();
+    state.muted = muted;
+    state.level = level;
+    state.level_known = true;
+    Ok(state)
 }
 
 fn guest_error(kind: pb::GuestControlErrorKind) -> pb::GuestControlError {
@@ -4480,34 +4684,201 @@ mod tests {
     }
 
     #[test]
-    fn audio_caps_never_advertised_when_handlers_return_unavailable() {
-        // audio_status and audio_set handlers always return PIPEWIRE_UNAVAILABLE
-        // in this build because the in-guest wpctl path is not connected.
-        // Advertising these capabilities would cause d2bd to falsely report
-        // HostAndGuest enforcement. This test locks that they are NEVER
-        // advertised regardless of the `audio` parameter.
-        for audio in [false, true] {
-            let cfg = derive_capabilities_config(
-                true,  // exec_paths_present
-                false, // exec_detached
-                false, // exec_tty
-                false, // read_guest_file
-                false, // usbip_import
-                false, // system_activation
-                None,  // shell_limits
-                audio,
-            );
-            assert!(
-                !cfg.audio_status,
-                "audio_status must not be advertised (audio={audio}): \
-                 handlers return PIPEWIRE_UNAVAILABLE"
-            );
-            assert!(
-                !cfg.audio_set,
-                "audio_set must not be advertised (audio={audio}): \
-                 handlers return PIPEWIRE_UNAVAILABLE"
-            );
-        }
+    fn audio_caps_not_advertised_without_runtime() {
+        // Without a usable audio runtime (audio_usable=false), AudioStatus and
+        // AudioSet must not be advertised — handlers would return
+        // AudioPipeWireUnavailable fail-closed which would cause d2bd to
+        // incorrectly report HostAndGuest enforcement.
+        let cfg = derive_capabilities_config(
+            true,  // exec_paths_present
+            false, // exec_detached
+            false, // exec_tty
+            false, // read_guest_file
+            false, // usbip_import
+            false, // system_activation
+            None,  // shell_limits
+            false, // audio_usable
+        );
+        assert!(
+            !cfg.audio_status,
+            "audio_status must not be advertised without a usable audio runtime"
+        );
+        assert!(
+            !cfg.audio_set,
+            "audio_set must not be advertised without a usable audio runtime"
+        );
+    }
+
+    #[test]
+    fn audio_caps_advertised_with_runtime() {
+        // When audio_usable=true (wpctl binary present + workload user resolved),
+        // both AudioStatus and AudioSet must be advertised.
+        let cfg = derive_capabilities_config(
+            true,  // exec_paths_present
+            false, // exec_detached
+            false, // exec_tty
+            false, // read_guest_file
+            false, // usbip_import
+            false, // system_activation
+            None,  // shell_limits
+            true,  // audio_usable
+        );
+        assert!(
+            cfg.audio_status,
+            "audio_status must be advertised when audio runtime is usable"
+        );
+        assert!(
+            cfg.audio_set,
+            "audio_set must be advertised when audio runtime is usable"
+        );
+    }
+
+    #[test]
+    fn parse_wpctl_volume_unmuted() {
+        let state = parse_wpctl_get_volume_output("Volume: 0.50\n").unwrap();
+        assert!(!state.muted);
+        assert_eq!(state.level, 50);
+        assert!(state.level_known);
+    }
+
+    #[test]
+    fn parse_wpctl_volume_muted() {
+        let state = parse_wpctl_get_volume_output("Volume: 0.75 [MUTED]\n").unwrap();
+        assert!(state.muted);
+        assert_eq!(state.level, 75);
+        assert!(state.level_known);
+    }
+
+    #[test]
+    fn parse_wpctl_volume_zero() {
+        let state = parse_wpctl_get_volume_output("Volume: 0.00\n").unwrap();
+        assert!(!state.muted);
+        assert_eq!(state.level, 0);
+    }
+
+    #[test]
+    fn parse_wpctl_volume_full() {
+        let state = parse_wpctl_get_volume_output("Volume: 1.00\n").unwrap();
+        assert!(!state.muted);
+        assert_eq!(state.level, 100);
+    }
+
+    #[test]
+    fn parse_wpctl_volume_boosted_clamped_to_100() {
+        // wpctl can report > 1.0 for boosted volumes; clamp to 100.
+        let state = parse_wpctl_get_volume_output("Volume: 1.50\n").unwrap();
+        assert_eq!(state.level, 100);
+    }
+
+    #[test]
+    fn parse_wpctl_volume_malformed_returns_unavailable() {
+        use pb::GuestControlErrorKind as K;
+        let err =
+            parse_wpctl_get_volume_output("unexpected output\n").unwrap_err();
+        assert_eq!(
+            err,
+            K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE,
+            "malformed wpctl output must return AudioPipeWireUnavailable"
+        );
+    }
+
+    #[test]
+    fn parse_wpctl_volume_empty_returns_unavailable() {
+        use pb::GuestControlErrorKind as K;
+        let err = parse_wpctl_get_volume_output("").unwrap_err();
+        assert_eq!(err, K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn wpctl_channel_target_speaker() {
+        let target = wpctl_channel_target(protobuf::EnumOrUnknown::new(
+            pb::AudioChannel::AUDIO_CHANNEL_SPEAKER,
+        ))
+        .unwrap();
+        assert_eq!(target, "@DEFAULT_SINK@");
+    }
+
+    #[test]
+    fn wpctl_channel_target_microphone() {
+        let target = wpctl_channel_target(protobuf::EnumOrUnknown::new(
+            pb::AudioChannel::AUDIO_CHANNEL_MICROPHONE,
+        ))
+        .unwrap();
+        assert_eq!(target, "@DEFAULT_SOURCE@");
+    }
+
+    #[test]
+    fn wpctl_channel_target_unspecified_returns_unknown() {
+        use pb::GuestControlErrorKind as K;
+        let err = wpctl_channel_target(protobuf::EnumOrUnknown::new(
+            pb::AudioChannel::AUDIO_CHANNEL_UNSPECIFIED,
+        ))
+        .unwrap_err();
+        assert_eq!(err, K::GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN);
+    }
+
+    #[tokio::test]
+    async fn audio_status_unavailable_without_runtime() {
+        // When no audio runtime is configured, audio_status_inner must return
+        // AudioPipeWireUnavailable — never a success-shaped response.
+        use pb::GuestControlErrorKind as K;
+        // test_service has audio=None by default (no with_audio_runtime call).
+        let service = test_service(220);
+        let err = service.audio_status_inner().await.unwrap_err();
+        assert_eq!(
+            err,
+            K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE,
+            "audio_status_inner must return AudioPipeWireUnavailable without runtime"
+        );
+    }
+
+    #[tokio::test]
+    async fn audio_set_unavailable_without_runtime() {
+        // When no audio runtime is configured, audio_set_inner must return
+        // AudioPipeWireUnavailable — never a success-shaped response.
+        use pb::GuestControlErrorKind as K;
+        let service = test_service(221);
+        let err = service
+            .audio_set_inner(
+                protobuf::EnumOrUnknown::new(pb::AudioChannel::AUDIO_CHANNEL_SPEAKER),
+                protobuf::EnumOrUnknown::new(pb::AudioSetKind::AUDIO_SET_KIND_GRANT),
+                true,
+                0,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err,
+            K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE,
+            "audio_set_inner must return AudioPipeWireUnavailable without runtime"
+        );
+    }
+
+    #[tokio::test]
+    async fn audio_set_level_out_of_range() {
+        // Level > 100 must return AudioLevelOutOfRange before any wpctl call.
+        use pb::GuestControlErrorKind as K;
+        // Provide a fake wpctl path (non-existent) to ensure the level guard
+        // fires before the subprocess attempt.
+        let audio_rt = Arc::new(AudioRuntime {
+            wpctl_path: PathBuf::from("/nix/store/fake-wpctl/bin/wpctl"),
+            workload_uid: 1000,
+        });
+        let service = test_service(222).with_audio_runtime(Some(audio_rt));
+        let err = service
+            .audio_set_inner(
+                protobuf::EnumOrUnknown::new(pb::AudioChannel::AUDIO_CHANNEL_SPEAKER),
+                protobuf::EnumOrUnknown::new(pb::AudioSetKind::AUDIO_SET_KIND_LEVEL),
+                false,
+                101, // out of range
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err,
+            K::GUEST_CONTROL_ERROR_KIND_AUDIO_LEVEL_OUT_OF_RANGE,
+            "level 101 must return AudioLevelOutOfRange"
+        );
     }
 
     #[test]
