@@ -49,6 +49,14 @@ deprecations ship one minor release before removal.
   capabilities the handlers cannot fulfil would cause `d2bd` to report
   false `HostAndGuest` enforcement. Capabilities will be re-enabled once
   the in-guest `wpctl` integration lands.
+- `guestd` `AudioStatus` and `AudioSet` handlers now use real `wpctl`
+  argv-only subprocesses targeting the workload user's PipeWire session.
+  The `--wpctl-path` flag (set to `wireplumber/bin/wpctl` by the guest
+  audio component) enables the runtime; capabilities are only advertised
+  when the binary exists and the workload UID is known at startup.
+  `PIPEWIRE_RUNTIME_DIR` is set per-user so wpctl never touches root's
+  PipeWire socket. Level > 100 returns `AudioLevelOutOfRange`; missing
+  PipeWire returns typed `AudioPipeWireUnavailable`.
 - `audioService` (`d2b-<vm>-snd.service`) is fully retired: the field
   is unconditionally `null` in all manifest and daemon-access paths;
   `ProcessRole::Audio` is the sole source of truth for audio runner
