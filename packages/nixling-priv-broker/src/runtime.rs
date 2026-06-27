@@ -8593,18 +8593,14 @@ impl BrokerError {
                 "Broker.UsbipLockConflict",
                 "UsbipBind",
                 None,
-                &format!(
-                    "UsbipBind refused: busid {busid} is already claimed by another VM"
-                ),
+                &format!("UsbipBind refused: busid {busid} is already claimed by another VM"),
                 "Stop the VM currently holding this busid or use `nixling usb detach` to release the claim, then retry.",
             ),
             Self::UsbipDeviceAbsent { busid } => error_response(
                 "Broker.UsbipDeviceAbsent",
                 "UsbipBind",
                 None,
-                &format!(
-                    "UsbipBind refused: USB device {busid} is not present in sysfs"
-                ),
+                &format!("UsbipBind refused: USB device {busid} is not present in sysfs"),
                 "Confirm the physical device is connected and recognized by the host kernel, then retry.",
             ),
             Self::LiveHandler(message) => error_response(
@@ -8734,7 +8730,8 @@ impl BrokerError {
 }
 
 fn public_live_handler_message(message: &str) -> String {
-    if message.contains("USB") || message.contains("usb") || message.contains("/sys/") {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("usbip") || lower.contains("/sys/bus/usb") {
         "privileged USB host operation failed; details are available only in the broker audit log"
             .to_owned()
     } else {
