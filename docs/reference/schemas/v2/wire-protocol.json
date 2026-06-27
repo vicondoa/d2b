@@ -226,6 +226,478 @@
       },
       "additionalProperties": false
     },
+    "AudioChannel": {
+      "description": "An audio channel controlled by a single operation.",
+      "oneOf": [
+        {
+          "description": "Speaker / playback output volume.",
+          "type": "string",
+          "enum": [
+            "speaker"
+          ]
+        },
+        {
+          "description": "Microphone / capture gain.",
+          "type": "string",
+          "enum": [
+            "microphone"
+          ]
+        }
+      ]
+    },
+    "AudioChannelState": {
+      "description": "Per-channel audio state for one VM target.",
+      "type": "object",
+      "required": [
+        "muted"
+      ],
+      "properties": {
+        "level": {
+          "description": "Current volume/gain level in percent. `None` when the level is unknown (e.g. the provider has not yet synced state).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LevelPercent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "muted": {
+          "description": "Whether the channel is currently muted.",
+          "type": "boolean"
+        }
+      }
+    },
+    "AudioEnforcementPosture": {
+      "description": "How audio enforcement is applied for a target VM (ADR 0041).",
+      "oneOf": [
+        {
+          "description": "Host-side PipeWire policy and guest-side guestd policy both applied.",
+          "type": "string",
+          "enum": [
+            "host-and-guest"
+          ]
+        },
+        {
+          "description": "Host-side enforcement only; guestd is absent or the provider does not support guest enforcement.",
+          "type": "string",
+          "enum": [
+            "host-only"
+          ]
+        },
+        {
+          "description": "Guest-side guestd enforcement only; no local PipeWire node (e.g. ACA sandbox with a guestd-compatible agent).",
+          "type": "string",
+          "enum": [
+            "guest-only"
+          ]
+        },
+        {
+          "description": "Neither host nor guest enforcement is supported for this target.",
+          "type": "string",
+          "enum": [
+            "unsupported"
+          ]
+        },
+        {
+          "description": "The provider is expected to expose a guestd-compatible agent but none was found; operator remediation is required.",
+          "type": "string",
+          "enum": [
+            "provider-misconfigured"
+          ]
+        }
+      ]
+    },
+    "AudioMuteArgs": {
+      "description": "Mute or unmute one channel of one VM.",
+      "type": "object",
+      "required": [
+        "channel",
+        "mute",
+        "vm"
+      ],
+      "properties": {
+        "channel": {
+          "description": "Which audio channel to mute/unmute.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AudioChannel"
+            }
+          ]
+        },
+        "mute": {
+          "description": "True to mute, false to unmute.",
+          "type": "boolean"
+        },
+        "vm": {
+          "description": "Target VM.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AudioOp": {
+      "description": "Audio operation sub-request dispatched inside [`PublicRequest::Audio`].\n\nThe staged DTOs fail closed with a typed not-yet-implemented response until the runtime backend implementations land.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/AudioStatusArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "status"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/AudioSetVolumeArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "setVolume"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/AudioMuteArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "mute"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "AudioOpResponse": {
+      "description": "Audio operation response dispatched inside [`PublicResponse::Audio`].",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "status"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/AudioStatusResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "setVolume"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/AudioSetResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "mute"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/AudioSetResult"
+            }
+          }
+        }
+      ]
+    },
+    "AudioProviderKind": {
+      "description": "Which runtime provider handles audio for a given target VM.",
+      "oneOf": [
+        {
+          "description": "Cloud Hypervisor NixOS VM with vhost-user-sound + PipeWire.",
+          "type": "string",
+          "enum": [
+            "local-hypervisor"
+          ]
+        },
+        {
+          "description": "qemu-media VM with a declared qemu audio backend.",
+          "type": "string",
+          "enum": [
+            "qemu-media"
+          ]
+        },
+        {
+          "description": "ACA sandbox with a guestd-compatible agent for audio policy.",
+          "type": "string",
+          "enum": [
+            "aca-sandbox"
+          ]
+        }
+      ]
+    },
+    "AudioSetApplied": {
+      "description": "Whether a set-volume or mute operation was applied and through which path.",
+      "oneOf": [
+        {
+          "description": "Applied to both host (PipeWire/qemu) and guest (guestd).",
+          "type": "string",
+          "enum": [
+            "host-and-guest"
+          ]
+        },
+        {
+          "description": "Applied to host only; guestd enforcement was unavailable or degraded.",
+          "type": "string",
+          "enum": [
+            "host-only"
+          ]
+        },
+        {
+          "description": "Applied to guest only (ACA sandbox; no local host audio state written).",
+          "type": "string",
+          "enum": [
+            "guest-only"
+          ]
+        },
+        {
+          "description": "No enforcement path was available; the operation was not applied.",
+          "type": "string",
+          "enum": [
+            "unsupported"
+          ]
+        }
+      ]
+    },
+    "AudioSetResult": {
+      "description": "Result of a set-volume or mute operation.",
+      "type": "object",
+      "required": [
+        "applied",
+        "channel",
+        "state",
+        "vm"
+      ],
+      "properties": {
+        "applied": {
+          "description": "Whether and how the change was applied.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AudioSetApplied"
+            }
+          ]
+        },
+        "channel": {
+          "description": "Channel that was changed.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AudioChannel"
+            }
+          ]
+        },
+        "state": {
+          "description": "Channel state after the operation.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AudioChannelState"
+            }
+          ]
+        },
+        "vm": {
+          "description": "Target VM.",
+          "type": "string"
+        }
+      }
+    },
+    "AudioSetVolumeArgs": {
+      "description": "Set the volume or gain level for one channel of one VM.",
+      "type": "object",
+      "required": [
+        "channel",
+        "level",
+        "vm"
+      ],
+      "properties": {
+        "channel": {
+          "description": "Which audio channel to adjust.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AudioChannel"
+            }
+          ]
+        },
+        "level": {
+          "description": "New level (0–100 inclusive). Validated at the wire boundary.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LevelPercent"
+            }
+          ]
+        },
+        "vm": {
+          "description": "Target VM.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AudioStatusArgs": {
+      "description": "Request audio status for one or more target VMs.",
+      "type": "object",
+      "properties": {
+        "vms": {
+          "description": "VMs to query. An empty list queries all accessible VMs.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AudioStatusResult": {
+      "description": "Multi-target audio status result.",
+      "type": "object",
+      "required": [
+        "entries"
+      ],
+      "properties": {
+        "entries": {
+          "description": "Per-VM state for targets that resolved successfully.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AudioVmState"
+          }
+        },
+        "errors": {
+          "description": "Per-VM errors for targets that could not be resolved. One misconfigured target does not fail the entire multi-target query.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AudioVmError"
+          }
+        }
+      }
+    },
+    "AudioVmError": {
+      "description": "A per-VM error in a multi-target audio status response.",
+      "type": "object",
+      "required": [
+        "kind",
+        "vm"
+      ],
+      "properties": {
+        "kind": {
+          "description": "Low-cardinality error kind (e.g. `provider-misconfigured`, `vm-not-found`, `enforcement-unavailable`). Never contains provider-internal details or credential fragments.",
+          "type": "string"
+        },
+        "remediation": {
+          "description": "Optional operator-facing remediation hint.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "description": "VM that failed.",
+          "type": "string"
+        }
+      }
+    },
+    "AudioVmState": {
+      "description": "Full audio status for one VM target.",
+      "type": "object",
+      "required": [
+        "enforcement",
+        "microphone",
+        "providerKind",
+        "speaker",
+        "vm"
+      ],
+      "properties": {
+        "enforcement": {
+          "description": "Current enforcement posture.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AudioEnforcementPosture"
+            }
+          ]
+        },
+        "microphone": {
+          "description": "Microphone / capture channel state.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AudioChannelState"
+            }
+          ]
+        },
+        "providerKind": {
+          "description": "Which runtime provider handles audio for this VM.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AudioProviderKind"
+            }
+          ]
+        },
+        "speaker": {
+          "description": "Speaker / playback channel state.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AudioChannelState"
+            }
+          ]
+        },
+        "vm": {
+          "description": "Target VM name.",
+          "type": "string"
+        }
+      }
+    },
     "AuditEntry": {
       "type": "object",
       "required": [
@@ -2444,6 +2916,555 @@
         },
         "runnerId": {
           "description": "`\"<vm_id>:<role_id>\"` key from the broker's pidfd registry.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConsoleAttachArgs": {
+      "description": "Attach to a console session for a VM.",
+      "type": "object",
+      "required": [
+        "initialTerminalSize",
+        "vm"
+      ],
+      "properties": {
+        "initialTerminalSize": {
+          "description": "Initial terminal geometry.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/TerminalSize"
+            }
+          ]
+        },
+        "vm": {
+          "description": "VM whose console is requested.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConsoleAttachResult": {
+      "description": "Result of a successful console attach.",
+      "type": "object",
+      "required": [
+        "providerKind",
+        "ringBufferStartOffset",
+        "session"
+      ],
+      "properties": {
+        "providerKind": {
+          "description": "Which provider handled the attach.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ConsoleProviderKind"
+            }
+          ]
+        },
+        "ringBufferStartOffset": {
+          "description": "Ring-buffer start offset at attach time. Clients compare the `ring_buffer_start_offset` returned by subsequent `ReadOutput` calls against this value to detect dropped output.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "session": {
+          "description": "Opaque session handle for subsequent ops (never logged or audited).",
+          "type": "string"
+        }
+      }
+    },
+    "ConsoleCloseArgs": {
+      "description": "Close a console session, detaching the client without stopping the VM.",
+      "type": "object",
+      "required": [
+        "session"
+      ],
+      "properties": {
+        "session": {
+          "description": "Opaque console session handle.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConsoleCloseResult": {
+      "description": "Result of closing a console session.",
+      "type": "object",
+      "required": [
+        "closed",
+        "session"
+      ],
+      "properties": {
+        "closed": {
+          "description": "True if the session was found and closed; false if it was already gone.",
+          "type": "boolean"
+        },
+        "session": {
+          "description": "Opaque session handle.",
+          "type": "string"
+        }
+      }
+    },
+    "ConsoleControlResult": {
+      "description": "Generic control acknowledgement for console write and resize operations.",
+      "type": "object",
+      "required": [
+        "ok",
+        "session"
+      ],
+      "properties": {
+        "ok": {
+          "description": "Whether the control operation was applied.",
+          "type": "boolean"
+        },
+        "session": {
+          "description": "Opaque session handle.",
+          "type": "string"
+        }
+      }
+    },
+    "ConsoleOp": {
+      "description": "Console operation sub-request dispatched inside [`PublicRequest::Console`].\n\nThe staged DTOs fail closed with a typed not-yet-implemented response until the runtime backend implementations land.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ConsoleAttachArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "attach"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ConsoleWriteStdinArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "writeStdin"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ConsoleReadOutputArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "readOutput"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ConsoleResizeArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "resize"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ConsoleWaitArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "wait"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ConsoleCloseArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "close"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ConsoleOpResponse": {
+      "description": "Console operation response dispatched inside [`PublicResponse::Console`].",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "attach"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ConsoleAttachResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "writeStdin"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ConsoleControlResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "readOutput"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ConsoleReadOutputResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "resize"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ConsoleControlResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "wait"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ConsoleWaitResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "close"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ConsoleCloseResult"
+            }
+          }
+        }
+      ]
+    },
+    "ConsoleProviderKind": {
+      "description": "Which runtime provider handles the console for a given target VM.",
+      "oneOf": [
+        {
+          "description": "Cloud Hypervisor NixOS VM with a local hypervisor console backend and daemon/broker drainer.",
+          "type": "string",
+          "enum": [
+            "local-hypervisor"
+          ]
+        },
+        {
+          "description": "qemu-media VM with a broker-owned fd-backed console backend.",
+          "type": "string",
+          "enum": [
+            "qemu-media"
+          ]
+        },
+        {
+          "description": "ACA sandbox with a guestd-compatible agent over the provider peer transport (no local socket or broker fd involved).",
+          "type": "string",
+          "enum": [
+            "aca-sandbox"
+          ]
+        }
+      ]
+    },
+    "ConsoleReadOutputArgs": {
+      "description": "Read console output from a ring-buffer–backed session.",
+      "type": "object",
+      "required": [
+        "maxLen",
+        "offset",
+        "session",
+        "stream"
+      ],
+      "properties": {
+        "maxLen": {
+          "description": "Maximum output bytes to return in this response.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "offset": {
+          "description": "Ring-buffer read offset. Compare against the `ring_buffer_start_offset` from the previous response to detect dropped output.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "session": {
+          "description": "Opaque console session handle.",
+          "type": "string"
+        },
+        "stream": {
+          "description": "Stream to read (`stdout` is the primary console stream; providers that expose a separate stderr channel report it here).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/TerminalStream"
+            }
+          ]
+        },
+        "timeoutMs": {
+          "description": "Long-poll timeout in milliseconds (0 = no timeout).",
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "wait": {
+          "description": "Whether to block until output is available.",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConsoleReadOutputResult": {
+      "description": "A chunk of console output from the ring buffer.",
+      "type": "object",
+      "required": [
+        "chunkBase64",
+        "droppedBytes",
+        "isEof",
+        "offset",
+        "ringBufferStartOffset",
+        "session",
+        "stream"
+      ],
+      "properties": {
+        "chunkBase64": {
+          "description": "Base64-encoded output bytes.",
+          "type": "string"
+        },
+        "droppedBytes": {
+          "description": "Total bytes dropped from the ring buffer since VM start.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "isEof": {
+          "description": "Whether the output stream has ended (VM exited or session closed).",
+          "type": "boolean"
+        },
+        "offset": {
+          "description": "Absolute offset of the first byte of `chunk_base64` in the logical output stream (includes any bytes already dropped from the ring buffer).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "ringBufferStartOffset": {
+          "description": "Current ring-buffer start offset. If this exceeds `offset + decoded_len(chunk_base64)`, bytes were dropped and the client should fast-forward.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "session": {
+          "description": "Opaque session handle.",
+          "type": "string"
+        },
+        "stream": {
+          "description": "Which output stream this chunk belongs to.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/TerminalStream"
+            }
+          ]
+        }
+      }
+    },
+    "ConsoleResizeArgs": {
+      "description": "Resize the terminal associated with a console session.",
+      "type": "object",
+      "required": [
+        "session",
+        "size"
+      ],
+      "properties": {
+        "session": {
+          "description": "Opaque console session handle.",
+          "type": "string"
+        },
+        "size": {
+          "description": "New terminal geometry.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/TerminalSize"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConsoleWaitArgs": {
+      "description": "Wait until the console session exits, or until the optional timeout elapses.",
+      "type": "object",
+      "required": [
+        "session"
+      ],
+      "properties": {
+        "session": {
+          "description": "Opaque console session handle.",
+          "type": "string"
+        },
+        "timeoutMs": {
+          "description": "Maximum time to wait in milliseconds (0 = indefinite).",
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConsoleWaitResult": {
+      "description": "Result of waiting for the console session to end.",
+      "type": "object",
+      "required": [
+        "exited",
+        "session"
+      ],
+      "properties": {
+        "exited": {
+          "description": "True if the session ended; false if the timeout elapsed before exit.",
+          "type": "boolean"
+        },
+        "session": {
+          "description": "Opaque session handle.",
+          "type": "string"
+        }
+      }
+    },
+    "ConsoleWriteStdinArgs": {
+      "description": "Write stdin bytes to an active console session.",
+      "type": "object",
+      "required": [
+        "chunkBase64",
+        "offset",
+        "session"
+      ],
+      "properties": {
+        "chunkBase64": {
+          "description": "Base64-encoded input bytes.",
+          "type": "string"
+        },
+        "eof": {
+          "description": "Whether this write marks end-of-stdin.",
+          "default": false,
+          "type": "boolean"
+        },
+        "offset": {
+          "description": "Input byte offset for flow-control ordering.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "session": {
+          "description": "Opaque console session handle (never logged or audited).",
           "type": "string"
         }
       },
@@ -5136,6 +6157,11 @@
       },
       "additionalProperties": false
     },
+    "LevelPercent": {
+      "type": "integer",
+      "maximum": 100.0,
+      "minimum": 0.0
+    },
     "ListEntry": {
       "type": "object",
       "required": [
@@ -6244,6 +7270,44 @@
           }
         },
         {
+          "description": "Console streaming operation (ADR 0041). Staged contract DTOs; daemons return a typed not-yet-implemented envelope until runtime backends are available.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "console"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ConsoleOp"
+            }
+          }
+        },
+        {
+          "description": "Audio policy and status operation (ADR 0041). Staged contract DTOs; daemons return a typed not-yet-implemented envelope until runtime backends are available.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "audio"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/AudioOp"
+            }
+          }
+        },
+        {
           "description": "Gateway-mode display-session operation. Host-mode daemons reject this with a typed gateway-unavailable error; gateway-mode d2bd handles it through the ADR 0032 orchestrator.",
           "type": "object",
           "required": [
@@ -6515,6 +7579,42 @@
             },
             "payload": {
               "$ref": "#/definitions/ShellOpResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "console"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ConsoleOpResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "audio"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/AudioOpResponse"
             }
           }
         },
