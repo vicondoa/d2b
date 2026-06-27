@@ -145,7 +145,10 @@ let
             gpuSocket = "${cfg.site.stateDir}/vms/${gw.vmName}/${gw.vmName}-gpu.sock";
             tpmSocket = "/run/d2b/vms/${gw.vmName}/tpm.sock";
             audioStateFile = "${cfg.site.stateDir}/vms/${gw.vmName}/state/audio-state.json";
-            audioService = "d2b-${gw.vmName}-snd.service";
+            # audioService is always null: the per-VM `d2b-<vm>-snd.service`
+            # systemd unit is retired. The audio sidecar runs as a
+            # broker-spawned runner via SpawnRunner{role: Audio}.
+            audioService = null;
             observability = {
               enabled = false;
               vsockCid = 0;

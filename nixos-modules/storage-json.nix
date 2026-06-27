@@ -7,6 +7,7 @@ let
   normalNixosVms = d2bLib.normalNixosVms cfg.vms;
   qemuMediaVms = d2bLib.qemuMediaVms cfg.vms;
   tpmVms = lib.filterAttrs (_: vm: vm.tpm.enable) normalNixosVms;
+  audioVms = lib.filterAttrs (_: vm: vm.audio.enable) normalNixosVms;
   processDags = cfg._bundle.processesJson.data.vms or [ ];
 
   actor = kind: value: { inherit kind value; };
@@ -764,6 +765,100 @@ let
     ])
     qemuMediaVms);
 
+  # Per-audio-VM storage paths: the per-VM audio state directory, the
+  # audio-state JSON file, and the per-VM advisory lock file.
+  # The lock is placed under /run/d2b/locks/ per ADR 0034 lockfile
+  # conventions: 'f' tmpfiles type creates it only if absent and never
+  # unlinks it, so OFD lock semantics are preserved across daemon restarts.
+  # d2b group traversal on /run/d2b/locks is declared in the audio
+  # component's tmpfiles (conditional on any audio VM), matching this entry.
+  perAudioVmStoragePaths = lib.flatten (lib.mapAttrsToList
+    (name: _: [
+      (mkPath {
+        id = "path:vm-audio-state-dir:${name}";
+        scope = "vm:${name}";
+        path = "${toString cfg.store.stateDir}/${name}/state";
+        owner = principal "user" "d2bd";
+        group = principal "group" "d2b";
+        mode = "0750";
+        creator = actor "nix-module" "tmpfiles";
+        writers = [
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-priv-broker")
+        ];
+        readers = [
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-priv-broker")
+        ];
+        cleanupPolicy = "never";
+        repairPolicy = "nix-activation";
+        accessAcl = [
+          {
+            principal = principal "user" "d2b-${name}-gpu";
+            permissions = "r-x";
+          }
+        ];
+        invariants = [ "no-symlink" "scope-authorization-required" ];
+      })
+      (mkPath {
+        id = "path:vm-audio-state-file:${name}";
+        scope = "vm:${name}";
+        path = "${toString cfg.store.stateDir}/${name}/state/audio-state.json";
+        kind = "regular-file";
+        owner = principal "user" "d2bd";
+        group = principal "group" "d2b";
+        mode = "0640";
+        creator = actor "nix-module" "tmpfiles";
+        writers = [
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-priv-broker")
+        ];
+        readers = [
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-priv-broker")
+          (actor "operator" "audio-cli")
+        ];
+        cleanupPolicy = "never";
+        repairPolicy = "nix-activation";
+        accessAcl = [
+          {
+            principal = principal "user" "d2b-${name}-gpu";
+            permissions = "r--";
+          }
+        ];
+        invariants = [ "no-symlink" "scope-authorization-required" ];
+      })
+      (mkPath {
+        id = "path:vm-audio-lock:${name}";
+        scope = "vm:${name}";
+        path = "/run/d2b/locks/audio-${name}.lock";
+        kind = "regular-file";
+        lifecycle = "boot-scoped-readoptable";
+        persistence = "boot-scoped";
+        owner = principal "user" "root";
+        group = principal "group" "d2b";
+        mode = "0660";
+        creator = actor "nix-module" "tmpfiles";
+        writers = [
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-priv-broker")
+        ];
+        readers = [
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-priv-broker")
+        ];
+        # Advisory OFD lock file: never unlink (preserve lock semantics
+        # across daemon restarts). cleanupPolicy "boot" means on next boot
+        # the file is recreated by the 'f' tmpfiles rule if absent, which
+        # is correct since /run/ is tmpfs-backed and cleaned on reboot.
+        cleanupPolicy = "boot";
+        repairPolicy = "nix-activation";
+        leaseClass = "none";
+        invariants = [ "no-symlink" "scope-authorization-required" ];
+      })
+    ])
+    audioVms);
+
   nodeWritablePaths = lib.flatten (map
     (dag: lib.flatten (map
       (node: map
@@ -950,6 +1045,7 @@ let
       ++ perNormalVmStoragePaths
       ++ perTpmStoragePaths
       ++ perQemuMediaStoragePaths
+      ++ perAudioVmStoragePaths
       ++ nodeWritablePaths
       ++ readinessSocketPaths
       ++ diskInitPaths;

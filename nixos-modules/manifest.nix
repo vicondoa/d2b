@@ -139,10 +139,13 @@ let
       apiSocket = if isNixosRuntime then "${stateRoot}/${name}.sock" else null;
       gpuSocket = if isNixosRuntime then "${stateRoot}/${name}-gpu.sock" else null;
       tpmSocket = if isNixosRuntime then "/run/d2b/vms/${name}/tpm.sock" else null;
-      # State file under root-owned non-group-writable subdir.
+      # State file under daemon-owned subdir.
       audioStateFile =
         if isNixosRuntime then "${stateRoot}/state/audio-state.json" else null;
-      audioService = if isNixosRuntime then "d2b-${name}-snd.service" else null;
+      # The per-VM `d2b-<vm>-snd.service` systemd unit is retired; the
+      # vhost-user-sound sidecar now runs as a broker-spawned runner via
+      # SpawnRunner{role: Audio}. audioService is always null.
+      audioService = null;
       observability = {
         enabled = isNixosRuntime && vm.observability.enable;
         vsockCid = baseVsockCid;
@@ -666,10 +669,10 @@ let
       audioService = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         description = ''
-          Name of the host-side per-VM audio sidecar systemd unit
-          (`d2b-<vm>-snd.service`). The CLI restarts this unit
-          on every audio-state change. Null for providers without the d2b
-          audio sidecar.
+          Retired: always null. The per-VM `d2b-<vm>-snd.service` systemd unit
+          was replaced by a broker-spawned runner (`SpawnRunner{role: Audio}`).
+          The CLI no longer restarts a systemd unit on audio-state changes;
+          state changes are communicated through the daemon public socket.
         '';
       };
 
