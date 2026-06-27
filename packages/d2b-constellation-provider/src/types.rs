@@ -755,16 +755,32 @@ mod tests {
     fn provider_guestd_audio_enforcement_ready_requires_guestd_capable() {
         let mut contract = ProviderGuestdBootstrapContract::execute_only_fail_closed();
         assert!(!contract.audio_guest_enforcement_ready());
-        assert!(!contract.advertised_capabilities().has(Capability::AudioPlayback));
-        assert!(!contract.advertised_capabilities().has(Capability::AudioCapture));
+        assert!(
+            !contract
+                .advertised_capabilities()
+                .has(Capability::AudioPlayback)
+        );
+        assert!(
+            !contract
+                .advertised_capabilities()
+                .has(Capability::AudioCapture)
+        );
 
         contract.audio = Some(ProviderAudioCapability::absent());
         assert!(!contract.audio_guest_enforcement_ready());
 
         contract.audio = Some(ProviderAudioCapability::guestd_guest_only());
         assert!(contract.audio_guest_enforcement_ready());
-        assert!(contract.advertised_capabilities().has(Capability::AudioPlayback));
-        assert!(contract.advertised_capabilities().has(Capability::AudioCapture));
+        assert!(
+            contract
+                .advertised_capabilities()
+                .has(Capability::AudioPlayback)
+        );
+        assert!(
+            contract
+                .advertised_capabilities()
+                .has(Capability::AudioCapture)
+        );
     }
 
     #[test]
@@ -780,13 +796,25 @@ mod tests {
     fn provider_audio_capability_constructors_match_adr_0041() {
         // absent: no host or guest enforcement.
         let absent = ProviderAudioCapability::absent();
-        assert_eq!(absent.host_enforcement, ProviderAudioHostEnforcement::Absent);
-        assert_eq!(absent.guest_enforcement, ProviderAudioGuestEnforcement::Unsupported);
+        assert_eq!(
+            absent.host_enforcement,
+            ProviderAudioHostEnforcement::Absent
+        );
+        assert_eq!(
+            absent.guest_enforcement,
+            ProviderAudioGuestEnforcement::Unsupported
+        );
 
         // guestd_guest_only: no host; guest via guestd.
         let guest_only = ProviderAudioCapability::guestd_guest_only();
-        assert_eq!(guest_only.host_enforcement, ProviderAudioHostEnforcement::Absent);
-        assert_eq!(guest_only.guest_enforcement, ProviderAudioGuestEnforcement::GuestdCapable);
+        assert_eq!(
+            guest_only.host_enforcement,
+            ProviderAudioHostEnforcement::Absent
+        );
+        assert_eq!(
+            guest_only.guest_enforcement,
+            ProviderAudioGuestEnforcement::GuestdCapable
+        );
     }
 
     #[test]
@@ -796,8 +824,14 @@ mod tests {
         // shape (without console/audio keys) must succeed fail-closed.
         let contract = ProviderGuestdBootstrapContract::execute_only_fail_closed();
         let json = serde_json::to_string(&contract).expect("serialize");
-        assert!(!json.contains("console"), "absent console must not appear in JSON");
-        assert!(!json.contains("audio"), "absent audio must not appear in JSON");
+        assert!(
+            !json.contains("console"),
+            "absent console must not appear in JSON"
+        );
+        assert!(
+            !json.contains("audio"),
+            "absent audio must not appear in JSON"
+        );
 
         // A JSON blob without console/audio keys (from an older peer) must
         // deserialize with console/audio defaulting to None.

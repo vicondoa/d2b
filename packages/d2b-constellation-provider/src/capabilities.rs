@@ -307,12 +307,18 @@ mod tests {
     fn audio_capability_set_constructors_match_adr_0041_provider_matrix() {
         // Cloud Hypervisor: host PipeWire + guestd guest enforcement.
         let ch = AudioCapabilitySet::local_hypervisor_full();
-        assert_eq!(ch.host_enforcement, AudioHostEnforcement::PipeWireVhostUserSound);
+        assert_eq!(
+            ch.host_enforcement,
+            AudioHostEnforcement::PipeWireVhostUserSound
+        );
         assert_eq!(ch.guest_enforcement, AudioGuestEnforcement::GuestdCapable);
 
         // qemu-media: host qemu backend only; guestd unsupported.
         let qemu = AudioCapabilitySet::qemu_media_host_only();
-        assert_eq!(qemu.host_enforcement, AudioHostEnforcement::QemuAudioBackend);
+        assert_eq!(
+            qemu.host_enforcement,
+            AudioHostEnforcement::QemuAudioBackend
+        );
         assert_eq!(qemu.guest_enforcement, AudioGuestEnforcement::Unsupported);
 
         // ACA sandbox: no host enforcement; guestd guest enforcement.
@@ -335,6 +341,9 @@ mod tests {
         // AudioCapabilitySet::default() enforces nothing (fail-closed).
         let no_audio = AudioCapabilitySet::default();
         assert_eq!(no_audio.host_enforcement, AudioHostEnforcement::None);
-        assert_eq!(no_audio.guest_enforcement, AudioGuestEnforcement::Unsupported);
+        assert_eq!(
+            no_audio.guest_enforcement,
+            AudioGuestEnforcement::Unsupported
+        );
     }
 }

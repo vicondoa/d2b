@@ -315,14 +315,17 @@ fn parse_optional_level(
     if raw.is_null() {
         return Ok(None);
     }
-    let n = raw.as_u64().and_then(|v| u8::try_from(v).ok()).ok_or_else(|| {
-        AudioPolicyError::InvalidField(format!(
-            "field {key:?} must be an integer or null; got {raw}"
-        ))
-    })?;
-    LevelPercent::new(n).map(Some).map_err(|err| {
-        AudioPolicyError::InvalidField(format!("field {key:?}: {err}"))
-    })
+    let n = raw
+        .as_u64()
+        .and_then(|v| u8::try_from(v).ok())
+        .ok_or_else(|| {
+            AudioPolicyError::InvalidField(format!(
+                "field {key:?} must be an integer or null; got {raw}"
+            ))
+        })?;
+    LevelPercent::new(n)
+        .map(Some)
+        .map_err(|err| AudioPolicyError::InvalidField(format!("field {key:?}: {err}")))
 }
 
 fn parse_v1(value: &Value) -> Result<AudioPolicyState, AudioPolicyError> {
@@ -350,6 +353,3 @@ fn parse_v2(value: &Value) -> Result<AudioPolicyState, AudioPolicyError> {
         mic_gain,
     })
 }
-
-
-

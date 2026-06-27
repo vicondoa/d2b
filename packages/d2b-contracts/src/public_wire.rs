@@ -1,18 +1,15 @@
 use crate::types::MediaRef;
 use crate::{FeatureFlag, Version, guest_wire::ExecState};
+pub use d2b_core::audio_policy::LevelPercent;
 use d2b_core::{
     error::Error,
     host::IfName,
     runtime::{RuntimeOperationCapabilities, RuntimeServiceSummary},
 };
-pub use d2b_core::audio_policy::LevelPercent;
 use schemars::{
     JsonSchema,
     r#gen::SchemaGenerator,
-    schema::{
-        InstanceType, Metadata, Schema, SchemaObject, SingleOrVec,
-        StringValidation,
-    },
+    schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec, StringValidation},
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -3166,18 +3163,20 @@ mod tests {
             serde_json::from_value(value.clone()).expect("console attach decodes");
         assert_eq!(decoded, attach);
 
-        let attach_response = PublicResponse::Console(ConsoleOpResponse::Attach(
-            ConsoleAttachResult {
+        let attach_response =
+            PublicResponse::Console(ConsoleOpResponse::Attach(ConsoleAttachResult {
                 session: "opaque-console".to_owned(),
                 provider_kind: ConsoleProviderKind::LocalHypervisor,
                 ring_buffer_start_offset: 0,
-            },
-        ));
+            }));
         let value =
             serde_json::to_value(&attach_response).expect("console attach response serializes");
         assert_eq!(value["kind"], "console");
         assert_eq!(value["payload"]["op"], "attach");
-        assert_eq!(value["payload"]["result"]["providerKind"], "local-hypervisor");
+        assert_eq!(
+            value["payload"]["result"]["providerKind"],
+            "local-hypervisor"
+        );
         assert_eq!(value["payload"]["result"]["ringBufferStartOffset"], 0);
         // session must not be present in the serialized output (it is, but must
         // be redacted in Debug output — verify Debug does not leak it).
@@ -3249,8 +3248,7 @@ mod tests {
         assert_eq!(value["payload"]["op"], "status");
         assert_eq!(value["payload"]["args"]["vms"][0], "corp-vm");
 
-        let decoded: PublicRequest =
-            serde_json::from_value(value).expect("audio status decodes");
+        let decoded: PublicRequest = serde_json::from_value(value).expect("audio status decodes");
         assert_eq!(decoded, status);
 
         // Empty-vms status request (query-all).
@@ -3290,7 +3288,8 @@ mod tests {
                 remediation: None,
             }],
         }));
-        let value = serde_json::to_value(&status_response).expect("audio status response serializes");
+        let value =
+            serde_json::to_value(&status_response).expect("audio status response serializes");
         assert_eq!(value["kind"], "audio");
         assert_eq!(value["payload"]["op"], "status");
         assert_eq!(value["payload"]["result"]["entries"][0]["vm"], "corp-vm");
@@ -3310,10 +3309,7 @@ mod tests {
             value["payload"]["result"]["entries"][0]["enforcement"],
             "host-and-guest"
         );
-        assert_eq!(
-            value["payload"]["result"]["errors"][0]["vm"],
-            "missing-vm"
-        );
+        assert_eq!(value["payload"]["result"]["errors"][0]["vm"], "missing-vm");
 
         // Set-volume response.
         let set_response = PublicResponse::Audio(AudioOpResponse::SetVolume(AudioSetResult {
@@ -3325,8 +3321,7 @@ mod tests {
                 muted: false,
             },
         }));
-        let value =
-            serde_json::to_value(&set_response).expect("set-volume response serializes");
+        let value = serde_json::to_value(&set_response).expect("set-volume response serializes");
         assert_eq!(value["payload"]["op"], "setVolume");
         assert_eq!(value["payload"]["result"]["channel"], "microphone");
         assert_eq!(value["payload"]["result"]["applied"], "host-and-guest");
@@ -3340,8 +3335,7 @@ mod tests {
             let lp = LevelPercent::new(v).expect("valid level");
             assert_eq!(lp.get(), v);
             let json = serde_json::to_value(lp).expect("serializes");
-            let decoded: LevelPercent =
-                serde_json::from_value(json).expect("deserializes");
+            let decoded: LevelPercent = serde_json::from_value(json).expect("deserializes");
             assert_eq!(decoded.get(), v);
         }
 
@@ -3374,8 +3368,8 @@ mod tests {
             "channel": "speaker",
             "level": 75
         });
-        let args = serde_json::from_value::<AudioSetVolumeArgs>(good_json)
-            .expect("level 75 is valid");
+        let args =
+            serde_json::from_value::<AudioSetVolumeArgs>(good_json).expect("level 75 is valid");
         assert_eq!(args.level.get(), 75);
         assert_eq!(args.channel, AudioChannel::Speaker);
     }
@@ -3384,7 +3378,6 @@ mod tests {
     fn audio_status_unknown_fields_fail_closed() {
         use super::AudioStatusArgs;
         let bad = serde_json::json!({ "vms": [], "extraField": true });
-        serde_json::from_value::<AudioStatusArgs>(bad)
-            .expect_err("unknown field must be rejected");
+        serde_json::from_value::<AudioStatusArgs>(bad).expect_err("unknown field must be rejected");
     }
 }

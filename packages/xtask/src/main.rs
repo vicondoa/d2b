@@ -39,11 +39,10 @@ use d2b_contracts::{
     },
 };
 use d2b_core::{
-    audio_policy::AudioPolicyState,
-    bundle::Bundle, closures::ClosureMetadata, error::Error, host::HostJson,
-    manifest_v04::ManifestV04, minijail_profile::MinijailProfile, privileges::PrivilegesJson,
-    processes::ProcessesJson, storage::StorageJson, storage_lifecycle::StorageLifecycleReport,
-    sync::SyncJson,
+    audio_policy::AudioPolicyState, bundle::Bundle, closures::ClosureMetadata, error::Error,
+    host::HostJson, manifest_v04::ManifestV04, minijail_profile::MinijailProfile,
+    privileges::PrivilegesJson, processes::ProcessesJson, storage::StorageJson,
+    storage_lifecycle::StorageLifecycleReport, sync::SyncJson,
 };
 use schemars::schema::RootSchema;
 
@@ -357,10 +356,7 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
             schemars::schema_for!(GuestControlSchema),
         ),
         ("manifest_v04.json", schemars::schema_for!(ManifestV04)),
-        (
-            "audio-state.json",
-            schemars::schema_for!(AudioPolicyState),
-        ),
+        ("audio-state.json", schemars::schema_for!(AudioPolicyState)),
     ];
 
     write_schemas(&out_dir, &schemas)

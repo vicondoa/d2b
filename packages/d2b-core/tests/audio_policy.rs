@@ -144,7 +144,8 @@ fn parse_v2_omitted_levels_are_none() {
 #[test]
 fn parse_v2_explicit_null_levels_are_none() {
     // Explicit JSON null must be accepted as "unset; use system default".
-    let doc = br#"{"schemaVersion":"v2","mic":"off","speaker":"on","speakerLevel":null,"micGain":null}"#;
+    let doc =
+        br#"{"schemaVersion":"v2","mic":"off","speaker":"on","speakerLevel":null,"micGain":null}"#;
     let state = parse_audio_state(doc).unwrap();
     assert!(state.speaker_level.is_none());
     assert!(state.mic_gain.is_none());
@@ -152,8 +153,7 @@ fn parse_v2_explicit_null_levels_are_none() {
 
 #[test]
 fn parse_v2_level_out_of_range_is_error() {
-    let doc =
-        br#"{"schemaVersion":"v2","mic":"off","speaker":"off","speakerLevel":101}"#;
+    let doc = br#"{"schemaVersion":"v2","mic":"off","speaker":"off","speakerLevel":101}"#;
     assert!(matches!(
         parse_audio_state(doc),
         Err(AudioPolicyError::InvalidField(_))
