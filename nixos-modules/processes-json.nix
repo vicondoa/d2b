@@ -772,6 +772,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       "PIPEWIRE_RUNTIME_DIR=/run/user/${waylandUid}"
       "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
       ''PIPEWIRE_PROPS={ application.name = "d2b-${name}" node.name = "d2b-${name}" node.description = "d2b ${name}" d2b.vm = "${name}" }''
+      "WPCTL_PATH=${pkgs.wireplumber}/bin/wpctl"
     ] ++ lib.optional (cfg.site.audio.inputTargetNode != null)
       "D2B_AUDIO_INPUT_TARGET_NODE=${cfg.site.audio.inputTargetNode}";
   };

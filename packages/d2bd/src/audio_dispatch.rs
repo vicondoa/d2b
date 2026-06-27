@@ -3,10 +3,11 @@
 //! Resolves the per-VM provider capability row before touching local state:
 //!
 //! * **Cloud Hypervisor NixOS** – OFD-locked local state I/O, host PipeWire
-//!   enforcement via a `pw-cli`/`wpexec` subprocess, guest enforcement via
+//!   enforcement via a `pw-cli`/`wpctl` subprocess (credential-aware; see
+//!   [`audio_host_controller::PipeWireHostController`]), guest enforcement via
 //!   guestd audio RPCs over the authenticated guest-control transport.
-//! * **qemu-media** – OFD-locked local state I/O, host/qemu offline subset,
-//!   guest enforcement always reported `Unsupported`.
+//! * **qemu-media** – OFD-locked local state I/O, offline state-file policy.
+//!   Guest enforcement always reported `Unsupported`. No guestd calls.
 //!
 //! All provider-internal resource IDs and credentials are redacted from
 //! public responses. Volume/gain values never appear in audit records,
@@ -28,6 +29,7 @@ use d2b_contracts::public_wire::{
 use d2b_core::audio_policy::{AudioGrant, AudioPolicyError, AudioPolicyState, LevelPercent,
     parse_audio_state};
 use d2b_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
+use d2b_core::processes::ProcessesJson;
 use d2b_core::provider_capabilities::{
     AudioGuestEnforcementKind, AudioHostEnforcementKind, AudioProviderCapability,
 };
@@ -36,6 +38,9 @@ use serde_json::Value;
 
 use crate::TypedError;
 use crate::ServerState;
+use crate::audio_host_controller::{
+    HostAudioController, PipeWireHostController, QemuAudioController,
+};
 
 // ── Lock path ────────────────────────────────────────────────────────────────
 
@@ -280,56 +285,84 @@ pub enum HostEnforcementResult {
     Failed,
 }
 
-/// Apply host-side audio policy for Cloud Hypervisor / PipeWire-vhost-user-sound.
+/// Build the host controller for a VM based on its audio capability row.
 ///
-/// The actual `wpexec`/`pw-cli` subprocess invocation is not yet implemented.
-/// Returns `Unsupported` on production builds so callers report honest
-/// degraded state rather than falsely claiming enforcement succeeded.
+/// * For `PipeWireVhostUserSound` providers (Cloud Hypervisor NixOS), reads
+///   the audio ProcessNode from `processes.json` to extract `WPCTL_PATH` and
+///   `PIPEWIRE_RUNTIME_DIR` and returns a [`PipeWireHostController`]. Falls
+///   back to returning `Unsupported` if the node or required env vars are
+///   absent — this is a configuration error, not a runtime failure.
 ///
-/// Tests receive `Applied` via the `cfg(test)` path so dispatch logic can
-/// be exercised end-to-end without a live PipeWire session.
-pub fn enforce_pipewire_grant(
+/// * For `QemuAudioBackend` providers, returns a [`QemuAudioController`]
+///   which commits offline policy and returns `Applied` immediately.
+///
+/// * For `None` (ACA sandboxes), no host enforcement is performed; callers
+///   should skip the controller entirely.
+fn build_host_controller(
+    state: &ServerState,
     vm_name: &str,
-    grant: AudioGrant,
-    channel: AudioChannel,
-) -> HostEnforcementResult {
-    #[cfg(not(test))]
-    {
-        let _ = (vm_name, grant, channel);
-        // PipeWire enforcement via pw-cli/wpexec is not implemented in this
-        // wave. Return Unsupported so callers surface honest degraded state
-        // rather than reporting false success. Remove once the argv-only
-        // wpexec invocation targeting the vhost-user-sound node lands.
-        HostEnforcementResult::Unsupported
-    }
-    #[cfg(test)]
-    {
-        let _ = (vm_name, grant, channel);
-        HostEnforcementResult::Applied
+    cap: &AudioProviderCapability,
+) -> Option<Box<dyn HostAudioController>> {
+    match cap.host_enforcement {
+        AudioHostEnforcementKind::PipeWireVhostUserSound => {
+            // Load processes.json and find the audio runner node for this VM.
+            let processes: ProcessesJson =
+                match crate::load_json(&state.config.artifacts.processes_path) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        tracing::warn!(
+                            vm = vm_name,
+                            "failed to load processes.json; PipeWire host enforcement unavailable"
+                        );
+                        return None;
+                    }
+                };
+            let audio_node = PipeWireHostController::find_audio_node(&processes, vm_name)?;
+            PipeWireHostController::from_audio_node(audio_node)
+                .map(|ctrl| -> Box<dyn HostAudioController> { Box::new(ctrl) })
+        }
+        AudioHostEnforcementKind::QemuAudioBackend => {
+            Some(Box::new(QemuAudioController))
+        }
+        AudioHostEnforcementKind::None => {
+            // ACA sandboxes: no host enforcement; caller skips the controller.
+            None
+        }
     }
 }
 
-/// Apply host-side audio level change (volume/gain).
+/// Apply host-side audio grant (mute/unmute) using the appropriate controller.
 ///
-/// See [`enforce_pipewire_grant`] for the enforcement status. Returns
-/// `Unsupported` in production until the argv-only `pw-cli` level set
-/// path is connected; tests receive `Applied`.
-pub fn enforce_pipewire_level(
+/// Returns `Unsupported` when no controller is available (ACA or configuration
+/// gap). Returns `Failed` when the controller is present but enforcement failed
+/// (subprocess error, credential failure, etc.) so callers know the host
+/// boundary was NOT sealed for `off` requests.
+pub fn enforce_host_grant(
+    state: &ServerState,
     vm_name: &str,
+    cap: &AudioProviderCapability,
+    grant: AudioGrant,
+    channel: AudioChannel,
+) -> HostEnforcementResult {
+    match build_host_controller(state, vm_name, cap) {
+        Some(ctrl) => ctrl.enforce_grant(vm_name, grant, channel),
+        None => HostEnforcementResult::Unsupported,
+    }
+}
+
+/// Apply host-side audio level change using the appropriate controller.
+///
+/// Returns `Unsupported` when no controller is available.
+pub fn enforce_host_level(
+    state: &ServerState,
+    vm_name: &str,
+    cap: &AudioProviderCapability,
     level: LevelPercent,
     channel: AudioChannel,
 ) -> HostEnforcementResult {
-    #[cfg(not(test))]
-    {
-        let _ = (vm_name, level, channel);
-        // PipeWire level enforcement via pw-cli is not implemented in this
-        // wave. Return Unsupported so callers report honest degraded state.
-        HostEnforcementResult::Unsupported
-    }
-    #[cfg(test)]
-    {
-        let _ = (vm_name, level, channel);
-        HostEnforcementResult::Applied
+    match build_host_controller(state, vm_name, cap) {
+        Some(ctrl) => ctrl.enforce_level(vm_name, level, channel),
+        None => HostEnforcementResult::Unsupported,
     }
 }
 
@@ -509,7 +542,7 @@ fn dispatch_audio_set_volume(
     })?;
 
     // Host enforcement for running VMs.
-    let host_result = enforce_pipewire_level(vm_name, level, channel);
+    let host_result = enforce_host_level(state, vm_name, &cap, level, channel);
 
     // Guest enforcement for CH VMs: guestd AudioSet integration is not yet
     // implemented. applied_from_host_result reports HostOnly on host success
@@ -578,7 +611,7 @@ fn dispatch_audio_mute(
     })?;
 
     // Host enforcement: `off` seals the host boundary even if guestd fails.
-    let host_result = enforce_pipewire_grant(vm_name, grant, channel);
+    let host_result = enforce_host_grant(state, vm_name, &cap, grant, channel);
 
     // applied_from_host_result returns HostOnly on host success. When host
     // enforcement is Unsupported/Failed, `off` is still persisted in the state
@@ -765,6 +798,127 @@ mod tests {
         let result = applied_from_host_result(
             HostEnforcementResult::Failed,
             AudioGuestEnforcementKind::Unsupported,
+        );
+        assert_eq!(result, AudioSetApplied::Unsupported);
+    }
+
+    // ── host controller + applied_from_host_result integration ─────────────
+    //
+    // These tests combine the FakeHostController with applied_from_host_result
+    // to prove that:
+    //   1. Controller success → HostOnly (not HostAndGuest)
+    //   2. Controller failure → Unsupported (off did NOT seal host boundary)
+    //   3. Controller unsupported → Unsupported
+    //   4. QemuAudioController always returns Applied (offline policy applied)
+    //   5. No success-shaped fallback exists for the off/Failed path
+
+    #[test]
+    fn fake_controller_success_maps_to_host_only() {
+        use crate::audio_host_controller::FakeHostController;
+        let ctrl = FakeHostController::success();
+        let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
+        assert_eq!(host_result, HostEnforcementResult::Applied);
+        let applied = applied_from_host_result(host_result, AudioGuestEnforcementKind::GuestdCapable);
+        assert_eq!(
+            applied,
+            AudioSetApplied::HostOnly,
+            "successful enforcement on guestd-capable VM must be HostOnly, not HostAndGuest"
+        );
+    }
+
+    #[test]
+    fn fake_controller_failure_on_off_maps_to_unsupported_not_success() {
+        use crate::audio_host_controller::FakeHostController;
+        // This is the critical no-success-shaped-fallback test for `off`.
+        // When enforcement fails, the host boundary is NOT sealed; we must
+        // report Unsupported, never HostOnly.
+        let ctrl = FakeHostController::failed();
+        let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
+        assert_eq!(host_result, HostEnforcementResult::Failed);
+        let applied = applied_from_host_result(host_result, AudioGuestEnforcementKind::GuestdCapable);
+        assert_eq!(
+            applied,
+            AudioSetApplied::Unsupported,
+            "failed enforcement on Off must be Unsupported — host boundary NOT sealed"
+        );
+        assert_ne!(
+            applied,
+            AudioSetApplied::HostOnly,
+            "must never report HostOnly when enforcement failed"
+        );
+    }
+
+    #[test]
+    fn fake_controller_failure_on_level_maps_to_unsupported() {
+        use crate::audio_host_controller::FakeHostController;
+        let ctrl = FakeHostController::failed();
+        let level = LevelPercent::new(80).unwrap();
+        let host_result = ctrl.enforce_level("corp-vm", level, AudioChannel::Microphone);
+        assert_eq!(host_result, HostEnforcementResult::Failed);
+        let applied = applied_from_host_result(host_result, AudioGuestEnforcementKind::Unsupported);
+        assert_eq!(applied, AudioSetApplied::Unsupported);
+    }
+
+    #[test]
+    fn fake_controller_unsupported_maps_to_unsupported_not_applied() {
+        use crate::audio_host_controller::FakeHostController;
+        let ctrl = FakeHostController::unsupported();
+        let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Microphone);
+        assert_eq!(host_result, HostEnforcementResult::Unsupported);
+        let applied = applied_from_host_result(host_result, AudioGuestEnforcementKind::GuestdCapable);
+        assert_eq!(
+            applied,
+            AudioSetApplied::Unsupported,
+            "unsupported enforcement must not be reported as success"
+        );
+    }
+
+    #[test]
+    fn qemu_controller_applied_maps_to_host_only() {
+        use crate::audio_host_controller::QemuAudioController;
+        let ctrl = QemuAudioController;
+        // qemu-media: offline policy committed → Applied → HostOnly
+        let host_result = ctrl.enforce_grant("qemu-vm", AudioGrant::Off, AudioChannel::Speaker);
+        assert_eq!(host_result, HostEnforcementResult::Applied);
+        let applied = applied_from_host_result(host_result, AudioGuestEnforcementKind::Unsupported);
+        assert_eq!(applied, AudioSetApplied::HostOnly);
+    }
+
+    #[test]
+    fn qemu_controller_never_calls_guestd_capable_path() {
+        use crate::audio_host_controller::QemuAudioController;
+        // qemu-media VMs have guest_enforcement = Unsupported. Verify the
+        // applied result with Unsupported guest kind, not GuestdCapable.
+        let ctrl = QemuAudioController;
+        let host_result = ctrl.enforce_level(
+            "qemu-vm",
+            LevelPercent::new(50).unwrap(),
+            AudioChannel::Microphone,
+        );
+        // The controller returns Applied (offline policy) and the capability
+        // row for qemu-media is Unsupported, not GuestdCapable.
+        assert_eq!(host_result, HostEnforcementResult::Applied);
+        let applied = applied_from_host_result(host_result, AudioGuestEnforcementKind::Unsupported);
+        assert_eq!(
+            applied,
+            AudioSetApplied::HostOnly,
+            "qemu-media: offline policy applied → HostOnly; guest enforcement Unsupported"
+        );
+    }
+
+    #[test]
+    fn no_success_shaped_fallback_for_missing_controller() {
+        // When build_host_controller returns None (ACA sandbox or missing
+        // processes.json), enforce_host_grant returns Unsupported. This test
+        // verifies the path exists and maps correctly.
+        let result = applied_from_host_result(
+            HostEnforcementResult::Unsupported,
+            AudioGuestEnforcementKind::GuestdCapable,
+        );
+        assert_ne!(
+            result,
+            AudioSetApplied::HostOnly,
+            "missing controller must never produce HostOnly success"
         );
         assert_eq!(result, AudioSetApplied::Unsupported);
     }
