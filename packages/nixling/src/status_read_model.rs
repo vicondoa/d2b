@@ -67,8 +67,8 @@ pub(crate) fn list_output_from_manifest(
                     guest_closure_out_path: if pending_restart {
                         booted
                             .as_ref()
-                            .filter(|path| path.is_absolute())
-                            .map(|path| path.to_string_lossy().into_owned())
+                            .filter(|path| path.starts_with('/'))
+                            .cloned()
                             .or(declared_guest_closure_out_path)
                     } else {
                         declared_guest_closure_out_path
